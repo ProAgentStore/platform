@@ -1,0 +1,40 @@
+{
+  "name": "@proagentstore/sdk",
+  "version": "0.1.0",
+  "description": "SDK for server-powered AI agents on proagentstore.online — Workers AI, D1, R2, Stripe Connect, cron, API gateway.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "homepage": "https://github.com/ProAgentStore/platform#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ProAgentStore/platform.git",
+    "directory": "packages/sdk"
+  },
+  "keywords": [
+    "proagentstore",
+    "sdk",
+    "ai",
+    "workers-ai",
+    "d1",
+    "r2",
+    "stripe",
+    "agents"
+  ],
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  },
+  "sideEffects": false
+}
