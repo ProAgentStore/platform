@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent — ProAgentStore</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-hover:#6d28d9;--accent-soft:rgba(124,58,237,0.15);--green:#22c55e;--line:#262626;--line-strong:#404040;--radius:0.75rem;--shadow:0 1px 3px rgba(0,0,0,0.3)}
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100vh}
+    .container{max-width:960px;margin:0 auto;padding:0 1.5rem}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+
+    header{border-bottom:1px solid var(--line)}
+    header .container{display:flex;align-items:center;gap:1.25rem;padding-top:0.75rem;padding-bottom:0.75rem}
+    .brand{display:flex;align-items:center;gap:0.6rem;text-decoration:none;color:var(--ink)}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    nav{display:flex;gap:1.25rem;font-size:0.88rem;font-weight:600;margin-left:auto}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}
+    nav a.free{color:#3b82f6}
+    .back{display:inline-flex;align-items:center;gap:0.3rem;font-size:0.88rem;color:var(--muted);margin:1.25rem 0;text-decoration:none}.back:hover{color:var(--ink)}
+
+    .agent-hero{display:flex;gap:1.25rem;align-items:start;margin-bottom:2rem}
+    .hero-icon{width:72px;height:72px;border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:2.2rem;flex-shrink:0}
+    .hero-info h1{font-family:var(--font-display);font-size:1.75rem;font-weight:700;margin-bottom:0.25rem}
+    .hero-info .cat{display:inline-block;font-size:0.78rem;padding:0.15rem 0.6rem;border-radius:999px;background:var(--accent-soft);color:#a78bfa;font-weight:500}
+    .hero-info .desc{color:var(--muted);font-size:0.95rem;line-height:1.6;margin-top:0.5rem;max-width:500px}
+    .hero-info .subs{font-size:0.82rem;color:var(--muted-soft);margin-top:0.5rem}
+
+    .cta-row{display:flex;gap:0.75rem;margin-top:1rem;align-items:center}
+    .btn{display:inline-flex;align-items:center;gap:0.5rem;padding:0.65rem 1.25rem;border-radius:var(--radius);font-size:0.9rem;font-weight:600;text-decoration:none;transition:all 0.15s;border:none;cursor:pointer;font-family:var(--font-body)}
+    .btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-hover);text-decoration:none}
+    .btn-outline{border:1px solid var(--line);color:var(--muted);background:none}.btn-outline:hover{border-color:var(--accent);color:var(--accent)}
+
+    .try-section{margin-top:2rem}
+    .try-section h2{font-family:var(--font-display);font-size:1.25rem;font-weight:700;margin-bottom:1rem}
+    .chat-box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;height:420px;display:flex;flex-direction:column}
+    .chat-msgs{flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:0.65rem}
+    .msg{max-width:80%;padding:0.6rem 0.8rem;border-radius:var(--radius);font-size:0.88rem;line-height:1.5;white-space:pre-wrap}
+    .msg.user{background:var(--accent);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+    .msg.assistant{background:#1f1f1f;border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
+    .msg.system{background:rgba(234,179,8,0.1);color:#eab308;align-self:center;font-size:0.78rem;border-radius:999px;padding:0.3rem 0.85rem}
+    .chat-bar{display:flex;gap:0.5rem;padding:0.75rem;border-top:1px solid var(--line)}
+    .chat-bar input{flex:1;background:var(--paper);border:1px solid var(--line);border-radius:0.5rem;padding:0.5rem 0.75rem;color:var(--ink);font-family:var(--font-body);font-size:0.88rem}
+    .chat-bar input:focus{outline:none;border-color:var(--accent)}
+    .chat-bar button{padding:0.5rem 1rem;background:var(--accent);color:#fff;border:none;border-radius:0.5rem;font-weight:600;font-size:0.85rem;cursor:pointer;font-family:var(--font-body)}
+    .thinking{color:var(--muted);font-style:italic;font-size:0.82rem;padding:0.25rem 1rem}
+
+    .embed-section{margin-top:2rem;padding-bottom:3rem}
+    .embed-section h2{font-family:var(--font-display);font-size:1.25rem;font-weight:700;margin-bottom:0.75rem}
+    pre{background:var(--panel);border:1px solid var(--line);border-radius:0.5rem;padding:0.85rem;font-size:0.78rem;color:#a78bfa;overflow-x:auto}
+
+    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:0.8rem;color:var(--muted-soft)}
+
+    .loading{text-align:center;padding:3rem;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <nav>
+        <a href="/">Agents</a>
+        <a href="/about/">About</a>
+        <a href="/console/">Console</a>
+        <a href="https://github.com/ProAgentStore">GitHub</a>
+        <a href="https://freeagentstore.online" class="free">Free</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <a href="/" class="back">&larr; All agents</a>
+    <div id="loading" class="loading">Loading agent...</div>
+    <div id="content" style="display:none">
+      <div class="agent-hero">
+        <div id="a-icon" class="hero-icon" style="background:var(--accent)">&#9889;</div>
+        <div class="hero-info">
+          <h1 id="a-name"></h1>
+          <span id="a-cat" class="cat"></span>
+          <p id="a-desc" class="desc"></p>
+          <p id="a-subs" class="subs"></p>
+          <div class="cta-row">
+            <a id="a-subscribe" href="#" class="btn btn-primary">Get This Agent</a>
+            <span style="font-size:0.82rem;color:var(--muted)">Free to try below</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="try-section">
+        <h2>Try it now</h2>
+        <div class="chat-box">
+          <div id="chat-msgs" class="chat-msgs"></div>
+          <div id="thinking" class="thinking" style="display:none">Agent is thinking...</div>
+          <div class="chat-bar">
+            <input id="chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')send()">
+            <button onclick="send()">Send</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="embed-section">
+        <h2>Embed on your site</h2>
+        <p style="color:var(--muted);font-size:0.88rem;margin-bottom:0.75rem">Add this script to your website to embed this agent as a chat widget.</p>
+        <pre id="embed-code"></pre>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <a href="/">Agents</a> · <a href="/about/">About</a> · <a href="/console/">Console</a> · <a href="https://github.com/ProAgentStore">GitHub</a>
+  </footer>
+
+  <script>
+    const API = 'https://api.proagentstore.online';
+    let agentId = null;
+    let sessionId = null;
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+    async function loadAgent() {
+      const path = window.location.pathname;
+      const match = path.match(/\/agents\/([^/]+)/);
+      if (!match) { document.getElementById('loading').textContent = 'Agent not found'; return; }
+      agentId = match[1];
+
+      try {
+        const res = await fetch(`${API}/v1/public/agents/${agentId}`);
+        if (!res.ok) { document.getElementById('loading').textContent = 'Agent not found'; return; }
+        const a = await res.json();
+
+        document.title = `${a.name} — ProAgentStore`;
+        document.getElementById('a-name').textContent = a.name;
+        document.getElementById('a-cat').textContent = a.category;
+        document.getElementById('a-desc').textContent = a.description;
+        document.getElementById('a-subs').textContent = `${a.subscriber_count || 0} subscriber${a.subscriber_count !== 1 ? 's' : ''}`;
+        if (a.icon_bg) document.getElementById('a-icon').style.background = a.icon_bg;
+        document.getElementById('a-subscribe').href = `/console/?subscribe=${a.id}`;
+
+        document.getElementById('embed-code').textContent =
+          `<script src="https://proagentstore.online/widget.js"\n  data-agent="${a.slug || a.id}"\n  data-theme="dark"><\/script>`;
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = '';
+      } catch (e) {
+        document.getElementById('loading').textContent = 'Failed to load agent';
+      }
+    }
+
+    async function send() {
+      const input = document.getElementById('chat-input');
+      const message = input.value.trim();
+      if (!message) return;
+      input.value = '';
+
+      const msgs = document.getElementById('chat-msgs');
+      msgs.innerHTML += `<div class="msg user">${esc(message)}</div>`;
+      msgs.scrollTop = msgs.scrollHeight;
+      document.getElementById('thinking').style.display = '';
+
+      try {
+        const res = await fetch(`${API}/v1/public/agents/${agentId}/try`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message, sessionId }),
+        });
+        const data = await res.json();
+        sessionId = data.sessionId || sessionId;
+
+        if (data.message) {
+          msgs.innerHTML += `<div class="msg assistant">${esc(data.message.content)}</div>`;
+        }
+        if (data.error) {
+          msgs.innerHTML += `<div class="msg system">${esc(data.error)}</div>`;
+        }
+      } catch (e) {
+        msgs.innerHTML += `<div class="msg system">Error: ${esc(e.message)}</div>`;
+      }
+      document.getElementById('thinking').style.display = 'none';
+      msgs.scrollTop = msgs.scrollHeight;
+    }
+
+    loadAgent();
+  </script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 /**
- * ProAgentStore host worker — serves marketing pages + console.
+ * ProAgentStore host worker — serves marketing pages, console, agent details, widget.
  * Pages are inlined from store/ at build time via build.js → pages.ts.
  */
-import { homepage, aboutPage, getStartedPage, consolePage } from './pages.js';
+import { homepage, aboutPage, getStartedPage, consolePage, agentDetailPage, widgetJs } from './pages.js';
 
 const PAGES: Record<string, string> = {
   '/': homepage,
@@ -14,12 +14,19 @@ const PAGES: Record<string, string> = {
   '/console/': consolePage,
 };
 
-const HEADERS: Record<string, string> = {
+const HTML_HEADERS: Record<string, string> = {
   'Content-Type': 'text/html; charset=utf-8',
   'Cache-Control': 'public, max-age=300',
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+};
+
+const JS_HEADERS: Record<string, string> = {
+  'Content-Type': 'application/javascript; charset=utf-8',
+  'Cache-Control': 'public, max-age=3600',
+  'X-Content-Type-Options': 'nosniff',
+  'Access-Control-Allow-Origin': '*',
 };
 
 export default {
@@ -29,13 +36,23 @@ export default {
     }
 
     const url = new URL(request.url);
-    const page = PAGES[url.pathname];
+    const path = url.pathname;
 
-    if (page) {
-      return new Response(page, { headers: HEADERS });
+    // Static pages
+    const page = PAGES[path];
+    if (page) return new Response(page, { headers: HTML_HEADERS });
+
+    // Widget JS (embeddable, CORS-allowed)
+    if (path === '/widget.js') {
+      return new Response(widgetJs, { headers: JS_HEADERS });
     }
 
-    if (url.pathname === '/index.html') {
+    // Agent detail pages: /agents/{slug} or /agents/{slug}/
+    if (path.match(/^\/agents\/[a-z0-9-]+\/?$/)) {
+      return new Response(agentDetailPage, { headers: HTML_HEADERS });
+    }
+
+    if (path === '/index.html') {
       return Response.redirect(`${url.origin}/`, 301);
     }
 
