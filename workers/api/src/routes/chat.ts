@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import type { Env } from '../types.js';
 import { requireUser, HttpError } from '../lib/auth.js';
 
@@ -34,7 +35,7 @@ chatRoutes.post('/:id/chat', async (c) => {
   ).bind(crypto.randomUUID(), agent.id, session.uid).run();
 
   const data = await doRes.json();
-  return c.json(data, doRes.status as 200);
+  return c.json(data, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
 });
 
 /** WebSocket upgrade for real-time chat. */

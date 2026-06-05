@@ -61,6 +61,12 @@ export interface AgentState {
 
 const DEFAULT_MODEL = '@cf/meta/llama-3.2-3b-instruct';
 const MAX_CONTEXT_MESSAGES = 50;
+const DEPRECATED_MODELS = new Set([
+  '@cf/meta/llama-3.1-8b-instruct',
+  '@cf/meta/llama-3.1-70b-instruct',
+  '@cf/mistral/mistral-7b-instruct-v0.2',
+  '@cf/qwen/qwen1.5-14b-chat-awq',
+]);
 
 export class AgentDO extends DurableObject<Env> {
 
@@ -156,6 +162,12 @@ export class AgentDO extends DurableObject<Env> {
     const state = await this.getState();
     if (!state) return json({ error: 'Agent not initialized' }, 400);
 
+    // Auto-heal deprecated models
+    if (!state.model || DEPRECATED_MODELS.has(state.model)) {
+      state.model = DEFAULT_MODEL;
+      await this.ctx.storage.put('state', state);
+    }
+
     // Save user message
     const userMsg: AgentMessage = {
       id: crypto.randomUUID(),
@@ -190,9 +202,21 @@ export class AgentDO extends DurableObject<Env> {
 
       return json({ message: assistantMsg });
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       await this.ctx.storage.put('state', { ...state, status: 'error' });
-      this.broadcast({ type: 'status', status: 'error' });
-      throw err;
+      this.broadcast({ type: 'status', status: 'error', error: errMsg });
+
+      const errorMsg: AgentMessage = {
+        id: crypto.randomUUID(),
+        role: 'system',
+        content: `Error: ${errMsg}`,
+        channel: channel || 'chat',
+        createdAt: new Date().toISOString(),
+      };
+      await this.appendMessage(errorMsg);
+      this.broadcast({ type: 'message', message: errorMsg });
+
+      return json({ error: errMsg }, 500);
     }
   }
 
