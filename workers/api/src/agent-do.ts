@@ -68,6 +68,14 @@ const DEPRECATED_MODELS = new Set([
   '@cf/qwen/qwen1.5-14b-chat-awq',
 ]);
 
+/** Models that support structured function calling (tool_calls in response). */
+const TOOL_CAPABLE_MODELS = new Set([
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  '@cf/meta/llama-4-scout-17b-16e-instruct',
+  '@cf/mistralai/mistral-small-3.1-24b-instruct',
+  '@cf/qwen/qwen2.5-coder-32b-instruct',
+]);
+
 export class AgentDO extends DurableObject<Env> {
 
   /**
@@ -247,9 +255,27 @@ export class AgentDO extends DurableObject<Env> {
       }
     }
 
-    systemPrompt += '\n\nYou have tools available. Use them to manage your memory, tasks, fetch data, and store files. Call tools when the user asks you to remember something, work on a task, or fetch external data.';
+    const useTools = TOOL_CAPABLE_MODELS.has(state.model);
 
-    // Build tool definitions for Workers AI function calling
+    if (useTools) {
+      systemPrompt += '\n\nYou have tools available. Use them to manage your memory, tasks, fetch data, and store files. Call tools when the user asks you to remember something, work on a task, or fetch external data.';
+    }
+
+    const aiMessages: { role: string; content: string }[] = [
+      { role: 'system', content: systemPrompt },
+      ...messages.map(m => ({ role: m.role, content: m.content })),
+    ];
+
+    // Simple path: no tool support — just call the model and return
+    if (!useTools) {
+      const result = await this.env.AI.run(
+        state.model as Parameters<Ai['run']>[0],
+        { messages: aiMessages },
+      ) as { response?: string };
+      return result.response || '';
+    }
+
+    // Tool-capable model: build tool definitions and run the tool-use loop
     const tools = AGENT_TOOLS.map(t => ({
       type: 'function' as const,
       function: {
@@ -265,12 +291,6 @@ export class AgentDO extends DurableObject<Env> {
       },
     }));
 
-    const aiMessages: { role: string; content: string }[] = [
-      { role: 'system', content: systemPrompt },
-      ...messages.map(m => ({ role: m.role, content: m.content })),
-    ];
-
-    // Tool-use loop: call AI, execute tools, feed results back, repeat
     const MAX_TOOL_ROUNDS = 5;
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const result = await this.env.AI.run(
@@ -278,12 +298,10 @@ export class AgentDO extends DurableObject<Env> {
         { messages: aiMessages, tools },
       ) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }> };
 
-      // No tool calls — return the text response
       if (!result.tool_calls || result.tool_calls.length === 0) {
         return result.response || '';
       }
 
-      // Execute each tool call
       const toolResults: string[] = [];
       for (const tc of result.tool_calls) {
         const callReq: ToolCallRequest = { name: tc.name, input: tc.arguments };
@@ -292,12 +310,10 @@ export class AgentDO extends DurableObject<Env> {
         this.broadcast({ type: 'tool_call', tool: tc.name, result: toolResult });
       }
 
-      // Feed tool results back into the conversation
       aiMessages.push({ role: 'assistant', content: `I called tools:\n${toolResults.join('\n')}` });
       aiMessages.push({ role: 'user', content: 'Continue based on the tool results above.' });
     }
 
-    // Exhausted tool rounds — get final response
     const final = await this.env.AI.run(
       state.model as Parameters<Ai['run']>[0],
       { messages: aiMessages },
