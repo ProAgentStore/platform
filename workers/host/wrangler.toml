@@ -1,0 +1,12 @@
+name = "proagentstore-host"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+workers_dev = false
+
+[[routes]]
+pattern = "proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[[routes]]
+pattern = "*.proagentstore.online/*"
+zone_name = "proagentstore.online"
