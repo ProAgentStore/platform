@@ -1,0 +1,52 @@
+name: Deploy Host Worker
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/host/**'
+      - 'store/**'
+      - '.github/workflows/deploy-host.yml'
+
+concurrency:
+  group: deploy-host
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build host pages
+        working-directory: workers/host
+        run: node build.js
+
+      - name: Deploy host worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/host
+          command: deploy
+
+      - name: Smoke test
+        run: |
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://proagentstore.online/)
+            if [ "$STATUS" = "200" ]; then
+              echo "Host check passed"
+              exit 0
+            fi
+            echo "Attempt $i: got $STATUS, retrying..."
+            sleep 5
+          done
+          echo "Host check failed after 5 attempts"
+          exit 1

@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Env } from './types.js';
 import { HttpError } from './lib/auth.js';
+import { rateLimitDefault, rateLimitStrict } from './lib/rate-limit.js';
 import { authRoutes } from './routes/auth.js';
 import { agentRoutes } from './routes/agents.js';
 import { chatRoutes } from './routes/chat.js';
@@ -33,6 +34,11 @@ app.use('*', async (c, next) => {
   c.header('Referrer-Policy', 'strict-origin-when-cross-origin');
   await next();
 });
+
+// Rate limiting: 60 req/min default, 10 req/min for expensive routes
+app.use('/v1/*', rateLimitDefault());
+app.use('/v1/agents/*/chat', rateLimitStrict());
+app.use('/v1/agents/*/run', rateLimitStrict());
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 
