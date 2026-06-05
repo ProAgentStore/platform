@@ -5,6 +5,16 @@ import { requireUser, HttpError } from '../lib/auth.js';
 
 export const chatRoutes = new Hono<{ Bindings: Env }>();
 
+/** Resolve agent from :id param (by id or slug). */
+async function resolveAgent(c: { req: { param(k: string): string }; env: Env }) {
+  const id = c.req.param('id');
+  const agent = await c.env.DB.prepare(
+    'SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)',
+  ).bind(id).first<{ id: string }>();
+  if (!agent) throw new HttpError(404, 'Agent not found');
+  return agent;
+}
+
 /** Send a message to an agent (HTTP). */
 chatRoutes.post('/:id/chat', async (c) => {
   const session = await requireUser(c);
@@ -129,4 +139,67 @@ chatRoutes.post('/:id/tasks', async (c) => {
     body: JSON.stringify(await c.req.json()),
   }));
   return c.json(await doRes.json(), doRes.status as 201);
+});
+
+/** Agent DO state (identity, guardrails, etc.) */
+chatRoutes.get('/:id/state', async (c) => {
+  await requireUser(c);
+  const agent = await resolveAgent(c);
+  const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
+  const doRes = await stub.fetch(new Request('http://agent/state'));
+  return c.json(await doRes.json());
+});
+
+chatRoutes.put('/:id/state', async (c) => {
+  await requireUser(c);
+  const agent = await resolveAgent(c);
+  const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
+  const doRes = await stub.fetch(new Request('http://agent/state', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(await c.req.json()),
+  }));
+  return c.json(await doRes.json());
+});
+
+/** Knowledge base CRUD — forwarded to DO. */
+chatRoutes.get('/:id/knowledge', async (c) => {
+  await requireUser(c);
+  const agent = await resolveAgent(c);
+  const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
+  const doRes = await stub.fetch(new Request('http://agent/knowledge'));
+  return c.json(await doRes.json());
+});
+
+chatRoutes.post('/:id/knowledge', async (c) => {
+  await requireUser(c);
+  const agent = await resolveAgent(c);
+  const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
+  const doRes = await stub.fetch(new Request('http://agent/knowledge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(await c.req.json()),
+  }));
+  return c.json(await doRes.json(), doRes.status as 201);
+});
+
+chatRoutes.delete('/:id/knowledge/:docId', async (c) => {
+  await requireUser(c);
+  const agent = await resolveAgent(c);
+  const docId = c.req.param('docId');
+  const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
+  const doRes = await stub.fetch(new Request(`http://agent/knowledge/${docId}`, { method: 'DELETE' }));
+  return c.json(await doRes.json());
+});
+
+chatRoutes.post('/:id/knowledge/ingest-url', async (c) => {
+  await requireUser(c);
+  const agent = await resolveAgent(c);
+  const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
+  const doRes = await stub.fetch(new Request('http://agent/knowledge/ingest-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(await c.req.json()),
+  }));
+  return c.json(await doRes.json(), (doRes.ok ? 201 : doRes.status) as ContentfulStatusCode);
 });

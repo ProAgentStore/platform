@@ -241,6 +241,7 @@
 
     <div class="tabs">
       <button class="tab active" onclick="switchTab('chat')">Chat</button>
+      <button class="tab" onclick="switchTab('knowledge')">Knowledge</button>
       <button class="tab" onclick="switchTab('memory')">Memory</button>
       <button class="tab" onclick="switchTab('tasks')">Tasks</button>
       <button class="tab" onclick="switchTab('settings')">Settings</button>
@@ -256,6 +257,45 @@
           <button onclick="sendMessage()">Send</button>
         </div>
       </div>
+    </div>
+
+    <!-- Knowledge tab -->
+    <div id="tab-knowledge" class="tab-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+        <h3 style="font-size:1rem">Knowledge Base</h3>
+      </div>
+      <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1rem">Documents your agent uses to answer questions. Add text, URLs, or upload files.</p>
+
+      <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
+        <button onclick="showKbForm('paste')" class="btn btn-outline btn-sm">Paste Text</button>
+        <button onclick="showKbForm('url')" class="btn btn-outline btn-sm">Import URL</button>
+        <button onclick="document.getElementById('kb-file-input').click()" class="btn btn-outline btn-sm">Upload File</button>
+        <input type="file" id="kb-file-input" accept=".txt,.md,.csv,.json,.html" style="display:none" onchange="uploadKbFile(this)">
+      </div>
+
+      <div id="kb-form-paste" class="create-form hidden" style="margin-bottom:1rem">
+        <div><label>Title</label><input id="kb-title" placeholder="e.g. Product FAQ"></div>
+        <div style="margin-top:0.5rem"><label>Content</label><textarea id="kb-content" placeholder="Paste your text here..." style="min-height:120px"></textarea></div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+          <button onclick="addKbPaste()" class="btn btn-primary btn-sm">Add Document</button>
+          <button onclick="hideKbForms()" class="btn btn-outline btn-sm">Cancel</button>
+        </div>
+      </div>
+
+      <div id="kb-form-url" class="create-form hidden" style="margin-bottom:1rem">
+        <div class="form-row">
+          <div style="flex:2"><label>URL</label><input id="kb-url" placeholder="https://docs.example.com/faq"></div>
+          <div><label>Title (optional)</label><input id="kb-url-title" placeholder="Auto-detected"></div>
+        </div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+          <button onclick="addKbUrl()" class="btn btn-primary btn-sm">Import</button>
+          <button onclick="hideKbForms()" class="btn btn-outline btn-sm">Cancel</button>
+        </div>
+        <div id="kb-url-status" class="error hidden"></div>
+      </div>
+
+      <div id="kb-list" class="memory-list"></div>
+      <div id="kb-empty" class="empty hidden">No documents yet. Add your first knowledge source above.</div>
     </div>
 
     <!-- Memory tab -->
@@ -307,8 +347,8 @@
 
     <!-- Settings tab -->
     <div id="tab-settings" class="tab-panel">
-      <div class="create-form">
-        <h3>Agent Settings</h3>
+      <div class="create-form" style="margin-bottom:1rem">
+        <h3>Identity</h3>
         <div class="form-row">
           <div><label>Name</label><input id="s-name"></div>
           <div><label>Category</label>
@@ -323,8 +363,41 @@
           </div>
         </div>
         <div class="form-row">
-          <div style="flex:2"><label>Description</label><textarea id="s-desc"></textarea></div>
+          <div style="flex:2"><label>Description</label><textarea id="s-desc" placeholder="What this agent does (shown in store)"></textarea></div>
         </div>
+        <div class="form-row">
+          <div><label>Personality</label><textarea id="s-personality" placeholder="How the agent communicates"></textarea></div>
+          <div><label>Goal</label><textarea id="s-goal" placeholder="What the agent aims to achieve"></textarea></div>
+        </div>
+        <div><label>Welcome Message</label><input id="s-welcome" placeholder="First message shown to users"></div>
+      </div>
+
+      <div class="create-form" style="margin-bottom:1rem">
+        <h3>Guardrails</h3>
+        <div><label>Topic Restrictions</label><input id="s-topics" placeholder="e.g. Only answer about cooking and recipes"></div>
+        <div style="margin-top:0.5rem"><label>Blocked Terms (comma-separated)</label><input id="s-blocked" placeholder="competitor-name, offensive-word"></div>
+        <div class="form-row" style="margin-top:0.5rem">
+          <div><label>Response Style</label>
+            <select id="s-style">
+              <option value="">Default</option>
+              <option value="professional">Professional</option>
+              <option value="casual">Casual</option>
+              <option value="concise">Concise</option>
+              <option value="detailed">Detailed</option>
+              <option value="friendly">Friendly</option>
+            </select>
+          </div>
+          <div><label>Max Response Length</label><input id="s-maxlen" type="number" placeholder="0 = unlimited" min="0"></div>
+        </div>
+        <div style="margin-top:0.5rem">
+          <label style="display:inline-flex;align-items:center;gap:0.5rem;cursor:pointer">
+            <input type="checkbox" id="s-citations"> Require citations from knowledge base
+          </label>
+        </div>
+      </div>
+
+      <div class="create-form" style="margin-bottom:1rem">
+        <h3>Model &amp; Publishing</h3>
         <div class="form-row">
           <div><label>Visibility</label>
             <select id="s-visibility">
@@ -335,17 +408,19 @@
           </div>
           <div><label>Model</label>
             <select id="s-model">
-              <option value="@cf/meta/llama-3.2-3b-instruct">Llama 3.1 8B</option>
-              <option value="@cf/meta/llama-3.1-70b-instruct">Llama 3.1 70B</option>
-              <option value="@cf/mistral/mistral-7b-instruct-v0.2">Mistral 7B</option>
-              <option value="@cf/qwen/qwen1.5-14b-chat-awq">Qwen 14B</option>
+              <option value="@cf/meta/llama-3.2-3b-instruct">Llama 3.2 3B (fast)</option>
+              <option value="@cf/meta/llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B</option>
+              <option value="@cf/meta/llama-3.3-70b-instruct-fp8-fast">Llama 3.3 70B</option>
+              <option value="@cf/mistralai/mistral-small-3.1-24b-instruct">Mistral Small 24B</option>
+              <option value="@cf/qwen/qwen2.5-coder-32b-instruct">Qwen 2.5 Coder 32B</option>
             </select>
           </div>
         </div>
-        <div style="display:flex;gap:0.5rem;margin-top:0.75rem">
-          <button onclick="saveSettings()" class="btn btn-primary btn-sm">Save</button>
-          <button onclick="deleteAgent()" class="btn btn-danger btn-sm">Delete Agent</button>
-        </div>
+      </div>
+
+      <div style="display:flex;gap:0.5rem">
+        <button onclick="saveSettings()" class="btn btn-primary btn-sm">Save All Settings</button>
+        <button onclick="deleteAgent()" class="btn btn-danger btn-sm">Delete Agent</button>
       </div>
     </div>
   </div>
@@ -565,15 +640,34 @@ console.log(response)</pre>
         document.getElementById('detail-desc').textContent = agent.description;
         if (agent.icon_bg) document.getElementById('detail-icon').style.background = agent.icon_bg;
 
-        // Settings
+        // Also fetch DO state for guardrails/personality
+        let doState = {};
+        try {
+          const stub = await api(`/v1/agents/${agent.id}/state`);
+          doState = stub;
+        } catch {}
+
+        // Settings — identity
         document.getElementById('s-name').value = agent.name;
         document.getElementById('s-desc').value = agent.description;
         document.getElementById('s-category').value = agent.category;
         document.getElementById('s-visibility').value = agent.visibility;
         document.getElementById('s-model').value = agent.model || '@cf/meta/llama-3.2-3b-instruct';
+        document.getElementById('s-personality').value = doState.personality || '';
+        document.getElementById('s-goal').value = doState.goal || '';
+        document.getElementById('s-welcome').value = doState.welcomeMessage || '';
+
+        // Settings — guardrails
+        const gr = doState.guardrails || {};
+        document.getElementById('s-topics').value = gr.topicRestrictions || '';
+        document.getElementById('s-blocked').value = (gr.blockedTerms || []).join(', ');
+        document.getElementById('s-style').value = gr.responseStyle || '';
+        document.getElementById('s-maxlen').value = gr.maxResponseLength || '';
+        document.getElementById('s-citations').checked = gr.requireCitations || false;
 
         switchTab('chat');
         loadMessages();
+        loadKnowledge();
         loadMemory();
         loadTasks();
       } catch (e) { alert(e.message); }
@@ -622,6 +716,110 @@ console.log(response)</pre>
       }
       document.getElementById('chat-thinking').classList.add('hidden');
       container.scrollTop = container.scrollHeight;
+    }
+
+    // ── Knowledge Base ─────────────────────────────────────────
+
+    function showKbForm(type) {
+      hideKbForms();
+      document.getElementById(`kb-form-${type}`).classList.remove('hidden');
+    }
+    function hideKbForms() {
+      document.getElementById('kb-form-paste').classList.add('hidden');
+      document.getElementById('kb-form-url').classList.add('hidden');
+    }
+
+    async function loadKnowledge() {
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/knowledge`);
+        const list = document.getElementById('kb-list');
+        const empty = document.getElementById('kb-empty');
+        list.innerHTML = '';
+        const docs = data.documents || [];
+        empty.classList.toggle('hidden', docs.length > 0);
+        if (!docs.length) return;
+        for (const doc of docs) {
+          const item = document.createElement('div');
+          item.className = 'memory-item';
+          const preview = doc.content.length > 120 ? doc.content.slice(0, 120) + '...' : doc.content;
+          item.innerHTML = `<div style="flex:1;min-width:0">
+            <span class="key">${esc(doc.title)}</span>
+            <span class="type">${esc(doc.source)}</span>
+            ${doc.sourceUrl ? `<span class="type" style="margin-left:0.25rem">${esc(doc.sourceUrl)}</span>` : ''}
+            <div class="content">${esc(preview)}</div>
+            <div style="font-size:0.7rem;color:var(--muted-soft);margin-top:0.2rem">${Math.round(doc.content.length / 1024)}KB</div>
+          </div>`;
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-outline btn-sm';
+          btn.style.flexShrink = '0';
+          btn.textContent = '\u00d7';
+          btn.addEventListener('click', () => deleteKbDoc(doc.id));
+          item.appendChild(btn);
+          list.appendChild(item);
+        }
+      } catch {}
+    }
+
+    async function addKbPaste() {
+      const title = document.getElementById('kb-title').value.trim();
+      const content = document.getElementById('kb-content').value.trim();
+      if (!title || !content) { alert('Title and content required'); return; }
+      try {
+        await api(`/v1/agents/${currentAgent.id}/knowledge`, {
+          method: 'POST',
+          body: JSON.stringify({ title, content, source: 'paste' }),
+        });
+        hideKbForms();
+        document.getElementById('kb-title').value = '';
+        document.getElementById('kb-content').value = '';
+        loadKnowledge();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function addKbUrl() {
+      const url = document.getElementById('kb-url').value.trim();
+      if (!url) { alert('URL required'); return; }
+      const title = document.getElementById('kb-url-title').value.trim();
+      const statusEl = document.getElementById('kb-url-status');
+      statusEl.textContent = 'Importing...';
+      statusEl.classList.remove('hidden');
+      statusEl.style.color = 'var(--muted)';
+      try {
+        await api(`/v1/agents/${currentAgent.id}/knowledge/ingest-url`, {
+          method: 'POST',
+          body: JSON.stringify({ url, title: title || undefined }),
+        });
+        hideKbForms();
+        statusEl.classList.add('hidden');
+        document.getElementById('kb-url').value = '';
+        document.getElementById('kb-url-title').value = '';
+        loadKnowledge();
+      } catch (e) {
+        statusEl.textContent = e.message;
+        statusEl.style.color = '';
+      }
+    }
+
+    async function uploadKbFile(input) {
+      const file = input.files?.[0];
+      if (!file) return;
+      const text = await file.text();
+      try {
+        await api(`/v1/agents/${currentAgent.id}/knowledge`, {
+          method: 'POST',
+          body: JSON.stringify({ title: file.name, content: text, source: 'upload' }),
+        });
+        loadKnowledge();
+      } catch (e) { alert(e.message); }
+      input.value = '';
+    }
+
+    async function deleteKbDoc(id) {
+      if (!confirm('Delete this document?')) return;
+      try {
+        await api(`/v1/agents/${currentAgent.id}/knowledge/${id}`, { method: 'DELETE' });
+        loadKnowledge();
+      } catch {}
     }
 
     // ── Memory ──────────────────────────────────────────────────
@@ -724,6 +922,7 @@ console.log(response)</pre>
 
     async function saveSettings() {
       try {
+        // Save D1 fields (agent registry)
         await api(`/v1/agents/${currentAgent.id}`, {
           method: 'PUT',
           body: JSON.stringify({
@@ -734,6 +933,28 @@ console.log(response)</pre>
             model: document.getElementById('s-model').value,
           }),
         });
+
+        // Save DO state (identity + guardrails)
+        const blockedRaw = document.getElementById('s-blocked').value;
+        const blockedTerms = blockedRaw ? blockedRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+        await api(`/v1/agents/${currentAgent.id}/state`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: document.getElementById('s-name').value,
+            personality: document.getElementById('s-personality').value,
+            goal: document.getElementById('s-goal').value,
+            model: document.getElementById('s-model').value,
+            welcomeMessage: document.getElementById('s-welcome').value,
+            guardrails: {
+              topicRestrictions: document.getElementById('s-topics').value,
+              blockedTerms,
+              responseStyle: document.getElementById('s-style').value,
+              maxResponseLength: parseInt(document.getElementById('s-maxlen').value) || 0,
+              requireCitations: document.getElementById('s-citations').checked,
+            },
+          }),
+        });
+
         alert('Saved!');
         openAgent(currentAgent.id);
       } catch (e) { alert(e.message); }

@@ -49,6 +49,23 @@ export interface AgentTask {
   updatedAt: string;
 }
 
+export interface Guardrails {
+  topicRestrictions: string;   // "Only answer about cooking, nutrition, and recipes"
+  blockedTerms: string[];      // Words/phrases the agent should never use
+  responseStyle: string;       // "professional", "casual", "concise", etc.
+  maxResponseLength: number;   // 0 = unlimited
+  requireCitations: boolean;   // Must cite knowledge sources
+}
+
+export interface KnowledgeDoc {
+  id: string;
+  title: string;
+  content: string;
+  source: 'upload' | 'url' | 'paste' | 'google-docs' | 'webhook';
+  sourceUrl?: string;
+  addedAt: string;
+}
+
 export interface AgentState {
   agentId: string;
   name: string;
@@ -57,6 +74,9 @@ export interface AgentState {
   model: string;
   status: 'idle' | 'thinking' | 'error';
   systemPrompt: string;
+  guardrails: Guardrails;
+  welcomeMessage: string;      // First message shown to users
+  isPublished: boolean;
 }
 
 const DEFAULT_MODEL = '@cf/meta/llama-3.2-3b-instruct';
@@ -87,7 +107,16 @@ export class AgentDO extends DurableObject<Env> {
     personality?: string;
     goal?: string;
     model?: string;
+    guardrails?: Partial<Guardrails>;
+    welcomeMessage?: string;
   }): Promise<void> {
+    const guardrails: Guardrails = {
+      topicRestrictions: config.guardrails?.topicRestrictions || '',
+      blockedTerms: config.guardrails?.blockedTerms || [],
+      responseStyle: config.guardrails?.responseStyle || '',
+      maxResponseLength: config.guardrails?.maxResponseLength || 0,
+      requireCitations: config.guardrails?.requireCitations || false,
+    };
     const state: AgentState = {
       agentId: config.agentId,
       name: config.name,
@@ -95,7 +124,10 @@ export class AgentDO extends DurableObject<Env> {
       goal: config.goal || '',
       model: config.model || DEFAULT_MODEL,
       status: 'idle',
-      systemPrompt: this.buildSystemPrompt(config.name, config.personality, config.goal),
+      systemPrompt: this.buildSystemPrompt(config.name, config.personality, config.goal, guardrails),
+      guardrails,
+      welcomeMessage: config.welcomeMessage || '',
+      isPublished: false,
     };
     await this.ctx.storage.put('state', state);
 
@@ -144,6 +176,14 @@ export class AgentDO extends DurableObject<Env> {
       // Messages history
       if (path === '/messages' && request.method === 'GET') return this.handleGetMessages(url);
 
+      // Knowledge base
+      if (path === '/knowledge' && request.method === 'GET') return this.handleGetKnowledge();
+      if (path === '/knowledge' && request.method === 'POST') return this.handleAddKnowledge(request);
+      if (path.startsWith('/knowledge/') && request.method === 'DELETE') {
+        return this.handleDeleteKnowledge(path.slice('/knowledge/'.length));
+      }
+      if (path === '/knowledge/ingest-url' && request.method === 'POST') return this.handleIngestUrl(request);
+
       // State
       if (path === '/init' && request.method === 'POST') return this.handleInit(request);
       if (path === '/state' && request.method === 'GET') return this.handleGetState();
@@ -173,8 +213,14 @@ export class AgentDO extends DurableObject<Env> {
     // Auto-heal deprecated models
     if (!state.model || DEPRECATED_MODELS.has(state.model)) {
       state.model = DEFAULT_MODEL;
-      await this.ctx.storage.put('state', state);
     }
+    // Auto-migrate old state missing new fields
+    if (!state.guardrails) {
+      state.guardrails = { topicRestrictions: '', blockedTerms: [], responseStyle: '', maxResponseLength: 0, requireCitations: false };
+      state.welcomeMessage = state.welcomeMessage || '';
+      state.isPublished = state.isPublished || false;
+    }
+    await this.ctx.storage.put('state', state);
 
     // Save user message
     const userMsg: AgentMessage = {
@@ -236,9 +282,26 @@ export class AgentDO extends DurableObject<Env> {
     const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
     const memory = await this.getAllMemory();
     const tasks = await this.getAllTasks();
+    const knowledge = await this.getAllKnowledge();
 
-    // Build system prompt with memory + tasks context
+    // Build system prompt with knowledge + memory + tasks context
     let systemPrompt = state.systemPrompt;
+
+    // Inject knowledge base — the core of what makes this agent useful
+    if (knowledge.length > 0) {
+      systemPrompt += '\n\n## Knowledge Base\nAnswer questions using the following documents. Cite the document title when referencing information.\n';
+      let totalLen = 0;
+      const MAX_KB_CHARS = 30_000; // Keep context manageable
+      for (const doc of knowledge) {
+        if (totalLen + doc.content.length > MAX_KB_CHARS) {
+          systemPrompt += `\n### ${doc.title}\n${doc.content.slice(0, MAX_KB_CHARS - totalLen)}...[truncated]\n`;
+          break;
+        }
+        systemPrompt += `\n### ${doc.title}\n${doc.content}\n`;
+        totalLen += doc.content.length;
+      }
+    }
+
     if (memory.length > 0) {
       systemPrompt += '\n\n## Your Memory\n';
       for (const m of memory) {
@@ -470,6 +533,13 @@ export class AgentDO extends DurableObject<Env> {
   private async handleGetState(): Promise<Response> {
     const state = await this.getState();
     if (!state) return json({ error: 'Not initialized' }, 404);
+    // Auto-migrate old state missing new fields
+    if (!state.guardrails) {
+      state.guardrails = { topicRestrictions: '', blockedTerms: [], responseStyle: '', maxResponseLength: 0, requireCitations: false };
+      state.welcomeMessage = state.welcomeMessage || '';
+      state.isPublished = state.isPublished || false;
+      await this.ctx.storage.put('state', state);
+    }
     const { systemPrompt: _, ...public_ } = state;
     return json(public_);
   }
@@ -477,23 +547,122 @@ export class AgentDO extends DurableObject<Env> {
   private async handleUpdateState(request: Request): Promise<Response> {
     const state = await this.getState();
     if (!state) return json({ error: 'Not initialized' }, 404);
-    const updates = await request.json<Partial<AgentState>>();
+    const updates = await request.json<Partial<AgentState> & { guardrails?: Partial<Guardrails> }>();
 
     if (updates.name !== undefined) state.name = updates.name;
     if (updates.personality !== undefined) state.personality = updates.personality;
     if (updates.goal !== undefined) state.goal = updates.goal;
     if (updates.model !== undefined) state.model = updates.model;
-    state.systemPrompt = this.buildSystemPrompt(state.name, state.personality, state.goal);
+    if (updates.welcomeMessage !== undefined) state.welcomeMessage = updates.welcomeMessage;
+    if (updates.isPublished !== undefined) state.isPublished = updates.isPublished;
+    if (updates.guardrails) {
+      state.guardrails = { ...state.guardrails, ...updates.guardrails };
+    }
+    state.systemPrompt = this.buildSystemPrompt(state.name, state.personality, state.goal, state.guardrails);
     await this.ctx.storage.put('state', state);
     return json({ success: true });
   }
 
+  // ── Knowledge Base ─────────────────────────────────────────────────────────
+
+  private async getAllKnowledge(): Promise<KnowledgeDoc[]> {
+    const all = await this.ctx.storage.list<KnowledgeDoc>({ prefix: 'kb:' });
+    return [...all.values()];
+  }
+
+  private async handleGetKnowledge(): Promise<Response> {
+    return json({ documents: await this.getAllKnowledge() });
+  }
+
+  private async handleAddKnowledge(request: Request): Promise<Response> {
+    const body = await request.json<{
+      title: string;
+      content: string;
+      source?: KnowledgeDoc['source'];
+      sourceUrl?: string;
+    }>();
+    if (!body.title || !body.content) return json({ error: 'title and content required' }, 400);
+
+    const doc: KnowledgeDoc = {
+      id: crypto.randomUUID(),
+      title: body.title,
+      content: body.content,
+      source: body.source || 'paste',
+      sourceUrl: body.sourceUrl,
+      addedAt: new Date().toISOString(),
+    };
+    await this.ctx.storage.put(`kb:${doc.id}`, doc);
+    return json(doc, 201);
+  }
+
+  private async handleDeleteKnowledge(id: string): Promise<Response> {
+    await this.ctx.storage.delete(`kb:${decodeURIComponent(id)}`);
+    return json({ success: true });
+  }
+
+  private async handleIngestUrl(request: Request): Promise<Response> {
+    const { url, title } = await request.json<{ url: string; title?: string }>();
+    if (!url) return json({ error: 'url required' }, 400);
+
+    try {
+      const res = await fetch(url, { headers: { 'User-Agent': 'ProAgentStore-Ingest' } });
+      if (!res.ok) return json({ error: `Failed to fetch: ${res.status}` }, 400);
+
+      const contentType = res.headers.get('content-type') || '';
+      let text = await res.text();
+
+      // Strip HTML tags for web pages
+      if (contentType.includes('html')) {
+        text = text.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                   .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                   .replace(/<[^>]+>/g, ' ')
+                   .replace(/\s+/g, ' ')
+                   .trim();
+      }
+
+      // Truncate to 50KB per doc
+      if (text.length > 50_000) text = text.slice(0, 50_000) + '\n...[truncated]';
+
+      const doc: KnowledgeDoc = {
+        id: crypto.randomUUID(),
+        title: title || new URL(url).hostname,
+        content: text,
+        source: 'url',
+        sourceUrl: url,
+        addedAt: new Date().toISOString(),
+      };
+      await this.ctx.storage.put(`kb:${doc.id}`, doc);
+      return json(doc, 201);
+    } catch (err) {
+      return json({ error: `Ingest failed: ${err instanceof Error ? err.message : String(err)}` }, 400);
+    }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  private buildSystemPrompt(name: string, personality?: string, goal?: string): string {
+  private buildSystemPrompt(name: string, personality?: string, goal?: string, guardrails?: Guardrails): string {
     let prompt = `You are ${name}, a server-powered AI agent on ProAgentStore.`;
     if (personality) prompt += `\n\nPersonality: ${personality}`;
     if (goal) prompt += `\n\nGoal: ${goal}`;
+
+    if (guardrails) {
+      if (guardrails.topicRestrictions) {
+        prompt += `\n\nTopic restrictions: ${guardrails.topicRestrictions}. If the user asks about anything outside this scope, politely decline and redirect to your area of expertise.`;
+      }
+      if (guardrails.blockedTerms.length > 0) {
+        prompt += `\n\nNever use these words or phrases: ${guardrails.blockedTerms.join(', ')}`;
+      }
+      if (guardrails.responseStyle) {
+        prompt += `\n\nResponse style: ${guardrails.responseStyle}`;
+      }
+      if (guardrails.maxResponseLength > 0) {
+        prompt += `\n\nKeep responses under ${guardrails.maxResponseLength} characters.`;
+      }
+      if (guardrails.requireCitations) {
+        prompt += '\n\nAlways cite which knowledge base document you are drawing from when answering.';
+      }
+    }
+
     prompt += '\n\nYou have persistent memory and tasks. Be helpful, concise, and proactive about completing your tasks.';
     return prompt;
   }
