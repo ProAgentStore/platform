@@ -341,10 +341,10 @@
 
     async function signIn() {
       const res = await fetch(`${API}/v1/auth/config`);
-      const { github_client_id } = await res.json();
-      if (!github_client_id) { alert('GitHub OAuth not configured yet.'); return; }
-      const redirect = encodeURIComponent(window.location.origin + '/console/');
-      window.location.href = `https://github.com/login/oauth/authorize?client_id=${github_client_id}&redirect_uri=${redirect}&scope=read:user`;
+      const config = await res.json();
+      const returnTo = encodeURIComponent(window.location.origin + '/console/');
+      // Use FAS shared OAuth (same approach as FAGS console)
+      window.location.href = `${config.oauth_url}?app_id=${config.app_id}&response_mode=${config.response_mode}&return_to=${returnTo}`;
     }
 
     function signOut() {
@@ -357,13 +357,15 @@
 
     async function handleOAuthCallback() {
       const params = new URLSearchParams(window.location.search);
-      const code = params.get('code');
-      if (!code) return false;
+      // FAS returns the token as fas_session in the query string
+      const fasSession = params.get('fas_session');
+      if (!fasSession) return false;
 
       try {
-        const res = await api('/v1/auth/github', {
+        // Exchange FAS token for a PAGS token
+        const res = await api('/v1/auth/exchange', {
           method: 'POST',
-          body: JSON.stringify({ code, return_to: window.location.origin + '/console/' }),
+          body: JSON.stringify({ fas_session: fasSession }),
         }, true);
         if (res.token) {
           setToken(res.token);
@@ -371,7 +373,7 @@
           window.history.replaceState({}, '', window.location.pathname);
           return true;
         }
-      } catch (e) { console.error('OAuth error:', e); }
+      } catch (e) { console.error('OAuth exchange error:', e); }
       window.history.replaceState({}, '', window.location.pathname);
       return false;
     }
