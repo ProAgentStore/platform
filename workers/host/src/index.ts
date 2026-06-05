@@ -1,8 +1,8 @@
 /**
- * ProAgentStore host worker — serves marketing pages.
+ * ProAgentStore host worker — serves marketing pages + console.
  * Pages are inlined from store/ at build time via build.js → pages.ts.
  */
-import { homepage, aboutPage, getStartedPage } from './pages.js';
+import { homepage, aboutPage, getStartedPage, consolePage } from './pages.js';
 
 const PAGES: Record<string, string> = {
   '/': homepage,
@@ -10,6 +10,8 @@ const PAGES: Record<string, string> = {
   '/about/': aboutPage,
   '/get-started': getStartedPage,
   '/get-started/': getStartedPage,
+  '/console': consolePage,
+  '/console/': consolePage,
 };
 
 const HEADERS: Record<string, string> = {

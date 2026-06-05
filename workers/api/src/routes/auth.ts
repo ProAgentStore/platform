@@ -4,6 +4,11 @@ import { signSession } from '../lib/session.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
+/** Public config for OAuth flow — returns client_id so the console can build the redirect URL. */
+authRoutes.get('/config', async (c) => {
+  return c.json({ github_client_id: c.env.GITHUB_CLIENT_ID });
+});
+
 /** GitHub OAuth callback — exchange code for token, upsert user, return session. */
 authRoutes.post('/github', async (c) => {
   const { code, return_to } = await c.req.json<{ code: string; return_to?: string }>();

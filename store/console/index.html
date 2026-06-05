@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Creator Console — ProAgentStore</title>
+  <meta name="description" content="Manage your server-powered AI agents on ProAgentStore.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    :root{
+      --font-body:'Manrope',system-ui,sans-serif;
+      --font-display:'Fraunces',Georgia,serif;
+      --paper:#0a0a0a;--panel:#141414;--panel-hover:#1a1a1a;
+      --ink:#fafafa;--ink-strong:#fff;
+      --muted:#a3a3a3;--muted-soft:#737373;
+      --accent:#7c3aed;--accent-hover:#6d28d9;--accent-soft:rgba(124,58,237,0.15);
+      --green:#22c55e;--red:#ef4444;--yellow:#eab308;--blue:#3b82f6;
+      --line:#262626;--line-strong:#404040;
+      --radius:0.75rem;
+    }
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100vh}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+    button{font-family:var(--font-body);cursor:pointer;border:none;background:none;color:inherit}
+
+    /* Header */
+    header{border-bottom:1px solid var(--line);padding:0.75rem 1.5rem;display:flex;align-items:center;gap:1.25rem}
+    .brand{display:flex;align-items:center;gap:0.6rem;text-decoration:none;color:var(--ink)}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    .brand-tag{font-size:0.72rem;color:var(--muted);font-weight:500}
+    nav{display:flex;gap:1.25rem;font-size:0.88rem;font-weight:600;margin-left:auto;align-items:center}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}
+    .avatar{width:28px;height:28px;border-radius:50%;border:2px solid var(--line)}
+    .user-info{display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;color:var(--muted)}
+
+    /* Layout */
+    .container{max-width:960px;margin:0 auto;padding:1.5rem}
+    .page-title{font-family:var(--font-display);font-size:1.5rem;font-weight:700;margin-bottom:1.5rem}
+
+    /* Login */
+    .login-page{display:flex;align-items:center;justify-content:center;min-height:80vh;flex-direction:column;gap:1.5rem;text-align:center}
+    .login-page h1{font-family:var(--font-display);font-size:2rem;font-weight:700}
+    .login-page p{color:var(--muted);max-width:400px;line-height:1.6}
+    .btn{display:inline-flex;align-items:center;gap:0.5rem;padding:0.65rem 1.25rem;border-radius:var(--radius);font-size:0.9rem;font-weight:600;transition:all 0.15s}
+    .btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-hover);text-decoration:none}
+    .btn-outline{border:1px solid var(--line);color:var(--muted)}.btn-outline:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+    .btn-danger{background:var(--red);color:#fff;font-size:0.8rem;padding:0.4rem 0.8rem}.btn-danger:hover{opacity:0.9}
+    .btn-sm{font-size:0.8rem;padding:0.35rem 0.75rem}
+    .gh-icon{width:20px;height:20px;fill:currentColor}
+
+    /* Agent grid */
+    .agents-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:0.75rem}
+    .agent-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1rem;cursor:pointer;transition:border-color 0.15s}
+    .agent-card:hover{border-color:var(--accent)}
+    .agent-card h3{font-size:0.95rem;font-weight:600;margin-bottom:0.25rem}
+    .agent-card p{font-size:0.8rem;color:var(--muted);margin-bottom:0.5rem}
+    .agent-meta{display:flex;gap:0.5rem;font-size:0.72rem}
+    .tag{padding:0.1rem 0.4rem;border-radius:0.25rem;font-weight:500}
+    .tag-draft{background:rgba(234,179,8,0.15);color:var(--yellow)}
+    .tag-published{background:rgba(34,197,94,0.15);color:var(--green)}
+    .tag-cat{background:var(--accent-soft);color:#a78bfa}
+
+    /* Create agent form */
+    .create-form{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.25rem;margin-bottom:1.5rem}
+    .create-form h3{font-size:1rem;font-weight:600;margin-bottom:1rem}
+    .form-row{display:flex;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap}
+    .form-row > *{flex:1;min-width:150px}
+    label{display:block;font-size:0.78rem;color:var(--muted);margin-bottom:0.25rem;font-weight:600}
+    input,textarea,select{width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.5rem;padding:0.5rem 0.75rem;color:var(--ink);font-family:var(--font-body);font-size:0.88rem}
+    input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+    textarea{resize:vertical;min-height:60px}
+
+    /* Agent detail */
+    .agent-header{display:flex;align-items:start;gap:1rem;margin-bottom:1.5rem}
+    .agent-icon{width:56px;height:56px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;flex-shrink:0}
+    .agent-header h2{font-family:var(--font-display);font-size:1.25rem;font-weight:700}
+    .agent-header .slug{font-size:0.78rem;color:var(--muted)}
+    .back-link{font-size:0.85rem;color:var(--muted);display:inline-flex;align-items:center;gap:0.3rem;margin-bottom:1rem;text-decoration:none}
+    .back-link:hover{color:var(--ink)}
+
+    /* Tabs */
+    .tabs{display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:1.25rem}
+    .tab{padding:0.6rem 1rem;font-size:0.85rem;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;transition:all 0.15s}
+    .tab:hover{color:var(--ink)}
+    .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+    .tab-panel{display:none}.tab-panel.active{display:block}
+
+    /* Chat */
+    .chat-container{display:flex;flex-direction:column;height:500px}
+    .chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:0.75rem;padding:0.5rem 0}
+    .chat-msg{max-width:80%;padding:0.65rem 0.85rem;border-radius:var(--radius);font-size:0.88rem;line-height:1.5;white-space:pre-wrap}
+    .chat-msg.user{background:var(--accent);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+    .chat-msg.assistant{background:var(--panel);border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
+    .chat-msg.system{background:rgba(234,179,8,0.1);color:var(--yellow);align-self:center;font-size:0.78rem;border-radius:999px;padding:0.3rem 0.85rem}
+    .chat-input{display:flex;gap:0.5rem;padding-top:0.75rem;border-top:1px solid var(--line)}
+    .chat-input input{flex:1}
+    .chat-input button{padding:0.5rem 1rem;background:var(--accent);color:#fff;border-radius:0.5rem;font-weight:600;font-size:0.85rem}
+    .thinking{color:var(--muted);font-style:italic;font-size:0.82rem;padding:0.5rem 0}
+
+    /* Memory + Tasks */
+    .memory-list,.task-list{display:flex;flex-direction:column;gap:0.5rem}
+    .memory-item,.task-item{background:var(--panel);border:1px solid var(--line);border-radius:0.5rem;padding:0.75rem;display:flex;justify-content:space-between;align-items:start;gap:0.75rem}
+    .memory-item .key{font-weight:600;font-size:0.85rem}.memory-item .type{font-size:0.72rem;color:#a78bfa}
+    .memory-item .content{font-size:0.82rem;color:var(--muted);margin-top:0.2rem}
+    .task-item .title{font-weight:600;font-size:0.85rem}.task-item .desc{font-size:0.8rem;color:var(--muted)}
+    .status-badge{font-size:0.7rem;padding:0.15rem 0.45rem;border-radius:999px;font-weight:600}
+    .status-pending{background:rgba(234,179,8,0.15);color:var(--yellow)}
+    .status-in_progress{background:rgba(59,130,246,0.15);color:var(--blue)}
+    .status-complete{background:rgba(34,197,94,0.15);color:var(--green)}
+    .status-blocked{background:rgba(239,68,68,0.15);color:var(--red)}
+
+    .empty{text-align:center;padding:2rem;color:var(--muted-soft);font-size:0.9rem}
+    .error{color:var(--red);font-size:0.82rem;margin-top:0.5rem}
+    .loading{text-align:center;padding:2rem;color:var(--muted)}
+    .hidden{display:none!important}
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/" class="brand">
+      <span class="brand-mark">&#9889;</span>
+      <span style="display:flex;flex-direction:column">
+        <span class="brand-name">ProAgentStore</span>
+        <span class="brand-tag">Creator Console</span>
+      </span>
+    </a>
+    <nav>
+      <a href="/">Store</a>
+      <a href="/about/">About</a>
+      <a href="https://github.com/ProAgentStore">GitHub</a>
+      <span id="user-nav" class="hidden">
+        <span class="user-info">
+          <img id="user-avatar" class="avatar" alt="">
+          <span id="user-login"></span>
+        </span>
+        <button onclick="signOut()" class="btn btn-outline btn-sm">Sign out</button>
+      </span>
+    </nav>
+  </header>
+
+  <!-- Login page -->
+  <div id="login-page" class="login-page">
+    <h1>Creator Console</h1>
+    <p>Sign in with GitHub to create and manage your server-powered AI agents.</p>
+    <button onclick="signIn()" class="btn btn-primary">
+      <svg class="gh-icon" viewBox="0 0 24 24"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+      Sign in with GitHub
+    </button>
+  </div>
+
+  <!-- Dashboard (post-login) -->
+  <div id="dashboard" class="container hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h1 class="page-title" style="margin-bottom:0">My Agents</h1>
+      <button onclick="toggleCreateForm()" class="btn btn-primary btn-sm">+ New Agent</button>
+    </div>
+
+    <!-- Create form (hidden by default) -->
+    <div id="create-form" class="create-form hidden">
+      <h3>Create Agent</h3>
+      <div class="form-row">
+        <div><label>Slug</label><input id="f-slug" placeholder="my-agent" pattern="[a-z0-9-]+"></div>
+        <div><label>Name</label><input id="f-name" placeholder="My Agent"></div>
+      </div>
+      <div class="form-row">
+        <div><label>Category</label>
+          <select id="f-category">
+            <option value="general">General</option>
+            <option value="chat">Chat</option>
+            <option value="code">Code</option>
+            <option value="data">Data</option>
+            <option value="creative">Creative</option>
+            <option value="productivity">Productivity</option>
+          </select>
+        </div>
+        <div><label>Model</label>
+          <select id="f-model">
+            <option value="@cf/meta/llama-3.1-8b-instruct">Llama 3.1 8B</option>
+            <option value="@cf/meta/llama-3.1-70b-instruct">Llama 3.1 70B</option>
+            <option value="@cf/mistral/mistral-7b-instruct-v0.2">Mistral 7B</option>
+            <option value="@cf/qwen/qwen1.5-14b-chat-awq">Qwen 14B</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div style="flex:2"><label>Description</label><input id="f-desc" placeholder="What does this agent do?"></div>
+      </div>
+      <div class="form-row">
+        <div><label>Personality</label><textarea id="f-personality" placeholder="How should the agent behave?"></textarea></div>
+        <div><label>Goal</label><textarea id="f-goal" placeholder="What should the agent accomplish?"></textarea></div>
+      </div>
+      <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+        <button onclick="createAgent()" class="btn btn-primary btn-sm">Create</button>
+        <button onclick="toggleCreateForm()" class="btn btn-outline btn-sm">Cancel</button>
+      </div>
+      <div id="create-error" class="error hidden"></div>
+    </div>
+
+    <div id="agents-list" class="agents-grid"></div>
+    <div id="agents-empty" class="empty hidden">No agents yet. Create your first one!</div>
+    <div id="agents-loading" class="loading">Loading agents...</div>
+  </div>
+
+  <!-- Agent detail -->
+  <div id="agent-detail" class="container hidden">
+    <a href="#" onclick="showDashboard();return false" class="back-link">&larr; Back to agents</a>
+    <div class="agent-header">
+      <div id="detail-icon" class="agent-icon" style="background:var(--accent)">&#9889;</div>
+      <div>
+        <h2 id="detail-name"></h2>
+        <div id="detail-slug" class="slug"></div>
+        <div id="detail-desc" style="font-size:0.85rem;color:var(--muted);margin-top:0.3rem"></div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('chat')">Chat</button>
+      <button class="tab" onclick="switchTab('memory')">Memory</button>
+      <button class="tab" onclick="switchTab('tasks')">Tasks</button>
+      <button class="tab" onclick="switchTab('settings')">Settings</button>
+    </div>
+
+    <!-- Chat tab -->
+    <div id="tab-chat" class="tab-panel active">
+      <div class="chat-container">
+        <div id="chat-messages" class="chat-messages"></div>
+        <div id="chat-thinking" class="thinking hidden">Agent is thinking...</div>
+        <div class="chat-input">
+          <input id="chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendMessage()">
+          <button onclick="sendMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Memory tab -->
+    <div id="tab-memory" class="tab-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h3 style="font-size:1rem">Agent Memory</h3>
+        <button onclick="showMemoryForm()" class="btn btn-outline btn-sm">+ Add</button>
+      </div>
+      <div id="memory-form" class="create-form hidden" style="margin-bottom:1rem">
+        <div class="form-row">
+          <div><label>Key</label><input id="m-key" placeholder="e.g. user-preference"></div>
+          <div><label>Type</label>
+            <select id="m-type">
+              <option value="knowledge">Knowledge</option>
+              <option value="preference">Preference</option>
+              <option value="skill">Skill</option>
+              <option value="context">Context</option>
+              <option value="identity">Identity</option>
+            </select>
+          </div>
+        </div>
+        <div><label>Content</label><textarea id="m-content" placeholder="What to remember"></textarea></div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+          <button onclick="saveMemory()" class="btn btn-primary btn-sm">Save</button>
+          <button onclick="document.getElementById('memory-form').classList.add('hidden')" class="btn btn-outline btn-sm">Cancel</button>
+        </div>
+      </div>
+      <div id="memory-list" class="memory-list"></div>
+      <div id="memory-empty" class="empty hidden">No memories stored yet.</div>
+    </div>
+
+    <!-- Tasks tab -->
+    <div id="tab-tasks" class="tab-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+        <h3 style="font-size:1rem">Agent Tasks</h3>
+        <button onclick="showTaskForm()" class="btn btn-outline btn-sm">+ Add</button>
+      </div>
+      <div id="task-form" class="create-form hidden" style="margin-bottom:1rem">
+        <div><label>Title</label><input id="t-title" placeholder="Task title"></div>
+        <div style="margin-top:0.5rem"><label>Description</label><textarea id="t-desc" placeholder="Details"></textarea></div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+          <button onclick="createTask()" class="btn btn-primary btn-sm">Create</button>
+          <button onclick="document.getElementById('task-form').classList.add('hidden')" class="btn btn-outline btn-sm">Cancel</button>
+        </div>
+      </div>
+      <div id="task-list" class="task-list"></div>
+      <div id="task-empty" class="empty hidden">No tasks yet.</div>
+    </div>
+
+    <!-- Settings tab -->
+    <div id="tab-settings" class="tab-panel">
+      <div class="create-form">
+        <h3>Agent Settings</h3>
+        <div class="form-row">
+          <div><label>Name</label><input id="s-name"></div>
+          <div><label>Category</label>
+            <select id="s-category">
+              <option value="general">General</option>
+              <option value="chat">Chat</option>
+              <option value="code">Code</option>
+              <option value="data">Data</option>
+              <option value="creative">Creative</option>
+              <option value="productivity">Productivity</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div style="flex:2"><label>Description</label><textarea id="s-desc"></textarea></div>
+        </div>
+        <div class="form-row">
+          <div><label>Visibility</label>
+            <select id="s-visibility">
+              <option value="draft">Draft</option>
+              <option value="published">Published</option>
+              <option value="unlisted">Unlisted</option>
+            </select>
+          </div>
+          <div><label>Model</label>
+            <select id="s-model">
+              <option value="@cf/meta/llama-3.1-8b-instruct">Llama 3.1 8B</option>
+              <option value="@cf/meta/llama-3.1-70b-instruct">Llama 3.1 70B</option>
+              <option value="@cf/mistral/mistral-7b-instruct-v0.2">Mistral 7B</option>
+              <option value="@cf/qwen/qwen1.5-14b-chat-awq">Qwen 14B</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.75rem">
+          <button onclick="saveSettings()" class="btn btn-primary btn-sm">Save</button>
+          <button onclick="deleteAgent()" class="btn btn-danger btn-sm">Delete Agent</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = 'https://api.proagentstore.online';
+    const SESSION_KEY = 'pags:session';
+    let token = null;
+    let user = null;
+    let currentAgent = null;
+
+    // ── Auth ────────────────────────────────────────────────────
+
+    function getToken() { return localStorage.getItem(SESSION_KEY); }
+    function setToken(t) { t ? localStorage.setItem(SESSION_KEY, t) : localStorage.removeItem(SESSION_KEY); token = t; }
+
+    async function signIn() {
+      const res = await fetch(`${API}/v1/auth/config`);
+      const { github_client_id } = await res.json();
+      if (!github_client_id) { alert('GitHub OAuth not configured yet.'); return; }
+      const redirect = encodeURIComponent(window.location.origin + '/console/');
+      window.location.href = `https://github.com/login/oauth/authorize?client_id=${github_client_id}&redirect_uri=${redirect}&scope=read:user`;
+    }
+
+    function signOut() {
+      setToken(null); user = null;
+      document.getElementById('login-page').classList.remove('hidden');
+      document.getElementById('dashboard').classList.add('hidden');
+      document.getElementById('agent-detail').classList.add('hidden');
+      document.getElementById('user-nav').classList.add('hidden');
+    }
+
+    async function handleOAuthCallback() {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      if (!code) return false;
+
+      window.history.replaceState({}, '', window.location.pathname);
+      try {
+        const res = await api('/v1/auth/github', {
+          method: 'POST',
+          body: JSON.stringify({ code, return_to: window.location.href }),
+        }, true);
+        if (res.token) { setToken(res.token); return true; }
+      } catch (e) { console.error('OAuth error:', e); }
+      return false;
+    }
+
+    async function checkAuth() {
+      token = getToken();
+      if (!token) return false;
+      try {
+        const data = await api('/v1/auth/me');
+        if (data.id) { user = data; return true; }
+      } catch { setToken(null); }
+      return false;
+    }
+
+    function showUser() {
+      document.getElementById('user-nav').classList.remove('hidden');
+      document.getElementById('user-avatar').src = user.avatar;
+      document.getElementById('user-login').textContent = user.login;
+    }
+
+    // ── API helper ──────────────────────────────────────────────
+
+    async function api(path, opts = {}, noAuth = false) {
+      const headers = { 'Content-Type': 'application/json' };
+      if (!noAuth && token) headers['Authorization'] = `Bearer ${token}`;
+      const res = await fetch(`${API}${path}`, { ...opts, headers: { ...headers, ...opts.headers } });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    // ── Dashboard ───────────────────────────────────────────────
+
+    async function loadAgents() {
+      document.getElementById('agents-loading').classList.remove('hidden');
+      try {
+        const data = await api('/v1/agents/my/agents');
+        const list = document.getElementById('agents-list');
+        const empty = document.getElementById('agents-empty');
+        list.innerHTML = '';
+        if (!data.agents.length) { empty.classList.remove('hidden'); }
+        else {
+          empty.classList.add('hidden');
+          for (const a of data.agents) {
+            list.innerHTML += `<div class="agent-card" onclick="openAgent('${a.id}')">
+              <h3>${esc(a.name)}</h3>
+              <p>${esc(a.description || 'No description')}</p>
+              <div class="agent-meta">
+                <span class="tag tag-${a.visibility}">${a.visibility}</span>
+                <span class="tag tag-cat">${a.category}</span>
+              </div>
+            </div>`;
+          }
+        }
+      } catch (e) { console.error(e); }
+      document.getElementById('agents-loading').classList.add('hidden');
+    }
+
+    function showDashboard() {
+      document.getElementById('dashboard').classList.remove('hidden');
+      document.getElementById('agent-detail').classList.add('hidden');
+      currentAgent = null;
+      loadAgents();
+    }
+
+    function toggleCreateForm() {
+      document.getElementById('create-form').classList.toggle('hidden');
+    }
+
+    async function createAgent() {
+      const slug = document.getElementById('f-slug').value.trim();
+      const name = document.getElementById('f-name').value.trim();
+      if (!slug || !name) { showError('create-error', 'Slug and name required'); return; }
+
+      try {
+        await api('/v1/agents', {
+          method: 'POST',
+          body: JSON.stringify({
+            slug, name,
+            description: document.getElementById('f-desc').value,
+            category: document.getElementById('f-category').value,
+            model: document.getElementById('f-model').value,
+            personality: document.getElementById('f-personality').value,
+            goal: document.getElementById('f-goal').value,
+          }),
+        });
+        toggleCreateForm();
+        ['f-slug','f-name','f-desc','f-personality','f-goal'].forEach(id => document.getElementById(id).value = '');
+        loadAgents();
+      } catch (e) { showError('create-error', e.message); }
+    }
+
+    // ── Agent detail ────────────────────────────────────────────
+
+    async function openAgent(id) {
+      try {
+        const agent = await api(`/v1/agents/${id}`);
+        currentAgent = agent;
+        document.getElementById('dashboard').classList.add('hidden');
+        document.getElementById('agent-detail').classList.remove('hidden');
+        document.getElementById('detail-name').textContent = agent.name;
+        document.getElementById('detail-slug').textContent = agent.slug;
+        document.getElementById('detail-desc').textContent = agent.description;
+        if (agent.icon_bg) document.getElementById('detail-icon').style.background = agent.icon_bg;
+
+        // Settings
+        document.getElementById('s-name').value = agent.name;
+        document.getElementById('s-desc').value = agent.description;
+        document.getElementById('s-category').value = agent.category;
+        document.getElementById('s-visibility').value = agent.visibility;
+        document.getElementById('s-model').value = agent.model || '@cf/meta/llama-3.1-8b-instruct';
+
+        switchTab('chat');
+        loadMessages();
+        loadMemory();
+        loadTasks();
+      } catch (e) { alert(e.message); }
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.textContent.toLowerCase() === name));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
+    }
+
+    // ── Chat ────────────────────────────────────────────────────
+
+    async function loadMessages() {
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/messages`);
+        const container = document.getElementById('chat-messages');
+        container.innerHTML = '';
+        for (const m of (data.messages || [])) {
+          container.innerHTML += `<div class="chat-msg ${m.role}">${esc(m.content)}</div>`;
+        }
+        container.scrollTop = container.scrollHeight;
+      } catch {}
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('chat-input');
+      const message = input.value.trim();
+      if (!message) return;
+      input.value = '';
+
+      const container = document.getElementById('chat-messages');
+      container.innerHTML += `<div class="chat-msg user">${esc(message)}</div>`;
+      container.scrollTop = container.scrollHeight;
+      document.getElementById('chat-thinking').classList.remove('hidden');
+
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/chat`, {
+          method: 'POST',
+          body: JSON.stringify({ message }),
+        });
+        if (data.message) {
+          container.innerHTML += `<div class="chat-msg assistant">${esc(data.message.content)}</div>`;
+        }
+      } catch (e) {
+        container.innerHTML += `<div class="chat-msg system">Error: ${esc(e.message)}</div>`;
+      }
+      document.getElementById('chat-thinking').classList.add('hidden');
+      container.scrollTop = container.scrollHeight;
+    }
+
+    // ── Memory ──────────────────────────────────────────────────
+
+    async function loadMemory() {
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/memory`);
+        const list = document.getElementById('memory-list');
+        const empty = document.getElementById('memory-empty');
+        list.innerHTML = '';
+        if (!(data.memory || []).length) { empty.classList.remove('hidden'); return; }
+        empty.classList.add('hidden');
+        for (const m of data.memory) {
+          list.innerHTML += `<div class="memory-item">
+            <div><span class="key">${esc(m.key)}</span> <span class="type">${m.type}</span>
+              <div class="content">${esc(m.content)}</div>
+            </div>
+            <button onclick="deleteMemory('${esc(m.key)}')" class="btn btn-outline btn-sm" style="flex-shrink:0">&times;</button>
+          </div>`;
+        }
+      } catch {}
+    }
+
+    function showMemoryForm() { document.getElementById('memory-form').classList.remove('hidden'); }
+
+    async function saveMemory() {
+      try {
+        await api(`/v1/agents/${currentAgent.id}/memory`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            key: document.getElementById('m-key').value,
+            type: document.getElementById('m-type').value,
+            content: document.getElementById('m-content').value,
+          }),
+        });
+        document.getElementById('memory-form').classList.add('hidden');
+        ['m-key','m-content'].forEach(id => document.getElementById(id).value = '');
+        loadMemory();
+      } catch (e) { alert(e.message); }
+    }
+
+    async function deleteMemory(key) {
+      if (!confirm(`Delete memory "${key}"?`)) return;
+      try {
+        await fetch(`${API}/v1/agents/${currentAgent.id}/memory/${encodeURIComponent(key)}`, {
+          method: 'DELETE', headers: { Authorization: `Bearer ${token}` },
+        });
+        loadMemory();
+      } catch {}
+    }
+
+    // ── Tasks ───────────────────────────────────────────────────
+
+    async function loadTasks() {
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/tasks`);
+        const list = document.getElementById('task-list');
+        const empty = document.getElementById('task-empty');
+        list.innerHTML = '';
+        if (!(data.tasks || []).length) { empty.classList.remove('hidden'); return; }
+        empty.classList.add('hidden');
+        for (const t of data.tasks) {
+          list.innerHTML += `<div class="task-item">
+            <div>
+              <span class="title">${esc(t.title)}</span>
+              <span class="status-badge status-${t.status}">${t.status.replace('_',' ')}</span>
+              ${t.description ? `<div class="desc">${esc(t.description)}</div>` : ''}
+            </div>
+          </div>`;
+        }
+      } catch {}
+    }
+
+    function showTaskForm() { document.getElementById('task-form').classList.remove('hidden'); }
+
+    async function createTask() {
+      try {
+        await api(`/v1/agents/${currentAgent.id}/tasks`, {
+          method: 'POST',
+          body: JSON.stringify({
+            title: document.getElementById('t-title').value,
+            description: document.getElementById('t-desc').value,
+          }),
+        });
+        document.getElementById('task-form').classList.add('hidden');
+        ['t-title','t-desc'].forEach(id => document.getElementById(id).value = '');
+        loadTasks();
+      } catch (e) { alert(e.message); }
+    }
+
+    // ── Settings ────────────────────────────────────────────────
+
+    async function saveSettings() {
+      try {
+        await api(`/v1/agents/${currentAgent.id}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: document.getElementById('s-name').value,
+            description: document.getElementById('s-desc').value,
+            category: document.getElementById('s-category').value,
+            visibility: document.getElementById('s-visibility').value,
+            model: document.getElementById('s-model').value,
+          }),
+        });
+        alert('Saved!');
+        openAgent(currentAgent.id);
+      } catch (e) { alert(e.message); }
+    }
+
+    async function deleteAgent() {
+      if (!confirm(`Delete "${currentAgent.name}"? This cannot be undone.`)) return;
+      try {
+        await api(`/v1/agents/${currentAgent.id}`, { method: 'DELETE' });
+        showDashboard();
+      } catch (e) { alert(e.message); }
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    function showError(id, msg) { const el = document.getElementById(id); el.textContent = msg; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 5000); }
+
+    // ── Init ────────────────────────────────────────────────────
+
+    (async () => {
+      const fromOAuth = await handleOAuthCallback();
+      const authed = fromOAuth || await checkAuth();
+      if (authed) {
+        document.getElementById('login-page').classList.add('hidden');
+        showUser();
+        showDashboard();
+      }
+    })();
+  </script>
+</body>
+</html>
