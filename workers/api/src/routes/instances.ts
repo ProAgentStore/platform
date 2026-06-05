@@ -162,7 +162,23 @@ instanceRoutes.post('/:instanceId/knowledge', async (c) => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(await c.req.json()),
   }));
-  return c.json(await doRes.json(), doRes.status as 201);
+  return c.json(await doRes.json(), (doRes.ok ? 201 : doRes.status) as ContentfulStatusCode);
+});
+
+/** Delete a doc from my instance's knowledge base. */
+instanceRoutes.delete('/:instanceId/knowledge/:docId', async (c) => {
+  const session = await requireUser(c);
+  const instanceId = c.req.param('instanceId');
+
+  const instance = await c.env.DB.prepare(
+    'SELECT id FROM agent_instances WHERE id = ?1 AND user_id = ?2',
+  ).bind(instanceId, session.uid).first();
+  if (!instance) throw new HttpError(404, 'Instance not found');
+
+  const docId = c.req.param('docId');
+  const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
+  const doRes = await stub.fetch(new Request(`http://agent/knowledge/${docId}`, { method: 'DELETE' }));
+  return c.json(await doRes.json());
 });
 
 /** Import URL into my instance's knowledge base. */

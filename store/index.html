@@ -204,7 +204,7 @@
       for (const a of filtered) {
         const card = document.createElement('a');
         card.className = 'agent-card';
-        card.href = `/console/`;  // TODO: public agent detail page
+        card.href = `/console/?subscribe=${encodeURIComponent(a.id)}`;
         const iconBg = a.icon_bg || '#7c3aed';
         const icon = a.icon || '&#9889;';
         card.innerHTML = `

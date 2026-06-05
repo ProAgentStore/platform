@@ -40,6 +40,7 @@ app.use('*', async (c, next) => {
 app.use('/v1/*', rateLimitDefault());
 app.use('/v1/agents/*/chat', rateLimitStrict());
 app.use('/v1/agents/*/run', rateLimitStrict());
+app.use('/v1/instances/*/chat', rateLimitStrict());
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 

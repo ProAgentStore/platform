@@ -761,8 +761,9 @@ console.log(response)</pre>
     }
 
     function switchTab(name) {
-      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.textContent.toLowerCase() === name));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
+      const container = document.getElementById('agent-detail');
+      container.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.textContent.toLowerCase() === name));
+      container.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === `tab-${name}`));
     }
 
     // ── Chat ────────────────────────────────────────────────────
@@ -1273,6 +1274,26 @@ console.log(response)</pre>
 
     // ── Init ────────────────────────────────────────────────────
 
+    async function handleSubscribeParam() {
+      const params = new URLSearchParams(window.location.search);
+      const agentId = params.get('subscribe');
+      if (!agentId || !token) return;
+      window.history.replaceState({}, '', window.location.pathname);
+      try {
+        const res = await api(`/v1/instances/${agentId}/subscribe`, { method: 'POST' });
+        if (res.instanceId) {
+          switchDashTab('instances');
+          return;
+        }
+      } catch (e) {
+        if (e.message.includes('Already subscribed')) {
+          switchDashTab('instances');
+          return;
+        }
+        alert('Subscribe failed: ' + e.message);
+      }
+    }
+
     (async () => {
       const fromOAuth = await handleOAuthCallback();
       if (fromOAuth && !user) await checkAuth();
@@ -1280,6 +1301,7 @@ console.log(response)</pre>
       if (authed && user) {
         showUser();
         showDashboard();
+        await handleSubscribeParam();
       } else {
         showPage('login-page');
       }
