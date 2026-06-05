@@ -175,8 +175,16 @@
 
   <!-- Dashboard (post-login) -->
   <div id="dashboard" class="container hidden">
+    <!-- Tab switcher: Creator / Client -->
+    <div style="display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:1.25rem">
+      <button class="tab active" id="dash-tab-agents" onclick="switchDashTab('agents')">My Agents (Creator)</button>
+      <button class="tab" id="dash-tab-instances" onclick="switchDashTab('instances')">My Instances (Client)</button>
+    </div>
+
+    <!-- Creator: My Agents -->
+    <div id="dash-agents">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-      <h1 class="page-title" style="margin-bottom:0">My Agents</h1>
+      <h2 style="font-size:1.1rem;font-weight:600">Agents you've built</h2>
       <button onclick="toggleCreateForm()" class="btn btn-primary btn-sm">+ New Agent</button>
     </div>
 
@@ -225,6 +233,85 @@
     <div id="agents-list" class="agents-grid"></div>
     <div id="agents-empty" class="empty hidden">No agents yet. Create your first one!</div>
     <div id="agents-loading" class="loading">Loading agents...</div>
+    </div><!-- /dash-agents -->
+
+    <!-- Client: My Instances -->
+    <div id="dash-instances" class="hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h2 style="font-size:1.1rem;font-weight:600">Agents you've subscribed to</h2>
+      <a href="/" class="btn btn-outline btn-sm">Browse Store</a>
+    </div>
+    <div id="instances-list" class="agents-grid"></div>
+    <div id="instances-empty" class="empty hidden">No subscriptions yet. Browse the <a href="/">store</a> to find agents.</div>
+    <div id="instances-loading" class="loading hidden">Loading instances...</div>
+    </div><!-- /dash-instances -->
+  </div>
+
+  <!-- Instance detail (client view) -->
+  <div id="instance-detail" class="container hidden">
+    <a href="#" onclick="showDashboard();switchDashTab('instances');return false" class="back-link">&larr; Back to instances</a>
+    <div class="agent-header">
+      <div id="inst-icon" class="agent-icon" style="background:var(--accent)">&#9889;</div>
+      <div>
+        <h2 id="inst-name"></h2>
+        <div id="inst-desc" style="font-size:0.85rem;color:var(--muted);margin-top:0.3rem"></div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchInstTab('chat')">Chat</button>
+      <button class="tab" onclick="switchInstTab('knowledge')">My Documents</button>
+    </div>
+
+    <!-- Instance chat -->
+    <div id="inst-tab-chat" class="tab-panel active">
+      <div class="chat-container">
+        <div id="inst-chat-messages" class="chat-messages"></div>
+        <div id="inst-chat-thinking" class="thinking hidden">Agent is thinking...</div>
+        <div class="chat-input">
+          <input id="inst-chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendInstanceMessage()">
+          <button onclick="sendInstanceMessage()">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Instance knowledge (client's own docs) -->
+    <div id="inst-tab-knowledge" class="tab-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
+        <h3 style="font-size:1rem">Your Documents</h3>
+      </div>
+      <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1rem">Add your own documents for this agent to reference. These are private to you.</p>
+
+      <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
+        <button onclick="showInstKbForm('paste')" class="btn btn-outline btn-sm">Paste Text</button>
+        <button onclick="showInstKbForm('url')" class="btn btn-outline btn-sm">Import URL</button>
+        <button onclick="document.getElementById('inst-kb-file').click()" class="btn btn-outline btn-sm">Upload File</button>
+        <input type="file" id="inst-kb-file" accept=".txt,.md,.csv,.json,.html" style="display:none" onchange="uploadInstKbFile(this)">
+      </div>
+
+      <div id="inst-kb-form-paste" class="create-form hidden" style="margin-bottom:1rem">
+        <div><label>Title</label><input id="inst-kb-title" placeholder="e.g. Company Handbook"></div>
+        <div style="margin-top:0.5rem"><label>Content</label><textarea id="inst-kb-content" placeholder="Paste your text..." style="min-height:120px"></textarea></div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+          <button onclick="addInstKbPaste()" class="btn btn-primary btn-sm">Add</button>
+          <button onclick="hideInstKbForms()" class="btn btn-outline btn-sm">Cancel</button>
+        </div>
+      </div>
+
+      <div id="inst-kb-form-url" class="create-form hidden" style="margin-bottom:1rem">
+        <div class="form-row">
+          <div style="flex:2"><label>URL</label><input id="inst-kb-url" placeholder="https://..."></div>
+          <div><label>Title</label><input id="inst-kb-url-title" placeholder="Auto-detected"></div>
+        </div>
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+          <button onclick="addInstKbUrl()" class="btn btn-primary btn-sm">Import</button>
+          <button onclick="hideInstKbForms()" class="btn btn-outline btn-sm">Cancel</button>
+        </div>
+      </div>
+
+      <div id="inst-kb-list" class="memory-list"></div>
+      <div id="inst-kb-empty" class="empty hidden">No documents yet. Add your own for the agent to reference.</div>
+    </div>
   </div>
 
   <!-- Agent detail -->
@@ -511,7 +598,7 @@ console.log(response)</pre>
 
     /** Show one page, hide all others. */
     function showPage(id) {
-      for (const p of ['login-page', 'dashboard', 'agent-detail', 'profile-page']) {
+      for (const p of ['login-page', 'dashboard', 'agent-detail', 'instance-detail', 'profile-page']) {
         document.getElementById(p).classList.toggle('hidden', p !== id);
       }
     }
@@ -716,6 +803,165 @@ console.log(response)</pre>
       }
       document.getElementById('chat-thinking').classList.add('hidden');
       container.scrollTop = container.scrollHeight;
+    }
+
+    // ── Dashboard tabs ─────────────────────────────────────────
+
+    function switchDashTab(tab) {
+      document.getElementById('dash-agents').classList.toggle('hidden', tab !== 'agents');
+      document.getElementById('dash-instances').classList.toggle('hidden', tab !== 'instances');
+      document.getElementById('dash-tab-agents').classList.toggle('active', tab === 'agents');
+      document.getElementById('dash-tab-instances').classList.toggle('active', tab === 'instances');
+      if (tab === 'instances') loadInstances();
+    }
+
+    // ── Instances (client view) ──────────────────────────────
+
+    let currentInstance = null;
+
+    async function loadInstances() {
+      document.getElementById('instances-loading').classList.remove('hidden');
+      try {
+        const data = await api('/v1/instances/my/instances');
+        const list = document.getElementById('instances-list');
+        const empty = document.getElementById('instances-empty');
+        list.innerHTML = '';
+        const items = data.instances || [];
+        empty.classList.toggle('hidden', items.length > 0);
+        if (!items.length) { document.getElementById('instances-loading').classList.add('hidden'); return; }
+        for (const inst of items) {
+          const card = document.createElement('div');
+          card.className = 'agent-card';
+          card.style.cursor = 'pointer';
+          card.innerHTML = `
+            <div class="agent-icon" style="background:${esc(inst.icon_bg || '#7c3aed')}">${inst.icon || '&#9889;'}</div>
+            <div class="agent-body">
+              <div class="agent-name">${esc(inst.name)}</div>
+              <div class="agent-desc">${esc(inst.description || '')}</div>
+              <div class="agent-meta"><span class="tag">${esc(inst.category || 'general')}</span></div>
+            </div>`;
+          card.addEventListener('click', () => openInstance(inst.id, inst));
+          list.appendChild(card);
+        }
+      } catch (e) { console.error(e); }
+      document.getElementById('instances-loading').classList.add('hidden');
+    }
+
+    async function openInstance(instanceId, meta) {
+      currentInstance = { id: instanceId, ...meta };
+      showPage('instance-detail');
+      document.getElementById('inst-name').textContent = meta.name || 'Agent';
+      document.getElementById('inst-desc').textContent = meta.description || '';
+      if (meta.icon_bg) document.getElementById('inst-icon').style.background = meta.icon_bg;
+      switchInstTab('chat');
+      loadInstanceMessages();
+      loadInstanceKnowledge();
+    }
+
+    function switchInstTab(name) {
+      document.querySelectorAll('#instance-detail .tab').forEach(t =>
+        t.classList.toggle('active', t.textContent.toLowerCase().includes(name)));
+      document.getElementById('inst-tab-chat').classList.toggle('active', name === 'chat');
+      document.getElementById('inst-tab-knowledge').classList.toggle('active', name === 'knowledge');
+      // manual display toggle since tab-panel CSS uses display:none
+      document.getElementById('inst-tab-chat').style.display = name === 'chat' ? 'block' : 'none';
+      document.getElementById('inst-tab-knowledge').style.display = name === 'knowledge' ? 'block' : 'none';
+    }
+
+    async function loadInstanceMessages() {
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/messages`);
+        const container = document.getElementById('inst-chat-messages');
+        container.innerHTML = '';
+        for (const m of (data.messages || [])) {
+          container.innerHTML += `<div class="chat-msg ${esc(m.role)}">${esc(m.content)}</div>`;
+        }
+        container.scrollTop = container.scrollHeight;
+      } catch {}
+    }
+
+    async function sendInstanceMessage() {
+      const input = document.getElementById('inst-chat-input');
+      const message = input.value.trim();
+      if (!message) return;
+      input.value = '';
+
+      const container = document.getElementById('inst-chat-messages');
+      container.innerHTML += `<div class="chat-msg user">${esc(message)}</div>`;
+      container.scrollTop = container.scrollHeight;
+      document.getElementById('inst-chat-thinking').classList.remove('hidden');
+
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/chat`, {
+          method: 'POST',
+          body: JSON.stringify({ message }),
+        });
+        if (data.message) {
+          container.innerHTML += `<div class="chat-msg assistant">${esc(data.message.content)}</div>`;
+        }
+        if (data.error) {
+          container.innerHTML += `<div class="chat-msg system">Error: ${esc(data.error)}</div>`;
+        }
+      } catch (e) {
+        container.innerHTML += `<div class="chat-msg system">Error: ${esc(e.message)}</div>`;
+      }
+      document.getElementById('inst-chat-thinking').classList.add('hidden');
+      container.scrollTop = container.scrollHeight;
+    }
+
+    // Instance knowledge
+    function showInstKbForm(type) { hideInstKbForms(); document.getElementById(`inst-kb-form-${type}`).classList.remove('hidden'); }
+    function hideInstKbForms() { document.getElementById('inst-kb-form-paste').classList.add('hidden'); document.getElementById('inst-kb-form-url').classList.add('hidden'); }
+
+    async function loadInstanceKnowledge() {
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/knowledge`);
+        const list = document.getElementById('inst-kb-list');
+        const empty = document.getElementById('inst-kb-empty');
+        list.innerHTML = '';
+        const docs = data.documents || [];
+        empty.classList.toggle('hidden', docs.length > 0);
+        if (!docs.length) return;
+        for (const doc of docs) {
+          const item = document.createElement('div');
+          item.className = 'memory-item';
+          item.innerHTML = `<div style="flex:1;min-width:0"><span class="key">${esc(doc.title)}</span> <span class="type">${esc(doc.source)}</span>
+            <div class="content">${esc(doc.content?.slice(0, 120) || '')}${doc.content?.length > 120 ? '...' : ''}</div></div>`;
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-outline btn-sm';
+          btn.textContent = '\u00d7';
+          btn.style.flexShrink = '0';
+          btn.addEventListener('click', async () => {
+            await api(`/v1/instances/${currentInstance.id}/knowledge/${doc.id}`, { method: 'DELETE' });
+            loadInstanceKnowledge();
+          });
+          item.appendChild(btn);
+          list.appendChild(item);
+        }
+      } catch {}
+    }
+
+    async function addInstKbPaste() {
+      const title = document.getElementById('inst-kb-title').value.trim();
+      const content = document.getElementById('inst-kb-content').value.trim();
+      if (!title || !content) { alert('Title and content required'); return; }
+      await api(`/v1/instances/${currentInstance.id}/knowledge`, { method: 'POST', body: JSON.stringify({ title, content, source: 'paste' }) });
+      hideInstKbForms(); document.getElementById('inst-kb-title').value = ''; document.getElementById('inst-kb-content').value = '';
+      loadInstanceKnowledge();
+    }
+
+    async function addInstKbUrl() {
+      const url = document.getElementById('inst-kb-url').value.trim();
+      if (!url) { alert('URL required'); return; }
+      await api(`/v1/instances/${currentInstance.id}/knowledge/ingest-url`, { method: 'POST', body: JSON.stringify({ url, title: document.getElementById('inst-kb-url-title').value.trim() || undefined }) });
+      hideInstKbForms(); document.getElementById('inst-kb-url').value = '';
+      loadInstanceKnowledge();
+    }
+
+    async function uploadInstKbFile(input) {
+      const file = input.files?.[0]; if (!file) return;
+      await api(`/v1/instances/${currentInstance.id}/knowledge`, { method: 'POST', body: JSON.stringify({ title: file.name, content: await file.text(), source: 'upload' }) });
+      loadInstanceKnowledge(); input.value = '';
     }
 
     // ── Knowledge Base ─────────────────────────────────────────
