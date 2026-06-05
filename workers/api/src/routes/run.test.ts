@@ -3,14 +3,14 @@ import { describe, it, expect } from 'vitest';
 describe('run route validation', () => {
   it('default model fallback', () => {
     const agentModel = '';
-    const model = agentModel || '@cf/meta/llama-3.1-8b-instruct';
-    expect(model).toBe('@cf/meta/llama-3.1-8b-instruct');
+    const model = agentModel || '@cf/meta/llama-3.2-3b-instruct';
+    expect(model).toBe('@cf/meta/llama-3.2-3b-instruct');
   });
 
   it('uses agent model when set', () => {
-    const agentModel = '@cf/meta/llama-3.1-70b-instruct';
-    const model = agentModel || '@cf/meta/llama-3.1-8b-instruct';
-    expect(model).toBe('@cf/meta/llama-3.1-70b-instruct');
+    const agentModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+    const model = agentModel || '@cf/meta/llama-3.2-3b-instruct';
+    expect(model).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
   });
 
   it('execution log tracks duration', () => {

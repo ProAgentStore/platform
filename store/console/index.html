@@ -200,10 +200,11 @@
         </div>
         <div><label>Model</label>
           <select id="f-model">
-            <option value="@cf/meta/llama-3.1-8b-instruct">Llama 3.1 8B</option>
-            <option value="@cf/meta/llama-3.1-70b-instruct">Llama 3.1 70B</option>
-            <option value="@cf/mistral/mistral-7b-instruct-v0.2">Mistral 7B</option>
-            <option value="@cf/qwen/qwen1.5-14b-chat-awq">Qwen 14B</option>
+            <option value="@cf/meta/llama-3.2-3b-instruct">Llama 3.2 3B (fast)</option>
+            <option value="@cf/meta/llama-4-scout-17b-16e-instruct">Llama 4 Scout 17B</option>
+            <option value="@cf/meta/llama-3.3-70b-instruct-fp8-fast">Llama 3.3 70B</option>
+            <option value="@cf/mistralai/mistral-small-3.1-24b-instruct">Mistral Small 24B</option>
+            <option value="@cf/qwen/qwen2.5-coder-32b-instruct">Qwen 2.5 Coder 32B</option>
           </select>
         </div>
       </div>
@@ -334,7 +335,7 @@
           </div>
           <div><label>Model</label>
             <select id="s-model">
-              <option value="@cf/meta/llama-3.1-8b-instruct">Llama 3.1 8B</option>
+              <option value="@cf/meta/llama-3.2-3b-instruct">Llama 3.1 8B</option>
               <option value="@cf/meta/llama-3.1-70b-instruct">Llama 3.1 70B</option>
               <option value="@cf/mistral/mistral-7b-instruct-v0.2">Mistral 7B</option>
               <option value="@cf/qwen/qwen1.5-14b-chat-awq">Qwen 14B</option>
@@ -569,7 +570,7 @@ console.log(response)</pre>
         document.getElementById('s-desc').value = agent.description;
         document.getElementById('s-category').value = agent.category;
         document.getElementById('s-visibility').value = agent.visibility;
-        document.getElementById('s-model').value = agent.model || '@cf/meta/llama-3.1-8b-instruct';
+        document.getElementById('s-model').value = agent.model || '@cf/meta/llama-3.2-3b-instruct';
 
         switchTab('chat');
         loadMessages();

@@ -121,7 +121,7 @@ export default {
     const { prompt } = await request.json()
 
     // Run a 70B model server-side
-    const response = await agent.ai.run('@cf/meta/llama-3.1-70b-instruct', {
+    const response = await agent.ai.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
       messages: [{ role: 'user', content: prompt }]
     })
 
@@ -136,7 +136,7 @@ export default {
 
   // Cron: runs daily at 8am UTC
   async scheduled(event, env) {
-    const summary = await agent.ai.run('@cf/meta/llama-3.1-8b-instruct', {
+    const summary = await agent.ai.run('@cf/meta/llama-3.2-3b-instruct', {
       messages: [{ role: 'user', content: 'Summarize yesterday\'s conversations' }]
     })
     await agent.storage.put('daily-summary.txt', summary.text)
@@ -175,7 +175,7 @@ const agent = initPro({ agentId: 'smart-recruiter' })
 
 // Use the free heuristic parser + Pro AI for analysis
 const parsed = parseResume(resumeText)
-const analysis = await agent.ai.run('@cf/meta/llama-3.1-70b-instruct', {
+const analysis = await agent.ai.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
   messages: [{ role: 'user', content: `Evaluate this candidate: ${JSON.stringify(parsed)}` }]
 })</pre>
 

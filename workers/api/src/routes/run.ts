@@ -31,7 +31,7 @@ runRoutes.post('/:id/run', async (c) => {
   const body = await c.req.json<{ input: Record<string, unknown> }>();
   if (!body.input) throw new HttpError(400, 'input required');
 
-  const model = agent.model || '@cf/meta/llama-3.1-8b-instruct';
+  const model = agent.model || '@cf/meta/llama-3.2-3b-instruct';
   const startMs = Date.now();
 
   const result = await c.env.AI.run(model as Parameters<Ai['run']>[0], body.input);

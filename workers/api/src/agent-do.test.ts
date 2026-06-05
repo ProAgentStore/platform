@@ -60,7 +60,7 @@ describe('AgentDO types', () => {
       name: 'Test Agent',
       personality: 'friendly',
       goal: 'help users',
-      model: '@cf/meta/llama-3.1-8b-instruct',
+      model: '@cf/meta/llama-3.2-3b-instruct',
       status: 'idle',
       systemPrompt: 'You are Test Agent.',
     };

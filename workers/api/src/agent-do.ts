@@ -59,7 +59,7 @@ export interface AgentState {
   systemPrompt: string;
 }
 
-const DEFAULT_MODEL = '@cf/meta/llama-3.1-8b-instruct';
+const DEFAULT_MODEL = '@cf/meta/llama-3.2-3b-instruct';
 const MAX_CONTEXT_MESSAGES = 50;
 
 export class AgentDO extends DurableObject<Env> {
