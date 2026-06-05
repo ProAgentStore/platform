@@ -4,42 +4,200 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ProAgentStore — Server-powered AI agents</title>
-  <meta name="description" content="When browser isn't enough. Workers AI, databases, file storage, cron, API gateway. $9/mo, creator payouts.">
-  <meta property="og:title" content="ProAgentStore">
-  <meta property="og:description" content="Server-powered AI agents">
+  <meta name="description" content="When browser isn't enough. Workers AI for 70B+ models, D1 databases, R2 file storage, cron scheduling, API gateway. $9/mo, Spotify-style creator payouts.">
+  <meta property="og:title" content="ProAgentStore — Server-powered AI agents">
+  <meta property="og:description" content="AI agents with Workers AI, databases, file storage, cron, and API access. $9/mo for everything.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://proagentstore.online">
+  <meta name="twitter:card" content="summary">
+  <script type="application/ld+json">{"@context":"https://schema.org","@type":"WebSite","name":"ProAgentStore","url":"https://proagentstore.online","description":"Server-powered AI agents"}</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    *{margin:0;padding:0;box-sizing:border-box}
-    :root{--font-sans:'Manrope',system-ui,sans-serif;--font-serif:'Fraunces',Georgia,serif;--accent:#7c3aed;--bg:#0a0a0a;--text:#fafafa;--muted:#a3a3a3;--border:#262626}
-    body{font-family:var(--font-sans);background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:2rem}
-    h1{font-family:var(--font-serif);font-size:2.5rem;margin-bottom:0.5rem}
-    h1 span{color:var(--accent)}
-    p{color:var(--muted);max-width:500px;line-height:1.6;margin-bottom:1rem}
-    .badge{display:inline-block;padding:0.25rem 0.75rem;border-radius:999px;font-size:0.8rem;background:#1a1a2e;border:1px solid var(--border);color:var(--muted);margin:0.25rem}
-    a{color:var(--accent);text-decoration:none}
-    a:hover{text-decoration:underline}
-    .links{margin-top:2rem;font-size:0.9rem;color:var(--muted)}
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    :root{
+      --font-body:'Manrope',system-ui,sans-serif;
+      --font-display:'Fraunces',Georgia,serif;
+      --paper:#0a0a0a;--panel:#171717;
+      --ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;
+      --accent:#7c3aed;--accent-hover:#6d28d9;
+      --free:#3b82f6;
+      --line:#262626;--line-strong:#404040;
+      --shadow:0 1px 3px rgba(0,0,0,0.3);
+      --shadow-lg:0 10px 25px -8px rgba(0,0,0,0.5);
+    }
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100vh}
+    .container{max-width:960px;margin:0 auto;padding:0 1.5rem}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+
+    header{border-bottom:1px solid var(--line)}
+    header .container{display:flex;align-items:center;gap:1.25rem;padding-top:0.75rem;padding-bottom:0.75rem}
+    .brand{display:flex;align-items:center;gap:0.6rem;text-decoration:none;color:var(--ink)}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    .brand-tag{font-size:0.72rem;color:var(--muted);font-weight:500}
+    nav{display:flex;gap:1.25rem;font-size:0.88rem;font-weight:600;margin-left:auto}
+    nav a{color:var(--muted);text-decoration:none;transition:color 0.15s}
+    nav a:hover{color:var(--ink)}
+    nav a.free{color:var(--free)}
+
+    .hero{text-align:center;padding:3.5rem 0 2rem}
+    .hero h1{font-family:var(--font-display);font-size:2.25rem;font-weight:700;margin-bottom:0.5rem}
+    .hero h1 span{color:#a78bfa}
+    .hero p{color:var(--muted);font-size:1.05rem;max-width:520px;margin:0 auto;line-height:1.6}
+    .hero .price{display:inline-block;margin-top:1rem;font-size:1.5rem;font-weight:700;color:var(--ink)}
+    .hero .price span{font-size:0.9rem;font-weight:500;color:var(--muted)}
+    .badges{display:flex;gap:0.5rem;justify-content:center;margin-top:1.25rem;flex-wrap:wrap}
+    .badge{padding:0.3rem 0.85rem;border-radius:999px;font-size:0.8rem;background:var(--panel);border:1px solid var(--line);color:var(--muted)}
+
+    .section-title{font-family:var(--font-display);font-size:1.4rem;font-weight:700;margin-bottom:0.5rem;padding-top:2rem}
+    .section-desc{color:var(--muted);font-size:0.92rem;margin-bottom:1.5rem;max-width:600px}
+
+    .features{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:1rem;padding-bottom:2rem}
+    .feature{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:1.25rem;transition:border-color 0.15s}
+    .feature:hover{border-color:var(--line-strong)}
+    .feature h3{font-size:1rem;font-weight:600;margin-bottom:0.3rem;display:flex;align-items:center;gap:0.5rem}
+    .feature p{font-size:0.85rem;color:var(--muted);line-height:1.5}
+
+    .comparison{width:100%;border-collapse:collapse;margin:1.5rem 0 3rem;font-size:0.88rem}
+    .comparison th{text-align:left;padding:0.75rem;border-bottom:2px solid var(--line);color:var(--muted);font-weight:600;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em}
+    .comparison td{padding:0.65rem 0.75rem;border-bottom:1px solid var(--line)}
+    .comparison .yes{color:#22c55e}
+    .comparison .no{color:var(--muted-soft)}
+    .comparison .highlight{background:rgba(124,58,237,0.08)}
+
+    .cta-section{text-align:center;padding:2.5rem 0 3rem}
+    .cta-section h2{font-family:var(--font-display);font-size:1.5rem;margin-bottom:0.5rem}
+    .cta-section p{color:var(--muted);margin-bottom:1.5rem}
+    .cta-btn{display:inline-flex;align-items:center;gap:0.5rem;background:var(--accent);color:#fff;padding:0.75rem 1.5rem;border-radius:12px;font-size:1rem;font-weight:600;text-decoration:none;transition:background 0.15s}
+    .cta-btn:hover{background:var(--accent-hover);text-decoration:none}
+    .cta-free{margin-top:0.75rem;font-size:0.85rem;color:var(--muted)}
+
+    footer{border-top:1px solid var(--line);padding:2rem 0}
+    footer .container{display:flex;flex-wrap:wrap;gap:2rem;justify-content:space-between;align-items:start}
+    .footer-brand{display:flex;flex-direction:column;gap:0.25rem}
+    .footer-brand .name{font-family:var(--font-display);font-size:1.1rem;font-weight:700}
+    .footer-brand .name span{color:#a78bfa}
+    .footer-brand p{font-size:0.8rem;color:var(--muted);max-width:250px;line-height:1.5}
+    .footer-links{display:flex;flex-wrap:wrap;gap:1.5rem;font-size:0.82rem}
+    .footer-links a{color:var(--muted)}
+    .footer-links a:hover{color:var(--ink)}
+    .footer-links .free{color:var(--free)}
+    .footer-stores{display:flex;flex-direction:column;gap:0.3rem;font-size:0.78rem}
+    .footer-stores a{color:var(--muted-soft)}
   </style>
 </head>
 <body>
-  <h1>Pro<span>Agent</span>Store</h1>
-  <p>Server-powered AI agents for when browser isn't enough. Workers AI, D1 databases, R2 storage, cron scheduling, API gateway.</p>
-  <div>
-    <span class="badge">Workers AI</span>
-    <span class="badge">D1 Database</span>
-    <span class="badge">R2 Storage</span>
-    <span class="badge">Cron Jobs</span>
-    <span class="badge">API Gateway</span>
-    <span class="badge">Stripe Connect</span>
-  </div>
-  <p style="margin-top:2rem;font-size:0.9rem">Coming soon. Start with the free tier:</p>
-  <p><a href="https://freeagentstore.online">FreeAgentStore</a> — AI tools that run free in your browser</p>
-  <div class="links">
-    <a href="https://github.com/ProAgentStore">GitHub</a> &middot;
-    <a href="https://freeagentstore.online">Free Tier</a> &middot;
-    Part of the <a href="https://freeappstore.online">FreeStore</a> family
-  </div>
+  <header>
+    <div class="container">
+      <a href="/" class="brand">
+        <span class="brand-mark">⚡</span>
+        <span style="display:flex;flex-direction:column">
+          <span class="brand-name">ProAgentStore</span>
+          <span class="brand-tag">Server-Powered AI</span>
+        </span>
+      </a>
+      <nav>
+        <a href="/">Agents</a>
+        <a href="https://github.com/ProAgentStore">GitHub</a>
+        <a href="https://freeagentstore.online" class="free">Free ←</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <h1>Pro<span>Agent</span>Store</h1>
+      <p>When browser isn't enough. Server-powered AI agents with Workers AI, databases, file storage, cron scheduling, and API access.</p>
+      <div class="price">$9<span>/mo for everything</span></div>
+      <div class="badges">
+        <span class="badge">Workers AI (70B+ models)</span>
+        <span class="badge">D1 Database</span>
+        <span class="badge">R2 File Storage</span>
+        <span class="badge">Cron Jobs</span>
+        <span class="badge">API Gateway</span>
+        <span class="badge">Creator Payouts</span>
+      </div>
+    </section>
+
+    <h2 class="section-title">What Pro adds</h2>
+    <p class="section-desc">Everything in the free tier, plus server-side compute for agents that need real power.</p>
+
+    <div class="features">
+      <div class="feature">
+        <h3>🧠 Workers AI</h3>
+        <p>Run any model server-side — 70B+ parameter LLMs, Whisper Large, SDXL. No browser memory limits.</p>
+      </div>
+      <div class="feature">
+        <h3>🗄️ D1 Database</h3>
+        <p>Per-agent SQLite database. Store conversations, knowledge, user preferences. Survives across sessions.</p>
+      </div>
+      <div class="feature">
+        <h3>📁 R2 Storage</h3>
+        <p>Per-agent file storage. Save generated audio, images, documents. Serve via CDN.</p>
+      </div>
+      <div class="feature">
+        <h3>⏰ Cron Scheduling</h3>
+        <p>Run agents on a schedule. Daily reports, monitoring, batch processing, digests.</p>
+      </div>
+      <div class="feature">
+        <h3>🔌 API Gateway</h3>
+        <p>Expose your agent as a service. Other apps call your agent via REST API with auth + rate limits.</p>
+      </div>
+      <div class="feature">
+        <h3>💰 Creator Payouts</h3>
+        <p>Earn from the $9/mo subscription pool. Usage-weighted splits, Stripe Connect payouts. Spotify model.</p>
+      </div>
+    </div>
+
+    <h2 class="section-title">Free vs Pro</h2>
+    <table class="comparison">
+      <thead>
+        <tr><th>Capability</th><th>Free</th><th class="highlight">Pro</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>AI inference</td><td>User's GPU (WebGPU/WASM)</td><td class="highlight">Workers AI (any model)</td></tr>
+        <tr><td>Model size</td><td>~2-3GB (browser limit)</td><td class="highlight">Unlimited</td></tr>
+        <tr><td>Storage</td><td>IndexedDB (local only)</td><td class="highlight">D1 database + R2 files</td></tr>
+        <tr><td>Offline</td><td class="yes">Yes</td><td class="no">No (needs server)</td></tr>
+        <tr><td>Privacy</td><td class="yes">Data stays on device</td><td>Processed on CF edge</td></tr>
+        <tr><td>Cron / scheduling</td><td class="no">—</td><td class="highlight yes">Yes</td></tr>
+        <tr><td>API access</td><td class="no">—</td><td class="highlight yes">Agent-as-a-service</td></tr>
+        <tr><td>Custom domain</td><td class="no">Subdomain only</td><td class="highlight yes">your-domain.com</td></tr>
+        <tr><td>Source license</td><td>MIT required</td><td class="highlight">Proprietary OK</td></tr>
+        <tr><td>Price</td><td class="yes">$0 forever</td><td class="highlight">$9/mo</td></tr>
+      </tbody>
+    </table>
+
+    <section class="cta-section">
+      <h2>Coming Soon</h2>
+      <p>ProAgentStore is being built. Start with the free tier today — your agents upgrade seamlessly when Pro launches.</p>
+      <a href="https://freeagentstore.online" class="cta-btn">Start Free →</a>
+      <p class="cta-free">4 agents live now. No sign-up required.</p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      <div class="footer-brand">
+        <div class="name">Pro<span>Agent</span>Store</div>
+        <p>Server-powered AI agents. $9/mo for everything, creator payouts.</p>
+      </div>
+      <div class="footer-links">
+        <a href="/">Home</a>
+        <a href="https://github.com/ProAgentStore">GitHub</a>
+        <a href="https://freeagentstore.online" class="free">Free Tier ←</a>
+      </div>
+      <div class="footer-stores">
+        <strong style="color:var(--muted);font-size:0.72rem">FreeStore Family</strong>
+        <a href="https://freeappstore.online">FreeAppStore</a>
+        <a href="https://freegamestore.online">FreeGameStore</a>
+        <a href="https://freewebstore.online">FreeWebStore</a>
+        <a href="https://freeagentstore.online">FreeAgentStore</a>
+        <a href="https://proagentstore.online"><strong style="color:var(--muted)">ProAgentStore</strong></a>
+      </div>
+    </div>
+  </footer>
 </body>
 </html>
