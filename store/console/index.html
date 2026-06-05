@@ -360,14 +360,19 @@
       const code = params.get('code');
       if (!code) return false;
 
-      window.history.replaceState({}, '', window.location.pathname);
       try {
         const res = await api('/v1/auth/github', {
           method: 'POST',
-          body: JSON.stringify({ code, return_to: window.location.href }),
+          body: JSON.stringify({ code, return_to: window.location.origin + '/console/' }),
         }, true);
-        if (res.token) { setToken(res.token); return true; }
+        if (res.token) {
+          setToken(res.token);
+          if (res.user) user = res.user;
+          window.history.replaceState({}, '', window.location.pathname);
+          return true;
+        }
       } catch (e) { console.error('OAuth error:', e); }
+      window.history.replaceState({}, '', window.location.pathname);
       return false;
     }
 
@@ -407,18 +412,20 @@
         const list = document.getElementById('agents-list');
         const empty = document.getElementById('agents-empty');
         list.innerHTML = '';
-        if (!data.agents.length) { empty.classList.remove('hidden'); }
+        if (!data.agents.length) { empty.classList.remove('hidden'); return; }
         else {
           empty.classList.add('hidden');
           for (const a of data.agents) {
-            list.innerHTML += `<div class="agent-card" onclick="openAgent('${a.id}')">
-              <h3>${esc(a.name)}</h3>
+            const card = document.createElement('div');
+            card.className = 'agent-card';
+            card.innerHTML = `<h3>${esc(a.name)}</h3>
               <p>${esc(a.description || 'No description')}</p>
               <div class="agent-meta">
-                <span class="tag tag-${a.visibility}">${a.visibility}</span>
-                <span class="tag tag-cat">${a.category}</span>
-              </div>
-            </div>`;
+                <span class="tag tag-${esc(a.visibility)}">${esc(a.visibility)}</span>
+                <span class="tag tag-cat">${esc(a.category)}</span>
+              </div>`;
+            card.addEventListener('click', () => openAgent(a.id));
+            list.appendChild(card);
           }
         }
       } catch (e) { console.error(e); }
@@ -539,15 +546,22 @@
         const list = document.getElementById('memory-list');
         const empty = document.getElementById('memory-empty');
         list.innerHTML = '';
-        if (!(data.memory || []).length) { empty.classList.remove('hidden'); return; }
-        empty.classList.add('hidden');
-        for (const m of data.memory) {
-          list.innerHTML += `<div class="memory-item">
-            <div><span class="key">${esc(m.key)}</span> <span class="type">${m.type}</span>
-              <div class="content">${esc(m.content)}</div>
-            </div>
-            <button onclick="deleteMemory('${esc(m.key)}')" class="btn btn-outline btn-sm" style="flex-shrink:0">&times;</button>
+        const entries = data.memory || [];
+        empty.classList.toggle('hidden', entries.length > 0);
+        if (!entries.length) return;
+        for (const m of entries) {
+          const item = document.createElement('div');
+          item.className = 'memory-item';
+          item.innerHTML = `<div><span class="key">${esc(m.key)}</span> <span class="type">${esc(m.type)}</span>
+            <div class="content">${esc(m.content)}</div>
           </div>`;
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-outline btn-sm';
+          btn.style.flexShrink = '0';
+          btn.textContent = '\u00d7';
+          btn.addEventListener('click', () => deleteMemory(m.key));
+          item.appendChild(btn);
+          list.appendChild(item);
         }
       } catch {}
     }
@@ -588,9 +602,10 @@
         const list = document.getElementById('task-list');
         const empty = document.getElementById('task-empty');
         list.innerHTML = '';
-        if (!(data.tasks || []).length) { empty.classList.remove('hidden'); return; }
-        empty.classList.add('hidden');
-        for (const t of data.tasks) {
+        const items = data.tasks || [];
+        empty.classList.toggle('hidden', items.length > 0);
+        if (!items.length) return;
+        for (const t of items) {
           list.innerHTML += `<div class="task-item">
             <div>
               <span class="title">${esc(t.title)}</span>
@@ -655,8 +670,9 @@
 
     (async () => {
       const fromOAuth = await handleOAuthCallback();
+      if (fromOAuth && !user) await checkAuth();
       const authed = fromOAuth || await checkAuth();
-      if (authed) {
+      if (authed && user) {
         document.getElementById('login-page').classList.add('hidden');
         showUser();
         showDashboard();

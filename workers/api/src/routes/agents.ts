@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
 import { requireUser, requireCreator, HttpError } from '../lib/auth.js';
+import { verifySession } from '../lib/session.js';
 
 export const agentRoutes = new Hono<{ Bindings: Env }>();
 
@@ -52,13 +53,23 @@ agentRoutes.get('/', async (c) => {
   return c.json({ agents: results });
 });
 
-/** Get single agent (public if published). */
+/** Get single agent. Public if published; owners can see their own drafts. */
 agentRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
   const row = await c.env.DB.prepare(
-    `SELECT * FROM agents WHERE (id = ?1 OR slug = ?1) AND visibility = 'published'`,
+    `SELECT * FROM agents WHERE (id = ?1 OR slug = ?1)`,
   ).bind(id).first<AgentRow>();
   if (!row) return c.json({ error: 'Agent not found' }, 404);
+
+  // Non-published agents require ownership
+  if (row.visibility !== 'published') {
+    const header = c.req.header('Authorization');
+    if (!header?.startsWith('Bearer ')) return c.json({ error: 'Agent not found' }, 404);
+    const session = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
+    if (!session || (row.owner_id !== session.uid && !session.roles.includes('admin'))) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+  }
   return c.json(row);
 });
 
