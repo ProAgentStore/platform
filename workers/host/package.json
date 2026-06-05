@@ -2,9 +2,11 @@
   "name": "@proagentstore/host",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "build": "node build.js",
+    "dev": "node build.js && wrangler dev",
+    "deploy": "node build.js && wrangler deploy"
   },
   "devDependencies": {
     "wrangler": "^4.76.0"

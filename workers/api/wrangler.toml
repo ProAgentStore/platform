@@ -15,7 +15,7 @@ GITHUB_CLIENT_ID = ""  # Set after creating GitHub OAuth app
 [[d1_databases]]
 binding = "DB"
 database_name = "pags"
-database_id = ""  # Set after provisioning D1
+database_id = "036f9349-4a2e-48f0-93a8-b5f185bc2572"
 migrations_dir = "migrations"
 
 [ai]

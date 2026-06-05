@@ -3,10 +3,7 @@ main = "src/index.ts"
 compatibility_date = "2026-01-01"
 workers_dev = false
 
+# Apex domain only — api.proagentstore.online is handled by the API worker
 [[routes]]
 pattern = "proagentstore.online/*"
-zone_name = "proagentstore.online"
-
-[[routes]]
-pattern = "*.proagentstore.online/*"
 zone_name = "proagentstore.online"

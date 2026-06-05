@@ -4,3 +4,4 @@ dist/
 .env
 .env.*
 *.tsbuildinfo
+workers/host/src/pages.ts
