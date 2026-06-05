@@ -100,6 +100,29 @@
     .chat-input button{padding:0.5rem 1rem;background:var(--accent);color:#fff;border-radius:0.5rem;font-weight:600;font-size:0.85rem}
     .thinking{color:var(--muted);font-style:italic;font-size:0.82rem;padding:0.5rem 0}
 
+    /* Profile */
+    .profile-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.5rem;margin-bottom:1rem}
+    .profile-header{display:flex;align-items:center;gap:1.25rem;margin-bottom:1.5rem}
+    .profile-avatar{width:72px;height:72px;border-radius:50%;border:3px solid var(--line)}
+    .profile-name{font-family:var(--font-display);font-size:1.25rem;font-weight:700}
+    .profile-login{font-size:0.85rem;color:var(--muted)}
+    .profile-roles{display:flex;gap:0.4rem;margin-top:0.35rem}
+    .role-badge{font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:999px;font-weight:600}
+    .role-user{background:rgba(59,130,246,0.15);color:var(--blue)}
+    .role-creator{background:rgba(124,58,237,0.15);color:#a78bfa}
+    .role-admin{background:rgba(239,68,68,0.15);color:var(--red)}
+    .profile-section{margin-bottom:1.5rem}
+    .profile-section h3{font-size:0.95rem;font-weight:600;margin-bottom:0.75rem;color:var(--ink)}
+    .profile-row{display:flex;justify-content:space-between;align-items:center;padding:0.6rem 0;border-bottom:1px solid var(--line);font-size:0.88rem}
+    .profile-row:last-child{border-bottom:none}
+    .profile-label{color:var(--muted);font-weight:500}
+    .profile-value{color:var(--ink);font-weight:500}
+    .token-display{display:flex;align-items:center;gap:0.5rem}
+    .token-field{background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.35rem 0.6rem;font-family:'SF Mono',monospace;font-size:0.78rem;color:var(--muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .copy-btn{font-size:0.75rem;padding:0.25rem 0.5rem;border:1px solid var(--line);border-radius:0.35rem;color:var(--muted);cursor:pointer;background:none;font-family:var(--font-body)}
+    .copy-btn:hover{border-color:var(--accent);color:var(--accent)}
+    .profile-actions{display:flex;gap:0.75rem;margin-top:1rem}
+
     /* Memory + Tasks */
     .memory-list,.task-list{display:flex;flex-direction:column;gap:0.5rem}
     .memory-item,.task-item{background:var(--panel);border:1px solid var(--line);border-radius:0.5rem;padding:0.75rem;display:flex;justify-content:space-between;align-items:start;gap:0.75rem}
@@ -132,11 +155,10 @@
       <a href="/about/">About</a>
       <a href="https://github.com/ProAgentStore">GitHub</a>
       <span id="user-nav" class="hidden">
-        <span class="user-info">
+        <a href="#" onclick="showProfile();return false" class="user-info" style="text-decoration:none">
           <img id="user-avatar" class="avatar" alt="">
           <span id="user-login"></span>
-        </span>
-        <button onclick="signOut()" class="btn btn-outline btn-sm">Sign out</button>
+        </a>
       </span>
     </nav>
   </header>
@@ -327,6 +349,64 @@
     </div>
   </div>
 
+  <!-- Profile page -->
+  <div id="profile-page" class="container hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem">
+      <h1 class="page-title" style="margin-bottom:0">Profile</h1>
+      <button onclick="showDashboard()" class="btn btn-outline btn-sm">&larr; My Agents</button>
+    </div>
+
+    <div class="profile-card">
+      <div class="profile-header">
+        <img id="profile-avatar" class="profile-avatar" alt="">
+        <div>
+          <div id="profile-name" class="profile-name"></div>
+          <div id="profile-login" class="profile-login"></div>
+          <div id="profile-roles" class="profile-roles"></div>
+        </div>
+      </div>
+
+      <div class="profile-section">
+        <h3>Account</h3>
+        <div class="profile-row">
+          <span class="profile-label">User ID</span>
+          <span id="profile-uid" class="profile-value" style="font-family:'SF Mono',monospace;font-size:0.82rem"></span>
+        </div>
+        <div class="profile-row">
+          <span class="profile-label">GitHub</span>
+          <span id="profile-gh-link" class="profile-value"></span>
+        </div>
+      </div>
+
+      <div class="profile-section">
+        <h3>API Token</h3>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem">Use this token to authenticate SDK calls and API requests. Keep it secret.</p>
+        <div class="token-display">
+          <span id="profile-token" class="token-field"></span>
+          <button class="copy-btn" onclick="copyToken()">Copy</button>
+          <button class="copy-btn" onclick="toggleTokenVisibility()">Show</button>
+        </div>
+      </div>
+
+      <div class="profile-section">
+        <h3>SDK Quick Start</h3>
+        <pre style="background:var(--paper);border:1px solid var(--line);border-radius:0.5rem;padding:0.85rem;font-size:0.78rem;color:#a78bfa;overflow-x:auto;margin:0">import { initPro } from '@proagentstore/sdk'
+
+const agent = initPro({
+  agentId: 'your-agent-id',
+  token: 'your-token-here',
+})
+
+const { response } = await agent.chat('Hello!')
+console.log(response)</pre>
+      </div>
+
+      <div class="profile-actions">
+        <button onclick="signOut()" class="btn btn-danger">Sign Out</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const API = 'https://api.proagentstore.online';
     const SESSION_KEY = 'pags:session';
@@ -349,10 +429,15 @@
 
     function signOut() {
       setToken(null); user = null;
-      document.getElementById('login-page').classList.remove('hidden');
-      document.getElementById('dashboard').classList.add('hidden');
-      document.getElementById('agent-detail').classList.add('hidden');
+      showPage('login-page');
       document.getElementById('user-nav').classList.add('hidden');
+    }
+
+    /** Show one page, hide all others. */
+    function showPage(id) {
+      for (const p of ['login-page', 'dashboard', 'agent-detail', 'profile-page']) {
+        document.getElementById(p).classList.toggle('hidden', p !== id);
+      }
     }
 
     async function handleOAuthCallback() {
@@ -435,8 +520,7 @@
     }
 
     function showDashboard() {
-      document.getElementById('dashboard').classList.remove('hidden');
-      document.getElementById('agent-detail').classList.add('hidden');
+      showPage('dashboard');
       currentAgent = null;
       loadAgents();
     }
@@ -474,8 +558,7 @@
       try {
         const agent = await api(`/v1/agents/${id}`);
         currentAgent = agent;
-        document.getElementById('dashboard').classList.add('hidden');
-        document.getElementById('agent-detail').classList.remove('hidden');
+        showPage('agent-detail');
         document.getElementById('detail-name').textContent = agent.name;
         document.getElementById('detail-slug').textContent = agent.slug;
         document.getElementById('detail-desc').textContent = agent.description;
@@ -663,6 +746,58 @@
       } catch (e) { alert(e.message); }
     }
 
+    // ── Profile ──────────────────────────────────────────────────
+
+    let tokenVisible = false;
+
+    function showProfile() {
+      if (!user) return;
+      showPage('profile-page');
+
+      document.getElementById('profile-avatar').src = user.avatar || '';
+      document.getElementById('profile-name').textContent = user.name || user.login;
+      document.getElementById('profile-login').textContent = '@' + user.login;
+      document.getElementById('profile-uid').textContent = user.id;
+
+      const ghLink = document.getElementById('profile-gh-link');
+      ghLink.innerHTML = '';
+      const a = document.createElement('a');
+      a.href = 'https://github.com/' + user.login;
+      a.textContent = user.login;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      ghLink.appendChild(a);
+
+      const rolesEl = document.getElementById('profile-roles');
+      rolesEl.innerHTML = '';
+      for (const r of (user.roles || [])) {
+        const badge = document.createElement('span');
+        badge.className = 'role-badge role-' + r;
+        badge.textContent = r;
+        rolesEl.appendChild(badge);
+      }
+
+      tokenVisible = false;
+      const tokenEl = document.getElementById('profile-token');
+      tokenEl.textContent = token ? token.slice(0, 12) + '...' : 'Not signed in';
+    }
+
+    function copyToken() {
+      if (!token) return;
+      navigator.clipboard.writeText(token).then(() => {
+        const btn = document.querySelector('.copy-btn');
+        const orig = btn.textContent;
+        btn.textContent = 'Copied!';
+        setTimeout(() => btn.textContent = orig, 1500);
+      });
+    }
+
+    function toggleTokenVisibility() {
+      if (!token) return;
+      tokenVisible = !tokenVisible;
+      document.getElementById('profile-token').textContent = tokenVisible ? token : token.slice(0, 12) + '...';
+    }
+
     // ── Helpers ──────────────────────────────────────────────────
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
@@ -675,9 +810,10 @@
       if (fromOAuth && !user) await checkAuth();
       const authed = fromOAuth || await checkAuth();
       if (authed && user) {
-        document.getElementById('login-page').classList.add('hidden');
         showUser();
         showDashboard();
+      } else {
+        showPage('login-page');
       }
     })();
   </script>
