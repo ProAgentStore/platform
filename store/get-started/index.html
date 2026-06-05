@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Get Started — ProAgentStore</title>
+  <meta name="description" content="Build a server-powered AI agent with Workers AI, D1, R2, and cron. Deploy to Cloudflare in minutes.">
+  <meta property="og:title" content="Get Started — ProAgentStore">
+  <meta property="og:description" content="Build and deploy a server-powered AI agent in minutes.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://proagentstore.online/get-started/">
+  <link rel="canonical" href="https://proagentstore.online/get-started/">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-hover:#6d28d9;--free:#3b82f6;--line:#262626}
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+    .container{max-width:760px;margin:0 auto;padding:0 1.5rem}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+    header{border-bottom:1px solid var(--line)}
+    header .c{max-width:1200px;margin:0 auto;padding:0.75rem 1.5rem;display:flex;align-items:center;gap:1.25rem}
+    .brand{display:flex;align-items:center;gap:0.6rem;text-decoration:none;color:var(--ink)}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    nav{display:flex;gap:1.25rem;font-size:0.88rem;font-weight:600;margin-left:auto}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}
+    nav a.free{color:var(--free)}
+    h1{font-family:var(--font-display);font-size:2.25rem;font-weight:700;margin:3rem 0 1rem}
+    h2{font-family:var(--font-display);font-size:1.3rem;font-weight:700;margin:2.5rem 0 0.75rem}
+    p{color:var(--muted);line-height:1.7;margin-bottom:1rem;font-size:0.95rem}
+    .highlight{color:var(--ink)}
+    .step{display:flex;gap:1rem;margin:1.5rem 0;align-items:start}
+    .step-num{width:36px;height:36px;border-radius:10px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.9rem;flex-shrink:0}
+    .step-body h3{font-size:1rem;font-weight:600;margin-bottom:0.25rem;color:var(--ink)}
+    .step-body p{margin:0;font-size:0.88rem}
+    code{background:var(--panel);padding:0.15rem 0.5rem;border-radius:4px;font-size:0.85rem;font-family:'SF Mono',monospace}
+    pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:1rem;font-family:'SF Mono',monospace;font-size:0.82rem;overflow-x:auto;margin:1rem 0;color:#a78bfa}
+    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:0.8rem;color:var(--muted-soft);margin-top:4rem}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="c">
+      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <nav>
+        <a href="/">Agents</a>
+        <a href="/about/">About</a>
+        <a href="/get-started/">Get Started</a>
+        <a href="https://github.com/ProAgentStore">GitHub</a>
+        <a href="https://freeagentstore.online" class="free">Free</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <h1>Get Started</h1>
+    <p class="highlight" style="font-size:1.1rem">Build a server-powered AI agent and deploy it to Cloudflare. Takes 10 minutes.</p>
+
+    <h2>Use an existing Pro agent</h2>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h3>Subscribe</h3>
+        <p>$9/mo unlocks every Pro agent. One subscription, all agents. <a href="/">Browse the catalog</a> to see what's available.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>Call the agent's API</h3>
+        <p>Every Pro agent has a REST endpoint. Authenticate with your subscription token and call it from anywhere.</p>
+      </div>
+    </div>
+
+    <pre>curl https://api.proagentstore.online/agents/summarizer/run \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Long article to summarize..."}'</pre>
+
+    <h2>Build a new Pro agent</h2>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h3>Install the CLI</h3>
+        <p>The CLI scaffolds your agent, runs it locally, and deploys to Cloudflare.</p>
+      </div>
+    </div>
+
+    <pre>pnpm add -g @proagentstore/cli</pre>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>Create the agent</h3>
+        <p>Pick a template. Each template includes Workers AI, D1, and R2 pre-wired.</p>
+      </div>
+    </div>
+
+    <pre>pags init my-agent --template ai-chat
+cd my-agent</pre>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h3>Write the logic</h3>
+        <p>Your agent is a Cloudflare Worker. Use the SDK to access AI, database, storage, and more.</p>
+      </div>
+    </div>
+
+    <pre>import { initPro } from '@proagentstore/sdk'
+
+const agent = initPro({ agentId: 'my-agent' })
+
+export default {
+  async fetch(request, env) {
+    const { prompt } = await request.json()
+
+    // Run a 70B model server-side
+    const response = await agent.ai.run('@cf/meta/llama-3.1-70b-instruct', {
+      messages: [{ role: 'user', content: prompt }]
+    })
+
+    // Save to persistent database
+    await agent.db.exec(
+      'INSERT INTO conversations (prompt, response) VALUES (?, ?)',
+      prompt, response.text
+    )
+
+    return Response.json({ text: response.text })
+  },
+
+  // Cron: runs daily at 8am UTC
+  async scheduled(event, env) {
+    const summary = await agent.ai.run('@cf/meta/llama-3.1-8b-instruct', {
+      messages: [{ role: 'user', content: 'Summarize yesterday\'s conversations' }]
+    })
+    await agent.storage.put('daily-summary.txt', summary.text)
+  }
+}</pre>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h3>Test locally</h3>
+        <p>The CLI runs your agent with a local D1 database and mock AI responses.</p>
+      </div>
+    </div>
+
+    <pre>pags dev</pre>
+
+    <div class="step">
+      <div class="step-num">5</div>
+      <div class="step-body">
+        <h3>Publish</h3>
+        <p>Push to the ProAgentStore org. CI deploys the Worker, provisions D1 + R2, sets up the subdomain and API endpoint.</p>
+      </div>
+    </div>
+
+    <pre>pags publish</pre>
+
+    <p>Your agent is live at <code>my-agent.proagentstore.online</code> with a REST API at <code>api.proagentstore.online/agents/my-agent/</code>.</p>
+
+    <h2>Upgrading from Free</h2>
+    <p>Already have a browser agent on <a href="https://freeagentstore.online">FreeAgentStore</a>? Pro agents can import free agents as dependencies -- keep the browser-side logic, add server-side compute on top.</p>
+
+    <pre>import { parseResume } from '@freeagentstore/resume-parser'
+import { initPro } from '@proagentstore/sdk'
+
+const agent = initPro({ agentId: 'smart-recruiter' })
+
+// Use the free heuristic parser + Pro AI for analysis
+const parsed = parseResume(resumeText)
+const analysis = await agent.ai.run('@cf/meta/llama-3.1-70b-instruct', {
+  messages: [{ role: 'user', content: `Evaluate this candidate: ${JSON.stringify(parsed)}` }]
+})</pre>
+
+    <h2>SDK reference</h2>
+    <pre>const agent = initPro({ agentId: 'my-agent' })
+
+agent.ai          // Workers AI -- run any model server-side
+agent.db          // D1 database -- per-agent SQLite
+agent.storage     // R2 storage -- per-agent file bucket
+agent.subscription // Stripe -- checkout, portal, status
+agent.usage       // Usage tracking -- for creator payouts</pre>
+
+    <p>Full SDK docs on <a href="https://github.com/ProAgentStore/platform">GitHub</a>.</p>
+  </main>
+
+  <footer>
+    <a href="/">Agents</a> · <a href="/about/">About</a> · <a href="/get-started/">Get Started</a> · <a href="https://github.com/ProAgentStore">GitHub</a> · <a href="https://freeagentstore.online" style="color:#3b82f6">Free</a>
+  </footer>
+</body>
+</html>

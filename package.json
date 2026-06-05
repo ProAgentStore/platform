@@ -1,6 +1,7 @@
 {
   "name": "proagentstore-platform-monorepo",
   "private": true,
+  "type": "module",
   "version": "0.0.0",
   "description": "SDK + CLI + compliance + backend for server-powered AI agents on proagentstore.online",
   "license": "MIT",
