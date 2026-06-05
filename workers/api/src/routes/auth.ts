@@ -32,33 +32,34 @@ authRoutes.post('/exchange', async (c) => {
   if (!fasRes.ok) {
     return c.json({ error: 'Invalid FAS session' }, 401);
   }
-  // FAS /v1/auth/me returns a flat user object: { id, github_login, avatar_url, ... }
+  // FAS /v1/auth/me returns: { id, login, githubLogin, avatarUrl, roles, ... }
   const fasUser = await fasRes.json<{
-    id?: string; github_login?: string; avatar_url?: string; display_name?: string;
+    id?: string; login?: string; githubLogin?: string; avatarUrl?: string;
   }>();
   if (!fasUser.id) {
     return c.json({ error: 'FAS session invalid' }, 401);
   }
 
   const uid = fasUser.id;
-  const github_login = fasUser.github_login || 'unknown';
-  const avatar_url = fasUser.avatar_url || '';
-  const github_name = fasUser.display_name || github_login;
+  const github_login = fasUser.githubLogin || fasUser.login || 'unknown';
+  const avatar_url = fasUser.avatarUrl || '';
+  const github_name = fasUser.login || github_login;
 
-  // Upsert user in PAGS D1
+  // Upsert user in PAGS D1 — everyone is a creator on PAGS (it's a creator platform)
+  const defaultRoles = JSON.stringify(['user', 'creator']);
   await c.env.DB.prepare(
-    `INSERT INTO users (id, github_login, github_name, avatar_url, updated_at)
-     VALUES (?1, ?2, ?3, ?4, datetime('now'))
+    `INSERT INTO users (id, github_login, github_name, avatar_url, roles, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
      ON CONFLICT(id) DO UPDATE SET
        github_login = excluded.github_login,
        github_name = excluded.github_name,
        avatar_url = excluded.avatar_url,
        updated_at = excluded.updated_at`,
-  ).bind(uid, github_login, github_name || github_login, avatar_url).run();
+  ).bind(uid, github_login, github_name || github_login, avatar_url, defaultRoles).run();
 
-  // Fetch roles
+  // Fetch roles (existing users keep their roles, new users get user+creator)
   const row = await c.env.DB.prepare('SELECT roles FROM users WHERE id = ?1').bind(uid).first<{ roles: string }>();
-  const roles = row?.roles ? JSON.parse(row.roles) : ['user'];
+  const roles = row?.roles ? JSON.parse(row.roles) : ['user', 'creator'];
 
   const token = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles });
   return c.json({
