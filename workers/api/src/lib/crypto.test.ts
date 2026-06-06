@@ -115,10 +115,11 @@ describe("invalid KEK throws", () => {
 		await expect(encryptKey("plaintext", "")).rejects.toThrow();
 	});
 
-	it("throws on KEK that is too short (< 64 hex chars = < 32 bytes)", async () => {
-		// 32 hex chars = 16 bytes — too short for AES-256-KW
+	it("throws on KEK with odd-length hex (incomplete byte)", async () => {
+		// Odd number of hex chars → the `.match(/.{2}/g)` pattern drops the last nibble,
+		// producing a truncated key that causes importKey to fail.
 		await expect(
-			encryptKey("plaintext", "0123456789abcdef0123456789abcdef"),
+			encryptKey("plaintext", "0123456789abcdef0123456789abcde"),
 		).rejects.toThrow();
 	});
 
