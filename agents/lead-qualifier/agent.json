@@ -1,12 +1,12 @@
 {
-  "id": "lead-qualifier",
-  "name": "lead-qualifier",
-  "description": "Receives leads via webhook, scores them with Workers AI, and routes hot leads to your CRM or notification channel.",
-  "storeType": "agent",
-  "category": "productivity",
-  "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  "template": "api",
-  "serverConfig": {
-    "routes": ["lead-qualifier.proagentstore.online/*"]
-  }
+	"id": "lead-qualifier",
+	"name": "lead-qualifier",
+	"description": "Receives leads via webhook, scores them with Workers AI, and routes hot leads to your CRM or notification channel.",
+	"storeType": "agent",
+	"category": "productivity",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "api",
+	"serverConfig": {
+		"routes": ["lead-qualifier.proagentstore.online/*"]
+	}
 }

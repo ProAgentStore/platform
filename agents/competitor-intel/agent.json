@@ -1,13 +1,13 @@
 {
-  "id": "competitor-intel",
-  "name": "competitor-intel",
-  "description": "Tracks competitor websites daily. Fetches configured URLs, detects content changes via hashing, and generates AI intelligence reports with trend analysis stored in a Durable Object.",
-  "storeType": "worker",
-  "category": "data",
-  "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  "template": "cron",
-  "serverConfig": {
-    "cron": "0 7 * * *",
-    "routes": ["competitor-intel.proagentstore.online/*"]
-  }
+	"id": "competitor-intel",
+	"name": "competitor-intel",
+	"description": "Tracks competitor websites daily. Fetches configured URLs, detects content changes via hashing, and generates AI intelligence reports with trend analysis stored in a Durable Object.",
+	"storeType": "worker",
+	"category": "data",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "cron",
+	"serverConfig": {
+		"cron": "0 7 * * *",
+		"routes": ["competitor-intel.proagentstore.online/*"]
+	}
 }

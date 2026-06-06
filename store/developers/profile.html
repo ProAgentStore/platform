@@ -132,7 +132,7 @@
         document.title = `${dev.name || dev.login} — ProAgentStore Developer`;
         document.getElementById('d-avatar').src = dev.avatar || '';
         document.getElementById('d-name').textContent = dev.name || dev.login;
-        document.getElementById('d-login').textContent = '@' + dev.login;
+        document.getElementById('d-login').textContent = `@${dev.login}`;
         document.getElementById('d-bio').textContent = dev.bio || '';
 
         // Badges
@@ -140,7 +140,7 @@
         for (const r of (dev.roles || [])) {
           if (r === 'user') continue;
           const b = document.createElement('span');
-          b.className = 'badge badge-' + r;
+          b.className = `badge badge-${r}`;
           b.textContent = r;
           badges.appendChild(b);
         }
@@ -181,7 +181,7 @@
 
         document.getElementById('loading').style.display = 'none';
         document.getElementById('content').style.display = '';
-      } catch (e) { document.getElementById('loading').textContent = 'Failed to load'; }
+      } catch (_e) { document.getElementById('loading').textContent = 'Failed to load'; }
     }
     loadDeveloper();
   </script>

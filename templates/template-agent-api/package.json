@@ -1,19 +1,19 @@
 {
-  "name": "@proagentstore/AGENTNAME",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "hono": "^4.7.0"
-  },
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250530.0",
-    "typescript": "^5.7.0",
-    "wrangler": "^4.0.0"
-  }
+	"name": "@proagentstore/AGENTNAME",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"hono": "^4.7.0"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^4.20250530.0",
+		"typescript": "^5.7.0",
+		"wrangler": "^4.0.0"
+	}
 }

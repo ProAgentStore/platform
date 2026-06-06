@@ -138,7 +138,7 @@
     .empty{text-align:center;padding:2rem;color:var(--muted-soft);font-size:0.9rem}
     .error{color:var(--red);font-size:0.82rem;margin-top:0.5rem}
     .loading{text-align:center;padding:2rem;color:var(--muted)}
-    .hidden{display:none!important}
+    .hidden{display:none}
   </style>
 </head>
 <body>
@@ -633,15 +633,15 @@ console.log(response)</pre>
     function getToken() { return localStorage.getItem(SESSION_KEY); }
     function setToken(t) { t ? localStorage.setItem(SESSION_KEY, t) : localStorage.removeItem(SESSION_KEY); token = t; }
 
-    async function signIn() {
+    async function _signIn() {
       const res = await fetch(`${API}/v1/auth/config`);
       const config = await res.json();
-      const returnTo = encodeURIComponent(window.location.origin + '/console/');
+      const returnTo = encodeURIComponent(`${window.location.origin}/console/`);
       // Use FAS shared OAuth (same approach as FAGS console)
       window.location.href = `${config.oauth_url}?app_id=${config.app_id}&response_mode=${config.response_mode}&return_to=${returnTo}`;
     }
 
-    function signOut() {
+    function _signOut() {
       setToken(null); user = null;
       showPage('login-page');
       document.getElementById('user-nav').classList.add('hidden');
@@ -697,7 +697,7 @@ console.log(response)</pre>
 
     async function api(path, opts = {}, noAuth = false) {
       const headers = { 'Content-Type': 'application/json' };
-      if (!noAuth && token) headers['Authorization'] = `Bearer ${token}`;
+      if (!noAuth && token) headers.Authorization = `Bearer ${token}`;
       const res = await fetch(`${API}${path}`, { ...opts, headers: { ...headers, ...opts.headers } });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
@@ -743,7 +743,7 @@ console.log(response)</pre>
       document.getElementById('create-form').classList.toggle('hidden');
     }
 
-    async function createAgent() {
+    async function _createAgent() {
       const slug = document.getElementById('f-slug').value.trim();
       const name = document.getElementById('f-name').value.trim();
       if (!slug || !name) { showError('create-error', 'Slug and name required'); return; }
@@ -832,7 +832,7 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function sendMessage() {
+    async function _sendMessage() {
       const input = document.getElementById('chat-input');
       const message = input.value.trim();
       if (!message) return;
@@ -930,7 +930,7 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function sendInstanceMessage() {
+    async function _sendInstanceMessage() {
       const input = document.getElementById('inst-chat-input');
       const message = input.value.trim();
       if (!message) return;
@@ -960,7 +960,7 @@ console.log(response)</pre>
     }
 
     // Instance knowledge
-    function showInstKbForm(type) { hideInstKbForms(); document.getElementById(`inst-kb-form-${type}`).classList.remove('hidden'); }
+    function _showInstKbForm(type) { hideInstKbForms(); document.getElementById(`inst-kb-form-${type}`).classList.remove('hidden'); }
     function hideInstKbForms() { document.getElementById('inst-kb-form-paste').classList.add('hidden'); document.getElementById('inst-kb-form-url').classList.add('hidden'); }
 
     async function loadInstanceKnowledge() {
@@ -991,7 +991,7 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function addInstKbPaste() {
+    async function _addInstKbPaste() {
       const title = document.getElementById('inst-kb-title').value.trim();
       const content = document.getElementById('inst-kb-content').value.trim();
       if (!title || !content) { alert('Title and content required'); return; }
@@ -1000,7 +1000,7 @@ console.log(response)</pre>
       loadInstanceKnowledge();
     }
 
-    async function addInstKbUrl() {
+    async function _addInstKbUrl() {
       const url = document.getElementById('inst-kb-url').value.trim();
       if (!url) { alert('URL required'); return; }
       await api(`/v1/instances/${currentInstance.id}/knowledge/ingest-url`, { method: 'POST', body: JSON.stringify({ url, title: document.getElementById('inst-kb-url-title').value.trim() || undefined }) });
@@ -1008,7 +1008,7 @@ console.log(response)</pre>
       loadInstanceKnowledge();
     }
 
-    async function uploadInstKbFile(input) {
+    async function _uploadInstKbFile(input) {
       const file = input.files?.[0]; if (!file) return;
       await api(`/v1/instances/${currentInstance.id}/knowledge`, { method: 'POST', body: JSON.stringify({ title: file.name, content: await file.text(), source: 'upload' }) });
       loadInstanceKnowledge(); input.value = '';
@@ -1060,7 +1060,7 @@ console.log(response)</pre>
 
     // ── Knowledge Base ─────────────────────────────────────────
 
-    function showKbForm(type) {
+    function _showKbForm(type) {
       hideKbForms();
       document.getElementById(`kb-form-${type}`).classList.remove('hidden');
     }
@@ -1081,7 +1081,7 @@ console.log(response)</pre>
         for (const doc of docs) {
           const item = document.createElement('div');
           item.className = 'memory-item';
-          const preview = doc.content.length > 120 ? doc.content.slice(0, 120) + '...' : doc.content;
+          const preview = doc.content.length > 120 ? `${doc.content.slice(0, 120)}...` : doc.content;
           item.innerHTML = `<div style="flex:1;min-width:0">
             <span class="key">${esc(doc.title)}</span>
             <span class="type">${esc(doc.source)}</span>
@@ -1100,7 +1100,7 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function addKbPaste() {
+    async function _addKbPaste() {
       const title = document.getElementById('kb-title').value.trim();
       const content = document.getElementById('kb-content').value.trim();
       if (!title || !content) { alert('Title and content required'); return; }
@@ -1116,7 +1116,7 @@ console.log(response)</pre>
       } catch (e) { alert(e.message); }
     }
 
-    async function addKbUrl() {
+    async function _addKbUrl() {
       const url = document.getElementById('kb-url').value.trim();
       if (!url) { alert('URL required'); return; }
       const title = document.getElementById('kb-url-title').value.trim();
@@ -1140,7 +1140,7 @@ console.log(response)</pre>
       }
     }
 
-    async function uploadKbFile(input) {
+    async function _uploadKbFile(input) {
       const file = input.files?.[0];
       if (!file) return;
       const text = await file.text();
@@ -1190,9 +1190,9 @@ console.log(response)</pre>
       } catch {}
     }
 
-    function showMemoryForm() { document.getElementById('memory-form').classList.remove('hidden'); }
+    function _showMemoryForm() { document.getElementById('memory-form').classList.remove('hidden'); }
 
-    async function saveMemory() {
+    async function _saveMemory() {
       try {
         await api(`/v1/agents/${currentAgent.id}/memory`, {
           method: 'PUT',
@@ -1241,9 +1241,9 @@ console.log(response)</pre>
       } catch {}
     }
 
-    function showTaskForm() { document.getElementById('task-form').classList.remove('hidden'); }
+    function _showTaskForm() { document.getElementById('task-form').classList.remove('hidden'); }
 
-    async function createTask() {
+    async function _createTask() {
       try {
         await api(`/v1/agents/${currentAgent.id}/tasks`, {
           method: 'POST',
@@ -1260,7 +1260,7 @@ console.log(response)</pre>
 
     // ── Settings ────────────────────────────────────────────────
 
-    async function saveSettings() {
+    async function _saveSettings() {
       try {
         // Save D1 fields (agent registry)
         await api(`/v1/agents/${currentAgent.id}`, {
@@ -1289,7 +1289,7 @@ console.log(response)</pre>
               topicRestrictions: document.getElementById('s-topics').value,
               blockedTerms,
               responseStyle: document.getElementById('s-style').value,
-              maxResponseLength: parseInt(document.getElementById('s-maxlen').value) || 0,
+              maxResponseLength: parseInt(document.getElementById('s-maxlen').value, 10) || 0,
               requireCitations: document.getElementById('s-citations').checked,
             },
           }),
@@ -1300,7 +1300,7 @@ console.log(response)</pre>
       } catch (e) { alert(e.message); }
     }
 
-    async function deleteAgent() {
+    async function _deleteAgent() {
       if (!confirm(`Delete "${currentAgent.name}"? This cannot be undone.`)) return;
       try {
         await api(`/v1/agents/${currentAgent.id}`, { method: 'DELETE' });
@@ -1312,19 +1312,19 @@ console.log(response)</pre>
 
     let tokenVisible = false;
 
-    function showProfile() {
+    function _showProfile() {
       if (!user) return;
       showPage('profile-page');
 
       document.getElementById('profile-avatar').src = user.avatar || '';
       document.getElementById('profile-name').textContent = user.name || user.login;
-      document.getElementById('profile-login').textContent = '@' + user.login;
+      document.getElementById('profile-login').textContent = `@${user.login}`;
       document.getElementById('profile-uid').textContent = user.id;
 
       const ghLink = document.getElementById('profile-gh-link');
       ghLink.innerHTML = '';
       const a = document.createElement('a');
-      a.href = 'https://github.com/' + user.login;
+      a.href = `https://github.com/${user.login}`;
       a.textContent = user.login;
       a.target = '_blank';
       a.rel = 'noopener';
@@ -1334,14 +1334,14 @@ console.log(response)</pre>
       rolesEl.innerHTML = '';
       for (const r of (user.roles || [])) {
         const badge = document.createElement('span');
-        badge.className = 'role-badge role-' + r;
+        badge.className = `role-badge role-${r}`;
         badge.textContent = r;
         rolesEl.appendChild(badge);
       }
 
       tokenVisible = false;
       const tokenEl = document.getElementById('profile-token');
-      tokenEl.textContent = token ? token.slice(0, 12) + '...' : 'Not signed in';
+      tokenEl.textContent = token ? `${token.slice(0, 12)}...` : 'Not signed in';
 
       // Profile edit fields
       document.getElementById('p-display-name').value = user.name || '';
@@ -1353,7 +1353,7 @@ console.log(response)</pre>
       loadKeys();
     }
 
-    function copyToken() {
+    function _copyToken() {
       if (!token) return;
       navigator.clipboard.writeText(token).then(() => {
         const btn = document.querySelector('.copy-btn');
@@ -1363,13 +1363,13 @@ console.log(response)</pre>
       });
     }
 
-    function toggleTokenVisibility() {
+    function _toggleTokenVisibility() {
       if (!token) return;
       tokenVisible = !tokenVisible;
-      document.getElementById('profile-token').textContent = tokenVisible ? token : token.slice(0, 12) + '...';
+      document.getElementById('profile-token').textContent = tokenVisible ? token : `${token.slice(0, 12)}...`;
     }
 
-    async function saveProfile() {
+    async function _saveProfile() {
       try {
         await api('/v1/auth/me', {
           method: 'PUT',
@@ -1404,8 +1404,8 @@ console.log(response)</pre>
             delBtn.className = 'btn btn-outline btn-sm';
             delBtn.textContent = 'Remove';
             delBtn.addEventListener('click', async () => {
-              if (!confirm('Remove ' + p.name + ' key?')) return;
-              await api('/v1/keys/' + p.id, { method: 'DELETE' });
+              if (!confirm(`Remove ${p.name} key?`)) return;
+              await api(`/v1/keys/${p.id}`, { method: 'DELETE' });
               loadKeys();
             });
             row.appendChild(delBtn);
@@ -1414,9 +1414,9 @@ console.log(response)</pre>
             addBtn.className = 'btn btn-primary btn-sm';
             addBtn.textContent = 'Add Key';
             addBtn.addEventListener('click', () => {
-              const key = prompt(p.name + ' API key:');
+              const key = prompt(`${p.name} API key:`);
               if (!key) return;
-              api('/v1/keys/' + p.id, { method: 'PUT', body: JSON.stringify({ key }) })
+              api(`/v1/keys/${p.id}`, { method: 'PUT', body: JSON.stringify({ key }) })
                 .then(() => loadKeys())
                 .catch(e => alert(e.message));
             });
@@ -1452,7 +1452,7 @@ console.log(response)</pre>
           switchDashTab('instances');
           return;
         }
-        alert('Subscribe failed: ' + e.message);
+        alert(`Subscribe failed: ${e.message}`);
       }
     }
 

@@ -147,7 +147,7 @@
         document.getElementById('a-subscribe').href = `/console/?subscribe=${encodeURIComponent(a.id)}`;
 
         document.getElementById('embed-code').textContent =
-          `<script src="https://proagentstore.online/widget.js"\n  data-agent="${a.slug || a.id}"\n  data-theme="dark"><\/script>`;
+          `<script src="https://proagentstore.online/widget.js"\n  data-agent="${a.slug || a.id}"\n  data-theme="dark"></script>`;
 
         document.getElementById('loading').style.display = 'none';
         document.getElementById('content').style.display = '';

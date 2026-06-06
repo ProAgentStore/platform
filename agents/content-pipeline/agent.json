@@ -1,13 +1,13 @@
 {
-  "id": "content-pipeline",
-  "name": "content-pipeline",
-  "description": "Scheduled content generation agent. Picks topics daily, generates blog drafts, social posts, or newsletters via Workers AI, and stores them in R2.",
-  "storeType": "worker",
-  "category": "creative",
-  "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  "template": "cron",
-  "serverConfig": {
-    "cron": "0 6 * * *",
-    "routes": ["content-pipeline.proagentstore.online/*"]
-  }
+	"id": "content-pipeline",
+	"name": "content-pipeline",
+	"description": "Scheduled content generation agent. Picks topics daily, generates blog drafts, social posts, or newsletters via Workers AI, and stores them in R2.",
+	"storeType": "worker",
+	"category": "creative",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "cron",
+	"serverConfig": {
+		"cron": "0 6 * * *",
+		"routes": ["content-pipeline.proagentstore.online/*"]
+	}
 }

@@ -2,26 +2,47 @@
  * ProAgentStore embeddable chat widget.
  * Usage: <script src="https://proagentstore.online/widget.js" data-agent="slug" data-theme="dark"></script>
  */
-(function() {
-  const script = document.currentScript;
-  const agentId = script?.getAttribute('data-agent');
-  const theme = script?.getAttribute('data-theme') || 'dark';
-  const API = 'https://api.proagentstore.online';
+(() => {
+	const script = document.currentScript;
+	const agentId = script?.getAttribute("data-agent");
+	const theme = script?.getAttribute("data-theme") || "dark";
+	const API = "https://api.proagentstore.online";
 
-  if (!agentId) { console.error('ProAgentStore widget: data-agent attribute required'); return; }
+	if (!agentId) {
+		console.error("ProAgentStore widget: data-agent attribute required");
+		return;
+	}
 
-  let sessionId = null;
-  let open = false;
+	let sessionId = null;
+	const _open = false;
 
-  const isDark = theme === 'dark';
-  const colors = isDark
-    ? { bg: '#0a0a0a', panel: '#171717', ink: '#fafafa', muted: '#a3a3a3', accent: '#7c3aed', line: '#262626', userBg: '#7c3aed', botBg: '#1f1f1f' }
-    : { bg: '#fff', panel: '#f5f5f5', ink: '#171717', muted: '#737373', accent: '#7c3aed', line: '#e5e5e5', userBg: '#7c3aed', botBg: '#f0f0f0' };
+	const isDark = theme === "dark";
+	const colors = isDark
+		? {
+				bg: "#0a0a0a",
+				panel: "#171717",
+				ink: "#fafafa",
+				muted: "#a3a3a3",
+				accent: "#7c3aed",
+				line: "#262626",
+				userBg: "#7c3aed",
+				botBg: "#1f1f1f",
+			}
+		: {
+				bg: "#fff",
+				panel: "#f5f5f5",
+				ink: "#171717",
+				muted: "#737373",
+				accent: "#7c3aed",
+				line: "#e5e5e5",
+				userBg: "#7c3aed",
+				botBg: "#f0f0f0",
+			};
 
-  // Create container
-  const container = document.createElement('div');
-  container.id = 'pags-widget';
-  container.innerHTML = `
+	// Create container
+	const container = document.createElement("div");
+	container.id = "pags-widget";
+	container.innerHTML = `
     <style>
       #pags-widget *{margin:0;padding:0;box-sizing:border-box;font-family:'Manrope',system-ui,sans-serif}
       #pags-fab{position:fixed;bottom:20px;right:20px;width:56px;height:56px;border-radius:50%;background:${colors.accent};color:#fff;border:none;cursor:pointer;font-size:1.5rem;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:99999;transition:transform 0.15s}
@@ -60,40 +81,50 @@
       </div>
       <div id="pags-powered">Powered by <a href="https://proagentstore.online" target="_blank">ProAgentStore</a></div>
     </div>`;
-  document.body.appendChild(container);
+	document.body.appendChild(container);
 
-  // Load agent name
-  fetch(API + '/v1/public/agents/' + agentId).then(r => r.json()).then(a => {
-    if (a.name) document.getElementById('pags-agent-name').textContent = a.name;
-  }).catch(() => {});
+	// Load agent name
+	fetch(`${API}/v1/public/agents/${agentId}`)
+		.then((r) => r.json())
+		.then((a) => {
+			if (a.name)
+				document.getElementById("pags-agent-name").textContent = a.name;
+		})
+		.catch(() => {});
 
-  function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+	function esc(s) {
+		const d = document.createElement("div");
+		d.textContent = s || "";
+		return d.innerHTML;
+	}
 
-  window._pagsSend = async function() {
-    const input = document.getElementById('pags-input');
-    const message = input.value.trim();
-    if (!message) return;
-    input.value = '';
+	window._pagsSend = async () => {
+		const input = document.getElementById("pags-input");
+		const message = input.value.trim();
+		if (!message) return;
+		input.value = "";
 
-    const msgs = document.getElementById('pags-msgs');
-    msgs.innerHTML += '<div class="pags-msg user">' + esc(message) + '</div>';
-    msgs.scrollTop = msgs.scrollHeight;
-    document.getElementById('pags-thinking').style.display = '';
+		const msgs = document.getElementById("pags-msgs");
+		msgs.innerHTML += `<div class="pags-msg user">${esc(message)}</div>`;
+		msgs.scrollTop = msgs.scrollHeight;
+		document.getElementById("pags-thinking").style.display = "";
 
-    try {
-      const res = await fetch(API + '/v1/public/agents/' + agentId + '/try', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: message, sessionId: sessionId }),
-      });
-      const data = await res.json();
-      sessionId = data.sessionId || sessionId;
-      if (data.message) msgs.innerHTML += '<div class="pags-msg assistant">' + esc(data.message.content) + '</div>';
-      if (data.error) msgs.innerHTML += '<div class="pags-msg system">' + esc(data.error) + '</div>';
-    } catch (e) {
-      msgs.innerHTML += '<div class="pags-msg system">Error: ' + esc(e.message) + '</div>';
-    }
-    document.getElementById('pags-thinking').style.display = 'none';
-    msgs.scrollTop = msgs.scrollHeight;
-  };
+		try {
+			const res = await fetch(`${API}/v1/public/agents/${agentId}/try`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ message: message, sessionId: sessionId }),
+			});
+			const data = await res.json();
+			sessionId = data.sessionId || sessionId;
+			if (data.message)
+				msgs.innerHTML += `<div class="pags-msg assistant">${esc(data.message.content)}</div>`;
+			if (data.error)
+				msgs.innerHTML += `<div class="pags-msg system">${esc(data.error)}</div>`;
+		} catch (e) {
+			msgs.innerHTML += `<div class="pags-msg system">Error: ${esc(e.message)}</div>`;
+		}
+		document.getElementById("pags-thinking").style.display = "none";
+		msgs.scrollTop = msgs.scrollHeight;
+	};
 })();
