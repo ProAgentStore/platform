@@ -16,7 +16,7 @@ crons = ["0 5 * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "seo-auditor-db"
-database_id = "placeholder-replace-after-creation"
+database_id = "1de41943-e82d-4e65-b429-232168831844"
 migrations_dir = "migrations"
 
 [[durable_objects.bindings]]

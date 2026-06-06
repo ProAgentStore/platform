@@ -4,7 +4,7 @@
  */
 import {
 	homepage, aboutPage, getStartedPage, consolePage, agentDetailPage,
-	widgetJs, authWidgetJs, developerProfilePage,
+	widgetJs, authWidgetJs, developerProfilePage, adminPage,
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
@@ -17,6 +17,8 @@ const PAGES: Record<string, string> = {
 	"/get-started/": getStartedPage,
 	"/console": consolePage,
 	"/console/": consolePage,
+	"/admin": adminPage,
+	"/admin/": adminPage,
 };
 
 const HTML_HEADERS: Record<string, string> = {

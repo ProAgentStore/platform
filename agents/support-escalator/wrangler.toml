@@ -13,7 +13,7 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "support-escalator"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "053712e5-562a-4da0-bf88-7bf6429f1246"
 migrations_dir = "migrations"
 
 [[durable_objects.bindings]]

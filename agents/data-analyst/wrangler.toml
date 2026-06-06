@@ -13,7 +13,7 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "data-analyst-db"
-database_id = "placeholder-replace-after-creation"
+database_id = "961b090d-b6b3-4d24-bea3-cf77279cf17d"
 migrations_dir = "migrations"
 
 # Secrets (set via wrangler secret put + Doppler):

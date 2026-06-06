@@ -13,7 +13,7 @@ crons = ["0 * * * *"]
 [[d1_databases]]
 binding = "DB"
 database_name = "site-monitor-db"
-database_id = "placeholder-replace-after-creation"
+database_id = "d8074889-b650-409d-a1be-e0b10d983b61"
 migrations_dir = "migrations"
 
 [[durable_objects.bindings]]
