@@ -593,6 +593,13 @@
         <button onclick="saveVersion()" class="btn btn-outline btn-sm">Save Version</button>
         <button onclick="deleteAgent()" class="btn btn-danger btn-sm">Delete Agent</button>
       </div>
+
+      <div class="create-form" style="margin-top:1rem">
+        <h3>Version History</h3>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem">Snapshots of your agent's config. Click "Rollback" to restore a previous version.</p>
+        <div id="version-list" style="display:flex;flex-direction:column;gap:0.4rem"></div>
+        <div id="version-empty" style="color:var(--muted-soft);font-size:0.82rem" class="hidden">No versions saved yet. Click "Save Version" above.</div>
+      </div>
     </div>
   </div>
 
@@ -863,6 +870,7 @@ console.log(response)</pre>
         loadMemory();
         loadTasks();
         loadAnalytics();
+        loadVersions();
       } catch (e) { alert(e.message); }
     }
 
@@ -1456,7 +1464,41 @@ console.log(response)</pre>
       try {
         const res = await api(`/v1/agents/${currentAgent.id}/versions`, { method: 'POST', body: JSON.stringify({ description: desc }) });
         alert(`Saved version ${res.version}`);
+        loadVersions();
       } catch (e) { alert(e.message); }
+    }
+
+    async function loadVersions() {
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/versions`);
+        const list = document.getElementById('version-list');
+        const empty = document.getElementById('version-empty');
+        list.innerHTML = '';
+        const versions = data.versions || [];
+        empty.classList.toggle('hidden', versions.length > 0);
+        for (const v of versions) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:0.5rem 0.75rem;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem';
+          row.innerHTML = `<div>
+            <span style="font-weight:600;font-size:0.85rem">v${v.version_num}</span>
+            <span style="font-size:0.82rem;color:var(--muted);margin-left:0.5rem">${esc(v.description)}</span>
+            <span style="font-size:0.7rem;color:var(--muted-soft);margin-left:0.5rem">${new Date(v.created_at).toLocaleString()}</span>
+          </div>`;
+          const btn = document.createElement('button');
+          btn.className = 'btn btn-outline btn-sm';
+          btn.textContent = 'Rollback';
+          btn.addEventListener('click', async () => {
+            if (!confirm(`Rollback to v${v.version_num}? This overwrites current agent config.`)) return;
+            try {
+              await api(`/v1/agents/${currentAgent.id}/versions/${v.id}/rollback`, { method: 'POST' });
+              alert(`Rolled back to v${v.version_num}`);
+              openAgent(currentAgent.id);
+            } catch (e) { alert(e.message); }
+          });
+          row.appendChild(btn);
+          list.appendChild(row);
+        }
+      } catch {}
     }
 
     async function deleteAgent() {

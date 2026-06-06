@@ -4,7 +4,7 @@
  */
 import {
 	homepage, aboutPage, getStartedPage, consolePage, agentDetailPage,
-	widgetJs, authWidgetJs, developerProfilePage, adminPage,
+	widgetJs, authWidgetJs, developerProfilePage, adminPage, notFoundPage,
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
@@ -76,6 +76,39 @@ export default {
 			});
 		}
 
+		// robots.txt
+		if (path === "/robots.txt") {
+			return new Response(
+				"User-agent: *\nAllow: /\nDisallow: /console/\nDisallow: /admin/\n\nSitemap: https://proagentstore.online/sitemap.xml\n",
+				{ headers: { "Content-Type": "text/plain", "Cache-Control": "public, max-age=86400" } },
+			);
+		}
+
+		// Dynamic sitemap — fetches published agents from API
+		if (path === "/sitemap.xml") {
+			const staticUrls = ["/", "/about/", "/get-started/", "/console/"];
+			let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
+			for (const u of staticUrls) {
+				xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;
+			}
+			try {
+				const res = await fetch("https://api.proagentstore.online/v1/agents");
+				const data = await res.json() as { agents?: Array<{ slug: string; creator_login?: string }> };
+				const devs = new Set<string>();
+				for (const a of data.agents || []) {
+					xml += `  <url><loc>https://proagentstore.online/agents/${a.slug}/</loc><changefreq>daily</changefreq></url>\n`;
+					if (a.creator_login) devs.add(a.creator_login);
+				}
+				for (const d of devs) {
+					xml += `  <url><loc>https://proagentstore.online/developers/${d}/</loc><changefreq>weekly</changefreq></url>\n`;
+				}
+			} catch {}
+			xml += "</urlset>";
+			return new Response(xml, {
+				headers: { "Content-Type": "application/xml", "Cache-Control": "public, max-age=3600" },
+			});
+		}
+
 		// Manifest
 		if (path === "/manifest.json") {
 			return new Response(manifestJson, {
@@ -112,6 +145,6 @@ export default {
 			return Response.redirect(`${url.origin}/`, 301);
 		}
 
-		return new Response("Not Found", { status: 404, headers: { "Content-Type": "text/plain" } });
+		return new Response(notFoundPage, { status: 404, headers: { ...HTML_HEADERS, "Cache-Control": "no-cache" } });
 	},
 };
