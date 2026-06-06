@@ -5,12 +5,12 @@ import { requireUser, HttpError } from '../lib/auth.js';
 
 export const chatRoutes = new Hono<{ Bindings: Env }>();
 
-/** Resolve agent from :id param (by id or slug). */
+/** Resolve agent from :id param (by id or slug). Returns id + name for DO init. */
 async function resolveAgent(c: { req: { param(k: string): string }; env: Env }) {
   const id = c.req.param('id');
   const agent = await c.env.DB.prepare(
-    'SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)',
-  ).bind(id).first<{ id: string }>();
+    'SELECT id, name, model FROM agents WHERE (id = ?1 OR slug = ?1)',
+  ).bind(id).first<{ id: string; name: string; model: string }>();
   if (!agent) throw new HttpError(404, 'Agent not found');
   return agent;
 }
@@ -24,18 +24,18 @@ chatRoutes.post('/:id/chat', async (c) => {
 
   // Verify agent exists in D1
   const agent = await c.env.DB.prepare(
-    'SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)',
-  ).bind(id).first<{ id: string }>();
+    'SELECT id, name, model FROM agents WHERE (id = ?1 OR slug = ?1)',
+  ).bind(id).first<{ id: string; name: string; model: string }>();
   if (!agent) throw new HttpError(404, 'Agent not found');
 
-  // Forward to the agent's Durable Object
+  // Forward to the agent's Durable Object (pass name+id for auto-init)
   const doId = c.env.AGENT.idFromName(agent.id);
   const stub = c.env.AGENT.get(doId);
 
   const doRes = await stub.fetch(new Request('http://agent/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, channel: 'chat', userId: session.uid }),
+    body: JSON.stringify({ message, channel: 'chat', userId: session.uid, agentId: agent.id, agentName: agent.name }),
   }));
 
   // Track usage

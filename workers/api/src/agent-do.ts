@@ -200,15 +200,27 @@ export class AgentDO extends DurableObject<Env> {
   // ── Chat ───────────────────────────────────────────────────────────────────
 
   private async handleChat(request: Request): Promise<Response> {
-    const { message, channel, userId } = await request.json<{
+    const body = await request.json<{
       message: string;
       channel?: string;
       userId?: string;
+      agentId?: string;
+      agentName?: string;
     }>();
+    const { message, channel, userId } = body;
     if (!message) return json({ error: 'message required' }, 400);
 
-    const state = await this.getState();
-    if (!state) return json({ error: 'Agent not initialized' }, 400);
+    let state = await this.getState();
+
+    // Auto-initialize if DO has no state (agent created via D1 but DO never init'd)
+    if (!state) {
+      const url = new URL(request.url);
+      const agentId = body.agentId || url.searchParams.get('agentId') || 'unknown';
+      const agentName = body.agentName || url.searchParams.get('agentName') || 'Agent';
+      await this.init({ agentId, name: agentName });
+      state = await this.getState();
+      if (!state) return json({ error: 'Failed to initialize agent' }, 500);
+    }
 
     // Auto-heal deprecated models
     if (!state.model || DEPRECATED_MODELS.has(state.model)) {
