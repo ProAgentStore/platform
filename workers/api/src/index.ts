@@ -61,7 +61,7 @@ app.route("/v1/instances", instanceRoutes); // /v1/instances/:agentId/subscribe,
 app.route("/v1/agents", analyticsRoutes); // /v1/agents/:id/analytics
 app.route("/v1/dashboard", dashboardRoutes);
 app.route("/v1/notifications", notificationRoutes);
-app.route("/v1/agents", versionRoutes);     // /v1/agents/:id/versions, /:versionId/rollback // /v1/dashboard/usage, /creator
+app.route("/v1/agents", versionRoutes);     // /v1/agents/:id/versions, /:versionId/rollback
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);

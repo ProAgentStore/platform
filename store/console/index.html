@@ -1053,17 +1053,10 @@ console.log(response)</pre>
       const url = prompt('Google Docs URL (must be publicly shared):');
       if (!url) return;
       try {
-        // Import via the public API (it adds to the agent's KB, not instance — use instance KB endpoint instead)
-        const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
-        if (!match) { alert('Invalid Google Docs URL'); return; }
-        const exportUrl = `https://docs.google.com/document/d/${match[1]}/export?format=txt`;
-        const res = await fetch(exportUrl);
-        if (!res.ok) { alert('Failed to fetch doc. Make sure it is publicly shared.'); return; }
-        let text = await res.text();
-        if (text.length > 100000) text = text.slice(0, 100000) + '\n...[truncated]';
-        await api(`/v1/instances/${currentInstance.id}/knowledge`, {
+        // Proxy through instance ingest-url (server-side fetch avoids CORS)
+        await api(`/v1/instances/${currentInstance.id}/knowledge/ingest-url`, {
           method: 'POST',
-          body: JSON.stringify({ title: `Google Doc ${match[1].slice(0,8)}`, content: text, source: 'google-docs', sourceUrl: url }),
+          body: JSON.stringify({ url: url.replace(/\/edit.*$/, '/export?format=txt'), title: 'Google Doc' }),
         });
         loadInstanceKnowledge();
       } catch (e) { alert(e.message); }
