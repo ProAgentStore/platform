@@ -37,7 +37,7 @@ agentRoutes.get('/', async (c) => {
   const category = c.req.query('category');
   const limit = Math.min(Number(c.req.query('limit')) || 50, 200);
 
-  let sql = `SELECT id, slug, name, description, category, icon, icon_bg, model, status
+  let sql = `SELECT id, slug, name, description, category, store_type, icon, icon_bg, model, status
              FROM agents WHERE visibility = 'published'`;
   const params: unknown[] = [];
 

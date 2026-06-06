@@ -123,13 +123,21 @@
       </div>
     </section>
 
+    <!-- Type tabs (matches FAGS: Libraries | Models | Agents) -->
+    <div class="toolbar" style="border-bottom:1px solid var(--line);padding-bottom:0.75rem">
+      <button class="filter-btn active" onclick="filterType('all')">All</button>
+      <button class="filter-btn" onclick="filterType('agent')">Agents</button>
+      <button class="filter-btn" onclick="filterType('worker')">Workers</button>
+      <button class="filter-btn" onclick="filterType('tool')">Tools</button>
+    </div>
+    <!-- Category filters -->
     <div class="toolbar">
-      <button class="filter-btn active" onclick="filterAgents('all')">All</button>
-      <button class="filter-btn" onclick="filterAgents('chat')">Chat</button>
-      <button class="filter-btn" onclick="filterAgents('code')">Code</button>
-      <button class="filter-btn" onclick="filterAgents('data')">Data</button>
-      <button class="filter-btn" onclick="filterAgents('creative')">Creative</button>
-      <button class="filter-btn" onclick="filterAgents('productivity')">Productivity</button>
+      <button class="filter-btn cat-btn active" onclick="filterCategory('all')">All</button>
+      <button class="filter-btn cat-btn" onclick="filterCategory('chat')">Chat</button>
+      <button class="filter-btn cat-btn" onclick="filterCategory('code')">Code</button>
+      <button class="filter-btn cat-btn" onclick="filterCategory('data')">Data</button>
+      <button class="filter-btn cat-btn" onclick="filterCategory('creative')">Creative</button>
+      <button class="filter-btn cat-btn" onclick="filterCategory('productivity')">Productivity</button>
       <span id="agent-count" class="agent-count"></span>
     </div>
 
@@ -170,7 +178,8 @@
   <script>
     const API = 'https://api.proagentstore.online';
     let allAgents = [];
-    let currentFilter = 'all';
+    let currentType = 'all';
+    let currentCategory = 'all';
 
     async function loadAgents() {
       try {
@@ -183,10 +192,24 @@
       }
     }
 
+    function filterType(type) {
+      currentType = type;
+      document.querySelectorAll('.toolbar:first-of-type .filter-btn').forEach(b =>
+        b.classList.toggle('active', b.textContent.toLowerCase() === (type === 'all' ? 'all' : type + 's') || (type === 'all' && b.textContent === 'All') || (type === 'tool' && b.textContent === 'Tools')));
+      renderAgents();
+    }
+
+    function filterCategory(cat) {
+      currentCategory = cat;
+      document.querySelectorAll('.cat-btn').forEach(b =>
+        b.classList.toggle('active', b.textContent.toLowerCase() === cat || (cat === 'all' && b.textContent === 'All')));
+      renderAgents();
+    }
+
     function renderAgents() {
-      const filtered = currentFilter === 'all'
-        ? allAgents
-        : allAgents.filter(a => a.category === currentFilter);
+      let filtered = allAgents;
+      if (currentType !== 'all') filtered = filtered.filter(a => (a.store_type || 'agent') === currentType);
+      if (currentCategory !== 'all') filtered = filtered.filter(a => a.category === currentCategory);
 
       const grid = document.getElementById('agents-grid');
       const empty = document.getElementById('empty-state');
@@ -213,6 +236,7 @@
             <div class="agent-name">${esc(a.name)}</div>
             <div class="agent-desc">${esc(a.description || 'No description')}</div>
             <div class="agent-meta">
+              <span class="tag">${esc(a.store_type || 'agent')}</span>
               <span class="tag">${esc(a.category)}</span>
             </div>
           </div>
@@ -221,13 +245,6 @@
       }
     }
 
-    function filterAgents(cat) {
-      currentFilter = cat;
-      document.querySelectorAll('.filter-btn').forEach(b =>
-        b.classList.toggle('active', b.textContent.toLowerCase() === cat || (cat === 'all' && b.textContent === 'All'))
-      );
-      renderAgents();
-    }
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
 
