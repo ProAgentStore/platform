@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { createNotification } from "./notifications.js";
 import type { Env } from "../types.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
@@ -106,6 +107,22 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		`INSERT INTO usage (id, agent_id, user_id, event, metadata, created_at)
      VALUES (?1, ?2, ?3, 'subscribe', '{}', datetime('now'))`,
 	).bind(crypto.randomUUID(), agent.id, session.uid).run();
+
+	// Notify the agent creator
+	const creator = await c.env.DB.prepare(
+		"SELECT owner_id FROM agents WHERE id = ?1",
+	).bind(agent.id).first<{ owner_id: string }>();
+	if (creator && creator.owner_id !== session.uid) {
+		const subscriber = await c.env.DB.prepare(
+			"SELECT github_login FROM users WHERE id = ?1",
+		).bind(session.uid).first<{ github_login: string }>();
+		await createNotification(
+			c.env.DB, creator.owner_id, "subscribe",
+			`New subscriber: ${subscriber?.github_login || "someone"}`,
+			`${subscriber?.github_login || "A user"} subscribed to ${agent.name}.`,
+			agent.id,
+		);
+	}
 
 	return c.json({ instanceId, agentId: agent.id, status: "active" }, 201);
 });

@@ -10,6 +10,7 @@ import { chatRoutes } from "./routes/chat.js";
 import { instanceRoutes } from "./routes/instances.js";
 import { keysRoutes } from "./routes/keys.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
+import { notificationRoutes } from "./routes/notifications.js";
 import { publicRoutes } from "./routes/public.js";
 import { runRoutes } from "./routes/run.js";
 import type { Env } from "./types.js";
@@ -57,7 +58,8 @@ app.route("/v1/agents", chatRoutes); // /v1/agents/:id/chat, /ws, /messages, /me
 app.route("/v1/agents", runRoutes); // /v1/agents/:id/run, /executions
 app.route("/v1/instances", instanceRoutes); // /v1/instances/:agentId/subscribe, /my/instances, /:id/chat, etc.
 app.route("/v1/agents", analyticsRoutes); // /v1/agents/:id/analytics
-app.route("/v1/dashboard", dashboardRoutes); // /v1/dashboard/usage, /creator
+app.route("/v1/dashboard", dashboardRoutes);
+app.route("/v1/notifications", notificationRoutes); // /v1/dashboard/usage, /creator
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);

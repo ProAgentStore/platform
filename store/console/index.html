@@ -160,6 +160,9 @@
       <a href="/about/">About</a>
       <a href="https://github.com/ProAgentStore">GitHub</a>
       <span id="user-nav" class="hidden">
+        <a href="#" onclick="showNotifications();return false" style="position:relative;text-decoration:none;font-size:1.1rem;color:var(--muted)" title="Notifications">
+          &#128276;<span id="notif-badge" style="display:none;position:absolute;top:-4px;right:-6px;background:var(--red);color:#fff;font-size:0.6rem;width:16px;height:16px;border-radius:50%;text-align:center;line-height:16px"></span>
+        </a>
         <a href="#" onclick="showProfile();return false" class="user-info" style="text-decoration:none">
           <img id="user-avatar" class="avatar" alt="">
           <span id="user-login"></span>
@@ -338,6 +341,16 @@
       <div id="inst-kb-list" class="memory-list"></div>
       <div id="inst-kb-empty" class="empty hidden">No documents yet. Add your own for the agent to reference.</div>
     </div>
+  </div>
+
+  <!-- Notifications page -->
+  <div id="notifications-page" class="container hidden">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
+      <h1 class="page-title" style="margin-bottom:0">Notifications</h1>
+      <button onclick="markAllRead()" class="btn btn-outline btn-sm">Mark all read</button>
+    </div>
+    <div id="notif-list" style="display:flex;flex-direction:column;gap:0.5rem"></div>
+    <div id="notif-empty" class="empty hidden">No notifications</div>
   </div>
 
   <!-- Agent detail -->
@@ -686,7 +699,7 @@ console.log(response)</pre>
 
     /** Show one page, hide all others. */
     function showPage(id) {
-      for (const p of ['login-page', 'dashboard', 'agent-detail', 'instance-detail', 'profile-page']) {
+      for (const p of ['login-page', 'dashboard', 'agent-detail', 'instance-detail', 'profile-page', 'notifications-page']) {
         document.getElementById(p).classList.toggle('hidden', p !== id);
       }
     }
@@ -1485,6 +1498,60 @@ console.log(response)</pre>
       document.getElementById('profile-token').textContent = tokenVisible ? token : `${token.slice(0, 12)}...`;
     }
 
+    // ── Notifications ─────────────────────────────────────────
+
+    async function loadNotifBadge() {
+      try {
+        const data = await api('/v1/notifications?unread=true&limit=1');
+        const badge = document.getElementById('notif-badge');
+        if (data.unreadCount > 0) {
+          badge.textContent = String(data.unreadCount > 9 ? '9+' : data.unreadCount);
+          badge.style.display = '';
+        } else {
+          badge.style.display = 'none';
+        }
+      } catch {}
+    }
+
+    async function showNotifications() {
+      showPage('notifications-page');
+      try {
+        const data = await api('/v1/notifications');
+        const list = document.getElementById('notif-list');
+        const empty = document.getElementById('notif-empty');
+        list.innerHTML = '';
+        const items = data.notifications || [];
+        empty.classList.toggle('hidden', items.length > 0);
+        for (const n of items) {
+          const item = document.createElement('div');
+          item.style.cssText = `padding:0.75rem;background:var(--panel);border:1px solid var(--line);border-radius:0.5rem;${n.read ? 'opacity:0.6' : ''}`;
+          item.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:start">
+            <div>
+              <div style="font-weight:600;font-size:0.88rem">${esc(n.title)}</div>
+              <div style="font-size:0.82rem;color:var(--muted);margin-top:0.2rem">${esc(n.body)}</div>
+              <div style="font-size:0.7rem;color:var(--muted-soft);margin-top:0.3rem">${new Date(n.created_at).toLocaleString()}</div>
+            </div>
+            ${!n.read ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;margin-top:0.3rem"></span>' : ''}
+          </div>`;
+          if (!n.read) {
+            item.style.cursor = 'pointer';
+            item.addEventListener('click', async () => {
+              await api(`/v1/notifications/${n.id}/read`, { method: 'POST' });
+              showNotifications();
+              loadNotifBadge();
+            });
+          }
+          list.appendChild(item);
+        }
+      } catch {}
+    }
+
+    async function markAllRead() {
+      await api('/v1/notifications/read-all', { method: 'POST' });
+      showNotifications();
+      loadNotifBadge();
+    }
+
     async function saveProfile() {
       try {
         await api('/v1/auth/me', {
@@ -1588,6 +1655,7 @@ console.log(response)</pre>
       if (authed && user) {
         showUser();
         showDashboard();
+        loadNotifBadge();
         await handleSubscribeParam();
       } else {
         showPage('login-page');
