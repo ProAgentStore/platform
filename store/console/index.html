@@ -552,6 +552,13 @@
       </div>
 
       <div class="profile-section">
+        <h3>API Keys</h3>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem">Store your AI provider keys. Agents use them to call external APIs (OpenAI, Anthropic, etc.) on your behalf. Keys are encrypted with AES-256-GCM.</p>
+        <div id="keys-list" style="display:flex;flex-direction:column;gap:0.5rem"></div>
+        <div id="keys-loading" style="font-size:0.82rem;color:var(--muted)">Loading keys...</div>
+      </div>
+
+      <div class="profile-section">
         <h3>SDK Quick Start</h3>
         <pre style="background:var(--paper);border:1px solid var(--line);border-radius:0.5rem;padding:0.85rem;font-size:0.78rem;color:#a78bfa;overflow-x:auto;margin:0">import { initPro } from '@proagentstore/sdk'
 
@@ -1249,6 +1256,8 @@ console.log(response)</pre>
       tokenVisible = false;
       const tokenEl = document.getElementById('profile-token');
       tokenEl.textContent = token ? token.slice(0, 12) + '...' : 'Not signed in';
+
+      loadKeys();
     }
 
     function copyToken() {
@@ -1265,6 +1274,51 @@ console.log(response)</pre>
       if (!token) return;
       tokenVisible = !tokenVisible;
       document.getElementById('profile-token').textContent = tokenVisible ? token : token.slice(0, 12) + '...';
+    }
+
+    // ── API Keys ─────────────────────────────────────────────────
+
+    async function loadKeys() {
+      const container = document.getElementById('keys-list');
+      const loading = document.getElementById('keys-loading');
+      try {
+        const data = await api('/v1/keys/status');
+        loading.style.display = 'none';
+        container.innerHTML = '';
+        for (const p of data.providers) {
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;align-items:center;gap:0.75rem;padding:0.5rem 0.75rem;background:var(--paper);border:1px solid var(--line);border-radius:0.5rem';
+          row.innerHTML = `<span style="font-size:0.88rem;font-weight:500;flex:1">${esc(p.name)}</span>
+            <span style="font-size:0.75rem;color:${p.hasKey ? 'var(--green)' : 'var(--muted-soft)'}">${p.hasKey ? 'Stored' : 'Not set'}</span>`;
+
+          if (p.hasKey) {
+            const delBtn = document.createElement('button');
+            delBtn.className = 'btn btn-outline btn-sm';
+            delBtn.textContent = 'Remove';
+            delBtn.addEventListener('click', async () => {
+              if (!confirm('Remove ' + p.name + ' key?')) return;
+              await api('/v1/keys/' + p.id, { method: 'DELETE' });
+              loadKeys();
+            });
+            row.appendChild(delBtn);
+          } else {
+            const addBtn = document.createElement('button');
+            addBtn.className = 'btn btn-primary btn-sm';
+            addBtn.textContent = 'Add Key';
+            addBtn.addEventListener('click', () => {
+              const key = prompt(p.name + ' API key:');
+              if (!key) return;
+              api('/v1/keys/' + p.id, { method: 'PUT', body: JSON.stringify({ key }) })
+                .then(() => loadKeys())
+                .catch(e => alert(e.message));
+            });
+            row.appendChild(addBtn);
+          }
+          container.appendChild(row);
+        }
+      } catch (e) {
+        loading.textContent = 'Failed to load keys';
+      }
     }
 
     // ── Helpers ──────────────────────────────────────────────────
