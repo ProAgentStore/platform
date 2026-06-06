@@ -206,6 +206,65 @@ agentRoutes.put("/:id", async (c) => {
 	return c.json({ success: true });
 });
 
+/** Clone/fork a published agent as your own draft. */
+agentRoutes.post("/:id/clone", async (c) => {
+	const session = await requireCreator(c);
+	const id = c.req.param("id");
+	const { slug } = await c.req.json<{ slug: string }>();
+	if (!slug) throw new HttpError(400, "slug required for cloned agent");
+	if (!/^[a-z0-9-]+$/.test(slug)) throw new HttpError(400, "slug must be lowercase alphanumeric with hyphens");
+
+	// Source agent must exist
+	const source = await c.env.DB.prepare(
+		"SELECT id, name, description, category, store_type, icon, icon_bg, model FROM agents WHERE (id = ?1 OR slug = ?1) AND visibility = 'published'",
+	).bind(id).first<Record<string, string>>();
+	if (!source) throw new HttpError(404, "Agent not found");
+
+	// Check slug uniqueness
+	const existing = await c.env.DB.prepare("SELECT id FROM agents WHERE slug = ?1").bind(slug).first();
+	if (existing) throw new HttpError(409, "Slug already taken");
+
+	const newId = crypto.randomUUID();
+	await c.env.DB.prepare(
+		`INSERT INTO agents (id, owner_id, slug, name, description, category, store_type, icon, icon_bg, model, visibility, status, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'draft', 'inactive', datetime('now'), datetime('now'))`,
+	).bind(
+		newId, session.uid, slug, `${source.name} (clone)`, source.description,
+		source.category, source.store_type || "agent", source.icon, source.icon_bg, source.model,
+	).run();
+
+	// Copy template DO state + KB to the new agent's DO
+	const srcStub = c.env.AGENT.get(c.env.AGENT.idFromName(source.id));
+	const stateRes = await srcStub.fetch(new Request("http://agent/state"));
+	const tmpl = await stateRes.json() as Record<string, unknown>;
+
+	const newStub = c.env.AGENT.get(c.env.AGENT.idFromName(newId));
+	await newStub.fetch(new Request("http://agent/init", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({
+			agentId: newId, name: tmpl.name || source.name,
+			personality: tmpl.personality || "", goal: tmpl.goal || "",
+			model: tmpl.model || source.model, guardrails: tmpl.guardrails || {},
+		}),
+	}));
+
+	// Copy KB
+	const kbRes = await srcStub.fetch(new Request("http://agent/knowledge"));
+	const kb = await kbRes.json() as { documents?: Array<Record<string, unknown>> };
+	if (kb.documents?.length) {
+		for (const doc of kb.documents) {
+			await newStub.fetch(new Request("http://agent/knowledge", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(doc),
+			}));
+		}
+	}
+
+	return c.json({ id: newId, slug, clonedFrom: source.id }, 201);
+});
+
 /** Delete agent (owner only). */
 agentRoutes.delete("/:id", async (c) => {
 	const session = await requireUser(c);

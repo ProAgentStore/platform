@@ -101,6 +101,12 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		}
 	}
 
+	// Track subscription event for analytics
+	await c.env.DB.prepare(
+		`INSERT INTO usage (id, agent_id, user_id, event, metadata, created_at)
+     VALUES (?1, ?2, ?3, 'subscribe', '{}', datetime('now'))`,
+	).bind(crypto.randomUUID(), agent.id, session.uid).run();
+
 	return c.json({ instanceId, agentId: agent.id, status: "active" }, 201);
 });
 

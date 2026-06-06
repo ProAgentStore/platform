@@ -92,6 +92,7 @@
           <p id="a-subs" class="subs"></p>
           <div class="cta-row">
             <a id="a-subscribe" href="#" class="btn btn-primary">Get This Agent</a>
+            <a id="a-clone" href="#" class="btn btn-outline" style="font-size:0.82rem">Clone as Template</a>
             <span style="font-size:0.82rem;color:var(--muted)">Free to try below</span>
           </div>
         </div>
@@ -150,6 +151,7 @@
         document.getElementById('a-subs').textContent = `${a.subscriber_count || 0} subscriber${a.subscriber_count !== 1 ? 's' : ''}`;
         if (a.icon_bg) document.getElementById('a-icon').style.background = a.icon_bg;
         document.getElementById('a-subscribe').href = `/console/?subscribe=${encodeURIComponent(a.id)}`;
+        document.getElementById('a-clone').href = `/console/?clone=${encodeURIComponent(a.id)}`;
 
         document.getElementById('embed-code').textContent =
           `<script src="https://proagentstore.online/widget.js"\n  data-agent="${a.slug || a.id}"\n  data-theme="dark"></script>`;
