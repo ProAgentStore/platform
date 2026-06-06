@@ -11,6 +11,7 @@ import { billingRoutes } from './routes/billing.js';
 import { instanceRoutes } from './routes/instances.js';
 import { publicRoutes } from './routes/public.js';
 import { keysRoutes } from './routes/keys.js';
+import { analyticsRoutes } from './routes/analytics.js';
 
 // Re-export Durable Object class for wrangler
 export { AgentDO } from './agent-do.js';
@@ -51,6 +52,7 @@ app.route('/v1/agents', agentRoutes);
 app.route('/v1/agents', chatRoutes);    // /v1/agents/:id/chat, /ws, /messages, /memory, /tasks
 app.route('/v1/agents', runRoutes);     // /v1/agents/:id/run, /executions
 app.route('/v1/instances', instanceRoutes); // /v1/instances/:agentId/subscribe, /my/instances, /:id/chat, etc.
+app.route('/v1/agents', analyticsRoutes);   // /v1/agents/:id/analytics
 app.route('/v1/keys', keysRoutes);         // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route('/v1/public', publicRoutes);     // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route('/v1/billing', billingRoutes);

@@ -332,6 +332,7 @@
       <button class="tab" onclick="switchTab('memory')">Memory</button>
       <button class="tab" onclick="switchTab('tasks')">Tasks</button>
       <button class="tab" onclick="switchTab('settings')">Settings</button>
+      <button class="tab" onclick="switchTab('analytics')">Analytics</button>
     </div>
 
     <!-- Chat tab -->
@@ -433,6 +434,35 @@
     </div>
 
     <!-- Settings tab -->
+    <!-- Analytics tab -->
+    <div id="tab-analytics" class="tab-panel">
+      <div id="analytics-loading" style="color:var(--muted);font-size:0.88rem">Loading analytics...</div>
+      <div id="analytics-content" style="display:none">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:0.75rem;margin-bottom:1.5rem">
+          <div class="create-form" style="text-align:center;padding:1rem">
+            <div style="font-size:1.5rem;font-weight:700" id="stat-subs">0</div>
+            <div style="font-size:0.78rem;color:var(--muted)">Subscribers</div>
+          </div>
+          <div class="create-form" style="text-align:center;padding:1rem">
+            <div style="font-size:1.5rem;font-weight:700" id="stat-chats">0</div>
+            <div style="font-size:0.78rem;color:var(--muted)">Chat Messages</div>
+          </div>
+          <div class="create-form" style="text-align:center;padding:1rem">
+            <div style="font-size:1.5rem;font-weight:700" id="stat-execs">0</div>
+            <div style="font-size:0.78rem;color:var(--muted)">Executions</div>
+          </div>
+        </div>
+        <div class="create-form" style="margin-bottom:1rem">
+          <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Daily Usage (last 30 days)</h3>
+          <div id="daily-chart" style="display:flex;align-items:end;gap:2px;height:80px"></div>
+        </div>
+        <div class="create-form">
+          <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Recent Executions</h3>
+          <div id="recent-execs"></div>
+        </div>
+      </div>
+    </div>
+
     <div id="tab-settings" class="tab-panel">
       <div class="create-form" style="margin-bottom:1rem">
         <h3>Identity</h3>
@@ -764,6 +794,7 @@ console.log(response)</pre>
         loadKnowledge();
         loadMemory();
         loadTasks();
+        loadAnalytics();
       } catch (e) { alert(e.message); }
     }
 
@@ -968,6 +999,50 @@ console.log(response)</pre>
       const file = input.files?.[0]; if (!file) return;
       await api(`/v1/instances/${currentInstance.id}/knowledge`, { method: 'POST', body: JSON.stringify({ title: file.name, content: await file.text(), source: 'upload' }) });
       loadInstanceKnowledge(); input.value = '';
+    }
+
+    // ── Analytics ────────────────────────────────────────────────
+
+    async function loadAnalytics() {
+      document.getElementById('analytics-loading').style.display = '';
+      document.getElementById('analytics-content').style.display = 'none';
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/analytics`);
+        document.getElementById('stat-subs').textContent = String(data.subscribers || 0);
+        document.getElementById('stat-chats').textContent = String(data.totalChats || 0);
+        document.getElementById('stat-execs').textContent = String(data.totalExecutions || 0);
+
+        // Daily usage chart (simple bar chart)
+        const chart = document.getElementById('daily-chart');
+        chart.innerHTML = '';
+        const daily = data.dailyUsage || [];
+        const maxCount = Math.max(1, ...daily.map(d => d.count));
+        for (const d of daily) {
+          const bar = document.createElement('div');
+          const pct = Math.max(4, (d.count / maxCount) * 100);
+          bar.style.cssText = `flex:1;min-width:4px;background:var(--accent);border-radius:2px 2px 0 0;height:${pct}%`;
+          bar.title = `${d.day}: ${d.count} events`;
+          chart.appendChild(bar);
+        }
+        if (!daily.length) chart.innerHTML = '<span style="color:var(--muted-soft);font-size:0.82rem">No usage data yet</span>';
+
+        // Recent executions
+        const execs = document.getElementById('recent-execs');
+        execs.innerHTML = '';
+        for (const e of (data.recentExecutions || [])) {
+          execs.innerHTML += `<div style="display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid var(--line);font-size:0.82rem">
+            <span style="color:var(--muted)">${esc(e.model)}</span>
+            <span>${e.duration_ms}ms</span>
+            <span style="color:var(--muted-soft)">${new Date(e.created_at).toLocaleString()}</span>
+          </div>`;
+        }
+        if (!(data.recentExecutions || []).length) execs.innerHTML = '<span style="color:var(--muted-soft);font-size:0.82rem">No executions yet</span>';
+
+        document.getElementById('analytics-loading').style.display = 'none';
+        document.getElementById('analytics-content').style.display = '';
+      } catch (e) {
+        document.getElementById('analytics-loading').textContent = 'Failed to load analytics';
+      }
     }
 
     // ── Knowledge Base ─────────────────────────────────────────

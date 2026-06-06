@@ -1,0 +1,12 @@
+{
+  "id": "AGENTNAME",
+  "name": "AGENTNAME",
+  "description": "",
+  "storeType": "tool",
+  "category": "general",
+  "model": "@cf/meta/llama-3.2-3b-instruct",
+  "template": "api",
+  "serverConfig": {
+    "routes": ["AGENTNAME.proagentstore.online/*"]
+  }
+}

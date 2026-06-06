@@ -1,0 +1,19 @@
+name = "proagentstore-AGENTNAME"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "AGENTNAME.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "AGENT"
+class_name = "AgentDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["AgentDO"]
