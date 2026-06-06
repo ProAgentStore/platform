@@ -140,7 +140,7 @@
         document.getElementById('a-desc').textContent = a.description;
         document.getElementById('a-subs').textContent = `${a.subscriber_count || 0} subscriber${a.subscriber_count !== 1 ? 's' : ''}`;
         if (a.icon_bg) document.getElementById('a-icon').style.background = a.icon_bg;
-        document.getElementById('a-subscribe').href = `/console/?subscribe=${a.id}`;
+        document.getElementById('a-subscribe').href = `/console/?subscribe=${encodeURIComponent(a.id)}`;
 
         document.getElementById('embed-code').textContent =
           `<script src="https://proagentstore.online/widget.js"\n  data-agent="${a.slug || a.id}"\n  data-theme="dark"><\/script>`;

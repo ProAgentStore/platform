@@ -1443,7 +1443,7 @@ console.log(response)</pre>
       if (!agentId || !token) return;
       window.history.replaceState({}, '', window.location.pathname);
       try {
-        const res = await api(`/v1/instances/${agentId}/subscribe`, { method: 'POST' });
+        const res = await api(`/v1/instances/${encodeURIComponent(agentId)}/subscribe`, { method: 'POST' });
         if (res.instanceId) {
           switchDashTab('instances');
           return;

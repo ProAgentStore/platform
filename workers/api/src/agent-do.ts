@@ -594,6 +594,11 @@ export class AgentDO extends DurableObject<Env> {
       sourceUrl?: string;
     }>();
     if (!body.title || !body.content) return json({ error: 'title and content required' }, 400);
+    if (body.content.length > 100_000) return json({ error: 'Document too large (max 100KB)' }, 400);
+
+    // Limit total knowledge base size (max 20 docs)
+    const existing = await this.ctx.storage.list({ prefix: 'kb:' });
+    if (existing.size >= 20) return json({ error: 'Knowledge base full (max 20 documents)' }, 400);
 
     const doc: KnowledgeDoc = {
       id: crypto.randomUUID(),

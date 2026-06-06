@@ -144,8 +144,15 @@
         // Links
         const links = document.getElementById('d-links');
         links.innerHTML = `<a href="https://github.com/${esc(dev.login)}" target="_blank">GitHub</a>`;
-        if (dev.website) links.innerHTML += ` <a href="${esc(dev.website)}" target="_blank">${esc(new URL(dev.website).hostname)}</a>`;
-        if (dev.twitter) links.innerHTML += ` <a href="https://x.com/${esc(dev.twitter)}" target="_blank">@${esc(dev.twitter)}</a>`;
+        if (dev.website) {
+          try {
+            const url = new URL(dev.website);
+            if (url.protocol === 'https:' || url.protocol === 'http:') {
+              links.innerHTML += ` <a href="${esc(url.href)}" target="_blank" rel="noopener">${esc(url.hostname)}</a>`;
+            }
+          } catch {}
+        }
+        if (dev.twitter) links.innerHTML += ` <a href="https://x.com/${esc(dev.twitter.replace(/^@/, ''))}" target="_blank" rel="noopener">@${esc(dev.twitter.replace(/^@/, ''))}</a>`;
         // Cross-store profile links
         links.innerHTML += ` <a href="https://freeagentstore.online/developers/${esc(dev.login)}/" style="color:var(--blue)">FAGS profile</a>`;
 

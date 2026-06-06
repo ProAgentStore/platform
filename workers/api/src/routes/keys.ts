@@ -155,6 +155,10 @@ keysRoutes.all('/proxy/:host{.+}', async (c) => {
   headers.delete('host');
   headers.delete('cf-connecting-ip');
   headers.delete('cf-ray');
+  headers.delete('x-forwarded-for');
+  headers.delete('x-real-ip');
+  headers.delete('cf-ipcountry');
+  headers.delete('cf-visitor');
 
   // Inject key based on provider
   if (providerId === 'anthropic') {
