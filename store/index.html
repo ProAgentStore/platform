@@ -125,19 +125,19 @@
 
     <!-- Type tabs (matches FAGS: Libraries | Models | Agents) -->
     <div class="toolbar" style="border-bottom:1px solid var(--line);padding-bottom:0.75rem">
-      <button class="filter-btn active" onclick="filterType('all')">All</button>
-      <button class="filter-btn" onclick="filterType('agent')">Agents</button>
-      <button class="filter-btn" onclick="filterType('worker')">Workers</button>
-      <button class="filter-btn" onclick="filterType('tool')">Tools</button>
+      <button class="filter-btn type-btn active" data-type="all" onclick="filterType('all')">All</button>
+      <button class="filter-btn type-btn" data-type="agent" onclick="filterType('agent')">Agents</button>
+      <button class="filter-btn type-btn" data-type="worker" onclick="filterType('worker')">Workers</button>
+      <button class="filter-btn type-btn" data-type="tool" onclick="filterType('tool')">Tools</button>
     </div>
     <!-- Category filters -->
     <div class="toolbar">
-      <button class="filter-btn cat-btn active" onclick="filterCategory('all')">All</button>
-      <button class="filter-btn cat-btn" onclick="filterCategory('chat')">Chat</button>
-      <button class="filter-btn cat-btn" onclick="filterCategory('code')">Code</button>
-      <button class="filter-btn cat-btn" onclick="filterCategory('data')">Data</button>
-      <button class="filter-btn cat-btn" onclick="filterCategory('creative')">Creative</button>
-      <button class="filter-btn cat-btn" onclick="filterCategory('productivity')">Productivity</button>
+      <button class="filter-btn cat-btn active" data-cat="all" onclick="filterCategory('all')">All</button>
+      <button class="filter-btn cat-btn" data-cat="chat" onclick="filterCategory('chat')">Chat</button>
+      <button class="filter-btn cat-btn" data-cat="code" onclick="filterCategory('code')">Code</button>
+      <button class="filter-btn cat-btn" data-cat="data" onclick="filterCategory('data')">Data</button>
+      <button class="filter-btn cat-btn" data-cat="creative" onclick="filterCategory('creative')">Creative</button>
+      <button class="filter-btn cat-btn" data-cat="productivity" onclick="filterCategory('productivity')">Productivity</button>
       <span id="agent-count" class="agent-count"></span>
     </div>
 
@@ -194,15 +194,15 @@
 
     function filterType(type) {
       currentType = type;
-      document.querySelectorAll('.toolbar:first-of-type .filter-btn').forEach(b =>
-        b.classList.toggle('active', b.textContent.toLowerCase() === (type === 'all' ? 'all' : type + 's') || (type === 'all' && b.textContent === 'All') || (type === 'tool' && b.textContent === 'Tools')));
+      document.querySelectorAll('.type-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.type === type));
       renderAgents();
     }
 
     function filterCategory(cat) {
       currentCategory = cat;
       document.querySelectorAll('.cat-btn').forEach(b =>
-        b.classList.toggle('active', b.textContent.toLowerCase() === cat || (cat === 'all' && b.textContent === 'All')));
+        b.classList.toggle('active', b.dataset.cat === cat));
       renderAgents();
     }
 

@@ -867,13 +867,11 @@ console.log(response)</pre>
     }
 
     function switchInstTab(name) {
-      document.querySelectorAll('#instance-detail .tab').forEach(t =>
+      const container = document.getElementById('instance-detail');
+      container.querySelectorAll('.tab').forEach(t =>
         t.classList.toggle('active', t.textContent.toLowerCase().includes(name)));
-      document.getElementById('inst-tab-chat').classList.toggle('active', name === 'chat');
-      document.getElementById('inst-tab-knowledge').classList.toggle('active', name === 'knowledge');
-      // manual display toggle since tab-panel CSS uses display:none
-      document.getElementById('inst-tab-chat').style.display = name === 'chat' ? 'block' : 'none';
-      document.getElementById('inst-tab-knowledge').style.display = name === 'knowledge' ? 'block' : 'none';
+      container.querySelectorAll('.tab-panel').forEach(p =>
+        p.classList.toggle('active', p.id === `inst-tab-${name}`));
     }
 
     async function loadInstanceMessages() {

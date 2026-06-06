@@ -57,20 +57,26 @@ agentRoutes.get('/', async (c) => {
 agentRoutes.get('/:id', async (c) => {
   const id = c.req.param('id');
   const row = await c.env.DB.prepare(
-    `SELECT * FROM agents WHERE (id = ?1 OR slug = ?1)`,
+    `SELECT id, owner_id, slug, name, description, category, store_type, icon, icon_bg, model, visibility, status, cron_schedule, created_at, updated_at
+     FROM agents WHERE (id = ?1 OR slug = ?1)`,
   ).bind(id).first<AgentRow>();
   if (!row) return c.json({ error: 'Agent not found' }, 404);
 
   // Non-published agents require ownership
-  if (row.visibility !== 'published') {
+  const isOwner = await (async () => {
     const header = c.req.header('Authorization');
-    if (!header?.startsWith('Bearer ')) return c.json({ error: 'Agent not found' }, 404);
+    if (!header?.startsWith('Bearer ')) return false;
     const session = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
-    if (!session || (row.owner_id !== session.uid && !session.roles.includes('admin'))) {
-      return c.json({ error: 'Agent not found' }, 404);
-    }
+    return session && (row.owner_id === session.uid || session.roles.includes('admin'));
+  })();
+
+  if (row.visibility !== 'published' && !isOwner) {
+    return c.json({ error: 'Agent not found' }, 404);
   }
-  return c.json(row);
+
+  // Strip owner_id for non-owners
+  const { owner_id, ...publicFields } = row;
+  return c.json(isOwner ? row : publicFields);
 });
 
 /** Create agent (requires creator role). */

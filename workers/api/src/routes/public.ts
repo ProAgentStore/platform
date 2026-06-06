@@ -13,7 +13,7 @@ export const publicRoutes = new Hono<{ Bindings: Env }>();
 publicRoutes.get('/agents/:id', async (c) => {
   const id = c.req.param('id');
   const row = await c.env.DB.prepare(
-    `SELECT id, slug, name, description, category, icon, icon_bg, model, created_at,
+    `SELECT id, slug, name, description, category, store_type, icon, icon_bg, model, created_at,
             (SELECT COUNT(*) FROM agent_instances WHERE agent_id = agents.id AND status = 'active') as subscriber_count
      FROM agents WHERE (id = ?1 OR slug = ?1) AND visibility = 'published'`,
   ).bind(id).first();
