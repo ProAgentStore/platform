@@ -310,6 +310,7 @@
       <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
         <button onclick="showInstKbForm('paste')" class="btn btn-outline btn-sm">Paste Text</button>
         <button onclick="showInstKbForm('url')" class="btn btn-outline btn-sm">Import URL</button>
+        <button onclick="importInstGoogleDoc()" class="btn btn-outline btn-sm">Google Doc</button>
         <button onclick="document.getElementById('inst-kb-file').click()" class="btn btn-outline btn-sm">Upload File</button>
         <input type="file" id="inst-kb-file" accept=".txt,.md,.csv,.json,.html" style="display:none" onchange="uploadInstKbFile(this)">
       </div>
@@ -382,8 +383,19 @@
       <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
         <button onclick="showKbForm('paste')" class="btn btn-outline btn-sm">Paste Text</button>
         <button onclick="showKbForm('url')" class="btn btn-outline btn-sm">Import URL</button>
+        <button onclick="showKbForm('gdoc')" class="btn btn-outline btn-sm">Google Doc</button>
         <button onclick="document.getElementById('kb-file-input').click()" class="btn btn-outline btn-sm">Upload File</button>
         <input type="file" id="kb-file-input" accept=".txt,.md,.csv,.json,.html" style="display:none" onchange="uploadKbFile(this)">
+      </div>
+
+      <div id="kb-form-gdoc" class="create-form hidden" style="margin-bottom:1rem">
+        <div><label>Google Docs URL</label><input id="kb-gdoc-url" placeholder="https://docs.google.com/document/d/..."></div>
+        <p style="font-size:0.75rem;color:var(--muted);margin-top:0.3rem">Doc must be shared as "Anyone with link → Viewer"</p>
+        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+          <button onclick="importGoogleDoc()" class="btn btn-primary btn-sm">Import</button>
+          <button onclick="hideKbForms()" class="btn btn-outline btn-sm">Cancel</button>
+        </div>
+        <div id="kb-gdoc-status" class="error hidden"></div>
       </div>
 
       <div id="kb-form-paste" class="create-form hidden" style="margin-bottom:1rem">
@@ -1024,6 +1036,26 @@ console.log(response)</pre>
     function showInstKbForm(type) { hideInstKbForms(); document.getElementById(`inst-kb-form-${type}`).classList.remove('hidden'); }
     function hideInstKbForms() { document.getElementById('inst-kb-form-paste').classList.add('hidden'); document.getElementById('inst-kb-form-url').classList.add('hidden'); }
 
+    async function importInstGoogleDoc() {
+      const url = prompt('Google Docs URL (must be publicly shared):');
+      if (!url) return;
+      try {
+        // Import via the public API (it adds to the agent's KB, not instance — use instance KB endpoint instead)
+        const match = url.match(/\/d\/([a-zA-Z0-9_-]+)/);
+        if (!match) { alert('Invalid Google Docs URL'); return; }
+        const exportUrl = `https://docs.google.com/document/d/${match[1]}/export?format=txt`;
+        const res = await fetch(exportUrl);
+        if (!res.ok) { alert('Failed to fetch doc. Make sure it is publicly shared.'); return; }
+        let text = await res.text();
+        if (text.length > 100000) text = text.slice(0, 100000) + '\n...[truncated]';
+        await api(`/v1/instances/${currentInstance.id}/knowledge`, {
+          method: 'POST',
+          body: JSON.stringify({ title: `Google Doc ${match[1].slice(0,8)}`, content: text, source: 'google-docs', sourceUrl: url }),
+        });
+        loadInstanceKnowledge();
+      } catch (e) { alert(e.message); }
+    }
+
     async function loadInstanceKnowledge() {
       try {
         const data = await api(`/v1/instances/${currentInstance.id}/knowledge`);
@@ -1128,6 +1160,29 @@ console.log(response)</pre>
     function hideKbForms() {
       document.getElementById('kb-form-paste').classList.add('hidden');
       document.getElementById('kb-form-url').classList.add('hidden');
+      document.getElementById('kb-form-gdoc').classList.add('hidden');
+    }
+
+    async function importGoogleDoc() {
+      const url = document.getElementById('kb-gdoc-url').value.trim();
+      if (!url) { alert('Google Docs URL required'); return; }
+      const statusEl = document.getElementById('kb-gdoc-status');
+      statusEl.textContent = 'Importing...';
+      statusEl.classList.remove('hidden');
+      statusEl.style.color = 'var(--muted)';
+      try {
+        await api(`/v1/public/agents/${currentAgent.id}/import-gdoc`, {
+          method: 'POST',
+          body: JSON.stringify({ docUrl: url }),
+        });
+        hideKbForms();
+        statusEl.classList.add('hidden');
+        document.getElementById('kb-gdoc-url').value = '';
+        loadKnowledge();
+      } catch (e) {
+        statusEl.textContent = e.message;
+        statusEl.style.color = '';
+      }
     }
 
     async function loadKnowledge() {

@@ -162,6 +162,56 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 	);
 });
 
+/** Google Docs import — fetch a public Google Doc and add to agent KB. */
+publicRoutes.post("/agents/:id/import-gdoc", async (c) => {
+	const auth = c.req.header("Authorization");
+	if (!auth?.startsWith("Bearer ")) throw new HttpError(401, "Auth required");
+	const { verifySession } = await import("../lib/session.js");
+	const session = await verifySession(auth.slice(7), c.env.SESSION_SIGNING_KEY);
+	if (!session) throw new HttpError(401, "Invalid token");
+
+	const { docUrl } = await c.req.json<{ docUrl: string }>();
+	if (!docUrl) throw new HttpError(400, "docUrl required");
+
+	const match = docUrl.match(/\/d\/([a-zA-Z0-9_-]+)/);
+	if (!match) throw new HttpError(400, "Invalid Google Docs URL. Expected: https://docs.google.com/document/d/...");
+	const docId = match[1];
+
+	// Fetch as plain text (works for publicly shared docs)
+	const exportUrl = `https://docs.google.com/document/d/${docId}/export?format=txt`;
+	const res = await fetch(exportUrl, { headers: { "User-Agent": "ProAgentStore-Ingest" } });
+	if (!res.ok) throw new HttpError(400, `Failed to fetch doc (${res.status}). Make sure it's publicly accessible (Anyone with link → Viewer).`);
+
+	let text = await res.text();
+	if (text.length > 100_000) text = `${text.slice(0, 100_000)}\n...[truncated]`;
+
+	// Get title from HTML export
+	let title = `Google Doc ${docId.slice(0, 8)}`;
+	try {
+		const htmlRes = await fetch(`https://docs.google.com/document/d/${docId}/export?format=html`);
+		if (htmlRes.ok) {
+			const html = await htmlRes.text();
+			const titleMatch = html.match(/<title>([^<]+)<\/title>/);
+			if (titleMatch) title = titleMatch[1];
+		}
+	} catch { /* title fallback is fine */ }
+
+	const id = c.req.param("id");
+	const agent = await c.env.DB.prepare(
+		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
+	).bind(id).first<{ id: string }>();
+	if (!agent) throw new HttpError(404, "Agent not found");
+
+	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
+	const doRes = await stub.fetch(new Request("http://agent/knowledge", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ title, content: text, source: "google-docs", sourceUrl: docUrl }),
+	}));
+
+	return c.json(await doRes.json(), 201);
+});
+
 /**
  * Webhook ingestion — POST docs to an instance's knowledge base.
  * Used by Zapier, Zoho, Make, n8n, etc.
