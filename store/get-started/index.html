@@ -4,12 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Get Started — ProAgentStore</title>
-  <meta name="description" content="Build a server-powered AI agent with Workers AI, D1, R2, and cron. Deploy to Cloudflare in minutes.">
-  <meta property="og:title" content="Get Started — ProAgentStore">
-  <meta property="og:description" content="Build and deploy a server-powered AI agent in minutes.">
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://proagentstore.online/get-started/">
-  <link rel="canonical" href="https://proagentstore.online/get-started/">
+  <meta name="description" content="Create a server-powered AI agent, subscribe to one, or embed an agent on your site. 3 ways to use ProAgentStore.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -48,6 +43,7 @@
         <a href="/">Agents</a>
         <a href="/about/">About</a>
         <a href="/get-started/">Get Started</a>
+        <a href="/console/">Console</a>
         <a href="https://github.com/ProAgentStore">GitHub</a>
         <a href="https://freeagentstore.online" class="free">Free</a>
       </nav>
@@ -56,139 +52,136 @@
 
   <main class="container">
     <h1>Get Started</h1>
-    <p class="highlight" style="font-size:1.1rem">Build a server-powered AI agent and deploy it to Cloudflare. Takes 10 minutes.</p>
+    <p class="highlight" style="font-size:1.1rem">Three ways to use ProAgentStore: try an agent, subscribe to one, or build your own.</p>
 
-    <h2>Use an existing Pro agent</h2>
+    <h2>Try an agent</h2>
 
     <div class="step">
       <div class="step-num">1</div>
       <div class="step-body">
-        <h3>Subscribe</h3>
-        <p>$9/mo unlocks every Pro agent. One subscription, all agents. <a href="/">Browse the catalog</a> to see what's available.</p>
+        <h3>Browse the store</h3>
+        <p>Visit <a href="/">proagentstore.online</a> and pick an agent. Each one has a live trial — no sign-up needed.</p>
       </div>
     </div>
 
     <div class="step">
       <div class="step-num">2</div>
       <div class="step-body">
-        <h3>Call the agent's API</h3>
-        <p>Every Pro agent has a REST endpoint. Authenticate with your subscription token and call it from anywhere.</p>
+        <h3>Chat in the detail page</h3>
+        <p>Every agent detail page has a "Try it now" chat box. 20 free messages per session.</p>
       </div>
     </div>
 
-    <pre>curl https://api.proagentstore.online/agents/summarizer/run \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Long article to summarize..."}'</pre>
-
-    <h2>Build a new Pro agent</h2>
+    <h2>Subscribe to an agent</h2>
 
     <div class="step">
       <div class="step-num">1</div>
       <div class="step-body">
-        <h3>Install the CLI</h3>
-        <p>The CLI scaffolds your agent, runs it locally, and deploys to Cloudflare.</p>
+        <h3>Sign in with GitHub</h3>
+        <p>Go to the <a href="/console/">Console</a> and sign in. One click — no separate account needed.</p>
       </div>
     </div>
-
-    <pre>pnpm add -g @proagentstore/cli</pre>
 
     <div class="step">
       <div class="step-num">2</div>
       <div class="step-body">
-        <h3>Create the agent</h3>
-        <p>Pick a template. Each template includes Workers AI, D1, and R2 pre-wired.</p>
+        <h3>Get the agent</h3>
+        <p>Click "Get Agent" on any store listing. You get your own isolated instance of the agent.</p>
       </div>
     </div>
-
-    <pre>pags init my-agent --template ai-chat
-cd my-agent</pre>
 
     <div class="step">
       <div class="step-num">3</div>
       <div class="step-body">
-        <h3>Write the logic</h3>
-        <p>Your agent is a Cloudflare Worker. Use the SDK to access AI, database, storage, and more.</p>
+        <h3>Add your documents</h3>
+        <p>Upload your files, paste text, or import URLs. The agent answers based on YOUR data. Private to you — the creator never sees it.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">4</div>
+      <div class="step-body">
+        <h3>Chat or call the API</h3>
+        <p>Use the console chat, or integrate via the REST API and SDK.</p>
       </div>
     </div>
 
     <pre>import { initPro } from '@proagentstore/sdk'
 
-const agent = initPro({ agentId: 'my-agent' })
+const agent = initPro({
+  agentId: 'your-instance-id',
+  token: 'your-token',
+})
 
-export default {
-  async fetch(request, env) {
-    const { prompt } = await request.json()
+const { response } = await agent.chat('Summarize my Q3 report')
+console.log(response)</pre>
 
-    // Run a 70B model server-side
-    const response = await agent.ai.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
-      messages: [{ role: 'user', content: prompt }]
-    })
-
-    // Save to persistent database
-    await agent.db.exec(
-      'INSERT INTO conversations (prompt, response) VALUES (?, ?)',
-      prompt, response.text
-    )
-
-    return Response.json({ text: response.text })
-  },
-
-  // Cron: runs daily at 8am UTC
-  async scheduled(event, env) {
-    const summary = await agent.ai.run('@cf/meta/llama-3.2-3b-instruct', {
-      messages: [{ role: 'user', content: 'Summarize yesterday\'s conversations' }]
-    })
-    await agent.storage.put('daily-summary.txt', summary.text)
-  }
-}</pre>
+    <h2>Build your own agent</h2>
 
     <div class="step">
-      <div class="step-num">4</div>
+      <div class="step-num">1</div>
       <div class="step-body">
-        <h3>Test locally</h3>
-        <p>The CLI runs your agent with a local D1 database and mock AI responses.</p>
+        <h3>Install the CLI</h3>
+        <p>Scaffold a complete agent project with one command.</p>
       </div>
     </div>
 
-    <pre>pags dev</pre>
+    <pre>npx @proagentstore/cli init my-agent --template worker</pre>
+
+    <p>Three templates:</p>
+    <ul style="color:var(--muted);font-size:0.88rem;padding-left:1.5rem;margin-bottom:1rem">
+      <li><strong style="color:var(--ink)">worker</strong> — Durable Object with conversation, memory, knowledge base, 10 tools</li>
+      <li><strong style="color:var(--ink)">cron</strong> — Scheduled worker (daily digests, monitoring, batch processing)</li>
+      <li><strong style="color:var(--ink)">api</strong> — Stateless endpoint (transform, generate, analyze)</li>
+    </ul>
 
     <div class="step">
-      <div class="step-num">5</div>
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>Customize</h3>
+        <p>Edit <code>src/index.ts</code> — set the system prompt, add knowledge docs, wire up tools. Or use the Console UI to configure without code.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
       <div class="step-body">
         <h3>Publish</h3>
-        <p>Push to the ProAgentStore org. CI deploys the Worker, provisions D1 + R2, sets up the subdomain and API endpoint.</p>
+        <p>Run compliance checks and publish to the store in one command.</p>
       </div>
     </div>
 
-    <pre>pags publish</pre>
+    <pre>npx @proagentstore/cli check    # 11-point compliance check
+npx @proagentstore/cli publish  # creates repo, deploys, registers</pre>
 
-    <p>Your agent is live at <code>my-agent.proagentstore.online</code> with a REST API at <code>api.proagentstore.online/agents/my-agent/</code>.</p>
+    <p>Your agent appears at <code>proagentstore.online/agents/my-agent/</code> with a live trial, subscribe button, and embed code.</p>
 
-    <h2>Upgrading from Free</h2>
-    <p>Already have a browser agent on <a href="https://freeagentstore.online">FreeAgentStore</a>? Pro agents can import free agents as dependencies -- keep the browser-side logic, add server-side compute on top.</p>
+    <h2>Embed on your site</h2>
+    <p>Add an agent as a chat widget on any website:</p>
+    <pre>&lt;script src="https://proagentstore.online/widget.js"
+  data-agent="your-agent-slug"
+  data-theme="dark"&gt;&lt;/script&gt;</pre>
+    <p>Floating chat button, expandable panel, dark/light theme. Works on any origin.</p>
 
-    <pre>import { parseResume } from '@freeagentstore/resume-parser'
-import { initPro } from '@proagentstore/sdk'
+    <h2>Connect via webhook</h2>
+    <p>Send documents from Zapier, Make, n8n, or any service:</p>
+    <pre>curl -X POST https://api.proagentstore.online/v1/public/webhook/INSTANCE_ID/ingest \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Meeting Notes","content":"...","source":"zapier"}'</pre>
 
-const agent = initPro({ agentId: 'smart-recruiter' })
+    <h2>MCP integration</h2>
+    <p>Manage agents from Claude Code, Cursor, or VS Code:</p>
+    <pre>npx mcp-remote https://mcp.proagentstore.online/mcp</pre>
+    <p>10 tools: list agents, create, chat, add knowledge, analytics, and more.</p>
 
-// Use the free heuristic parser + Pro AI for analysis
-const parsed = parseResume(resumeText)
-const analysis = await agent.ai.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', {
-  messages: [{ role: 'user', content: `Evaluate this candidate: ${JSON.stringify(parsed)}` }]
-})</pre>
+    <h2>Store your API keys</h2>
+    <p>Use your own OpenAI, Anthropic, or Google AI keys for higher-quality responses. Keys are encrypted with AES-256-GCM and injected server-side via proxy — never exposed to agents.</p>
+    <p>Go to <a href="/console/">Console</a> → Profile → API Keys.</p>
+    <p>Supported: OpenAI, Anthropic, Google AI (Gemini), OpenRouter, Groq, Together AI.</p>
 
-    <h2>SDK reference</h2>
-    <pre>const agent = initPro({ agentId: 'my-agent' })
-
-agent.ai          // Workers AI -- run any model server-side
-agent.db          // D1 database -- per-agent SQLite
-agent.storage     // R2 storage -- per-agent file bucket
-agent.subscription // Stripe -- checkout, portal, status
-agent.usage       // Usage tracking -- for creator payouts</pre>
-
-    <p>Full SDK docs on <a href="https://github.com/ProAgentStore/platform">GitHub</a>.</p>
+    <h2>Browser-side agents?</h2>
+    <p>If your agent runs in the browser (no server needed), use <a href="https://freeagentstore.online">FreeAgentStore</a> instead — free forever, fully private, offline-capable. ProAgentStore is for agents that need server power: cron, databases, large models, webhooks, multi-user state.</p>
   </main>
 
   <footer>
@@ -197,6 +190,6 @@ agent.usage       // Usage tracking -- for creator payouts</pre>
       <a href="https://freeappstore.online">FreeAppStore</a> · <a href="https://freegamestore.online">FreeGameStore</a> · <a href="https://freewebstore.online">FreeWebStore</a> · <a href="https://freeagentstore.online" style="color:#3b82f6">FreeAgentStore</a> · <a href="https://proappstore.online">ProAppStore</a> · <strong>ProAgentStore</strong>
     </span>
   </footer>
-<script src="/auth-widget.js" defer></script>
+  <script src="/auth-widget.js" defer></script>
 </body>
 </html>

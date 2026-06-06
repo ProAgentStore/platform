@@ -4,18 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>About — ProAgentStore</title>
-  <meta name="description" content="ProAgentStore: server-powered AI agents with Workers AI, D1 databases, R2 storage, cron scheduling, and API access. $9/mo for everything.">
-  <meta property="og:title" content="About — ProAgentStore">
-  <meta property="og:description" content="Server-powered AI agents. Workers AI, D1, R2, cron, API gateway. $9/mo.">
-  <meta property="og:type" content="website">
-  <meta property="og:url" content="https://proagentstore.online/about/">
-  <link rel="canonical" href="https://proagentstore.online/about/">
+  <meta name="description" content="ProAgentStore: a marketplace for server-powered AI agents. Creators build, clients subscribe, agents run on Cloudflare's edge.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-hover:#6d28d9;--free:#3b82f6;--line:#262626}
+    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--free:#3b82f6;--line:#262626}
     body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
     .container{max-width:760px;margin:0 auto;padding:0 1.5rem}
     a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
@@ -46,6 +41,7 @@
         <a href="/">Agents</a>
         <a href="/about/">About</a>
         <a href="/get-started/">Get Started</a>
+        <a href="/console/">Console</a>
         <a href="https://github.com/ProAgentStore">GitHub</a>
         <a href="https://freeagentstore.online" class="free">Free</a>
       </nav>
@@ -56,77 +52,91 @@
     <h1>About ProAgentStore</h1>
 
     <p class="highlight" style="font-size:1.15rem;line-height:1.6">
-      ProAgentStore is a platform for <strong>server-powered AI agents</strong> that need more than the browser can give. Workers AI for 70B+ parameter models, D1 databases for persistent state, R2 for file storage, cron for scheduling, and an API gateway to expose your agent as a service. $9/mo for everything.
+      ProAgentStore is a <strong>marketplace for server-powered AI agents</strong>. Creators build agent templates — identity, knowledge base, guardrails, tools. Clients subscribe and run them on their own documents and data. Every agent runs on Cloudflare's edge: Workers AI for inference, Durable Objects for state, D1 for databases, R2 for storage.
     </p>
 
-    <h2>Why server-side?</h2>
-    <p><a href="https://freeagentstore.online">FreeAgentStore</a> runs AI in the browser -- WebGPU, WASM, heuristics. That's great for privacy and cost. But some agents need more:</p>
-    <p><strong>Bigger models.</strong> Browser caps out around 2-3GB. Server-side Workers AI runs Llama 3, Mistral, Whisper Large, SDXL -- any model, any size.</p>
-    <p><strong>Persistent state.</strong> Browser storage is ephemeral. A D1 database survives across sessions, devices, and users. Your agent remembers everything.</p>
-    <p><strong>Background work.</strong> Cron scheduling lets agents run on a schedule -- daily digests, monitoring, batch processing -- without anyone visiting the page.</p>
-    <p><strong>API access.</strong> Expose your agent as a REST endpoint. Other apps, other agents, webhooks -- anything can call your agent programmatically.</p>
+    <h2>How it works</h2>
+    <div class="grid3">
+      <div class="card">
+        <h3 style="color:#a78bfa">Creators build</h3>
+        <p>Set identity, personality, guardrails. Add knowledge docs. Choose a model. Publish to the store.</p>
+      </div>
+      <div class="card">
+        <h3 style="color:#3b82f6">Clients subscribe</h3>
+        <p>Get your own isolated instance. Add your documents. Chat or call the API. Your data stays private.</p>
+      </div>
+      <div class="card">
+        <h3 style="color:#22c55e">Agents run</h3>
+        <p>On Cloudflare's edge. Workers AI, Durable Objects, cron. No infrastructure to manage.</p>
+      </div>
+    </div>
+
+    <h2>Three types of agents</h2>
+    <div class="grid3">
+      <div class="card">
+        <h3 style="color:#a78bfa">Agents</h3>
+        <p>Full AI with conversation, memory, knowledge base, 10 tools, Workers AI backbone. The flagship type.</p>
+      </div>
+      <div class="card">
+        <h3 style="color:#f59e0b">Workers</h3>
+        <p>Always-on Durable Objects for scheduled tasks. Daily digests, monitoring, batch processing.</p>
+      </div>
+      <div class="card">
+        <h3 style="color:#22c55e">Tools</h3>
+        <p>Stateless API endpoints. Transform, generate, analyze. No state, no conversation — pure functions.</p>
+      </div>
+    </div>
 
     <h2>What each agent gets</h2>
     <div class="grid3">
       <div class="card">
-        <h3 style="color:#a78bfa">Workers AI</h3>
-        <p>Server-side inference. Any model from Cloudflare's catalog -- LLMs, image generation, speech, embeddings.</p>
+        <h3>Workers AI</h3>
+        <p>Llama 3.3 70B, Llama 4 Scout, Mistral, Qwen. Any model from Cloudflare's catalog.</p>
       </div>
       <div class="card">
-        <h3 style="color:#34d399">D1 Database</h3>
-        <p>Per-agent SQLite. Conversations, knowledge bases, user prefs, analytics. Survives forever.</p>
+        <h3>Knowledge Base</h3>
+        <p>Upload docs, paste text, import URLs. Agent answers from your documents.</p>
       </div>
       <div class="card">
-        <h3 style="color:#fbbf24">R2 Storage</h3>
-        <p>Per-agent file storage. Generated audio, images, documents, exports. Served via CDN.</p>
+        <h3>Guardrails</h3>
+        <p>Topic restrictions, blocked terms, response style, citations. Keep the agent on track.</p>
       </div>
       <div class="card">
-        <h3 style="color:#f87171">Cron</h3>
-        <p>Scheduled execution. Daily reports, monitoring checks, data pipelines, notification digests.</p>
+        <h3>10 Tools</h3>
+        <p>Memory, tasks, fetch URLs, store/read files. Agents act, not just chat.</p>
       </div>
       <div class="card">
-        <h3 style="color:#60a5fa">API Gateway</h3>
-        <p>REST endpoint with auth + rate limits. Other apps call your agent as a service.</p>
+        <h3>Conversation</h3>
+        <p>Persistent chat history. Memory across sessions. WebSocket real-time.</p>
       </div>
       <div class="card">
-        <h3 style="color:#c084fc">Stripe Payouts</h3>
-        <p>Earn from the $9/mo pool. Usage-weighted splits via Stripe Connect. Spotify model.</p>
+        <h3>API + Widget</h3>
+        <p>REST API, SDK, embeddable chat widget. Use agents anywhere.</p>
       </div>
     </div>
 
-    <h2>Pricing</h2>
-    <p class="highlight">One subscription: <strong>$9/mo</strong>. That unlocks every Pro agent on the platform. No per-agent pricing, no usage billing, no surprises.</p>
-    <p>Creators earn from the subscription pool in proportion to their agent's share of usage each month, minus a 10% platform fee. Same model as Spotify -- the more people use your agent, the more you earn.</p>
+    <h2>Data isolation</h2>
+    <p class="highlight">Creators and clients never see each other's data. Each subscription creates an isolated Durable Object with its own knowledge base, conversations, and memory. The creator defines the template; the client owns their instance.</p>
 
-    <h2>Free vs Pro</h2>
-    <p>They're <strong>different products</strong>, not tiers. FreeAgentStore runs AI on your device -- private, offline-capable, zero cost. ProAgentStore runs AI on Cloudflare's edge -- powerful, persistent, connected. Start free, graduate to Pro when you need server-side compute.</p>
+    <h2>Developer tools</h2>
+    <p><strong>CLI</strong> — <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags init</code>, <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags check</code>, <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags publish</code>. Scaffold, validate, deploy in minutes.</p>
+    <p><strong>MCP Server</strong> — manage agents from Claude Code, Cursor, or VS Code. 10 tools: create, chat, add knowledge, analytics.</p>
+    <p><strong>Webhook ingestion</strong> — Zapier, Make, n8n can POST documents directly into an instance's knowledge base.</p>
+    <p><strong>API key vault</strong> — store your OpenAI, Anthropic, Google AI keys once. Encrypted AES-256-GCM. Agents access via proxy.</p>
 
-    <h2>Part of the FreeStore family</h2>
+    <h2>Part of the FreeStore ecosystem</h2>
     <div class="grid3">
-      <div class="card">
-        <h3><a href="https://freeappstore.online">FreeAppStore</a></h3>
-        <p>Apps -- PWAs, free forever.</p>
-      </div>
-      <div class="card">
-        <h3><a href="https://freegamestore.online">FreeGameStore</a></h3>
-        <p>Games -- browser-based, free forever.</p>
-      </div>
-      <div class="card">
-        <h3><a href="https://freewebstore.online">FreeWebStore</a></h3>
-        <p>Websites -- AI-built one-page sites.</p>
-      </div>
-      <div class="card">
-        <h3><a href="https://freeagentstore.online">FreeAgentStore</a></h3>
-        <p>Browser AI agents -- free, private, offline.</p>
-      </div>
-      <div class="card">
-        <h3 style="color:var(--accent)">ProAgentStore</h3>
-        <p>Server AI agents -- powerful, persistent, connected.</p>
-      </div>
+      <div class="card"><h3><a href="https://freeappstore.online">FreeAppStore</a></h3><p>PWA apps — free forever.</p></div>
+      <div class="card"><h3><a href="https://freegamestore.online">FreeGameStore</a></h3><p>Browser games — free forever.</p></div>
+      <div class="card"><h3><a href="https://freewebstore.online">FreeWebStore</a></h3><p>AI-built one-page sites.</p></div>
+      <div class="card"><h3><a href="https://freeagentstore.online">FreeAgentStore</a></h3><p>Browser AI tools — free, private.</p></div>
+      <div class="card"><h3><a href="https://proappstore.online">ProAppStore</a></h3><p>Paid apps with server-side features.</p></div>
+      <div class="card"><h3 style="color:var(--accent)">ProAgentStore</h3><p>Server-powered AI agents.</p></div>
     </div>
+    <p><a href="https://freeagentstore.online">FreeAgentStore</a> is the browser-side pair. Agents that run on your device — free, private, offline-capable. When you need server power (cron, databases, large models, multi-user state), you use ProAgentStore.</p>
 
     <h2>Open source</h2>
-    <p>The platform -- SDK, CLI, compliance, host worker -- is MIT-licensed on <a href="https://github.com/ProAgentStore">GitHub</a>. Agents published on Pro can be proprietary (no MIT requirement, unlike the free tier).</p>
+    <p>The platform — SDK, CLI, MCP server, host worker, API — is on <a href="https://github.com/ProAgentStore">GitHub</a>. Agents can be open source or proprietary.</p>
   </main>
 
   <footer>
@@ -135,6 +145,6 @@
       <a href="https://freeappstore.online">FreeAppStore</a> · <a href="https://freegamestore.online">FreeGameStore</a> · <a href="https://freewebstore.online">FreeWebStore</a> · <a href="https://freeagentstore.online" style="color:#3b82f6">FreeAgentStore</a> · <a href="https://proappstore.online">ProAppStore</a> · <strong>ProAgentStore</strong>
     </span>
   </footer>
-<script src="/auth-widget.js" defer></script>
+  <script src="/auth-widget.js" defer></script>
 </body>
 </html>
