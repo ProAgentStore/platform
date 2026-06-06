@@ -572,6 +572,20 @@
       </div>
 
       <div class="profile-section">
+        <h3>Edit Profile</h3>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem">Shown on your <a href="#" id="profile-dev-link">developer page</a>.</p>
+        <div style="display:flex;flex-direction:column;gap:0.5rem">
+          <div><label style="font-size:0.78rem;color:var(--muted);font-weight:600">Display Name</label><input id="p-display-name" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem" placeholder="Your name"></div>
+          <div><label style="font-size:0.78rem;color:var(--muted);font-weight:600">Bio</label><input id="p-bio" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem" placeholder="What you do"></div>
+          <div style="display:flex;gap:0.5rem">
+            <div style="flex:1"><label style="font-size:0.78rem;color:var(--muted);font-weight:600">Website</label><input id="p-website" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem" placeholder="https://..."></div>
+            <div style="flex:1"><label style="font-size:0.78rem;color:var(--muted);font-weight:600">Twitter/X</label><input id="p-twitter" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem" placeholder="username"></div>
+          </div>
+          <button onclick="saveProfile()" class="btn btn-primary btn-sm" style="align-self:flex-start">Save Profile</button>
+        </div>
+      </div>
+
+      <div class="profile-section">
         <h3>API Token</h3>
         <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem">Use this token to authenticate SDK calls and API requests. Keep it secret.</p>
         <div class="token-display">
@@ -1330,6 +1344,13 @@ console.log(response)</pre>
       const tokenEl = document.getElementById('profile-token');
       tokenEl.textContent = token ? token.slice(0, 12) + '...' : 'Not signed in';
 
+      // Profile edit fields
+      document.getElementById('p-display-name').value = user.name || '';
+      document.getElementById('p-bio').value = user.bio || '';
+      document.getElementById('p-website').value = user.website || '';
+      document.getElementById('p-twitter').value = user.twitter || '';
+      document.getElementById('profile-dev-link').href = `/developers/${user.login}/`;
+
       loadKeys();
     }
 
@@ -1347,6 +1368,21 @@ console.log(response)</pre>
       if (!token) return;
       tokenVisible = !tokenVisible;
       document.getElementById('profile-token').textContent = tokenVisible ? token : token.slice(0, 12) + '...';
+    }
+
+    async function saveProfile() {
+      try {
+        await api('/v1/auth/me', {
+          method: 'PUT',
+          body: JSON.stringify({
+            display_name: document.getElementById('p-display-name').value,
+            bio: document.getElementById('p-bio').value,
+            website: document.getElementById('p-website').value,
+            twitter: document.getElementById('p-twitter').value,
+          }),
+        });
+        alert('Profile saved!');
+      } catch (e) { alert(e.message); }
     }
 
     // ── API Keys ─────────────────────────────────────────────────

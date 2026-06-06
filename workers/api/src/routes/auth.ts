@@ -148,16 +148,19 @@ authRoutes.get('/me', async (c) => {
   if (!session) return c.json({ error: 'Invalid or expired token' }, 401);
 
   const row = await c.env.DB.prepare(
-    'SELECT id, github_login, github_name, avatar_url, roles, stripe_customer_id FROM users WHERE id = ?1',
+    'SELECT id, github_login, github_name, avatar_url, roles, stripe_customer_id, display_name, bio, website, twitter FROM users WHERE id = ?1',
   ).bind(session.uid).first<Record<string, string>>();
   if (!row) return c.json({ error: 'User not found' }, 404);
 
   return c.json({
     id: row.id,
     login: row.github_login,
-    name: row.github_name,
+    name: row.display_name || row.github_name,
     avatar: row.avatar_url,
     roles: JSON.parse(row.roles || '["user"]'),
     hasSubscription: !!row.stripe_customer_id,
+    bio: row.bio || '',
+    website: row.website || '',
+    twitter: row.twitter || '',
   });
 });
