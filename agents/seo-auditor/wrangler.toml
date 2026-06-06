@@ -1,0 +1,31 @@
+name = "proagentstore-seo-auditor"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "seo-auditor.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[triggers]
+crons = ["0 5 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "seo-auditor-db"
+database_id = "placeholder-replace-after-creation"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "AUDIT_STATE"
+class_name = "AuditStateDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["AuditStateDO"]
+
+# Secrets (set via wrangler secret put + Doppler):
+# ADMIN_TOKEN — bearer token for write API endpoints (optional; if unset all routes are open)

@@ -1,0 +1,30 @@
+name = "proagentstore-email-drafter"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "email-drafter.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "BRAND_CONFIG"
+class_name = "BrandConfigDO"
+
+[[durable_objects.bindings]]
+name = "DRAFT_STORE"
+class_name = "DraftStoreDO"
+
+[[durable_objects.bindings]]
+name = "KNOWLEDGE_BASE"
+class_name = "KnowledgeBaseDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["BrandConfigDO", "DraftStoreDO", "KnowledgeBaseDO"]
+
+# Secrets (set via wrangler secret put + Doppler):
+# API_SECRET   — bearer token callers must send in Authorization header (optional)

@@ -1,0 +1,13 @@
+{
+	"id": "seo-auditor",
+	"name": "seo-auditor",
+	"description": "Audits website SEO daily. Fetches configured URLs, extracts title, meta description, heading structure, image alt tags, links, word count, and schema markup. Workers AI scores each page 0-100 with actionable recommendations. Tracks scores over time and flags regressions.",
+	"storeType": "worker",
+	"category": "data",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "cron",
+	"serverConfig": {
+		"cron": "0 5 * * *",
+		"routes": ["seo-auditor.proagentstore.online/*"]
+	}
+}

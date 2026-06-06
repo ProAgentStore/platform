@@ -1,0 +1,13 @@
+{
+	"id": "meeting-notes",
+	"name": "meeting-notes",
+	"description": "Processes meeting transcripts from Zoom, Teams, or Otter via webhook. Workers AI extracts summaries, action items, decisions, follow-ups, and attendees. Stores structured notes in a Durable Object with search. Daily digest of pending action items via cron.",
+	"storeType": "worker",
+	"category": "productivity",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "cron",
+	"serverConfig": {
+		"cron": "0 18 * * *",
+		"routes": ["meeting-notes.proagentstore.online/*"]
+	}
+}

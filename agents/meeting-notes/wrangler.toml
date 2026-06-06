@@ -1,0 +1,26 @@
+name = "proagentstore-meeting-notes"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "meeting-notes.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[triggers]
+crons = ["0 18 * * *"]
+
+[[durable_objects.bindings]]
+name = "MEETINGS"
+class_name = "MeetingsDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["MeetingsDO"]
+
+# Secrets (set via wrangler secret put + Doppler project pags):
+# WEBHOOK_SECRET  — if set, callers must send X-Webhook-Secret: <value>
+# DIGEST_WEBHOOK  — URL to POST daily digest to (Slack, email relay, n8n, etc.)

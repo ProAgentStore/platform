@@ -1,0 +1,12 @@
+{
+	"id": "data-analyst",
+	"name": "data-analyst",
+	"description": "Upload CSVs or JSON, then ask questions in plain English. Workers AI generates SQL against your D1 tables and returns results instantly.",
+	"storeType": "agent",
+	"category": "data",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "api",
+	"serverConfig": {
+		"routes": ["data-analyst.proagentstore.online/*"]
+	}
+}

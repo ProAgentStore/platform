@@ -1,0 +1,12 @@
+{
+	"id": "invoice-parser",
+	"name": "invoice-parser",
+	"description": "Extracts structured data from invoice text using Workers AI — vendor, amounts, line items, dates, and more.",
+	"storeType": "tool",
+	"category": "data",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "api",
+	"serverConfig": {
+		"routes": ["invoice-parser.proagentstore.online/*"]
+	}
+}

@@ -1,0 +1,23 @@
+name = "proagentstore-invoice-parser"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "invoice-parser.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "HISTORY"
+class_name = "ParseHistoryDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ParseHistoryDO"]
+
+# No secrets required for basic operation.
+# Optional secrets (set via wrangler secret put + Doppler):
+# API_KEY   — if set, callers must send X-Api-Key: <value> header

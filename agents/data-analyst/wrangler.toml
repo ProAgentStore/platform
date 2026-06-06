@@ -1,0 +1,20 @@
+name = "proagentstore-data-analyst"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "data-analyst.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "data-analyst-db"
+database_id = "placeholder-replace-after-creation"
+migrations_dir = "migrations"
+
+# Secrets (set via wrangler secret put + Doppler):
+# ADMIN_TOKEN — bearer token required for upload + delete endpoints

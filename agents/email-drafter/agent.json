@@ -1,0 +1,12 @@
+{
+	"id": "email-drafter",
+	"name": "email-drafter",
+	"description": "Generates emails matching your brand voice. Upload brand guidelines and example emails, then describe what you need — the agent drafts it in your tone.",
+	"storeType": "agent",
+	"category": "creative",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "api",
+	"serverConfig": {
+		"routes": ["email-drafter.proagentstore.online/*"]
+	}
+}
