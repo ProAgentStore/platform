@@ -137,11 +137,19 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 
 	const doId = c.env.AGENT.idFromName(instanceId);
 	const stub = c.env.AGENT.get(doId);
+	// Pass agentId/agentName for auto-init if DO has no state
+	const agentMeta = await c.env.DB.prepare(
+		"SELECT name FROM agents WHERE id = ?1",
+	).bind(instance.agent_id).first<{ name: string }>();
+
 	const doRes = await stub.fetch(
 		new Request("http://agent/chat", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ message, channel: "chat", userId: session.uid }),
+			body: JSON.stringify({
+				message, channel: "chat", userId: session.uid,
+				agentId: instanceId, agentName: agentMeta?.name || "Agent",
+			}),
 		}),
 	);
 

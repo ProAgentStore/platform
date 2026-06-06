@@ -74,10 +74,10 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 	if (!message) throw new HttpError(400, "message required");
 
 	const agent = await c.env.DB.prepare(
-		`SELECT id, model FROM agents WHERE (id = ?1 OR slug = ?1) AND visibility = 'published'`,
+		`SELECT id, name, model FROM agents WHERE (id = ?1 OR slug = ?1) AND visibility = 'published'`,
 	)
 		.bind(id)
-		.first<{ id: string; model: string }>();
+		.first<{ id: string; name: string; model: string }>();
 	if (!agent) throw new HttpError(404, "Agent not found");
 
 	// Ephemeral session — keyed by agent + client session (or random)
@@ -102,7 +102,7 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
 					agentId: doKey,
-					name: tmpl.name || "Agent",
+					name: tmpl.name || agent.name || "Agent",
 					personality: tmpl.personality || "",
 					goal: tmpl.goal || "",
 					model: tmpl.model || agent.model,
@@ -151,7 +151,7 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 		new Request("http://agent/chat", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ message, channel: "trial" }),
+			body: JSON.stringify({ message, channel: "trial", agentId: doKey, agentName: agent.name }),
 		}),
 	);
 

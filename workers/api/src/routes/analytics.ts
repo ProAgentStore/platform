@@ -9,9 +9,9 @@ analyticsRoutes.get("/:id/analytics", async (c) => {
 	const session = await requireUser(c);
 	const id = c.req.param("id");
 
-	// Verify ownership
+	// Verify ownership (accept ID or slug)
 	const agent = await c.env.DB.prepare(
-		"SELECT id, owner_id FROM agents WHERE id = ?1",
+		"SELECT id, owner_id FROM agents WHERE id = ?1 OR slug = ?1",
 	)
 		.bind(id)
 		.first<{ id: string; owner_id: string }>();
