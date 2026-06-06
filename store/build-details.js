@@ -20,7 +20,7 @@ function generateDetailPage(agent) {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${agent.name} — ProAgentStore</title>
-  <meta name="description" content="${agent.description} Server-powered AI agent. $9/mo.">
+  <meta name="description" content="${agent.description} Server-powered AI agent on ProAgentStore.">
   <meta property="og:type" content="website">
   <meta property="og:title" content="${agent.name} — ProAgentStore">
   <meta property="og:description" content="${agent.description}">

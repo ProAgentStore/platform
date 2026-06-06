@@ -633,7 +633,7 @@ console.log(response)</pre>
     function getToken() { return localStorage.getItem(SESSION_KEY); }
     function setToken(t) { t ? localStorage.setItem(SESSION_KEY, t) : localStorage.removeItem(SESSION_KEY); token = t; }
 
-    async function _signIn() {
+    async function signIn() {
       const res = await fetch(`${API}/v1/auth/config`);
       const config = await res.json();
       const returnTo = encodeURIComponent(`${window.location.origin}/console/`);
@@ -641,7 +641,7 @@ console.log(response)</pre>
       window.location.href = `${config.oauth_url}?app_id=${config.app_id}&response_mode=${config.response_mode}&return_to=${returnTo}`;
     }
 
-    function _signOut() {
+    function signOut() {
       setToken(null); user = null;
       showPage('login-page');
       document.getElementById('user-nav').classList.add('hidden');
@@ -743,7 +743,7 @@ console.log(response)</pre>
       document.getElementById('create-form').classList.toggle('hidden');
     }
 
-    async function _createAgent() {
+    async function createAgent() {
       const slug = document.getElementById('f-slug').value.trim();
       const name = document.getElementById('f-name').value.trim();
       if (!slug || !name) { showError('create-error', 'Slug and name required'); return; }
@@ -832,7 +832,7 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function _sendMessage() {
+    async function sendMessage() {
       const input = document.getElementById('chat-input');
       const message = input.value.trim();
       if (!message) return;
@@ -930,7 +930,7 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function _sendInstanceMessage() {
+    async function sendInstanceMessage() {
       const input = document.getElementById('inst-chat-input');
       const message = input.value.trim();
       if (!message) return;
@@ -960,7 +960,7 @@ console.log(response)</pre>
     }
 
     // Instance knowledge
-    function _showInstKbForm(type) { hideInstKbForms(); document.getElementById(`inst-kb-form-${type}`).classList.remove('hidden'); }
+    function showInstKbForm(type) { hideInstKbForms(); document.getElementById(`inst-kb-form-${type}`).classList.remove('hidden'); }
     function hideInstKbForms() { document.getElementById('inst-kb-form-paste').classList.add('hidden'); document.getElementById('inst-kb-form-url').classList.add('hidden'); }
 
     async function loadInstanceKnowledge() {
@@ -991,7 +991,7 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function _addInstKbPaste() {
+    async function addInstKbPaste() {
       const title = document.getElementById('inst-kb-title').value.trim();
       const content = document.getElementById('inst-kb-content').value.trim();
       if (!title || !content) { alert('Title and content required'); return; }
@@ -1000,7 +1000,7 @@ console.log(response)</pre>
       loadInstanceKnowledge();
     }
 
-    async function _addInstKbUrl() {
+    async function addInstKbUrl() {
       const url = document.getElementById('inst-kb-url').value.trim();
       if (!url) { alert('URL required'); return; }
       await api(`/v1/instances/${currentInstance.id}/knowledge/ingest-url`, { method: 'POST', body: JSON.stringify({ url, title: document.getElementById('inst-kb-url-title').value.trim() || undefined }) });
@@ -1008,7 +1008,7 @@ console.log(response)</pre>
       loadInstanceKnowledge();
     }
 
-    async function _uploadInstKbFile(input) {
+    async function uploadInstKbFile(input) {
       const file = input.files?.[0]; if (!file) return;
       await api(`/v1/instances/${currentInstance.id}/knowledge`, { method: 'POST', body: JSON.stringify({ title: file.name, content: await file.text(), source: 'upload' }) });
       loadInstanceKnowledge(); input.value = '';
@@ -1060,7 +1060,7 @@ console.log(response)</pre>
 
     // ── Knowledge Base ─────────────────────────────────────────
 
-    function _showKbForm(type) {
+    function showKbForm(type) {
       hideKbForms();
       document.getElementById(`kb-form-${type}`).classList.remove('hidden');
     }
@@ -1100,7 +1100,7 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function _addKbPaste() {
+    async function addKbPaste() {
       const title = document.getElementById('kb-title').value.trim();
       const content = document.getElementById('kb-content').value.trim();
       if (!title || !content) { alert('Title and content required'); return; }
@@ -1116,7 +1116,7 @@ console.log(response)</pre>
       } catch (e) { alert(e.message); }
     }
 
-    async function _addKbUrl() {
+    async function addKbUrl() {
       const url = document.getElementById('kb-url').value.trim();
       if (!url) { alert('URL required'); return; }
       const title = document.getElementById('kb-url-title').value.trim();
@@ -1140,7 +1140,7 @@ console.log(response)</pre>
       }
     }
 
-    async function _uploadKbFile(input) {
+    async function uploadKbFile(input) {
       const file = input.files?.[0];
       if (!file) return;
       const text = await file.text();
@@ -1190,9 +1190,9 @@ console.log(response)</pre>
       } catch {}
     }
 
-    function _showMemoryForm() { document.getElementById('memory-form').classList.remove('hidden'); }
+    function showMemoryForm() { document.getElementById('memory-form').classList.remove('hidden'); }
 
-    async function _saveMemory() {
+    async function saveMemory() {
       try {
         await api(`/v1/agents/${currentAgent.id}/memory`, {
           method: 'PUT',
@@ -1241,9 +1241,9 @@ console.log(response)</pre>
       } catch {}
     }
 
-    function _showTaskForm() { document.getElementById('task-form').classList.remove('hidden'); }
+    function showTaskForm() { document.getElementById('task-form').classList.remove('hidden'); }
 
-    async function _createTask() {
+    async function createTask() {
       try {
         await api(`/v1/agents/${currentAgent.id}/tasks`, {
           method: 'POST',
@@ -1260,7 +1260,7 @@ console.log(response)</pre>
 
     // ── Settings ────────────────────────────────────────────────
 
-    async function _saveSettings() {
+    async function saveSettings() {
       try {
         // Save D1 fields (agent registry)
         await api(`/v1/agents/${currentAgent.id}`, {
@@ -1300,7 +1300,7 @@ console.log(response)</pre>
       } catch (e) { alert(e.message); }
     }
 
-    async function _deleteAgent() {
+    async function deleteAgent() {
       if (!confirm(`Delete "${currentAgent.name}"? This cannot be undone.`)) return;
       try {
         await api(`/v1/agents/${currentAgent.id}`, { method: 'DELETE' });
@@ -1312,7 +1312,7 @@ console.log(response)</pre>
 
     let tokenVisible = false;
 
-    function _showProfile() {
+    function showProfile() {
       if (!user) return;
       showPage('profile-page');
 
@@ -1353,7 +1353,7 @@ console.log(response)</pre>
       loadKeys();
     }
 
-    function _copyToken() {
+    function copyToken() {
       if (!token) return;
       navigator.clipboard.writeText(token).then(() => {
         const btn = document.querySelector('.copy-btn');
@@ -1363,13 +1363,13 @@ console.log(response)</pre>
       });
     }
 
-    function _toggleTokenVisibility() {
+    function toggleTokenVisibility() {
       if (!token) return;
       tokenVisible = !tokenVisible;
       document.getElementById('profile-token').textContent = tokenVisible ? token : `${token.slice(0, 12)}...`;
     }
 
-    async function _saveProfile() {
+    async function saveProfile() {
       try {
         await api('/v1/auth/me', {
           method: 'PUT',
