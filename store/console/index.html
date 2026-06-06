@@ -713,7 +713,7 @@ console.log(response)</pre>
         const list = document.getElementById('agents-list');
         const empty = document.getElementById('agents-empty');
         list.innerHTML = '';
-        if (!data.agents.length) { empty.classList.remove('hidden'); return; }
+        if (!data.agents.length) { empty.classList.remove('hidden'); }
         else {
           empty.classList.add('hidden');
           for (const a of data.agents) {
@@ -881,7 +881,6 @@ console.log(response)</pre>
         list.innerHTML = '';
         const items = data.instances || [];
         empty.classList.toggle('hidden', items.length > 0);
-        if (!items.length) { document.getElementById('instances-loading').classList.add('hidden'); return; }
         for (const inst of items) {
           const card = document.createElement('div');
           card.className = 'agent-card';
