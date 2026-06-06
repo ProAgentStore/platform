@@ -20,6 +20,15 @@ publicRoutes.get("/agents/:id", async (c) => {
 		.bind(id)
 		.first();
 	if (!row) throw new HttpError(404, "Agent not found");
+
+	// Track view event (fire-and-forget)
+	c.executionCtx.waitUntil(
+		c.env.DB.prepare(
+			`INSERT INTO usage (id, agent_id, user_id, event, metadata, created_at)
+       VALUES (?1, ?2, '', 'view', '{}', datetime('now'))`,
+		).bind(crypto.randomUUID(), (row as Record<string, unknown>).id).run().catch(() => {}),
+	);
+
 	return c.json(row);
 });
 

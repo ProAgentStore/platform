@@ -506,6 +506,10 @@
           <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Daily Usage (last 30 days)</h3>
           <div id="daily-chart" style="display:flex;align-items:end;gap:2px;height:80px"></div>
         </div>
+        <div class="create-form" style="margin-bottom:1rem">
+          <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Conversion Funnel</h3>
+          <div id="funnel" style="display:flex;gap:0.5rem;align-items:end"></div>
+        </div>
         <div class="create-form">
           <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Recent Executions</h3>
           <div id="recent-execs"></div>
@@ -642,6 +646,7 @@
             <div style="flex:1"><label style="font-size:0.78rem;color:var(--muted);font-weight:600">Website</label><input id="p-website" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem" placeholder="https://..."></div>
             <div style="flex:1"><label style="font-size:0.78rem;color:var(--muted);font-weight:600">Twitter/X</label><input id="p-twitter" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem" placeholder="username"></div>
           </div>
+          <div><label style="font-size:0.78rem;color:var(--muted);font-weight:600">Slack Webhook URL</label><input id="p-slack" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem" placeholder="https://hooks.slack.com/services/..."><p style="font-size:0.7rem;color:var(--muted-soft);margin-top:0.2rem">Get notified in Slack when someone subscribes to your agents</p></div>
           <button onclick="saveProfile()" class="btn btn-primary btn-sm" style="align-self:flex-start">Save Profile</button>
         </div>
       </div>
@@ -1150,6 +1155,21 @@ console.log(response)</pre>
         }
         if (!daily.length) chart.innerHTML = '<span style="color:var(--muted-soft);font-size:0.82rem">No usage data yet</span>';
 
+        // Funnel
+        const funnel = document.getElementById('funnel');
+        funnel.innerHTML = '';
+        const f = data.funnel || { views: 0, trials: 0, subscribes: 0 };
+        const maxF = Math.max(1, f.views, f.trials, f.subscribes);
+        for (const [label, count, color] of [['Views', f.views, '#3b82f6'], ['Trials', f.trials, '#eab308'], ['Subscribes', f.subscribes, '#22c55e']]) {
+          const col = document.createElement('div');
+          col.style.cssText = 'flex:1;text-align:center';
+          const h = Math.max(8, (count / maxF) * 80);
+          col.innerHTML = `<div style="height:${h}px;background:${color};border-radius:4px 4px 0 0;margin:0 auto;width:60%"></div>
+            <div style="font-size:1.1rem;font-weight:700;margin-top:0.3rem">${count}</div>
+            <div style="font-size:0.72rem;color:var(--muted)">${label}</div>`;
+          funnel.appendChild(col);
+        }
+
         // Recent executions
         const execs = document.getElementById('recent-execs');
         execs.innerHTML = '';
@@ -1549,6 +1569,7 @@ console.log(response)</pre>
       document.getElementById('p-bio').value = user.bio || '';
       document.getElementById('p-website').value = user.website || '';
       document.getElementById('p-twitter').value = user.twitter || '';
+      document.getElementById('p-slack').value = user.slackWebhook === 'configured' ? '(configured — enter new URL to change)' : '';
       document.getElementById('profile-dev-link').href = `/developers/${user.login}/`;
 
       loadKeys();
@@ -1626,14 +1647,17 @@ console.log(response)</pre>
 
     async function saveProfile() {
       try {
+        const slackVal = document.getElementById('p-slack').value;
+        const updates = {
+          display_name: document.getElementById('p-display-name').value,
+          bio: document.getElementById('p-bio').value,
+          website: document.getElementById('p-website').value,
+          twitter: document.getElementById('p-twitter').value,
+        };
+        if (slackVal && !slackVal.startsWith('(')) updates.slack_webhook = slackVal;
         await api('/v1/auth/me', {
           method: 'PUT',
-          body: JSON.stringify({
-            display_name: document.getElementById('p-display-name').value,
-            bio: document.getElementById('p-bio').value,
-            website: document.getElementById('p-website').value,
-            twitter: document.getElementById('p-twitter').value,
-          }),
+          body: JSON.stringify(updates),
         });
         alert('Profile saved!');
       } catch (e) { alert(e.message); }

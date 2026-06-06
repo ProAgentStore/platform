@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Changelog — ProAgentStore</title>
+  <meta name="description" content="What's new on ProAgentStore — platform updates, new agents, and features.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#7c3aed">
+  <meta property="og:image" content="https://proagentstore.online/og-image.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--green:#22c55e;--blue:#3b82f6;--line:#262626}
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+    .container{max-width:760px;margin:0 auto;padding:0 1.5rem}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+    header{border-bottom:1px solid var(--line)}
+    header .c{max-width:1200px;margin:0 auto;padding:0.75rem 1.5rem;display:flex;align-items:center;gap:1.25rem}
+    .brand{display:flex;align-items:center;gap:0.6rem;text-decoration:none;color:var(--ink)}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    nav{display:flex;gap:1.25rem;font-size:0.88rem;font-weight:600;margin-left:auto}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}
+    nav a.free{color:var(--blue)}
+    h1{font-family:var(--font-display);font-size:2.25rem;font-weight:700;margin:3rem 0 1.5rem}
+    .entry{border-left:2px solid var(--line);padding-left:1.5rem;margin-bottom:2.5rem;position:relative}
+    .entry::before{content:'';position:absolute;left:-5px;top:0;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+    .entry .date{font-size:0.82rem;color:var(--muted-soft);margin-bottom:0.3rem}
+    .entry h2{font-family:var(--font-display);font-size:1.15rem;font-weight:700;margin-bottom:0.5rem}
+    .entry p{color:var(--muted);font-size:0.92rem;line-height:1.6;margin-bottom:0.5rem}
+    .entry ul{color:var(--muted);font-size:0.88rem;line-height:1.7;padding-left:1.2rem;margin-bottom:0.5rem}
+    .tag{display:inline-block;font-size:0.7rem;padding:0.1rem 0.45rem;border-radius:999px;font-weight:600;margin-right:0.3rem}
+    .tag-feat{background:rgba(124,58,237,0.15);color:#a78bfa}
+    .tag-fix{background:rgba(34,197,94,0.15);color:var(--green)}
+    .tag-new{background:rgba(59,130,246,0.15);color:var(--blue)}
+    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:0.8rem;color:var(--muted-soft);margin-top:2rem}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="c">
+      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <nav>
+        <a href="/">Agents</a>
+        <a href="/about/">About</a>
+        <a href="/get-started/">Get Started</a>
+        <a href="/console/">Console</a>
+        <a href="https://github.com/ProAgentStore">GitHub</a>
+        <a href="https://freeagentstore.online" class="free">Free</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <h1>Changelog</h1>
+
+    <div class="entry">
+      <div class="date">June 6, 2026</div>
+      <h2>Launch + 11 Agents</h2>
+      <span class="tag tag-new">Launch</span>
+      <p>ProAgentStore goes live with a full marketplace platform and 11 server-powered AI agents.</p>
+      <ul>
+        <li><strong>Platform:</strong> Store with search + sort, Console (creator + client), Admin dashboard, MCP server (10 tools), CLI (init/check/publish)</li>
+        <li><strong>11 Agents:</strong> chatbot, site-monitor, lead-qualifier, content-pipeline, competitor-intel, support-escalator, data-analyst, meeting-notes, seo-auditor, invoice-parser, email-drafter</li>
+        <li><strong>Marketplace:</strong> Subscribe to agents, get isolated instances with your own data</li>
+        <li><strong>Knowledge Base:</strong> Paste text, import URLs, upload files, Google Docs integration</li>
+        <li><strong>Guardrails:</strong> Topic restrictions, blocked terms, response style, max length, citations</li>
+        <li><strong>Key Vault:</strong> Store API keys for OpenAI, Anthropic, Google AI, OpenRouter, Groq, Together AI</li>
+        <li><strong>Embeddable Widget:</strong> Add any agent as a chat widget on your site</li>
+        <li><strong>Developer Profiles:</strong> Public pages with all published agents, cross-store links</li>
+      </ul>
+    </div>
+
+    <div class="entry">
+      <div class="date">June 6, 2026</div>
+      <h2>Analytics, Versioning, Export</h2>
+      <span class="tag tag-feat">Feature</span>
+      <ul>
+        <li><strong>Analytics:</strong> Subscriber count, chat count, daily usage charts, conversion funnel (views → trials → subscribes)</li>
+        <li><strong>Version History:</strong> Save snapshots of agent config, rollback to any version</li>
+        <li><strong>Export/Import:</strong> Full JSON backup of agent state + KB + memory, restore from backup</li>
+        <li><strong>Agent Cloning:</strong> Fork any published agent as your own draft</li>
+        <li><strong>Notifications:</strong> Bell icon, subscribe alerts, mark read/unread</li>
+        <li><strong>Dashboard:</strong> Creator stats + client usage in one view</li>
+      </ul>
+    </div>
+
+    <div class="entry">
+      <div class="date">June 6, 2026</div>
+      <h2>SEO + Polish</h2>
+      <span class="tag tag-fix">Polish</span>
+      <ul>
+        <li>Dynamic sitemap.xml with all agents + developer pages</li>
+        <li>robots.txt with search allowance + console/admin blocking</li>
+        <li>Branded 404 page</li>
+        <li>Favicon, OG image, PWA manifest on all pages</li>
+        <li>Auth widget (sign-in state) across all pages</li>
+        <li>Store sorting: newest, most popular, name A-Z</li>
+        <li>Agent detail: README from GitHub repo + API docs section</li>
+        <li>Subscriber counts on store cards</li>
+        <li>238 tests across 18 files</li>
+      </ul>
+    </div>
+  </main>
+
+  <footer>
+    <a href="/">Agents</a> · <a href="/about/">About</a> · <a href="/get-started/">Get Started</a> · <a href="/changelog/">Changelog</a> · <a href="https://github.com/ProAgentStore">GitHub</a>
+  </footer>
+  <script src="/auth-widget.js" defer></script>
+</body>
+</html>

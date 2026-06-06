@@ -57,4 +57,24 @@ export async function createNotification(
 		`INSERT INTO notifications (id, user_id, type, title, body, agent_id, created_at)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))`,
 	).bind(crypto.randomUUID(), userId, type, title, body, agentId || null).run();
+
+	// Send Slack webhook if configured (fire-and-forget)
+	try {
+		const user = await db.prepare(
+			"SELECT slack_webhook FROM users WHERE id = ?1",
+		).bind(userId).first<{ slack_webhook: string }>();
+		if (user?.slack_webhook) {
+			await fetch(user.slack_webhook, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					text: `*${title}*\n${body}`,
+					blocks: [
+						{ type: "section", text: { type: "mrkdwn", text: `*${title}*\n${body}` } },
+						{ type: "context", elements: [{ type: "mrkdwn", text: `ProAgentStore · ${type}` }] },
+					],
+				}),
+			}).catch(() => {});
+		}
+	} catch {}
 }

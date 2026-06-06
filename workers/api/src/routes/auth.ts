@@ -174,10 +174,11 @@ authRoutes.put("/me", async (c) => {
 		bio?: string;
 		website?: string;
 		twitter?: string;
+		slack_webhook?: string;
 	}>();
 	const sets: string[] = ["updated_at = datetime('now')"];
 	const params: unknown[] = [];
-	for (const key of ["display_name", "bio", "website", "twitter"] as const) {
+	for (const key of ["display_name", "bio", "website", "twitter", "slack_webhook"] as const) {
 		if (body[key] !== undefined) {
 			params.push(body[key]);
 			sets.push(`${key} = ?${params.length + 1}`);
@@ -204,7 +205,7 @@ authRoutes.get("/me", async (c) => {
 	if (!session) return c.json({ error: "Invalid or expired token" }, 401);
 
 	const row = await c.env.DB.prepare(
-		"SELECT id, github_login, github_name, avatar_url, roles, stripe_customer_id, display_name, bio, website, twitter FROM users WHERE id = ?1",
+		"SELECT id, github_login, github_name, avatar_url, roles, stripe_customer_id, display_name, bio, website, twitter, slack_webhook FROM users WHERE id = ?1",
 	)
 		.bind(session.uid)
 		.first<Record<string, string>>();
@@ -220,5 +221,6 @@ authRoutes.get("/me", async (c) => {
 		bio: row.bio || "",
 		website: row.website || "",
 		twitter: row.twitter || "",
+		slackWebhook: row.slack_webhook ? "configured" : "",
 	});
 });

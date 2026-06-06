@@ -1,0 +1,2540 @@
+openapi: 3.1.0
+
+info:
+  title: ProAgentStore API
+  description: |
+    REST API for ProAgentStore — server-powered AI agents on Cloudflare Workers.
+    Agents are backed by Durable Objects; each user gets a personal instance with
+    isolated memory, knowledge base, and message history.
+
+    **Auth:** All protected endpoints require a Bearer token in the `Authorization`
+    header. Obtain a token via `POST /v1/auth/exchange` (FAS OAuth flow) or
+    `POST /v1/auth/github` (direct GitHub OAuth).
+  version: 1.0.0
+  contact:
+    url: https://proagentstore.online
+
+servers:
+  - url: https://api.proagentstore.online
+    description: Production
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+    description: Authentication and user profile
+  - name: Agents
+    description: Agent CRUD, listing, and cloning
+  - name: Chat
+    description: Messaging, memory, tasks, state, and knowledge base for template agents
+  - name: Instances
+    description: User subscriptions and per-instance chat, knowledge, and lifecycle
+  - name: Run
+    description: Direct Workers AI execution and execution history
+  - name: Keys
+    description: Encrypted user API key vault and AI provider proxy
+  - name: Analytics
+    description: Per-agent usage analytics (owner only)
+  - name: Dashboard
+    description: Subscriber usage dashboard and creator aggregate stats
+  - name: Notifications
+    description: In-app notification inbox
+  - name: Versions
+    description: Agent version snapshots and rollback
+  - name: Export
+    description: Agent backup export and import
+  - name: Public
+    description: Unauthenticated store browsing, trial chat, and webhook ingestion
+  - name: Billing
+    description: Subscription status
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+
+    Success:
+      type: object
+      required: [success]
+      properties:
+        success:
+          type: boolean
+          example: true
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        login:
+          type: string
+        name:
+          type: string
+        avatar:
+          type: string
+          format: uri
+        roles:
+          type: array
+          items:
+            type: string
+          example: [user, creator]
+        hasSubscription:
+          type: boolean
+        bio:
+          type: string
+        website:
+          type: string
+        twitter:
+          type: string
+
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        owner_id:
+          type: string
+        slug:
+          type: string
+          example: my-support-agent
+        name:
+          type: string
+          example: Support Agent
+        description:
+          type: string
+        category:
+          type: string
+          example: general
+        store_type:
+          type: string
+          example: agent
+        icon:
+          type: string
+        icon_bg:
+          type: string
+          example: "#7c3aed"
+        model:
+          type: string
+          example: "@cf/meta/llama-3.2-3b-instruct"
+        visibility:
+          type: string
+          enum: [draft, published]
+        status:
+          type: string
+          enum: [active, inactive]
+        cron_schedule:
+          type: string
+          nullable: true
+          example: "0 9 * * *"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AgentSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        slug:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        store_type:
+          type: string
+        icon:
+          type: string
+        icon_bg:
+          type: string
+        model:
+          type: string
+        status:
+          type: string
+        creator_login:
+          type: string
+        creator_avatar:
+          type: string
+        subscriber_count:
+          type: integer
+
+    Instance:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        agent_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [active, canceled]
+        created_at:
+          type: string
+          format: date-time
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        icon:
+          type: string
+        icon_bg:
+          type: string
+
+    Message:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    KnowledgeDocument:
+      type: object
+      required: [title, content]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        content:
+          type: string
+        source:
+          type: string
+          example: manual
+        sourceUrl:
+          type: string
+          format: uri
+
+    AgentState:
+      type: object
+      properties:
+        name:
+          type: string
+        personality:
+          type: string
+        goal:
+          type: string
+        model:
+          type: string
+        guardrails:
+          type: object
+        welcomeMessage:
+          type: string
+
+    Task:
+      type: object
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, done]
+        created_at:
+          type: string
+          format: date-time
+
+    Version:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        version_num:
+          type: integer
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DailyUsage:
+      type: object
+      properties:
+        day:
+          type: string
+          format: date
+        count:
+          type: integer
+
+    Execution:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        model:
+          type: string
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+        duration_ms:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        agent_id:
+          type: string
+          nullable: true
+        read:
+          type: integer
+          enum: [0, 1]
+        created_at:
+          type: string
+          format: date-time
+
+    Provider:
+      type: object
+      properties:
+        id:
+          type: string
+          example: openai
+        name:
+          type: string
+          example: OpenAI
+        docsUrl:
+          type: string
+          format: uri
+
+paths:
+
+  # ── Health ────────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                  service:
+                    type: string
+
+  # ── Auth ──────────────────────────────────────────────────────────────────
+
+  /v1/auth/config:
+    get:
+      summary: Get OAuth config
+      description: Returns the OAuth URL and app ID for starting the GitHub OAuth flow via FAS.
+      operationId: getAuthConfig
+      security: []
+      tags: [Auth]
+      responses:
+        "200":
+          description: OAuth configuration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  oauth_url:
+                    type: string
+                    format: uri
+                  app_id:
+                    type: string
+                  response_mode:
+                    type: string
+
+  /v1/auth/exchange:
+    post:
+      summary: Exchange FAS token for PAGS token
+      description: |
+        Exchange a FreeAppStore session token for a ProAgentStore session token.
+        This is the primary auth flow: complete GitHub OAuth on FAS, then call
+        this endpoint with the resulting `fas_session` token.
+      operationId: exchangeToken
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fas_session]
+              properties:
+                fas_session:
+                  type: string
+                  description: Bearer token from FAS OAuth
+      responses:
+        "200":
+          description: PAGS session token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  user:
+                    $ref: "#/components/schemas/User"
+        "400":
+          description: fas_session missing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Invalid FAS session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/auth/github:
+    post:
+      summary: Direct GitHub OAuth exchange
+      description: |
+        Exchange a GitHub OAuth code for a PAGS token. Only works when PAGS has
+        its own OAuth app configured. Prefer `/v1/auth/exchange` instead.
+      operationId: githubAuth
+      security: []
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  description: GitHub OAuth authorization code
+                return_to:
+                  type: string
+                  description: URL to redirect to after auth
+      responses:
+        "200":
+          description: PAGS session token issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  user:
+                    $ref: "#/components/schemas/User"
+                  return_to:
+                    type: string
+        "401":
+          description: OAuth failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: GitHub OAuth not configured on this server
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/auth/me:
+    get:
+      summary: Get current user
+      description: Verify the current session and return the authenticated user's profile.
+      operationId: getMe
+      tags: [Auth]
+      responses:
+        "200":
+          description: Authenticated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Not authenticated or token expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Update profile
+      description: Update display name, bio, website, or Twitter handle.
+      operationId: updateMe
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                bio:
+                  type: string
+                website:
+                  type: string
+                twitter:
+                  type: string
+      responses:
+        "200":
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "400":
+          description: Nothing to update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Agents ────────────────────────────────────────────────────────────────
+
+  /v1/agents/my/agents:
+    get:
+      summary: List my agents
+      description: List all agents owned by the authenticated user, ordered by last update.
+      operationId: listMyAgents
+      tags: [Agents]
+      responses:
+        "200":
+          description: Owned agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Agent"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents:
+    get:
+      summary: List published agents
+      description: Browse published agents in the store. Filterable by category and sortable.
+      operationId: listAgents
+      security: []
+      tags: [Agents]
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+          description: Filter by category slug
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [newest, popular, name]
+            default: newest
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Published agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentSummary"
+    post:
+      summary: Create agent
+      description: Create a new agent. Requires the `creator` role. The agent is created as a draft.
+      operationId: createAgent
+      tags: [Agents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug, name]
+              properties:
+                slug:
+                  type: string
+                  pattern: "^[a-z0-9-]+$"
+                  description: Unique URL-safe identifier
+                name:
+                  type: string
+                description:
+                  type: string
+                category:
+                  type: string
+                  default: general
+                icon:
+                  type: string
+                icon_bg:
+                  type: string
+                  example: "#7c3aed"
+                model:
+                  type: string
+                  example: "@cf/meta/llama-3.2-3b-instruct"
+                personality:
+                  type: string
+                  description: Initial personality prompt stored in the Durable Object
+                goal:
+                  type: string
+                  description: Initial goal prompt stored in the Durable Object
+      responses:
+        "201":
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  slug:
+                    type: string
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Creator role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Slug already taken
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents/{id}:
+    get:
+      summary: Get agent
+      description: |
+        Get a single agent by ID or slug. Published agents are public.
+        Draft agents are only visible to the owner or admins.
+      operationId: getAgent
+      security: []
+      tags: [Agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+      responses:
+        "200":
+          description: Agent detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Update agent
+      description: Update agent metadata. Owner or admin only.
+      operationId: updateAgent
+      tags: [Agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+                category:
+                  type: string
+                icon:
+                  type: string
+                icon_bg:
+                  type: string
+                model:
+                  type: string
+                visibility:
+                  type: string
+                  enum: [draft, published]
+                cron_schedule:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Agent updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "400":
+          description: Nothing to update
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Not your agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete agent
+      description: Permanently delete an agent and all its executions/usage. Owner or admin only.
+      operationId: deleteAgent
+      tags: [Agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID
+      responses:
+        "200":
+          description: Agent deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Not your agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents/{id}/clone:
+    post:
+      summary: Clone agent
+      description: Fork a published agent as a new draft. Copies state, personality, and knowledge base. Requires `creator` role.
+      operationId: cloneAgent
+      tags: [Agents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Source agent UUID or slug
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug]
+              properties:
+                slug:
+                  type: string
+                  pattern: "^[a-z0-9-]+$"
+                  description: Slug for the cloned agent
+      responses:
+        "201":
+          description: Clone created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  slug:
+                    type: string
+                  clonedFrom:
+                    type: string
+                    format: uuid
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Source agent not found or not published
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Slug already taken
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Chat ──────────────────────────────────────────────────────────────────
+
+  /v1/agents/{id}/chat:
+    post:
+      summary: Send message to agent
+      description: Send a chat message to the template agent's Durable Object. Tracks usage.
+      operationId: chatWithAgent
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+      responses:
+        "200":
+          description: Agent reply
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Message"
+        "400":
+          description: message required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents/{id}/ws:
+    get:
+      summary: WebSocket chat connection
+      description: |
+        Upgrade to a WebSocket connection for real-time chat with the agent's Durable Object.
+        Must send `Upgrade: websocket` header.
+      operationId: agentWebSocket
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+        - name: Upgrade
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [websocket]
+      responses:
+        "101":
+          description: WebSocket upgrade successful
+        "426":
+          description: WebSocket upgrade required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents/{id}/messages:
+    get:
+      summary: Get message history
+      description: Retrieve the agent's conversation history from its Durable Object.
+      operationId: getAgentMessages
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Message history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Message"
+
+  /v1/agents/{id}/memory:
+    get:
+      summary: Get agent memory
+      operationId: getAgentMemory
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent memory entries
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  memory:
+                    type: array
+                    items:
+                      type: object
+    put:
+      summary: Update agent memory
+      operationId: updateAgentMemory
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Memory updated
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /v1/agents/{id}/tasks:
+    get:
+      summary: List agent tasks
+      operationId: getAgentTasks
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Task"
+    post:
+      summary: Create task
+      operationId: createAgentTask
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title:
+                  type: string
+                status:
+                  type: string
+                  enum: [pending, in_progress, done]
+                  default: pending
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+
+  /v1/agents/{id}/state:
+    get:
+      summary: Get agent DO state
+      description: Retrieve the Durable Object state (identity, personality, guardrails, etc.)
+      operationId: getAgentState
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentState"
+    put:
+      summary: Update agent DO state
+      description: Overwrite the agent's Durable Object state fields.
+      operationId: updateAgentState
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentState"
+      responses:
+        "200":
+          description: State updated
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /v1/agents/{id}/knowledge:
+    get:
+      summary: List knowledge documents
+      operationId: getAgentKnowledge
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Knowledge base documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/KnowledgeDocument"
+    post:
+      summary: Add knowledge document
+      operationId: addAgentKnowledge
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KnowledgeDocument"
+      responses:
+        "201":
+          description: Document added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeDocument"
+
+  /v1/agents/{id}/knowledge/{docId}:
+    delete:
+      summary: Delete knowledge document
+      operationId: deleteAgentKnowledge
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: docId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Document deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+
+  /v1/agents/{id}/knowledge/ingest-url:
+    post:
+      summary: Ingest URL into knowledge base
+      description: Fetches a URL and adds its content as a knowledge document.
+      operationId: ingestAgentKnowledgeUrl
+      tags: [Chat]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                title:
+                  type: string
+      responses:
+        "201":
+          description: URL ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeDocument"
+
+  # ── Run ───────────────────────────────────────────────────────────────────
+
+  /v1/agents/{id}/run:
+    post:
+      summary: Execute agent via Workers AI
+      description: Run the agent's model directly with a structured input. Logs execution and tracks usage for creator payouts.
+      operationId: runAgent
+      tags: [Run]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [input]
+              properties:
+                input:
+                  type: object
+                  description: Model-specific input (e.g. messages array for chat models)
+      responses:
+        "200":
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    description: Raw Workers AI model output
+                  executionId:
+                    type: string
+                    format: uuid
+                  durationMs:
+                    type: integer
+        "400":
+          description: input required or agent not active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents/{id}/executions:
+    get:
+      summary: Get execution history
+      description: List the authenticated user's execution history for a given agent.
+      operationId: getAgentExecutions
+      tags: [Run]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        "200":
+          description: Execution list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  executions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Execution"
+
+  # ── Analytics ─────────────────────────────────────────────────────────────
+
+  /v1/agents/{id}/analytics:
+    get:
+      summary: Get agent analytics
+      description: Per-agent usage stats. Owner or admin only.
+      operationId: getAgentAnalytics
+      tags: [Analytics]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subscribers:
+                    type: integer
+                  totalExecutions:
+                    type: integer
+                  totalChats:
+                    type: integer
+                  dailyUsage:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DailyUsage"
+                  recentExecutions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Execution"
+        "403":
+          description: Not your agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Versions ──────────────────────────────────────────────────────────────
+
+  /v1/agents/{id}/versions:
+    get:
+      summary: List versions
+      description: List all version snapshots for an agent. Owner or admin only.
+      operationId: listAgentVersions
+      tags: [Versions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Version list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  versions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Version"
+        "403":
+          description: Not your agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Save version snapshot
+      description: Snapshot the current Durable Object state as a named version.
+      operationId: createAgentVersion
+      tags: [Versions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                description:
+                  type: string
+                  example: "Added customer FAQ docs"
+      responses:
+        "201":
+          description: Version saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                    format: uuid
+                  version:
+                    type: integer
+        "403":
+          description: Not your agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents/{id}/versions/{versionId}/rollback:
+    post:
+      summary: Rollback to version
+      description: Restore the agent's Durable Object state to a previous snapshot.
+      operationId: rollbackAgentVersion
+      tags: [Versions]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: versionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Rolled back successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  rolledBackTo:
+                    type: string
+                    format: uuid
+        "403":
+          description: Not your agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Agent or version not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Export / Import ───────────────────────────────────────────────────────
+
+  /v1/agents/{id}/export:
+    get:
+      summary: Export agent backup
+      description: Download a full JSON backup of the agent's config, DO state, knowledge base, and memory.
+      operationId: exportAgent
+      tags: [Export]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Agent backup
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exportVersion:
+                    type: integer
+                    example: 1
+                  exportedAt:
+                    type: string
+                    format: date-time
+                  agent:
+                    type: object
+                    properties:
+                      slug:
+                        type: string
+                      name:
+                        type: string
+                      description:
+                        type: string
+                      category:
+                        type: string
+                      storeType:
+                        type: string
+                      model:
+                        type: string
+                  state:
+                    $ref: "#/components/schemas/AgentState"
+                  knowledge:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/KnowledgeDocument"
+                  memory:
+                    type: array
+                    items:
+                      type: object
+        "403":
+          description: Not your agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/agents/{id}/import:
+    post:
+      summary: Import agent backup
+      description: Restore an agent from a JSON backup. Overwrites current state, knowledge, and memory.
+      operationId: importAgent
+      tags: [Export]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                exportVersion:
+                  type: integer
+                agent:
+                  type: object
+                  properties:
+                    name:
+                      type: string
+                    description:
+                      type: string
+                    category:
+                      type: string
+                    model:
+                      type: string
+                state:
+                  $ref: "#/components/schemas/AgentState"
+                knowledge:
+                  type: array
+                  items:
+                    $ref: "#/components/schemas/KnowledgeDocument"
+                memory:
+                  type: array
+                  items:
+                    type: object
+                    required: [key, type, content]
+                    properties:
+                      key:
+                        type: string
+                      type:
+                        type: string
+                      content:
+                        type: string
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  restored:
+                    type: object
+                    properties:
+                      knowledge:
+                        type: integer
+                      memory:
+                        type: integer
+                      state:
+                        type: boolean
+        "403":
+          description: Not your agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Instances ─────────────────────────────────────────────────────────────
+
+  /v1/instances/{agentId}/subscribe:
+    post:
+      summary: Subscribe to agent
+      description: |
+        Subscribe to a published agent. Creates a personal instance with its own
+        Durable Object pre-seeded from the template agent's state and knowledge base.
+        Also creates a subscription record and notifies the creator.
+      operationId: subscribeToAgent
+      tags: [Instances]
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+      responses:
+        "201":
+          description: Instance created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instanceId:
+                    type: string
+                    format: uuid
+                  agentId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: active
+        "404":
+          description: Agent not found or not published
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Already subscribed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/my/instances:
+    get:
+      summary: List my instances
+      description: List all agent instances the authenticated user is subscribed to.
+      operationId: listMyInstances
+      tags: [Instances]
+      responses:
+        "200":
+          description: Subscribed instances
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  instances:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Instance"
+
+  /v1/instances/{instanceId}/chat:
+    post:
+      summary: Chat with my instance
+      description: Send a message to the user's personal instance Durable Object.
+      operationId: chatWithInstance
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+      responses:
+        "200":
+          description: Agent reply
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+        "400":
+          description: message required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/messages:
+    get:
+      summary: Get instance messages
+      operationId: getInstanceMessages
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Message history
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Message"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/knowledge:
+    get:
+      summary: Get instance knowledge base
+      operationId: getInstanceKnowledge
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Knowledge documents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/KnowledgeDocument"
+    post:
+      summary: Add document to instance knowledge base
+      operationId: addInstanceKnowledge
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KnowledgeDocument"
+      responses:
+        "201":
+          description: Document added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeDocument"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/knowledge/{docId}:
+    delete:
+      summary: Delete document from instance knowledge base
+      operationId: deleteInstanceKnowledge
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: docId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Document deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/knowledge/ingest-url:
+    post:
+      summary: Ingest URL into instance knowledge base
+      operationId: ingestInstanceKnowledgeUrl
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url:
+                  type: string
+                  format: uri
+                title:
+                  type: string
+      responses:
+        "201":
+          description: URL ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeDocument"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/cancel:
+    post:
+      summary: Cancel subscription
+      description: Deactivate the instance and mark the subscription as canceled.
+      operationId: cancelInstance
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Subscription canceled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Keys ──────────────────────────────────────────────────────────────────
+
+  /v1/keys/providers:
+    get:
+      summary: List supported AI providers
+      description: Returns all AI providers supported by the key vault and proxy (public).
+      operationId: listProviders
+      security: []
+      tags: [Keys]
+      responses:
+        "200":
+          description: Provider list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Provider"
+
+  /v1/keys/status:
+    get:
+      summary: Get my key status
+      description: Shows which providers the authenticated user has stored keys for.
+      operationId: getKeyStatus
+      tags: [Keys]
+      responses:
+        "200":
+          description: Key status per provider
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        name:
+                          type: string
+                        hasKey:
+                          type: boolean
+                        createdAt:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        lastUsedAt:
+                          type: string
+                          format: date-time
+                          nullable: true
+
+  /v1/keys/{provider}:
+    put:
+      summary: Store API key
+      description: Encrypt and store an API key for the given provider. Validates the key prefix format.
+      operationId: storeKey
+      tags: [Keys]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [openai, anthropic, google, openrouter, groq, together]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key:
+                  type: string
+                  description: The raw API key (stored encrypted with AES-256-GCM)
+      responses:
+        "200":
+          description: Key stored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  provider:
+                    type: string
+        "400":
+          description: Unknown provider or invalid key format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Delete API key
+      description: Remove the stored key for a provider.
+      operationId: deleteKey
+      tags: [Keys]
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Key deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+
+  /v1/keys/proxy/{host}/{path}:
+    post:
+      summary: Proxy AI API call
+      description: |
+        Inject the user's stored key and forward the request to an upstream AI provider.
+        The `host` segment identifies the provider (e.g. `api.openai.com`).
+        Everything after the host becomes the upstream path.
+
+        Example: `POST /v1/keys/proxy/api.openai.com/v1/chat/completions`
+
+        Rate limit: 100 calls/hour per user.
+      operationId: proxyAiCall
+      tags: [Keys]
+      parameters:
+        - name: host
+          in: path
+          required: true
+          schema:
+            type: string
+          example: api.openai.com
+          description: Upstream AI API host
+        - name: path
+          in: path
+          required: true
+          schema:
+            type: string
+          example: v1/chat/completions
+          description: Path on the upstream API
+      requestBody:
+        description: Request body forwarded verbatim to the upstream API
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Upstream API response forwarded
+        "400":
+          description: Unsupported host or no key stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Rate limit exceeded (100 calls/hour)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Dashboard ─────────────────────────────────────────────────────────────
+
+  /v1/dashboard/usage:
+    get:
+      summary: Subscriber usage dashboard
+      description: Aggregate usage stats for the authenticated user across all their agent instances.
+      operationId: getDashboardUsage
+      tags: [Dashboard]
+      responses:
+        "200":
+          description: Usage summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  activeInstances:
+                    type: integer
+                  totalChats:
+                    type: integer
+                  totalExecutions:
+                    type: integer
+                  dailyUsage:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DailyUsage"
+                  usageByAgent:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        agent_id:
+                          type: string
+                        name:
+                          type: string
+                        slug:
+                          type: string
+                        count:
+                          type: integer
+
+  /v1/dashboard/creator:
+    get:
+      summary: Creator dashboard
+      description: Aggregate stats across all agents owned by the authenticated user.
+      operationId: getDashboardCreator
+      tags: [Dashboard]
+      responses:
+        "200":
+          description: Creator summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalAgents:
+                    type: integer
+                  totalSubscribers:
+                    type: integer
+                  totalUsage:
+                    type: integer
+                  agents:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+                        slug:
+                          type: string
+                        name:
+                          type: string
+                        subscribers:
+                          type: integer
+                        usage_count:
+                          type: integer
+
+  # ── Notifications ─────────────────────────────────────────────────────────
+
+  /v1/notifications:
+    get:
+      summary: List notifications
+      operationId: listNotifications
+      tags: [Notifications]
+      parameters:
+        - name: unread
+          in: query
+          schema:
+            type: boolean
+          description: If true, return only unread notifications
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        "200":
+          description: Notification list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notifications:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Notification"
+                  unreadCount:
+                    type: integer
+
+  /v1/notifications/read-all:
+    post:
+      summary: Mark all notifications as read
+      operationId: markAllNotificationsRead
+      tags: [Notifications]
+      responses:
+        "200":
+          description: All marked read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+
+  /v1/notifications/{id}/read:
+    post:
+      summary: Mark notification as read
+      operationId: markNotificationRead
+      tags: [Notifications]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Marked read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+
+  # ── Billing ───────────────────────────────────────────────────────────────
+
+  /v1/billing/status:
+    get:
+      summary: Get subscription status
+      description: Returns whether the user has an active $9/mo platform subscription.
+      operationId: getBillingStatus
+      tags: [Billing]
+      responses:
+        "200":
+          description: Subscription status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active:
+                    type: boolean
+                  status:
+                    type: string
+                    enum: [active, canceled, past_due, none]
+                  expiresAt:
+                    type: string
+                    format: date-time
+                    nullable: true
+
+  # ── Public ────────────────────────────────────────────────────────────────
+
+  /v1/public/agents/{id}:
+    get:
+      summary: Public agent detail
+      description: Full agent info for the store detail page. No auth required.
+      operationId: getPublicAgent
+      security: []
+      tags: [Public]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+      responses:
+        "200":
+          description: Public agent data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: string
+                  slug:
+                    type: string
+                  name:
+                    type: string
+                  description:
+                    type: string
+                  category:
+                    type: string
+                  store_type:
+                    type: string
+                  icon:
+                    type: string
+                  icon_bg:
+                    type: string
+                  model:
+                    type: string
+                  created_at:
+                    type: string
+                    format: date-time
+                  subscriber_count:
+                    type: integer
+        "404":
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/public/agents/{id}/try:
+    post:
+      summary: Trial chat (no auth)
+      description: |
+        Try a published agent without creating an account. Uses an ephemeral Durable
+        Object keyed by agent + session. Limited to 20 messages per session.
+      operationId: tryAgent
+      security: []
+      tags: [Public]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message:
+                  type: string
+                sessionId:
+                  type: string
+                  description: Opaque session identifier from a previous response; omit to start a new trial
+      responses:
+        "200":
+          description: Agent reply with session ID
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reply:
+                    type: string
+                  sessionId:
+                    type: string
+        "429":
+          description: Trial limit reached (20 messages)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  sessionId:
+                    type: string
+
+  /v1/public/agents/{id}/import-gdoc:
+    post:
+      summary: Import Google Doc into agent knowledge base
+      description: |
+        Fetch a publicly shared Google Doc and add its content as a knowledge document.
+        Requires a valid PAGS session token (Bearer).
+      operationId: importGoogleDoc
+      tags: [Public]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [docUrl]
+              properties:
+                docUrl:
+                  type: string
+                  format: uri
+                  example: "https://docs.google.com/document/d/1BxiMV.../edit"
+                  description: URL of a publicly accessible Google Doc
+      responses:
+        "201":
+          description: Document ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeDocument"
+        "400":
+          description: Invalid URL or inaccessible document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Auth required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/public/developers/{login}:
+    get:
+      summary: Developer public profile
+      description: Public creator profile with their published agents.
+      operationId: getDeveloperProfile
+      security: []
+      tags: [Public]
+      parameters:
+        - name: login
+          in: path
+          required: true
+          schema:
+            type: string
+          description: GitHub login of the creator
+      responses:
+        "200":
+          description: Developer profile and their agents
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  developer:
+                    type: object
+                    properties:
+                      login:
+                        type: string
+                      name:
+                        type: string
+                      avatar:
+                        type: string
+                        format: uri
+                      bio:
+                        type: string
+                      website:
+                        type: string
+                      twitter:
+                        type: string
+                      roles:
+                        type: array
+                        items:
+                          type: string
+                      agentCount:
+                        type: integer
+                  agents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AgentSummary"
+        "404":
+          description: Developer not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/public/webhook/{instanceId}/ingest:
+    post:
+      summary: Webhook knowledge ingestion
+      description: |
+        Add a document to an instance's knowledge base via webhook.
+        Intended for Zapier, Make, n8n, and similar automation tools.
+        Auth: Bearer token (the instance owner's PAGS session token).
+      operationId: webhookIngest
+      tags: [Public]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content]
+              properties:
+                title:
+                  type: string
+                content:
+                  type: string
+                source:
+                  type: string
+                  default: webhook
+                sourceUrl:
+                  type: string
+                  format: uri
+      responses:
+        "201":
+          description: Document ingested
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeDocument"
+        "400":
+          description: title and content required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Bearer token required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Instance not found or not active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"

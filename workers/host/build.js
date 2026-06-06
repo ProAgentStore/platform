@@ -29,6 +29,7 @@ const pages = {
 	authWidgetJs: fs.readFileSync(path.join(storeDir, "auth-widget.js"), "utf-8"),
 	adminPage: fs.readFileSync(path.join(storeDir, "admin", "index.html"), "utf-8"),
 	notFoundPage: fs.readFileSync(path.join(storeDir, "404.html"), "utf-8"),
+	changelogPage: fs.readFileSync(path.join(storeDir, "changelog", "index.html"), "utf-8"),
 	developerProfilePage: fs.readFileSync(
 		path.join(storeDir, "developers", "profile.html"),
 		"utf-8",
