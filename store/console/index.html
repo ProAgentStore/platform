@@ -184,6 +184,7 @@
     <div style="display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:1.25rem">
       <button class="tab active" id="dash-tab-agents" onclick="switchDashTab('agents')">My Agents (Creator)</button>
       <button class="tab" id="dash-tab-instances" onclick="switchDashTab('instances')">My Instances (Client)</button>
+      <button class="tab" id="dash-tab-dashboard" onclick="switchDashTab('dashboard')">Dashboard</button>
     </div>
 
     <!-- Creator: My Agents -->
@@ -250,6 +251,25 @@
     <div id="instances-empty" class="empty hidden">No subscriptions yet. Browse the <a href="/">store</a> to find agents.</div>
     <div id="instances-loading" class="loading hidden">Loading instances...</div>
     </div><!-- /dash-instances -->
+
+    <!-- Dashboard -->
+    <div id="dash-dashboard" class="hidden">
+      <h2 style="font-size:1.1rem;font-weight:600;margin-bottom:1rem">Platform Dashboard</h2>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:0.75rem;margin-bottom:1.5rem">
+        <div class="create-form" style="text-align:center;padding:1rem"><div style="font-size:1.5rem;font-weight:700" id="d-agents">-</div><div style="font-size:0.78rem;color:var(--muted)">My Agents</div></div>
+        <div class="create-form" style="text-align:center;padding:1rem"><div style="font-size:1.5rem;font-weight:700" id="d-subs">-</div><div style="font-size:0.78rem;color:var(--muted)">Total Subscribers</div></div>
+        <div class="create-form" style="text-align:center;padding:1rem"><div style="font-size:1.5rem;font-weight:700" id="d-usage">-</div><div style="font-size:0.78rem;color:var(--muted)">Total Usage</div></div>
+        <div class="create-form" style="text-align:center;padding:1rem"><div style="font-size:1.5rem;font-weight:700" id="d-instances">-</div><div style="font-size:0.78rem;color:var(--muted)">My Instances</div></div>
+      </div>
+      <div class="create-form" style="margin-bottom:1rem">
+        <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Agent Performance</h3>
+        <div id="d-agent-table"></div>
+      </div>
+      <div class="create-form">
+        <h3 style="font-size:0.95rem;margin-bottom:0.75rem">My Usage (last 30 days)</h3>
+        <div id="d-daily" style="display:flex;align-items:end;gap:2px;height:60px"></div>
+      </div>
+    </div><!-- /dash-dashboard -->
   </div>
 
   <!-- Instance detail (client view) -->
@@ -866,11 +886,47 @@ console.log(response)</pre>
     // ── Dashboard tabs ─────────────────────────────────────────
 
     function switchDashTab(tab) {
-      document.getElementById('dash-agents').classList.toggle('hidden', tab !== 'agents');
-      document.getElementById('dash-instances').classList.toggle('hidden', tab !== 'instances');
-      document.getElementById('dash-tab-agents').classList.toggle('active', tab === 'agents');
-      document.getElementById('dash-tab-instances').classList.toggle('active', tab === 'instances');
+      for (const t of ['agents', 'instances', 'dashboard']) {
+        document.getElementById('dash-' + t).classList.toggle('hidden', t !== tab);
+        document.getElementById('dash-tab-' + t).classList.toggle('active', t === tab);
+      }
       if (tab === 'instances') loadInstances();
+      if (tab === 'dashboard') loadDashboard();
+    }
+
+    async function loadDashboard() {
+      try {
+        const [creator, usage] = await Promise.all([
+          api('/v1/dashboard/creator'),
+          api('/v1/dashboard/usage'),
+        ]);
+        document.getElementById('d-agents').textContent = String(creator.totalAgents || 0);
+        document.getElementById('d-subs').textContent = String(creator.totalSubscribers || 0);
+        document.getElementById('d-usage').textContent = String(creator.totalUsage || 0);
+        document.getElementById('d-instances').textContent = String(usage.activeInstances || 0);
+
+        const table = document.getElementById('d-agent-table');
+        table.innerHTML = '';
+        for (const a of (creator.agents || [])) {
+          table.innerHTML += `<div style="display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid var(--line);font-size:0.82rem">
+            <span>${esc(a.name)}</span>
+            <span style="color:var(--muted)">${a.subscribers || 0} subs · ${a.usage_count || 0} events</span>
+          </div>`;
+        }
+        if (!(creator.agents || []).length) table.innerHTML = '<span style="color:var(--muted-soft);font-size:0.82rem">No agents yet</span>';
+
+        const chart = document.getElementById('d-daily');
+        chart.innerHTML = '';
+        const daily = usage.dailyUsage || [];
+        const max = Math.max(1, ...daily.map(d => d.count));
+        for (const d of daily) {
+          const bar = document.createElement('div');
+          bar.style.cssText = `flex:1;min-width:3px;background:var(--accent);border-radius:2px 2px 0 0;height:${Math.max(4, (d.count / max) * 100)}%`;
+          bar.title = `${d.day}: ${d.count}`;
+          chart.appendChild(bar);
+        }
+        if (!daily.length) chart.innerHTML = '<span style="color:var(--muted-soft);font-size:0.82rem">No usage data yet</span>';
+      } catch (e) { console.error('Dashboard error:', e); }
     }
 
     // ── Instances (client view) ──────────────────────────────

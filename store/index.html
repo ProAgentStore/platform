@@ -128,6 +128,13 @@
       </div>
     </section>
 
+    <!-- Search -->
+    <div style="margin-bottom:0.5rem">
+      <input id="search-input" type="text" placeholder="Search agents..." oninput="searchAgents(this.value)"
+        style="width:100%;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:0.55rem 1rem;color:var(--ink);font-family:var(--font-body);font-size:0.9rem;outline:none"
+        onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--line)'">
+    </div>
+
     <!-- Type tabs (matches FAGS: Libraries | Models | Agents) -->
     <div class="toolbar" style="border-bottom:1px solid var(--line);padding-bottom:0.75rem">
       <button class="filter-btn type-btn active" data-type="all" onclick="filterType('all')">All</button>
@@ -187,6 +194,12 @@
     let allAgents = [];
     let currentType = 'all';
     let currentCategory = 'all';
+    let searchQuery = '';
+
+    function searchAgents(query) {
+      searchQuery = query.toLowerCase().trim();
+      renderAgents();
+    }
 
     async function loadAgents() {
       try {
@@ -215,6 +228,11 @@
 
     function renderAgents() {
       let filtered = allAgents;
+      if (searchQuery) filtered = filtered.filter(a =>
+        (a.name || '').toLowerCase().includes(searchQuery) ||
+        (a.description || '').toLowerCase().includes(searchQuery) ||
+        (a.slug || '').toLowerCase().includes(searchQuery) ||
+        (a.category || '').toLowerCase().includes(searchQuery));
       if (currentType !== 'all') filtered = filtered.filter(a => (a.store_type || 'agent') === currentType);
       if (currentCategory !== 'all') filtered = filtered.filter(a => a.category === currentCategory);
 
