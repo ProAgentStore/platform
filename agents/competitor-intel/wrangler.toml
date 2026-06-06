@@ -1,0 +1,25 @@
+name = "proagentstore-competitor-intel"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "competitor-intel.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[triggers]
+crons = ["0 7 * * *"]
+
+[[durable_objects.bindings]]
+name = "INTEL"
+class_name = "CompetitorIntelDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["CompetitorIntelDO"]
+
+# Secrets (set via wrangler secret put + Doppler):
+# ADMIN_TOKEN — bearer token for write API endpoints

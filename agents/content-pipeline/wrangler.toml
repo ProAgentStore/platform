@@ -1,0 +1,26 @@
+name = "proagentstore-content-pipeline"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "content-pipeline.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[[r2_buckets]]
+binding = "CONTENT"
+bucket_name = "pags-content-pipeline"
+
+[[durable_objects.bindings]]
+name = "PIPELINE"
+class_name = "PipelineDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["PipelineDO"]
+
+[triggers]
+crons = ["0 6 * * *"]

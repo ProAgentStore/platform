@@ -1,0 +1,12 @@
+{
+  "id": "site-monitor",
+  "name": "site-monitor",
+  "description": "Monitors websites for content changes on an hourly schedule. Stores change history, diffs, and alerts via webhook.",
+  "storeType": "worker",
+  "category": "productivity",
+  "template": "cron",
+  "serverConfig": {
+    "cron": "0 * * * *",
+    "routes": ["site-monitor.proagentstore.online/*"]
+  }
+}

@@ -1,0 +1,23 @@
+name = "proagentstore-lead-qualifier"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "lead-qualifier.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "LEADS"
+class_name = "LeadStoreDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["LeadStoreDO"]
+
+# Secrets (set via wrangler secret put + Doppler):
+# WEBHOOK_SECRET   — shared secret for inbound webhook auth (X-Webhook-Secret header)
+# NOTIFY_WEBHOOK   — outbound URL to POST hot lead notifications to (e.g. Slack, n8n)

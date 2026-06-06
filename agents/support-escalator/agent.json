@@ -1,0 +1,13 @@
+{
+  "id": "support-escalator",
+  "name": "Support Escalator",
+  "description": "Triages incoming support tickets using Workers AI — auto-responds to common questions and escalates complex issues to the team with daily summaries.",
+  "storeType": "agent",
+  "category": "chat",
+  "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  "template": "support",
+  "serverConfig": {
+    "cron": "0 9 * * *",
+    "routes": ["support-escalator.proagentstore.online/*"]
+  }
+}

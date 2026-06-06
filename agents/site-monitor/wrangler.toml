@@ -1,0 +1,28 @@
+name = "proagentstore-site-monitor"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "site-monitor.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[triggers]
+crons = ["0 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "site-monitor-db"
+database_id = "placeholder-replace-after-creation"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "SITE_STATE"
+class_name = "SiteStateDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["SiteStateDO"]
+
+# Secrets (set via wrangler secret put + Doppler):
+# WEBHOOK_SECRET — shared secret for outbound webhook HMAC signatures

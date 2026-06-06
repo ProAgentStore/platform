@@ -1,0 +1,32 @@
+name = "proagentstore-support-escalator"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "support-escalator.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "support-escalator"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "TICKET_STORE"
+class_name = "TicketStoreDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["TicketStoreDO"]
+
+[triggers]
+crons = ["0 9 * * *"]
+
+# Secrets (set via: wrangler secret put <NAME> + update Doppler project pags):
+# ESCALATION_WEBHOOK_URL   — team webhook URL (Slack/Discord/custom)
+# WEBHOOK_SECRET           — HMAC secret to verify incoming ticket webhooks
