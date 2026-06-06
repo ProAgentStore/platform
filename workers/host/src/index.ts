@@ -2,7 +2,7 @@
  * ProAgentStore host worker — serves marketing pages, console, agent details, widget.
  * Pages are inlined from store/ at build time via build.js → pages.ts.
  */
-import { homepage, aboutPage, getStartedPage, consolePage, agentDetailPage, widgetJs } from './pages.js';
+import { homepage, aboutPage, getStartedPage, consolePage, agentDetailPage, widgetJs, authWidgetJs } from './pages.js';
 
 const PAGES: Record<string, string> = {
   '/': homepage,
@@ -42,9 +42,12 @@ export default {
     const page = PAGES[path];
     if (page) return new Response(page, { headers: HTML_HEADERS });
 
-    // Widget JS (embeddable, CORS-allowed)
+    // JS assets
     if (path === '/widget.js') {
       return new Response(widgetJs, { headers: JS_HEADERS });
+    }
+    if (path === '/auth-widget.js') {
+      return new Response(authWidgetJs, { headers: JS_HEADERS });
     }
 
     // Agent detail pages: /agents/{slug} or /agents/{slug}/
