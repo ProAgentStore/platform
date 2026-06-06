@@ -587,6 +587,10 @@
 
       <div style="display:flex;gap:0.5rem">
         <button onclick="saveSettings()" class="btn btn-primary btn-sm">Save All Settings</button>
+        <button onclick="exportAgent()" class="btn btn-outline btn-sm">Export JSON</button>
+        <button onclick="document.getElementById('import-file').click()" class="btn btn-outline btn-sm">Import JSON</button>
+        <input type="file" id="import-file" accept=".json" style="display:none" onchange="importAgent(this)">
+        <button onclick="saveVersion()" class="btn btn-outline btn-sm">Save Version</button>
         <button onclick="deleteAgent()" class="btn btn-danger btn-sm">Delete Agent</button>
       </div>
     </div>
@@ -1419,6 +1423,39 @@ console.log(response)</pre>
 
         alert('Saved!');
         openAgent(currentAgent.id);
+      } catch (e) { alert(e.message); }
+    }
+
+    async function exportAgent() {
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/export`);
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${currentAgent.slug || 'agent'}-backup.json`;
+        a.click(); URL.revokeObjectURL(url);
+      } catch (e) { alert(e.message); }
+    }
+
+    async function importAgent(input) {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const backup = JSON.parse(text);
+        if (!confirm(`Import backup? This will overwrite current agent state, knowledge (${(backup.knowledge || []).length} docs), and memory (${(backup.memory || []).length} entries).`)) return;
+        const res = await api(`/v1/agents/${currentAgent.id}/import`, { method: 'POST', body: text });
+        alert(`Imported! State: ${res.restored?.state ? 'yes' : 'no'}, KB: ${res.restored?.knowledge || 0}, Memory: ${res.restored?.memory || 0}`);
+        openAgent(currentAgent.id);
+      } catch (e) { alert(e.message); }
+      input.value = '';
+    }
+
+    async function saveVersion() {
+      const desc = prompt('Version description (optional):') || '';
+      try {
+        const res = await api(`/v1/agents/${currentAgent.id}/versions`, { method: 'POST', body: JSON.stringify({ description: desc }) });
+        alert(`Saved version ${res.version}`);
       } catch (e) { alert(e.message); }
     }
 

@@ -37,10 +37,12 @@ agentRoutes.get("/my/agents", async (c) => {
 /** List all published agents (public). */
 agentRoutes.get("/", async (c) => {
 	const category = c.req.query("category");
+	const sort = c.req.query("sort") || "newest"; // newest, popular, name
 	const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
 
 	let sql = `SELECT a.id, a.slug, a.name, a.description, a.category, a.store_type, a.icon, a.icon_bg, a.model, a.status,
-                    u.github_login as creator_login, u.avatar_url as creator_avatar
+                    u.github_login as creator_login, u.avatar_url as creator_avatar,
+                    (SELECT COUNT(*) FROM agent_instances WHERE agent_id = a.id AND status = 'active') as subscriber_count
              FROM agents a LEFT JOIN users u ON u.id = a.owner_id
              WHERE a.visibility = 'published'`;
 	const params: unknown[] = [];
@@ -49,7 +51,12 @@ agentRoutes.get("/", async (c) => {
 		sql += ` AND a.category = ?${params.length + 1}`;
 		params.push(category);
 	}
-	sql += ` ORDER BY a.created_at DESC LIMIT ?${params.length + 1}`;
+
+	if (sort === "popular") sql += " ORDER BY subscriber_count DESC, a.created_at DESC";
+	else if (sort === "name") sql += " ORDER BY a.name ASC";
+	else sql += " ORDER BY a.created_at DESC";
+
+	sql += ` LIMIT ?${params.length + 1}`;
 	params.push(limit);
 
 	const stmt = c.env.DB.prepare(sql);

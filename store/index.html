@@ -151,6 +151,11 @@
       <button class="filter-btn cat-btn" data-cat="creative" onclick="filterCategory('creative')">Creative</button>
       <button class="filter-btn cat-btn" data-cat="productivity" onclick="filterCategory('productivity')">Productivity</button>
       <span id="agent-count" class="agent-count"></span>
+      <select id="sort-select" onchange="sortAgents(this.value)" style="margin-left:auto;background:var(--panel);border:1px solid var(--line);border-radius:0.4rem;padding:0.3rem 0.6rem;color:var(--muted);font-size:0.78rem;font-family:var(--font-body)">
+        <option value="newest">Newest</option>
+        <option value="popular">Most Popular</option>
+        <option value="name">Name A-Z</option>
+      </select>
     </div>
 
     <div id="agents-grid" class="agents-grid"></div>
@@ -196,14 +201,21 @@
     let currentCategory = 'all';
     let searchQuery = '';
 
+    let currentSort = 'newest';
+
     function searchAgents(query) {
       searchQuery = query.toLowerCase().trim();
       renderAgents();
     }
 
+    function sortAgents(sort) {
+      currentSort = sort;
+      loadAgents();
+    }
+
     async function loadAgents() {
       try {
-        const res = await fetch(`${API}/v1/agents`);
+        const res = await fetch(`${API}/v1/agents?sort=${currentSort}`);
         const data = await res.json();
         allAgents = data.agents || [];
         renderAgents();
@@ -263,6 +275,7 @@
             <div class="agent-meta">
               <span class="tag">${esc(a.store_type || 'agent')}</span>
               <span class="tag">${esc(a.category)}</span>
+              ${a.subscriber_count > 0 ? `<span style="font-size:0.68rem;color:var(--muted-soft)">${a.subscriber_count} sub${a.subscriber_count !== 1 ? 's' : ''}</span>` : ''}
               ${a.creator_login ? `<a href="/developers/${esc(a.creator_login)}/" style="font-size:0.68rem;color:var(--muted-soft);margin-left:auto;text-decoration:none" onclick="event.stopPropagation()">by ${esc(a.creator_login)}</a>` : ''}
             </div>
           </div>

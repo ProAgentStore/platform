@@ -11,6 +11,7 @@ import { instanceRoutes } from "./routes/instances.js";
 import { keysRoutes } from "./routes/keys.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { notificationRoutes } from "./routes/notifications.js";
+import { exportRoutes } from "./routes/export.js";
 import { versionRoutes } from "./routes/versions.js";
 import { publicRoutes } from "./routes/public.js";
 import { runRoutes } from "./routes/run.js";
@@ -62,6 +63,7 @@ app.route("/v1/agents", analyticsRoutes); // /v1/agents/:id/analytics
 app.route("/v1/dashboard", dashboardRoutes);
 app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/agents", versionRoutes);     // /v1/agents/:id/versions, /:versionId/rollback
+app.route("/v1/agents", exportRoutes);     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);

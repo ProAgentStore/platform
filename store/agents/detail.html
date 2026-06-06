@@ -115,6 +115,24 @@
         <p style="color:var(--muted);font-size:0.88rem;margin-bottom:0.75rem">Add this script to your website to embed this agent as a chat widget.</p>
         <pre id="embed-code"></pre>
       </div>
+
+      <div id="readme-section" style="display:none;margin-top:2rem;padding-bottom:2rem">
+        <h2 style="font-family:var(--font-display);font-size:1.25rem;font-weight:700;margin-bottom:1rem">Documentation</h2>
+        <div id="readme-content" style="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.5rem;font-size:0.88rem;line-height:1.7;color:var(--muted);white-space:pre-wrap"></div>
+      </div>
+
+      <div style="margin-top:1.5rem;padding-bottom:2rem">
+        <h2 style="font-family:var(--font-display);font-size:1.25rem;font-weight:700;margin-bottom:1rem">API Usage</h2>
+        <pre style="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1rem;font-size:0.82rem;color:#a78bfa;overflow-x:auto">// Chat with this agent via API
+curl -X POST https://api.proagentstore.online/v1/public/agents/<span id="api-slug"></span>/try \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello!"}'
+
+// Or use the SDK
+import { initPro } from '@proagentstore/sdk'
+const agent = initPro({ agentId: '<span id="api-id"></span>', token: 'YOUR_TOKEN' })
+const { response } = await agent.chat('Hello!')</pre>
+      </div>
     </div>
   </main>
 
@@ -155,6 +173,20 @@
 
         document.getElementById('embed-code').textContent =
           `<script src="https://proagentstore.online/widget.js"\n  data-agent="${a.slug || a.id}"\n  data-theme="dark"></script>`;
+
+        // API docs
+        document.getElementById('api-slug').textContent = a.slug || a.id;
+        document.getElementById('api-id').textContent = a.id;
+
+        // Fetch README from GitHub repo
+        fetch(`https://raw.githubusercontent.com/ProAgentStore/${a.slug}/main/README.md`)
+          .then(r => r.ok ? r.text() : null)
+          .then(readme => {
+            if (readme) {
+              document.getElementById('readme-content').textContent = readme;
+              document.getElementById('readme-section').style.display = '';
+            }
+          }).catch(() => {});
 
         document.getElementById('loading').style.display = 'none';
         document.getElementById('content').style.display = '';
