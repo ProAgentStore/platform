@@ -37,15 +37,17 @@ agentRoutes.get('/', async (c) => {
   const category = c.req.query('category');
   const limit = Math.min(Number(c.req.query('limit')) || 50, 200);
 
-  let sql = `SELECT id, slug, name, description, category, store_type, icon, icon_bg, model, status
-             FROM agents WHERE visibility = 'published'`;
+  let sql = `SELECT a.id, a.slug, a.name, a.description, a.category, a.store_type, a.icon, a.icon_bg, a.model, a.status,
+                    u.github_login as creator_login, u.avatar_url as creator_avatar
+             FROM agents a LEFT JOIN users u ON u.id = a.owner_id
+             WHERE a.visibility = 'published'`;
   const params: unknown[] = [];
 
   if (category) {
-    sql += ` AND category = ?${params.length + 1}`;
+    sql += ` AND a.category = ?${params.length + 1}`;
     params.push(category);
   }
-  sql += ` ORDER BY created_at DESC LIMIT ?${params.length + 1}`;
+  sql += ` ORDER BY a.created_at DESC LIMIT ?${params.length + 1}`;
   params.push(limit);
 
   const stmt = c.env.DB.prepare(sql);

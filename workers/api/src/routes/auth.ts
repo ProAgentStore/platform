@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import type { Env } from '../types.js';
-import { signSession } from '../lib/session.js';
+import { signSession, verifySession } from '../lib/session.js';
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
@@ -117,12 +117,33 @@ authRoutes.post('/github', async (c) => {
   return c.json({ token, user: { id: uid, login: ghUser.login, avatar: ghUser.avatar_url, roles }, return_to });
 });
 
+/** Update profile (bio, website, twitter, display name). */
+authRoutes.put('/me', async (c) => {
+  const header = c.req.header('Authorization');
+  if (!header?.startsWith('Bearer ')) return c.json({ error: 'Not authenticated' }, 401);
+  const session = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
+  if (!session) return c.json({ error: 'Invalid or expired token' }, 401);
+
+  const body = await c.req.json<{ display_name?: string; bio?: string; website?: string; twitter?: string }>();
+  const sets: string[] = ["updated_at = datetime('now')"];
+  const params: unknown[] = [];
+  for (const key of ['display_name', 'bio', 'website', 'twitter'] as const) {
+    if (body[key] !== undefined) {
+      params.push(body[key]);
+      sets.push(`${key} = ?${params.length + 1}`);
+    }
+  }
+  if (params.length === 0) return c.json({ error: 'Nothing to update' }, 400);
+  params.unshift(session.uid);
+  await c.env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?1`).bind(...params).run();
+  return c.json({ success: true });
+});
+
 /** Verify current PAGS session. */
 authRoutes.get('/me', async (c) => {
   const header = c.req.header('Authorization');
   if (!header?.startsWith('Bearer ')) return c.json({ error: 'Not authenticated' }, 401);
 
-  const { verifySession } = await import('../lib/session.js');
   const session = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
   if (!session) return c.json({ error: 'Invalid or expired token' }, 401);
 

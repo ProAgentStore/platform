@@ -165,12 +165,13 @@
         <a href="https://freeagentstore.online" class="free">Free</a>
       </div>
       <div class="footer-stores">
-        <strong style="color:var(--muted);font-size:0.72rem">FreeStore Family</strong>
-        <a href="https://freeappstore.online">FreeAppStore</a>
-        <a href="https://freegamestore.online">FreeGameStore</a>
-        <a href="https://freewebstore.online">FreeWebStore</a>
-        <a href="https://freeagentstore.online">FreeAgentStore</a>
-        <a href="https://proagentstore.online"><strong style="color:var(--muted)">ProAgentStore</strong></a>
+        <strong style="color:var(--muted);font-size:0.72rem">FreeStore Ecosystem</strong>
+        <a href="https://freeappstore.online">FreeAppStore — apps</a>
+        <a href="https://freegamestore.online">FreeGameStore — games</a>
+        <a href="https://freewebstore.online">FreeWebStore — sites</a>
+        <a href="https://freeagentstore.online">FreeAgentStore — browser AI</a>
+        <a href="https://proappstore.online">ProAppStore — pro apps</a>
+        <a href="https://proagentstore.online"><strong style="color:var(--muted)">ProAgentStore — server AI</strong></a>
       </div>
     </div>
   </footer>
@@ -239,6 +240,7 @@
             <div class="agent-meta">
               <span class="tag">${esc(a.store_type || 'agent')}</span>
               <span class="tag">${esc(a.category)}</span>
+              ${a.creator_login ? `<a href="/developers/${esc(a.creator_login)}/" style="font-size:0.68rem;color:var(--muted-soft);margin-left:auto;text-decoration:none" onclick="event.stopPropagation()">by ${esc(a.creator_login)}</a>` : ''}
             </div>
           </div>
           <span class="agent-cta">Get Agent</span>`;

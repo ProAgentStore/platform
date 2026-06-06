@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Developer — ProAgentStore</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-soft:rgba(124,58,237,0.15);--green:#22c55e;--blue:#3b82f6;--line:#262626;--radius:0.75rem}
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100vh}
+    .container{max-width:960px;margin:0 auto;padding:0 1.5rem}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+    header{border-bottom:1px solid var(--line)}
+    header .container{display:flex;align-items:center;gap:1.25rem;padding-top:0.75rem;padding-bottom:0.75rem}
+    .brand{display:flex;align-items:center;gap:0.6rem;text-decoration:none;color:var(--ink)}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    nav{display:flex;gap:1.25rem;font-size:0.88rem;font-weight:600;margin-left:auto}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}
+    nav a.free{color:var(--blue)}
+    .back{display:inline-flex;align-items:center;gap:0.3rem;font-size:0.88rem;color:var(--muted);margin:1.25rem 0;text-decoration:none}.back:hover{color:var(--ink)}
+
+    .dev-profile{display:flex;gap:1.5rem;align-items:start;margin-bottom:2rem;flex-wrap:wrap}
+    .dev-avatar{width:96px;height:96px;border-radius:50%;border:3px solid var(--line);flex-shrink:0}
+    .dev-info h1{font-family:var(--font-display);font-size:1.5rem;font-weight:700}
+    .dev-login{font-size:0.88rem;color:var(--muted)}
+    .dev-bio{font-size:0.92rem;color:var(--muted);margin-top:0.5rem;max-width:500px;line-height:1.6}
+    .dev-links{display:flex;gap:1rem;margin-top:0.75rem;font-size:0.85rem;flex-wrap:wrap}
+    .dev-links a{color:var(--muted);display:inline-flex;align-items:center;gap:0.3rem}
+    .dev-links a:hover{color:var(--accent)}
+    .dev-badges{display:flex;gap:0.4rem;margin-top:0.5rem}
+    .badge{font-size:0.7rem;padding:0.15rem 0.5rem;border-radius:999px;font-weight:600}
+    .badge-creator{background:var(--accent-soft);color:#a78bfa}
+    .badge-admin{background:rgba(239,68,68,0.15);color:#ef4444}
+    .dev-stats{display:flex;gap:1.5rem;margin-top:0.75rem;font-size:0.85rem;color:var(--muted-soft)}
+    .dev-stats strong{color:var(--ink)}
+
+    .section-title{font-family:var(--font-display);font-size:1.15rem;font-weight:700;margin-bottom:1rem}
+    .agents-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:0.75rem;margin-bottom:2rem}
+    .agent-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:1rem;display:flex;align-items:center;gap:0.85rem;text-decoration:none;color:inherit;transition:border-color 0.15s}
+    .agent-card:hover{border-color:var(--accent);text-decoration:none}
+    .agent-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.2rem;flex-shrink:0}
+    .agent-body{flex:1;min-width:0}
+    .agent-name{font-size:0.92rem;font-weight:600}
+    .agent-desc{font-size:0.78rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .tag{font-size:0.68rem;padding:0.1rem 0.4rem;border-radius:0.25rem;background:var(--accent-soft);color:#a78bfa;font-weight:500;margin-top:0.2rem;display:inline-block}
+
+    .ecosystem{margin-top:2rem;padding:1.5rem;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:2rem}
+    .ecosystem h3{font-family:var(--font-display);font-size:1rem;font-weight:700;margin-bottom:0.75rem}
+    .eco-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:0.5rem}
+    .eco-link{display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.75rem;border-radius:0.5rem;border:1px solid var(--line);font-size:0.82rem;color:var(--muted);text-decoration:none;transition:border-color 0.15s}
+    .eco-link:hover{border-color:var(--accent);color:var(--ink);text-decoration:none}
+    .eco-link .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:0.8rem;color:var(--muted-soft)}
+    .loading{text-align:center;padding:3rem;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <nav>
+        <a href="/">Agents</a>
+        <a href="/about/">About</a>
+        <a href="/console/">Console</a>
+        <a href="https://github.com/ProAgentStore">GitHub</a>
+        <a href="https://freeagentstore.online" class="free">Free</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <a href="/" class="back">&larr; All agents</a>
+    <div id="loading" class="loading">Loading developer profile...</div>
+    <div id="content" style="display:none">
+      <div class="dev-profile">
+        <img id="d-avatar" class="dev-avatar" alt="">
+        <div class="dev-info">
+          <h1 id="d-name"></h1>
+          <div id="d-login" class="dev-login"></div>
+          <div id="d-badges" class="dev-badges"></div>
+          <p id="d-bio" class="dev-bio"></p>
+          <div id="d-links" class="dev-links"></div>
+          <div id="d-stats" class="dev-stats"></div>
+        </div>
+      </div>
+
+      <h2 class="section-title">Published Agents</h2>
+      <div id="agents-grid" class="agents-grid"></div>
+
+      <div class="ecosystem">
+        <h3>Part of the FreeStore Ecosystem</h3>
+        <div class="eco-grid">
+          <a href="https://freeappstore.online" class="eco-link"><span class="dot" style="background:#22c55e"></span>FreeAppStore — PWA apps</a>
+          <a href="https://freegamestore.online" class="eco-link"><span class="dot" style="background:#3b82f6"></span>FreeGameStore — browser games</a>
+          <a href="https://freewebstore.online" class="eco-link"><span class="dot" style="background:#f59e0b"></span>FreeWebStore — AI-built sites</a>
+          <a href="https://freeagentstore.online" class="eco-link"><span class="dot" style="background:#a855f7"></span>FreeAgentStore — browser AI tools</a>
+          <a href="https://proappstore.online" class="eco-link"><span class="dot" style="background:#ef4444"></span>ProAppStore — paid apps</a>
+          <a href="https://proagentstore.online" class="eco-link"><span class="dot" style="background:#7c3aed"></span><strong>ProAgentStore — server agents</strong></a>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    <a href="/">Agents</a> · <a href="/about/">About</a> · <a href="/console/">Console</a> · <a href="https://github.com/ProAgentStore">GitHub</a>
+  </footer>
+
+  <script src="/auth-widget.js" defer></script>
+  <script>
+    const API = 'https://api.proagentstore.online';
+    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+    async function loadDeveloper() {
+      const match = window.location.pathname.match(/\/developers\/([^/]+)/);
+      if (!match) { document.getElementById('loading').textContent = 'Developer not found'; return; }
+      const login = match[1];
+
+      try {
+        const res = await fetch(`${API}/v1/public/developers/${login}`);
+        if (!res.ok) { document.getElementById('loading').textContent = 'Developer not found'; return; }
+        const { developer: dev, agents } = await res.json();
+
+        document.title = `${dev.name || dev.login} — ProAgentStore Developer`;
+        document.getElementById('d-avatar').src = dev.avatar || '';
+        document.getElementById('d-name').textContent = dev.name || dev.login;
+        document.getElementById('d-login').textContent = '@' + dev.login;
+        document.getElementById('d-bio').textContent = dev.bio || '';
+
+        // Badges
+        const badges = document.getElementById('d-badges');
+        for (const r of (dev.roles || [])) {
+          if (r === 'user') continue;
+          const b = document.createElement('span');
+          b.className = 'badge badge-' + r;
+          b.textContent = r;
+          badges.appendChild(b);
+        }
+
+        // Links
+        const links = document.getElementById('d-links');
+        links.innerHTML = `<a href="https://github.com/${esc(dev.login)}" target="_blank">GitHub</a>`;
+        if (dev.website) links.innerHTML += ` <a href="${esc(dev.website)}" target="_blank">${esc(new URL(dev.website).hostname)}</a>`;
+        if (dev.twitter) links.innerHTML += ` <a href="https://x.com/${esc(dev.twitter)}" target="_blank">@${esc(dev.twitter)}</a>`;
+        // Cross-store profile links
+        links.innerHTML += ` <a href="https://freeagentstore.online/developers/${esc(dev.login)}/" style="color:var(--blue)">FAGS profile</a>`;
+
+        // Stats
+        document.getElementById('d-stats').innerHTML = `<span><strong>${agents.length}</strong> agents</span>`;
+
+        // Agent grid
+        const grid = document.getElementById('agents-grid');
+        for (const a of agents) {
+          const card = document.createElement('a');
+          card.className = 'agent-card';
+          card.href = `/agents/${esc(a.slug || a.id)}/`;
+          card.innerHTML = `<div class="agent-icon" style="background:${esc(a.icon_bg || '#7c3aed')}">&#9889;</div>
+            <div class="agent-body">
+              <div class="agent-name">${esc(a.name)}</div>
+              <div class="agent-desc">${esc(a.description || '')}</div>
+              <span class="tag">${esc(a.store_type || 'agent')}</span>
+              <span class="tag">${esc(a.category)}</span>
+            </div>`;
+          grid.appendChild(card);
+        }
+
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = '';
+      } catch (e) { document.getElementById('loading').textContent = 'Failed to load'; }
+    }
+    loadDeveloper();
+  </script>
+</body>
+</html>

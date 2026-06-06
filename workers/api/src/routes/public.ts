@@ -21,6 +21,36 @@ publicRoutes.get('/agents/:id', async (c) => {
   return c.json(row);
 });
 
+/** Developer profile — public page for a creator. */
+publicRoutes.get('/developers/:login', async (c) => {
+  const login = c.req.param('login');
+  const user = await c.env.DB.prepare(
+    `SELECT id, github_login, github_name, avatar_url, display_name, bio, website, twitter, roles
+     FROM users WHERE github_login = ?1`,
+  ).bind(login).first();
+  if (!user) throw new HttpError(404, 'Developer not found');
+
+  const { results: agents } = await c.env.DB.prepare(
+    `SELECT id, slug, name, description, category, store_type, icon, icon_bg
+     FROM agents WHERE owner_id = ?1 AND visibility = 'published'
+     ORDER BY created_at DESC`,
+  ).bind((user as Record<string, unknown>).id).all();
+
+  return c.json({
+    developer: {
+      login: (user as Record<string, unknown>).github_login,
+      name: (user as Record<string, unknown>).display_name || (user as Record<string, unknown>).github_name,
+      avatar: (user as Record<string, unknown>).avatar_url,
+      bio: (user as Record<string, unknown>).bio,
+      website: (user as Record<string, unknown>).website,
+      twitter: (user as Record<string, unknown>).twitter,
+      roles: JSON.parse(((user as Record<string, unknown>).roles as string) || '["user"]'),
+      agentCount: agents.length,
+    },
+    agents,
+  });
+});
+
 /**
  * Public chat — anyone can try a published agent (no auth, no instance).
  * Creates an ephemeral DO keyed by agent+session. Limited to 10 messages.
