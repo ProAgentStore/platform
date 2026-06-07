@@ -4,7 +4,7 @@
  */
 import {
 	homepage, aboutPage, getStartedPage, consolePage, agentDetailPage,
-	widgetJs, authWidgetJs, developerProfilePage, adminPage, notFoundPage, changelogPage,
+	widgetJs, authWidgetJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
@@ -78,6 +78,13 @@ export default {
 			});
 		}
 
+		// OpenAPI spec
+		if (path === "/openapi.yaml" || path === "/openapi.yml") {
+			return new Response(openapiYaml, {
+				headers: { "Content-Type": "text/yaml; charset=utf-8", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" },
+			});
+		}
+
 		// robots.txt
 		if (path === "/robots.txt") {
 			return new Response(
@@ -88,7 +95,7 @@ export default {
 
 		// Dynamic sitemap — fetches published agents from API
 		if (path === "/sitemap.xml") {
-			const staticUrls = ["/", "/about/", "/get-started/", "/console/"];
+			const staticUrls = ["/", "/about/", "/get-started/", "/console/", "/changelog/"];
 			let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
 			for (const u of staticUrls) {
 				xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;

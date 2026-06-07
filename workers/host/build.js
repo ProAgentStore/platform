@@ -30,6 +30,7 @@ const pages = {
 	adminPage: fs.readFileSync(path.join(storeDir, "admin", "index.html"), "utf-8"),
 	notFoundPage: fs.readFileSync(path.join(storeDir, "404.html"), "utf-8"),
 	changelogPage: fs.readFileSync(path.join(storeDir, "changelog", "index.html"), "utf-8"),
+	openapiYaml: fs.readFileSync(path.join(storeDir, "openapi.yaml"), "utf-8"),
 	developerProfilePage: fs.readFileSync(
 		path.join(storeDir, "developers", "profile.html"),
 		"utf-8",
