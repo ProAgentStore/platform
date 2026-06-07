@@ -1757,6 +1757,27 @@ console.log(response)</pre>
         showPage('login-page');
       }
     })();
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      // Escape: go back to dashboard from any detail view
+      if (e.key === 'Escape') {
+        const current = ['agent-detail', 'instance-detail', 'profile-page', 'notifications-page']
+          .find(id => !document.getElementById(id).classList.contains('hidden'));
+        if (current) { showDashboard(); e.preventDefault(); }
+      }
+      // Cmd/Ctrl+K: focus chat input (if in agent/instance detail)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        const chatInput = document.getElementById('chat-input') || document.getElementById('inst-chat-input');
+        if (chatInput) chatInput.focus();
+      }
+      // Cmd/Ctrl+N: toggle create form (if on dashboard)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'n' && !document.getElementById('dashboard').classList.contains('hidden')) {
+        e.preventDefault();
+        toggleCreateForm();
+      }
+    });
   </script>
 </body>
 </html>

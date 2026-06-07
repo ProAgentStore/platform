@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
 import { rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
 import { agentRoutes } from "./routes/agents.js";
+import { batchRoutes } from "./routes/batch.js";
 import { analyticsRoutes } from "./routes/analytics.js";
 import { authRoutes } from "./routes/auth.js";
 import { billingRoutes } from "./routes/billing.js";
@@ -63,7 +64,8 @@ app.route("/v1/agents", analyticsRoutes); // /v1/agents/:id/analytics
 app.route("/v1/dashboard", dashboardRoutes);
 app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/agents", versionRoutes);     // /v1/agents/:id/versions, /:versionId/rollback
-app.route("/v1/agents", exportRoutes);     // /v1/agents/:id/export, /import
+app.route("/v1/agents", exportRoutes);
+app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);
