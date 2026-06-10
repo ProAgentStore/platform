@@ -61,7 +61,10 @@ export default {
 		}
 
 		const url = new URL(request.url);
-		const path = url.pathname;
+		const path =
+			url.hostname === "console.proagentstore.online" && url.pathname === "/"
+				? "/console"
+				: url.pathname;
 
 		// Static pages
 		const page = PAGES[path];

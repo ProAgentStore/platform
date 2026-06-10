@@ -7,3 +7,7 @@ workers_dev = false
 [[routes]]
 pattern = "proagentstore.online/*"
 zone_name = "proagentstore.online"
+
+[[routes]]
+pattern = "console.proagentstore.online/*"
+zone_name = "proagentstore.online"
