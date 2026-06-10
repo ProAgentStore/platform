@@ -1705,9 +1705,14 @@ console.log(response)</pre>
             addBtn.className = 'btn btn-primary btn-sm';
             addBtn.textContent = 'Add Key';
             addBtn.addEventListener('click', () => {
-              const key = prompt(`${p.name} API key:`);
+              let accountId = null;
+              if (p.id === 'cloudflare') {
+                accountId = prompt('Cloudflare account ID:');
+                if (!accountId) return;
+              }
+              const key = prompt(p.id === 'cloudflare' ? `${p.name} API token:` : `${p.name} API key:`);
               if (!key) return;
-              api(`/v1/keys/${p.id}`, { method: 'PUT', body: JSON.stringify({ key }) })
+              api(`/v1/keys/${p.id}`, { method: 'PUT', body: JSON.stringify({ key, accountId }) })
                 .then(() => loadKeys())
                 .catch(e => alert(e.message));
             });

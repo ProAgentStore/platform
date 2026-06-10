@@ -8,6 +8,7 @@
 	"template": "worker",
 	"serverConfig": {
 		"durableObject": true,
-		"routes": ["AGENTNAME.proagentstore.online/*"]
+		"routes": ["AGENTNAME.proagentstore.online/*"],
+		"aiBilling": "caller-provided"
 	}
 }

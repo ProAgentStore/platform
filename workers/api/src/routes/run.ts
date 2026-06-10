@@ -1,5 +1,9 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import {
+	runUserWorkersAi,
+	UserAiCredentialsError,
+} from "../lib/user-ai.js";
 import type { Env } from "../types.js";
 
 export const runRoutes = new Hono<{ Bindings: Env }>();
@@ -36,10 +40,15 @@ runRoutes.post("/:id/run", async (c) => {
 	const model = agent.model || "@cf/meta/llama-3.2-3b-instruct";
 	const startMs = Date.now();
 
-	const result = await c.env.AI.run(
-		model as Parameters<Ai["run"]>[0],
-		body.input,
-	);
+	let result: unknown;
+	try {
+		result = await runUserWorkersAi(c.env, session.uid, model, body.input);
+	} catch (err) {
+		if (err instanceof UserAiCredentialsError) {
+			throw new HttpError(err.status, err.message);
+		}
+		throw err;
+	}
 
 	const durationMs = Date.now() - startMs;
 

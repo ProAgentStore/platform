@@ -8,6 +8,7 @@
 	"template": "cron",
 	"serverConfig": {
 		"cron": "0 8 * * *",
-		"routes": ["AGENTNAME.proagentstore.online/*"]
+		"routes": ["AGENTNAME.proagentstore.online/*"],
+		"aiBilling": "caller-provided"
 	}
 }

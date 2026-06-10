@@ -7,9 +7,6 @@ compatibility_flags = ["nodejs_compat"]
 pattern = "AGENTNAME.proagentstore.online/*"
 zone_name = "proagentstore.online"
 
-[ai]
-binding = "AI"
-
 [[durable_objects.bindings]]
 name = "AGENT"
 class_name = "AgentDO"

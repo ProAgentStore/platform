@@ -6,6 +6,10 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { AGENT_TOOLS, executeTool, type ToolCallRequest } from "./lib/tools.js";
+import {
+	runUserWorkersAi,
+	UserAiCredentialsError,
+} from "./lib/user-ai.js";
 import type { Env } from "./types.js";
 
 export interface AgentMessage {
@@ -275,7 +279,7 @@ export class AgentDO extends DurableObject<Env> {
 		this.broadcast({ type: "status", status: "thinking" });
 
 		try {
-			const response = await this.think(state);
+			const response = await this.think(state, userId);
 
 			const assistantMsg: AgentMessage = {
 				id: crypto.randomUUID(),
@@ -293,6 +297,8 @@ export class AgentDO extends DurableObject<Env> {
 			return json({ message: assistantMsg });
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);
+			const status =
+				err instanceof UserAiCredentialsError ? err.status : 500;
 			await this.ctx.storage.put("state", { ...state, status: "error" });
 			this.broadcast({ type: "status", status: "error", error: errMsg });
 
@@ -306,7 +312,7 @@ export class AgentDO extends DurableObject<Env> {
 			await this.appendMessage(errorMsg);
 			this.broadcast({ type: "message", message: errorMsg });
 
-			return json({ error: errMsg }, 500);
+			return json({ error: errMsg }, status);
 		}
 	}
 
@@ -314,7 +320,7 @@ export class AgentDO extends DurableObject<Env> {
 	 * The agent loop — build context, call Workers AI, return response.
 	 * This is where archagent's agent-loop.ts concept lives.
 	 */
-	private async think(state: AgentState): Promise<string> {
+	private async think(state: AgentState, userId?: string): Promise<string> {
 		const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
 		const memory = await this.getAllMemory();
 		const tasks = await this.getAllTasks();
@@ -369,8 +375,10 @@ export class AgentDO extends DurableObject<Env> {
 
 		// Simple path: no tool support — just call the model and return
 		if (!useTools) {
-			const result = (await this.env.AI.run(
-				state.model as Parameters<Ai["run"]>[0],
+			const result = (await runUserWorkersAi(
+				this.env,
+				userId,
+				state.model,
 				{ messages: aiMessages },
 			)) as { response?: string };
 			return result.response || "";
@@ -399,8 +407,10 @@ export class AgentDO extends DurableObject<Env> {
 
 		const MAX_TOOL_ROUNDS = 5;
 		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-			const result = (await this.env.AI.run(
-				state.model as Parameters<Ai["run"]>[0],
+			const result = (await runUserWorkersAi(
+				this.env,
+				userId,
+				state.model,
 				{ messages: aiMessages, tools },
 			)) as {
 				response?: string;
@@ -441,8 +451,10 @@ export class AgentDO extends DurableObject<Env> {
 			});
 		}
 
-		const final = (await this.env.AI.run(
-			state.model as Parameters<Ai["run"]>[0],
+		const final = (await runUserWorkersAi(
+			this.env,
+			userId,
+			state.model,
 			{ messages: aiMessages },
 		)) as { response?: string };
 		return final.response || "";

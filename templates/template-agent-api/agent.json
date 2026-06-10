@@ -7,6 +7,7 @@
 	"model": "@cf/meta/llama-3.2-3b-instruct",
 	"template": "api",
 	"serverConfig": {
-		"routes": ["AGENTNAME.proagentstore.online/*"]
+		"routes": ["AGENTNAME.proagentstore.online/*"],
+		"aiBilling": "caller-provided"
 	}
 }

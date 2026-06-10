@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 interface Provider {
 	id: string;
 	name: string;
-	host: string;
+	host: string | null;
 	keyPrefix: string;
 	docsUrl: string;
 }
@@ -52,10 +52,19 @@ const PROVIDERS: Provider[] = [
 		keyPrefix: "",
 		docsUrl: "https://api.together.xyz/settings/api-keys",
 	},
+	{
+		id: "cloudflare",
+		name: "Cloudflare Workers AI",
+		host: null,
+		keyPrefix: "",
+		docsUrl: "https://dash.cloudflare.com/profile/api-tokens",
+	},
 ];
 
 const PROVIDER_BY_ID = new Map(PROVIDERS.map((p) => [p.id, p]));
-const HOST_TO_PROVIDER = new Map(PROVIDERS.map((p) => [p.host, p.id]));
+const HOST_TO_PROVIDER = new Map(
+	PROVIDERS.filter((p) => p.host).map((p) => [p.host as string, p.id]),
+);
 
 function validateKey(provider: Provider, key: string): boolean {
 	if (!provider.keyPrefix) return true; // no prefix required (e.g. together)
@@ -63,8 +72,8 @@ function validateKey(provider: Provider, key: string): boolean {
 }
 
 describe("provider list", () => {
-	it("contains exactly 6 providers", () => {
-		expect(PROVIDERS).toHaveLength(6);
+	it("contains exactly 7 providers", () => {
+		expect(PROVIDERS).toHaveLength(7);
 	});
 
 	it("includes openai", () => {
@@ -97,11 +106,20 @@ describe("provider list", () => {
 		expect(ids).toContain("together");
 	});
 
+	it("includes cloudflare", () => {
+		const ids = PROVIDERS.map((p) => p.id);
+		expect(ids).toContain("cloudflare");
+	});
+
 	it("all providers have id, name, host, keyPrefix, docsUrl", () => {
 		for (const p of PROVIDERS) {
 			expect(p.id).toBeTruthy();
 			expect(p.name).toBeTruthy();
-			expect(p.host).toBeTruthy();
+			if (p.id === "cloudflare") {
+				expect(p.host).toBeNull();
+			} else {
+				expect(p.host).toBeTruthy();
+			}
 			expect(p.keyPrefix).toBeDefined(); // may be empty string
 			expect(p.docsUrl).toBeTruthy();
 		}
@@ -126,7 +144,7 @@ describe("provider ID validation", () => {
 		expect(p).toBeUndefined();
 	});
 
-	it("all 6 IDs are resolvable", () => {
+	it("all 7 IDs are resolvable", () => {
 		for (const p of PROVIDERS) {
 			expect(PROVIDER_BY_ID.get(p.id)).toBeDefined();
 		}
@@ -170,6 +188,12 @@ describe("key prefix validation per provider", () => {
 		expect(p.keyPrefix).toBe("");
 		expect(validateKey(p, "any-string-at-all")).toBe(true);
 		expect(validateKey(p, "")).toBe(true);
+	});
+
+	it("cloudflare has no token prefix requirement", () => {
+		const p = PROVIDER_BY_ID.get("cloudflare")!;
+		expect(p.keyPrefix).toBe("");
+		expect(validateKey(p, "any-string-at-all")).toBe(true);
 	});
 });
 

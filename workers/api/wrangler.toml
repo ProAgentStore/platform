@@ -18,9 +18,6 @@ database_name = "pags"
 database_id = "036f9349-4a2e-48f0-93a8-b5f185bc2572"
 migrations_dir = "migrations"
 
-[ai]
-binding = "AI"
-
 [[r2_buckets]]
 binding = "STORAGE"
 bucket_name = "pags-agents"

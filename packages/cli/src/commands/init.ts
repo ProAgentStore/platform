@@ -82,6 +82,7 @@ export const initCommand = new Command("init")
 							durableObject: template === "worker",
 							cron: template === "cron" ? "0 8 * * *" : undefined,
 							routes: [`${slug}.proagentstore.online/*`],
+							aiBilling: "caller-provided",
 						},
 					},
 					null,
@@ -125,9 +126,6 @@ export const initCommand = new Command("init")
 				"[[routes]]",
 				`pattern = "${slug}.proagentstore.online/*"`,
 				'zone_name = "proagentstore.online"',
-				"",
-				"[ai]",
-				'binding = "AI"',
 			];
 			if (template === "worker") {
 				wranglerLines.push(
@@ -196,7 +194,7 @@ export const initCommand = new Command("init")
 			// README
 			writeFileSync(
 				join(dir, "README.md"),
-				`# ${name}\n\nA ProAgentStore ${template} agent.\n\n## Development\n\n\`\`\`bash\npnpm install\npnpm dev\n\`\`\`\n\n## Deploy\n\n\`\`\`bash\npags publish\n\`\`\`\n`,
+				`# ${name}\n\nA ProAgentStore ${template} agent.\n\n## AI billing\n\nThis scaffold does not include a ProAgentStore Cloudflare Workers AI binding. AI calls must use caller-owned credentials or another explicit billing source.\n\n## Development\n\n\`\`\`bash\npnpm install\npnpm dev\n\`\`\`\n\n## Deploy\n\n\`\`\`bash\npags publish\n\`\`\`\n`,
 			);
 
 			// Deploy workflow

@@ -1,6 +1,10 @@
 # AGENTNAME
 
-A ProAgentStore agent with persistent conversation, memory, and Workers AI.
+A scheduled ProAgentStore worker.
+
+## AI Billing
+
+This template does not include a ProAgentStore Cloudflare Workers AI binding. If the cron job needs AI, wire it to a user-owned provider credential or another explicit billing source.
 
 ## Development
 
@@ -13,12 +17,9 @@ pnpm dev
 
 ```bash
 pags publish
-# Or: push to main → auto-deploys via GitHub Actions
+# Or: push to main to auto-deploy via GitHub Actions
 ```
 
 ## Customize
 
-Edit `src/index.ts`:
-- Change `SYSTEM_PROMPT` to define personality and behavior
-- Add knowledge by storing docs in the DO
-- Change the model in the `AI.run()` call
+Edit `src/index.ts` to add scheduled work.

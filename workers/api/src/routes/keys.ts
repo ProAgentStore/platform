@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
+import { encodeCloudflareAiCredentials } from "../lib/user-ai.js";
 import type { Env } from "../types.js";
 
 export const keysRoutes = new Hono<{ Bindings: Env }>();
@@ -16,7 +17,7 @@ export const keysRoutes = new Hono<{ Bindings: Env }>();
 interface Provider {
 	id: string;
 	name: string;
-	host: string;
+	host: string | null;
 	keyPrefix: string;
 	docsUrl: string;
 }
@@ -64,10 +65,19 @@ const PROVIDERS: Provider[] = [
 		keyPrefix: "",
 		docsUrl: "https://api.together.xyz/settings/api-keys",
 	},
+	{
+		id: "cloudflare",
+		name: "Cloudflare Workers AI",
+		host: null,
+		keyPrefix: "",
+		docsUrl: "https://dash.cloudflare.com/profile/api-tokens",
+	},
 ];
 
 const PROVIDER_BY_ID = new Map(PROVIDERS.map((p) => [p.id, p]));
-const HOST_TO_PROVIDER = new Map(PROVIDERS.map((p) => [p.host, p.id]));
+const HOST_TO_PROVIDER = new Map(
+	PROVIDERS.filter((p) => p.host).map((p) => [p.host as string, p.id]),
+);
 
 /** List supported providers (public). */
 keysRoutes.get("/providers", async (c) => {
@@ -116,11 +126,22 @@ keysRoutes.put("/:provider", async (c) => {
 	if (!c.env.KEY_ENCRYPTION_KEY)
 		throw new HttpError(500, "Key encryption not configured");
 
-	const { key } = await c.req.json<{ key: string }>();
+	const { key, accountId } = await c.req.json<{
+		key: string;
+		accountId?: string;
+	}>();
 	if (!key) throw new HttpError(400, "key required");
 
-	// Basic validation
-	if (provider.keyPrefix && !key.startsWith(provider.keyPrefix)) {
+	let keyToStore = key;
+	if (providerId === "cloudflare") {
+		if (!accountId?.trim()) {
+			throw new HttpError(
+				400,
+				"Cloudflare Workers AI requires accountId and key",
+			);
+		}
+		keyToStore = encodeCloudflareAiCredentials(accountId.trim(), key.trim());
+	} else if (provider.keyPrefix && !key.startsWith(provider.keyPrefix)) {
 		throw new HttpError(
 			400,
 			`${provider.name} keys should start with "${provider.keyPrefix}"`,
@@ -128,7 +149,7 @@ keysRoutes.put("/:provider", async (c) => {
 	}
 
 	const { ciphertext, dekWrapped, iv } = await encryptKey(
-		key,
+		keyToStore,
 		c.env.KEY_ENCRYPTION_KEY,
 	);
 

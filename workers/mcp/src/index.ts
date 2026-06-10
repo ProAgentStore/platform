@@ -268,6 +268,7 @@ function agentTemplateFiles(config: {
 					durableObject: template === "worker",
 					cron: template === "cron" ? "0 8 * * *" : undefined,
 					routes: [`${slug}.proagentstore.online/*`],
+					aiBilling: "caller-provided",
 				},
 			},
 			null,
@@ -308,9 +309,6 @@ function agentTemplateFiles(config: {
 		"[[routes]]",
 		`pattern = "${slug}.proagentstore.online/*"`,
 		'zone_name = "proagentstore.online"',
-		"",
-		"[ai]",
-		'binding = "AI"',
 	];
 	if (template === "worker") {
 		wrangler.push(
@@ -351,22 +349,22 @@ function agentTemplateFiles(config: {
 	if (template === "cron") {
 		files.set(
 			"src/index.ts",
-			`export default {\n\tasync scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {\n\t\tconsole.log("${slug} cron fired:", event.cron);\n\t},\n\tasync fetch() {\n\t\treturn new Response("${slug} cron worker", { status: 200 });\n\t},\n};\n\ninterface Env {\n\tAI: Ai;\n}\n`,
+			`export default {\n\tasync scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {\n\t\tconsole.log("${slug} cron fired:", event.cron);\n\t},\n\tasync fetch() {\n\t\treturn new Response("${slug} cron worker", { status: 200 });\n\t},\n};\n\ninterface Env {}\n`,
 		);
 	} else if (template === "api") {
 		files.set(
 			"src/index.ts",
-			`import { Hono } from "hono";\n\ninterface Env {\n\tAI: Ai;\n}\n\nconst app = new Hono<{ Bindings: Env }>();\n\napp.post("/run", async (c) => {\n\tconst { input } = await c.req.json<{ input: unknown }>();\n\treturn c.json({ result: input });\n});\n\nexport default app;\n`,
+			`import { Hono } from "hono";\n\ninterface Env {}\n\nconst app = new Hono<{ Bindings: Env }>();\n\napp.post("/run", async (c) => {\n\tconst { input } = await c.req.json<{ input: unknown }>();\n\treturn c.json({ result: input });\n});\n\nexport default app;\n`,
 		);
 	} else {
 		files.set(
 			"src/index.ts",
-			`import { Hono } from "hono";\n\ninterface Env {\n\tAI: Ai;\n}\n\nconst app = new Hono<{ Bindings: Env }>();\n\napp.get("/", (c) => c.json({ agent: "${slug}", status: "ok" }));\n\napp.post("/chat", async (c) => {\n\tconst { message } = await c.req.json<{ message: string }>();\n\tconst result = await c.env.AI.run("${model}", {\n\t\tmessages: [\n\t\t\t{ role: "system", content: "You are ${name}. ${description}" },\n\t\t\t{ role: "user", content: message },\n\t\t],\n\t});\n\treturn c.json(result);\n});\n\nexport class AgentDO {\n\tconstructor(private state: DurableObjectState, private env: Env) {}\n\n\tasync fetch(request: Request): Promise<Response> {\n\t\treturn app.fetch(request, this.env);\n\t}\n}\n\nexport default app;\n`,
+			`import { Hono } from "hono";\n\ninterface Env {}\n\nconst MODEL = "${model}";\n\nconst app = new Hono<{ Bindings: Env }>();\n\napp.get("/", (c) => c.json({\n\tagent: "${slug}",\n\tstatus: "ok",\n\taiBilling: "caller-provided",\n\trequiredHeaders: ["X-CF-Account-ID", "X-CF-AI-Token"],\n}));\n\napp.post("/chat", async (c) => {\n\tconst credentials = callerAiCredentials(c.req.raw);\n\tif (!credentials) {\n\t\treturn c.json({\n\t\t\terror: "caller_ai_credentials_required",\n\t\t\tmessage: "Pass your own Cloudflare Workers AI credentials with X-CF-Account-ID and X-CF-AI-Token. The platform will not spend its Workers AI account for this agent.",\n\t\t}, 402);\n\t}\n\tconst { message } = await c.req.json<{ message: string }>();\n\tconst result = await runCallerWorkersAi(credentials, {\n\t\tmessages: [\n\t\t\t{ role: "system", content: "You are ${name}. ${description}" },\n\t\t\t{ role: "user", content: message },\n\t\t],\n\t});\n\treturn c.json(result);\n});\n\nfunction callerAiCredentials(request: Request): { accountId: string; token: string } | null {\n\tconst accountId = request.headers.get("X-CF-Account-ID")?.trim();\n\tconst token = request.headers.get("X-CF-AI-Token")?.trim();\n\tif (!accountId || !token) return null;\n\treturn { accountId, token };\n}\n\nasync function runCallerWorkersAi(credentials: { accountId: string; token: string }, body: unknown): Promise<unknown> {\n\tconst encodedModel = MODEL.split("/").map(encodeURIComponent).join("/");\n\tconst res = await fetch("https://api.cloudflare.com/client/v4/accounts/" + encodeURIComponent(credentials.accountId) + "/ai/run/" + encodedModel, {\n\t\tmethod: "POST",\n\t\theaders: {\n\t\t\t"Authorization": "Bearer " + credentials.token,\n\t\t\t"Content-Type": "application/json",\n\t\t},\n\t\tbody: JSON.stringify(body),\n\t});\n\tconst data = await res.json().catch(() => ({}));\n\tif (!res.ok) return { error: "caller_workers_ai_failed", status: res.status, details: data };\n\tif (data && typeof data === "object" && "result" in data) return (data as { result: unknown }).result;\n\treturn data;\n}\n\nexport class AgentDO {\n\tconstructor(private state: DurableObjectState, private env: Env) {}\n\n\tasync fetch(request: Request): Promise<Response> {\n\t\treturn app.fetch(request, this.env);\n\t}\n}\n\nexport default app;\n`,
 		);
 	}
 	files.set(
 		"README.md",
-		`# ${name}\n\n${description || `A ProAgentStore ${template} agent.`}\n\n## Development\n\n\`\`\`bash\npnpm install\npnpm dev\n\`\`\`\n\n## Deploy\n\n\`\`\`bash\npnpm deploy\n\`\`\`\n`,
+		`# ${name}\n\n${description || `A ProAgentStore ${template} agent.`}\n\n## AI billing\n\nThis generated agent does not use the ProAgentStore Cloudflare Workers AI binding by default. AI calls require caller-provided Cloudflare Workers AI credentials:\n\n- \`X-CF-Account-ID\`\n- \`X-CF-AI-Token\`\n\nThat makes inference spend bill to the caller's Cloudflare account, not the ProAgentStore platform account.\n\n## Development\n\n\`\`\`bash\npnpm install\npnpm dev\n\`\`\`\n\n## Deploy\n\n\`\`\`bash\npnpm deploy\n\`\`\`\n`,
 	);
 	files.set("LICENSE", "MIT License\n");
 	files.set(".gitignore", "node_modules/\ndist/\n.wrangler/\n");

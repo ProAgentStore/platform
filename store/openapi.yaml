@@ -1993,7 +1993,7 @@ paths:
   /v1/keys/{provider}:
     put:
       summary: Store API key
-      description: Encrypt and store an API key for the given provider. Validates the key prefix format.
+      description: Encrypt and store an API key for the given provider. Cloudflare Workers AI also requires accountId so inference bills to the user's Cloudflare account.
       operationId: storeKey
       tags: [Keys]
       parameters:
@@ -2002,7 +2002,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [openai, anthropic, google, openrouter, groq, together]
+            enum: [openai, anthropic, google, openrouter, groq, together, cloudflare]
       requestBody:
         required: true
         content:
@@ -2013,7 +2013,10 @@ paths:
               properties:
                 key:
                   type: string
-                  description: The raw API key (stored encrypted with AES-256-GCM)
+                  description: The raw API key or token (stored encrypted with AES-256-GCM)
+                accountId:
+                  type: string
+                  description: Required for provider=cloudflare. Cloudflare account ID used for Workers AI billing.
       responses:
         "200":
           description: Key stored

@@ -7,8 +7,5 @@ compatibility_flags = ["nodejs_compat"]
 pattern = "AGENTNAME.proagentstore.online/*"
 zone_name = "proagentstore.online"
 
-[ai]
-binding = "AI"
-
 [triggers]
 crons = ["0 8 * * *"]

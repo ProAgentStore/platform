@@ -1,6 +1,5 @@
 export interface Env {
 	DB: D1Database;
-	AI: Ai;
 	STORAGE: R2Bucket;
 	AGENT: DurableObjectNamespace;
 	GITHUB_CLIENT_ID: string;

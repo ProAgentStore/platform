@@ -6,6 +6,3 @@ compatibility_flags = ["nodejs_compat"]
 [[routes]]
 pattern = "AGENTNAME.proagentstore.online/*"
 zone_name = "proagentstore.online"
-
-[ai]
-binding = "AI"
