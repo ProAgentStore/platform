@@ -372,7 +372,7 @@ function agentTemplateFiles(config: {
 	files.set(".gitignore", "node_modules/\ndist/\n.wrangler/\n");
 	files.set(
 		".github/workflows/deploy.yml",
-		`name: Deploy\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: pnpm/action-setup@v4\n        with:\n          version: 10.30.3\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n          cache: pnpm\n      - run: pnpm install --no-frozen-lockfile\n      - run: pnpm typecheck\n      - uses: cloudflare/wrangler-action@v3\n        with:\n          apiToken: \${{ secrets.CLOUDFLARE_API_TOKEN }}\n          accountId: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}\n          command: deploy\n`,
+		`name: Deploy\non:\n  push:\n    branches: [main]\n  workflow_dispatch:\njobs:\n  deploy:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: pnpm/action-setup@v4\n        with:\n          version: 10.30.3\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n      - run: pnpm install --no-frozen-lockfile\n      - run: pnpm typecheck\n      - uses: cloudflare/wrangler-action@v3\n        with:\n          apiToken: \${{ secrets.CLOUDFLARE_API_TOKEN }}\n          accountId: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}\n          command: deploy\n`,
 	);
 	return files;
 }
@@ -422,6 +422,10 @@ async function triggerDeploy(
 	);
 	if (res.status === 204) {
 		return `Deploy triggered for ${repo}.\n${await deployStatus(env, org, repo)}`;
+	}
+	const status = await deployStatus(env, org, repo);
+	if (res.status === 404 && !status.startsWith("No workflow runs found")) {
+		return `Deploy workflow is still indexing or already queued for ${repo}.\n${status}`;
 	}
 	return `Deploy trigger failed for ${repo}: ${res.text}`;
 }
@@ -581,6 +585,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				template: z.enum(["worker", "cron", "api"]).optional(),
 				personality: z.string().optional(),
 				goal: z.string().optional(),
+				auto_deploy: z.boolean().optional().describe("Trigger the deploy workflow after scaffolding. Defaults to true."),
 			},
 			async ({
 				token,
@@ -592,6 +597,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				template,
 				personality,
 				goal,
+				auto_deploy,
 			}) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
@@ -637,6 +643,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 								`scaffold ${slug} via MCP`,
 							),
 						);
+					}
+					if (auto_deploy !== false) {
+						steps.push(await triggerDeploy(this.env, org, repo));
+					} else {
+						steps.push("~ Auto deploy skipped by request");
 					}
 				}
 
