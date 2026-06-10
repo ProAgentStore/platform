@@ -17,6 +17,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
       - name: Typecheck SDK
         run: cd packages/sdk && npx tsc --noEmit
       - name: Typecheck API worker
