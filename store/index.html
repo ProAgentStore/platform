@@ -137,19 +137,19 @@
 
     <!-- Type tabs (matches FAGS: Libraries | Models | Agents) -->
     <div class="toolbar" style="border-bottom:1px solid var(--line);padding-bottom:0.75rem">
-      <button class="filter-btn type-btn active" data-type="all" onclick="filterType('all')">All</button>
-      <button class="filter-btn type-btn" data-type="agent" onclick="filterType('agent')">Agents</button>
-      <button class="filter-btn type-btn" data-type="worker" onclick="filterType('worker')">Workers</button>
-      <button class="filter-btn type-btn" data-type="tool" onclick="filterType('tool')">Tools</button>
+      <button type="button" class="filter-btn type-btn active" data-type="all" onclick="filterType('all')">All</button>
+      <button type="button" class="filter-btn type-btn" data-type="agent" onclick="filterType('agent')">Agents</button>
+      <button type="button" class="filter-btn type-btn" data-type="worker" onclick="filterType('worker')">Workers</button>
+      <button type="button" class="filter-btn type-btn" data-type="tool" onclick="filterType('tool')">Tools</button>
     </div>
     <!-- Category filters -->
     <div class="toolbar">
-      <button class="filter-btn cat-btn active" data-cat="all" onclick="filterCategory('all')">All</button>
-      <button class="filter-btn cat-btn" data-cat="chat" onclick="filterCategory('chat')">Chat</button>
-      <button class="filter-btn cat-btn" data-cat="code" onclick="filterCategory('code')">Code</button>
-      <button class="filter-btn cat-btn" data-cat="data" onclick="filterCategory('data')">Data</button>
-      <button class="filter-btn cat-btn" data-cat="creative" onclick="filterCategory('creative')">Creative</button>
-      <button class="filter-btn cat-btn" data-cat="productivity" onclick="filterCategory('productivity')">Productivity</button>
+      <button type="button" class="filter-btn cat-btn active" data-cat="all" onclick="filterCategory('all')">All</button>
+      <button type="button" class="filter-btn cat-btn" data-cat="chat" onclick="filterCategory('chat')">Chat</button>
+      <button type="button" class="filter-btn cat-btn" data-cat="code" onclick="filterCategory('code')">Code</button>
+      <button type="button" class="filter-btn cat-btn" data-cat="data" onclick="filterCategory('data')">Data</button>
+      <button type="button" class="filter-btn cat-btn" data-cat="creative" onclick="filterCategory('creative')">Creative</button>
+      <button type="button" class="filter-btn cat-btn" data-cat="productivity" onclick="filterCategory('productivity')">Productivity</button>
       <span id="agent-count" class="agent-count"></span>
       <select id="sort-select" onchange="sortAgents(this.value)" style="margin-left:auto;background:var(--panel);border:1px solid var(--line);border-radius:0.4rem;padding:0.3rem 0.6rem;color:var(--muted);font-size:0.78rem;font-family:var(--font-body)">
         <option value="newest">Newest</option>
@@ -226,19 +226,21 @@
       }
     }
 
-    function filterType(type) {
-      currentType = type;
-      document.querySelectorAll('.type-btn').forEach(b =>
-        b.classList.toggle('active', b.dataset.type === type));
-      renderAgents();
-    }
+	    function filterType(type) {
+	      currentType = type;
+	      document.querySelectorAll('.type-btn').forEach(b => {
+	        b.classList.toggle('active', b.dataset.type === type);
+	      });
+	      renderAgents();
+	    }
 
-    function filterCategory(cat) {
-      currentCategory = cat;
-      document.querySelectorAll('.cat-btn').forEach(b =>
-        b.classList.toggle('active', b.dataset.cat === cat));
-      renderAgents();
-    }
+	    function filterCategory(cat) {
+	      currentCategory = cat;
+	      document.querySelectorAll('.cat-btn').forEach(b => {
+	        b.classList.toggle('active', b.dataset.cat === cat);
+	      });
+	      renderAgents();
+	    }
 
     function renderAgents() {
       let filtered = allAgents;

@@ -37,7 +37,8 @@ describe("tool definitions", () => {
 	});
 
 	it("required params are marked correctly", () => {
-		const writeMem = AGENT_TOOLS.find((t) => t.name === "write_memory")!;
+		const writeMem = AGENT_TOOLS.find((t) => t.name === "write_memory");
+		if (!writeMem) throw new Error("write_memory tool not found");
 		expect(writeMem.parameters.key.required).toBe(true);
 		expect(writeMem.parameters.type.required).toBe(true);
 		expect(writeMem.parameters.content.required).toBe(true);

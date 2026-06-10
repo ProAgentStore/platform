@@ -32,7 +32,7 @@ export async function checkWrangler(dir: string): Promise<CheckResult[]> {
 	results.push({
 		name: "wrangler-name",
 		pass: hasName,
-		message: hasName ? `name = "${nameMatch![1]}"` : "Missing or empty name field in wrangler.toml",
+		message: hasName ? `name = "${nameMatch[1]}"` : "Missing or empty name field in wrangler.toml",
 		severity: "error",
 	});
 

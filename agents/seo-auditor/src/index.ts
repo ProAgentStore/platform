@@ -115,9 +115,8 @@ function extractSeoData(html: string, baseUrl: string): ExtractedData {
 	// Headings h1-h6
 	const headingPattern = /<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi;
 	const headings: { level: number; text: string }[] = [];
-	let hMatch: RegExpExecArray | null;
-	while ((hMatch = headingPattern.exec(html)) !== null) {
-		headings.push({ level: parseInt(hMatch[1]), text: stripTags(hMatch[2]).trim() });
+	for (const hMatch of html.matchAll(headingPattern)) {
+		headings.push({ level: parseInt(hMatch[1], 10), text: stripTags(hMatch[2]).trim() });
 	}
 	const h1Count = headings.filter((h) => h.level === 1).length;
 
@@ -134,8 +133,7 @@ function extractSeoData(html: string, baseUrl: string): ExtractedData {
 	const imgPattern = /<img([^>]*)>/gi;
 	let imagesTotal = 0;
 	let imagesNoAlt = 0;
-	let imgMatch: RegExpExecArray | null;
-	while ((imgMatch = imgPattern.exec(html)) !== null) {
+	for (const imgMatch of html.matchAll(imgPattern)) {
 		imagesTotal++;
 		const attrs = imgMatch[1];
 		const hasAlt = /alt=["'][^"']*["']/i.test(attrs) && !/alt=["']["']/i.test(attrs);
@@ -147,8 +145,7 @@ function extractSeoData(html: string, baseUrl: string): ExtractedData {
 	const linkPattern = /<a[^>]+href=["']([^"'#][^"']*)["']/gi;
 	let linksInternal = 0;
 	let linksExternal = 0;
-	let linkMatch: RegExpExecArray | null;
-	while ((linkMatch = linkPattern.exec(html)) !== null) {
+	for (const linkMatch of html.matchAll(linkPattern)) {
 		const href = linkMatch[1].trim();
 		if (href.startsWith("mailto:") || href.startsWith("tel:")) continue;
 		try {

@@ -4,6 +4,28 @@ compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
+[vars]
+API_BASE = "https://api.proagentstore.online"
+AUTH_START = "https://api.freeappstore.online/v1/auth/github/start"
+GITHUB_ORG = "ProAgentStore"
+
 [[routes]]
 pattern = "mcp.proagentstore.online/*"
 zone_name = "proagentstore.online"
+
+# Secrets:
+#   SESSION_SIGNING_KEY — must match the PAGS API worker session key.
+#   GITHUB_TOKEN — org-level PAT for repo scaffold/read/write tools.
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "0a52222c4d0c45b3bba496357d2c8b99"
+
+[durable_objects]
+bindings = [
+  { name = "MCP_OBJECT", class_name = "PagsMcp" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PagsMcp"]

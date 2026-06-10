@@ -105,7 +105,10 @@ app.post("/parse", async (c) => {
 
 	const { text } = body;
 	if (!text || typeof text !== "string" || text.trim().length === 0) {
-		return c.json({ error: '"text" is required and must be a non-empty string' }, 400);
+		return c.json(
+			{ error: '"text" is required and must be a non-empty string' },
+			400,
+		);
 	}
 
 	const parsed = await extractInvoice(c.env.AI, text);
@@ -185,7 +188,10 @@ export class ParseHistoryDO extends DurableObject<Env> {
 
 			// GET /records — list recent records, newest first
 			if (path === "/records" && request.method === "GET") {
-				const limit = parseInt(url.searchParams.get("limit") ?? String(HISTORY_LIMIT), 10);
+				const limit = parseInt(
+					url.searchParams.get("limit") ?? String(HISTORY_LIMIT),
+					10,
+				);
 				const all = await this.ctx.storage.list<ParseRecord>({
 					prefix: "record:",
 					reverse: true,
@@ -303,14 +309,18 @@ function str(v: unknown): string | null {
 
 function num(v: unknown): number | null {
 	if (v === null || v === undefined) return null;
-	const n = typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.\-]/g, ""));
-	return isFinite(n) ? Math.round(n * 100) / 100 : null;
+	const n =
+		typeof v === "number" ? v : parseFloat(String(v).replace(/[^0-9.-]/g, ""));
+	return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
 }
 
 function normalizeLineItems(raw: unknown): LineItem[] {
 	if (!Array.isArray(raw)) return [];
 	return raw
-		.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null)
+		.filter(
+			(item): item is Record<string, unknown> =>
+				typeof item === "object" && item !== null,
+		)
 		.map((item) => ({
 			description: str(item.description) ?? "",
 			quantity: num(item.quantity),

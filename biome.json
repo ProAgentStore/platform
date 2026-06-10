@@ -1,0 +1,35 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
+	"formatter": {
+		"enabled": false
+	},
+	"assist": {
+		"enabled": false
+	},
+	"linter": {
+		"rules": {
+			"style": "off"
+		}
+	},
+	"files": {
+		"includes": [
+			"**",
+			"!**/node_modules",
+			"!**/dist",
+			"!**/.wrangler",
+			"!workers/host/src/pages.ts"
+		]
+	},
+	"overrides": [
+		{
+			"includes": ["store/**/*.html"],
+			"linter": {
+				"rules": {
+					"correctness": {
+						"noUnusedVariables": "off"
+					}
+				}
+			}
+		}
+	]
+}

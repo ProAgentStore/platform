@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Agent — ProAgentStore</title>
+  <title>Agent Dashboard — ProAgentStore</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.json">
@@ -13,55 +13,65 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    *,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
-    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-hover:#6d28d9;--accent-soft:rgba(124,58,237,0.15);--green:#22c55e;--line:#262626;--line-strong:#404040;--radius:0.75rem;--shadow:0 1px 3px rgba(0,0,0,0.3)}
-    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100vh}
-    .container{max-width:960px;margin:0 auto;padding:0 1.5rem}
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--panel-2:#111;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-hover:#6d28d9;--accent-soft:rgba(124,58,237,.15);--green:#22c55e;--blue:#3b82f6;--amber:#f59e0b;--red:#ef4444;--line:#262626;--line-strong:#404040;--radius:8px}
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
     a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-
-    header{border-bottom:1px solid var(--line)}
-    header .container{display:flex;align-items:center;gap:1.25rem;padding-top:0.75rem;padding-bottom:0.75rem}
-    .brand{display:flex;align-items:center;gap:0.6rem;text-decoration:none;color:var(--ink)}
+    button,input,textarea{font:inherit}
+    .container{max-width:1240px;margin:0 auto;padding:0 1.25rem}
+    header{border-bottom:1px solid var(--line);background:rgba(10,10,10,.92);position:sticky;top:0;z-index:10;backdrop-filter:blur(12px)}
+    header .container{display:flex;align-items:center;gap:1rem;padding-top:.75rem;padding-bottom:.75rem}
+    .brand{display:flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none}
     .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
     .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
-    nav{display:flex;gap:1.25rem;font-size:0.88rem;font-weight:600;margin-left:auto}
-    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}
-    nav a.free{color:#3b82f6}
-    .back{display:inline-flex;align-items:center;gap:0.3rem;font-size:0.88rem;color:var(--muted);margin:1.25rem 0;text-decoration:none}.back:hover{color:var(--ink)}
-
-    .agent-hero{display:flex;gap:1.25rem;align-items:start;margin-bottom:2rem}
-    .hero-icon{width:72px;height:72px;border-radius:18px;display:flex;align-items:center;justify-content:center;font-size:2.2rem;flex-shrink:0}
-    .hero-info h1{font-family:var(--font-display);font-size:1.75rem;font-weight:700;margin-bottom:0.25rem}
-    .hero-info .cat{display:inline-block;font-size:0.78rem;padding:0.15rem 0.6rem;border-radius:999px;background:var(--accent-soft);color:#a78bfa;font-weight:500}
-    .hero-info .desc{color:var(--muted);font-size:0.95rem;line-height:1.6;margin-top:0.5rem;max-width:500px}
-    .hero-info .subs{font-size:0.82rem;color:var(--muted-soft);margin-top:0.5rem}
-
-    .cta-row{display:flex;gap:0.75rem;margin-top:1rem;align-items:center}
-    .btn{display:inline-flex;align-items:center;gap:0.5rem;padding:0.65rem 1.25rem;border-radius:var(--radius);font-size:0.9rem;font-weight:600;text-decoration:none;transition:all 0.15s;border:none;cursor:pointer;font-family:var(--font-body)}
-    .btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent-hover);text-decoration:none}
-    .btn-outline{border:1px solid var(--line);color:var(--muted);background:none}.btn-outline:hover{border-color:var(--accent);color:var(--accent)}
-
-    .try-section{margin-top:2rem}
-    .try-section h2{font-family:var(--font-display);font-size:1.25rem;font-weight:700;margin-bottom:1rem}
-    .chat-box{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;height:420px;display:flex;flex-direction:column}
-    .chat-msgs{flex:1;overflow-y:auto;padding:1rem;display:flex;flex-direction:column;gap:0.65rem}
-    .msg{max-width:80%;padding:0.6rem 0.8rem;border-radius:var(--radius);font-size:0.88rem;line-height:1.5;white-space:pre-wrap}
-    .msg.user{background:var(--accent);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
-    .msg.assistant{background:#1f1f1f;border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
-    .msg.system{background:rgba(234,179,8,0.1);color:#eab308;align-self:center;font-size:0.78rem;border-radius:999px;padding:0.3rem 0.85rem}
-    .chat-bar{display:flex;gap:0.5rem;padding:0.75rem;border-top:1px solid var(--line)}
-    .chat-bar input{flex:1;background:var(--paper);border:1px solid var(--line);border-radius:0.5rem;padding:0.5rem 0.75rem;color:var(--ink);font-family:var(--font-body);font-size:0.88rem}
-    .chat-bar input:focus{outline:none;border-color:var(--accent)}
-    .chat-bar button{padding:0.5rem 1rem;background:var(--accent);color:#fff;border:none;border-radius:0.5rem;font-weight:600;font-size:0.85rem;cursor:pointer;font-family:var(--font-body)}
-    .thinking{color:var(--muted);font-style:italic;font-size:0.82rem;padding:0.25rem 1rem}
-
-    .embed-section{margin-top:2rem;padding-bottom:3rem}
-    .embed-section h2{font-family:var(--font-display);font-size:1.25rem;font-weight:700;margin-bottom:0.75rem}
-    pre{background:var(--panel);border:1px solid var(--line);border-radius:0.5rem;padding:0.85rem;font-size:0.78rem;color:#a78bfa;overflow-x:auto}
-
-    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:0.8rem;color:var(--muted-soft)}
-
-    .loading{text-align:center;padding:3rem;color:var(--muted)}
+    nav{display:flex;gap:1.1rem;font-size:.88rem;font-weight:600;margin-left:auto;align-items:center}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}nav a.free{color:var(--blue)}
+    .back{display:inline-flex;margin:1rem 0;color:var(--muted);font-size:.88rem}.back:hover{color:var(--ink)}
+    .loading{padding:3rem 0;text-align:center;color:var(--muted)}
+    .hero{display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:start;border-bottom:1px solid var(--line);padding-bottom:1.25rem}
+    .hero-main{display:flex;gap:1rem;align-items:flex-start;min-width:0}
+    .agent-icon{width:64px;height:64px;border-radius:14px;display:flex;align-items:center;justify-content:center;font-size:2rem;flex-shrink:0}
+    .eyebrow{display:flex;gap:.45rem;align-items:center;flex-wrap:wrap;margin-bottom:.35rem}
+    .pill{display:inline-flex;align-items:center;gap:.35rem;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:999px;padding:.18rem .55rem;font-size:.72rem;font-weight:700}
+    .pill.live{color:var(--green);border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.08)}
+    .pill.warn{color:var(--amber);border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
+    h1{font-family:var(--font-display);font-size:clamp(1.65rem,4vw,2.6rem);line-height:1.05;letter-spacing:0;margin-bottom:.45rem}
+    .desc{max-width:760px;color:var(--muted);line-height:1.6;font-size:.96rem}
+    .actions{display:flex;gap:.55rem;flex-wrap:wrap;justify-content:flex-end}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:.45rem;border-radius:var(--radius);border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:.58rem .85rem;font-size:.85rem;font-weight:700;cursor:pointer;text-decoration:none;min-height:38px}
+    .btn:hover{text-decoration:none;border-color:var(--line-strong)}
+    .btn.primary{border-color:var(--accent);background:var(--accent);color:#fff}.btn.primary:hover{background:var(--accent-hover)}
+    .btn.ghost{background:transparent;color:var(--muted)}
+    .dashboard{display:grid;grid-template-columns:minmax(0,1.3fr) 360px;gap:1rem;margin:1rem 0 2rem}
+    .tabs{display:flex;gap:.35rem;border-bottom:1px solid var(--line);margin-bottom:1rem;overflow-x:auto}
+    .tab{border:0;background:transparent;color:var(--muted);padding:.7rem .8rem;font-size:.84rem;font-weight:800;cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap}
+    .tab.active{color:var(--ink);border-color:var(--accent)}
+    .panel{display:none}.panel.active{display:block}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1rem}
+    .card h2,.card h3{font-size:.86rem;font-weight:800;margin-bottom:.65rem}
+    .card h2{font-family:var(--font-body);text-transform:uppercase;letter-spacing:.04em;color:var(--muted)}
+    .metric{font-size:1.65rem;font-weight:800;line-height:1}.metric-label{margin-top:.35rem;color:var(--muted);font-size:.78rem}
+    .kv{display:grid;gap:.55rem}.kv-row{display:flex;justify-content:space-between;gap:1rem;border-bottom:1px solid var(--line);padding-bottom:.5rem;font-size:.84rem}.kv-row:last-child{border-bottom:0;padding-bottom:0}.kv-row span:first-child{color:var(--muted)}.kv-row span:last-child{text-align:right;word-break:break-word}
+    .code{background:#050505;border:1px solid var(--line);border-radius:var(--radius);padding:.85rem;color:#c4b5fd;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-word;overflow:auto}
+    .list{display:grid;gap:.55rem}.list-item{border:1px solid var(--line);background:var(--panel-2);border-radius:var(--radius);padding:.75rem}.list-item strong{display:block;font-size:.85rem;margin-bottom:.25rem}.list-item p{color:var(--muted);font-size:.8rem;line-height:1.45}
+    .status-row{display:flex;align-items:center;gap:.55rem;color:var(--muted);font-size:.84rem}.dot{width:9px;height:9px;border-radius:50%;background:var(--muted-soft)}.dot.ok{background:var(--green)}.dot.warn{background:var(--amber)}.dot.bad{background:var(--red)}
+    .chat{height:520px;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+    .chat-head{display:flex;justify-content:space-between;gap:1rem;align-items:center;padding:.8rem 1rem;border-bottom:1px solid var(--line)}
+    .chat-head strong{font-size:.9rem}.chat-head span{font-size:.76rem;color:var(--muted)}
+    .messages{flex:1;overflow:auto;padding:1rem;display:flex;flex-direction:column;gap:.65rem}
+    .msg{max-width:84%;padding:.62rem .78rem;border-radius:var(--radius);font-size:.87rem;line-height:1.5;white-space:pre-wrap}
+    .msg.user{align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:3px}
+    .msg.assistant{align-self:flex-start;background:#202020;border:1px solid var(--line);border-bottom-left-radius:3px}
+    .msg.system{align-self:center;background:rgba(245,158,11,.1);color:var(--amber);font-size:.78rem;border-radius:999px}
+    .chat-form{display:flex;gap:.5rem;padding:.75rem;border-top:1px solid var(--line)}
+    .chat-form input{flex:1;min-width:0;background:#050505;border:1px solid var(--line);border-radius:var(--radius);color:var(--ink);padding:.58rem .7rem}.chat-form input:focus{outline:none;border-color:var(--accent)}
+    .side{display:grid;gap:1rem;align-content:start}
+    .locked{color:var(--muted);font-size:.84rem;line-height:1.5}
+    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:.8rem;color:var(--muted-soft)}
+    footer a{color:var(--muted)}
+    @media(max-width:960px){.hero{grid-template-columns:1fr}.actions{justify-content:flex-start}.dashboard{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.side{grid-template-columns:1fr 1fr}.chat{height:470px}}
+    @media(max-width:640px){.container{padding:0 1rem}header .container{align-items:flex-start}nav{gap:.7rem;flex-wrap:wrap;justify-content:flex-end}.hero-main{flex-direction:column}.grid,.side{grid-template-columns:1fr}.actions{width:100%}.btn{flex:1}.chat{height:430px}.msg{max-width:92%}}
   </style>
 </head>
 <body>
@@ -81,152 +91,376 @@
 
   <main class="container">
     <a href="/" class="back">&larr; All agents</a>
-    <div id="loading" class="loading">Loading agent...</div>
+    <div id="loading" class="loading">Loading agent dashboard...</div>
     <div id="content" style="display:none">
-      <div class="agent-hero">
-        <div id="a-icon" class="hero-icon" style="background:var(--accent)">&#9889;</div>
-        <div class="hero-info">
-          <h1 id="a-name"></h1>
-          <span id="a-cat" class="cat"></span>
-          <p id="a-desc" class="desc"></p>
-          <p id="a-subs" class="subs"></p>
-          <div class="cta-row">
-            <a id="a-subscribe" href="#" class="btn btn-primary">Get This Agent</a>
-            <a id="a-clone" href="#" class="btn btn-outline" style="font-size:0.82rem">Clone as Template</a>
-            <span style="font-size:0.82rem;color:var(--muted)">Free to try below</span>
+      <section class="hero">
+        <div class="hero-main">
+          <div id="a-icon" class="agent-icon">&#9889;</div>
+          <div style="min-width:0">
+            <div class="eyebrow">
+              <span id="a-store-type" class="pill live">agent</span>
+              <span id="a-category" class="pill"></span>
+              <span id="a-health-pill" class="pill warn">checking health</span>
+            </div>
+            <h1 id="a-name"></h1>
+            <p id="a-desc" class="desc"></p>
           </div>
         </div>
-      </div>
-
-      <div class="try-section">
-        <h2>Try it now</h2>
-        <div class="chat-box">
-          <div id="chat-msgs" class="chat-msgs"></div>
-          <div id="thinking" class="thinking" style="display:none">Agent is thinking...</div>
-          <div class="chat-bar">
-            <input id="chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')send()">
-            <button onclick="send()">Send</button>
-          </div>
+        <div class="actions">
+          <a id="console-link" class="btn primary" href="/console/">Open Console</a>
+          <a id="repo-link" class="btn" target="_blank" rel="noopener">Repo</a>
+          <button id="copy-mcp" class="btn ghost" type="button">Copy MCP</button>
         </div>
-      </div>
+      </section>
 
-      <div class="embed-section">
-        <h2>Embed on your site</h2>
-        <p style="color:var(--muted);font-size:0.88rem;margin-bottom:0.75rem">Add this script to your website to embed this agent as a chat widget.</p>
-        <pre id="embed-code"></pre>
-      </div>
+      <div class="dashboard">
+        <section>
+          <div class="tabs" role="tablist">
+            <button class="tab active" data-tab="overview" type="button">Overview</button>
+            <button class="tab" data-tab="chat" type="button">Chat</button>
+            <button class="tab" data-tab="mcp" type="button">MCP & Tools</button>
+            <button class="tab" data-tab="prompts" type="button">Prompts</button>
+            <button class="tab" data-tab="api" type="button">API</button>
+          </div>
 
-      <div id="readme-section" style="display:none;margin-top:2rem;padding-bottom:2rem">
-        <h2 style="font-family:var(--font-display);font-size:1.25rem;font-weight:700;margin-bottom:1rem">Documentation</h2>
-        <div id="readme-content" style="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1.5rem;font-size:0.88rem;line-height:1.7;color:var(--muted);white-space:pre-wrap"></div>
-      </div>
+          <div id="tab-overview" class="panel active">
+            <div class="grid">
+              <div class="card"><div id="metric-subs" class="metric">0</div><div class="metric-label">Subscribers</div></div>
+              <div class="card"><div id="metric-chats" class="metric">-</div><div class="metric-label">Chats</div></div>
+              <div class="card"><div id="metric-execs" class="metric">-</div><div class="metric-label">Executions</div></div>
+            </div>
+            <div class="card" style="margin-top:.75rem">
+              <h2>Agent Metadata</h2>
+              <div id="meta-kv" class="kv"></div>
+            </div>
+            <div class="card" style="margin-top:.75rem">
+              <h2>Runtime Health</h2>
+              <div class="list">
+                <div class="status-row"><span id="api-dot" class="dot"></span><span id="api-status">API status pending</span></div>
+                <div class="status-row"><span id="mcp-dot" class="dot"></span><span id="mcp-status">MCP status pending</span></div>
+                <div class="status-row"><span id="repo-dot" class="dot"></span><span id="repo-status">Repo status pending</span></div>
+                <div class="status-row"><span id="worker-dot" class="dot"></span><span id="worker-status">Worker route status pending</span></div>
+              </div>
+            </div>
+          </div>
 
-      <div style="margin-top:1.5rem;padding-bottom:2rem">
-        <h2 style="font-family:var(--font-display);font-size:1.25rem;font-weight:700;margin-bottom:1rem">API Usage</h2>
-        <pre style="background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1rem;font-size:0.82rem;color:#a78bfa;overflow-x:auto">// Chat with this agent via API
-curl -X POST https://api.proagentstore.online/v1/public/agents/<span id="api-slug"></span>/try \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Hello!"}'
+          <div id="tab-chat" class="panel">
+            <div class="chat">
+              <div class="chat-head"><strong>Live Trial Chat</strong><span id="trial-note">Public trial session</span></div>
+              <div id="chat-msgs" class="messages"></div>
+              <div id="thinking" class="locked" style="display:none;padding:0 1rem .5rem">Agent is thinking...</div>
+              <form id="chat-form" class="chat-form">
+                <input id="chat-input" autocomplete="off" placeholder="Ask this agent something...">
+                <button class="btn primary" type="submit">Send</button>
+              </form>
+            </div>
+          </div>
 
-// Or use the SDK
-import { initPro } from '@proagentstore/sdk'
-const agent = initPro({ agentId: '<span id="api-id"></span>', token: 'YOUR_TOKEN' })
-const { response } = await agent.chat('Hello!')</pre>
+          <div id="tab-mcp" class="panel">
+            <div class="card">
+              <h2>MCP Connection</h2>
+              <div id="mcp-command" class="code"></div>
+            </div>
+            <div class="card" style="margin-top:.75rem">
+              <h2>Standard MCP Tools</h2>
+              <div id="mcp-tools" class="list"></div>
+            </div>
+            <div class="card" style="margin-top:.75rem">
+              <h2>Agent Runtime Tools</h2>
+              <div id="runtime-tools" class="list"></div>
+            </div>
+          </div>
+
+          <div id="tab-prompts" class="panel">
+            <div class="card">
+              <h2>Prompts & Identity</h2>
+              <div id="prompt-content" class="locked">Sign in as the owner to inspect private system prompt, guardrails, memory, and knowledge documents.</div>
+            </div>
+            <div class="card" style="margin-top:.75rem">
+              <h2>Knowledge Base</h2>
+              <div id="knowledge-list" class="list"><div class="locked">Knowledge document metadata is owner-only.</div></div>
+            </div>
+          </div>
+
+          <div id="tab-api" class="panel">
+            <div class="card">
+              <h2>Public Chat API</h2>
+              <div id="api-chat" class="code"></div>
+            </div>
+            <div class="card" style="margin-top:.75rem">
+              <h2>Embed Widget</h2>
+              <div id="embed-code" class="code"></div>
+            </div>
+            <div class="card" style="margin-top:.75rem">
+              <h2>SDK</h2>
+              <div id="sdk-code" class="code"></div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="side">
+          <div class="card">
+            <h2>Dashboard</h2>
+            <div class="kv">
+              <div class="kv-row"><span>Status</span><span id="side-status">Published</span></div>
+              <div class="kv-row"><span>Model</span><span id="side-model">-</span></div>
+              <div class="kv-row"><span>Created</span><span id="side-created">-</span></div>
+              <div class="kv-row"><span>Slug</span><span id="side-slug">-</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h2>Quick Actions</h2>
+            <div class="list">
+              <a id="subscribe-link" class="btn primary" href="#">Get This Agent</a>
+              <a id="clone-link" class="btn" href="#">Clone Template</a>
+              <a id="details-console-link" class="btn ghost" href="/console/">Edit in Console</a>
+            </div>
+          </div>
+          <div class="card">
+            <h2>README</h2>
+            <div id="readme-summary" class="locked">Checking repository documentation...</div>
+          </div>
+        </aside>
       </div>
     </div>
   </main>
 
   <footer>
-    <a href="/">Agents</a> · <a href="/about/">About</a> · <a href="/get-started/">Get Started</a> · <a href="/console/">Console</a> · <a href="https://github.com/ProAgentStore">GitHub</a> · <a href="/changelog/">Changelog</a><br>
-    <span style="margin-top:0.5rem;display:inline-block">
-      <a href="https://freeappstore.online">FreeAppStore</a> · <a href="https://freegamestore.online">FreeGameStore</a> · <a href="https://freewebstore.online">FreeWebStore</a> · <a href="https://freeagentstore.online" style="color:#3b82f6">FreeAgentStore</a> · <a href="https://proappstore.online">ProAppStore</a> · <strong>ProAgentStore</strong>
-    </span>
+    <a href="/">Agents</a> &middot; <a href="/about/">About</a> &middot; <a href="/get-started/">Get Started</a> &middot; <a href="/console/">Console</a> &middot; <a href="/changelog/">Changelog</a><br>
+    <span style="margin-top:.5rem;display:inline-block"><a href="https://freeappstore.online">FreeAppStore</a> &middot; <a href="https://freegamestore.online">FreeGameStore</a> &middot; <a href="https://freewebstore.online">FreeWebStore</a> &middot; <a href="https://freeagentstore.online">FreeAgentStore</a> &middot; <a href="https://proappstore.online">ProAppStore</a> &middot; <strong>ProAgentStore</strong></span>
   </footer>
 
   <script src="/auth-widget.js" defer></script>
   <script>
     const API = 'https://api.proagentstore.online';
+    const SESSION_KEY = 'pags:session';
+    const MCP_URL = 'https://mcp.proagentstore.online/mcp';
     let agentId = null;
+    let agent = null;
     let sessionId = null;
 
-    function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    const MCP_TOOLS = [
+      ['scaffold_agent', 'Create an agent and scaffold its GitHub repo'],
+      ['my_agents', 'List owned agents after browser sign-in'],
+      ['read_agent_file', 'Inspect repo files'],
+      ['write_agent_file', 'Update repo files'],
+      ['trigger_agent_deploy', 'Run the agent deploy workflow'],
+      ['agent_deploy_status', 'Inspect deploy workflow status'],
+      ['add_knowledge', 'Attach knowledge documents'],
+      ['agent_analytics', 'Read owner analytics']
+    ];
+    const RUNTIME_TOOLS = [
+      ['read_memory', 'Read persistent memory'],
+      ['write_memory', 'Save durable profile or context'],
+      ['get_tasks', 'List active tasks'],
+      ['fetch_url', 'Fetch external content'],
+      ['store_file', 'Write artifacts to R2'],
+      ['list_files', 'Inspect stored artifacts']
+    ];
+
+    function $(id){return document.getElementById(id)}
+    function esc(value){const d=document.createElement('div');d.textContent=value == null ? '' : String(value);return d.innerHTML}
+    function token(){return localStorage.getItem(SESSION_KEY)}
+	    function setText(id,value){$(id).textContent = value == null || value === '' ? '-' : String(value)}
+	    function setStatus(dotId,textId,state,text){$(dotId).className = 'dot ' + state; $(textId).textContent = text}
+	    function formatDate(value){if(!value)return '-';try{return new Date(value).toLocaleDateString(undefined,{year:'numeric',month:'short',day:'numeric'})}catch{return value}}
+	    function titleizeSlug(value){return String(value || 'private-agent').replace(/[-_]+/g,' ').replace(/\b\w/g, c => c.toUpperCase())}
+	    function snippetScript(slug){return '<scr' + 'ipt src="https://proagentstore.online/widget.js" data-agent="' + slug + '" data-theme="dark"></scr' + 'ipt>'}
+
+    async function request(path, opts = {}, auth = false) {
+      const headers = {'Content-Type':'application/json', ...(opts.headers || {})};
+      if (auth && token()) headers.Authorization = 'Bearer ' + token();
+      const res = await fetch(API + path, {...opts, headers});
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+      return data;
+    }
+
+	    function activateTab(name) {
+	      document.querySelectorAll('.tab').forEach(tab => {
+	        tab.classList.toggle('active', tab.dataset.tab === name);
+	      });
+	      document.querySelectorAll('.panel').forEach(panel => {
+	        panel.classList.toggle('active', panel.id === 'tab-' + name);
+	      });
+	    }
+
+    function renderTools(id, tools) {
+      $(id).innerHTML = tools.map(([name, desc]) => '<div class="list-item"><strong>' + esc(name) + '</strong><p>' + esc(desc) + '</p></div>').join('');
+    }
+
+	    function renderPublic(a) {
+	      const slug = a.slug || a.id;
+	      document.title = a.name + ' Dashboard — ProAgentStore';
+      setText('a-name', a.name);
+      setText('a-desc', a.description || 'No description provided.');
+      setText('a-category', a.category || 'general');
+      setText('a-store-type', a.store_type || 'agent');
+      setText('side-model', a.model || 'default');
+      setText('side-created', formatDate(a.created_at));
+      setText('side-slug', slug);
+      $('a-icon').style.background = a.icon_bg || '#7c3aed';
+      $('repo-link').href = 'https://github.com/ProAgentStore/' + encodeURIComponent(slug);
+      $('console-link').href = '/console/?agent=' + encodeURIComponent(a.id);
+      $('details-console-link').href = '/console/?agent=' + encodeURIComponent(a.id);
+      $('subscribe-link').href = '/console/?subscribe=' + encodeURIComponent(a.id);
+      $('clone-link').href = '/console/?clone=' + encodeURIComponent(a.id);
+      $('metric-subs').textContent = a.subscriber_count || 0;
+      $('meta-kv').innerHTML = [
+        ['Agent ID', a.id], ['Slug', slug], ['Type', a.store_type || 'agent'], ['Category', a.category || 'general'], ['Model', a.model || 'default'], ['Created', formatDate(a.created_at)]
+      ].map(([k,v]) => '<div class="kv-row"><span>' + esc(k) + '</span><span>' + esc(v) + '</span></div>').join('');
+      $('mcp-command').textContent = 'npx mcp-remote ' + MCP_URL + '\n\n# Then call scaffold_agent, my_agents, add_knowledge, read_agent_file, and other PAGS tools.';
+	      $('api-chat').textContent = 'curl -X POST https://api.proagentstore.online/v1/public/agents/' + slug + '/try \\\n  -H "Content-Type: application/json" \\\n  -d \'' + JSON.stringify({message:'Hello!'}) + '\'';
+      $('embed-code').textContent = snippetScript(slug);
+      $('sdk-code').textContent = "import { initPro } from '@proagentstore/sdk'\n\nconst agent = initPro({ agentId: '" + a.id + "', token: 'YOUR_TOKEN' })\nconst { response } = await agent.chat('Hello!')";
+      renderTools('mcp-tools', MCP_TOOLS);
+	      renderTools('runtime-tools', RUNTIME_TOOLS);
+	      $('chat-msgs').innerHTML = '<div class="msg assistant">Hi. This is the standard ProAgentStore agent dashboard. Ask me a question to start a public trial chat.</div>';
+	    }
+
+	    function renderPrivatePlaceholder(slug, message) {
+	      const placeholder = {
+	        id: slug,
+	        slug,
+	        name: titleizeSlug(slug),
+	        description: message || 'This agent is private, draft, or not published yet. Sign in as the owner to open the full dashboard.',
+	        category: 'private',
+	        store_type: 'agent',
+	        model: 'owner-only',
+	        icon_bg: '#404040',
+	        __privatePlaceholder: true
+	      };
+	      renderPublic(placeholder);
+	      setText('side-status', 'Draft/private');
+	      $('a-health-pill').textContent = 'private';
+	      $('a-health-pill').className = 'pill warn';
+	      $('metric-subs').textContent = '-';
+	      $('metric-chats').textContent = '-';
+	      $('metric-execs').textContent = '-';
+	      $('trial-note').textContent = 'Available after publish';
+	      $('chat-msgs').innerHTML = '<div class="msg system">Sign in as the owner or publish this agent to use public trial chat.</div>';
+	      $('chat-input').disabled = true;
+	      $('chat-input').placeholder = 'Private draft';
+	      $('chat-form').querySelector('button').disabled = true;
+	      $('subscribe-link').textContent = 'Open Console';
+	      $('subscribe-link').href = '/console/';
+	      $('clone-link').style.display = 'none';
+	      $('prompt-content').textContent = 'Owner-only prompt, guardrails, memory, and knowledge documents are available after sign-in.';
+	      $('knowledge-list').innerHTML = '<div class="locked">Sign in as the owner to inspect knowledge documents.</div>';
+	      setStatus('api-dot','api-status','warn','Public API cannot load private or draft agents');
+	      setStatus('repo-dot','repo-status','warn','Repository visibility is owner-only until published');
+	      setStatus('worker-dot','worker-status','warn','Worker route is unavailable until deployment');
+	      return placeholder;
+	    }
+
+    async function loadOwnerData(a) {
+      if (!token()) return;
+      try {
+        const [state, knowledge, analytics] = await Promise.allSettled([
+          request('/v1/agents/' + encodeURIComponent(a.id) + '/state', {}, true),
+          request('/v1/agents/' + encodeURIComponent(a.id) + '/knowledge', {}, true),
+          request('/v1/agents/' + encodeURIComponent(a.id) + '/analytics', {}, true)
+        ]);
+        if (state.status === 'fulfilled') {
+          const s = state.value || {};
+          $('prompt-content').innerHTML = '<div class="kv">' + [
+	            ['Name', s.name], ['Goal', s.goal], ['Personality', s.personality], ['Response style', s.guardrails?.responseStyle], ['Topic restrictions', s.guardrails?.topicRestrictions], ['Require citations', s.guardrails?.requireCitations ? 'yes' : 'no']
+          ].map(([k,v]) => '<div class="kv-row"><span>' + esc(k) + '</span><span>' + esc(v || '-') + '</span></div>').join('') + '</div>';
+        }
+        if (knowledge.status === 'fulfilled') {
+          const docs = knowledge.value.documents || [];
+          $('knowledge-list').innerHTML = docs.length ? docs.map(doc => '<div class="list-item"><strong>' + esc(doc.title) + '</strong><p>' + esc(doc.source || 'knowledge') + ' · ' + esc(formatDate(doc.addedAt)) + '</p></div>').join('') : '<div class="locked">No knowledge documents yet.</div>';
+        }
+        if (analytics.status === 'fulfilled') {
+          $('metric-chats').textContent = analytics.value.totalChats || 0;
+          $('metric-execs').textContent = analytics.value.totalExecutions || 0;
+        }
+      } catch {}
+    }
+
+	    async function checkHealth(a) {
+	      const slug = a.slug || a.id;
+	      if (!a.__privatePlaceholder) {
+	        setStatus('api-dot','api-status','ok', a.__ownerView ? 'Owner API loaded this agent' : 'Public API loaded this agent');
+	        $('a-health-pill').textContent = a.__ownerView ? 'owner view' : 'online';
+	        $('a-health-pill').className = a.__ownerView ? 'pill warn' : 'pill live';
+	      }
+	      fetch('https://mcp.proagentstore.online/health').then(r => r.ok ? r.json() : null).then(data => {
+	        if (data?.ok) setStatus('mcp-dot','mcp-status','ok','MCP online with ' + data.tools + ' tools');
+	        else setStatus('mcp-dot','mcp-status','warn','MCP health unavailable');
+	      }).catch(() => setStatus('mcp-dot','mcp-status','warn','MCP health unavailable'));
+	      if (a.__privatePlaceholder) return;
+	      fetch('https://raw.githubusercontent.com/ProAgentStore/' + encodeURIComponent(slug) + '/main/README.md').then(r => r.ok ? r.text() : null).then(readme => {
+	        if (readme) {
+	          setStatus('repo-dot','repo-status','ok','GitHub README available');
+          $('readme-summary').textContent = readme.split('\n').filter(Boolean).slice(0,5).join('\n');
+        } else {
+          setStatus('repo-dot','repo-status','warn','Repository README not found');
+          $('readme-summary').textContent = 'No README found in the public repository yet.';
+        }
+      }).catch(() => setStatus('repo-dot','repo-status','warn','Repository README not found'));
+	      setStatus('worker-dot','worker-status','warn','Worker route health is checked during deploy');
+	    }
 
     async function loadAgent() {
-      const path = window.location.pathname;
-      const match = path.match(/\/agents\/([^/]+)/);
-      if (!match) { document.getElementById('loading').textContent = 'Agent not found'; return; }
+      const match = window.location.pathname.match(/\/agents\/([^/]+)/);
+      if (!match) { $('loading').textContent = 'Agent not found'; return; }
       agentId = match[1];
-
       try {
-        const res = await fetch(`${API}/v1/public/agents/${agentId}`);
-        if (!res.ok) { document.getElementById('loading').textContent = 'Agent not found'; return; }
-        const a = await res.json();
+        try {
+          agent = await request('/v1/public/agents/' + encodeURIComponent(agentId));
+        } catch (publicError) {
+          if (!token()) throw publicError;
+          agent = await request('/v1/agents/' + encodeURIComponent(agentId), {}, true);
+          agent.__ownerView = true;
+        }
+        renderPublic(agent);
+        $('loading').style.display = 'none';
+        $('content').style.display = '';
+        checkHealth(agent);
+        loadOwnerData(agent);
+	      } catch (error) {
+	        agent = renderPrivatePlaceholder(agentId, 'This agent is private, draft, or not published yet. Sign in as the owner to open the full dashboard.');
+	        $('loading').style.display = 'none';
+	        $('content').style.display = '';
+	        checkHealth(agent);
+	      }
+	    }
 
-        document.title = `${a.name} — ProAgentStore`;
-        document.getElementById('a-name').textContent = a.name;
-        document.getElementById('a-cat').textContent = a.category;
-        document.getElementById('a-desc').textContent = a.description;
-        document.getElementById('a-subs').textContent = `${a.subscriber_count || 0} subscriber${a.subscriber_count !== 1 ? 's' : ''}`;
-        if (a.icon_bg) document.getElementById('a-icon').style.background = a.icon_bg;
-        document.getElementById('a-subscribe').href = `/console/?subscribe=${encodeURIComponent(a.id)}`;
-        document.getElementById('a-clone').href = `/console/?clone=${encodeURIComponent(a.id)}`;
-
-        document.getElementById('embed-code').textContent =
-          `<script src="https://proagentstore.online/widget.js"\n  data-agent="${a.slug || a.id}"\n  data-theme="dark"></script>`;
-
-        // API docs
-        document.getElementById('api-slug').textContent = a.slug || a.id;
-        document.getElementById('api-id').textContent = a.id;
-
-        // Fetch README from GitHub repo
-        fetch(`https://raw.githubusercontent.com/ProAgentStore/${a.slug}/main/README.md`)
-          .then(r => r.ok ? r.text() : null)
-          .then(readme => {
-            if (readme) {
-              document.getElementById('readme-content').textContent = readme;
-              document.getElementById('readme-section').style.display = '';
-            }
-          }).catch(() => {});
-
-        document.getElementById('loading').style.display = 'none';
-        document.getElementById('content').style.display = '';
-      } catch (e) {
-        document.getElementById('loading').textContent = 'Failed to load agent';
+    async function sendMessage(message) {
+      const msgs = $('chat-msgs');
+      msgs.insertAdjacentHTML('beforeend','<div class="msg user">' + esc(message) + '</div>');
+      $('thinking').style.display = '';
+      try {
+        const data = await request('/v1/public/agents/' + encodeURIComponent(agentId) + '/try', {method:'POST', body: JSON.stringify({message, sessionId})});
+        sessionId = data.sessionId || sessionId;
+	        const reply = data.message?.content ? data.message.content : data.reply;
+        msgs.insertAdjacentHTML('beforeend','<div class="msg assistant">' + esc(reply || 'No response') + '</div>');
+      } catch (error) {
+        msgs.insertAdjacentHTML('beforeend','<div class="msg system">' + esc(error.message) + '</div>');
+      } finally {
+        $('thinking').style.display = 'none';
+        msgs.scrollTop = msgs.scrollHeight;
       }
     }
 
-    async function send() {
-      const input = document.getElementById('chat-input');
+    document.addEventListener('click', event => {
+      const tab = event.target.closest('.tab');
+      if (tab) activateTab(tab.dataset.tab);
+    });
+    $('chat-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const input = $('chat-input');
       const message = input.value.trim();
       if (!message) return;
       input.value = '';
-
-      const msgs = document.getElementById('chat-msgs');
-      msgs.innerHTML += `<div class="msg user">${esc(message)}</div>`;
-      msgs.scrollTop = msgs.scrollHeight;
-      document.getElementById('thinking').style.display = '';
-
-      try {
-        const res = await fetch(`${API}/v1/public/agents/${agentId}/try`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message, sessionId }),
-        });
-        const data = await res.json();
-        sessionId = data.sessionId || sessionId;
-
-        if (data.message) {
-          msgs.innerHTML += `<div class="msg assistant">${esc(data.message.content)}</div>`;
-        }
-        if (data.error) {
-          msgs.innerHTML += `<div class="msg system">${esc(data.error)}</div>`;
-        }
-      } catch (e) {
-        msgs.innerHTML += `<div class="msg system">Error: ${esc(e.message)}</div>`;
-      }
-      document.getElementById('thinking').style.display = 'none';
-      msgs.scrollTop = msgs.scrollHeight;
-    }
+      sendMessage(message);
+    });
+    $('copy-mcp').addEventListener('click', async () => {
+      await navigator.clipboard.writeText('npx mcp-remote ' + MCP_URL).catch(() => {});
+      $('copy-mcp').textContent = 'Copied';
+      setTimeout(() => $('copy-mcp').textContent = 'Copy MCP', 1200);
+    });
 
     loadAgent();
   </script>

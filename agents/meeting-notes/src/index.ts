@@ -125,15 +125,15 @@ async function extractNotes(
 
 	try {
 		return JSON.parse(raw) as ExtractedNotes;
-	} catch {
-		// AI returned malformed JSON — return a minimal fallback so we never
-		// lose the transcript. The caller can re-process if needed.
-		console.error("[meeting-notes] AI returned non-JSON response:", raw.slice(0, 200));
-		return {
-			title: "Meeting " + new Date().toISOString().slice(0, 10),
-			attendees: [],
-			summary: raw.slice(0, 500) || "Could not extract summary.",
-			decisions: [],
+		} catch {
+			// AI returned malformed JSON — return a minimal fallback so we never
+			// lose the transcript. The caller can re-process if needed.
+			console.error("[meeting-notes] AI returned non-JSON response:", raw.slice(0, 200));
+			return {
+				title: `Meeting ${new Date().toISOString().slice(0, 10)}`,
+				attendees: [],
+				summary: raw.slice(0, 500) || "Could not extract summary.",
+				decisions: [],
 			followUps: [],
 			actionItems: [],
 		};
@@ -353,12 +353,13 @@ function buildDigest(data: DigestData): string {
 	if (openItems.length > 0) {
 		lines.push("--- Open Action Items ---");
 		// Group by meeting
-		const byMeeting = new Map<string, ActionItem[]>();
-		for (const item of openItems) {
-			const key = item.meetingTitle;
-			if (!byMeeting.has(key)) byMeeting.set(key, []);
-			byMeeting.get(key)!.push(item);
-		}
+			const byMeeting = new Map<string, ActionItem[]>();
+			for (const item of openItems) {
+				const key = item.meetingTitle;
+				const items = byMeeting.get(key) ?? [];
+				items.push(item);
+				byMeeting.set(key, items);
+			}
 		for (const [meetingTitle, items] of byMeeting) {
 			lines.push(`${meetingTitle}:`);
 			for (const item of items) {
