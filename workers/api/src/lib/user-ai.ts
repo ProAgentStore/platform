@@ -39,6 +39,11 @@ export async function runUserWorkersAi(
 	if (!res.ok) {
 		return { error: "user_workers_ai_failed", status: res.status, details: data };
 	}
+	await env.DB.prepare(
+		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = 'cloudflare'",
+	)
+		.bind(userId)
+		.run();
 	if (data && typeof data === "object" && "result" in data) {
 		return (data as { result: unknown }).result;
 	}

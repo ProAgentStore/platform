@@ -4,6 +4,8 @@ export interface Env {
 	AGENT: DurableObjectNamespace;
 	GITHUB_CLIENT_ID: string;
 	GITHUB_CLIENT_SECRET: string;
+	GITHUB_ORG?: string;
+	GITHUB_TOKEN?: string;
 	SESSION_SIGNING_KEY: string;
 	KEY_ENCRYPTION_KEY?: string;
 	STRIPE_SECRET_KEY?: string;

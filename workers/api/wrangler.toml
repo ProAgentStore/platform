@@ -11,6 +11,7 @@ custom_domain = true
 
 [vars]
 GITHUB_CLIENT_ID = ""  # Set after creating GitHub OAuth app
+GITHUB_ORG = "ProAgentStore"
 
 [[d1_databases]]
 binding = "DB"
@@ -32,6 +33,7 @@ new_classes = ["AgentDO"]
 
 # Secrets (set via wrangler secret put + Doppler):
 # GITHUB_CLIENT_SECRET
+# GITHUB_TOKEN
 # SESSION_SIGNING_KEY
 # STRIPE_SECRET_KEY
 # STRIPE_WEBHOOK_SECRET

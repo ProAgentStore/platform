@@ -7,7 +7,11 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
-import { encodeCloudflareAiCredentials } from "../lib/user-ai.js";
+import {
+	encodeCloudflareAiCredentials,
+	runUserWorkersAi,
+	UserAiCredentialsError,
+} from "../lib/user-ai.js";
 import type { Env } from "../types.js";
 
 export const keysRoutes = new Hono<{ Bindings: Env }>();
@@ -166,6 +170,44 @@ keysRoutes.put("/:provider", async (c) => {
 		.run();
 
 	return c.json({ success: true, provider: providerId });
+});
+
+/** Verify a stored provider key with a minimal provider request. */
+keysRoutes.post("/:provider/verify", async (c) => {
+	const session = await requireUser(c);
+	const providerId = c.req.param("provider");
+	if (providerId !== "cloudflare") {
+		throw new HttpError(400, `Verification not available for ${providerId}`);
+	}
+
+	try {
+		const result = await runUserWorkersAi(
+			c.env,
+			session.uid,
+			"@cf/meta/llama-3.2-3b-instruct",
+			{
+				messages: [
+					{ role: "system", content: "Reply with exactly: ok" },
+					{ role: "user", content: "verify" },
+				],
+				max_tokens: 4,
+			},
+		);
+		if (
+			result &&
+			typeof result === "object" &&
+			"error" in result &&
+			(result as { error?: unknown }).error
+		) {
+			return c.json({ ok: false, result }, 400);
+		}
+		return c.json({ ok: true, provider: providerId, checkedAt: new Date().toISOString() });
+	} catch (err) {
+		if (err instanceof UserAiCredentialsError) {
+			throw new HttpError(err.status, err.message);
+		}
+		throw err;
+	}
 });
 
 /** Delete a key. */

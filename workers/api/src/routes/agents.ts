@@ -23,6 +23,109 @@ interface AgentRow {
 	updated_at: string;
 }
 
+interface GithubRun {
+	id: number;
+	name: string;
+	status: string;
+	conclusion: string | null;
+	html_url: string;
+	head_sha: string;
+	created_at: string;
+	updated_at: string;
+}
+
+async function github(
+	env: Env,
+	path: string,
+	init: RequestInit = {},
+): Promise<Response> {
+	if (!env.GITHUB_TOKEN) throw new HttpError(503, "GitHub deploy token is not configured");
+	return fetch(`https://api.github.com${path}`, {
+		...init,
+		headers: {
+			Accept: "application/vnd.github+json",
+			Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+			"X-GitHub-Api-Version": "2022-11-28",
+			"User-Agent": "proagentstore-api",
+			...(init.headers || {}),
+		},
+	});
+}
+
+function repoNameFor(agent: Pick<AgentRow, "slug">): string {
+	return agent.slug;
+}
+
+async function requireOwnedAgent(
+	c: {
+		req: { param(k: string): string };
+		env: Env;
+	},
+	session: { uid: string; roles: string[] },
+): Promise<AgentRow> {
+	const id = c.req.param("id");
+	const row = await c.env.DB.prepare("SELECT * FROM agents WHERE (id = ?1 OR slug = ?1)")
+		.bind(id)
+		.first<AgentRow>();
+	if (!row) throw new HttpError(404, "Agent not found");
+	if (row.owner_id !== session.uid && !session.roles.includes("admin")) {
+		throw new HttpError(403, "Not your agent");
+	}
+	return row;
+}
+
+async function deployStatus(env: Env, agent: AgentRow) {
+	const org = env.GITHUB_ORG || "ProAgentStore";
+	const repo = repoNameFor(agent);
+	if (!env.GITHUB_TOKEN) {
+		return {
+			configured: false,
+			repo,
+			org,
+			runs: [],
+			message: "GitHub deploy token is not configured",
+		};
+	}
+	const res = await github(
+		env,
+		`/repos/${org}/${repo}/actions/runs?per_page=5`,
+	);
+	if (res.status === 404) {
+		return {
+			configured: true,
+			repo,
+			org,
+			runs: [],
+			message: "Repository or deploy workflow not found",
+		};
+	}
+	if (!res.ok) {
+		return {
+			configured: true,
+			repo,
+			org,
+			runs: [],
+			message: `GitHub status failed: ${res.status}`,
+		};
+	}
+	const data = (await res.json()) as { workflow_runs?: GithubRun[] };
+	return {
+		configured: true,
+		repo,
+		org,
+		runs: (data.workflow_runs || []).map((run) => ({
+			id: run.id,
+			name: run.name,
+			status: run.status,
+			conclusion: run.conclusion,
+			url: run.html_url,
+			headSha: run.head_sha,
+			createdAt: run.created_at,
+			updatedAt: run.updated_at,
+		})),
+	};
+}
+
 /** List agents owned by the current user. Must be before /:id to avoid shadowing. */
 agentRoutes.get("/my/agents", async (c) => {
 	const session = await requireUser(c);
@@ -32,6 +135,83 @@ agentRoutes.get("/my/agents", async (c) => {
 		.bind(session.uid)
 		.all<AgentRow>();
 	return c.json({ agents: results });
+});
+
+/** Agent operations status: billing, runtime, deployment. */
+agentRoutes.get("/:id/ops", async (c) => {
+	const session = await requireUser(c);
+	const agent = await requireOwnedAgent(c, session);
+
+	const cloudflareKey = await c.env.DB.prepare(
+		"SELECT created_at, last_used_at FROM user_api_keys WHERE user_id = ?1 AND provider = 'cloudflare'",
+	)
+		.bind(session.uid)
+		.first<{ created_at: string; last_used_at: string | null }>();
+	const executions = await c.env.DB.prepare(
+		`SELECT id, model, duration_ms, error, created_at
+     FROM agent_executions
+     WHERE agent_id = ?1
+     ORDER BY created_at DESC
+     LIMIT 5`,
+	)
+		.bind(agent.id)
+		.all();
+
+	return c.json({
+		agent: {
+			id: agent.id,
+			slug: agent.slug,
+			name: agent.name,
+			model: agent.model || "@cf/meta/llama-3.2-3b-instruct",
+			visibility: agent.visibility,
+			status: agent.status,
+			workerUrl: `https://${agent.slug}.proagentstore.online/`,
+		},
+		billing: {
+			provider: "cloudflare",
+			mode: "user-owned",
+			hasCloudflareKey: Boolean(cloudflareKey),
+			createdAt: cloudflareKey?.created_at || null,
+			lastUsedAt: cloudflareKey?.last_used_at || null,
+		},
+		deploy: await deployStatus(c.env, agent),
+		executions: executions.results || [],
+	});
+});
+
+/** Trigger the GitHub Actions deploy workflow for this agent repo. */
+agentRoutes.post("/:id/deploy", async (c) => {
+	const session = await requireUser(c);
+	const agent = await requireOwnedAgent(c, session);
+	const org = c.env.GITHUB_ORG || "ProAgentStore";
+	const repo = repoNameFor(agent);
+
+	const res = await github(
+		c.env,
+		`/repos/${org}/${repo}/actions/workflows/deploy.yml/dispatches`,
+		{
+			method: "POST",
+			body: JSON.stringify({ ref: "main" }),
+		},
+	);
+	if (res.status === 404) {
+		const status = await deployStatus(c.env, agent);
+		return c.json({
+			queued: false,
+			message: "Deploy workflow is not available yet",
+			deploy: status,
+		}, 404);
+	}
+	if (!res.ok && res.status !== 204) {
+		const body = await res.text();
+		throw new HttpError(res.status, body || "Deploy trigger failed");
+	}
+	return c.json({
+		queued: true,
+		repo,
+		org,
+		deploy: await deployStatus(c.env, agent),
+	});
 });
 
 /** List all published agents (public). */

@@ -372,6 +372,7 @@
       <button type="button" class="tab" onclick="switchTab('tasks')">Tasks</button>
       <button type="button" class="tab" onclick="switchTab('settings')">Settings</button>
       <button type="button" class="tab" onclick="switchTab('analytics')">Analytics</button>
+      <button type="button" class="tab" onclick="switchTab('ops')">Ops</button>
     </div>
 
     <!-- Chat tab -->
@@ -514,6 +515,50 @@
           <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Recent Executions</h3>
           <div id="recent-execs"></div>
         </div>
+      </div>
+    </div>
+
+    <!-- Ops tab -->
+    <div id="tab-ops" class="tab-panel">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:0.75rem;margin-bottom:1rem">
+        <div class="create-form">
+          <h3 style="font-size:0.95rem;margin-bottom:0.75rem">AI Billing</h3>
+          <div id="ops-billing-status" style="font-size:0.9rem;font-weight:600;margin-bottom:0.4rem">Loading...</div>
+          <div id="ops-billing-detail" style="font-size:0.78rem;color:var(--muted);line-height:1.5"></div>
+          <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem">
+            <button type="button" onclick="verifyCloudflareKey()" class="btn btn-outline btn-sm" id="ops-verify-key">Verify Key</button>
+            <button type="button" onclick="showProfile()" class="btn btn-outline btn-sm">Manage Keys</button>
+          </div>
+        </div>
+        <div class="create-form">
+          <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Runtime Health</h3>
+          <div id="ops-api-status" style="font-size:0.82rem;color:var(--muted);margin-bottom:0.35rem">API: checking...</div>
+          <div id="ops-mcp-status" style="font-size:0.82rem;color:var(--muted);margin-bottom:0.35rem">MCP: checking...</div>
+          <div id="ops-worker-status" style="font-size:0.82rem;color:var(--muted);margin-bottom:0.35rem">Worker: checking...</div>
+          <button type="button" onclick="loadOps()" class="btn btn-outline btn-sm" style="margin-top:0.4rem">Refresh</button>
+        </div>
+      </div>
+
+      <div class="create-form" style="margin-bottom:1rem">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap">
+          <h3 style="font-size:0.95rem">Deploy</h3>
+          <button type="button" onclick="triggerDeploy()" class="btn btn-primary btn-sm" id="ops-deploy-button">Deploy</button>
+        </div>
+        <div id="ops-deploy-status" style="font-size:0.82rem;color:var(--muted);margin-bottom:0.65rem">Loading deploy status...</div>
+        <div id="ops-deploy-runs" style="display:flex;flex-direction:column;gap:0.35rem"></div>
+      </div>
+
+      <div class="create-form" style="margin-bottom:1rem">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap">
+          <h3 style="font-size:0.95rem">MCP</h3>
+          <button type="button" onclick="copyMcpCommand()" class="btn btn-outline btn-sm">Copy Command</button>
+        </div>
+        <pre id="ops-mcp-command" style="background:var(--paper);border:1px solid var(--line);border-radius:0.5rem;padding:0.75rem;font-size:0.76rem;color:var(--accent);overflow-x:auto;margin:0"></pre>
+      </div>
+
+      <div class="create-form">
+        <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Recent Executions</h3>
+        <div id="ops-execs" style="display:flex;flex-direction:column;gap:0.35rem"></div>
       </div>
     </div>
 
@@ -878,6 +923,7 @@ console.log(response)</pre>
         loadTasks();
         loadAnalytics();
         loadVersions();
+        loadOps();
       } catch (e) { alert(e.message); }
     }
 
@@ -889,6 +935,7 @@ console.log(response)</pre>
 	      container.querySelectorAll('.tab-panel').forEach(p => {
 	        p.classList.toggle('active', p.id === `tab-${name}`);
 	      });
+	      if (name === 'ops') loadOps();
 	    }
 
     // ── Chat ────────────────────────────────────────────────────
@@ -1539,6 +1586,140 @@ console.log(response)</pre>
         await api(`/v1/agents/${currentAgent.id}`, { method: 'DELETE' });
         showDashboard();
       } catch (e) { alert(e.message); }
+    }
+
+    // ── Ops ─────────────────────────────────────────────────────
+
+    function opsStatus(text, ok) {
+      const color = ok ? 'var(--green)' : 'var(--red)';
+      return `<span style="color:${color};font-weight:700">${esc(text)}</span>`;
+    }
+
+    function formatTime(value) {
+      if (!value) return 'Never';
+      try { return new Date(value).toLocaleString(); }
+      catch { return value; }
+    }
+
+    async function loadOps() {
+      if (!currentAgent || !document.getElementById('ops-billing-status')) return;
+      const billingStatus = document.getElementById('ops-billing-status');
+      const billingDetail = document.getElementById('ops-billing-detail');
+      const deployStatus = document.getElementById('ops-deploy-status');
+      const deployRuns = document.getElementById('ops-deploy-runs');
+      const execs = document.getElementById('ops-execs');
+      const verifyBtn = document.getElementById('ops-verify-key');
+      try {
+        const data = await api(`/v1/agents/${currentAgent.id}/ops`);
+        const billing = data.billing || {};
+        const agent = data.agent || currentAgent;
+
+        verifyBtn.disabled = !billing.hasCloudflareKey;
+        billingStatus.innerHTML = billing.hasCloudflareKey
+          ? opsStatus('Ready: user-owned Cloudflare Workers AI', true)
+          : opsStatus('Missing: Cloudflare Workers AI key required', false);
+        billingDetail.innerHTML = `
+          Mode: <strong>${esc(billing.mode || 'user-owned')}</strong><br>
+          Model: <strong>${esc(agent.model || '')}</strong><br>
+          Key created: ${esc(formatTime(billing.createdAt))}<br>
+          Last used: ${esc(formatTime(billing.lastUsedAt))}
+        `;
+
+        document.getElementById('ops-mcp-command').textContent =
+          'npx mcp-remote https://mcp.proagentstore.online/mcp\n\n# Agent repo: ProAgentStore/' + (data.deploy?.repo || agent.slug || currentAgent.slug);
+
+        const deploy = data.deploy || {};
+        if (!deploy.configured) {
+          deployStatus.innerHTML = opsStatus(deploy.message || 'Deploy integration is not configured', false);
+        } else if (deploy.message) {
+          deployStatus.innerHTML = opsStatus(deploy.message, false);
+        } else {
+          deployStatus.innerHTML = `Repo: <a href="https://github.com/${esc(deploy.org)}/${esc(deploy.repo)}" target="_blank" rel="noreferrer">${esc(deploy.org)}/${esc(deploy.repo)}</a>`;
+        }
+
+        deployRuns.innerHTML = '';
+        const runs = deploy.runs || [];
+        if (!runs.length) {
+          deployRuns.innerHTML = '<span style="font-size:0.82rem;color:var(--muted-soft)">No deploy runs found.</span>';
+        } else {
+          for (const run of runs) {
+            const state = run.conclusion || run.status || 'queued';
+            const ok = state === 'success' || state === 'completed';
+            deployRuns.innerHTML += `<div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;padding:0.45rem 0;border-top:1px solid var(--line);font-size:0.82rem">
+              <a href="${esc(run.url)}" target="_blank" rel="noreferrer">${esc(run.name || 'Deploy')}</a>
+              <span style="color:${ok ? 'var(--green)' : 'var(--muted)'}">${esc(state)}</span>
+            </div>`;
+          }
+        }
+
+        execs.innerHTML = '';
+        const executions = data.executions || [];
+        if (!executions.length) {
+          execs.innerHTML = '<span style="font-size:0.82rem;color:var(--muted-soft)">No executions yet.</span>';
+        } else {
+          for (const ex of executions) {
+            execs.innerHTML += `<div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;padding:0.4rem 0;border-top:1px solid var(--line);font-size:0.82rem">
+              <span>${esc(ex.model || agent.model || '')}</span>
+              <span style="color:${ex.error ? 'var(--red)' : 'var(--muted)'}">${ex.error ? esc(ex.error) : `${Number(ex.duration_ms || 0)}ms`}</span>
+            </div>`;
+          }
+        }
+
+        checkOpsHealth(agent);
+      } catch (e) {
+        billingStatus.innerHTML = opsStatus('Ops failed to load', false);
+        billingDetail.textContent = e.message;
+        deployStatus.textContent = e.message;
+      }
+    }
+
+    async function checkOpsHealth(agent) {
+      const set = (id, label, ok, detail = '') => {
+        document.getElementById(id).innerHTML = `${esc(label)}: ${ok ? opsStatus('online', true) : opsStatus('check failed', false)}${detail ? ` <span style="color:var(--muted)"> ${esc(detail)}</span>` : ''}`;
+      };
+      fetch(`${API}/health`).then(r => set('ops-api-status', 'API', r.ok, String(r.status))).catch(() => set('ops-api-status', 'API', false));
+      fetch('https://mcp.proagentstore.online/mcp', { method: 'HEAD' })
+        .then(r => set('ops-mcp-status', 'MCP', r.status === 401 || r.ok, String(r.status)))
+        .catch(() => set('ops-mcp-status', 'MCP', false));
+      const workerUrl = agent.workerUrl || `https://${agent.slug}.proagentstore.online/`;
+      fetch(workerUrl)
+        .then(r => set('ops-worker-status', 'Worker', r.ok, String(r.status)))
+        .catch(() => set('ops-worker-status', 'Worker', false, workerUrl));
+    }
+
+    async function verifyCloudflareKey() {
+      if (!confirm('Verify by making a tiny Cloudflare Workers AI request using your stored key?')) return;
+      const status = document.getElementById('ops-billing-status');
+      status.textContent = 'Verifying Cloudflare key...';
+      try {
+        const res = await api('/v1/keys/cloudflare/verify', { method: 'POST' });
+        status.innerHTML = res.ok ? opsStatus('Verified: Cloudflare Workers AI key works', true) : opsStatus('Verification failed', false);
+        loadOps();
+      } catch (e) {
+        status.innerHTML = opsStatus(`Verification failed: ${e.message}`, false);
+      }
+    }
+
+    async function triggerDeploy() {
+      if (!currentAgent) return;
+      if (!confirm(`Deploy ${currentAgent.slug || currentAgent.name}?`)) return;
+      const btn = document.getElementById('ops-deploy-button');
+      btn.disabled = true;
+      btn.textContent = 'Deploying...';
+      try {
+        await api(`/v1/agents/${currentAgent.id}/deploy`, { method: 'POST' });
+        await loadOps();
+      } catch (e) {
+        alert(e.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Deploy';
+      }
+    }
+
+    async function copyMcpCommand() {
+      const text = document.getElementById('ops-mcp-command').textContent;
+      await navigator.clipboard.writeText(text).catch(() => {});
     }
 
     // ── Profile ──────────────────────────────────────────────────
