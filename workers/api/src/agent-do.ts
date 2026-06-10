@@ -9,6 +9,7 @@ import { AGENT_TOOLS, executeTool, type ToolCallRequest } from "./lib/tools.js";
 import {
 	runUserWorkersAi,
 	UserAiCredentialsError,
+	UserAiProviderError,
 } from "./lib/user-ai.js";
 import type { Env } from "./types.js";
 
@@ -298,7 +299,9 @@ export class AgentDO extends DurableObject<Env> {
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);
 			const status =
-				err instanceof UserAiCredentialsError ? err.status : 500;
+				err instanceof UserAiCredentialsError || err instanceof UserAiProviderError
+					? err.status
+					: 500;
 			await this.ctx.storage.put("state", { ...state, status: "error" });
 			this.broadcast({ type: "status", status: "error", error: errMsg });
 

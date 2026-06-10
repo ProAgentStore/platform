@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import {
 	runUserWorkersAi,
 	UserAiCredentialsError,
+	UserAiProviderError,
 } from "../lib/user-ai.js";
 import type { Env } from "../types.js";
 
@@ -45,6 +46,9 @@ runRoutes.post("/:id/run", async (c) => {
 		result = await runUserWorkersAi(c.env, session.uid, model, body.input);
 	} catch (err) {
 		if (err instanceof UserAiCredentialsError) {
+			throw new HttpError(err.status, err.message);
+		}
+		if (err instanceof UserAiProviderError) {
 			throw new HttpError(err.status, err.message);
 		}
 		throw err;

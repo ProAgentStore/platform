@@ -191,6 +191,7 @@ agentRoutes.post("/:id/deploy", async (c) => {
 		`/repos/${org}/${repo}/actions/workflows/deploy.yml/dispatches`,
 		{
 			method: "POST",
+			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ ref: "main" }),
 		},
 	);

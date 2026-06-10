@@ -11,6 +11,18 @@ export class UserAiCredentialsError extends Error {
 	}
 }
 
+export class UserAiProviderError extends Error {
+	constructor(
+		message: string,
+		public readonly status = 502,
+		public readonly upstreamStatus?: number,
+		public readonly details?: unknown,
+	) {
+		super(message);
+		this.name = "UserAiProviderError";
+	}
+}
+
 interface StoredCloudflareAiCredentials {
 	accountId: string;
 	token: string;
@@ -37,7 +49,12 @@ export async function runUserWorkersAi(
 	);
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) {
-		return { error: "user_workers_ai_failed", status: res.status, details: data };
+		throw new UserAiProviderError(
+			`Cloudflare Workers AI request failed with HTTP ${res.status}`,
+			res.status === 401 || res.status === 403 ? 400 : 502,
+			res.status,
+			data,
+		);
 	}
 	await env.DB.prepare(
 		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = 'cloudflare'",

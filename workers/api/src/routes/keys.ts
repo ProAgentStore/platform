@@ -11,6 +11,7 @@ import {
 	encodeCloudflareAiCredentials,
 	runUserWorkersAi,
 	UserAiCredentialsError,
+	UserAiProviderError,
 } from "../lib/user-ai.js";
 import type { Env } from "../types.js";
 
@@ -181,7 +182,7 @@ keysRoutes.post("/:provider/verify", async (c) => {
 	}
 
 	try {
-		const result = await runUserWorkersAi(
+		await runUserWorkersAi(
 			c.env,
 			session.uid,
 			"@cf/meta/llama-3.2-3b-instruct",
@@ -193,18 +194,18 @@ keysRoutes.post("/:provider/verify", async (c) => {
 				max_tokens: 4,
 			},
 		);
-		if (
-			result &&
-			typeof result === "object" &&
-			"error" in result &&
-			(result as { error?: unknown }).error
-		) {
-			return c.json({ ok: false, result }, 400);
-		}
 		return c.json({ ok: true, provider: providerId, checkedAt: new Date().toISOString() });
 	} catch (err) {
 		if (err instanceof UserAiCredentialsError) {
 			throw new HttpError(err.status, err.message);
+		}
+		if (err instanceof UserAiProviderError) {
+			return c.json({
+				ok: false,
+				error: err.message,
+				upstreamStatus: err.upstreamStatus,
+				details: err.details,
+			}, 400);
 		}
 		throw err;
 	}
