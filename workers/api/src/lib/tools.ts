@@ -3,7 +3,7 @@
  * Inspired by archagent's agent-tools.ts (update_task, read_memory, write_memory, etc.)
  */
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
-import type { AgentTask, MemoryEntry } from "../agent-do.js";
+import type { AgentTask, MemoryEntry } from "../agent-types.js";
 
 export interface ToolDef {
 	name: string;

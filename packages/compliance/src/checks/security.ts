@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { CheckResult } from "../index.js";
+import type { CheckResult } from "../types.js";
 
 // Patterns that look like real secrets (not just the words)
 const SECRET_PATTERNS = [

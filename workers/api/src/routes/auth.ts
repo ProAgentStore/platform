@@ -176,17 +176,25 @@ authRoutes.put("/me", async (c) => {
 		twitter?: string;
 		slack_webhook?: string;
 	}>();
+	const allowed = [
+		["display_name", "display_name"],
+		["bio", "bio"],
+		["website", "website"],
+		["twitter", "twitter"],
+		["slack_webhook", "slack_webhook"],
+	] as const;
 	const sets: string[] = ["updated_at = datetime('now')"];
 	const params: unknown[] = [];
-	for (const key of ["display_name", "bio", "website", "twitter", "slack_webhook"] as const) {
+	for (const [key, column] of allowed) {
 		if (body[key] !== undefined) {
 			params.push(body[key]);
-			sets.push(`${key} = ?${params.length + 1}`);
+			sets.push(`${column} = ?${params.length + 1}`);
 		}
 	}
 	if (params.length === 0) return c.json({ error: "Nothing to update" }, 400);
 	params.unshift(session.uid);
-	await c.env.DB.prepare(`UPDATE users SET ${sets.join(", ")} WHERE id = ?1`)
+	const sql = ["UPDATE users SET", sets.join(", "), "WHERE id = ?1"].join(" ");
+	await c.env.DB.prepare(sql)
 		.bind(...params)
 		.run();
 	return c.json({ success: true });

@@ -365,30 +365,31 @@ agentRoutes.put("/:id", async (c) => {
 	}
 
 	const body = await c.req.json<Record<string, unknown>>();
-	const allowed = [
-		"name",
-		"description",
-		"category",
-		"icon",
-		"icon_bg",
-		"model",
-		"visibility",
-		"cron_schedule",
-	];
+	const allowed = {
+		name: "name",
+		description: "description",
+		category: "category",
+		icon: "icon",
+		icon_bg: "icon_bg",
+		model: "model",
+		visibility: "visibility",
+		cron_schedule: "cron_schedule",
+	} as const;
 	const sets: string[] = ["updated_at = datetime('now')"];
 	const params: unknown[] = [];
 
-	for (const key of allowed) {
+	for (const [key, column] of Object.entries(allowed)) {
 		if (body[key] !== undefined) {
 			params.push(body[key]);
-			sets.push(`${key} = ?${params.length + 1}`);
+			sets.push(`${column} = ?${params.length + 1}`);
 		}
 	}
 
 	if (sets.length === 1) throw new HttpError(400, "Nothing to update");
 
 	params.unshift(id); // ?1
-	await c.env.DB.prepare(`UPDATE agents SET ${sets.join(", ")} WHERE id = ?1`)
+	const sql = ["UPDATE agents SET", sets.join(", "), "WHERE id = ?1"].join(" ");
+	await c.env.DB.prepare(sql)
 		.bind(...params)
 		.run();
 	return c.json({ success: true });

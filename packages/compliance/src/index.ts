@@ -6,13 +6,8 @@ import {
 	checkStructure,
 	checkWrangler,
 } from "./checks/index.js";
-
-export interface CheckResult {
-	name: string;
-	pass: boolean;
-	message: string;
-	severity: "error" | "warning" | "info";
-}
+import type { CheckResult } from "./types.js";
+export type { CheckResult } from "./types.js";
 
 type CheckFn = (dir: string) => Promise<CheckResult[]>;
 

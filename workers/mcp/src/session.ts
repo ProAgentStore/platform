@@ -1,4 +1,4 @@
-export interface SessionPayload {
+export interface McpSessionPayload {
 	uid: string;
 	roles: string[];
 	iat: number;
@@ -22,10 +22,10 @@ function unb64url(s: string): Uint8Array {
 	return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
 }
 
-export async function verifySession(
+export async function verifyMcpSession(
 	token: string,
 	signingKey: string,
-): Promise<SessionPayload | null> {
+): Promise<McpSessionPayload | null> {
 	const [data, sig] = token.split(".");
 	if (!data || !sig) return null;
 	const key = await hmacKey(signingKey);
@@ -36,7 +36,7 @@ export async function verifySession(
 		new TextEncoder().encode(data),
 	);
 	if (!valid) return null;
-	const payload: SessionPayload = JSON.parse(
+	const payload: McpSessionPayload = JSON.parse(
 		new TextDecoder().decode(unb64url(data)),
 	);
 	if (payload.exp < Math.floor(Date.now() / 1000)) return null;

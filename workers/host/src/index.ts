@@ -114,7 +114,9 @@ export default {
 				for (const d of devs) {
 					xml += `  <url><loc>https://proagentstore.online/developers/${d}/</loc><changefreq>weekly</changefreq></url>\n`;
 				}
-			} catch {}
+			} catch (error) {
+				console.warn("Sitemap agent expansion failed", error);
+			}
 			xml += "</urlset>";
 			return new Response(xml, {
 				headers: { "Content-Type": "application/xml", "Cache-Control": "public, max-age=3600" },

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { CheckResult } from "../index.js";
+import type { CheckResult } from "../types.js";
 
 export async function checkWrangler(dir: string): Promise<CheckResult[]> {
 	const wranglerPath = path.join(dir, "wrangler.toml");

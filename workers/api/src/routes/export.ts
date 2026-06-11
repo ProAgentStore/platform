@@ -108,17 +108,24 @@ exportRoutes.post("/:id/import", async (c) => {
 	// Update D1 fields if provided
 	if (backup.agent) {
 		const fields = backup.agent;
+		const allowed = {
+			name: "name",
+			description: "description",
+			category: "category",
+			model: "model",
+		} as const;
 		const sets: string[] = ["updated_at = datetime('now')"];
 		const params: unknown[] = [];
-		for (const key of ["name", "description", "category", "model"]) {
+		for (const [key, column] of Object.entries(allowed)) {
 			if (fields[key]) {
 				params.push(fields[key]);
-				sets.push(`${key} = ?${params.length + 1}`);
+				sets.push(`${column} = ?${params.length + 1}`);
 			}
 		}
 		if (params.length > 0) {
 			params.unshift(agent.id);
-			await c.env.DB.prepare(`UPDATE agents SET ${sets.join(", ")} WHERE id = ?1`).bind(...params).run();
+			const sql = ["UPDATE agents SET", sets.join(", "), "WHERE id = ?1"].join(" ");
+			await c.env.DB.prepare(sql).bind(...params).run();
 		}
 	}
 

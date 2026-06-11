@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Command } from "commander";
@@ -27,7 +27,7 @@ export const publishCommand = new Command("publish")
 		// Run compliance checks
 		console.log("  Running compliance checks...");
 		try {
-			execSync("pags check", { cwd: dir, stdio: "inherit" });
+			execFileSync("pags", ["check"], { cwd: dir, stdio: "inherit" });
 		} catch {
 			console.error("\n  Compliance checks failed. Fix issues and retry.\n");
 			process.exit(1);
@@ -40,14 +40,17 @@ export const publishCommand = new Command("publish")
 
 		let repoExists = false;
 		try {
-			execSync(`gh api repos/${org}/${repoName} --jq .name`, { stdio: "pipe" });
+			execFileSync("gh", ["api", `repos/${org}/${repoName}`, "--jq", ".name"], {
+				stdio: "pipe",
+			});
 			repoExists = true;
 			console.log("  Repo exists, pushing...");
 		} catch {
 			console.log("  Creating repo...");
 			try {
-				execSync(
-					`gh repo create ${org}/${repoName} --public --source=${dir} --push`,
+				execFileSync(
+					"gh",
+					["repo", "create", `${org}/${repoName}`, "--public", `--source=${dir}`, "--push"],
 					{ stdio: "inherit" },
 				);
 				repoExists = true;
@@ -60,15 +63,22 @@ export const publishCommand = new Command("publish")
 		if (repoExists) {
 			// Ensure remote is set and push
 			try {
-				execSync(`git remote get-url origin`, { cwd: dir, stdio: "pipe" });
+				execFileSync("git", ["remote", "get-url", "origin"], {
+					cwd: dir,
+					stdio: "pipe",
+				});
 			} catch {
-				execSync(
-					`git remote add origin https://github.com/${org}/${repoName}.git`,
+				execFileSync(
+					"git",
+					["remote", "add", "origin", `https://github.com/${org}/${repoName}.git`],
 					{ cwd: dir },
 				);
 			}
 			try {
-				execSync("git push -u origin main", { cwd: dir, stdio: "inherit" });
+				execFileSync("git", ["push", "-u", "origin", "main"], {
+					cwd: dir,
+					stdio: "inherit",
+				});
 			} catch {
 				console.log("  Push skipped (up to date or no commits)");
 			}

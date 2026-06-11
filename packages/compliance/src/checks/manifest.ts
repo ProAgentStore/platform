@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { CheckResult } from "../index.js";
+import type { CheckResult } from "../types.js";
 
 const VALID_STORE_TYPES = ["agent", "tool", "worker"] as const;
 const VALID_CATEGORIES = [

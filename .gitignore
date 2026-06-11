@@ -7,3 +7,4 @@ dist/
 workers/host/src/pages.ts
 playwright-report/
 test-results/
+.vibe-check/

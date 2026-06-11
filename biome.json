@@ -17,6 +17,7 @@
 			"!**/node_modules",
 			"!**/dist",
 			"!**/.wrangler",
+			"!**/.vibe-check",
 			"!workers/host/src/pages.ts"
 		]
 	},

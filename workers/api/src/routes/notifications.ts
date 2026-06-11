@@ -74,7 +74,11 @@ export async function createNotification(
 						{ type: "context", elements: [{ type: "mrkdwn", text: `ProAgentStore · ${type}` }] },
 					],
 				}),
-			}).catch(() => {});
+			}).catch((error) => {
+				console.warn("Slack notification delivery failed", error);
+			});
 		}
-	} catch {}
+	} catch (error) {
+		console.warn("Notification dispatch failed", error);
+	}
 }
