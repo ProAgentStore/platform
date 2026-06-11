@@ -1,0 +1,13 @@
+interface:
+  display_name: "ProAgentStore MCP Operator"
+  short_description: "Create, run, and inspect ProAgentStore agents through the user's MCP-authenticated account."
+  brand_color: "#14B8A6"
+  default_prompt: "Use ProAgentStore MCP to create or run an agent in my account."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "proagentstore"
+      description: "ProAgentStore account and agent runtime tools"
+      transport: "streamable_http"
+      url: "https://mcp.proagentstore.online/mcp"

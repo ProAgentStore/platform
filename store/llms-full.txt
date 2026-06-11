@@ -1,0 +1,123 @@
+# ProAgentStore LLM Guide
+
+ProAgentStore is a marketplace for server-powered AI agents. Creators build agent templates with identity, prompts, tools, guardrails, and knowledge. Users subscribe to agents and run private instances with isolated state, knowledge, memory, chat history, and billing credentials.
+
+The public website is the discovery layer. The plugin marketplaces are the install layer. The Agent Skill is the reusable workflow. The MCP server is the authenticated account-action boundary.
+
+## Public URLs
+
+- Store: https://proagentstore.online/
+- Skills catalog: https://proagentstore.online/skills/
+- MCP operator skill: https://proagentstore.online/skills/proagentstore-mcp-operator/
+- Machine-readable skills metadata: https://proagentstore.online/skills.json
+- MCP endpoint: https://mcp.proagentstore.online/mcp
+- MCP health: https://mcp.proagentstore.online/health
+- API: https://api.proagentstore.online/
+- GitHub marketplace repo: https://github.com/ProAgentStore/platform
+
+## Install for Codex
+
+```bash
+codex plugin marketplace add ProAgentStore/platform
+```
+
+After installation, use the `proagentstore` plugin or the `proagentstore-mcp-operator` skill when asked to create, run, subscribe to, or inspect ProAgentStore agents.
+
+## Install for Claude Code
+
+```text
+/plugin marketplace add ProAgentStore/platform
+/plugin install proagentstore@proagentstore
+/reload-plugins
+```
+
+After installation, use the plugin skill when the user asks for ProAgentStore account operations. The MCP server still requires user approval through browser sign-in.
+
+## Skill: proagentstore-mcp-operator
+
+Purpose: operate ProAgentStore account state only through the deployed MCP server.
+
+Use when:
+
+- Creating or updating an agent in the user's ProAgentStore account.
+- Subscribing to an agent.
+- Running a private agent instance.
+- Adding, listing, or deleting instance knowledge.
+- Reading private instance messages.
+- Checking deployment state or account-owned agent files.
+
+Do not bypass MCP with direct database writes, private API calls, browser-only shortcuts, or local secrets unless the user explicitly overrides that rule.
+
+## Correct Runtime Flow
+
+Public trial flow:
+
+```text
+list_agents -> chat_with_agent
+```
+
+Use this for discovery, demos, anonymous trials, and smoke tests.
+
+Private instance flow:
+
+```text
+list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages
+```
+
+Use this for durable user work. This path keeps user state, private knowledge, memory, messages, and billing credentials separate from the creator's template agent.
+
+## Billing Boundary
+
+Agents must use caller-owned AI credentials. If caller credentials are missing, the expected response is:
+
+```text
+Add your Cloudflare Workers AI account ID and API token before running this agent.
+```
+
+That response means the private instance path is working and correctly refusing to spend platform-owned AI.
+
+## Main MCP Tool Groups
+
+Creator tools:
+
+- `create_agent`
+- `scaffold_agent`
+- `update_agent`
+- `my_agents`
+- `list_agent_files`
+- `read_agent_file`
+- `write_agent_file`
+- `batch_write_agent_files`
+- `trigger_agent_deploy`
+- `agent_deploy_status`
+- `add_knowledge`
+- `list_knowledge`
+- `agent_analytics`
+
+User runtime tools:
+
+- `subscribe_agent`
+- `my_instances`
+- `chat_with_instance`
+- `instance_messages`
+- `add_instance_knowledge`
+- `list_instance_knowledge`
+- `delete_instance_knowledge`
+- `cancel_instance`
+
+Discovery/reference tools:
+
+- `list_agents`
+- `agent_info`
+- `chat_with_agent`
+- `platform_guide`
+- `sdk_reference`
+
+## Example Prompts
+
+```text
+Use ProAgentStore MCP to create an agent in my account.
+Subscribe me to this ProAgentStore agent and run my private instance.
+Add this document to my instance knowledge and ask the agent about it.
+Show my ProAgentStore MCP tools and explain which are for private instance runtime.
+```

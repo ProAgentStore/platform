@@ -17,6 +17,14 @@ const pages = {
 		path.join(storeDir, "get-started", "index.html"),
 		"utf-8",
 	),
+	skillsPage: fs.readFileSync(
+		path.join(storeDir, "skills", "index.html"),
+		"utf-8",
+	),
+	skillMcpOperatorPage: fs.readFileSync(
+		path.join(storeDir, "skills", "proagentstore-mcp-operator", "index.html"),
+		"utf-8",
+	),
 	consolePage: fs.readFileSync(
 		path.join(storeDir, "console", "index.html"),
 		"utf-8",
@@ -31,6 +39,9 @@ const pages = {
 	notFoundPage: fs.readFileSync(path.join(storeDir, "404.html"), "utf-8"),
 	changelogPage: fs.readFileSync(path.join(storeDir, "changelog", "index.html"), "utf-8"),
 	openapiYaml: fs.readFileSync(path.join(storeDir, "openapi.yaml"), "utf-8"),
+	llmsTxt: fs.readFileSync(path.join(storeDir, "llms.txt"), "utf-8"),
+	llmsFullTxt: fs.readFileSync(path.join(storeDir, "llms-full.txt"), "utf-8"),
+	skillsJson: fs.readFileSync(path.join(storeDir, "skills.json"), "utf-8"),
 	developerProfilePage: fs.readFileSync(
 		path.join(storeDir, "developers", "profile.html"),
 		"utf-8",

@@ -19,6 +19,8 @@ platform/
 ├── workers/host/     Marketing site + console + widget
 ├── workers/mcp/      MCP server for Claude/Cursor/VS Code
 ├── store/            Source HTML for all pages
+├── skills/           Open Agent Skills source files
+├── plugins/          Codex and Claude plugin wrappers
 ├── agents/           5 flagship agents (site-monitor, lead-qualifier, etc.)
 └── templates/        Agent scaffolding (worker, cron, api)
 ```
@@ -86,6 +88,34 @@ Add your Cloudflare Workers AI account ID and API token before running this agen
 ```
 
 That means the instance runtime path is working and correctly refusing to bill the platform AI account. See [MCP Instance Runtime](docs/mcp-instance-runtime.md) for the full tool map, live test record, and OAuth troubleshooting.
+
+### Skills and plugins
+
+ProAgentStore publishes skills through platform-specific plugin marketplaces so users can find them from both Codex and Claude Code.
+
+Codex:
+
+```bash
+codex plugin marketplace add ProAgentStore/platform
+```
+
+Claude Code:
+
+```text
+/plugin marketplace add ProAgentStore/platform
+/plugin install proagentstore@proagentstore
+/reload-plugins
+```
+
+See [Skill Publishing](docs/skill-publishing.md) for the publishing layout, marketplace files, and dual Codex/Claude release checklist.
+
+Public discovery pages:
+
+- https://proagentstore.online/skills/
+- https://proagentstore.online/skills/proagentstore-mcp-operator/
+- https://proagentstore.online/llms.txt
+- https://proagentstore.online/llms-full.txt
+- https://proagentstore.online/skills.json
 
 ## Flagship agents
 

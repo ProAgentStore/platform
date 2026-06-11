@@ -1,0 +1,15 @@
+{
+	"name": "proagentstore",
+	"version": "0.1.0",
+	"description": "Operate ProAgentStore agents and private instances through the user's MCP-authenticated account.",
+	"author": {
+		"name": "ProAgentStore",
+		"url": "https://github.com/ProAgentStore"
+	},
+	"homepage": "https://proagentstore.online/get-started/",
+	"repository": "https://github.com/ProAgentStore/platform",
+	"license": "MIT",
+	"keywords": ["agents", "mcp", "proagentstore", "marketplace", "automation"],
+	"skills": "./skills/",
+	"mcpServers": "./.mcp.json"
+}

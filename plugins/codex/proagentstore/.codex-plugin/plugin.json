@@ -1,0 +1,30 @@
+{
+	"name": "proagentstore",
+	"version": "0.1.0",
+	"description": "Operate ProAgentStore agents and private instances through the user's MCP-authenticated account.",
+	"author": {
+		"name": "ProAgentStore",
+		"url": "https://github.com/ProAgentStore"
+	},
+	"homepage": "https://proagentstore.online/get-started/",
+	"repository": "https://github.com/ProAgentStore/platform",
+	"license": "MIT",
+	"keywords": ["agents", "mcp", "proagentstore", "marketplace", "automation"],
+	"skills": "./skills/",
+	"mcpServers": "./.mcp.json",
+	"interface": {
+		"displayName": "ProAgentStore",
+		"shortDescription": "Build and operate ProAgentStore agents through MCP.",
+		"longDescription": "Create agents, subscribe to agents, run private instances, add knowledge, inspect messages, and manage ProAgentStore runtime state through the deployed MCP server.",
+		"developerName": "ProAgentStore",
+		"category": "Productivity",
+		"capabilities": ["Agents", "MCP", "Automation"],
+		"websiteURL": "https://proagentstore.online/",
+		"defaultPrompt": [
+			"Create a ProAgentStore agent in my account.",
+			"Subscribe to an agent and run my instance.",
+			"Inspect my ProAgentStore MCP tools."
+		],
+		"brandColor": "#14B8A6"
+	}
+}

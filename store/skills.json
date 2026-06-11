@@ -1,0 +1,56 @@
+{
+	"schema_version": "1.0",
+	"platform": "ProAgentStore",
+	"homepage": "https://proagentstore.online/",
+	"mcp_url": "https://mcp.proagentstore.online/mcp",
+	"marketplaces": {
+		"codex": {
+			"install": "codex plugin marketplace add ProAgentStore/platform",
+			"repo": "https://github.com/ProAgentStore/platform",
+			"marketplace_file": "https://github.com/ProAgentStore/platform/blob/main/.agents/plugins/marketplace.json"
+		},
+		"claude_code": {
+			"install": [
+				"/plugin marketplace add ProAgentStore/platform",
+				"/plugin install proagentstore@proagentstore",
+				"/reload-plugins"
+			],
+			"repo": "https://github.com/ProAgentStore/platform",
+			"marketplace_file": "https://github.com/ProAgentStore/platform/blob/main/.claude-plugin/marketplace.json"
+		}
+	},
+	"skills": [
+		{
+			"name": "proagentstore-mcp-operator",
+			"display_name": "ProAgentStore MCP Operator",
+			"description": "Operate ProAgentStore account state only through the deployed MCP server.",
+			"url": "https://proagentstore.online/skills/proagentstore-mcp-operator/",
+			"source": "https://github.com/ProAgentStore/platform/tree/main/skills/proagentstore-mcp-operator",
+			"plugin": "proagentstore",
+			"requires_mcp_auth": true,
+			"mcp_server": "https://mcp.proagentstore.online/mcp",
+			"use_when": [
+				"creating or updating ProAgentStore agents",
+				"subscribing to agents",
+				"running private agent instances",
+				"adding or inspecting instance knowledge",
+				"chatting with private instances",
+				"inspecting ProAgentStore MCP tools"
+			],
+			"public_trial_flow": ["list_agents", "chat_with_agent"],
+			"private_instance_flow": [
+				"list_agents",
+				"subscribe_agent",
+				"my_instances",
+				"add_instance_knowledge",
+				"chat_with_instance",
+				"instance_messages"
+			],
+			"example_prompts": [
+				"Use ProAgentStore MCP to create an agent in my account.",
+				"Subscribe me to this ProAgentStore agent and run my private instance.",
+				"Add this document to my instance knowledge and ask the agent about it."
+			]
+		}
+	]
+}

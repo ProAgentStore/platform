@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>proagentstore-mcp-operator Skill — ProAgentStore</title>
+  <meta name="description" content="Install the ProAgentStore MCP operator skill for Codex and Claude Code. Create, run, and inspect agents through your authenticated MCP account.">
+  <meta property="og:title" content="proagentstore-mcp-operator Skill — ProAgentStore">
+  <meta property="og:description" content="Operate ProAgentStore account state only through MCP.">
+  <meta property="og:type" content="article">
+  <meta property="og:url" content="https://proagentstore.online/skills/proagentstore-mcp-operator/">
+  <link rel="canonical" href="https://proagentstore.online/skills/proagentstore-mcp-operator/">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#7c3aed">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--accent:#7c3aed;--accent-hover:#6d28d9;--blue:#3b82f6;--line:#262626;--green:#22c55e;--amber:#f59e0b}
+    body{font-family:Manrope,Inter,system-ui,sans-serif;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+    .container{max-width:900px;margin:0 auto;padding:0 1.5rem}
+    a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
+    header{border-bottom:1px solid var(--line)}
+    header .c{max-width:1200px;margin:0 auto;padding:.75rem 1.5rem;display:flex;align-items:center;gap:1.25rem}
+    .brand{display:flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:Georgia,serif;font-size:1.15rem;font-weight:700}
+    nav{display:flex;gap:1.1rem;font-size:.88rem;font-weight:700;margin-left:auto;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}nav a.free{color:var(--blue)}
+    .back{display:inline-flex;margin:1.1rem 0 0;color:var(--muted);font-size:.88rem}
+    h1{font-family:Georgia,serif;font-size:2.35rem;line-height:1.05;margin:2rem 0 1rem}
+    h2{font-size:1.2rem;margin:2.2rem 0 .75rem}
+    h3{font-size:1rem;margin:1.25rem 0 .5rem}
+    p,li{color:var(--muted);line-height:1.7}
+    p{margin-bottom:1rem}
+    ul{padding-left:1.2rem;margin:.7rem 0 1rem}
+    pre{background:#050505;border:1px solid var(--line);border-radius:8px;color:#c4b5fd;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:auto;padding:1rem;margin:1rem 0}
+    code{background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:.12rem .4rem;font-size:.85em}
+    .hero{padding-bottom:1.5rem;border-bottom:1px solid var(--line)}
+    .meta{display:flex;flex-wrap:wrap;gap:.45rem;margin:.7rem 0 1rem}
+    .pill{display:inline-flex;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:999px;padding:.2rem .6rem;font-size:.72rem;font-weight:800}
+    .pill.ok{color:var(--green);border-color:rgba(34,197,94,.35);background:rgba(34,197,94,.08)}
+    .pill.warn{color:var(--amber);border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:1rem;margin:1rem 0}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:1rem}
+    .card p{font-size:.9rem;margin:0}
+    .links{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.9rem}
+    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:.58rem .85rem;font-size:.86rem;font-weight:800;text-decoration:none}
+    .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn.primary:hover{background:var(--accent-hover);text-decoration:none}
+    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:.8rem;color:var(--muted-soft);margin-top:4rem}
+    footer a{color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="c">
+      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <nav>
+        <a href="/">Agents</a>
+        <a href="/skills/">Skills</a>
+        <a href="/about/">About</a>
+        <a href="/get-started/">Get Started</a>
+        <a href="/console/">Console</a>
+        <a href="https://github.com/ProAgentStore">GitHub</a>
+        <a href="https://freeagentstore.online" class="free">Free</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <a class="back" href="/skills/">&larr; All skills</a>
+    <section class="hero">
+      <div class="meta">
+        <span class="pill ok">Agent Skill</span>
+        <span class="pill ok">Codex</span>
+        <span class="pill ok">Claude Code</span>
+        <span class="pill warn">Requires MCP sign-in</span>
+      </div>
+      <h1>proagentstore-mcp-operator</h1>
+      <p>Operate ProAgentStore account state only through the deployed MCP server. Use it to create agents, subscribe to agents, run private instances, add knowledge, inspect messages, and check deployment state from Codex or Claude Code.</p>
+      <div class="links">
+        <a class="btn primary" href="#install">Install</a>
+        <a class="btn" href="/skills.json">Machine-readable metadata</a>
+        <a class="btn" href="https://mcp.proagentstore.online/mcp">MCP endpoint</a>
+      </div>
+    </section>
+
+    <h2 id="install">Install</h2>
+    <h3>Codex</h3>
+    <pre>codex plugin marketplace add ProAgentStore/platform</pre>
+
+    <h3>Claude Code</h3>
+    <pre>/plugin marketplace add ProAgentStore/platform
+/plugin install proagentstore@proagentstore
+/reload-plugins</pre>
+
+    <h2>What it can do</h2>
+    <div class="grid">
+      <div class="card"><h3>Create agents</h3><p>Use MCP creator tools to scaffold, update, deploy, and inspect ProAgentStore agents in your account.</p></div>
+      <div class="card"><h3>Run private instances</h3><p>Subscribe to a template agent, add your knowledge, chat with the private instance, and read its messages.</p></div>
+      <div class="card"><h3>Preserve billing boundaries</h3><p>The runtime waits for caller-owned AI credentials instead of silently spending platform AI tokens.</p></div>
+    </div>
+
+    <h2>Correct runtime flow</h2>
+    <p>Use public trial chat only for demos and marketplace discovery:</p>
+    <pre>list_agents -> chat_with_agent</pre>
+    <p>Use private instance chat for durable user work:</p>
+    <pre>list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages</pre>
+
+    <h2>Required MCP tools</h2>
+    <ul>
+      <li><code>create_agent</code>, <code>scaffold_agent</code>, <code>update_agent</code>, <code>my_agents</code></li>
+      <li><code>subscribe_agent</code>, <code>my_instances</code>, <code>chat_with_instance</code>, <code>instance_messages</code></li>
+      <li><code>add_instance_knowledge</code>, <code>list_instance_knowledge</code>, <code>delete_instance_knowledge</code>, <code>cancel_instance</code></li>
+      <li><code>list_agents</code>, <code>agent_info</code>, <code>platform_guide</code>, <code>sdk_reference</code></li>
+    </ul>
+
+    <h2>Security and account access</h2>
+    <p>The skill is instructional. It does not grant account access by itself. Account actions require the user to approve ProAgentStore MCP OAuth/browser sign-in in their own MCP client.</p>
+    <p>Do not use direct database writes, private API shortcuts, browser-only workarounds, or local secrets for live account operations. The deployed MCP server is the account-operation boundary.</p>
+
+    <h2>Example prompts</h2>
+    <pre>Use ProAgentStore MCP to create an agent in my account.
+Subscribe me to the Codex MCP Browser Test agent and run my private instance.
+Add this document to my ProAgentStore instance knowledge and ask the agent about it.
+Show my ProAgentStore MCP tools and explain which ones are for private instance runtime.</pre>
+  </main>
+
+  <footer>
+    <a href="/skills/">Skills</a> · <a href="/get-started/">Get Started</a> · <a href="/llms.txt">llms.txt</a> · <a href="/skills.json">skills.json</a>
+  </footer>
+  <script src="/auth-widget.js" defer></script>
+</body>
+</html>

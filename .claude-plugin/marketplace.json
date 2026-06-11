@@ -1,0 +1,27 @@
+{
+	"$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+	"name": "proagentstore",
+	"version": "0.1.0",
+	"description": "ProAgentStore plugins for creating, running, and inspecting MCP-powered agents.",
+	"owner": {
+		"name": "ProAgentStore",
+		"url": "https://github.com/ProAgentStore"
+	},
+	"plugins": [
+		{
+			"name": "proagentstore",
+			"description": "Operate ProAgentStore agents and private instances through the user's MCP-authenticated account.",
+			"source": "./plugins/claude/proagentstore",
+			"version": "0.1.0",
+			"author": {
+				"name": "ProAgentStore",
+				"url": "https://github.com/ProAgentStore"
+			},
+			"homepage": "https://proagentstore.online/get-started/",
+			"repository": "https://github.com/ProAgentStore/platform",
+			"license": "MIT",
+			"keywords": ["agents", "mcp", "proagentstore", "marketplace", "automation"],
+			"category": "productivity"
+		}
+	]
+}

@@ -3,8 +3,9 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, consolePage, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, consolePage, agentDetailPage,
 	widgetJs, authWidgetJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
+	llmsTxt, llmsFullTxt, skillsJson,
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
@@ -15,6 +16,10 @@ const PAGES: Record<string, string> = {
 	"/about/": aboutPage,
 	"/get-started": getStartedPage,
 	"/get-started/": getStartedPage,
+	"/skills": skillsPage,
+	"/skills/": skillsPage,
+	"/skills/proagentstore-mcp-operator": skillMcpOperatorPage,
+	"/skills/proagentstore-mcp-operator/": skillMcpOperatorPage,
 	"/console": consolePage,
 	"/console/": consolePage,
 	"/admin": adminPage,
@@ -88,17 +93,35 @@ export default {
 			});
 		}
 
+		if (path === "/llms.txt") {
+			return new Response(llmsTxt, {
+				headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" },
+			});
+		}
+
+		if (path === "/llms-full.txt") {
+			return new Response(llmsFullTxt, {
+				headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" },
+			});
+		}
+
+		if (path === "/skills.json") {
+			return new Response(skillsJson, {
+				headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" },
+			});
+		}
+
 		// robots.txt
 		if (path === "/robots.txt") {
 			return new Response(
-				"User-agent: *\nAllow: /\nDisallow: /console/\nDisallow: /admin/\n\nSitemap: https://proagentstore.online/sitemap.xml\n",
+				"User-agent: *\nAllow: /\nDisallow: /console/\nDisallow: /admin/\n\nSitemap: https://proagentstore.online/sitemap.xml\nLLMs: https://proagentstore.online/llms.txt\n",
 				{ headers: { "Content-Type": "text/plain", "Cache-Control": "public, max-age=86400" } },
 			);
 		}
 
 		// Dynamic sitemap — fetches published agents from API
 		if (path === "/sitemap.xml") {
-			const staticUrls = ["/", "/about/", "/get-started/", "/console/", "/changelog/"];
+			const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/console/", "/changelog/"];
 			let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
 			for (const u of staticUrls) {
 				xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;

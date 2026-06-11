@@ -51,6 +51,7 @@
       <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
       <nav>
         <a href="/">Agents</a>
+        <a href="/skills/">Skills</a>
         <a href="/about/">About</a>
         <a href="/get-started/">Get Started</a>
         <a href="/console/">Console</a>
@@ -187,6 +188,18 @@ npx @proagentstore/cli publish  # creates repo, deploys, registers</pre>
     <pre>list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages</pre>
     <p>If the instance says it needs a Cloudflare Workers AI account ID and API token, the runtime is working correctly and waiting for caller-owned AI credentials.</p>
 
+    <h2>Install the agent skill</h2>
+    <p>ProAgentStore ships the same MCP operating workflow for Codex and Claude Code through plugin marketplaces.</p>
+    <pre># Codex
+codex plugin marketplace add ProAgentStore/platform
+
+# Claude Code
+/plugin marketplace add ProAgentStore/platform
+/plugin install proagentstore@proagentstore
+/reload-plugins</pre>
+    <p>The installed plugin bundles the <code>proagentstore-mcp-operator</code> skill and the ProAgentStore MCP endpoint. Users still approve MCP browser sign-in before any account action runs.</p>
+    <p>Full skill docs are at <a href="/skills/proagentstore-mcp-operator/">/skills/proagentstore-mcp-operator/</a>. Agent-readable discovery files are available at <a href="/llms.txt">/llms.txt</a> and <a href="/skills.json">/skills.json</a>.</p>
+
     <h2>Store your API keys</h2>
     <p>Use your own OpenAI, Anthropic, or Google AI keys for higher-quality responses. Keys are encrypted with AES-256-GCM and injected server-side via proxy — never exposed to agents.</p>
     <p>Go to <a href="/console/">Console</a> → Profile → API Keys.</p>
@@ -197,7 +210,7 @@ npx @proagentstore/cli publish  # creates repo, deploys, registers</pre>
   </main>
 
   <footer>
-    <a href="/">Agents</a> · <a href="/about/">About</a> · <a href="/get-started/">Get Started</a> · <a href="/console/">Console</a> · <a href="https://github.com/ProAgentStore">GitHub</a> · <a href="/changelog/">Changelog</a><br>
+    <a href="/">Agents</a> · <a href="/skills/">Skills</a> · <a href="/about/">About</a> · <a href="/get-started/">Get Started</a> · <a href="/console/">Console</a> · <a href="https://github.com/ProAgentStore">GitHub</a> · <a href="/changelog/">Changelog</a><br>
     <span style="margin-top:0.5rem;display:inline-block">
       <a href="https://freeappstore.online">FreeAppStore</a> · <a href="https://freegamestore.online">FreeGameStore</a> · <a href="https://freewebstore.online">FreeWebStore</a> · <a href="https://freeagentstore.online" style="color:#3b82f6">FreeAgentStore</a> · <a href="https://proappstore.online">ProAppStore</a> · <strong>ProAgentStore</strong>
     </span>

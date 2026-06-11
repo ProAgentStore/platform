@@ -1,0 +1,20 @@
+{
+	"name": "proagentstore",
+	"interface": {
+		"displayName": "ProAgentStore"
+	},
+	"plugins": [
+		{
+			"name": "proagentstore",
+			"source": {
+				"source": "local",
+				"path": "./plugins/codex/proagentstore"
+			},
+			"policy": {
+				"installation": "AVAILABLE",
+				"authentication": "ON_INSTALL"
+			},
+			"category": "Productivity"
+		}
+	]
+}

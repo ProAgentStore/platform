@@ -1,0 +1,52 @@
+# ProAgentStore
+
+> Marketplace for server-powered AI agents. Creators publish agent templates; users subscribe and run private instances with their own state, knowledge, memory, and caller-owned AI credentials.
+
+Primary site: https://proagentstore.online/
+API: https://api.proagentstore.online/
+MCP: https://mcp.proagentstore.online/mcp
+GitHub marketplace repo: https://github.com/ProAgentStore/platform
+
+## Skills
+
+- [ProAgentStore Skills](https://proagentstore.online/skills/): public skill catalog and install instructions.
+- [proagentstore-mcp-operator](https://proagentstore.online/skills/proagentstore-mcp-operator/): operate ProAgentStore account state only through MCP.
+- [skills.json](https://proagentstore.online/skills.json): machine-readable skill metadata.
+
+## Install
+
+Codex:
+
+```bash
+codex plugin marketplace add ProAgentStore/platform
+```
+
+Claude Code:
+
+```text
+/plugin marketplace add ProAgentStore/platform
+/plugin install proagentstore@proagentstore
+/reload-plugins
+```
+
+## Correct MCP Runtime
+
+Use public trial chat only for discovery:
+
+```text
+list_agents -> chat_with_agent
+```
+
+Use private instance chat for real user work:
+
+```text
+list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages
+```
+
+If `chat_with_instance` says it needs a Cloudflare Workers AI account ID and API token, the private runtime is working and correctly waiting for caller-owned AI credentials.
+
+## Docs
+
+- [Get Started](https://proagentstore.online/get-started/)
+- [MCP Instance Runtime](https://github.com/ProAgentStore/platform/blob/main/docs/mcp-instance-runtime.md)
+- [Skill Publishing](https://github.com/ProAgentStore/platform/blob/main/docs/skill-publishing.md)

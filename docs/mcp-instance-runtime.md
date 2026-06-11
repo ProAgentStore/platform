@@ -33,6 +33,32 @@ Expected response:
 {"ok":true,"service":"proagentstore-mcp","tools":26}
 ```
 
+## Skills and Plugins
+
+The reusable operating workflow is published as an Agent Skill and wrapped for both Codex and Claude Code.
+
+Canonical skill:
+
+```text
+skills/proagentstore-mcp-operator/
+```
+
+Codex plugin wrapper:
+
+```text
+plugins/codex/proagentstore/
+.agents/plugins/marketplace.json
+```
+
+Claude plugin wrapper:
+
+```text
+plugins/claude/proagentstore/
+.claude-plugin/marketplace.json
+```
+
+See [Skill Publishing](skill-publishing.md) for the install commands and release checklist.
+
 ## Correct User Runtime Flow
 
 Use this flow when a user wants to run an agent with their own state, knowledge, memory, and billing credentials:
