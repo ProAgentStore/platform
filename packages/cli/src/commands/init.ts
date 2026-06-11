@@ -2,6 +2,7 @@ import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
+import { writeError, writeLine } from "../output.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,7 +29,7 @@ export const initCommand = new Command("init")
 		const template = opts.template as TemplateType;
 
 		if (!TEMPLATES.includes(template)) {
-			console.error(
+			writeError(
 				`Unknown template: ${template}. Choose: ${TEMPLATES.join(", ")}`,
 			);
 			process.exit(1);
@@ -36,7 +37,7 @@ export const initCommand = new Command("init")
 
 		const dir = resolve(slug);
 		if (existsSync(dir)) {
-			console.error(`Directory ${slug} already exists`);
+			writeError(`Directory ${slug} already exists`);
 			process.exit(1);
 		}
 
@@ -53,7 +54,7 @@ export const initCommand = new Command("init")
 		const templateHasFiles = existsSync(join(templateDir, "agent.json"));
 		if (templateHasFiles) {
 			cpSync(templateDir, dir, { recursive: true });
-			console.log(`Copied template: template-agent-${template}`);
+			writeLine(`Copied template: template-agent-${template}`);
 		} else {
 			// Generate minimal scaffold
 			mkdirSync(dir, { recursive: true });
@@ -182,7 +183,7 @@ export const initCommand = new Command("init")
 			} else if (template === "cron") {
 				writeFileSync(
 					join(dir, "src", "index.ts"),
-					`export default {\n  async scheduled(event: ScheduledEvent, env: unknown, ctx: ExecutionContext) {\n    console.log('${slug} cron fired:', event.cron);\n    // Your scheduled logic here\n  },\n  async fetch() {\n    return new Response('${slug} cron worker', { status: 200 });\n  },\n};\n`,
+					`export default {\n  async scheduled(event: ScheduledEvent, env: unknown, ctx: ExecutionContext) {\n    // Your scheduled logic here. Access event.cron if you need the trigger expression.\n  },\n  async fetch() {\n    return new Response('${slug} cron worker', { status: 200 });\n  },\n};\n`,
 				);
 			} else {
 				writeFileSync(
@@ -214,10 +215,10 @@ export const initCommand = new Command("init")
 		}
 
 		// Replace AGENTNAME placeholders
-		console.log(`\n  Created ${slug}/`);
-		console.log(`  Template: ${template} — ${TEMPLATE_DESC[template]}`);
-		console.log(`\n  cd ${slug}`);
-		console.log("  pnpm install");
-		console.log("  pnpm dev");
-		console.log("");
+		writeLine(`\n  Created ${slug}/`);
+		writeLine(`  Template: ${template} — ${TEMPLATE_DESC[template]}`);
+		writeLine(`\n  cd ${slug}`);
+		writeLine("  pnpm install");
+		writeLine("  pnpm dev");
+		writeLine();
 	});

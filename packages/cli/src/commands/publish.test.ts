@@ -4,18 +4,26 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileSync = vi.fn();
+const writeLine = vi.fn();
+const writeError = vi.fn();
 
 vi.mock("node:child_process", () => ({
 	execFileSync,
 }));
 
+vi.mock("../output.js", () => ({
+	writeError,
+	writeLine,
+}));
+
 describe("publish command process execution", () => {
 	let dir: string;
-	let log: ReturnType<typeof vi.spyOn>;
 
 	beforeEach(() => {
 		vi.resetModules();
 		execFileSync.mockReset();
+		writeLine.mockReset();
+		writeError.mockReset();
 		dir = mkdtempSync(join(tmpdir(), "pags-publish-"));
 		writeFileSync(
 			join(dir, "agent.json"),
@@ -24,12 +32,9 @@ describe("publish command process execution", () => {
 				name: "Safe Agent",
 			}),
 		);
-		log = vi.spyOn(console, "log").mockImplementation(() => {});
-		vi.spyOn(console, "error").mockImplementation(() => {});
 	});
 
 	afterEach(() => {
-		log.mockRestore();
 		vi.restoreAllMocks();
 		rmSync(dir, { recursive: true, force: true });
 	});

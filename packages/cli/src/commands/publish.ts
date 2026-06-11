@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Command } from "commander";
+import { writeError, writeLine } from "../output.js";
 
 export const publishCommand = new Command("publish")
 	.description("Publish an agent to ProAgentStore")
@@ -12,31 +13,31 @@ export const publishCommand = new Command("publish")
 		// Read manifest
 		const manifestPath = join(dir, "agent.json");
 		if (!existsSync(manifestPath)) {
-			console.error("No agent.json found. Run `pags init` first.");
+			writeError("No agent.json found. Run `pags init` first.");
 			process.exit(1);
 		}
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 		const slug = manifest.id;
 		if (!slug) {
-			console.error("agent.json missing id");
+			writeError("agent.json missing id");
 			process.exit(1);
 		}
 
-		console.log(`\n  Publishing ${manifest.name} (${slug})...\n`);
+		writeLine(`\n  Publishing ${manifest.name} (${slug})...\n`);
 
 		// Run compliance checks
-		console.log("  Running compliance checks...");
+		writeLine("  Running compliance checks...");
 		try {
 			execFileSync("pags", ["check"], { cwd: dir, stdio: "inherit" });
 		} catch {
-			console.error("\n  Compliance checks failed. Fix issues and retry.\n");
+			writeError("\n  Compliance checks failed. Fix issues and retry.\n");
 			process.exit(1);
 		}
 
 		// Check if repo exists in ProAgentStore org
 		const org = "ProAgentStore";
 		const repoName = slug;
-		console.log(`\n  Checking GitHub repo: ${org}/${repoName}`);
+		writeLine(`\n  Checking GitHub repo: ${org}/${repoName}`);
 
 		let repoExists = false;
 		try {
@@ -44,9 +45,9 @@ export const publishCommand = new Command("publish")
 				stdio: "pipe",
 			});
 			repoExists = true;
-			console.log("  Repo exists, pushing...");
+			writeLine("  Repo exists, pushing...");
 		} catch {
-			console.log("  Creating repo...");
+			writeLine("  Creating repo...");
 			try {
 				execFileSync(
 					"gh",
@@ -55,7 +56,7 @@ export const publishCommand = new Command("publish")
 				);
 				repoExists = true;
 			} catch (e) {
-				console.error(`  Failed to create repo: ${e}`);
+				writeError(`  Failed to create repo: ${e}`);
 				process.exit(1);
 			}
 		}
@@ -80,17 +81,17 @@ export const publishCommand = new Command("publish")
 					stdio: "inherit",
 				});
 			} catch {
-				console.log("  Push skipped (up to date or no commits)");
+				writeLine("  Push skipped (up to date or no commits)");
 			}
 		}
 
 		// Register in platform D1 (via API)
-		console.log("\n  Registering agent in store...");
+		writeLine("\n  Registering agent in store...");
 		// TODO: call POST /v1/agents with agent.json data
 		// For now, agents are registered via the Console UI
 
-		console.log(`\n  Published! ${slug}.proagentstore.online`);
-		console.log(`  Store: https://proagentstore.online/agents/${slug}/`);
-		console.log(`  Repo:  https://github.com/${org}/${repoName}`);
-		console.log("");
+		writeLine(`\n  Published! ${slug}.proagentstore.online`);
+		writeLine(`  Store: https://proagentstore.online/agents/${slug}/`);
+		writeLine(`  Repo:  https://github.com/${org}/${repoName}`);
+		writeLine();
 	});

@@ -96,17 +96,17 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 	const stub = c.env.AGENT.get(doId);
 
 	// Ensure initialized (idempotent — init checks if state exists)
-	const stateRes = await stub.fetch(new Request("http://agent/state"));
+	const stateRes = await stub.fetch(new Request("https://agent/state"));
 	if (stateRes.status === 404) {
 		// Copy template state
 		const templateStub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 		const templateRes = await templateStub.fetch(
-			new Request("http://agent/state"),
+			new Request("https://agent/state"),
 		);
 		const tmpl = (await templateRes.json()) as Record<string, unknown>;
 
 		await stub.fetch(
-			new Request("http://agent/init", {
+			new Request("https://agent/init", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({
@@ -123,7 +123,7 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 
 		// Copy template knowledge base
 		const kbRes = await templateStub.fetch(
-			new Request("http://agent/knowledge"),
+			new Request("https://agent/knowledge"),
 		);
 		const kb = (await kbRes.json()) as {
 			documents?: Array<Record<string, unknown>>;
@@ -131,7 +131,7 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 		if (kb.documents?.length) {
 			for (const doc of kb.documents) {
 				await stub.fetch(
-					new Request("http://agent/knowledge", {
+					new Request("https://agent/knowledge", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify(doc),
@@ -143,7 +143,7 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 
 	// Check message limit for trial
 	const msgsRes = await stub.fetch(
-		new Request("http://agent/messages?limit=20"),
+		new Request("https://agent/messages?limit=20"),
 	);
 	const msgs = (await msgsRes.json()) as { messages?: unknown[] };
 	if ((msgs.messages?.length || 0) >= 20) {
@@ -157,7 +157,7 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 	}
 
 	const doRes = await stub.fetch(
-		new Request("http://agent/chat", {
+		new Request("https://agent/chat", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({ message, channel: "trial", agentId: doKey, agentName: agent.name }),
@@ -212,7 +212,7 @@ publicRoutes.post("/agents/:id/import-gdoc", async (c) => {
 	if (!agent) throw new HttpError(404, "Agent not found");
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
-	const doRes = await stub.fetch(new Request("http://agent/knowledge", {
+	const doRes = await stub.fetch(new Request("https://agent/knowledge", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ title, content: text, source: "google-docs", sourceUrl: docUrl }),
@@ -254,7 +254,7 @@ publicRoutes.post("/webhook/:instanceId/ingest", async (c) => {
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(
-		new Request("http://agent/knowledge", {
+		new Request("https://agent/knowledge", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({

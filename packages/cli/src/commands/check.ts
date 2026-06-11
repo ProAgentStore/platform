@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Command } from "commander";
+import { writeLine } from "../output.js";
 
 interface CheckResult {
 	name: string;
@@ -107,15 +108,15 @@ export const checkCommand = new Command("check")
 		// Print results
 		const passed = results.filter((r) => r.pass).length;
 		const total = results.length;
-		console.log(
+		writeLine(
 			`\n  ProAgentStore compliance check: ${passed}/${total} passed\n`,
 		);
 		for (const r of results) {
-			console.log(
+			writeLine(
 				`  ${r.pass ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m"} ${r.name} — ${r.message}`,
 			);
 		}
-		console.log("");
+		writeLine();
 
 		if (passed < total) process.exit(1);
 	});

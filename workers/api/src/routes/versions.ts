@@ -21,7 +21,7 @@ versionRoutes.post("/:id/versions", async (c) => {
 
 	// Get current DO state
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
-	const stateRes = await stub.fetch(new Request("http://agent/state"));
+	const stateRes = await stub.fetch(new Request("https://agent/state"));
 	if (!stateRes.ok) throw new HttpError(400, "Agent not initialized");
 	const state = await stateRes.json();
 
@@ -83,7 +83,7 @@ versionRoutes.post("/:id/versions/:versionId/rollback", async (c) => {
 
 	// Apply the snapshot to the DO
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
-	await stub.fetch(new Request("http://agent/state", {
+	await stub.fetch(new Request("https://agent/state", {
 		method: "PUT",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(state),

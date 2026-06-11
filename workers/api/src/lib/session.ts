@@ -20,9 +20,9 @@ function b64url(buf: ArrayBuffer): string {
 }
 
 function unb64url(s: string): Uint8Array {
+	const padding = "=".repeat((4 - (s.length % 4)) % 4);
 	const padded =
-		s.replace(/-/g, "+").replace(/_/g, "/") +
-		"==".slice(0, (4 - (s.length % 4)) % 4);
+		s.replace(/-/g, "+").replace(/_/g, "/") + padding;
 	return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
 }
 

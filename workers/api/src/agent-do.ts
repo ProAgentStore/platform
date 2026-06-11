@@ -435,7 +435,7 @@ export class AgentDO extends DurableObject<Env> {
 			const parsed = JSON.parse(data);
 			if (parsed.type === "chat" && parsed.message) {
 				// Handle chat via WebSocket — reuse the same logic
-				const request = new Request("http://internal/chat", {
+				const request = new Request("https://internal/chat", {
 					method: "POST",
 					body: JSON.stringify({
 						message: parsed.message,

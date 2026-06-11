@@ -40,7 +40,7 @@ chatRoutes.post("/:id/chat", async (c) => {
 	const stub = c.env.AGENT.get(doId);
 
 	const doRes = await stub.fetch(
-		new Request("http://agent/chat", {
+		new Request("https://agent/chat", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -104,7 +104,7 @@ chatRoutes.get("/:id/messages", async (c) => {
 
 	const limit = c.req.query("limit") || "50";
 	const doRes = await stub.fetch(
-		new Request(`http://agent/messages?limit=${limit}`),
+		new Request(`https://agent/messages?limit=${limit}`),
 	);
 	const data = await doRes.json();
 	return c.json(data);
@@ -122,7 +122,7 @@ chatRoutes.get("/:id/memory", async (c) => {
 	if (!agent) throw new HttpError(404, "Agent not found");
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
-	const doRes = await stub.fetch(new Request("http://agent/memory"));
+	const doRes = await stub.fetch(new Request("https://agent/memory"));
 	return c.json(await doRes.json());
 });
 
@@ -138,7 +138,7 @@ chatRoutes.put("/:id/memory", async (c) => {
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
-		new Request("http://agent/memory", {
+		new Request("https://agent/memory", {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(await c.req.json()),
@@ -159,7 +159,7 @@ chatRoutes.get("/:id/tasks", async (c) => {
 	if (!agent) throw new HttpError(404, "Agent not found");
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
-	const doRes = await stub.fetch(new Request("http://agent/tasks"));
+	const doRes = await stub.fetch(new Request("https://agent/tasks"));
 	return c.json(await doRes.json());
 });
 
@@ -175,7 +175,7 @@ chatRoutes.post("/:id/tasks", async (c) => {
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
-		new Request("http://agent/tasks", {
+		new Request("https://agent/tasks", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(await c.req.json()),
@@ -189,7 +189,7 @@ chatRoutes.get("/:id/state", async (c) => {
 	await requireUser(c);
 	const agent = await resolveAgent(c);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
-	const doRes = await stub.fetch(new Request("http://agent/state"));
+	const doRes = await stub.fetch(new Request("https://agent/state"));
 	return c.json(await doRes.json());
 });
 
@@ -198,7 +198,7 @@ chatRoutes.put("/:id/state", async (c) => {
 	const agent = await resolveAgent(c);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
-		new Request("http://agent/state", {
+		new Request("https://agent/state", {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(await c.req.json()),
@@ -212,7 +212,7 @@ chatRoutes.get("/:id/knowledge", async (c) => {
 	await requireUser(c);
 	const agent = await resolveAgent(c);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
-	const doRes = await stub.fetch(new Request("http://agent/knowledge"));
+	const doRes = await stub.fetch(new Request("https://agent/knowledge"));
 	return c.json(await doRes.json());
 });
 
@@ -221,7 +221,7 @@ chatRoutes.post("/:id/knowledge", async (c) => {
 	const agent = await resolveAgent(c);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
-		new Request("http://agent/knowledge", {
+		new Request("https://agent/knowledge", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(await c.req.json()),
@@ -236,7 +236,7 @@ chatRoutes.delete("/:id/knowledge/:docId", async (c) => {
 	const docId = c.req.param("docId");
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
-		new Request(`http://agent/knowledge/${docId}`, { method: "DELETE" }),
+		new Request(`https://agent/knowledge/${docId}`, { method: "DELETE" }),
 	);
 	return c.json(await doRes.json());
 });
@@ -246,7 +246,7 @@ chatRoutes.post("/:id/knowledge/ingest-url", async (c) => {
 	const agent = await resolveAgent(c);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
-		new Request("http://agent/knowledge/ingest-url", {
+		new Request("https://agent/knowledge/ingest-url", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(await c.req.json()),

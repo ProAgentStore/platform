@@ -334,7 +334,7 @@ agentRoutes.post("/", async (c) => {
 	const doId = c.env.AGENT.idFromName(id);
 	const stub = c.env.AGENT.get(doId);
 	await stub.fetch(
-		new Request("http://agent/init", {
+		new Request("https://agent/init", {
 			method: "POST",
 			body: JSON.stringify({
 				agentId: id,
@@ -424,11 +424,11 @@ agentRoutes.post("/:id/clone", async (c) => {
 
 	// Copy template DO state + KB to the new agent's DO
 	const srcStub = c.env.AGENT.get(c.env.AGENT.idFromName(source.id));
-	const stateRes = await srcStub.fetch(new Request("http://agent/state"));
+	const stateRes = await srcStub.fetch(new Request("https://agent/state"));
 	const tmpl = await stateRes.json() as Record<string, unknown>;
 
 	const newStub = c.env.AGENT.get(c.env.AGENT.idFromName(newId));
-	await newStub.fetch(new Request("http://agent/init", {
+	await newStub.fetch(new Request("https://agent/init", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({
@@ -439,11 +439,11 @@ agentRoutes.post("/:id/clone", async (c) => {
 	}));
 
 	// Copy KB
-	const kbRes = await srcStub.fetch(new Request("http://agent/knowledge"));
+	const kbRes = await srcStub.fetch(new Request("https://agent/knowledge"));
 	const kb = await kbRes.json() as { documents?: Array<Record<string, unknown>> };
 	if (kb.documents?.length) {
 		for (const doc of kb.documents) {
-			await newStub.fetch(new Request("http://agent/knowledge", {
+			await newStub.fetch(new Request("https://agent/knowledge", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(doc),

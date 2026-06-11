@@ -58,14 +58,14 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	// Initialize the instance's DO — copy template state from the agent's DO
 	const templateDoId = c.env.AGENT.idFromName(agent.id);
 	const templateStub = c.env.AGENT.get(templateDoId);
-	const stateRes = await templateStub.fetch(new Request("http://agent/state"));
+	const stateRes = await templateStub.fetch(new Request("https://agent/state"));
 	const templateState = (await stateRes.json()) as Record<string, unknown>;
 
 	// Initialize instance DO with template config
 	const instanceDoId = c.env.AGENT.idFromName(instanceId);
 	const instanceStub = c.env.AGENT.get(instanceDoId);
 	await instanceStub.fetch(
-		new Request("http://agent/init", {
+		new Request("https://agent/init", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -81,7 +81,7 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	);
 
 	// Copy knowledge base from template to instance
-	const kbRes = await templateStub.fetch(new Request("http://agent/knowledge"));
+	const kbRes = await templateStub.fetch(new Request("https://agent/knowledge"));
 	const kbData = (await kbRes.json()) as {
 		documents?: Array<{
 			title: string;
@@ -93,7 +93,7 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	if (kbData.documents?.length) {
 		for (const doc of kbData.documents) {
 			await instanceStub.fetch(
-				new Request("http://agent/knowledge", {
+				new Request("https://agent/knowledge", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(doc),
@@ -166,7 +166,7 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 	).bind(instance.agent_id).first<{ name: string }>();
 
 	const doRes = await stub.fetch(
-		new Request("http://agent/chat", {
+		new Request("https://agent/chat", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify({
@@ -208,7 +208,7 @@ instanceRoutes.get("/:instanceId/messages", async (c) => {
 	const limit = c.req.query("limit") || "50";
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(
-		new Request(`http://agent/messages?limit=${limit}`),
+		new Request(`https://agent/messages?limit=${limit}`),
 	);
 	return c.json(await doRes.json());
 });
@@ -227,7 +227,7 @@ instanceRoutes.post("/:instanceId/knowledge", async (c) => {
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(
-		new Request("http://agent/knowledge", {
+		new Request("https://agent/knowledge", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(await c.req.json()),
@@ -254,7 +254,7 @@ instanceRoutes.delete("/:instanceId/knowledge/:docId", async (c) => {
 	const docId = c.req.param("docId");
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(
-		new Request(`http://agent/knowledge/${docId}`, { method: "DELETE" }),
+		new Request(`https://agent/knowledge/${docId}`, { method: "DELETE" }),
 	);
 	return c.json(await doRes.json());
 });
@@ -273,7 +273,7 @@ instanceRoutes.post("/:instanceId/knowledge/ingest-url", async (c) => {
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(
-		new Request("http://agent/knowledge/ingest-url", {
+		new Request("https://agent/knowledge/ingest-url", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(await c.req.json()),
@@ -298,7 +298,7 @@ instanceRoutes.get("/:instanceId/knowledge", async (c) => {
 	if (!instance) throw new HttpError(404, "Instance not found");
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
-	const doRes = await stub.fetch(new Request("http://agent/knowledge"));
+	const doRes = await stub.fetch(new Request("https://agent/knowledge"));
 	return c.json(await doRes.json());
 });
 

@@ -19,15 +19,15 @@ exportRoutes.get("/:id/export", async (c) => {
 
 	// Get DO state
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
-	const stateRes = await stub.fetch(new Request("http://agent/state"));
+	const stateRes = await stub.fetch(new Request("https://agent/state"));
 	const state = stateRes.ok ? await stateRes.json() : null;
 
 	// Get knowledge base
-	const kbRes = await stub.fetch(new Request("http://agent/knowledge"));
+	const kbRes = await stub.fetch(new Request("https://agent/knowledge"));
 	const kb = await kbRes.json() as { documents?: unknown[] };
 
 	// Get memory
-	const memRes = await stub.fetch(new Request("http://agent/memory"));
+	const memRes = await stub.fetch(new Request("https://agent/memory"));
 	const mem = await memRes.json() as { memory?: unknown[] };
 
 	return c.json({
@@ -72,7 +72,7 @@ exportRoutes.post("/:id/import", async (c) => {
 
 	// Restore state
 	if (backup.state) {
-		await stub.fetch(new Request("http://agent/state", {
+		await stub.fetch(new Request("https://agent/state", {
 			method: "PUT",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(backup.state),
@@ -83,7 +83,7 @@ exportRoutes.post("/:id/import", async (c) => {
 	let kbCount = 0;
 	if (backup.knowledge?.length) {
 		for (const doc of backup.knowledge) {
-			await stub.fetch(new Request("http://agent/knowledge", {
+			await stub.fetch(new Request("https://agent/knowledge", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(doc),
@@ -96,7 +96,7 @@ exportRoutes.post("/:id/import", async (c) => {
 	let memCount = 0;
 	if (backup.memory?.length) {
 		for (const m of backup.memory) {
-			await stub.fetch(new Request("http://agent/memory", {
+			await stub.fetch(new Request("https://agent/memory", {
 				method: "PUT",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(m),
