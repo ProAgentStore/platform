@@ -17,7 +17,7 @@ platform/
 ├── packages/cli/     @proagentstore/cli — init, check, publish
 ├── workers/api/      Hono API worker (auth, agents, instances, keys, analytics)
 ├── workers/host/     Marketing site + console + widget
-├── workers/mcp/      MCP server for Claude/Cursor/VS Code
+├── workers/mcp/      MCP server for Codex, Claude Code, Cursor, and VS Code
 ├── store/            Source HTML for all pages
 ├── skills/           Open Agent Skills source files
 ├── plugins/          Codex and Claude plugin wrappers

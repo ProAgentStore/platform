@@ -2,7 +2,7 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 
-const port = Number(process.env.E2E_PORT || 4173);
+const port = Number(process.env.E2E_PORT || 4273);
 const storeRoot = resolve("store");
 
 const contentTypes = {
@@ -12,6 +12,7 @@ const contentTypes = {
 	".json": "application/json; charset=utf-8",
 	".png": "image/png",
 	".svg": "image/svg+xml",
+	".txt": "text/plain; charset=utf-8",
 	".webp": "image/webp",
 };
 

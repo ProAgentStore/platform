@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const externalBaseURL = process.env.E2E_BASE_URL;
-const baseURL = externalBaseURL || "http://127.0.0.1:4173";
+const baseURL = externalBaseURL || "http://127.0.0.1:4273";
 
 export default defineConfig({
 	testDir: "./e2e",
@@ -20,7 +20,7 @@ export default defineConfig({
 		: {
 				command: "node e2e/console-server.mjs",
 				url: baseURL,
-				reuseExistingServer: !process.env.CI,
+				reuseExistingServer: false,
 				timeout: 10_000,
 			},
 	projects: [

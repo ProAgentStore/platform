@@ -219,6 +219,59 @@ test.describe("ProAgentStore Console smoke", () => {
 	});
 });
 
+test.describe("ProAgentStore skill discovery", () => {
+	test("skills catalog links to the MCP operator skill", async ({ page }) => {
+		await page.goto("/skills/");
+
+		await expect(page).toHaveTitle(/Skills/);
+		await expect(
+			page.getByRole("heading", { name: "ProAgentStore Skills" }),
+		).toBeVisible();
+		await expect(
+			page.getByRole("link", { name: "proagentstore-mcp-operator" }),
+		).toBeVisible();
+		await expect(page.getByText("codex plugin marketplace add")).toBeVisible();
+		await expect(page.getByText("/plugin install proagentstore")).toBeVisible();
+	});
+
+	test("MCP operator skill page documents the private runtime flow", async ({
+		page,
+	}) => {
+		await page.goto("/skills/proagentstore-mcp-operator/");
+
+		await expect(page).toHaveTitle(/proagentstore-mcp-operator/);
+		await expect(
+			page.getByRole("heading", { name: "proagentstore-mcp-operator" }),
+		).toBeVisible();
+		await expect(
+			page.getByText(
+				"list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages",
+			),
+		).toBeVisible();
+		await expect(page.getByText("Requires MCP sign-in")).toBeVisible();
+	});
+
+	test("machine-readable skill discovery files are served", async ({
+		request,
+	}) => {
+		const skillsRes = await request.get("/skills.json");
+		expect(skillsRes.ok()).toBe(true);
+		expect(skillsRes.headers()["content-type"]).toContain("application/json");
+		const skills = (await skillsRes.json()) as {
+			skills: Array<{ name: string; private_instance_flow: string[] }>;
+		};
+		expect(skills.skills[0]?.name).toBe("proagentstore-mcp-operator");
+		expect(skills.skills[0]?.private_instance_flow).toContain(
+			"chat_with_instance",
+		);
+
+		const llmsRes = await request.get("/llms.txt");
+		expect(llmsRes.ok()).toBe(true);
+		expect(llmsRes.headers()["content-type"]).toContain("text/plain");
+		expect(await llmsRes.text()).toContain("Claude Code");
+	});
+});
+
 test.describe("ProAgentStore live API smoke", () => {
 	test("providers include Cloudflare Workers AI", async ({ request }) => {
 		const res = await request.get(
