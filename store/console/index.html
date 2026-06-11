@@ -1634,7 +1634,8 @@ console.log(response)</pre>
         } else if (deploy.message) {
           deployStatus.innerHTML = opsStatus(deploy.message, false);
         } else {
-          deployStatus.innerHTML = `Repo: <a href="https://github.com/${esc(deploy.org)}/${esc(deploy.repo)}" target="_blank" rel="noreferrer">${esc(deploy.org)}/${esc(deploy.repo)}</a>`;
+          const repoLabel = `${deploy.org || 'ProAgentStore'}/${deploy.repo || agent.slug || currentAgent.slug}`;
+          deployStatus.innerHTML = `Repo: <a href="${escAttr(githubRepoUrl(deploy.org || 'ProAgentStore', deploy.repo || agent.slug || currentAgent.slug))}" target="_blank" rel="noreferrer">${esc(repoLabel)}</a>`;
         }
 
         deployRuns.innerHTML = '';
@@ -1645,8 +1646,13 @@ console.log(response)</pre>
           for (const run of runs) {
             const state = run.conclusion || run.status || 'queued';
             const ok = state === 'success' || state === 'completed';
+            const runUrl = safeExternalUrl(run.url);
+            const runLabel = esc(run.name || 'Deploy');
+            const runTitle = runUrl
+              ? `<a href="${escAttr(runUrl)}" target="_blank" rel="noreferrer">${runLabel}</a>`
+              : `<span>${runLabel}</span>`;
             deployRuns.innerHTML += `<div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:center;padding:0.45rem 0;border-top:1px solid var(--line);font-size:0.82rem">
-              <a href="${esc(run.url)}" target="_blank" rel="noreferrer">${esc(run.name || 'Deploy')}</a>
+              ${runTitle}
               <span style="color:${ok ? 'var(--green)' : 'var(--muted)'}">${esc(state)}</span>
             </div>`;
           }
@@ -1909,6 +1915,26 @@ console.log(response)</pre>
     // ── Helpers ──────────────────────────────────────────────────
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    function escAttr(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+    }
+    function safeExternalUrl(value) {
+      try {
+        const url = new URL(String(value || ''));
+        return url.protocol === 'https:' ? url.href : '';
+      } catch {
+        return '';
+      }
+    }
+    function githubRepoUrl(org, repo) {
+      const cleanOrg = encodeURIComponent(String(org || 'ProAgentStore'));
+      const cleanRepo = encodeURIComponent(String(repo || ''));
+      return `https://github.com/${cleanOrg}/${cleanRepo}`;
+    }
     function showError(id, msg) { const el = document.getElementById(id); el.textContent = msg; el.classList.remove('hidden'); setTimeout(() => el.classList.add('hidden'), 5000); }
 
     // ── Init ────────────────────────────────────────────────────

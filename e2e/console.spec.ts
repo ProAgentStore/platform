@@ -4,7 +4,61 @@ import type { Page } from "@playwright/test";
 const API = "https://api.proagentstore.online";
 const TEST_TOKEN = "test-pags-token";
 
-async function mockSignedInConsole(page: Page) {
+interface OpsMockOptions {
+	ops?: Record<string, unknown>;
+	verifyStatus?: number;
+	verifyBody?: Record<string, unknown>;
+	deployStatus?: number;
+	deployBody?: Record<string, unknown>;
+}
+
+function defaultOpsPayload() {
+	return {
+		agent: {
+			id: "agent-1",
+			slug: "ops-agent",
+			name: "Ops Agent",
+			model: "@cf/meta/llama-3.2-3b-instruct",
+			visibility: "draft",
+			status: "inactive",
+			workerUrl: "https://ops-agent.proagentstore.online/",
+		},
+		billing: {
+			provider: "cloudflare",
+			mode: "user-owned",
+			hasCloudflareKey: true,
+			createdAt: "2026-06-10T01:00:00Z",
+			lastUsedAt: "2026-06-10T02:00:00Z",
+		},
+		deploy: {
+			configured: true,
+			org: "ProAgentStore",
+			repo: "ops-agent",
+			runs: [
+				{
+					id: 1,
+					name: "Deploy",
+					status: "completed",
+					conclusion: "success",
+					url: "https://github.com/ProAgentStore/ops-agent/actions/runs/1",
+					createdAt: "2026-06-10T03:00:00Z",
+					updatedAt: "2026-06-10T03:01:00Z",
+				},
+			],
+		},
+		executions: [
+			{
+				id: "exec-1",
+				model: "@cf/meta/llama-3.2-3b-instruct",
+				duration_ms: 123,
+				error: null,
+				created_at: "2026-06-10T04:00:00Z",
+			},
+		],
+	};
+}
+
+async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	await page.addInitScript((token) => {
 		window.localStorage.setItem("pags:session", token);
 	}, TEST_TOKEN);
@@ -25,8 +79,10 @@ async function mockSignedInConsole(page: Page) {
 			});
 
 		if (path === "/health") return json({ ok: true, service: "proagentstore-api" });
-		if (path === "/v1/auth/me") {
+		if (path.startsWith("/v1/")) {
 			expect(route.request().headers().authorization).toBe(`Bearer ${TEST_TOKEN}`);
+		}
+		if (path === "/v1/auth/me") {
 			return json({
 				id: "user-1",
 				login: "tester",
@@ -86,57 +142,21 @@ async function mockSignedInConsole(page: Page) {
 		}
 		if (path === "/v1/agents/agent-1/versions") return json({ versions: [] });
 		if (path === "/v1/agents/agent-1/ops") {
-			return json({
-				agent: {
-					id: "agent-1",
-					slug: "ops-agent",
-					name: "Ops Agent",
-					model: "@cf/meta/llama-3.2-3b-instruct",
-					visibility: "draft",
-					status: "inactive",
-					workerUrl: "https://ops-agent.proagentstore.online/",
-				},
-				billing: {
-					provider: "cloudflare",
-					mode: "user-owned",
-					hasCloudflareKey: true,
-					createdAt: "2026-06-10T01:00:00Z",
-					lastUsedAt: "2026-06-10T02:00:00Z",
-				},
-				deploy: {
-					configured: true,
-					org: "ProAgentStore",
-					repo: "ops-agent",
-					runs: [
-						{
-							id: 1,
-							name: "Deploy",
-							status: "completed",
-							conclusion: "success",
-							url: "https://github.com/ProAgentStore/ops-agent/actions/runs/1",
-							createdAt: "2026-06-10T03:00:00Z",
-							updatedAt: "2026-06-10T03:01:00Z",
-						},
-					],
-				},
-				executions: [
-					{
-						id: "exec-1",
-						model: "@cf/meta/llama-3.2-3b-instruct",
-						duration_ms: 123,
-						error: null,
-						created_at: "2026-06-10T04:00:00Z",
-					},
-				],
-			});
+			return json(options.ops ?? defaultOpsPayload());
 		}
 		if (path === "/v1/keys/cloudflare/verify" && method === "POST") {
 			verifyCalls += 1;
-			return json({ ok: true, provider: "cloudflare" });
+			return json(
+				options.verifyBody ?? { ok: true, provider: "cloudflare" },
+				options.verifyStatus ?? 200,
+			);
 		}
 		if (path === "/v1/agents/agent-1/deploy" && method === "POST") {
 			deployCalls += 1;
-			return json({ queued: true, repo: "ops-agent", org: "ProAgentStore" });
+			return json(
+				options.deployBody ?? { queued: true, repo: "ops-agent", org: "ProAgentStore" },
+				options.deployStatus ?? 200,
+			);
 		}
 
 		return json({ error: `Unhandled mock route ${method} ${path}` }, 500);
@@ -257,5 +277,86 @@ test.describe("ProAgentStore authenticated Console", () => {
 		await expect
 			.poll(() => calls.deployCalls)
 			.toBe(1);
+	});
+
+	test("Ops renderer treats malformed backend fields as inert text", async ({
+		page,
+	}) => {
+		await mockSignedInConsole(page, {
+			ops: {
+				agent: {
+					id: "agent-1",
+					slug: "ops-agent",
+					name: "Ops Agent",
+					model: "<img src=x onerror=alert(1)>",
+					visibility: "draft",
+					status: "inactive",
+					workerUrl: "https://ops-agent.proagentstore.online/",
+				},
+				billing: {
+					provider: "cloudflare",
+					mode: "<script>alert(1)</script>",
+					hasCloudflareKey: true,
+					createdAt: "2026-06-10T01:00:00Z",
+					lastUsedAt: "2026-06-10T02:00:00Z",
+				},
+				deploy: {
+					configured: true,
+					org: "ProAgentStore",
+					repo: 'ops-agent"><img src=x onerror=alert(1)>',
+					runs: [
+						{
+							id: 1,
+							name: "<img src=x onerror=alert(1)>",
+							status: "completed",
+							conclusion: "success",
+							url: "javascript:alert(1)",
+							createdAt: "2026-06-10T03:00:00Z",
+							updatedAt: "2026-06-10T03:01:00Z",
+						},
+					],
+				},
+				executions: [
+					{
+						id: "exec-1",
+						model: "<script>alert(1)</script>",
+						duration_ms: 0,
+						error: "<img src=x onerror=alert(1)>",
+						created_at: "2026-06-10T04:00:00Z",
+					},
+				],
+			},
+		});
+		await page.goto("/");
+
+		await page.locator("#agents-list .agent-card", { hasText: "Ops Agent" }).click();
+		await page.getByRole("button", { name: "Ops" }).click();
+
+		await expect(page.locator("#tab-ops img")).toHaveCount(0);
+		await expect(page.locator("#tab-ops script")).toHaveCount(0);
+		await expect(page.locator('#ops-deploy-runs a[href^="javascript:"]')).toHaveCount(0);
+		await expect(page.locator("#ops-deploy-runs a")).toHaveCount(0);
+		await expect(page.locator("#ops-deploy-runs")).toContainText(
+			"<img src=x onerror=alert(1)>",
+		);
+		await expect(page.locator("#ops-execs")).toContainText(
+			"<img src=x onerror=alert(1)>",
+		);
+	});
+
+	test("Ops controls do not call protected endpoints when confirmation is canceled", async ({
+		page,
+	}) => {
+		const calls = await mockSignedInConsole(page);
+		page.on("dialog", (dialog) => dialog.dismiss());
+		await page.goto("/");
+
+		await page.locator("#agents-list .agent-card", { hasText: "Ops Agent" }).click();
+		await page.getByRole("button", { name: "Ops" }).click();
+		await page.getByRole("button", { name: "Verify Key" }).click();
+		await page.getByRole("button", { name: "Deploy" }).click();
+
+		await expect.poll(() => calls.verifyCalls).toBe(0);
+		await expect.poll(() => calls.deployCalls).toBe(0);
 	});
 });
