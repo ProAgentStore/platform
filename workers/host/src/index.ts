@@ -84,7 +84,7 @@ export default {
 		// OpenAPI spec
 		if (path === "/openapi.yaml" || path === "/openapi.yml") {
 			return new Response(openapiYaml, {
-				headers: { "Content-Type": "text/yaml; charset=utf-8", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" },
+				headers: { "Content-Type": "text/yaml; charset=utf-8", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "https://proagentstore.online" },
 			});
 		}
 

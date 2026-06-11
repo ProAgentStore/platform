@@ -11,6 +11,9 @@ concurrency:
   group: deploy-host
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

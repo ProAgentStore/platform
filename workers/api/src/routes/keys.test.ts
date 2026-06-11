@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { allowedCorsOrigin } from "./keys.js";
 
 // Mirror the PROVIDERS list from the source so tests validate the real shape.
 interface Provider {
@@ -65,7 +66,6 @@ const PROVIDER_BY_ID = new Map(PROVIDERS.map((p) => [p.id, p]));
 const HOST_TO_PROVIDER = new Map(
 	PROVIDERS.filter((p) => p.host).map((p) => [p.host as string, p.id]),
 );
-
 function validateKey(provider: Provider, key: string): boolean {
 	if (!provider.keyPrefix) return true; // no prefix required (e.g. together)
 	return key.startsWith(provider.keyPrefix);
@@ -284,5 +284,34 @@ describe("rate limit logic (100/hour)", () => {
 		const t1 = new Date("2025-06-06T14:00:00.000Z").toISOString().slice(0, 13);
 		const t2 = new Date("2025-06-06T15:00:00.000Z").toISOString().slice(0, 13);
 		expect(t1).not.toBe(t2);
+	});
+});
+
+describe("proxy CORS origin selection", () => {
+	it("reflects the console origin", () => {
+		expect(allowedCorsOrigin("https://console.proagentstore.online")).toBe(
+			"https://console.proagentstore.online",
+		);
+	});
+
+	it("reflects the public store origin", () => {
+		expect(allowedCorsOrigin("https://proagentstore.online")).toBe(
+			"https://proagentstore.online",
+		);
+	});
+
+	it("allows local e2e origins", () => {
+		expect(allowedCorsOrigin("http://localhost:4173")).toBe(
+			"http://localhost:4173",
+		);
+	});
+
+	it("does not emit wildcard CORS for unknown origins", () => {
+		expect(allowedCorsOrigin("https://evil.example")).toBe(
+			"https://console.proagentstore.online",
+		);
+		expect(allowedCorsOrigin(undefined)).toBe(
+			"https://console.proagentstore.online",
+		);
 	});
 });

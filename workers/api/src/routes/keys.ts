@@ -17,6 +17,19 @@ import type { Env } from "../types.js";
 
 export const keysRoutes = new Hono<{ Bindings: Env }>();
 
+const ALLOWED_CORS_ORIGINS = new Set([
+	"https://proagentstore.online",
+	"https://console.proagentstore.online",
+	"http://localhost:5173",
+	"http://localhost:4173",
+]);
+
+export function allowedCorsOrigin(origin: string | undefined): string {
+	return origin && ALLOWED_CORS_ORIGINS.has(origin)
+		? origin
+		: "https://console.proagentstore.online";
+}
+
 // ── Providers ──────────────────────────────────────────────────────────────
 
 interface Provider {
@@ -320,7 +333,8 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 
 	// Forward response with CORS
 	const respHeaders = new Headers(upstream.headers);
-	respHeaders.set("Access-Control-Allow-Origin", "*");
+	respHeaders.set("Access-Control-Allow-Origin", allowedCorsOrigin(c.req.header("Origin")));
+	respHeaders.set("Vary", "Origin");
 	return new Response(upstream.body, {
 		status: upstream.status,
 		headers: respHeaders,

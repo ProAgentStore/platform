@@ -992,7 +992,7 @@ export default {
 		if (url.pathname === "/health") {
 			return new Response(
 				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 17 }),
-				{ headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } },
+				{ headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "https://proagentstore.online" } },
 			);
 		}
 		return new Response(

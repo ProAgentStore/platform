@@ -11,6 +11,9 @@ concurrency:
   group: deploy-api
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

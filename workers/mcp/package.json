@@ -8,8 +8,9 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"agents": "^0.0.98",
-		"@modelcontextprotocol/sdk": "^1.12.1",
+		"@modelcontextprotocol/sdk": "1.29.0",
+		"agents": "^0.3.10",
+		"ai": "^6.0.200",
 		"zod": "^3.24.0"
 	},
 	"devDependencies": {
