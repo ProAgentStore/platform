@@ -6,66 +6,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { z } from "zod";
+import { apiBase, apiCall, authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
+import { registerInstanceTools } from "./instance-tools.js";
 import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
 
-const API = "https://api.proagentstore.online";
-type Env = {
-	API_BASE?: string;
-	AUTH_START?: string;
-	GITHUB_ORG?: string;
-	GITHUB_TOKEN?: string;
-	OAUTH_KV?: KVNamespace;
-	SESSION_SIGNING_KEY?: string;
-};
 type Props = Record<string, unknown>;
-type TextResult = { content: { type: "text"; text: string }[] };
+type Env = McpEnv;
 
 const AGENT_ID = z
 	.string()
 	.regex(/^[a-z][a-z0-9-]*$/)
 	.describe("Agent slug, lowercase with hyphens, e.g. 'job-apply-agent'");
-
-const text = (value: string): TextResult => ({
-	content: [{ type: "text" as const, text: value }],
-});
-
-function apiBase(env?: Env): string {
-	return env?.API_BASE || API;
-}
-
-async function apiCall(
-	path: string,
-	opts?: RequestInit,
-	env?: Env,
-): Promise<unknown> {
-	const res = await fetch(`${apiBase(env)}${path}`, {
-		...opts,
-		headers: { "Content-Type": "application/json", ...opts?.headers },
-	});
-	const raw = await res.text();
-	let json: unknown = {};
-	try {
-		json = raw ? JSON.parse(raw) : {};
-	} catch {
-		json = { raw };
-	}
-	if (!res.ok && typeof json === "object" && json !== null) {
-		return { error: `API ${res.status}`, ...json };
-	}
-	return json;
-}
-
-async function authedCall(
-	path: string,
-	token: string,
-	opts?: RequestInit,
-	env?: Env,
-): Promise<unknown> {
-	return apiCall(path, {
-		...opts,
-		headers: { Authorization: `Bearer ${token}`, ...opts?.headers },
-	}, env);
-}
 
 async function validatePagsToken(env: Env, token: string): Promise<boolean> {
 	const res = await fetch(`${apiBase(env)}/v1/auth/me`, {
@@ -506,7 +457,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
 			async ({ token }) => {
 				const sessionToken = this.token(token);
-				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
+				if (!sessionToken) return authRequired();
 				const data = (await authedCall(
 					"/v1/agents/my/agents",
 					sessionToken,
@@ -516,9 +467,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				if (data.error) return text(`Error: ${data.error}`);
 				const agents = data.agents || [];
 				if (agents.length === 0) return text("No owned agents yet.");
-				return text(JSON.stringify(agents, null, 2));
+				return jsonText(agents);
 			},
 		);
+
+		registerInstanceTools(this.server, this.env, (provided) => this.token(provided));
 
 		this.server.tool(
 			"create_agent",
@@ -935,9 +888,11 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 
 ## Agent Types: Agents | Workers | Tools
 ## CLI: pags init <name> --template worker|cron|api, pags check, pags publish
-## MCP project tools: scaffold_agent, list_agent_files, read_agent_file, write_agent_file, batch_write_agent_files, trigger_agent_deploy, agent_deploy_status
+## MCP creator tools: scaffold_agent, list_agent_files, read_agent_file, write_agent_file, batch_write_agent_files, trigger_agent_deploy, agent_deploy_status
+## MCP runtime tools: subscribe_agent, my_instances, add_instance_knowledge, chat_with_instance, instance_messages
+## Public trial: chat_with_agent calls /v1/public/agents/:id/try and is for previews, not the main user runtime
 ## URLs: Store proagentstore.online, API api.proagentstore.online, MCP mcp.proagentstore.online/mcp
-## Key endpoints: GET /v1/agents, POST /v1/public/agents/:id/try, POST /v1/instances/:id/subscribe`;
+## Key endpoints: GET /v1/agents, POST /v1/public/agents/:id/try, POST /v1/instances/:id/subscribe, POST /v1/instances/:instanceId/chat`;
 
 const SDK_REFERENCE = `# SDK: import { initPro } from '@proagentstore/sdk'
 const agent = initPro({ agentId: '...', token: '...' })
@@ -991,12 +946,12 @@ export default {
 		}
 		if (url.pathname === "/health") {
 			return new Response(
-				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 17 }),
+				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 26 }),
 				{ headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "https://proagentstore.online" } },
 			);
 		}
 		return new Response(
-			"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nTools include: list_agents, my_agents, scaffold_agent, create_agent, update_agent, list/read/write agent files, add/list knowledge, analytics, deploy status, platform guide, SDK reference.",
+			"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for the real private instance runtime.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, scaffold_agent, create_agent, update_agent, list/read/write agent files, add/list knowledge, analytics, deploy status, platform guide, SDK reference.",
 			{ headers: { "Content-Type": "text/plain" } },
 		);
 	},

@@ -183,7 +183,7 @@ npx @proagentstore/cli publish  # creates repo, deploys, registers</pre>
     <h2>MCP integration</h2>
     <p>Manage agents from Claude Code, Cursor, or VS Code:</p>
     <pre>npx mcp-remote https://mcp.proagentstore.online/mcp</pre>
-    <p>10 tools: list agents, create, chat, add knowledge, analytics, and more.</p>
+    <p>Use <code>chat_with_agent</code> only for public trial chats. For the real user runtime, call <code>subscribe_agent</code>, then <code>my_instances</code>, then <code>chat_with_instance</code>. Instance tools keep user knowledge and chat state separate from the creator's template agent.</p>
 
     <h2>Store your API keys</h2>
     <p>Use your own OpenAI, Anthropic, or Google AI keys for higher-quality responses. Keys are encrypted with AES-256-GCM and injected server-side via proxy — never exposed to agents.</p>

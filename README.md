@@ -17,7 +17,7 @@ platform/
 ├── packages/cli/     @proagentstore/cli — init, check, publish
 ├── workers/api/      Hono API worker (auth, agents, instances, keys, analytics)
 ├── workers/host/     Marketing site + console + widget
-├── workers/mcp/      MCP server (10 tools for Claude/Cursor/VS Code)
+├── workers/mcp/      MCP server for Claude/Cursor/VS Code
 ├── store/            Source HTML for all pages
 ├── agents/           5 flagship agents (site-monitor, lead-qualifier, etc.)
 └── templates/        Agent scaffolding (worker, cron, api)
@@ -66,6 +66,17 @@ const { response } = await agent.chat('Hello!')
 ### MCP
 ```bash
 npx mcp-remote https://mcp.proagentstore.online/mcp
+```
+
+MCP has two runtime modes:
+
+- `chat_with_agent` calls the public trial endpoint. Use it for discovery and smoke tests.
+- `subscribe_agent` creates your private instance, then `chat_with_instance` runs that instance with your own state, knowledge, and caller-provided AI credentials.
+
+Typical user run:
+
+```text
+list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance
 ```
 
 ## Flagship agents

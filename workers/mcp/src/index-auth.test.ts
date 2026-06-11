@@ -54,4 +54,19 @@ describe("MCP transport auth", () => {
 		expect(res.status).toBe(200);
 		await expect(res.text()).resolves.toContain("ProAgentStore MCP Server");
 	});
+
+	it("reports the current MCP tool count in health metadata", async () => {
+		const res = await worker.fetch(
+			new Request("https://mcp.proagentstore.online/health"),
+			env,
+			ctx,
+		);
+
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toMatchObject({
+			ok: true,
+			service: "proagentstore-mcp",
+			tools: 26,
+		});
+	});
 });

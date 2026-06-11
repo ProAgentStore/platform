@@ -1,0 +1,52 @@
+name: Deploy MCP Worker
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/mcp/**'
+      - '.github/workflows/deploy-mcp.yml'
+
+concurrency:
+  group: deploy-mcp
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck MCP worker
+        run: pnpm --filter proagentstore-mcp typecheck
+
+      - name: Deploy MCP worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: workers/mcp
+          command: deploy
+
+      - name: Smoke test
+        run: |
+          for i in 1 2 3 4 5; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://mcp.proagentstore.online/health)
+            if [ "$STATUS" = "200" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "MCP health check failed"
+          exit 1
