@@ -184,6 +184,8 @@ npx @proagentstore/cli publish  # creates repo, deploys, registers</pre>
     <p>Manage agents from Claude Code, Cursor, or VS Code:</p>
     <pre>npx mcp-remote https://mcp.proagentstore.online/mcp</pre>
     <p>Use <code>chat_with_agent</code> only for public trial chats. For the real user runtime, call <code>subscribe_agent</code>, then <code>my_instances</code>, then <code>chat_with_instance</code>. Instance tools keep user knowledge and chat state separate from the creator's template agent.</p>
+    <pre>list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages</pre>
+    <p>If the instance says it needs a Cloudflare Workers AI account ID and API token, the runtime is working correctly and waiting for caller-owned AI credentials.</p>
 
     <h2>Store your API keys</h2>
     <p>Use your own OpenAI, Anthropic, or Google AI keys for higher-quality responses. Keys are encrypted with AES-256-GCM and injected server-side via proxy — never exposed to agents.</p>

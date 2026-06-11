@@ -79,6 +79,14 @@ Typical user run:
 list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance
 ```
 
+The expected response when user-owned AI credentials are missing is:
+
+```text
+Add your Cloudflare Workers AI account ID and API token before running this agent.
+```
+
+That means the instance runtime path is working and correctly refusing to bill the platform AI account. See [MCP Instance Runtime](docs/mcp-instance-runtime.md) for the full tool map, live test record, and OAuth troubleshooting.
+
 ## Flagship agents
 
 | Agent | Type | Description |

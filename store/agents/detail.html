@@ -246,6 +246,12 @@
     let sessionId = null;
 
     const MCP_TOOLS = [
+      ['subscribe_agent', 'Create or reuse a private runnable instance'],
+      ['my_instances', 'List your subscribed private instances'],
+      ['add_instance_knowledge', 'Attach user-specific knowledge to an instance'],
+      ['chat_with_instance', 'Chat with the private instance runtime'],
+      ['instance_messages', 'Read recent instance messages'],
+      ['chat_with_agent', 'Run a public trial preview only'],
       ['scaffold_agent', 'Create an agent and scaffold its GitHub repo'],
       ['my_agents', 'List owned agents after browser sign-in'],
       ['read_agent_file', 'Inspect repo files'],
@@ -256,12 +262,11 @@
       ['agent_analytics', 'Read owner analytics']
     ];
     const RUNTIME_TOOLS = [
-      ['read_memory', 'Read persistent memory'],
-      ['write_memory', 'Save durable profile or context'],
-      ['get_tasks', 'List active tasks'],
-      ['fetch_url', 'Fetch external content'],
-      ['store_file', 'Write artifacts to R2'],
-      ['list_files', 'Inspect stored artifacts']
+      ['subscribe_agent', 'Creates an isolated instance with its own Durable Object'],
+      ['add_instance_knowledge', 'Stores documents on the user instance, not the creator template'],
+      ['chat_with_instance', 'Uses /v1/instances/:instanceId/chat'],
+      ['instance_messages', 'Confirms the instance conversation history'],
+      ['caller credentials', 'AI inference waits for user-owned provider credentials']
     ];
 
     function $(id){return document.getElementById(id)}
@@ -315,13 +320,13 @@
       $('meta-kv').innerHTML = [
         ['Agent ID', a.id], ['Slug', slug], ['Type', a.store_type || 'agent'], ['Category', a.category || 'general'], ['Model', a.model || 'default'], ['Created', formatDate(a.created_at)]
       ].map(([k,v]) => '<div class="kv-row"><span>' + esc(k) + '</span><span>' + esc(v) + '</span></div>').join('');
-      $('mcp-command').textContent = 'npx mcp-remote ' + MCP_URL + '\n\n# Then call scaffold_agent, my_agents, add_knowledge, read_agent_file, and other PAGS tools.';
+      $('mcp-command').textContent = 'npx mcp-remote ' + MCP_URL + '\n\n# Public preview: chat_with_agent\n# Real runtime: subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages';
 	      $('api-chat').textContent = 'curl -X POST https://api.proagentstore.online/v1/public/agents/' + slug + '/try \\\n  -H "Content-Type: application/json" \\\n  -d \'' + JSON.stringify({message:'Hello!'}) + '\'';
       $('embed-code').textContent = snippetScript(slug);
       $('sdk-code').textContent = "import { initPro } from '@proagentstore/sdk'\n\nconst agent = initPro({ agentId: '" + a.id + "', token: 'YOUR_TOKEN' })\nconst { response } = await agent.chat('Hello!')";
       renderTools('mcp-tools', MCP_TOOLS);
 	      renderTools('runtime-tools', RUNTIME_TOOLS);
-	      $('chat-msgs').innerHTML = '<div class="msg assistant">Hi. This is the standard ProAgentStore agent dashboard. Ask me a question to start a public trial chat.</div>';
+	      $('chat-msgs').innerHTML = '<div class="msg assistant">Hi. This chat is a public trial preview. Use MCP subscribe_agent and chat_with_instance for your private runnable instance.</div>';
 	    }
 
 	    function renderPrivatePlaceholder(slug, message) {
