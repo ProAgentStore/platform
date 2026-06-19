@@ -6,6 +6,96 @@ export const authRoutes = new Hono<{ Bindings: Env }>();
 
 const FAS_API = "https://api.freeappstore.online";
 
+function parseJsonOrNull(value: string | null | undefined): unknown {
+	if (!value) return null;
+	try {
+		return JSON.parse(value);
+	} catch {
+		return null;
+	}
+}
+
+interface BoardColumnConfig {
+	id: string;
+	title: string;
+	color: string;
+	empty: string;
+	statuses: string[];
+	visibilities: string[];
+	excludeStatuses: string[];
+	excludeVisibilities: string[];
+	catchAll: boolean;
+}
+
+interface BoardConfig {
+	summary: string;
+	columns: BoardColumnConfig[];
+}
+
+function strings(value: unknown, maxItems = 10): string[] {
+	return Array.isArray(value)
+		? value.map((item) => String(item).slice(0, 40)).slice(0, maxItems)
+		: [];
+}
+
+function safeBoardColor(value: unknown): string {
+	const color = String(value || "").trim().slice(0, 40);
+	if (
+		/^(#[0-9a-f]{3,8}|[a-z]+|rgba?\([0-9, .%]+\)|hsla?\([0-9, .%]+\)|var\(--[a-z0-9-]+\))$/i.test(
+			color,
+		)
+	) {
+		return color;
+	}
+	return "var(--accent)";
+}
+
+export function normalizeBoardConfigInput(input: unknown): BoardConfig {
+	let source = input;
+	if (typeof input === "string") {
+		try {
+			source = JSON.parse(input);
+		} catch {
+			throw new Error("board_config must be valid JSON");
+		}
+	}
+	if (!source || typeof source !== "object") {
+		throw new Error("board_config must be an object");
+	}
+	const raw = source as { summary?: unknown; columns?: unknown };
+	if (!Array.isArray(raw.columns) || raw.columns.length === 0) {
+		throw new Error("board_config.columns must contain at least one column");
+	}
+	const columns = raw.columns
+		.slice(0, 8)
+		.map((column): BoardColumnConfig => {
+			if (!column || typeof column !== "object") {
+				throw new Error("board_config columns must be objects");
+			}
+			const col = column as Record<string, unknown>;
+			if (!col.id || !col.title) {
+				throw new Error("board_config columns require id and title");
+			}
+			return {
+				id: String(col.id).replace(/[^a-z0-9_-]/gi, "-").toLowerCase().slice(0, 40),
+				title: String(col.title).slice(0, 40),
+				color: safeBoardColor(col.color || "var(--accent)"),
+				empty: String(col.empty || "No agents in this column.").slice(0, 160),
+				statuses: strings(col.statuses),
+				visibilities: strings(col.visibilities),
+				excludeStatuses: strings(col.excludeStatuses),
+				excludeVisibilities: strings(col.excludeVisibilities),
+				catchAll: Boolean(col.catchAll),
+			};
+		});
+	return {
+		summary: String(
+			raw.summary || columns.map((column) => column.title.toLowerCase()).join(", "),
+		).slice(0, 120),
+		columns,
+	};
+}
+
 /** Auth config — tells the console how to start the OAuth flow. */
 authRoutes.get("/config", async (c) => {
 	return c.json({
@@ -175,19 +265,30 @@ authRoutes.put("/me", async (c) => {
 		website?: string;
 		twitter?: string;
 		slack_webhook?: string;
+		board_config?: unknown;
 	}>();
+	let boardConfig: string | undefined;
+	if (body.board_config !== undefined) {
+		try {
+			boardConfig = JSON.stringify(normalizeBoardConfigInput(body.board_config));
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Invalid board_config" }, 400);
+		}
+	}
 	const allowed = [
 		["display_name", "display_name"],
 		["bio", "bio"],
 		["website", "website"],
 		["twitter", "twitter"],
 		["slack_webhook", "slack_webhook"],
+		["board_config", "board_config"],
 	] as const;
 	const sets: string[] = ["updated_at = datetime('now')"];
 	const params: unknown[] = [];
 	for (const [key, column] of allowed) {
-		if (body[key] !== undefined) {
-			params.push(body[key]);
+		const value = key === "board_config" ? boardConfig : body[key];
+		if (value !== undefined) {
+			params.push(value);
 			sets.push(`${column} = ?${params.length + 1}`);
 		}
 	}
@@ -213,7 +314,7 @@ authRoutes.get("/me", async (c) => {
 	if (!session) return c.json({ error: "Invalid or expired token" }, 401);
 
 	const row = await c.env.DB.prepare(
-		"SELECT id, github_login, github_name, avatar_url, roles, stripe_customer_id, display_name, bio, website, twitter, slack_webhook FROM users WHERE id = ?1",
+		"SELECT id, github_login, github_name, avatar_url, roles, stripe_customer_id, display_name, bio, website, twitter, slack_webhook, board_config FROM users WHERE id = ?1",
 	)
 		.bind(session.uid)
 		.first<Record<string, string>>();
@@ -230,5 +331,6 @@ authRoutes.get("/me", async (c) => {
 		website: row.website || "",
 		twitter: row.twitter || "",
 		slackWebhook: row.slack_webhook ? "configured" : "",
+		boardConfig: parseJsonOrNull(row.board_config),
 	});
 });

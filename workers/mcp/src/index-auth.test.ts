@@ -66,7 +66,7 @@ describe("MCP transport auth", () => {
 		await expect(res.json()).resolves.toMatchObject({
 			ok: true,
 			service: "proagentstore-mcp",
-			tools: 26,
+			tools: 35,
 		});
 	});
 });

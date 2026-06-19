@@ -21,6 +21,12 @@ function resolveStorePath(pathname) {
 	if (cleanPath === "/" || cleanPath === "/console") {
 		return join(storeRoot, "console", "index.html");
 	}
+	if (cleanPath === "/docs/browser-runtime") {
+		return join(storeRoot, "docs", "browser-runtime", "index.html");
+	}
+	if (/^\/agents\/[a-z0-9-]+$/.test(cleanPath)) {
+		return join(storeRoot, "agents", "detail.html");
+	}
 
 	const relative = normalize(cleanPath.replace(/^\/+/, ""));
 	const target = resolve(storeRoot, relative);

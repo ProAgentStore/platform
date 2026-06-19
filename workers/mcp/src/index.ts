@@ -471,6 +471,59 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			},
 		);
 
+		this.server.tool(
+			"get_agent_board_config",
+			"Read the authenticated creator's configurable console kanban board for agents.",
+			{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
+			async ({ token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const data = (await authedCall(
+					"/v1/auth/me",
+					sessionToken,
+					{},
+					this.env,
+				)) as { boardConfig?: unknown; error?: string };
+				if (data.error) return text(`Error: ${data.error}`);
+				return jsonText(data.boardConfig || null);
+			},
+		);
+
+		this.server.tool(
+			"update_agent_board_config",
+			"Update the authenticated creator's console kanban board. Columns match agent statuses and visibilities in order.",
+			{
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+				config: z.object({
+					summary: z.string().optional(),
+					columns: z.array(z.object({
+						id: z.string(),
+						title: z.string(),
+						color: z.string().optional(),
+						empty: z.string().optional(),
+						statuses: z.array(z.string()).optional(),
+						visibilities: z.array(z.string()).optional(),
+						excludeStatuses: z.array(z.string()).optional(),
+						excludeVisibilities: z.array(z.string()).optional(),
+						catchAll: z.boolean().optional(),
+					})).min(1).max(8),
+				}),
+			},
+			async ({ token, config }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const data = (await authedCall(
+					"/v1/auth/me",
+					sessionToken,
+					{ method: "PUT", body: JSON.stringify({ board_config: config }) },
+					this.env,
+				)) as { success?: boolean; error?: string };
+				return data.success
+					? text("Updated agent board config.")
+					: text(`Error: ${data.error || "update failed"}`);
+			},
+		);
+
 		registerInstanceTools(this.server, this.env, (provided) => this.token(provided));
 
 		this.server.tool(
@@ -888,8 +941,8 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 
 ## Agent Types: Agents | Workers | Tools
 ## CLI: pags init <name> --template worker|cron|api, pags check, pags publish
-## MCP creator tools: scaffold_agent, list_agent_files, read_agent_file, write_agent_file, batch_write_agent_files, trigger_agent_deploy, agent_deploy_status
-## MCP runtime tools: subscribe_agent, my_instances, add_instance_knowledge, chat_with_instance, instance_messages
+## MCP creator tools: scaffold_agent, list_agent_files, read_agent_file, write_agent_file, batch_write_agent_files, get_agent_board_config, update_agent_board_config, trigger_agent_deploy, agent_deploy_status
+## MCP runtime tools: subscribe_agent, my_instances, add_instance_knowledge, chat_with_instance, instance_messages, register_instance_runtime, instance_runtime_status, unregister_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, instance_task_events
 ## Public trial: chat_with_agent calls /v1/public/agents/:id/try and is for previews, not the main user runtime
 ## URLs: Store proagentstore.online, API api.proagentstore.online, MCP mcp.proagentstore.online/mcp
 ## Key endpoints: GET /v1/agents, POST /v1/public/agents/:id/try, POST /v1/instances/:id/subscribe, POST /v1/instances/:instanceId/chat`;
@@ -946,12 +999,12 @@ export default {
 		}
 		if (url.pathname === "/health") {
 			return new Response(
-				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 26 }),
+				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 35 }),
 				{ headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "https://proagentstore.online" } },
 			);
 		}
 		return new Response(
-			"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for the real private instance runtime.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, scaffold_agent, create_agent, update_agent, list/read/write agent files, add/list knowledge, analytics, deploy status, platform guide, SDK reference.",
+			"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for text private instances. Use register_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, and instance_task_events for browser-capable private instances.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, register/manage instance runtimes, run/approve/cancel instance tasks, scaffold_agent, create_agent, update_agent, get/update agent board config, list/read/write agent files, add/list knowledge, analytics, deploy status, platform guide, SDK reference.",
 			{ headers: { "Content-Type": "text/plain" } },
 		);
 	},

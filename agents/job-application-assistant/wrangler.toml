@@ -1,0 +1,22 @@
+name = "proagentstore-job-application-assistant"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[routes]]
+pattern = "job-application-assistant.proagentstore.online/*"
+zone_name = "proagentstore.online"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "APPLICATIONS"
+class_name = "ApplicationStoreDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["ApplicationStoreDO"]
+
+# Secrets:
+# API_SECRET — optional bearer token for private direct API use.

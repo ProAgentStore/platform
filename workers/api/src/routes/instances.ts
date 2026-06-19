@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { createNotification } from "./notifications.js";
 import type { Env } from "../types.js";
 
@@ -14,6 +15,242 @@ interface InstanceRow {
 	config: string;
 	created_at: string;
 	updated_at: string;
+}
+
+interface RuntimeRow {
+	instance_id: string;
+	user_id: string;
+	placement: string;
+	endpoint_url: string;
+	token_ciphertext: ArrayBuffer | Uint8Array | null;
+	token_dek_wrapped: ArrayBuffer | Uint8Array | null;
+	token_iv: ArrayBuffer | Uint8Array | null;
+	token_plaintext: string | null;
+	capabilities: string;
+	runner_version: string;
+	status: string;
+	last_seen_at: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+interface RuntimeRegistrationBody {
+	endpointUrl: string;
+	token?: string;
+	placement?: "local" | "managed";
+	capabilities?: unknown[];
+	runnerVersion?: string;
+}
+
+interface RunnerTaskBody {
+	type: string;
+	input?: Record<string, unknown>;
+	requiresApproval?: boolean;
+	approvalPrompt?: string;
+}
+
+const APPROVAL_REQUIRED_RUNNER_TASKS = new Set(["browser.open"]);
+
+export function validateRuntimeEndpointUrl(value: string): string {
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		throw new HttpError(400, "endpointUrl must be a valid URL");
+	}
+
+	const isLocalhost =
+		url.hostname === "localhost" ||
+		url.hostname === "127.0.0.1" ||
+		url.hostname === "[::1]" ||
+		url.hostname === "::1";
+	if (url.protocol !== "https:" && !(isLocalhost && url.protocol === "http:")) {
+		throw new HttpError(400, "endpointUrl must be https, except localhost for development");
+	}
+	url.pathname = url.pathname.replace(/\/+$/, "");
+	url.search = "";
+	url.hash = "";
+	return url.toString().replace(/\/$/, "");
+}
+
+function safeCapabilities(value: unknown): unknown[] {
+	return Array.isArray(value)
+		? value.filter((item) => typeof item === "string").slice(0, 50)
+		: [];
+}
+
+function runtimeResponse(row: RuntimeRow) {
+	return {
+		instanceId: row.instance_id,
+		placement: row.placement,
+		endpointUrl: row.endpoint_url,
+		capabilities: safeParseArray(row.capabilities),
+		runnerVersion: row.runner_version,
+		status: row.status,
+		lastSeenAt: row.last_seen_at,
+		createdAt: row.created_at,
+		updatedAt: row.updated_at,
+		hasToken: Boolean(row.token_plaintext || row.token_ciphertext),
+	};
+}
+
+function safeParseArray(value: string): unknown[] {
+	try {
+		const parsed = JSON.parse(value);
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function normalizeRunnerTaskBody(value: unknown): RunnerTaskBody {
+	if (!isRecord(value) || typeof value.type !== "string" || !value.type.trim()) {
+		throw new HttpError(400, "task type required");
+	}
+	const type = value.type.trim().slice(0, 120);
+	const requiresApproval =
+		value.requiresApproval === true || APPROVAL_REQUIRED_RUNNER_TASKS.has(type);
+	return {
+		type,
+		input: isRecord(value.input) ? value.input : {},
+		requiresApproval,
+		approvalPrompt: typeof value.approvalPrompt === "string"
+			? value.approvalPrompt.slice(0, 500)
+			: requiresApproval
+				? `Approve task ${type}`
+				: undefined,
+	};
+}
+
+async function requireOwnedInstance(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<InstanceRow> {
+	const instance = await env.DB.prepare(
+		"SELECT id, agent_id, user_id, status, config, created_at, updated_at FROM agent_instances WHERE id = ?1 AND user_id = ?2",
+	)
+		.bind(instanceId, userId)
+		.first<InstanceRow>();
+	if (!instance) throw new HttpError(404, "Instance not found");
+	return instance;
+}
+
+async function getRuntime(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<RuntimeRow | null> {
+	return env.DB.prepare(
+		"SELECT * FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2",
+	)
+		.bind(instanceId, userId)
+		.first<RuntimeRow>();
+}
+
+async function requireRuntime(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<RuntimeRow> {
+	const runtime = await getRuntime(env, instanceId, userId);
+	if (!runtime) throw new HttpError(404, "Runtime not registered");
+	return runtime;
+}
+
+async function encodeRuntimeToken(env: Env, token: string | undefined): Promise<{
+	ciphertext: Uint8Array | null;
+	dekWrapped: Uint8Array | null;
+	iv: Uint8Array | null;
+	plaintext: string | null;
+}> {
+	if (!token) {
+		return { ciphertext: null, dekWrapped: null, iv: null, plaintext: null };
+	}
+	if (!env.KEY_ENCRYPTION_KEY) {
+		return { ciphertext: null, dekWrapped: null, iv: null, plaintext: token };
+	}
+	const encrypted = await encryptKey(token, env.KEY_ENCRYPTION_KEY);
+	return {
+		ciphertext: encrypted.ciphertext,
+		dekWrapped: encrypted.dekWrapped,
+		iv: encrypted.iv,
+		plaintext: null,
+	};
+}
+
+async function decodeRuntimeToken(env: Env, row: RuntimeRow): Promise<string | null> {
+	if (row.token_plaintext) return row.token_plaintext;
+	if (
+		!row.token_ciphertext ||
+		!row.token_dek_wrapped ||
+		!row.token_iv ||
+		!env.KEY_ENCRYPTION_KEY
+	) {
+		return null;
+	}
+	return decryptKey(
+		new Uint8Array(row.token_ciphertext),
+		new Uint8Array(row.token_dek_wrapped),
+		new Uint8Array(row.token_iv),
+		env.KEY_ENCRYPTION_KEY,
+	);
+}
+
+async function callRuntime(
+	env: Env,
+	row: RuntimeRow,
+	path: string,
+	init: RequestInit = {},
+): Promise<Response> {
+	const token = await decodeRuntimeToken(env, row);
+	const url = new URL(path, `${row.endpoint_url}/`);
+	const headers = new Headers(init.headers);
+	if (token) headers.set("Authorization", `Bearer ${token}`);
+	headers.set("X-PAGS-Instance-Id", row.instance_id);
+	headers.set("X-PAGS-Runtime-Placement", row.placement);
+	if (init.body && !headers.has("Content-Type")) {
+		headers.set("Content-Type", "application/json");
+	}
+	return fetch(url.toString(), {
+		...init,
+		headers,
+	});
+}
+
+async function runtimeJson(res: Response): Promise<unknown> {
+	const text = await res.text();
+	if (!text) return {};
+	try {
+		return JSON.parse(text) as unknown;
+	} catch {
+		return {
+			error: text || res.statusText || "Runtime returned a non-JSON response",
+		};
+	}
+}
+
+function runtimeStatus(res: Response, okStatus: number): ContentfulStatusCode {
+	return (res.ok ? okStatus : Math.max(400, Math.min(599, res.status))) as ContentfulStatusCode;
+}
+
+async function updateRuntimeStatus(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	status: string,
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE instance_runtimes
+     SET status = ?1, last_seen_at = datetime('now'), updated_at = datetime('now')
+     WHERE instance_id = ?2 AND user_id = ?3`,
+	)
+		.bind(status, instanceId, userId)
+		.run();
 }
 
 /** Subscribe to an agent — creates a personal instance with its own DO. */
@@ -141,6 +378,188 @@ instanceRoutes.get("/my/instances", async (c) => {
 		.bind(session.uid)
 		.all();
 	return c.json({ instances: results });
+});
+
+/** Register or update the local/managed runtime for my instance. */
+instanceRoutes.post("/:instanceId/runtime", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+
+	const body = await c.req.json<RuntimeRegistrationBody>();
+	const endpointUrl = validateRuntimeEndpointUrl(body.endpointUrl);
+	const tokenParts = await encodeRuntimeToken(c.env, body.token);
+	const capabilities = JSON.stringify(safeCapabilities(body.capabilities));
+	const placement = body.placement === "managed" ? "managed" : "local";
+	const runnerVersion = String(body.runnerVersion || "").slice(0, 80);
+
+	await c.env.DB.prepare(
+		`INSERT INTO instance_runtimes (
+       instance_id, user_id, placement, endpoint_url,
+       token_ciphertext, token_dek_wrapped, token_iv, token_plaintext,
+       capabilities, runner_version, status, last_seen_at, created_at, updated_at
+     )
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'registered', datetime('now'), datetime('now'), datetime('now'))
+     ON CONFLICT(instance_id) DO UPDATE SET
+       placement = excluded.placement,
+       endpoint_url = excluded.endpoint_url,
+       token_ciphertext = excluded.token_ciphertext,
+       token_dek_wrapped = excluded.token_dek_wrapped,
+       token_iv = excluded.token_iv,
+       token_plaintext = excluded.token_plaintext,
+       capabilities = excluded.capabilities,
+       runner_version = excluded.runner_version,
+       status = 'registered',
+       last_seen_at = datetime('now'),
+       updated_at = datetime('now')`,
+	)
+		.bind(
+			instanceId,
+			session.uid,
+			placement,
+			endpointUrl,
+			tokenParts.ciphertext,
+			tokenParts.dekWrapped,
+			tokenParts.iv,
+			tokenParts.plaintext,
+			capabilities,
+			runnerVersion,
+		)
+		.run();
+
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	return c.json({ runtime: runtimeResponse(runtime) }, 201);
+});
+
+/** Read my registered runtime without exposing its token. */
+instanceRoutes.get("/:instanceId/runtime", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await getRuntime(c.env, instanceId, session.uid);
+	return c.json({ runtime: runtime ? runtimeResponse(runtime) : null });
+});
+
+/** Heartbeat from user/CLI after checking the local runner is online. */
+instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	await requireRuntime(c.env, instanceId, session.uid);
+	await updateRuntimeStatus(c.env, instanceId, session.uid, "online");
+	return c.json({ success: true, status: "online" });
+});
+
+/** Probe a registered runtime's health and capabilities through PAGS. */
+instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+
+	try {
+		const [healthRes, capabilitiesRes] = await Promise.all([
+			callRuntime(c.env, runtime, "/health"),
+			callRuntime(c.env, runtime, "/capabilities"),
+		]);
+		const health = await healthRes.json().catch(() => ({}));
+		const capabilities = await capabilitiesRes.json().catch(() => ({}));
+		const online = healthRes.ok && capabilitiesRes.ok;
+		await updateRuntimeStatus(c.env, instanceId, session.uid, online ? "online" : "offline");
+		return c.json({
+			runtime: runtimeResponse({
+				...runtime,
+				status: online ? "online" : "offline",
+				last_seen_at: new Date().toISOString(),
+			}),
+			health,
+			capabilities,
+		});
+	} catch (error) {
+		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		return c.json({
+			runtime: runtimeResponse({ ...runtime, status: "offline" }),
+			error: error instanceof Error ? error.message : String(error),
+		}, 502);
+	}
+});
+
+/** Remove my registered runtime. */
+instanceRoutes.delete("/:instanceId/runtime", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	await c.env.DB.prepare(
+		"DELETE FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2",
+	)
+		.bind(instanceId, session.uid)
+		.run();
+	return c.json({ success: true });
+});
+
+/** Create a task on my registered runtime. */
+instanceRoutes.post("/:instanceId/tasks", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const body = normalizeRunnerTaskBody(await c.req.json());
+	const res = await callRuntime(c.env, runtime, "/tasks", {
+		method: "POST",
+		body: JSON.stringify(body),
+	});
+	return c.json(await runtimeJson(res), runtimeStatus(res, 202));
+});
+
+/** Read a task from my registered runtime. */
+instanceRoutes.get("/:instanceId/tasks/:taskId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const res = await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(c.req.param("taskId"))}`);
+	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+});
+
+/** Approve a task waiting on local human approval. */
+instanceRoutes.post("/:instanceId/tasks/:taskId/approve", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const res = await callRuntime(
+		c.env,
+		runtime,
+		`/tasks/${encodeURIComponent(c.req.param("taskId"))}/approve`,
+		{ method: "POST" },
+	);
+	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+});
+
+/** Cancel a runtime task. */
+instanceRoutes.post("/:instanceId/tasks/:taskId/cancel", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const res = await callRuntime(
+		c.env,
+		runtime,
+		`/tasks/${encodeURIComponent(c.req.param("taskId"))}/cancel`,
+		{ method: "POST" },
+	);
+	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+});
+
+/** Read recent task events from my registered runtime. */
+instanceRoutes.get("/:instanceId/task-events", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const limit = c.req.query("limit") || "100";
+	const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(limit)}`);
+	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
 });
 
 /** Chat with my instance of an agent. */

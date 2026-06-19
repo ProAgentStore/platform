@@ -1,0 +1,12 @@
+{
+	"id": "job-application-assistant",
+	"name": "Job Application Assistant",
+	"description": "Turns a job URL into a tailored application packet, checks whether the job can be safely submitted, and submits only after explicit confirmation.",
+	"storeType": "agent",
+	"category": "productivity",
+	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+	"template": "api",
+	"serverConfig": {
+		"routes": ["job-application-assistant.proagentstore.online/*"]
+	}
+}

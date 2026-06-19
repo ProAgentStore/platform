@@ -62,6 +62,26 @@
     .gh-icon{width:20px;height:20px;fill:currentColor}
 
     /* Agent grid */
+    .agent-board-toolbar{display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap}
+    .agent-board-actions{display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap}
+    .agent-board-summary{font-size:0.78rem;color:var(--muted)}
+    .view-toggle{display:inline-flex;border:1px solid var(--line);border-radius:0.5rem;overflow:hidden}
+    .view-toggle button{padding:0.38rem 0.7rem;font-size:0.78rem;font-weight:700;color:var(--muted);border-right:1px solid var(--line)}
+    .view-toggle button:last-child{border-right:none}
+    .view-toggle button.active{background:var(--panel-hover);color:var(--ink)}
+    .kanban-board{display:grid;grid-template-columns:repeat(4,minmax(190px,1fr));gap:0.75rem;align-items:start;overflow-x:auto;padding-bottom:0.35rem}
+    .kanban-column{border:1px solid var(--line);border-radius:0.5rem;background:rgba(20,20,20,0.55);min-height:220px;min-width:190px}
+    .kanban-header{display:flex;align-items:center;justify-content:space-between;gap:0.5rem;padding:0.75rem;border-bottom:1px solid var(--line)}
+    .kanban-title{display:flex;align-items:center;gap:0.45rem;font-size:0.82rem;font-weight:800}
+    .kanban-dot{width:0.55rem;height:0.55rem;border-radius:999px;background:var(--muted)}
+    .kanban-count{font-size:0.7rem;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:0.08rem 0.42rem}
+    .kanban-items{display:flex;flex-direction:column;gap:0.5rem;padding:0.65rem}
+    .kanban-card{background:var(--paper);border:1px solid var(--line);border-radius:0.5rem;padding:0.75rem;cursor:pointer;transition:border-color 0.15s,background 0.15s}
+    .kanban-card:hover{border-color:var(--accent);background:var(--panel)}
+    .kanban-card h3{font-size:0.86rem;font-weight:700;margin-bottom:0.25rem;overflow-wrap:anywhere}
+    .kanban-card p{font-size:0.75rem;color:var(--muted);line-height:1.45;margin-bottom:0.55rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+    .kanban-card-meta{display:flex;gap:0.35rem;flex-wrap:wrap;font-size:0.7rem}
+    .kanban-empty{padding:0.75rem;color:var(--muted-soft);font-size:0.78rem;line-height:1.45}
     .agents-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:0.75rem}
     .agent-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1rem;cursor:pointer;transition:border-color 0.15s}
     .agent-card:hover{border-color:var(--accent)}
@@ -70,7 +90,15 @@
     .agent-meta{display:flex;gap:0.5rem;font-size:0.72rem}
     .tag{padding:0.1rem 0.4rem;border-radius:0.25rem;font-weight:500}
     .tag-draft{background:rgba(234,179,8,0.15);color:var(--yellow)}
+    .tag-unlisted{background:rgba(59,130,246,0.15);color:var(--blue)}
     .tag-published{background:rgba(34,197,94,0.15);color:var(--green)}
+    .tag-active{background:rgba(34,197,94,0.15);color:var(--green)}
+    .tag-inactive{background:rgba(163,163,163,0.14);color:var(--muted)}
+    .tag-error{background:rgba(239,68,68,0.15);color:var(--red)}
+    .tag-setup{background:rgba(234,179,8,0.15);color:var(--yellow)}
+    .tag-review{background:rgba(59,130,246,0.15);color:var(--blue)}
+    .tag-live{background:rgba(34,197,94,0.15);color:var(--green)}
+    .tag-attention{background:rgba(239,68,68,0.15);color:var(--red)}
     .tag-cat{background:var(--accent-soft);color:#a78bfa}
 
     /* Create agent form */
@@ -244,7 +272,28 @@
       <div id="create-error" class="error hidden"></div>
     </div>
 
-    <div id="agents-list" class="agents-grid"></div>
+    <div class="agent-board-toolbar">
+      <div id="agents-board-summary" class="agent-board-summary">Loading agent status...</div>
+      <div class="agent-board-actions">
+        <button type="button" onclick="toggleBoardConfig()" class="btn btn-outline btn-sm">Configure Board</button>
+        <div class="view-toggle" aria-label="Agent view">
+          <button type="button" id="agents-view-board" class="active" onclick="switchAgentsView('board')">Board</button>
+          <button type="button" id="agents-view-list" onclick="switchAgentsView('list')">List</button>
+        </div>
+      </div>
+    </div>
+    <div id="board-config-form" class="create-form hidden">
+      <h3>Agent Board Configuration</h3>
+      <textarea id="board-config-json" spellcheck="false" style="min-height:220px;font-family:'SF Mono',monospace;font-size:0.78rem"></textarea>
+      <div style="display:flex;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap">
+        <button type="button" onclick="saveBoardConfig()" class="btn btn-primary btn-sm">Save Board</button>
+        <button type="button" onclick="resetBoardConfig()" class="btn btn-outline btn-sm">Reset Default</button>
+        <button type="button" onclick="toggleBoardConfig()" class="btn btn-outline btn-sm">Cancel</button>
+      </div>
+      <div id="board-config-error" class="error hidden"></div>
+    </div>
+    <div id="agents-board" class="kanban-board"></div>
+    <div id="agents-list" class="agents-grid hidden"></div>
     <div id="agents-empty" class="empty hidden">No agents yet. Create your first one!</div>
     <div id="agents-loading" class="loading">Loading agents...</div>
     </div><!-- /dash-agents -->
@@ -743,6 +792,46 @@ console.log(response)</pre>
     let token = null;
     let user = null;
     let currentAgent = null;
+    let agentsView = 'board';
+    const DEFAULT_AGENT_STATUS_BOARD_CONFIG = {
+      summary: 'setup, review, live, and attention',
+      columns: [
+        {
+          id: 'setup',
+          title: 'Setup',
+          color: 'var(--yellow)',
+          empty: 'Draft agents appear here until they are ready to share.',
+          statuses: ['inactive'],
+          visibilities: ['draft'],
+          excludeStatuses: ['active', 'error'],
+        },
+        {
+          id: 'review',
+          title: 'Review',
+          color: 'var(--blue)',
+          empty: 'Unlisted agents appear here for private testing.',
+          visibilities: ['unlisted'],
+          excludeStatuses: ['active', 'error'],
+        },
+        {
+          id: 'live',
+          title: 'Live',
+          color: 'var(--green)',
+          empty: 'Published or active agents appear here.',
+          statuses: ['active'],
+          visibilities: ['published'],
+          excludeStatuses: ['error'],
+        },
+        {
+          id: 'attention',
+          title: 'Attention',
+          color: 'var(--red)',
+          empty: 'Agents with errors appear here.',
+          statuses: ['error'],
+        },
+      ],
+    };
+    let agentStatusBoardConfig = structuredClone(DEFAULT_AGENT_STATUS_BOARD_CONFIG);
 
     // ── Auth ────────────────────────────────────────────────────
 
@@ -798,7 +887,11 @@ console.log(response)</pre>
       if (!token) return false;
       try {
         const data = await api('/v1/auth/me');
-        if (data.id) { user = data; return true; }
+        if (data.id) {
+          user = data;
+          setBoardConfig(user.boardConfig || DEFAULT_AGENT_STATUS_BOARD_CONFIG);
+          return true;
+        }
       } catch { setToken(null); }
       return false;
     }
@@ -826,27 +919,205 @@ console.log(response)</pre>
       document.getElementById('agents-loading').classList.remove('hidden');
       try {
         const data = await api('/v1/agents/my/agents');
+        const agents = data.agents || [];
+        renderAgents(agents);
+      } catch (e) { console.error(e); }
+      document.getElementById('agents-loading').classList.add('hidden');
+    }
+
+    function renderAgents(agents) {
+      const empty = document.getElementById('agents-empty');
+      const summary = document.getElementById('agents-board-summary');
+      empty.classList.toggle('hidden', agents.length > 0);
+      summary.textContent = agents.length
+        ? `${agents.length} agent${agents.length === 1 ? '' : 's'} across ${agentStatusBoardConfig.summary || 'configured columns'}`
+        : 'No agent status yet';
+      renderKanbanBoard({
+        boardId: 'agents-board',
+        items: agents,
+        columns: agentStatusBoardConfig.columns,
+        renderCard: agentStatusCard,
+      });
+      renderAgentList(agents);
+      applyAgentsView();
+    }
+
+    function agentLifecycle(a) {
+      return firstMatchingColumn(a)?.id || 'setup';
+    }
+
+    function agentLifecycleLabel(a) {
+      return firstMatchingColumn(a)?.title || 'Unmatched';
+    }
+
+    function renderKanbanBoard({ boardId, items, columns, renderCard }) {
+      const board = document.getElementById(boardId);
+      board.innerHTML = '';
+      for (const col of columns) {
+        const columnItems = items.filter(item => firstMatchingColumn(item, columns)?.id === col.id);
+        const column = document.createElement('section');
+        column.className = 'kanban-column';
+        column.setAttribute('aria-label', `${col.title} column`);
+        column.innerHTML = `
+          <div class="kanban-header">
+            <div class="kanban-title"><span class="kanban-dot" style="background:${col.color}"></span>${esc(col.title)}</div>
+            <span class="kanban-count">${columnItems.length}</span>
+          </div>
+          <div class="kanban-items"></div>`;
+        const list = column.querySelector('.kanban-items');
+        if (!columnItems.length) {
+          list.innerHTML = `<div class="kanban-empty">${esc(col.empty)}</div>`;
+        } else {
+          for (const item of columnItems) list.appendChild(renderCard(item));
+        }
+        board.appendChild(column);
+      }
+    }
+
+    function columnMatchesAgent(column, agent) {
+      const status = agent.status || 'inactive';
+      const visibility = agent.visibility || 'draft';
+      const excludeStatuses = Array.isArray(column.excludeStatuses) ? column.excludeStatuses : [];
+      const excludeVisibilities = Array.isArray(column.excludeVisibilities) ? column.excludeVisibilities : [];
+      if (excludeStatuses.includes(status) || excludeVisibilities.includes(visibility)) return false;
+      if (column.catchAll) return true;
+      const statuses = Array.isArray(column.statuses) ? column.statuses : [];
+      const visibilities = Array.isArray(column.visibilities) ? column.visibilities : [];
+      return statuses.includes(status) || visibilities.includes(visibility);
+    }
+
+    function safeBoardColor(value) {
+      const color = String(value || '').trim().slice(0, 40);
+      if (/^(#[0-9a-f]{3,8}|[a-z]+|rgba?\([0-9, .%]+\)|hsla?\([0-9, .%]+\)|var\(--[a-z0-9-]+\))$/i.test(color)) {
+        return color;
+      }
+      return 'var(--accent)';
+    }
+
+    function firstMatchingColumn(agent, columns = agentStatusBoardConfig.columns) {
+      return columns.find(col => columnMatchesAgent(col, agent)) || columns[0];
+    }
+
+    function normalizeBoardConfig(config) {
+      const source = config && Array.isArray(config.columns) ? config : DEFAULT_AGENT_STATUS_BOARD_CONFIG;
+      const columns = source.columns
+        .filter(col => col?.id && col.title)
+        .slice(0, 8)
+        .map(col => ({
+          id: String(col.id).replace(/[^a-z0-9_-]/gi, '-').toLowerCase(),
+          title: String(col.title).slice(0, 40),
+          color: safeBoardColor(col.color || 'var(--accent)'),
+          empty: String(col.empty || 'No agents in this column.').slice(0, 160),
+          statuses: Array.isArray(col.statuses) ? col.statuses.map(String).slice(0, 10) : [],
+          visibilities: Array.isArray(col.visibilities) ? col.visibilities.map(String).slice(0, 10) : [],
+          excludeStatuses: Array.isArray(col.excludeStatuses) ? col.excludeStatuses.map(String).slice(0, 10) : [],
+          excludeVisibilities: Array.isArray(col.excludeVisibilities) ? col.excludeVisibilities.map(String).slice(0, 10) : [],
+          catchAll: Boolean(col.catchAll),
+        }));
+      if (!columns.length) throw new Error('Board config needs at least one column.');
+      return {
+        summary: String(source.summary || columns.map(c => c.title.toLowerCase()).join(', ')).slice(0, 120),
+        columns,
+      };
+    }
+
+    function setBoardConfig(config) {
+      agentStatusBoardConfig = normalizeBoardConfig(config);
+      document.getElementById('board-config-json').value = JSON.stringify(agentStatusBoardConfig, null, 2);
+    }
+
+    function toggleBoardConfig() {
+      const form = document.getElementById('board-config-form');
+      form.classList.toggle('hidden');
+      if (!form.classList.contains('hidden')) {
+        document.getElementById('board-config-json').value = JSON.stringify(agentStatusBoardConfig, null, 2);
+        document.getElementById('board-config-error').classList.add('hidden');
+      }
+    }
+
+    async function saveBoardConfig() {
+      const error = document.getElementById('board-config-error');
+      try {
+        const parsed = JSON.parse(document.getElementById('board-config-json').value);
+        const config = normalizeBoardConfig(parsed);
+        await api('/v1/auth/me', {
+          method: 'PUT',
+          body: JSON.stringify({ board_config: config }),
+        });
+        user.boardConfig = config;
+        setBoardConfig(config);
+        document.getElementById('board-config-form').classList.add('hidden');
+        loadAgents();
+      } catch (e) {
+        error.textContent = e.message;
+        error.classList.remove('hidden');
+      }
+    }
+
+    async function resetBoardConfig() {
+      setBoardConfig(DEFAULT_AGENT_STATUS_BOARD_CONFIG);
+      await api('/v1/auth/me', {
+        method: 'PUT',
+        body: JSON.stringify({ board_config: DEFAULT_AGENT_STATUS_BOARD_CONFIG }),
+      });
+      if (user) user.boardConfig = DEFAULT_AGENT_STATUS_BOARD_CONFIG;
+      document.getElementById('board-config-form').classList.add('hidden');
+      loadAgents();
+    }
+
+    function agentStatusCard(a) {
+      const card = document.createElement('article');
+      card.className = 'kanban-card';
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      card.setAttribute('aria-label', `Open ${a.name}`);
+      card.innerHTML = `
+        <h3>${esc(a.name)}</h3>
+        <p>${esc(a.description || 'No description')}</p>
+        <div style="font-size:0.7rem;color:var(--muted-soft);margin-bottom:0.45rem">Updated ${esc(formatTime(a.updated_at))}</div>
+        <div class="kanban-card-meta">
+          <span class="tag tag-${esc(a.visibility || 'draft')}">${esc(a.visibility || 'draft')}</span>
+          <span class="tag tag-${esc(a.status || 'inactive')}">${esc(a.status || 'inactive')}</span>
+          <span class="tag tag-cat">${esc(a.category || 'general')}</span>
+        </div>`;
+      card.addEventListener('click', () => openAgent(a.id));
+      card.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openAgent(a.id);
+        }
+      });
+      return card;
+    }
+
+    function renderAgentList(agents) {
         const list = document.getElementById('agents-list');
-        const empty = document.getElementById('agents-empty');
         list.innerHTML = '';
-        if (!data.agents.length) { empty.classList.remove('hidden'); }
-        else {
-          empty.classList.add('hidden');
-          for (const a of data.agents) {
+        for (const a of agents) {
             const card = document.createElement('div');
             card.className = 'agent-card';
             card.innerHTML = `<h3>${esc(a.name)}</h3>
               <p>${esc(a.description || 'No description')}</p>
               <div class="agent-meta">
                 <span class="tag tag-${esc(a.visibility)}">${esc(a.visibility)}</span>
+                <span class="tag tag-${esc(agentLifecycle(a))}">${esc(agentLifecycleLabel(a))}</span>
                 <span class="tag tag-cat">${esc(a.category)}</span>
               </div>`;
             card.addEventListener('click', () => openAgent(a.id));
             list.appendChild(card);
-          }
         }
-      } catch (e) { console.error(e); }
-      document.getElementById('agents-loading').classList.add('hidden');
+    }
+
+    function switchAgentsView(view) {
+      agentsView = view === 'list' ? 'list' : 'board';
+      applyAgentsView();
+    }
+
+    function applyAgentsView() {
+      document.getElementById('agents-board').classList.toggle('hidden', agentsView !== 'board');
+      document.getElementById('agents-list').classList.toggle('hidden', agentsView !== 'list');
+      document.getElementById('agents-view-board').classList.toggle('active', agentsView === 'board');
+      document.getElementById('agents-view-list').classList.toggle('active', agentsView === 'list');
     }
 
     function showDashboard() {

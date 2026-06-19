@@ -25,6 +25,10 @@ const pages = {
 		path.join(storeDir, "skills", "proagentstore-mcp-operator", "index.html"),
 		"utf-8",
 	),
+	browserRuntimeDocsPage: fs.readFileSync(
+		path.join(storeDir, "docs", "browser-runtime", "index.html"),
+		"utf-8",
+	),
 	consolePage: fs.readFileSync(
 		path.join(storeDir, "console", "index.html"),
 		"utf-8",

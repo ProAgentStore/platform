@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { HttpError } from "../lib/auth.js";
+import {
+	normalizeRunnerTaskBody,
+	validateRuntimeEndpointUrl,
+} from "./instances.js";
 
 describe("instance ID generation", () => {
 	it("generates a valid UUID v4", () => {
@@ -117,5 +122,79 @@ describe("instance ownership check", () => {
 			(i) => i.id === "inst-1" && i.user_id === "user-x",
 		);
 		expect(found).toBeUndefined();
+	});
+});
+
+describe("runtime endpoint validation", () => {
+	it("accepts https tunnel endpoints and strips path trailing slash", () => {
+		expect(validateRuntimeEndpointUrl("https://runner.example.com/")).toBe(
+			"https://runner.example.com",
+		);
+	});
+
+	it("accepts localhost http for development", () => {
+		expect(validateRuntimeEndpointUrl("http://127.0.0.1:49171")).toBe(
+			"http://127.0.0.1:49171",
+		);
+		expect(validateRuntimeEndpointUrl("http://localhost:49171/")).toBe(
+			"http://localhost:49171",
+		);
+		expect(validateRuntimeEndpointUrl("http://[::1]:49171/")).toBe(
+			"http://[::1]:49171",
+		);
+	});
+
+	it("rejects non-https non-local endpoints", () => {
+		expect(() => validateRuntimeEndpointUrl("http://runner.example.com")).toThrow(
+			HttpError,
+		);
+	});
+
+	it("rejects invalid URLs", () => {
+		expect(() => validateRuntimeEndpointUrl("not a url")).toThrow(HttpError);
+	});
+});
+
+describe("runtime task protocol shape", () => {
+	it("creates PAGS-brain runner task request shape", () => {
+		const request = {
+			type: "browser.open",
+			input: { url: "https://example.com/jobs/1" },
+			requiresApproval: true,
+			approvalPrompt: "Open job page locally",
+		};
+		expect(request.type).toBe("browser.open");
+		expect(request.requiresApproval).toBe(true);
+		expect(request.input.url).toContain("https://");
+	});
+
+	it("runtime response never includes token material", () => {
+		const runtime = {
+			instanceId: "inst-1",
+			endpointUrl: "https://runner.example.com",
+			hasToken: true,
+		};
+		expect(runtime).not.toHaveProperty("token");
+		expect(runtime).not.toHaveProperty("tokenPlaintext");
+	});
+
+	it("normalizes browser.open tasks as approval-required at the PAGS boundary", () => {
+		expect(
+			normalizeRunnerTaskBody({
+				type: " browser.open ",
+				input: { url: "https://example.com/jobs/1" },
+				requiresApproval: false,
+			}),
+		).toMatchObject({
+			type: "browser.open",
+			input: { url: "https://example.com/jobs/1" },
+			requiresApproval: true,
+			approvalPrompt: "Approve task browser.open",
+		});
+	});
+
+	it("rejects invalid runner task bodies", () => {
+		expect(() => normalizeRunnerTaskBody({ input: {} })).toThrow(HttpError);
+		expect(() => normalizeRunnerTaskBody({ type: "" })).toThrow(HttpError);
 	});
 });

@@ -8,6 +8,14 @@ const migration = readFileSync(
 	join(__dirname, "../migrations/0001_init.sql"),
 	"utf-8",
 );
+const boardConfigMigration = readFileSync(
+	join(__dirname, "../migrations/0010_board_config.sql"),
+	"utf-8",
+);
+const runtimeMigration = readFileSync(
+	join(__dirname, "../migrations/0011_instance_runtimes.sql"),
+	"utf-8",
+);
 
 describe("D1 migration 0001_init", () => {
 	it("creates users table", () => {
@@ -64,5 +72,27 @@ describe("D1 migration 0001_init", () => {
 		expect(migration).not.toContain("ENUM");
 		expect(migration).not.toMatch(/VARCHAR\(\d+\)/);
 		expect(migration).not.toContain("BOOLEAN"); // SQLite has no BOOLEAN, use INTEGER
+	});
+});
+
+describe("D1 migration 0010_board_config", () => {
+	it("adds persisted creator board configuration", () => {
+		expect(boardConfigMigration).toContain("ALTER TABLE users ADD COLUMN board_config TEXT");
+		expect(boardConfigMigration).toContain("DEFAULT ''");
+	});
+});
+
+describe("D1 migration 0011_instance_runtimes", () => {
+	it("creates instance runtime registrations", () => {
+		expect(runtimeMigration).toContain("CREATE TABLE instance_runtimes");
+		expect(runtimeMigration).toContain("instance_id TEXT PRIMARY KEY REFERENCES agent_instances(id)");
+		expect(runtimeMigration).toContain("endpoint_url TEXT NOT NULL");
+		expect(runtimeMigration).toContain("token_ciphertext BLOB");
+		expect(runtimeMigration).toContain("capabilities TEXT NOT NULL DEFAULT '[]'");
+	});
+
+	it("adds lookup indexes", () => {
+		expect(runtimeMigration).toContain("CREATE INDEX idx_instance_runtimes_user");
+		expect(runtimeMigration).toContain("CREATE INDEX idx_instance_runtimes_status");
 	});
 });

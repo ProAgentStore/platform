@@ -3,7 +3,7 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, consolePage, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, consolePage, agentDetailPage,
 	widgetJs, authWidgetJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson,
 	faviconSvg, manifestJson,
@@ -20,6 +20,8 @@ const PAGES: Record<string, string> = {
 	"/skills/": skillsPage,
 	"/skills/proagentstore-mcp-operator": skillMcpOperatorPage,
 	"/skills/proagentstore-mcp-operator/": skillMcpOperatorPage,
+	"/docs/browser-runtime": browserRuntimeDocsPage,
+	"/docs/browser-runtime/": browserRuntimeDocsPage,
 	"/console": consolePage,
 	"/console/": consolePage,
 	"/admin": adminPage,

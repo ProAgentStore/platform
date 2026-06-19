@@ -1,0 +1,444 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+import { Command } from "commander";
+import { writeError, writeLine } from "../output.js";
+
+interface RunnerStartOptions {
+	host?: string;
+	port?: string;
+	dataDir?: string;
+	token?: string;
+	instanceId?: string;
+	headless?: boolean;
+}
+
+interface RunnerRequestOptions {
+	url?: string;
+	token?: string;
+	instanceId?: string;
+}
+
+interface PagsRequestOptions {
+	apiBase?: string;
+	pagsToken?: string;
+}
+
+interface RuntimeRegisterOptions extends PagsRequestOptions, RunnerRequestOptions {
+	endpointUrl: string;
+	runnerToken?: string;
+	placement?: string;
+	runnerVersion?: string;
+	capability?: string[];
+	probe?: boolean;
+}
+
+export const runnerCommand = createRunnerCommand();
+
+export function runnerBaseUrl(url?: string): string {
+	return (clean(url) || clean(process.env.PAGS_RUNNER_URL) || "http://127.0.0.1:49171").replace(/\/$/, "");
+}
+
+export function pagsApiBase(url?: string): string {
+	return (clean(url) || clean(process.env.PAGS_API_BASE) || "https://api.proagentstore.online").replace(/\/$/, "");
+}
+
+export function pagsHeaders(token?: string): Record<string, string> {
+	const resolved = clean(token) || clean(process.env.PAGS_TOKEN);
+	return resolved ? { Authorization: `Bearer ${resolved}` } : {};
+}
+
+export function runnerHeaders(token?: string): Record<string, string> {
+	const resolved = clean(token) || clean(process.env.PAGS_RUNNER_TOKEN);
+	return resolved ? { Authorization: `Bearer ${resolved}` } : {};
+}
+
+export function runnerRequestHeaders(opts: RunnerRequestOptions): Record<string, string> {
+	const resolved = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN);
+	const headers: Record<string, string> = resolved ? { Authorization: `Bearer ${resolved}` } : {};
+	const instanceId = clean(opts.instanceId) || clean(process.env.PAGS_INSTANCE_ID);
+	if (instanceId) headers["X-PAGS-Instance-Id"] = instanceId;
+	return headers;
+}
+
+export function apiPathSegment(value: string): string {
+	return encodeURIComponent(value);
+}
+
+export function buildRunnerArgs(opts: RunnerStartOptions): string[] {
+	const args: string[] = [];
+	if (clean(opts.host)) args.push("--host", clean(opts.host) as string);
+	if (clean(opts.port)) args.push("--port", clean(opts.port) as string);
+	if (clean(opts.dataDir)) args.push("--data-dir", clean(opts.dataDir) as string);
+	if (clean(opts.token)) args.push("--token", clean(opts.token) as string);
+	if (clean(opts.instanceId)) args.push("--instance-id", clean(opts.instanceId) as string);
+	if (opts.headless) args.push("--headless");
+	return args;
+}
+
+export function buildRuntimeRegistrationBody(opts: RuntimeRegisterOptions, capabilities: string[] = []) {
+	return {
+		endpointUrl: clean(opts.endpointUrl) || opts.endpointUrl,
+		token: clean(opts.runnerToken) || clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN),
+		placement: opts.placement === "managed" ? "managed" : "local",
+		capabilities,
+		runnerVersion: clean(opts.runnerVersion) || "",
+	};
+}
+
+function clean(value?: string): string | undefined {
+	const trimmed = value?.trim();
+	return trimmed || undefined;
+}
+
+function findWorkspaceRoot(): string {
+	let dir = process.cwd();
+	for (let i = 0; i < 8; i++) {
+		if (existsSync(resolve(dir, "pnpm-workspace.yaml"))) return dir;
+		const parent = resolve(dir, "..");
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return process.cwd();
+}
+
+function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
+	const root = findWorkspaceRoot();
+	const localPackage = resolve(root, "packages", "browser-runner", "src", "index.ts");
+	const runnerArgs = buildRunnerArgs(opts);
+	const command = existsSync(localPackage) ? "pnpm" : "pags-browser-runner";
+	const args = existsSync(localPackage)
+		? ["--filter", "@proagentstore/browser-runner", "dev", "--", ...runnerArgs]
+		: runnerArgs;
+
+	return new Promise((resolvePromise, reject) => {
+		const child = spawn(command, args, {
+			cwd: root,
+			stdio: "inherit",
+			shell: process.platform === "win32",
+		});
+		child.on("error", reject);
+		child.on("exit", (code) => {
+			if (code && code !== 0) reject(new Error(`runner exited with code ${code}`));
+			else resolvePromise();
+		});
+	});
+}
+
+export async function requestRunner<T>(
+	method: string,
+	path: string,
+	opts: RunnerRequestOptions,
+	body?: unknown,
+): Promise<T> {
+	const headers: Record<string, string> = {
+		...runnerRequestHeaders(opts),
+	};
+	if (body !== undefined) headers["Content-Type"] = "application/json";
+	const res = await fetch(`${runnerBaseUrl(opts.url)}${path}`, {
+		method,
+		headers,
+		body: body === undefined ? undefined : JSON.stringify(body),
+	});
+	const { text, data } = await readResponse(res);
+	if (!res.ok) {
+		const message = responseErrorMessage(data, text, res.statusText);
+		throw new Error(`${res.status} ${message}`);
+	}
+	return data as T;
+}
+
+export async function requestPags<T>(
+	method: string,
+	path: string,
+	opts: PagsRequestOptions,
+	body?: unknown,
+): Promise<T> {
+	const headers: Record<string, string> = {
+		...pagsHeaders(opts.pagsToken),
+	};
+	if (!headers.Authorization) {
+		throw new Error("PAGS token required. Set PAGS_TOKEN or pass --pags-token.");
+	}
+	if (body !== undefined) headers["Content-Type"] = "application/json";
+	const res = await fetch(`${pagsApiBase(opts.apiBase)}${path}`, {
+		method,
+		headers,
+		body: body === undefined ? undefined : JSON.stringify(body),
+	});
+	const { text, data } = await readResponse(res);
+	if (!res.ok) {
+		const message = responseErrorMessage(data, text, res.statusText);
+		throw new Error(`${res.status} ${message}`);
+	}
+	return data as T;
+}
+
+async function readResponse(res: Response): Promise<{ text: string; data: Record<string, unknown> }> {
+	const text = await res.text();
+	if (!text) return { text, data: {} };
+	try {
+		return { text, data: JSON.parse(text) as Record<string, unknown> };
+	} catch {
+		return { text, data: {} };
+	}
+}
+
+function responseErrorMessage(
+	data: Record<string, unknown>,
+	text: string,
+	statusText: string,
+): string {
+	return typeof data.error === "string" ? data.error : text || statusText;
+}
+
+function collectCapability(value: string, previous: string[] = []): string[] {
+	return [...previous, value];
+}
+
+export function createRunnerCommand(): Command {
+	const command = new Command("runner").description(
+		"Manage a local ProAgentStore browser runner",
+	);
+
+	command
+	.command("start")
+	.description("Start the local browser runner in the foreground")
+	.option("--host <host>", "Host to bind", "127.0.0.1")
+	.option("--port <port>", "Port to bind", "49171")
+	.option("--data-dir <path>", "Runner data directory")
+	.option("--token <token>", "Require this bearer token")
+	.option("--instance-id <id>", "Bind runner requests to a PAGS instance id")
+	.option("--headless", "Run Playwright headless")
+	.action(async (opts: RunnerStartOptions) => {
+		await startRunnerForeground(opts);
+	});
+
+	command
+	.command("status")
+	.description("Check local runner health and capabilities")
+	.option("--url <url>", "Runner URL")
+	.option("--token <token>", "Runner bearer token")
+	.option("--instance-id <id>", "PAGS instance id header")
+	.action(async (opts: RunnerRequestOptions) => {
+		const health = await requestRunner("GET", "/health", opts);
+		const capabilities = await requestRunner("GET", "/capabilities", opts);
+		writeLine(JSON.stringify({ health, capabilities }, null, 2));
+	});
+
+	command
+	.command("task")
+	.description("Create a runner task")
+	.requiredOption("--type <type>", "Task type, e.g. echo or browser.open")
+	.option("--url <url>", "Runner URL")
+	.option("--token <token>", "Runner bearer token")
+	.option("--instance-id <id>", "PAGS instance id header")
+	.option("--input <json>", "Task input JSON")
+	.option("--job-url <url>", "Shortcut input for browser.open")
+	.option("--approve", "Create task in needs_approval state")
+	.option("--approval-prompt <text>", "Approval prompt")
+	.action(
+		async (
+			opts: RunnerRequestOptions & {
+				type: string;
+				input?: string;
+				jobUrl?: string;
+				approve?: boolean;
+				approvalPrompt?: string;
+			},
+		) => {
+			let input: Record<string, unknown> = {};
+			if (opts.input) {
+				try {
+					input = JSON.parse(opts.input) as Record<string, unknown>;
+				} catch {
+					writeError("--input must be valid JSON");
+					process.exit(1);
+				}
+			}
+			if (opts.jobUrl) input.url = opts.jobUrl;
+			const task = await requestRunner("POST", "/tasks", opts, {
+				type: opts.type,
+				input,
+				requiresApproval: Boolean(opts.approve),
+				approvalPrompt: opts.approvalPrompt,
+			});
+			writeLine(JSON.stringify(task, null, 2));
+		},
+	);
+
+	command
+	.command("register <instanceId>")
+	.description("Register a local or managed runner endpoint with a PAGS instance")
+	.requiredOption("--endpoint-url <url>", "Runner endpoint URL to store in PAGS")
+	.option("--api-base <url>", "PAGS API base URL")
+	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
+	.option("--runner-token <token>", "Runner bearer token to store in PAGS")
+	.option("--url <url>", "Local runner URL to probe for capabilities")
+	.option("--token <token>", "Local runner bearer token for capability probe")
+	.option("--instance-id <id>", "PAGS instance id header for capability probe")
+	.option("--placement <placement>", "Runtime placement: local or managed", "local")
+	.option("--runner-version <version>", "Runner version")
+	.option("--capability <name>", "Runtime capability; repeatable", collectCapability, [])
+	.option("--probe", "Read capabilities from the runner before registering")
+	.action(async (instanceId: string, opts: RuntimeRegisterOptions) => {
+		let capabilities = opts.capability || [];
+		if (opts.probe) {
+			const data = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", {
+				url: opts.url || opts.endpointUrl,
+				token: opts.token || opts.runnerToken,
+				instanceId: opts.instanceId || instanceId,
+			});
+			capabilities = Array.isArray(data.capabilities)
+				? data.capabilities.filter((item): item is string => typeof item === "string")
+				: capabilities;
+		}
+		const body = buildRuntimeRegistrationBody(opts, capabilities);
+		const result = await requestPags("POST", `/v1/instances/${apiPathSegment(instanceId)}/runtime`, opts, body);
+		writeLine(JSON.stringify(result, null, 2));
+	});
+
+	command
+	.command("runtime <instanceId>")
+	.description("Read the PAGS runtime registration for an instance")
+	.option("--api-base <url>", "PAGS API base URL")
+	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
+	.option("--probe", "Ask PAGS to probe /health and /capabilities on the runner")
+	.action(async (instanceId: string, opts: PagsRequestOptions & { probe?: boolean }) => {
+		const path = opts.probe
+			? `/v1/instances/${apiPathSegment(instanceId)}/runtime/status`
+			: `/v1/instances/${apiPathSegment(instanceId)}/runtime`;
+		const result = await requestPags("GET", path, opts);
+		writeLine(JSON.stringify(result, null, 2));
+	});
+
+	command
+	.command("unregister <instanceId>")
+	.description("Remove the PAGS runtime registration for an instance")
+	.option("--api-base <url>", "PAGS API base URL")
+	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
+	.action(async (instanceId: string, opts: PagsRequestOptions) => {
+		const result = await requestPags("DELETE", `/v1/instances/${apiPathSegment(instanceId)}/runtime`, opts);
+		writeLine(JSON.stringify(result, null, 2));
+	});
+
+	command
+	.command("run <instanceId>")
+	.description("Create a task through PAGS on an instance's registered runner")
+	.requiredOption("--type <type>", "Task type, e.g. echo or browser.open")
+	.option("--api-base <url>", "PAGS API base URL")
+	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
+	.option("--input <json>", "Task input JSON")
+	.option("--job-url <url>", "Shortcut input for browser.open")
+	.option("--approve", "Create task in needs_approval state")
+	.option("--approval-prompt <text>", "Approval prompt")
+	.action(
+		async (
+			instanceId: string,
+			opts: PagsRequestOptions & {
+				type: string;
+				input?: string;
+				jobUrl?: string;
+				approve?: boolean;
+				approvalPrompt?: string;
+			},
+		) => {
+			let input: Record<string, unknown> = {};
+			if (opts.input) {
+				try {
+					input = JSON.parse(opts.input) as Record<string, unknown>;
+				} catch {
+					writeError("--input must be valid JSON");
+					process.exit(1);
+				}
+			}
+			if (opts.jobUrl) input.url = opts.jobUrl;
+			const result = await requestPags("POST", `/v1/instances/${apiPathSegment(instanceId)}/tasks`, opts, {
+				type: opts.type,
+				input,
+				requiresApproval: Boolean(opts.approve),
+				approvalPrompt: opts.approvalPrompt,
+			});
+			writeLine(JSON.stringify(result, null, 2));
+		},
+	);
+
+	command
+	.command("approve-task <instanceId> <taskId>")
+	.description("Approve a registered-runner task through PAGS")
+	.option("--api-base <url>", "PAGS API base URL")
+	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
+	.action(async (instanceId: string, taskId: string, opts: PagsRequestOptions) => {
+		const result = await requestPags(
+			"POST",
+			`/v1/instances/${apiPathSegment(instanceId)}/tasks/${apiPathSegment(taskId)}/approve`,
+			opts,
+		);
+		writeLine(JSON.stringify(result, null, 2));
+	});
+
+	command
+	.command("cancel-task <instanceId> <taskId>")
+	.description("Cancel a registered-runner task through PAGS")
+	.option("--api-base <url>", "PAGS API base URL")
+	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
+	.action(async (instanceId: string, taskId: string, opts: PagsRequestOptions) => {
+		const result = await requestPags(
+			"POST",
+			`/v1/instances/${apiPathSegment(instanceId)}/tasks/${apiPathSegment(taskId)}/cancel`,
+			opts,
+		);
+		writeLine(JSON.stringify(result, null, 2));
+	});
+
+	command
+	.command("task-events <instanceId>")
+	.description("Read registered-runner task events through PAGS")
+	.option("--api-base <url>", "PAGS API base URL")
+	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
+	.option("--limit <n>", "Number of events", "50")
+	.action(async (instanceId: string, opts: PagsRequestOptions & { limit: string }) => {
+		const result = await requestPags(
+			"GET",
+			`/v1/instances/${apiPathSegment(instanceId)}/task-events?limit=${Number(opts.limit) || 50}`,
+			opts,
+		);
+		writeLine(JSON.stringify(result, null, 2));
+	});
+
+	command
+	.command("approve <taskId>")
+	.description("Approve a task waiting on human approval")
+	.option("--url <url>", "Runner URL")
+	.option("--token <token>", "Runner bearer token")
+	.option("--instance-id <id>", "PAGS instance id header")
+	.action(async (taskId: string, opts: RunnerRequestOptions) => {
+		const task = await requestRunner("POST", `/tasks/${apiPathSegment(taskId)}/approve`, opts);
+		writeLine(JSON.stringify(task, null, 2));
+	});
+
+	command
+	.command("cancel <taskId>")
+	.description("Cancel a local runner task")
+	.option("--url <url>", "Runner URL")
+	.option("--token <token>", "Runner bearer token")
+	.option("--instance-id <id>", "PAGS instance id header")
+	.action(async (taskId: string, opts: RunnerRequestOptions) => {
+		const task = await requestRunner("POST", `/tasks/${apiPathSegment(taskId)}/cancel`, opts);
+		writeLine(JSON.stringify(task, null, 2));
+	});
+
+	command
+	.command("events")
+	.description("List recent runner events")
+	.option("--url <url>", "Runner URL")
+	.option("--token <token>", "Runner bearer token")
+	.option("--instance-id <id>", "PAGS instance id header")
+	.option("--limit <n>", "Number of events", "50")
+	.action(async (opts: RunnerRequestOptions & { limit: string }) => {
+		const events = await requestRunner("GET", `/events?limit=${Number(opts.limit) || 50}`, opts);
+		writeLine(JSON.stringify(events, null, 2));
+	});
+
+	return command;
+}

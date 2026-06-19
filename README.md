@@ -89,6 +89,34 @@ Add your Cloudflare Workers AI account ID and API token before running this agen
 
 That means the instance runtime path is working and correctly refusing to bill the platform AI account. See [MCP Instance Runtime](docs/mcp-instance-runtime.md) for the full tool map, live test record, and OAuth troubleshooting.
 
+### Local browser runner
+
+Browser-capable agents use PAGS as the control-plane brain and a local runner as the tool executor. The first local runner package lives in `packages/browser-runner`.
+
+```bash
+pnpm --filter @proagentstore/browser-runner dev -- --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pnpm --filter @proagentstore/cli dev runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pnpm --filter @proagentstore/cli dev runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+```
+
+When exposing the runner through a tunnel, start it with a token and instance binding, then register only the tunnel URL plus token with PAGS. Runtime registration is instance-scoped: PAGS stores the endpoint and encrypted runner token, then MCP/API proxy task calls to the runner with `X-PAGS-Instance-Id`.
+
+```bash
+pnpm --filter @proagentstore/cli dev runner register "$PAGS_INSTANCE_ID" \
+  --endpoint-url "$PAGS_RUNNER_ENDPOINT" \
+  --runner-token "$PAGS_RUNNER_TOKEN" \
+  --pags-token "$PAGS_TOKEN" \
+  --probe
+pnpm --filter @proagentstore/cli dev runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
+pnpm --filter @proagentstore/cli dev runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
+```
+
+```text
+subscribe_agent -> register_instance_runtime -> instance_runtime_status(probe: true) -> run_instance_task -> approve_instance_task -> instance_task_events
+```
+
+The browser runtime MCP tools are `register_instance_runtime`, `instance_runtime_status`, `unregister_instance_runtime`, `run_instance_task`, `approve_instance_task`, `cancel_instance_task`, and `instance_task_events`.
+
 ### Skills and plugins
 
 ProAgentStore publishes skills through platform-specific plugin marketplaces so users can find them from both Codex and Claude Code.

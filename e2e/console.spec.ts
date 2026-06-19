@@ -5,6 +5,8 @@ const API = "https://api.proagentstore.online";
 const TEST_TOKEN = "test-pags-token";
 
 interface OpsMockOptions {
+	agents?: Array<Record<string, unknown>>;
+	boardConfig?: Record<string, unknown> | null;
 	ops?: Record<string, unknown>;
 	verifyStatus?: number;
 	verifyBody?: Record<string, unknown>;
@@ -65,6 +67,7 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 
 	let verifyCalls = 0;
 	let deployCalls = 0;
+	const profileUpdates: unknown[] = [];
 
 	await page.route(`${API}/**`, async (route) => {
 		const url = new URL(route.request().url());
@@ -82,6 +85,10 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		if (path.startsWith("/v1/")) {
 			expect(route.request().headers().authorization).toBe(`Bearer ${TEST_TOKEN}`);
 		}
+		if (path === "/v1/auth/me" && method === "PUT") {
+			profileUpdates.push(route.request().postDataJSON());
+			return json({ success: true });
+		}
 		if (path === "/v1/auth/me") {
 			return json({
 				id: "user-1",
@@ -89,12 +96,13 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				name: "Test User",
 				avatar: "https://example.com/avatar.png",
 				roles: ["user", "creator"],
+				boardConfig: options.boardConfig ?? null,
 			});
 		}
 		if (path === "/v1/notifications") return json({ notifications: [], unreadCount: 0 });
 		if (path === "/v1/agents/my/agents") {
 			return json({
-				agents: [
+				agents: options.agents ?? [
 					{
 						id: "agent-1",
 						slug: "ops-agent",
@@ -180,6 +188,9 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		get deployCalls() {
 			return deployCalls;
 		},
+		get profileUpdates() {
+			return profileUpdates;
+		},
 	};
 }
 
@@ -216,6 +227,93 @@ test.describe("ProAgentStore Console smoke", () => {
 		expect(html).toContain("Verify Key");
 		expect(html).toContain("Cloudflare account ID");
 		expect(html).toContain("triggerDeploy");
+	});
+
+	test("signed-in creator console shows an agent status board", async ({ page }) => {
+		await mockSignedInConsole(page, {
+			agents: [
+				{
+					id: "draft-agent",
+					slug: "draft-agent",
+					name: "Draft Agent",
+					description: "Still being configured",
+					category: "general",
+					visibility: "draft",
+					status: "inactive",
+				},
+				{
+					id: "live-agent",
+					slug: "live-agent",
+					name: "Live Agent",
+					description: "Available in the store",
+					category: "chat",
+					visibility: "published",
+					status: "active",
+				},
+				{
+					id: "error-agent",
+					slug: "error-agent",
+					name: "Error Agent",
+					description: "Needs operator review",
+					category: "data",
+					visibility: "draft",
+					status: "error",
+				},
+			],
+		});
+
+		await page.goto("/");
+
+		await expect(page.getByText("3 agents across setup, review, live, and attention")).toBeVisible();
+		await expect(page.getByText("Setup").first()).toBeVisible();
+		await expect(page.getByText("Live").first()).toBeVisible();
+		await expect(page.getByText("Attention").first()).toBeVisible();
+		await expect(
+			page.getByLabel("Setup column").getByRole("button", { name: "Open Draft Agent" }),
+		).toBeVisible();
+		await expect(
+			page.getByLabel("Live column").getByRole("button", { name: "Open Live Agent" }),
+		).toBeVisible();
+		await expect(
+			page.getByLabel("Attention column").getByRole("button", { name: "Open Error Agent" }),
+		).toBeVisible();
+		await expect(
+			page.getByLabel("Setup column").getByRole("button", { name: "Open Error Agent" }),
+		).toHaveCount(0);
+	});
+
+	test("signed-in creator can save a custom agent board config", async ({ page }) => {
+		const mock = await mockSignedInConsole(page);
+		await page.goto("/");
+
+		await page.getByRole("button", { name: "Configure Board" }).click();
+		const customConfig = {
+			summary: "build and shipped",
+			columns: [
+				{
+					id: "build",
+					title: "Build",
+					color: "var(--yellow)",
+					statuses: ["inactive"],
+					visibilities: ["draft"],
+				},
+				{
+					id: "shipped",
+					title: "Shipped",
+					color: "var(--green)",
+					statuses: ["active"],
+					visibilities: ["published"],
+					catchAll: true,
+				},
+			],
+		};
+		await page.locator("#board-config-json").fill(JSON.stringify(customConfig, null, 2));
+		await page.getByRole("button", { name: "Save Board" }).click();
+
+		await expect(page.getByText("1 agent across build and shipped")).toBeVisible();
+		await expect(page.getByText("Build").first()).toBeVisible();
+		expect(mock.profileUpdates).toHaveLength(1);
+		expect(mock.profileUpdates[0]).toMatchObject({ board_config: customConfig });
 	});
 });
 
@@ -272,6 +370,74 @@ test.describe("ProAgentStore skill discovery", () => {
 	});
 });
 
+test.describe("ProAgentStore agent detail pages", () => {
+	test("job application assistant renders as a public agent dashboard", async ({ page }) => {
+		await page.route(`${API}/v1/public/agents/job-application-assistant`, (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					id: "job-application-assistant",
+					slug: "job-application-assistant",
+					name: "Job Application Assistant",
+					description:
+						"Turns a job URL into a tailored application packet and submits only after explicit confirmation.",
+					category: "productivity",
+					store_type: "agent",
+					model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+					created_at: "2026-06-15T00:00:00Z",
+					subscriber_count: 0,
+				}),
+			}),
+		);
+		await page.route("https://mcp.proagentstore.online/health", (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({ ok: true, tools: 28 }),
+			}),
+		);
+		await page.route(
+			"https://raw.githubusercontent.com/ProAgentStore/job-application-assistant/main/README.md",
+			(route) =>
+				route.fulfill({
+					status: 200,
+					contentType: "text/plain",
+					body: "# Job Application Assistant\n\nPrepare and submit job applications safely.",
+				}),
+		);
+
+		await page.goto("/agents/job-application-assistant/");
+
+		await expect(
+			page.getByRole("heading", { name: "Job Application Assistant" }),
+		).toBeVisible();
+		await expect(page.locator("#a-category")).toHaveText("productivity");
+		await expect(page.locator("#a-health-pill")).toHaveText("online");
+		await expect(page.getByText("MCP online with 28 tools")).toBeVisible();
+		await expect(page.locator("#api-chat")).toContainText(
+			"/v1/public/agents/job-application-assistant/try",
+		);
+		await expect(page.locator("#readme-summary")).toContainText(
+			"Prepare and submit job applications safely.",
+		);
+	});
+});
+
+test.describe("ProAgentStore architecture docs", () => {
+	test("browser runtime docs show the managed-runner architecture", async ({ page }) => {
+		await page.goto("/docs/browser-runtime/");
+
+		await expect(
+			page.getByRole("heading", { name: "Browser-Capable Agent Runtime" }),
+		).toBeVisible();
+		await expect(page.getByText("PAS precedent: our loop")).toBeVisible();
+		await expect(page.getByText("Managed Browser Runner").first()).toBeVisible();
+		await expect(page.getByText("Local Browser Runner").first()).toBeVisible();
+		await expect(page.getByText("MVP recommendation")).toBeVisible();
+	});
+});
+
 test.describe("ProAgentStore live API smoke", () => {
 	test("providers include Cloudflare Workers AI", async ({ request }) => {
 		const res = await request.get(
@@ -299,8 +465,8 @@ test.describe("ProAgentStore authenticated Console", () => {
 		await page.goto("/");
 
 		await expect(page.getByText("Agents you've built")).toBeVisible();
-		await page.locator("#agents-list .agent-card", { hasText: "Ops Agent" }).click();
-		await page.getByRole("button", { name: "Ops" }).click();
+		await page.getByRole("button", { name: "Open Ops Agent" }).click();
+		await page.getByRole("button", { name: "Ops", exact: true }).click();
 
 		await expect(page.getByText("Ready: user-owned Cloudflare Workers AI")).toBeVisible();
 		await expect(page.getByText("API:")).toBeVisible();
@@ -319,8 +485,8 @@ test.describe("ProAgentStore authenticated Console", () => {
 		page.on("dialog", (dialog) => dialog.accept());
 		await page.goto("/");
 
-		await page.locator("#agents-list .agent-card", { hasText: "Ops Agent" }).click();
-		await page.getByRole("button", { name: "Ops" }).click();
+		await page.getByRole("button", { name: "Open Ops Agent" }).click();
+		await page.getByRole("button", { name: "Ops", exact: true }).click();
 		await page.getByRole("button", { name: "Verify Key" }).click();
 		await expect
 			.poll(() => calls.verifyCalls)
@@ -382,8 +548,8 @@ test.describe("ProAgentStore authenticated Console", () => {
 		});
 		await page.goto("/");
 
-		await page.locator("#agents-list .agent-card", { hasText: "Ops Agent" }).click();
-		await page.getByRole("button", { name: "Ops" }).click();
+		await page.getByRole("button", { name: "Open Ops Agent" }).click();
+		await page.getByRole("button", { name: "Ops", exact: true }).click();
 
 		await expect(page.locator("#tab-ops img")).toHaveCount(0);
 		await expect(page.locator("#tab-ops script")).toHaveCount(0);
@@ -404,8 +570,8 @@ test.describe("ProAgentStore authenticated Console", () => {
 		page.on("dialog", (dialog) => dialog.dismiss());
 		await page.goto("/");
 
-		await page.locator("#agents-list .agent-card", { hasText: "Ops Agent" }).click();
-		await page.getByRole("button", { name: "Ops" }).click();
+		await page.getByRole("button", { name: "Open Ops Agent" }).click();
+		await page.getByRole("button", { name: "Ops", exact: true }).click();
 		await page.getByRole("button", { name: "Verify Key" }).click();
 		await page.getByRole("button", { name: "Deploy" }).click();
 

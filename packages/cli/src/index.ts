@@ -7,6 +7,8 @@ import { Command } from "commander";
 import { checkCommand } from "./commands/check.js";
 import { initCommand } from "./commands/init.js";
 import { publishCommand } from "./commands/publish.js";
+import { runnerCommand } from "./commands/runner.js";
+import { writeError } from "./output.js";
 
 const program = new Command();
 
@@ -20,5 +22,11 @@ program
 program.addCommand(initCommand);
 program.addCommand(checkCommand);
 program.addCommand(publishCommand);
+program.addCommand(runnerCommand);
 
-program.parse();
+try {
+	await program.parseAsync();
+} catch (error) {
+	writeError(error instanceof Error ? error.message : String(error));
+	process.exit(1);
+}

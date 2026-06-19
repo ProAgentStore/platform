@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Browser Runtime Architecture — ProAgentStore Docs</title>
+  <meta name="description" content="Architecture for ProAgentStore browser-capable agents, managed VM runners, local Playwright fallback, Cloudflare Tunnel, and agent brain placement.">
+  <link rel="canonical" href="https://proagentstore.online/docs/browser-runtime/">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#7c3aed">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --font-body:'Manrope',system-ui,sans-serif;
+      --font-display:'Fraunces',Georgia,serif;
+      --paper:#0a0a0a;--panel:#171717;--panel-2:#111;--ink:#fafafa;
+      --muted:#a3a3a3;--muted-soft:#737373;--line:#262626;--line-strong:#404040;
+      --accent:#7c3aed;--accent-soft:rgba(124,58,237,.15);--blue:#3b82f6;
+      --green:#22c55e;--amber:#f59e0b;--red:#ef4444;--radius:8px;
+    }
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
+    a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
+    code{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#c4b5fd}
+    .container{max-width:1180px;margin:0 auto;padding:0 1.25rem}
+    header{border-bottom:1px solid var(--line);background:rgba(10,10,10,.94);position:sticky;top:0;z-index:10;backdrop-filter:blur(12px)}
+    header .container{display:flex;align-items:center;gap:1rem;padding-top:.75rem;padding-bottom:.75rem}
+    .brand{display:flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#2563eb);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    nav{display:flex;gap:1rem;font-size:.88rem;font-weight:700;margin-left:auto;align-items:center;flex-wrap:wrap}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover{color:var(--ink)}nav a.active{color:var(--ink)}
+    .layout{display:grid;grid-template-columns:250px minmax(0,1fr);gap:2rem;padding:1.5rem 0 3rem}
+    aside{position:sticky;top:76px;align-self:start;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);padding:1rem}
+    aside h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:.7rem}
+    aside a{display:block;color:var(--muted);font-size:.86rem;padding:.38rem 0;text-decoration:none}aside a:hover{color:var(--ink)}
+    main{min-width:0}
+    .eyebrow{color:var(--blue);font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.55rem}
+    h1{font-family:var(--font-display);font-size:clamp(2rem,5vw,3.4rem);line-height:1.02;letter-spacing:0;margin-bottom:.75rem}
+    .lead{max-width:780px;color:var(--muted);line-height:1.65;font-size:1rem}
+    .status{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0 1.5rem}
+    .pill{display:inline-flex;align-items:center;gap:.35rem;border:1px solid var(--line);background:var(--panel);color:var(--muted);border-radius:999px;padding:.22rem .62rem;font-size:.74rem;font-weight:800}
+    .pill.proposed{color:var(--amber);border-color:rgba(245,158,11,.35);background:rgba(245,158,11,.08)}
+    section{border-top:1px solid var(--line);padding:1.5rem 0}
+    h2{font-size:1.25rem;margin-bottom:.75rem}h3{font-size:.96rem;margin:.9rem 0 .45rem}
+    p{color:var(--muted);line-height:1.65;margin:.55rem 0}
+    ul{display:grid;gap:.45rem;margin:.6rem 0 .6rem 1.2rem;color:var(--muted);line-height:1.55}
+    .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem;margin-top:.85rem}
+    .card{border:1px solid var(--line);background:var(--panel);border-radius:var(--radius);padding:1rem}
+    .card strong{display:block;margin-bottom:.35rem;font-size:.9rem}.card p{font-size:.84rem;margin:0}
+    .diagram{border:1px solid var(--line);background:var(--panel-2);border-radius:var(--radius);padding:1rem;margin:1rem 0;overflow:auto}
+    .flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:.75rem;min-width:760px}
+    .node{border:1px solid var(--line-strong);background:var(--panel);border-radius:var(--radius);padding:.85rem;min-height:112px}
+    .node h3{margin:0 0 .35rem;font-size:.9rem}.node p{font-size:.78rem;margin:0}
+    .node.control{border-color:rgba(59,130,246,.45)}.node.runner{border-color:rgba(34,197,94,.45)}.node.browser{border-color:rgba(245,158,11,.45)}
+    .arrow{color:var(--muted-soft);font-weight:800}
+    .swimlane{display:grid;grid-template-columns:1fr 1fr;gap:.8rem;min-width:760px}
+    .lane{border:1px solid var(--line);border-radius:var(--radius);padding:.85rem;background:var(--panel)}
+    .lane h3{margin-top:0}.step{border:1px solid var(--line);border-radius:var(--radius);padding:.55rem;margin:.45rem 0;background:#0b0b0b;color:var(--muted);font-size:.8rem}
+    .decision{border-left:3px solid var(--amber);background:rgba(245,158,11,.07);padding:1rem;border-radius:0 var(--radius) var(--radius) 0}
+    .compare{width:100%;border-collapse:collapse;margin-top:.75rem;font-size:.84rem}
+    .compare th,.compare td{border:1px solid var(--line);padding:.7rem;text-align:left;vertical-align:top}
+    .compare th{background:var(--panel);color:var(--ink)}.compare td{color:var(--muted)}
+    .codeblock{background:#050505;border:1px solid var(--line);border-radius:var(--radius);padding:.9rem;white-space:pre-wrap;word-break:break-word;color:#c4b5fd;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;color:var(--muted-soft);font-size:.8rem}
+    @media(max-width:900px){.layout{grid-template-columns:1fr}aside{position:static}.grid{grid-template-columns:1fr}.flow,.swimlane{min-width:680px}}
+    @media(max-width:640px){.container{padding:0 1rem}header .container{align-items:flex-start}.brand{min-width:0}nav{justify-content:flex-end;gap:.65rem}.diagram{margin-left:-1rem;margin-right:-1rem;border-radius:0;border-left:0;border-right:0}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <nav>
+        <a href="/">Agents</a>
+        <a class="active" href="/docs/browser-runtime/">Docs</a>
+        <a href="/skills/">Skills</a>
+        <a href="/get-started/">Get Started</a>
+        <a href="/console/">Console</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="container layout">
+    <aside>
+      <h2>Architecture</h2>
+      <a href="#decision">Decision Status</a>
+      <a href="#diagram">System Diagram</a>
+      <a href="#runtimes">Runtime Modes</a>
+      <a href="#brain">Brain Placement</a>
+      <a href="#tasks">Task Lifecycle</a>
+      <a href="#protocol">Protocol</a>
+      <a href="#plan">Implementation Plan</a>
+    </aside>
+
+    <main>
+      <div class="eyebrow">Architecture docs</div>
+      <h1>Browser-Capable Agent Runtime</h1>
+      <p class="lead">A proposed runtime model for agents that need to drive a real browser: ProAgentStore-managed browser runners by default, with local Playwright through Cloudflare Tunnel only when a user does not want to pay for a managed VM.</p>
+      <div class="status">
+        <span class="pill proposed">Status: proposed</span>
+        <span class="pill">Decision owner: not finalized</span>
+        <span class="pill">PAS precedent: our loop</span>
+        <span class="pill">Reference agent: job applications</span>
+      </div>
+
+      <section id="decision">
+        <h2>Decision Status</h2>
+        <div class="decision">
+          <p><strong>This is not a ratified product decision.</strong> The current recommendation follows the PAS Agent Teams pattern: our system runs the agent loop, with billing/key choices layered on top. It still needs product and engineering approval for PAGS browser agents.</p>
+          <p>The recommendation is: browser-capable agents run their active brain in ProAgentStore-managed browser runner infrastructure by default. Local machine Playwright is the fallback for users who choose not to spend on a managed VM.</p>
+        </div>
+      </section>
+
+      <section id="diagram">
+        <h2>System Diagram</h2>
+        <div class="diagram" aria-label="PAGS browser runtime system diagram">
+          <div class="flow">
+            <div class="node control">
+              <h3>PAGS Control Plane</h3>
+              <p>Marketplace, MCP, subscriptions, runtime assignment, task summaries, auth, billing, audit events.</p>
+            </div>
+            <div class="arrow">-></div>
+            <div class="node runner">
+              <h3>Managed Browser Runner</h3>
+              <p>Default agent brain, LLM calls, task state, Playwright controller, VM storage.</p>
+            </div>
+            <div class="arrow">-></div>
+            <div class="node browser">
+              <h3>Real Browser</h3>
+              <p>Logged-in job boards, DOM, screenshots, file uploads, downloads, manual handoff.</p>
+            </div>
+          </div>
+        </div>
+        <p>PAGS starts and observes work. The managed runner does the active thinking and browser control. Local runner uses the same protocol only when selected as a no-VM option.</p>
+      </section>
+
+      <section id="runtimes">
+        <h2>Runtime Modes</h2>
+        <div class="grid">
+          <div class="card">
+            <strong>Hosted Worker</strong>
+            <p>Good for text-only/server-only agents. No Playwright. No real browser session.</p>
+          </div>
+          <div class="card">
+            <strong>Managed Browser Runner</strong>
+            <p>Default paid path. ProAgentStore-managed VM/container with Playwright and persistent browser state.</p>
+          </div>
+          <div class="card">
+            <strong>Local Browser Runner</strong>
+            <p>No-VM option. Node plus Playwright on the user's machine, exposed through Cloudflare Tunnel.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="brain">
+        <h2>Brain Placement</h2>
+        <table class="compare">
+          <thead>
+            <tr><th>Option</th><th>Upside</th><th>Problem</th><th>Recommendation</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Brain in PAGS Worker</td>
+              <td>Centralized orchestration.</td>
+              <td>Browser screenshots, DOM, cookies, and forms must travel through PAGS; high-latency observe/act loop.</td>
+              <td>Use for text-only agents, not browser agents.</td>
+            </tr>
+            <tr>
+              <td>Brain in managed VM runner</td>
+              <td>Always-on, managed, supportable, billable, same browser protocol.</td>
+              <td>Costs more and needs stronger isolation/retention policy.</td>
+              <td>MVP recommendation.</td>
+            </tr>
+            <tr>
+              <td>Brain in local runner</td>
+              <td>User avoids VM spend and can keep sessions/files local.</td>
+              <td>User machine must be online and configured; harder to support.</td>
+              <td>Fallback option, not default.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section id="tasks">
+        <h2>Task Lifecycle</h2>
+        <div class="diagram">
+          <div class="swimlane">
+            <div class="lane">
+              <h3>PAGS / MCP</h3>
+              <div class="step">Create subscribed instance</div>
+              <div class="step">Assign managed runner or register local tunnel</div>
+              <div class="step">Start task with job URL</div>
+              <div class="step">Receive events and status</div>
+              <div class="step">Approve final submit</div>
+            </div>
+            <div class="lane">
+              <h3>Browser Runner</h3>
+              <div class="step">Open browser context</div>
+              <div class="step">Observe page and detect job board</div>
+              <div class="step">Plan and fill application</div>
+              <div class="step">Pause for login/captcha/missing answers</div>
+              <div class="step">Submit only after approval</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="protocol">
+        <h2>Protocol Sketch</h2>
+        <p>Agents that need browser automation should declare it in their manifest.</p>
+        <div class="codeblock">{
+  "runtime": {
+    "kind": "browser-runner",
+    "brain": "managed-runner-default",
+    "browser": {
+      "engine": "playwright",
+      "persistentProfile": true,
+      "manualHandoff": true,
+      "fileUploads": true
+    },
+    "deployment": {
+      "managedVm": true,
+      "localTunnel": true,
+      "hostedWorker": false
+    }
+  }
+}</div>
+        <p>Runtime endpoints should be signed and instance-scoped, not open public tunnel URLs.</p>
+        <div class="codeblock">GET  /health
+GET  /capabilities
+POST /tasks
+GET  /tasks/:id
+POST /tasks/:id/approve
+POST /tasks/:id/cancel
+GET  /events</div>
+      </section>
+
+      <section id="plan">
+        <h2>Implementation Plan</h2>
+        <ul>
+          <li>Define browser-runner manifest and runtime registration schema.</li>
+          <li>Build the managed Node runner with Playwright persistent profiles.</li>
+          <li>Add VM/container provisioning and runner assignment in PAGS.</li>
+          <li>Add MCP tools for registering runtimes, starting tasks, approvals, and event reads.</li>
+          <li>Move the job application agent to the browser-runner protocol.</li>
+          <li>Add local Cloudflare Tunnel mode as the no-VM fallback.</li>
+        </ul>
+      </section>
+    </main>
+  </div>
+
+  <footer>
+    <a href="/">Agents</a> &middot; <a href="/docs/browser-runtime/">Browser Runtime Docs</a> &middot; <a href="/skills/">Skills</a> &middot; <a href="/console/">Console</a>
+  </footer>
+</body>
+</html>
