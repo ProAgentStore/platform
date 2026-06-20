@@ -344,6 +344,14 @@ pnpm --filter @proagentstore/cli dev runner cancel-task "$PAGS_INSTANCE_ID" "$PA
 pnpm --filter @proagentstore/cli dev runner task-events "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN"
 ```
 
+Local job application fixture:
+
+```bash
+pnpm --filter @proagentstore/browser-runner dev:test-job-server -- --port 49210
+```
+
+Use `http://127.0.0.1:49210/jobs/software-engineer` as the first safe resume-upload target. It accepts standard candidate fields, a resume file, and a cover note, then redirects to a success page and exposes submitted metadata at `/submissions`.
+
 PAGS/MCP registration flow:
 
 ```text

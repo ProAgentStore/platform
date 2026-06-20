@@ -32,6 +32,25 @@ pags runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
 pags runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
 ```
 
+## Test Job Fixture
+
+Use the local fixture instead of real job boards while building resume upload and final-submit automation.
+
+```bash
+pnpm --filter @proagentstore/browser-runner dev:test-job-server -- --port 49210
+```
+
+The fixture serves:
+
+```text
+GET  http://127.0.0.1:49210/jobs/software-engineer
+POST http://127.0.0.1:49210/apply
+GET  http://127.0.0.1:49210/success/:id
+GET  http://127.0.0.1:49210/submissions
+```
+
+The application form accepts standard candidate details, a resume file, and a cover note, then redirects to a success page.
+
 Initial protocol:
 
 ```text

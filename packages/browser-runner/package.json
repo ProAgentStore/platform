@@ -5,7 +5,8 @@
 	"license": "MIT",
 	"type": "module",
 	"bin": {
-		"pags-browser-runner": "dist/index.js"
+		"pags-browser-runner": "dist/index.js",
+		"pags-test-job-server": "dist/test-job-server-cli.js"
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
@@ -22,6 +23,7 @@
 	"scripts": {
 		"build": "tsc",
 		"dev": "tsx src/index.ts",
+		"dev:test-job-server": "tsx src/test-job-server-cli.ts",
 		"start": "node dist/index.js",
 		"typecheck": "tsc --noEmit"
 	},
