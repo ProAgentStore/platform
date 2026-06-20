@@ -1,0 +1,17 @@
+{
+	"$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+	"name": "io.github.proagentstore/platform",
+	"title": "ProAgentStore",
+	"description": "MCP-first control plane for creating, subscribing to, running, and inspecting ProAgentStore agents and private instances.",
+	"version": "0.1.0",
+	"repository": {
+		"url": "https://github.com/ProAgentStore/platform",
+		"source": "github"
+	},
+	"remotes": [
+		{
+			"type": "streamable-http",
+			"url": "https://mcp.proagentstore.online/mcp"
+		}
+	]
+}

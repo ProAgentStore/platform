@@ -1,0 +1,4 @@
+[mcp_servers.proagentstore]
+url = "https://mcp.proagentstore.online/mcp"
+tool_timeout_sec = 120
+default_tools_approval_mode = "prompt"

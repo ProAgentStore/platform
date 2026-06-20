@@ -3,9 +3,9 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, consolePage, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, agentDetailPage,
 	widgetJs, authWidgetJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
-	llmsTxt, llmsFullTxt, skillsJson,
+	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
@@ -22,6 +22,8 @@ const PAGES: Record<string, string> = {
 	"/skills/proagentstore-mcp-operator/": skillMcpOperatorPage,
 	"/docs/browser-runtime": browserRuntimeDocsPage,
 	"/docs/browser-runtime/": browserRuntimeDocsPage,
+	"/docs/mcp": mcpDocsPage,
+	"/docs/mcp/": mcpDocsPage,
 	"/console": consolePage,
 	"/console/": consolePage,
 	"/admin": adminPage,
@@ -113,6 +115,12 @@ export default {
 			});
 		}
 
+		if (path === "/.well-known/mcp-server.json" || path === "/mcp-server.json") {
+			return new Response(mcpServerJson, {
+				headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" },
+			});
+		}
+
 		// robots.txt
 		if (path === "/robots.txt") {
 			return new Response(
@@ -123,7 +131,7 @@ export default {
 
 		// Dynamic sitemap — fetches published agents from API
 		if (path === "/sitemap.xml") {
-			const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/console/", "/changelog/"];
+			const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/mcp/", "/docs/browser-runtime/", "/console/", "/changelog/"];
 			let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
 			for (const u of staticUrls) {
 				xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ProAgentStore MCP</title>
+  <meta name="description" content="Connect Codex, Claude Code, and other MCP clients to ProAgentStore through the official MCP server.">
+  <link rel="canonical" href="https://proagentstore.online/docs/mcp/">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <style>
+    *,*::before,*::after{box-sizing:border-box}body{margin:0;background:#0a0a0a;color:#fafafa;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}header{border-bottom:1px solid #27272a;background:#09090b}header .bar{max-width:1100px;margin:0 auto;padding:14px 20px;display:flex;align-items:center;gap:18px}.brand{color:#fafafa;font-weight:750}.nav{margin-left:auto;display:flex;gap:16px;font-size:14px}.nav a{color:#a1a1aa}main{max-width:980px;margin:0 auto;padding:42px 20px 64px}h1{font-size:40px;line-height:1.08;margin:0 0 12px}h2{font-size:24px;margin:36px 0 12px}h3{font-size:18px;margin:24px 0 8px}.lead{font-size:18px;color:#d4d4d8;max-width:760px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:20px 0}.card{border:1px solid #27272a;background:#111113;border-radius:8px;padding:16px}.card h3{margin-top:0}.pill{display:inline-block;border:1px solid #3f3f46;border-radius:999px;padding:2px 9px;color:#d4d4d8;font-size:12px;margin-right:6px}pre{background:#050505;border:1px solid #27272a;border-radius:8px;padding:14px;overflow:auto;color:#d8b4fe;font-size:13px}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#d8b4fe}table{width:100%;border-collapse:collapse;margin:12px 0 24px}th,td{border-bottom:1px solid #27272a;padding:10px;text-align:left;vertical-align:top}th{color:#fafafa}td{color:#d4d4d8}ul{padding-left:22px;color:#d4d4d8}.warn{border-left:3px solid #f59e0b;background:#18130a;padding:12px 14px;color:#fde68a}.ok{border-left:3px solid #22c55e;background:#08140d;padding:12px 14px;color:#bbf7d0}@media(max-width:640px){h1{font-size:32px}.nav{display:none}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <a class="brand" href="/">ProAgentStore</a>
+      <nav class="nav">
+        <a href="/skills/">Skills</a>
+        <a href="/get-started/">Get Started</a>
+        <a href="/console/">Console</a>
+        <a href="https://github.com/ProAgentStore/platform">GitHub</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    <span class="pill">MCP-first</span><span class="pill">OAuth</span><span class="pill">Streamable HTTP</span>
+    <h1>ProAgentStore MCP</h1>
+    <p class="lead">Use ProAgentStore from Codex, Claude Code, Cursor, and other MCP clients through the official MCP server. Agents should use MCP workflows instead of scraping the UI or calling private APIs directly.</p>
+
+    <section>
+      <h2>Use It Now</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Codex</h3>
+          <pre><code>codex mcp add proagentstore --url https://mcp.proagentstore.online/mcp
+codex mcp list
+# If the server shows "Not logged in":
+codex mcp login proagentstore</code></pre>
+        </div>
+        <div class="card">
+          <h3>Claude Code</h3>
+          <pre><code>claude mcp add --transport http proagentstore https://mcp.proagentstore.online/mcp
+claude mcp list</code></pre>
+        </div>
+        <div class="card">
+          <h3>Generic MCP Client</h3>
+          <pre><code>npx mcp-remote https://mcp.proagentstore.online/mcp</code></pre>
+        </div>
+      </div>
+      <p>Authentication uses browser sign-in/OAuth where the client supports it. Existing PAGS session tokens are accepted by individual tools as a fallback.</p>
+    </section>
+
+    <section>
+      <h2>Project Config</h2>
+      <p>Add this to repos that should use ProAgentStore only through MCP:</p>
+      <pre><code>{
+  "mcpServers": {
+    "proagentstore": {
+      "type": "streamable-http",
+      "url": "https://mcp.proagentstore.online/mcp"
+    }
+  }
+}</code></pre>
+      <p>For Codex project-local config in trusted repos:</p>
+      <pre><code>[mcp_servers.proagentstore]
+url = "https://mcp.proagentstore.online/mcp"
+tool_timeout_sec = 120
+default_tools_approval_mode = "prompt"</code></pre>
+    </section>
+
+    <section>
+      <h2>Agent Instructions</h2>
+      <pre><code>Use ProAgentStore only through the configured MCP server.
+
+Do not use the web UI.
+Do not call REST/GraphQL/private APIs directly.
+First inspect available MCP tools/resources.
+Prefer read-only tools unless the task explicitly requires changes.
+Confirm before destructive actions.</code></pre>
+    </section>
+
+    <section>
+      <h2>Capabilities</h2>
+      <table>
+        <thead><tr><th>Area</th><th>Supported</th></tr></thead>
+        <tbody>
+          <tr><td>Read</td><td>public agents, owned agents, private instances, messages, knowledge, deployment status, analytics, runtime status, task events</td></tr>
+          <tr><td>Write</td><td>create/update agents, scaffold repos, write agent files, subscribe to agents, add instance knowledge, register runtimes, create/approve/cancel runtime tasks</td></tr>
+          <tr><td>Not supported</td><td>user deletion, permission changes, broad billing changes, arbitrary shell access, generic API proxying</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Tool Groups</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Discovery</h3>
+          <ul><li><code>list_agents</code></li><li><code>agent_info</code></li><li><code>chat_with_agent</code></li><li><code>platform_guide</code></li><li><code>sdk_reference</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Private Runtime</h3>
+          <ul><li><code>subscribe_agent</code></li><li><code>my_instances</code></li><li><code>chat_with_instance</code></li><li><code>instance_messages</code></li><li><code>add_instance_knowledge</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Browser Runtime</h3>
+          <ul><li><code>register_instance_runtime</code></li><li><code>instance_runtime_status</code></li><li><code>run_instance_task</code></li><li><code>approve_instance_task</code></li><li><code>instance_task_events</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Creator Ops</h3>
+          <ul><li><code>create_agent</code></li><li><code>scaffold_agent</code></li><li><code>read_agent_file</code></li><li><code>write_agent_file</code></li><li><code>trigger_agent_deploy</code></li></ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Executable Recipes</h2>
+      <h3>Find an agent and run a private instance</h3>
+      <pre><code>Prompt: "Find a job application agent, subscribe me, add my resume, and run my private instance."
+Expected tool flow:
+1. list_agents
+2. subscribe_agent
+3. my_instances
+4. add_instance_knowledge
+5. chat_with_instance</code></pre>
+
+      <h3>Connect a local browser runner</h3>
+      <pre><code>npm i -g @proagentstore/cli
+pags runner start --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+
+Expected MCP flow:
+1. subscribe_agent
+2. register_instance_runtime
+3. instance_runtime_status
+4. run_instance_task
+5. approve_instance_task
+6. instance_task_events</code></pre>
+    </section>
+
+    <section>
+      <h2>Security Model</h2>
+      <div class="warn">MCP servers expose tools to agents. Keep permissions narrow, use specific tools, and avoid generic execution surfaces.</div>
+      <ul>
+        <li>OAuth/browser sign-in is the default auth path.</li>
+        <li>Tools are purpose-specific; there is no generic shell or arbitrary API proxy tool.</li>
+        <li>Browser actions are task-based and can require explicit approval.</li>
+        <li>Private instance runtime uses caller-owned AI credentials and refuses platform-owned AI billing.</li>
+        <li>Use `default_tools_approval_mode = "prompt"` in Codex for write-heavy work.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Discovery Files</h2>
+      <ul>
+        <li><a href="/llms.txt">/llms.txt</a></li>
+        <li><a href="/llms-full.txt">/llms-full.txt</a></li>
+        <li><a href="/.well-known/mcp-server.json">/.well-known/mcp-server.json</a></li>
+        <li><a href="https://mcp.proagentstore.online/health">MCP health</a></li>
+      </ul>
+      <div class="ok">The remote MCP endpoint is <code>https://mcp.proagentstore.online/mcp</code>.</div>
+    </section>
+  </main>
+</body>
+</html>

@@ -68,6 +68,14 @@ const { response } = await agent.chat('Hello!')
 
 ### MCP
 ```bash
+codex mcp add proagentstore --url https://mcp.proagentstore.online/mcp
+codex mcp list
+# If the server shows "Not logged in":
+codex mcp login proagentstore
+
+claude mcp add --transport http proagentstore https://mcp.proagentstore.online/mcp
+claude mcp list
+
 npx mcp-remote https://mcp.proagentstore.online/mcp
 ```
 
@@ -89,6 +97,14 @@ Add your Cloudflare Workers AI account ID and API token before running this agen
 ```
 
 That means the instance runtime path is working and correctly refusing to bill the platform AI account. See [MCP Instance Runtime](docs/mcp-instance-runtime.md) for the full tool map, live test record, and OAuth troubleshooting.
+
+The full MCP-first developer surface is documented at:
+
+- https://proagentstore.online/docs/mcp/
+- [docs/mcp.md](docs/mcp.md)
+- [server.json](server.json)
+- [.mcp.json](.mcp.json)
+- [AGENTS.md](AGENTS.md)
 
 ### Local browser runner
 

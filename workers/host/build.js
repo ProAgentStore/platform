@@ -29,6 +29,10 @@ const pages = {
 		path.join(storeDir, "docs", "browser-runtime", "index.html"),
 		"utf-8",
 	),
+	mcpDocsPage: fs.readFileSync(
+		path.join(storeDir, "docs", "mcp", "index.html"),
+		"utf-8",
+	),
 	consolePage: fs.readFileSync(
 		path.join(storeDir, "console", "index.html"),
 		"utf-8",
@@ -46,6 +50,7 @@ const pages = {
 	llmsTxt: fs.readFileSync(path.join(storeDir, "llms.txt"), "utf-8"),
 	llmsFullTxt: fs.readFileSync(path.join(storeDir, "llms-full.txt"), "utf-8"),
 	skillsJson: fs.readFileSync(path.join(storeDir, "skills.json"), "utf-8"),
+	mcpServerJson: fs.readFileSync(path.join(storeDir, ".well-known", "mcp-server.json"), "utf-8"),
 	developerProfilePage: fs.readFileSync(
 		path.join(storeDir, "developers", "profile.html"),
 		"utf-8",

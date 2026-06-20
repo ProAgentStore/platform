@@ -5,6 +5,8 @@
 Primary site: https://proagentstore.online/
 API: https://api.proagentstore.online/
 MCP: https://mcp.proagentstore.online/mcp
+MCP docs: https://proagentstore.online/docs/mcp/
+MCP discovery: https://proagentstore.online/.well-known/mcp-server.json
 GitHub marketplace repo: https://github.com/ProAgentStore/platform
 
 ## Skills
@@ -14,6 +16,22 @@ GitHub marketplace repo: https://github.com/ProAgentStore/platform
 - [skills.json](https://proagentstore.online/skills.json): machine-readable skill metadata.
 
 ## Install
+
+Direct MCP for Codex:
+
+```bash
+codex mcp add proagentstore --url https://mcp.proagentstore.online/mcp
+codex mcp list
+# If the server shows "Not logged in":
+codex mcp login proagentstore
+```
+
+Direct MCP for Claude Code:
+
+```bash
+claude mcp add --transport http proagentstore https://mcp.proagentstore.online/mcp
+claude mcp list
+```
 
 Codex:
 
@@ -30,6 +48,8 @@ Claude Code:
 ```
 
 ## Correct MCP Runtime
+
+Agents must use ProAgentStore account state only through the configured MCP server. Do not use the web UI or private REST/API routes unless the user explicitly overrides this rule.
 
 Use public trial chat only for discovery:
 
@@ -48,5 +68,6 @@ If `chat_with_instance` says it needs a Cloudflare Workers AI account ID and API
 ## Docs
 
 - [Get Started](https://proagentstore.online/get-started/)
+- [MCP Guide](https://proagentstore.online/docs/mcp/)
 - [MCP Instance Runtime](https://github.com/ProAgentStore/platform/blob/main/docs/mcp-instance-runtime.md)
 - [Skill Publishing](https://github.com/ProAgentStore/platform/blob/main/docs/skill-publishing.md)

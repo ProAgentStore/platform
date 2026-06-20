@@ -9,6 +9,8 @@ The public website is the discovery layer. The plugin marketplaces are the insta
 - Store: https://proagentstore.online/
 - Skills catalog: https://proagentstore.online/skills/
 - MCP operator skill: https://proagentstore.online/skills/proagentstore-mcp-operator/
+- MCP guide: https://proagentstore.online/docs/mcp/
+- MCP discovery metadata: https://proagentstore.online/.well-known/mcp-server.json
 - Machine-readable skills metadata: https://proagentstore.online/skills.json
 - MCP endpoint: https://mcp.proagentstore.online/mcp
 - MCP health: https://mcp.proagentstore.online/health
@@ -17,6 +19,17 @@ The public website is the discovery layer. The plugin marketplaces are the insta
 
 ## Install for Codex
 
+Direct MCP:
+
+```bash
+codex mcp add proagentstore --url https://mcp.proagentstore.online/mcp
+codex mcp list
+# If the server shows "Not logged in":
+codex mcp login proagentstore
+```
+
+Plugin:
+
 ```bash
 codex plugin marketplace add ProAgentStore/platform
 ```
@@ -24,6 +37,15 @@ codex plugin marketplace add ProAgentStore/platform
 After installation, use the `proagentstore` plugin or the `proagentstore-mcp-operator` skill when asked to create, run, subscribe to, or inspect ProAgentStore agents.
 
 ## Install for Claude Code
+
+Direct MCP:
+
+```bash
+claude mcp add --transport http proagentstore https://mcp.proagentstore.online/mcp
+claude mcp list
+```
+
+Plugin:
 
 ```text
 /plugin marketplace add ProAgentStore/platform
@@ -47,6 +69,30 @@ Use when:
 - Checking deployment state or account-owned agent files.
 
 Do not bypass MCP with direct database writes, private API calls, browser-only shortcuts, or local secrets unless the user explicitly overrides that rule.
+
+## Project-local MCP Config
+
+Use this `.mcp.json` in projects that should connect through ProAgentStore MCP:
+
+```json
+{
+  "mcpServers": {
+    "proagentstore": {
+      "type": "streamable-http",
+      "url": "https://mcp.proagentstore.online/mcp"
+    }
+  }
+}
+```
+
+Use this `.codex/config.toml` for Codex project-local MCP config in trusted repos:
+
+```toml
+[mcp_servers.proagentstore]
+url = "https://mcp.proagentstore.online/mcp"
+tool_timeout_sec = 120
+default_tools_approval_mode = "prompt"
+```
 
 ## Correct Runtime Flow
 
@@ -112,6 +158,55 @@ Discovery/reference tools:
 - `chat_with_agent`
 - `platform_guide`
 - `sdk_reference`
+
+Browser/runtime tools:
+
+- `register_instance_runtime`
+- `instance_runtime_status`
+- `unregister_instance_runtime`
+- `run_instance_task`
+- `approve_instance_task`
+- `cancel_instance_task`
+- `instance_task_events`
+
+## Capability Manifest
+
+Read:
+
+- agents
+- private instances
+- messages
+- knowledge
+- deployment status
+- analytics
+- runtime status
+- task events
+
+Write:
+
+- create/update agents
+- scaffold repositories
+- write agent files
+- subscribe to agents
+- add instance knowledge
+- register runtimes
+- create, approve, and cancel runtime tasks
+
+Not supported:
+
+- user deletion
+- permission changes
+- broad billing changes
+- arbitrary shell execution
+- generic API proxying
+
+## Security Model
+
+- Use OAuth/browser sign-in by default.
+- Keep tools purpose-specific; do not expose generic execute/query/call_api tools.
+- Use approval prompts for write-heavy or browser actions.
+- Use caller-owned AI credentials for private instance runtime.
+- Prefer read-only tools unless the user explicitly requests changes.
 
 ## Example Prompts
 
