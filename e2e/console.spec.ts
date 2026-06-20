@@ -421,6 +421,26 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.getByRole("button", { name: "Approve" }).click();
 		expect(mock.approvedTaskId).toBe("task-approval");
 	});
+
+	test("console deep links restore instance tabs after refresh", async ({ page }) => {
+		await mockSignedInConsole(page);
+
+		await page.goto("/console/instances/inst-1/runtime");
+
+		await expect(
+			page.getByRole("heading", { name: "Runtime Board" }),
+		).toBeVisible();
+		await expect(page.locator("#inst-runtime-summary")).toContainText(
+			"2 runtime tasks",
+		);
+
+		await page.getByRole("button", { name: "My Documents" }).click();
+		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/knowledge$/);
+		await page.reload();
+
+		await expect(page.getByRole("heading", { name: "Your Documents" })).toBeVisible();
+		await expect(page.locator("#inst-tab-knowledge")).toHaveClass(/active/);
+	});
 });
 
 test.describe("ProAgentStore skill discovery", () => {

@@ -18,7 +18,7 @@ const contentTypes = {
 
 function resolveStorePath(pathname) {
 	const cleanPath = decodeURIComponent(pathname).replace(/\/+$/, "") || "/";
-	if (cleanPath === "/" || cleanPath === "/console") {
+	if (cleanPath === "/" || cleanPath === "/console" || cleanPath.startsWith("/console/")) {
 		return join(storeRoot, "console", "index.html");
 	}
 	if (cleanPath === "/docs/browser-runtime") {

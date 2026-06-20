@@ -79,6 +79,13 @@ export default {
 		const page = PAGES[path];
 		if (page) return new Response(page, { headers: HTML_HEADERS });
 
+		if (
+			path.startsWith("/console/") ||
+			(url.hostname === "console.proagentstore.online" && !path.includes("."))
+		) {
+			return new Response(consolePage, { headers: HTML_HEADERS });
+		}
+
 		// JS assets
 		if (path === "/widget.js") return new Response(widgetJs, { headers: JS_HEADERS });
 		if (path === "/auth-widget.js") return new Response(authWidgetJs, { headers: JS_HEADERS });

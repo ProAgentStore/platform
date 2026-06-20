@@ -331,7 +331,7 @@
 
   <!-- Instance detail (client view) -->
   <div id="instance-detail" class="container hidden">
-    <a href="#" onclick="showDashboard();switchDashTab('instances');return false" class="back-link">&larr; Back to instances</a>
+    <a href="/console/instances" onclick="showDashboard('instances');return false" class="back-link">&larr; Back to instances</a>
     <div class="agent-header">
       <div id="inst-icon" class="agent-icon" style="background:var(--accent)">&#9889;</div>
       <div>
@@ -428,7 +428,7 @@
 
   <!-- Agent detail -->
   <div id="agent-detail" class="container hidden">
-    <a href="#" onclick="showDashboard();return false" class="back-link">&larr; Back to agents</a>
+    <a href="/console/agents" onclick="showDashboard('agents');return false" class="back-link">&larr; Back to agents</a>
     <div class="agent-header">
       <div id="detail-icon" class="agent-icon" style="background:var(--accent)">&#9889;</div>
       <div>
@@ -811,6 +811,9 @@ console.log(response)</pre>
     let token = null;
     let user = null;
     let currentAgent = null;
+    let currentAgentTab = 'chat';
+    let currentInstanceTab = 'chat';
+    let routeApplying = false;
     let agentsView = 'board';
     const DEFAULT_AGENT_STATUS_BOARD_CONFIG = {
       summary: 'setup, review, live, and attention',
@@ -857,10 +860,35 @@ console.log(response)</pre>
     function getToken() { return localStorage.getItem(SESSION_KEY); }
     function setToken(t) { t ? localStorage.setItem(SESSION_KEY, t) : localStorage.removeItem(SESSION_KEY); token = t; }
 
+    function consoleUrlPrefix() {
+      return window.location.hostname === 'console.proagentstore.online' ? '' : '/console';
+    }
+
+    function consolePath() {
+      const prefix = consoleUrlPrefix();
+      let path = window.location.pathname.replace(/\/+$/, '') || '/';
+      if (prefix && (path === prefix || path.startsWith(prefix + '/'))) {
+        path = path.slice(prefix.length) || '/';
+      }
+      return path || '/';
+    }
+
+    function setConsoleUrl(path, replace = false) {
+      if (routeApplying) return;
+      const clean = path.startsWith('/') ? path : `/${path}`;
+      const url = `${consoleUrlPrefix()}${clean === '/' ? '/' : clean}`;
+      if (`${window.location.pathname}${window.location.search}` === url) return;
+      window.history[replace ? 'replaceState' : 'pushState']({}, '', url);
+    }
+
+    function routeParts() {
+      return consolePath().split('/').filter(Boolean).map(decodeURIComponent);
+    }
+
     async function signIn() {
       const res = await fetch(`${API}/v1/auth/config`);
       const config = await res.json();
-      const returnTo = encodeURIComponent(`${window.location.origin}/console/`);
+      const returnTo = encodeURIComponent(window.location.href);
       // Use FAS shared OAuth (same approach as FAGS console)
       window.location.href = `${config.oauth_url}?app_id=${config.app_id}&response_mode=${config.response_mode}&return_to=${returnTo}`;
     }
@@ -868,6 +896,7 @@ console.log(response)</pre>
     function signOut() {
       setToken(null); user = null;
       showPage('login-page');
+      setConsoleUrl('/', true);
       document.getElementById('user-nav').classList.add('hidden');
     }
 
@@ -1140,10 +1169,13 @@ console.log(response)</pre>
       document.getElementById('agents-view-list').classList.toggle('active', agentsView === 'list');
     }
 
-    function showDashboard() {
+    function showDashboard(tab = 'agents', updateUrl = true) {
       showPage('dashboard');
       currentAgent = null;
+      currentInstance = null;
       loadAgents();
+      switchDashTab(tab, false);
+      if (updateUrl) setConsoleUrl(`/${tab === 'agents' ? 'agents' : tab}`);
     }
 
     function toggleCreateForm() {
@@ -1177,7 +1209,7 @@ console.log(response)</pre>
 
     // ── Agent detail ────────────────────────────────────────────
 
-    async function openAgent(id) {
+    async function openAgent(id, tab = 'chat', updateUrl = true) {
       try {
         const agent = await api(`/v1/agents/${id}`);
         currentAgent = agent;
@@ -1212,7 +1244,7 @@ console.log(response)</pre>
         document.getElementById('s-maxlen').value = gr.maxResponseLength || '';
         document.getElementById('s-citations').checked = gr.requireCitations || false;
 
-        switchTab('chat');
+        switchTab(tab, false);
         loadMessages();
         loadKnowledge();
         loadMemory();
@@ -1220,10 +1252,11 @@ console.log(response)</pre>
         loadAnalytics();
         loadVersions();
         loadOps();
+        if (updateUrl) setConsoleUrl(`/agents/${encodeURIComponent(agent.id)}/${tab}`);
       } catch (e) { alert(e.message); }
     }
 
-	    function switchTab(name) {
+	    function switchTab(name, updateUrl = true) {
 	      const container = document.getElementById('agent-detail');
 	      container.querySelectorAll('.tab').forEach(t => {
 	        t.classList.toggle('active', t.textContent.toLowerCase() === name);
@@ -1231,7 +1264,9 @@ console.log(response)</pre>
 	      container.querySelectorAll('.tab-panel').forEach(p => {
 	        p.classList.toggle('active', p.id === `tab-${name}`);
 	      });
+	      currentAgentTab = name;
 	      if (name === 'ops') loadOps();
+	      if (updateUrl && currentAgent) setConsoleUrl(`/agents/${encodeURIComponent(currentAgent.id)}/${name}`);
 	    }
 
     // ── Chat ────────────────────────────────────────────────────
@@ -1276,13 +1311,14 @@ console.log(response)</pre>
 
     // ── Dashboard tabs ─────────────────────────────────────────
 
-    function switchDashTab(tab) {
+    function switchDashTab(tab, updateUrl = true) {
       for (const t of ['agents', 'instances', 'dashboard']) {
         document.getElementById('dash-' + t).classList.toggle('hidden', t !== tab);
         document.getElementById('dash-tab-' + t).classList.toggle('active', t === tab);
       }
       if (tab === 'instances') loadInstances();
       if (tab === 'dashboard') loadDashboard();
+      if (updateUrl) setConsoleUrl(`/${tab === 'agents' ? 'agents' : tab}`);
     }
 
     async function loadDashboard() {
@@ -1388,19 +1424,27 @@ console.log(response)</pre>
       document.getElementById('instances-loading').classList.add('hidden');
     }
 
-    async function openInstance(instanceId, meta) {
+    async function resolveInstanceMeta(instanceId, meta) {
+      if (meta?.name) return meta;
+      const data = await api('/v1/instances/my/instances');
+      return (data.instances || []).find(inst => inst.id === instanceId) || { id: instanceId, name: 'Agent' };
+    }
+
+    async function openInstance(instanceId, meta, tab = 'chat', updateUrl = true) {
+      meta = await resolveInstanceMeta(instanceId, meta);
       currentInstance = { id: instanceId, ...meta };
       showPage('instance-detail');
       document.getElementById('inst-name').textContent = meta.name || 'Agent';
       document.getElementById('inst-desc').textContent = meta.description || '';
       if (meta.icon_bg) document.getElementById('inst-icon').style.background = meta.icon_bg;
-      switchInstTab('chat');
+      switchInstTab(tab, false);
       loadInstanceMessages();
       loadInstanceKnowledge();
       loadInstanceRuntime();
+      if (updateUrl) setConsoleUrl(`/instances/${encodeURIComponent(instanceId)}/${tab}`);
     }
 
-    function switchInstTab(name) {
+    function switchInstTab(name, updateUrl = true) {
       const container = document.getElementById('instance-detail');
       container.querySelectorAll('.tab').forEach(t => {
         t.classList.toggle('active', t.dataset.instTab === name);
@@ -1408,7 +1452,9 @@ console.log(response)</pre>
       container.querySelectorAll('.tab-panel').forEach(p => {
         p.classList.toggle('active', p.id === `inst-tab-${name}`);
       });
+      currentInstanceTab = name;
       if (name === 'runtime') loadInstanceRuntime();
+      if (updateUrl && currentInstance) setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/${name}`);
     }
 
     async function loadInstanceRuntime() {
@@ -2171,9 +2217,10 @@ console.log(response)</pre>
 
     let tokenVisible = false;
 
-    function showProfile() {
+    function showProfile(updateUrl = true) {
       if (!user) return;
       showPage('profile-page');
+      if (updateUrl) setConsoleUrl('/profile');
 
       document.getElementById('profile-avatar').src = user.avatar || '';
       document.getElementById('profile-name').textContent = user.name || user.login;
@@ -2244,8 +2291,9 @@ console.log(response)</pre>
       } catch {}
     }
 
-    async function showNotifications() {
+    async function showNotifications(updateUrl = true) {
       showPage('notifications-page');
+      if (updateUrl) setConsoleUrl('/notifications');
       try {
         const data = await api('/v1/notifications');
         const list = document.getElementById('notif-list');
@@ -2382,28 +2430,71 @@ console.log(response)</pre>
       const params = new URLSearchParams(window.location.search);
       const agentId = params.get('subscribe');
       const cloneId = params.get('clone');
-      window.history.replaceState({}, '', window.location.pathname);
+      if (agentId || cloneId) window.history.replaceState({}, '', window.location.pathname);
 
       if (agentId && token) {
         try {
           const res = await api(`/v1/instances/${encodeURIComponent(agentId)}/subscribe`, { method: 'POST' });
-          if (res.instanceId) { switchDashTab('instances'); return; }
+          if (res.instanceId) { showDashboard('instances'); return true; }
         } catch (e) {
-          if (e.message.includes('Already subscribed')) { switchDashTab('instances'); return; }
+          if (e.message.includes('Already subscribed')) { showDashboard('instances'); return true; }
           alert(`Subscribe failed: ${e.message}`);
         }
       }
 
       if (cloneId && token) {
         const slug = prompt('Choose a slug for your cloned agent (lowercase, hyphens):');
-        if (!slug) return;
+        if (!slug) return false;
         try {
           const res = await api(`/v1/agents/${encodeURIComponent(cloneId)}/clone`, {
             method: 'POST',
             body: JSON.stringify({ slug }),
           });
-          if (res.id) { alert(`Cloned! Your agent: ${slug}`); loadAgents(); }
+          if (res.id) { alert(`Cloned! Your agent: ${slug}`); showDashboard('agents'); return true; }
         } catch (e) { alert(`Clone failed: ${e.message}`); }
+      }
+      return false;
+    }
+
+    async function restoreConsoleRoute() {
+      const parts = routeParts();
+      const page = parts[0] || 'agents';
+      const validAgentTabs = ['chat', 'knowledge', 'memory', 'tasks', 'settings', 'analytics', 'ops'];
+      const validInstanceTabs = ['chat', 'runtime', 'knowledge'];
+
+      routeApplying = true;
+      try {
+        if (page === 'agents' && parts[1]) {
+          routeApplying = false;
+          await openAgent(parts[1], validAgentTabs.includes(parts[2]) ? parts[2] : 'chat', false);
+          routeApplying = true;
+          return;
+        }
+        if (page === 'instances' && parts[1]) {
+          routeApplying = false;
+          await openInstance(parts[1], null, validInstanceTabs.includes(parts[2]) ? parts[2] : 'chat', false);
+          routeApplying = true;
+          return;
+        }
+        if (page === 'instances') {
+          showDashboard('instances', false);
+          return;
+        }
+        if (page === 'dashboard') {
+          showDashboard('dashboard', false);
+          return;
+        }
+        if (page === 'profile') {
+          showProfile(false);
+          return;
+        }
+        if (page === 'notifications') {
+          await showNotifications(false);
+          return;
+        }
+        showDashboard('agents', false);
+      } finally {
+        routeApplying = false;
       }
     }
 
@@ -2413,13 +2504,17 @@ console.log(response)</pre>
       const authed = fromOAuth || await checkAuth();
       if (authed && user) {
         showUser();
-        showDashboard();
         loadNotifBadge();
-        await handleSubscribeParam();
+        const handledQuery = await handleSubscribeParam();
+        if (!handledQuery) await restoreConsoleRoute();
       } else {
         showPage('login-page');
       }
     })();
+
+    window.addEventListener('popstate', () => {
+      if (token && user) restoreConsoleRoute();
+    });
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
