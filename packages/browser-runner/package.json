@@ -10,6 +10,22 @@
 	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
+	"homepage": "https://github.com/ProAgentStore/platform#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ProAgentStore/platform.git",
+		"directory": "packages/browser-runner"
+	},
+	"keywords": [
+		"proagentstore",
+		"pags",
+		"browser-runner",
+		"playwright",
+		"agents"
+	],
+	"publishConfig": {
+		"access": "public"
+	},
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",

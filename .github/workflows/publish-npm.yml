@@ -3,12 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: 'Package to publish (sdk or cli)'
+        description: 'Package to publish'
         required: true
         type: choice
         options:
           - sdk
           - cli
+          - browser-runner
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -29,15 +30,8 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
 
-      - name: Build SDK
-        if: inputs.package == 'sdk'
-        run: cd packages/sdk && npx tsc
-
-      - name: Build CLI
-        if: inputs.package == 'cli'
-        run: cd packages/cli && npx tsup src/index.ts --format esm --dts
+      - name: Build package
+        run: pnpm --filter @proagentstore/${{ inputs.package }} build
 
       - name: Publish
         run: cd packages/${{ inputs.package }} && npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

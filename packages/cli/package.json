@@ -2,9 +2,26 @@
 	"name": "@proagentstore/cli",
 	"version": "0.1.0",
 	"description": "CLI for creating and publishing ProAgentStore agents",
+	"license": "MIT",
 	"type": "module",
 	"bin": {
 		"pags": "dist/index.js"
+	},
+	"homepage": "https://github.com/ProAgentStore/platform#readme",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ProAgentStore/platform.git",
+		"directory": "packages/cli"
+	},
+	"keywords": [
+		"proagentstore",
+		"pags",
+		"cli",
+		"agents",
+		"browser-runner"
+	],
+	"publishConfig": {
+		"access": "public"
 	},
 	"scripts": {
 		"build": "tsup src/index.ts --format esm --dts",
@@ -22,6 +39,5 @@
 	},
 	"files": [
 		"dist"
-	],
-	"license": "MIT"
+	]
 }
