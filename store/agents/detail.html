@@ -313,7 +313,7 @@
       setText('side-created', formatDate(a.created_at));
       setText('side-slug', slug);
       $('a-icon').style.background = a.icon_bg || '#7c3aed';
-      $('repo-link').href = 'https://github.com/ProAgentStore/' + encodeURIComponent(slug);
+      $('repo-link').href = 'https://github.com/ProAgentStore/platform/tree/main/agents/' + encodeURIComponent(slug);
       $('console-link').href = '/console/?agent=' + encodeURIComponent(a.id);
       $('details-console-link').href = '/console/?agent=' + encodeURIComponent(a.id);
       $('subscribe-link').href = '/console/?subscribe=' + encodeURIComponent(a.id);
@@ -403,7 +403,12 @@
 	        else setStatus('mcp-dot','mcp-status','warn','MCP health unavailable');
 	      }).catch(() => setStatus('mcp-dot','mcp-status','warn','MCP health unavailable'));
 	      if (a.__privatePlaceholder) return;
-	      fetch('https://raw.githubusercontent.com/ProAgentStore/' + encodeURIComponent(slug) + '/main/README.md').then(r => r.ok ? r.text() : null).then(readme => {
+	      const readmeUrls = [
+	        'https://raw.githubusercontent.com/ProAgentStore/platform/main/agents/' + encodeURIComponent(slug) + '/README.md',
+	        'https://raw.githubusercontent.com/ProAgentStore/' + encodeURIComponent(slug) + '/main/README.md'
+	      ];
+	      Promise.all(readmeUrls.map(url => fetch(url).then(r => r.ok ? r.text() : null).catch(() => null))).then(results => {
+	        const readme = results.find(Boolean);
 	        if (readme) {
 	          setStatus('repo-dot','repo-status','ok','GitHub README available');
           $('readme-summary').textContent = readme.split('\n').filter(Boolean).slice(0,5).join('\n');
