@@ -2,7 +2,7 @@
 	"$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
 	"name": "io.github.proagentstore/platform",
 	"title": "ProAgentStore",
-	"description": "MCP-first control plane for creating, subscribing to, running, and inspecting ProAgentStore agents and private instances.",
+	"description": "MCP-first control plane for ProAgentStore agents and private instances.",
 	"version": "0.1.0",
 	"repository": {
 		"url": "https://github.com/ProAgentStore/platform",
