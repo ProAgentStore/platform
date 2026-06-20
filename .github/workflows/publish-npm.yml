@@ -1,5 +1,11 @@
 name: Publish to npm
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/cli/**'
+      - 'packages/browser-runner/**'
+      - '.github/workflows/publish-npm.yml'
   workflow_dispatch:
 
 env:
@@ -14,9 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
@@ -25,4 +31,4 @@ jobs:
         run: pnpm --filter @proagentstore/cli build
 
       - name: Publish CLI
-        run: cd packages/cli && npm publish --access public --provenance
+        run: cd packages/cli && npm publish --access public
