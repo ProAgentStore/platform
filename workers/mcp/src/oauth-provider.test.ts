@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAuthChallenge, handleOAuthRoute } from "./oauth-provider.js";
+import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
 	const data = new Map(Object.entries(seed));
@@ -79,6 +79,12 @@ describe("handleOAuthRoute", () => {
 		expect(body.registration_endpoint).toBe(
 			"https://mcp.proagentstore.online/register",
 		);
+		expect(body.scopes_supported).toEqual([
+			"read",
+			"write",
+			"runtime",
+			"destructive",
+		]);
 	});
 
 	it("registers dynamic MCP clients", async () => {
@@ -148,5 +154,28 @@ describe("handleOAuthRoute", () => {
 		);
 		expect(res?.headers.get("Location")).toContain("app_id=pags-mcp");
 		expect(res?.headers.get("Location")).toContain("response_mode=query");
+	});
+
+	it("resolves scoped OAuth access tokens", async () => {
+		const kv = makeKv({
+			"token:access-1": JSON.stringify({
+				session: "pags-session",
+				scopes: ["read", "runtime"],
+			}),
+		});
+
+		await expect(resolveOAuthToken("access-1", kv)).resolves.toEqual({
+			session: "pags-session",
+			scopes: ["read", "runtime"],
+		});
+	});
+
+	it("keeps compatibility with legacy token values", async () => {
+		const kv = makeKv({ "token:legacy": "pags-session" });
+
+		await expect(resolveOAuthToken("legacy", kv)).resolves.toEqual({
+			session: "pags-session",
+			scopes: ["read", "write", "runtime", "destructive"],
+		});
 	});
 });

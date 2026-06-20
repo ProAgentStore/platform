@@ -40,6 +40,12 @@ Generic MCP client:
 npx mcp-remote https://mcp.proagentstore.online/mcp
 ```
 
+First-party local `npx` proxy:
+
+```bash
+npx @proagentstore/cli mcp
+```
+
 ## Project Config
 
 Use `.mcp.json` for MCP clients that support project-local config:
@@ -64,6 +70,19 @@ tool_timeout_sec = 120
 default_tools_approval_mode = "prompt"
 ```
 
+For stdio-only MCP clients, use the published CLI as the local proxy:
+
+```json
+{
+  "mcpServers": {
+    "proagentstore": {
+      "command": "npx",
+      "args": ["-y", "@proagentstore/cli", "mcp"]
+    }
+  }
+}
+```
+
 ## Agent Rules
 
 ```md
@@ -75,6 +94,28 @@ First inspect available MCP tools/resources.
 Prefer read-only tools unless the task explicitly requires changes.
 Confirm before destructive actions.
 ```
+
+## Auth Scopes And Safety
+
+OAuth connections can be scoped to:
+
+- `read`
+- `write`
+- `runtime`
+- `destructive`
+
+If a client does not request a scope, ProAgentStore grants the existing default scope set for compatibility. Use `read` only for inspection agents. Set `MCP_READ_ONLY=1` on the MCP worker to force server-wide read-only mode.
+
+Mutating tools support `dry_run: true` where useful. Destructive or overwrite-style tools require an exact `confirm` value:
+
+- `write_agent_file`: `confirm: "write_agent_file"`
+- `batch_write_agent_files`: `confirm: "batch_write_agent_files"`
+- `unregister_instance_runtime`: `confirm: "unregister_instance_runtime"`
+- `cancel_instance_task`: `confirm: "cancel_instance_task"`
+- `delete_instance_knowledge`: `confirm: "delete_instance_knowledge"`
+- `cancel_instance`: `confirm: "cancel_instance"`
+
+Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account.
 
 ## Correct Runtime Flows
 
@@ -108,6 +149,7 @@ Read:
 - analytics
 - runtime status
 - task events
+- MCP audit log
 
 Write:
 
@@ -130,7 +172,11 @@ Not supported:
 ## Security
 
 - OAuth/browser sign-in is the default auth path.
+- OAuth scopes are enforced server-side for write, runtime, and destructive tools.
 - Tools are purpose-specific; there is no generic shell or arbitrary API proxy tool.
+- Mutating tools support dry-run previews where useful.
+- Destructive and repository overwrite tools require explicit confirmation.
+- MCP audit events are stored for authenticated OAuth sessions.
 - Browser actions are task-based and can require explicit approval.
 - Private instance runtime uses caller-owned AI credentials.
 - Prefer read-only tools unless the user explicitly requests changes.

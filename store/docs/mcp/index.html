@@ -47,6 +47,10 @@ claude mcp list</code></pre>
           <h3>Generic MCP Client</h3>
           <pre><code>npx mcp-remote https://mcp.proagentstore.online/mcp</code></pre>
         </div>
+        <div class="card">
+          <h3>Local npx Proxy</h3>
+          <pre><code>npx @proagentstore/cli mcp</code></pre>
+        </div>
       </div>
       <p>Authentication uses browser sign-in/OAuth where the client supports it. Existing PAGS session tokens are accepted by individual tools as a fallback.</p>
     </section>
@@ -67,6 +71,15 @@ claude mcp list</code></pre>
 url = "https://mcp.proagentstore.online/mcp"
 tool_timeout_sec = 120
 default_tools_approval_mode = "prompt"</code></pre>
+      <p>For stdio-only MCP clients, use the published CLI as the local proxy:</p>
+      <pre><code>{
+  "mcpServers": {
+    "proagentstore": {
+      "command": "npx",
+      "args": ["-y", "@proagentstore/cli", "mcp"]
+    }
+  }
+}</code></pre>
     </section>
 
     <section>
@@ -81,11 +94,24 @@ Confirm before destructive actions.</code></pre>
     </section>
 
     <section>
+      <h2>Auth Scopes And Safety</h2>
+      <p>OAuth connections can request <code>read</code>, <code>write</code>, <code>runtime</code>, and <code>destructive</code> scopes. Write, runtime, and destructive tools enforce those scopes server-side. Set <code>MCP_READ_ONLY=1</code> on the MCP worker to force read-only mode.</p>
+      <table>
+        <thead><tr><th>Control</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td><code>dry_run: true</code></td><td>Available on mutating tools where useful; returns the planned action without changing state.</td></tr>
+          <tr><td><code>confirm</code></td><td>Required for destructive or overwrite-style tools: <code>write_agent_file</code>, <code>batch_write_agent_files</code>, <code>unregister_instance_runtime</code>, <code>cancel_instance_task</code>, <code>delete_instance_knowledge</code>, and <code>cancel_instance</code>.</td></tr>
+          <tr><td><code>mcp_audit_log</code></td><td>Reads recent MCP write, runtime, dry-run, denied, and destructive tool audit events for the authenticated account.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
       <h2>Capabilities</h2>
       <table>
         <thead><tr><th>Area</th><th>Supported</th></tr></thead>
         <tbody>
-          <tr><td>Read</td><td>public agents, owned agents, private instances, messages, knowledge, deployment status, analytics, runtime status, task events</td></tr>
+          <tr><td>Read</td><td>public agents, owned agents, private instances, messages, knowledge, deployment status, analytics, runtime status, task events, MCP audit log</td></tr>
           <tr><td>Write</td><td>create/update agents, scaffold repos, write agent files, subscribe to agents, add instance knowledge, register runtimes, create/approve/cancel runtime tasks</td></tr>
           <tr><td>Not supported</td><td>user deletion, permission changes, broad billing changes, arbitrary shell access, generic API proxying</td></tr>
         </tbody>
@@ -110,6 +136,10 @@ Confirm before destructive actions.</code></pre>
         <div class="card">
           <h3>Creator Ops</h3>
           <ul><li><code>create_agent</code></li><li><code>scaffold_agent</code></li><li><code>read_agent_file</code></li><li><code>write_agent_file</code></li><li><code>trigger_agent_deploy</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Safety</h3>
+          <ul><li><code>mcp_audit_log</code></li><li><code>dry_run</code> on writes</li><li><code>confirm</code> on destructive actions</li><li>OAuth scopes</li></ul>
         </div>
       </div>
     </section>
@@ -143,7 +173,11 @@ Expected MCP flow:
       <div class="warn">MCP servers expose tools to agents. Keep permissions narrow, use specific tools, and avoid generic execution surfaces.</div>
       <ul>
         <li>OAuth/browser sign-in is the default auth path.</li>
+        <li>OAuth scopes are enforced server-side for write, runtime, and destructive tools.</li>
         <li>Tools are purpose-specific; there is no generic shell or arbitrary API proxy tool.</li>
+        <li>Mutating tools support dry-run previews where useful.</li>
+        <li>Destructive and repository overwrite tools require explicit confirmation.</li>
+        <li>MCP audit events are stored for authenticated OAuth sessions.</li>
         <li>Browser actions are task-based and can require explicit approval.</li>
         <li>Private instance runtime uses caller-owned AI credentials and refuses platform-owned AI billing.</li>
         <li>Use `default_tools_approval_mode = "prompt"` in Codex for write-heavy work.</li>

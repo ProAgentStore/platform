@@ -5,6 +5,7 @@ export type McpEnv = {
 	AUTH_START?: string;
 	GITHUB_ORG?: string;
 	GITHUB_TOKEN?: string;
+	MCP_READ_ONLY?: string;
 	OAUTH_KV?: KVNamespace;
 	SESSION_SIGNING_KEY?: string;
 };

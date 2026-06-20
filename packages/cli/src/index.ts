@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { Command } from "commander";
 import { checkCommand } from "./commands/check.js";
 import { initCommand } from "./commands/init.js";
+import { mcpCommand } from "./commands/mcp.js";
 import { publishCommand } from "./commands/publish.js";
 import { runnerCommand } from "./commands/runner.js";
 import { writeError } from "./output.js";
@@ -27,6 +28,7 @@ program.addCommand(initCommand);
 program.addCommand(checkCommand);
 program.addCommand(publishCommand);
 program.addCommand(runnerCommand);
+program.addCommand(mcpCommand);
 
 try {
 	await program.parseAsync();

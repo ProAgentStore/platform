@@ -55,6 +55,27 @@ Plugin:
 
 After installation, use the plugin skill when the user asks for ProAgentStore account operations. The MCP server still requires user approval through browser sign-in.
 
+## Local MCP Proxy
+
+For stdio-only MCP clients, use the published first-party CLI package:
+
+```bash
+npx @proagentstore/cli mcp
+```
+
+Equivalent project config:
+
+```json
+{
+  "mcpServers": {
+    "proagentstore": {
+      "command": "npx",
+      "args": ["-y", "@proagentstore/cli", "mcp"]
+    }
+  }
+}
+```
+
 ## Skill: proagentstore-mcp-operator
 
 Purpose: operate ProAgentStore account state only through the deployed MCP server.
@@ -69,6 +90,16 @@ Use when:
 - Checking deployment state or account-owned agent files.
 
 Do not bypass MCP with direct database writes, private API calls, browser-only shortcuts, or local secrets unless the user explicitly overrides that rule.
+
+## MCP Safety Contract
+
+- OAuth scopes: `read`, `write`, `runtime`, `destructive`.
+- Server-side read-only mode: set `MCP_READ_ONLY=1` on the MCP worker.
+- Use `dry_run: true` on mutating tools before making uncertain changes.
+- Repository overwrite tools require exact confirmation: `write_agent_file` or `batch_write_agent_files`.
+- Destructive tools require exact confirmation: `unregister_instance_runtime`, `cancel_instance_task`, `delete_instance_knowledge`, or `cancel_instance`.
+- Use `mcp_audit_log` to read recent write, runtime, dry-run, denied, and destructive MCP audit events for the authenticated account.
+- There is no generic shell, arbitrary API proxy, or platform-owned AI spend path.
 
 ## Project-local MCP Config
 
@@ -139,6 +170,7 @@ Creator tools:
 - `add_knowledge`
 - `list_knowledge`
 - `agent_analytics`
+- `mcp_audit_log`
 
 User runtime tools:
 
@@ -181,6 +213,7 @@ Read:
 - analytics
 - runtime status
 - task events
+- MCP audit events
 
 Write:
 
@@ -203,7 +236,11 @@ Not supported:
 ## Security Model
 
 - Use OAuth/browser sign-in by default.
+- Enforce OAuth scopes server-side for write, runtime, and destructive tools.
 - Keep tools purpose-specific; do not expose generic execute/query/call_api tools.
+- Use `dry_run: true` for mutating tools when the requested change is not fully confirmed.
+- Require exact `confirm` values for destructive and repository overwrite tools.
+- Review `mcp_audit_log` for recent MCP tool events.
 - Use approval prompts for write-heavy or browser actions.
 - Use caller-owned AI credentials for private instance runtime.
 - Prefer read-only tools unless the user explicitly requests changes.

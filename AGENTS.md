@@ -8,7 +8,10 @@ Use ProAgentStore account state only through the configured MCP server.
 - Do not call private REST, GraphQL, database, or worker APIs directly unless the user explicitly overrides this rule.
 - First inspect available MCP tools/resources before choosing an action.
 - Prefer read-only tools unless the task explicitly requires changes.
-- Confirm before destructive actions such as cancelling instances, deleting knowledge, or overwriting files.
+- Use `dry_run: true` before uncertain write/runtime/destructive actions.
+- Confirm before destructive actions such as cancelling instances, deleting knowledge, unregistering runtimes, cancelling tasks, or overwriting files.
+- Use the exact `confirm` value required by the MCP tool schema.
+- Use `mcp_audit_log` when the user asks what MCP actions were attempted or completed.
 - Never use a generic shell/API proxy as a substitute for a specific MCP tool.
 
 ## Expected MCP Server

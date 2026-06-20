@@ -9,8 +9,21 @@ import { z } from "zod";
 import { apiBase, apiCall, authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
 import { registerInstanceTools } from "./instance-tools.js";
 import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
+import {
+	audit,
+	dryRun,
+	listAuditEvents,
+	type SafetyContext,
+	requireConfirmation,
+	requirePermission,
+} from "./safety.js";
+import { verifyMcpSession } from "./session.js";
 
-type Props = Record<string, unknown>;
+type Props = {
+	authToken?: string;
+	mcpScopes?: string[] | null;
+	mcpSubject?: string;
+};
 type Env = McpEnv;
 
 const AGENT_ID = z
@@ -382,15 +395,25 @@ async function triggerDeploy(
 export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	server = new McpServer({ name: "ProAgentStore", version: "0.1.0" });
 	private userToken: string | null = null;
+	private scopes: string[] | null = null;
+	private subject: string | undefined;
 
 	private token(provided?: string): string | null {
 		return provided || this.userToken;
 	}
 
+	private safety(provided?: string): SafetyContext {
+		return {
+			env: this.env,
+			subject: provided ? undefined : this.subject,
+			scopes: provided ? null : this.scopes,
+		};
+	}
+
 	async init() {
-		this.userToken =
-			((this.props as { authToken?: string } | undefined)?.authToken as string | undefined) ||
-			null;
+		this.userToken = this.props?.authToken || null;
+		this.scopes = this.props?.mcpScopes || null;
+		this.subject = this.props?.mcpSubject;
 
 		this.server.tool(
 			"list_agents",
@@ -472,6 +495,22 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		);
 
 		this.server.tool(
+			"mcp_audit_log",
+			"Read recent MCP write, runtime, dry-run, denied, and destructive tool audit events for the authenticated account.",
+			{
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+				limit: z.number().int().min(1).max(200).optional(),
+			},
+			async ({ token, limit }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(this.safety(token), "read", "mcp_audit_log", { limit });
+				if (denied) return denied;
+				return jsonText(await listAuditEvents(this.safety(token), limit || 50));
+			},
+		);
+
+		this.server.tool(
 			"get_agent_board_config",
 			"Read the authenticated creator's configurable console kanban board for agents.",
 			{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
@@ -508,23 +547,35 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 						catchAll: z.boolean().optional(),
 					})).min(1).max(8),
 				}),
+				dry_run: z.boolean().optional(),
 			},
-			async ({ token, config }) => {
+			async ({ token, config, dry_run }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(this.safety(token), "write", "update_agent_board_config", { config });
+				if (denied) return denied;
+				if (dry_run) {
+					return dryRun(this.safety(token), "update_agent_board_config", "update board config", { config }, { board_config: config });
+				}
 				const data = (await authedCall(
 					"/v1/auth/me",
 					sessionToken,
 					{ method: "PUT", body: JSON.stringify({ board_config: config }) },
 					this.env,
 				)) as { success?: boolean; error?: string };
+				if (data.success) await audit(this.safety(token), { tool: "update_agent_board_config", action: "completed", input: { config } });
 				return data.success
 					? text("Updated agent board config.")
 					: text(`Error: ${data.error || "update failed"}`);
 			},
 		);
 
-		registerInstanceTools(this.server, this.env, (provided) => this.token(provided));
+		registerInstanceTools(
+			this.server,
+			this.env,
+			(provided) => this.token(provided),
+			(provided) => this.safety(provided),
+		);
 
 		this.server.tool(
 			"create_agent",
@@ -538,6 +589,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				model: z.string().optional(),
 				personality: z.string().optional(),
 				goal: z.string().optional(),
+				dry_run: z.boolean().optional(),
 			},
 			async ({
 				token,
@@ -548,9 +600,20 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				model,
 				personality,
 				goal,
+				dry_run,
 			}) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
+				const input = { slug, name, description, category, model, personality, goal };
+				const denied = await requirePermission(this.safety(token), "write", "create_agent", input);
+				if (denied) return denied;
+				if (dry_run) {
+					return dryRun(this.safety(token), "create_agent", "create agent", input, {
+						endpoint: "/v1/agents",
+						method: "POST",
+						body: input,
+					});
+				}
 				const data = (await authedCall("/v1/agents", sessionToken, {
 					method: "POST",
 					body: JSON.stringify({
@@ -563,6 +626,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 						goal,
 					}),
 				}, this.env)) as { id?: string; error?: string };
+				if (data.id) await audit(this.safety(token), { tool: "create_agent", action: "completed", input, result: { id: data.id } });
 				return {
 					content: [
 						{
@@ -590,6 +654,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				personality: z.string().optional(),
 				goal: z.string().optional(),
 				auto_deploy: z.boolean().optional().describe("Trigger the deploy workflow after scaffolding. Defaults to true."),
+				dry_run: z.boolean().optional(),
 			},
 			async ({
 				token,
@@ -602,6 +667,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				personality,
 				goal,
 				auto_deploy,
+				dry_run,
 			}) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
@@ -609,6 +675,35 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
 				const selectedTemplate = template || "worker";
 				const selectedModel = model || "@cf/meta/llama-3.2-3b-instruct";
+				const input = {
+					slug,
+					name,
+					description,
+					category,
+					model: selectedModel,
+					template: selectedTemplate,
+					personality,
+					goal,
+					auto_deploy: auto_deploy !== false,
+				};
+				const denied = await requirePermission(this.safety(token), "write", "scaffold_agent", input);
+				if (denied) return denied;
+				if (dry_run) {
+					const files = Array.from(agentTemplateFiles({
+						slug,
+						name,
+						description,
+						category: category || "general",
+						model: selectedModel,
+						template: selectedTemplate,
+					}).keys());
+					return dryRun(this.safety(token), "scaffold_agent", "create agent and scaffold repository", input, {
+						agent: { slug, name, description, category, model: selectedModel },
+						repo: `https://github.com/${org}/${repo}`,
+						files,
+						autoDeploy: auto_deploy !== false,
+					});
+				}
 				const created = (await authedCall("/v1/agents", sessionToken, {
 					method: "POST",
 					body: JSON.stringify({
@@ -655,6 +750,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					}
 				}
 
+				await audit(this.safety(token), { tool: "scaffold_agent", action: "completed", input, result: { agentId: created.id, repo } });
 				return text(
 					[
 						`Scaffolded **${name}** (${slug})`,
@@ -678,18 +774,30 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				description: z.string().optional(),
 				visibility: z.string().optional(),
 				model: z.string().optional(),
+				dry_run: z.boolean().optional(),
 			},
-			async ({ token, agent_id, ...updates }) => {
+			async ({ token, agent_id, dry_run, ...updates }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
 				const body: Record<string, unknown> = {};
 				for (const [k, v] of Object.entries(updates)) {
 					if (v) body[k] = v;
 				}
+				const input = { agent_id, ...body };
+				const denied = await requirePermission(this.safety(token), "write", "update_agent", input);
+				if (denied) return denied;
+				if (dry_run) {
+					return dryRun(this.safety(token), "update_agent", "update agent settings", input, {
+						endpoint: `/v1/agents/${agent_id}`,
+						method: "PUT",
+						body,
+					});
+				}
 				const data = (await authedCall(`/v1/agents/${agent_id}`, sessionToken, {
 					method: "PUT",
 					body: JSON.stringify(body),
 				}, this.env)) as { success?: boolean; error?: string };
+				if (data.success) await audit(this.safety(token), { tool: "update_agent", action: "completed", input });
 				return {
 					content: [
 						{
@@ -750,24 +858,39 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				path: z.string().describe("File path relative to repo root"),
 				content: z.string().describe("Full file content"),
 				message: z.string().optional().describe("Commit message"),
+				confirm: z.string().optional().describe('Must be "write_agent_file" to create or overwrite repository content.'),
+				dry_run: z.boolean().optional(),
 			},
-			async ({ token, agent_id, path, content, message }) => {
+			async ({ token, agent_id, path, content, message, confirm, dry_run }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
+				const input = { agent_id, path, content, message };
+				const denied = await requirePermission(this.safety(token), "write", "write_agent_file", input);
+				if (denied) return denied;
+				if (dry_run) {
+					return dryRun(this.safety(token), "write_agent_file", "create or overwrite repository file", input, {
+						repo: repoNameFor(agent_id),
+						path,
+						bytes: new TextEncoder().encode(content).length,
+						message,
+					});
+				}
+				const unconfirmed = await requireConfirmation(this.safety(token), "write_agent_file", confirm, "write_agent_file", input);
+				if (unconfirmed) return unconfirmed;
 				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
 					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
 				}
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
-				return text(
-					await putRepoFile(
-						this.env,
-						org,
-						repoNameFor(agent_id),
-						path,
-						content,
-						message,
-					),
+				const result = await putRepoFile(
+					this.env,
+					org,
+					repoNameFor(agent_id),
+					path,
+					content,
+					message,
 				);
+				await audit(this.safety(token), { tool: "write_agent_file", action: "completed", input: { agent_id, path, message }, result });
+				return text(result);
 			},
 		);
 
@@ -784,10 +907,31 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					}),
 				),
 				message: z.string().optional().describe("Commit message"),
+				confirm: z.string().optional().describe('Must be "batch_write_agent_files" to create or overwrite repository content.'),
+				dry_run: z.boolean().optional(),
 			},
-			async ({ token, agent_id, files, message }) => {
+			async ({ token, agent_id, files, message, confirm, dry_run }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
+				const input = {
+					agent_id,
+					files: files.map((file) => ({
+						path: file.path,
+						bytes: new TextEncoder().encode(file.content).length,
+					})),
+					message,
+				};
+				const denied = await requirePermission(this.safety(token), "write", "batch_write_agent_files", input);
+				if (denied) return denied;
+				if (dry_run) {
+					return dryRun(this.safety(token), "batch_write_agent_files", "create or overwrite repository files", input, {
+						repo: repoNameFor(agent_id),
+						files: input.files,
+						message,
+					});
+				}
+				const unconfirmed = await requireConfirmation(this.safety(token), "batch_write_agent_files", confirm, "batch_write_agent_files", input);
+				if (unconfirmed) return unconfirmed;
 				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
 					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
 				}
@@ -805,6 +949,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 						),
 					);
 				}
+				await audit(this.safety(token), { tool: "batch_write_agent_files", action: "completed", input, result: lines });
 				return text(lines.join("\n"));
 			},
 		);
@@ -825,15 +970,28 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string().describe("Agent ID or slug"),
+				dry_run: z.boolean().optional(),
 			},
-			async ({ token, agent_id }) => {
+			async ({ token, agent_id, dry_run }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
+				const input = { agent_id };
+				const denied = await requirePermission(this.safety(token), "runtime", "trigger_agent_deploy", input);
+				if (denied) return denied;
+				if (dry_run) {
+					return dryRun(this.safety(token), "trigger_agent_deploy", "trigger GitHub Actions deploy workflow", input, {
+						repo: repoNameFor(agent_id),
+						workflow: "deploy.yml",
+						ref: "main",
+					});
+				}
 				if (!(await ownsAgent(this.env, sessionToken, agent_id))) {
 					return text(`Error: you do not own agent "${agent_id}" or it does not exist.`);
 				}
 				const org = this.env.GITHUB_ORG || "ProAgentStore";
-				return text(await triggerDeploy(this.env, org, repoNameFor(agent_id)));
+				const result = await triggerDeploy(this.env, org, repoNameFor(agent_id));
+				await audit(this.safety(token), { tool: "trigger_agent_deploy", action: "completed", input, result });
+				return text(result);
 			},
 		);
 
@@ -846,10 +1004,22 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				title: z.string(),
 				content: z.string(),
 				source: z.string().optional(),
+				dry_run: z.boolean().optional(),
 			},
-			async ({ token, agent_id, title, content, source }) => {
+			async ({ token, agent_id, title, content, source, dry_run }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
+				const input = { agent_id, title, content, source };
+				const denied = await requirePermission(this.safety(token), "write", "add_knowledge", input);
+				if (denied) return denied;
+				if (dry_run) {
+					return dryRun(this.safety(token), "add_knowledge", "add agent knowledge document", input, {
+						endpoint: `/v1/agents/${agent_id}/knowledge`,
+						title,
+						source: source || "paste",
+						bytes: new TextEncoder().encode(content).length,
+					});
+				}
 				const data = (await authedCall(
 					`/v1/agents/${agent_id}/knowledge`,
 					sessionToken,
@@ -859,6 +1029,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 					},
 					this.env,
 				)) as { id?: string; error?: string };
+				if (data.id) await audit(this.safety(token), { tool: "add_knowledge", action: "completed", input: { agent_id, title, source }, result: { id: data.id } });
 				return {
 					content: [
 						{
@@ -974,9 +1145,13 @@ export default {
 		const isMcpTransport = url.pathname === "/mcp" || url.pathname.startsWith("/mcp/");
 		if (isMcpTransport) {
 			let bearer = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
+			let mcpScopes: string[] | null = null;
 			if (bearer && env.OAUTH_KV) {
-				const session = await resolveOAuthToken(bearer, env.OAUTH_KV);
-				if (session) bearer = session;
+				const resolved = await resolveOAuthToken(bearer, env.OAUTH_KV);
+				if (resolved) {
+					bearer = resolved.session;
+					mcpScopes = resolved.scopes;
+				}
 			}
 			const validUser = bearer ? await validatePagsToken(env, bearer) : false;
 
@@ -990,21 +1165,26 @@ export default {
 			}
 
 			if (bearer && validUser) {
-				(ctx as unknown as { props?: Record<string, unknown> }).props = {
-					...((ctx as unknown as { props?: Record<string, unknown> }).props ?? {}),
+				const session = env.SESSION_SIGNING_KEY
+					? await verifyMcpSession(bearer, env.SESSION_SIGNING_KEY)
+					: null;
+				(ctx as unknown as { props?: Props }).props = {
+					...((ctx as unknown as { props?: Props }).props ?? {}),
 					authToken: bearer,
+					mcpScopes,
+					mcpSubject: session?.uid,
 				};
 			}
 			return PagsMcp.serve("/mcp").fetch(request, env, ctx);
 		}
 		if (url.pathname === "/health") {
 			return new Response(
-				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 35 }),
+				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 36 }),
 				{ headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "https://proagentstore.online" } },
 			);
 		}
 		return new Response(
-			"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for text private instances. Use register_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, and instance_task_events for browser-capable private instances.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, register/manage instance runtimes, run/approve/cancel instance tasks, scaffold_agent, create_agent, update_agent, get/update agent board config, list/read/write agent files, add/list knowledge, analytics, deploy status, platform guide, SDK reference.",
+			"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for text private instances. Use register_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, and instance_task_events for browser-capable private instances.\n\nSafety: OAuth scopes are read/write/runtime/destructive. Mutating tools support dry_run where useful. Destructive and repository overwrite tools require exact confirm values. Use mcp_audit_log to inspect recent MCP events.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, register/manage instance runtimes, run/approve/cancel instance tasks, scaffold_agent, create_agent, update_agent, get/update agent board config, list/read/write agent files, add/list knowledge, analytics, deploy status, MCP audit log, platform guide, SDK reference.",
 			{ headers: { "Content-Type": "text/plain" } },
 		);
 	},

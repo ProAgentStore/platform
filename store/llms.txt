@@ -33,6 +33,12 @@ claude mcp add --transport http proagentstore https://mcp.proagentstore.online/m
 claude mcp list
 ```
 
+Local stdio proxy:
+
+```bash
+npx @proagentstore/cli mcp
+```
+
 Codex:
 
 ```bash
@@ -50,6 +56,15 @@ Claude Code:
 ## Correct MCP Runtime
 
 Agents must use ProAgentStore account state only through the configured MCP server. Do not use the web UI or private REST/API routes unless the user explicitly overrides this rule.
+
+MCP safety:
+
+- OAuth scopes: `read`, `write`, `runtime`, `destructive`.
+- Server-side read-only mode: `MCP_READ_ONLY=1`.
+- Use `dry_run: true` on mutating tools before making uncertain changes.
+- Repository overwrite tools require `confirm: "write_agent_file"` or `confirm: "batch_write_agent_files"`.
+- Destructive tools require exact confirmation: `unregister_instance_runtime`, `cancel_instance_task`, `delete_instance_knowledge`, or `cancel_instance`.
+- Use `mcp_audit_log` to inspect recent write, runtime, dry-run, denied, and destructive MCP events.
 
 Use public trial chat only for discovery:
 

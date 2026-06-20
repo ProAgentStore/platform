@@ -3,7 +3,7 @@
 	"name": "io.github.ProAgentStore/platform",
 	"title": "ProAgentStore",
 	"description": "MCP-first control plane for ProAgentStore agents and private instances.",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"repository": {
 		"url": "https://github.com/ProAgentStore/platform",
 		"source": "github"

@@ -14,7 +14,7 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 ```
 platform/
 ├── packages/sdk/     Internal TypeScript SDK for agents
-├── packages/cli/     @proagentstore/cli — init, check, publish, local runner
+├── packages/cli/     @proagentstore/cli — init, check, publish, MCP proxy, local runner
 ├── packages/browser-runner/ Internal Playwright runner bundled into the CLI
 ├── workers/api/      Hono API worker (auth, agents, instances, keys, analytics)
 ├── workers/host/     Marketing site + console + widget
@@ -77,6 +77,7 @@ claude mcp add --transport http proagentstore https://mcp.proagentstore.online/m
 claude mcp list
 
 npx mcp-remote https://mcp.proagentstore.online/mcp
+npx @proagentstore/cli mcp
 ```
 
 MCP has two runtime modes:
@@ -105,6 +106,8 @@ The full MCP-first developer surface is documented at:
 - [server.json](server.json)
 - [.mcp.json](.mcp.json)
 - [AGENTS.md](AGENTS.md)
+
+MCP safety is enforced server-side. OAuth supports `read`, `write`, `runtime`, and `destructive` scopes; `MCP_READ_ONLY=1` forces read-only mode; mutating tools support `dry_run` where useful; overwrite/destructive tools require exact `confirm` values; and `mcp_audit_log` exposes recent MCP write, runtime, dry-run, denied, and destructive events.
 
 ### Local browser runner
 

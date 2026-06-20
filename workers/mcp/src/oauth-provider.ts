@@ -1,3 +1,5 @@
+import { MCP_SCOPES, parseScopes } from "./safety.js";
+
 const AUTH_IN_FLIGHT_COOKIE = "pags_mcp_oauth_inflight";
 
 export interface OAuthConfig {
@@ -6,6 +8,11 @@ export interface OAuthConfig {
 	apiBase: string;
 	kv: KVNamespace;
 	sessionSigningKey: string;
+}
+
+export interface ResolvedOAuthToken {
+	session: string;
+	scopes: string[];
 }
 
 export function createAuthChallenge(
@@ -66,6 +73,7 @@ export async function handleOAuthRoute(
 			response_types_supported: ["code"],
 			grant_types_supported: ["authorization_code"],
 			code_challenge_methods_supported: ["S256"],
+			scopes_supported: MCP_SCOPES,
 			token_endpoint_auth_methods_supported: ["none"],
 		});
 	}
@@ -83,8 +91,18 @@ export async function handleOAuthRoute(
 export async function resolveOAuthToken(
 	bearer: string,
 	kv: KVNamespace,
-): Promise<string | null> {
-	return kv.get(`token:${bearer}`);
+): Promise<ResolvedOAuthToken | null> {
+	const raw = await kv.get(`token:${bearer}`);
+	if (!raw) return null;
+	try {
+		const parsed = JSON.parse(raw) as { session?: string; scopes?: string[] };
+		if (parsed.session) {
+			return { session: parsed.session, scopes: parseScopes(parsed.scopes) };
+		}
+	} catch {
+		return { session: raw, scopes: parseScopes(null) };
+	}
+	return null;
 }
 
 function json(data: unknown, status = 200): Response {
@@ -166,6 +184,7 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
 	const codeChallenge = url.searchParams.get("code_challenge");
 	const codeChallengeMethod = url.searchParams.get("code_challenge_method");
 	const state = url.searchParams.get("state");
+	const scopes = parseScopes(url.searchParams.get("scope"));
 
 	if (responseType !== "code") return new Response("unsupported_response_type", { status: 400 });
 	if (!clientId || !redirectUri || !codeChallenge) {
@@ -186,7 +205,7 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
 	const nonce = crypto.randomUUID();
 	await config.kv.put(
 		`authreq:${nonce}`,
-		JSON.stringify({ clientId, redirectUri, codeChallenge, state }),
+		JSON.stringify({ clientId, redirectUri, codeChallenge, state, scopes }),
 		{ expirationTtl: 600 },
 	);
 
@@ -290,6 +309,7 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
 		redirectUri: string;
 		codeChallenge: string;
 		state: string | null;
+		scopes?: string[];
 	};
 
 	const code = crypto.randomUUID();
@@ -300,6 +320,7 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
 			codeChallenge: authReq.codeChallenge,
 			redirectUri: authReq.redirectUri,
 			clientId: authReq.clientId,
+			scopes: parseScopes(authReq.scopes),
 		}),
 		{ expirationTtl: 600 },
 	);
@@ -353,6 +374,7 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
 		codeChallenge: string;
 		redirectUri: string;
 		clientId: string;
+		scopes?: string[];
 	};
 	if (codeData.redirectUri !== redirectUri || codeData.clientId !== clientId) {
 		return json({ error: "invalid_grant" }, 400);
@@ -371,13 +393,19 @@ async function tokenExchange(request: Request, config: OAuthConfig): Promise<Res
 	}
 
 	const accessToken = crypto.randomUUID();
-	await config.kv.put(`token:${accessToken}`, codeData.session, {
-		expirationTtl: 86_400,
-	});
+	await config.kv.put(
+		`token:${accessToken}`,
+		JSON.stringify({
+			session: codeData.session,
+			scopes: parseScopes(codeData.scopes),
+		}),
+		{ expirationTtl: 86_400 },
+	);
 
 	return json({
 		access_token: accessToken,
 		token_type: "bearer",
 		expires_in: 86_400,
+		scope: parseScopes(codeData.scopes).join(" "),
 	});
 }
