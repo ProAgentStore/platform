@@ -57,6 +57,34 @@ describe("runner server", () => {
 		expect(saved.output).toEqual({ value: 1 });
 	});
 
+	it("lists tasks for console runtime boards", async () => {
+		await fetch(`${url}/tasks`, {
+			method: "POST",
+			headers: {
+				Authorization: "Bearer secret",
+				"X-PAGS-Instance-Id": "inst-1",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify({
+				type: "echo",
+				input: { board: true },
+				requiresApproval: true,
+				approvalPrompt: "Show on board",
+			}),
+		});
+
+		const list = await fetch(`${url}/tasks`, {
+			headers: {
+				Authorization: "Bearer secret",
+				"X-PAGS-Instance-Id": "inst-1",
+			},
+		});
+		expect(list.status).toBe(200);
+		await expect(list.json()).resolves.toMatchObject({
+			tasks: [{ type: "echo", status: "needs_approval" }],
+		});
+	});
+
 	it("returns 400 for invalid JSON request bodies", async () => {
 		const res = await fetch(`${url}/tasks`, {
 			method: "POST",

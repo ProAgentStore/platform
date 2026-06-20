@@ -6,6 +6,10 @@ const TEST_TOKEN = "test-pags-token";
 
 interface OpsMockOptions {
 	agents?: Array<Record<string, unknown>>;
+	instances?: Array<Record<string, unknown>>;
+	runtime?: Record<string, unknown> | null;
+	runtimeTasks?: Array<Record<string, unknown>>;
+	runtimeEvents?: Array<Record<string, unknown>>;
 	boardConfig?: Record<string, unknown> | null;
 	ops?: Record<string, unknown>;
 	verifyStatus?: number;
@@ -67,6 +71,8 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 
 	let verifyCalls = 0;
 	let deployCalls = 0;
+	let approvedTaskId: string | null = null;
+	let cancelledTaskId: string | null = null;
 	const profileUpdates: unknown[] = [];
 
 	await page.route(`${API}/**`, async (route) => {
@@ -166,6 +172,75 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				options.deployStatus ?? 200,
 			);
 		}
+		if (path === "/v1/instances/my/instances") {
+			return json({
+				instances: options.instances ?? [
+					{
+						id: "inst-1",
+						name: "Job Application Assistant",
+						description: "Apply to jobs through a local browser runtime",
+						category: "productivity",
+						icon_bg: "#7c3aed",
+					},
+				],
+			});
+		}
+		if (path === "/v1/instances/inst-1/messages") return json({ messages: [] });
+		if (path === "/v1/instances/inst-1/knowledge") return json({ documents: [] });
+		if (path === "/v1/instances/inst-1/runtime") {
+			return json({
+				runtime: options.runtime ?? {
+					instanceId: "inst-1",
+					status: "online",
+					placement: "local",
+				},
+			});
+		}
+		if (path === "/v1/instances/inst-1/tasks") {
+			return json({
+				tasks: options.runtimeTasks ?? [
+					{
+						id: "task-approval",
+						type: "job.apply_basic",
+						status: "needs_approval",
+						requiresApproval: true,
+						approval: { prompt: "Submit application to Acme?" },
+						createdAt: "2026-06-20T01:00:00Z",
+						updatedAt: "2026-06-20T01:01:00Z",
+					},
+					{
+						id: "task-done",
+						type: "job.apply_basic",
+						status: "completed",
+						requiresApproval: true,
+						output: { submitted: true, finalUrl: "https://example.com/success" },
+						createdAt: "2026-06-20T00:00:00Z",
+						updatedAt: "2026-06-20T00:02:00Z",
+					},
+				],
+			});
+		}
+		if (path === "/v1/instances/inst-1/task-events") {
+			return json({
+				events: options.runtimeEvents ?? [
+					{
+						id: "event-1",
+						taskId: "task-approval",
+						type: "task.needs_approval",
+						message: "Waiting for approval before submit",
+						createdAt: "2026-06-20T01:01:00Z",
+					},
+				],
+			});
+		}
+		if (path === "/v1/instances/inst-1/tasks/task-approval/approve" && method === "POST") {
+			approvedTaskId = "task-approval";
+			return json({ id: "task-approval", status: "running" });
+		}
+		if (path === "/v1/instances/inst-1/tasks/task-approval/cancel" && method === "POST") {
+			cancelledTaskId = "task-approval";
+			return json({ id: "task-approval", status: "cancelled" });
+		}
 
 		return json({ error: `Unhandled mock route ${method} ${path}` }, 500);
 	});
@@ -190,6 +265,12 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		},
 		get profileUpdates() {
 			return profileUpdates;
+		},
+		get approvedTaskId() {
+			return approvedTaskId;
+		},
+		get cancelledTaskId() {
+			return cancelledTaskId;
 		},
 	};
 }
@@ -314,6 +395,31 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("Build").first()).toBeVisible();
 		expect(mock.profileUpdates).toHaveLength(1);
 		expect(mock.profileUpdates[0]).toMatchObject({ board_config: customConfig });
+	});
+
+	test("signed-in user can inspect instance runtime tasks as a board", async ({
+		page,
+	}) => {
+		const mock = await mockSignedInConsole(page);
+		await page.goto("/");
+
+		await page.getByRole("button", { name: "My Instances (Client)" }).click();
+		await page.getByText("Job Application Assistant").click();
+		await page.getByRole("button", { name: "Runtime" }).click();
+
+		await expect(page.locator("#inst-runtime-summary")).toContainText(
+			"2 runtime tasks",
+		);
+		await expect(
+			page.locator("#inst-runtime-board").getByText("Waiting"),
+		).toBeVisible();
+		await expect(
+			page.locator("#inst-runtime-board").getByText("job.apply_basic").first(),
+		).toBeVisible();
+		await expect(page.getByText("Waiting for approval before submit")).toBeVisible();
+
+		await page.getByRole("button", { name: "Approve" }).click();
+		expect(mock.approvedTaskId).toBe("task-approval");
 	});
 });
 

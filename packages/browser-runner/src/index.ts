@@ -38,6 +38,7 @@ Usage:
 Endpoints:
   GET  /health
   GET  /capabilities
+  GET  /tasks
   POST /tasks
   GET  /tasks/:id
   POST /tasks/:id/approve

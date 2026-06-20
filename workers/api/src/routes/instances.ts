@@ -497,6 +497,16 @@ instanceRoutes.delete("/:instanceId/runtime", async (c) => {
 	return c.json({ success: true });
 });
 
+/** List tasks on my registered runtime. */
+instanceRoutes.get("/:instanceId/tasks", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const res = await callRuntime(c.env, runtime, "/tasks");
+	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+});
+
 /** Create a task on my registered runtime. */
 instanceRoutes.post("/:instanceId/tasks", async (c) => {
 	const session = await requireUser(c);

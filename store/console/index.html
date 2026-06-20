@@ -341,8 +341,9 @@
     </div>
 
     <div class="tabs">
-      <button type="button" class="tab active" onclick="switchInstTab('chat')">Chat</button>
-      <button type="button" class="tab" onclick="switchInstTab('knowledge')">My Documents</button>
+      <button type="button" class="tab active" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
+      <button type="button" class="tab" data-inst-tab="runtime" onclick="switchInstTab('runtime')">Runtime</button>
+      <button type="button" class="tab" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')">My Documents</button>
     </div>
 
     <!-- Instance chat -->
@@ -354,6 +355,24 @@
           <input id="inst-chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendInstanceMessage()">
           <button type="button" onclick="sendInstanceMessage()">Send</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Instance runtime board -->
+    <div id="inst-tab-runtime" class="tab-panel">
+      <div class="agent-board-toolbar">
+        <div>
+          <h3 style="font-size:1rem;margin-bottom:0.2rem">Runtime Board</h3>
+          <div id="inst-runtime-summary" class="agent-board-summary">Checking runtime...</div>
+        </div>
+        <div class="agent-board-actions">
+          <button type="button" onclick="loadInstanceRuntime()" class="btn btn-outline btn-sm">Refresh</button>
+        </div>
+      </div>
+      <div id="inst-runtime-board" class="kanban-board"></div>
+      <div id="inst-runtime-events" class="create-form" style="margin-top:1rem">
+        <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Recent Runtime Events</h3>
+        <div id="inst-runtime-event-list" style="display:flex;flex-direction:column;gap:0.35rem"></div>
       </div>
     </div>
 
@@ -950,11 +969,12 @@ console.log(response)</pre>
       return firstMatchingColumn(a)?.title || 'Unmatched';
     }
 
-    function renderKanbanBoard({ boardId, items, columns, renderCard }) {
+    function renderKanbanBoard({ boardId, items, columns, renderCard, columnForItem }) {
       const board = document.getElementById(boardId);
       board.innerHTML = '';
       for (const col of columns) {
-        const columnItems = items.filter(item => firstMatchingColumn(item, columns)?.id === col.id);
+        const resolveColumn = columnForItem || (item => firstMatchingColumn(item, columns));
+        const columnItems = items.filter(item => resolveColumn(item)?.id === col.id);
         const column = document.createElement('section');
         column.className = 'kanban-column';
         column.setAttribute('aria-label', `${col.title} column`);
@@ -1303,6 +1323,43 @@ console.log(response)</pre>
     // ── Instances (client view) ──────────────────────────────
 
     let currentInstance = null;
+    const INSTANCE_RUNTIME_COLUMNS = [
+      {
+        id: 'waiting',
+        title: 'Waiting',
+        color: 'var(--yellow)',
+        statuses: ['queued', 'needs_approval'],
+        empty: 'No queued or approval-gated tasks.',
+      },
+      {
+        id: 'running',
+        title: 'Running',
+        color: 'var(--blue)',
+        statuses: ['running'],
+        empty: 'No task is running right now.',
+      },
+      {
+        id: 'blocked',
+        title: 'Blocked',
+        color: 'var(--red)',
+        statuses: ['blocked', 'failed'],
+        empty: 'No blocked or failed runtime tasks.',
+      },
+      {
+        id: 'done',
+        title: 'Done',
+        color: 'var(--green)',
+        statuses: ['completed'],
+        empty: 'Completed tasks appear here.',
+      },
+      {
+        id: 'cancelled',
+        title: 'Cancelled',
+        color: 'var(--muted)',
+        statuses: ['cancelled'],
+        empty: 'Cancelled tasks appear here.',
+      },
+    ];
 
     async function loadInstances() {
       document.getElementById('instances-loading').classList.remove('hidden');
@@ -1340,16 +1397,122 @@ console.log(response)</pre>
       switchInstTab('chat');
       loadInstanceMessages();
       loadInstanceKnowledge();
+      loadInstanceRuntime();
     }
 
     function switchInstTab(name) {
       const container = document.getElementById('instance-detail');
       container.querySelectorAll('.tab').forEach(t => {
-        t.classList.toggle('active', t.textContent.toLowerCase().includes(name));
+        t.classList.toggle('active', t.dataset.instTab === name);
       });
       container.querySelectorAll('.tab-panel').forEach(p => {
         p.classList.toggle('active', p.id === `inst-tab-${name}`);
       });
+      if (name === 'runtime') loadInstanceRuntime();
+    }
+
+    async function loadInstanceRuntime() {
+      if (!currentInstance) return;
+      const summary = document.getElementById('inst-runtime-summary');
+      const board = document.getElementById('inst-runtime-board');
+      const eventList = document.getElementById('inst-runtime-event-list');
+      summary.textContent = 'Loading runtime tasks...';
+      board.innerHTML = '';
+      eventList.innerHTML = '';
+      try {
+        const [runtimeRes, tasksRes, eventsRes] = await Promise.allSettled([
+          api(`/v1/instances/${currentInstance.id}/runtime`),
+          api(`/v1/instances/${currentInstance.id}/tasks`),
+          api(`/v1/instances/${currentInstance.id}/task-events?limit=25`),
+        ]);
+        const runtime = runtimeRes.status === 'fulfilled' ? runtimeRes.value.runtime : null;
+        const tasks = tasksRes.status === 'fulfilled' ? (tasksRes.value.tasks || []) : [];
+        const events = eventsRes.status === 'fulfilled' ? (eventsRes.value.events || []) : [];
+        if (!runtime) {
+          summary.textContent = 'No browser runtime is registered for this instance yet.';
+          renderInstanceTaskBoard([]);
+          renderInstanceRuntimeEvents(events);
+          return;
+        }
+        const taskWord = tasks.length === 1 ? 'task' : 'tasks';
+        summary.textContent = `${tasks.length} runtime ${taskWord} · ${runtime.status || 'registered'} · ${runtime.placement || 'local'}`;
+        renderInstanceTaskBoard(tasks);
+        renderInstanceRuntimeEvents(events);
+      } catch (e) {
+        summary.textContent = `Runtime unavailable: ${e.message}`;
+        renderInstanceTaskBoard([]);
+      }
+    }
+
+    function renderInstanceTaskBoard(tasks) {
+      renderKanbanBoard({
+        boardId: 'inst-runtime-board',
+        items: tasks,
+        columns: INSTANCE_RUNTIME_COLUMNS,
+        renderCard: runtimeTaskCard,
+        columnForItem: task => INSTANCE_RUNTIME_COLUMNS.find(col => col.statuses.includes(task.status)) || INSTANCE_RUNTIME_COLUMNS[0],
+      });
+    }
+
+    function runtimeTaskCard(task) {
+      const card = document.createElement('article');
+      card.className = 'kanban-card';
+      const output = typeof task.output === 'object' && task.output ? JSON.stringify(task.output).slice(0, 180) : String(task.output || '');
+      const error = task.error ? `<div style="font-size:0.72rem;color:var(--red);line-height:1.45;margin-top:0.45rem">${esc(task.error)}</div>` : '';
+      const approval = task.status === 'needs_approval'
+        ? `<button type="button" class="btn btn-primary btn-sm" data-task-action="approve" data-task-id="${esc(task.id)}">Approve</button>`
+        : '';
+      const cancellable = ['queued', 'running', 'needs_approval'].includes(task.status)
+        ? `<button type="button" class="btn btn-outline btn-sm" data-task-action="cancel" data-task-id="${esc(task.id)}">Cancel</button>`
+        : '';
+      card.innerHTML = `
+        <h3>${esc(task.type || 'task')}</h3>
+        <p>${esc(task.approval?.prompt || task.id)}</p>
+        <div style="font-size:0.7rem;color:var(--muted-soft);margin-bottom:0.45rem">Updated ${esc(formatTime(task.updatedAt || task.createdAt))}</div>
+        <div class="kanban-card-meta">
+          <span class="tag tag-${esc(task.status || 'queued')}">${esc(String(task.status || 'queued').replace('_', ' '))}</span>
+          ${task.requiresApproval ? '<span class="tag">approval</span>' : ''}
+        </div>
+        ${error}
+        ${output ? `<div style="font-size:0.72rem;color:var(--muted);line-height:1.45;margin-top:0.45rem;overflow-wrap:anywhere">${esc(output)}${output.length >= 180 ? '...' : ''}</div>` : ''}
+        ${approval || cancellable ? `<div style="display:flex;gap:0.4rem;margin-top:0.65rem;flex-wrap:wrap">${approval}${cancellable}</div>` : ''}`;
+      card.querySelectorAll('[data-task-action]').forEach(button => {
+        button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          handleRuntimeTaskAction(button.dataset.taskId, button.dataset.taskAction);
+        });
+      });
+      return card;
+    }
+
+    async function handleRuntimeTaskAction(taskId, action) {
+      if (!currentInstance || !taskId || !action) return;
+      if (action === 'cancel' && !confirm('Cancel this runtime task?')) return;
+      const suffix = action === 'approve' ? 'approve' : 'cancel';
+      try {
+        await api(`/v1/instances/${currentInstance.id}/tasks/${encodeURIComponent(taskId)}/${suffix}`, { method: 'POST' });
+        loadInstanceRuntime();
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    function renderInstanceRuntimeEvents(events) {
+      const list = document.getElementById('inst-runtime-event-list');
+      list.innerHTML = '';
+      if (!events.length) {
+        list.innerHTML = '<div style="color:var(--muted-soft);font-size:0.82rem">No runtime events yet.</div>';
+        return;
+      }
+      for (const event of events) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:grid;grid-template-columns:130px 1fr auto;gap:0.6rem;align-items:start;border-bottom:1px solid var(--line);padding:0.4rem 0;font-size:0.78rem';
+        row.innerHTML = `
+          <span style="color:var(--muted);font-family:'SF Mono',monospace">${esc(event.type || 'event')}</span>
+          <span>${esc(event.message || '')}</span>
+          <span style="color:var(--muted-soft);white-space:nowrap">${esc(formatTime(event.createdAt))}</span>`;
+        list.appendChild(row);
+      }
     }
 
     async function loadInstanceMessages() {
