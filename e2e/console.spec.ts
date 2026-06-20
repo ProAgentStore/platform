@@ -398,7 +398,7 @@ test.describe("ProAgentStore agent detail pages", () => {
 			}),
 		);
 		await page.route(
-			"https://raw.githubusercontent.com/ProAgentStore/job-application-assistant/main/README.md",
+			"https://raw.githubusercontent.com/ProAgentStore/platform/main/agents/job-application-assistant/README.md",
 			(route) =>
 				route.fulfill({
 					status: 200,
