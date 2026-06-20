@@ -17,7 +17,7 @@ program
 	.description(
 		"ProAgentStore CLI — create and publish server-powered AI agents",
 	)
-	.version("0.1.0");
+	.version("0.1.2");
 
 program.addCommand(initCommand);
 program.addCommand(checkCommand);
