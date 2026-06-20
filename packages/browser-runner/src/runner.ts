@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BrowserContext } from "playwright";
 import { RunnerStore } from "./store.js";
@@ -18,6 +20,7 @@ const CAPABILITIES: RunnerCapability[] = [
 	"human.approval",
 ];
 const APPROVAL_REQUIRED_TASKS = new Set(["browser.open"]);
+const require = createRequire(import.meta.url);
 
 export class RunnerInputError extends Error {
 	readonly status = 400;
@@ -25,6 +28,7 @@ export class RunnerInputError extends Error {
 
 export class LocalRunner {
 	private browserContext: BrowserContext | null = null;
+	private chromiumInstallChecked = false;
 	readonly store: RunnerStore;
 
 	constructor(readonly config: RunnerConfig) {
@@ -181,6 +185,7 @@ export class LocalRunner {
 
 	private async getBrowserContext(): Promise<BrowserContext> {
 		if (this.browserContext) return this.browserContext;
+		this.ensureChromiumInstalled();
 		const profileDir = join(this.config.dataDir, "browser-profile");
 		const downloadsPath = join(this.config.dataDir, "downloads");
 		mkdirSync(profileDir, { recursive: true });
@@ -196,6 +201,24 @@ export class LocalRunner {
 			downloadsPath,
 		});
 		return this.browserContext;
+	}
+
+	private ensureChromiumInstalled(): void {
+		if (this.chromiumInstallChecked) return;
+		this.chromiumInstallChecked = true;
+		if (process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL === "1") return;
+
+		const cli = join(dirname(require.resolve("playwright")), "cli.js");
+		const result = spawnSync(process.execPath, [cli, "install", "chromium"], {
+			stdio: "inherit",
+			env: process.env,
+		});
+
+		if (result.status !== 0) {
+			throw new Error(
+				"Unable to install Playwright Chromium. Run `npx playwright install chromium` and retry.",
+			);
+		}
 	}
 }
 
