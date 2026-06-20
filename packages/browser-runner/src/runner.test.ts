@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LocalRunner } from "./runner.js";
+import { LocalRunner, normalizeJobApplicationInput } from "./runner.js";
 import { RunnerStore } from "./store.js";
 
 describe("LocalRunner", () => {
@@ -31,6 +31,8 @@ describe("LocalRunner", () => {
 			runnerRole: "tool-executor",
 		});
 		expect(runner.capabilities().capabilities).toContain("browser.playwright");
+		expect(runner.capabilities().taskTypes).toContain("job.apply_basic");
+		expect(runner.capabilities().approvalRequiredFor).toContain("job.apply_basic");
 	});
 
 	it("runs echo tasks without approval", async () => {
@@ -65,6 +67,61 @@ describe("LocalRunner", () => {
 		});
 		expect(task.status).toBe("needs_approval");
 		expect(task.requiresApproval).toBe(true);
+	});
+
+	it("requires approval for basic job application tasks", () => {
+		const resumePath = join(dir, "resume.txt");
+		writeFileSync(resumePath, "Resume body");
+		const task = runner.createTask({
+			type: "job.apply_basic",
+			input: {
+				url: "https://example.com/jobs/1",
+				resumePath,
+				candidate: {
+					fullName: "Sam Candidate",
+					email: "sam@example.com",
+				},
+			},
+		});
+
+		expect(task.status).toBe("needs_approval");
+		expect(task.requiresApproval).toBe(true);
+	});
+
+	it("validates basic job application input", () => {
+		const resumePath = join(dir, "resume.txt");
+		writeFileSync(resumePath, "Resume body");
+
+		expect(normalizeJobApplicationInput({
+			url: "https://example.com/jobs/1",
+			resumePath,
+			candidate: {
+				fullName: " Sam Candidate ",
+				email: " sam@example.com ",
+				phone: " +1 555 0100 ",
+			},
+			coverNote: " Interested ",
+		})).toMatchObject({
+			url: "https://example.com/jobs/1",
+			resumePath,
+			candidate: {
+				fullName: "Sam Candidate",
+				email: "sam@example.com",
+				phone: "+1 555 0100",
+			},
+			coverNote: "Interested",
+		});
+
+		expect(() => normalizeJobApplicationInput({
+			url: "ftp://example.com/jobs/1",
+			resumePath,
+			candidate: { fullName: "Sam", email: "sam@example.com" },
+		})).toThrow("http");
+		expect(() => normalizeJobApplicationInput({
+			url: "https://example.com/jobs/1",
+			resumePath: join(dir, "missing.txt"),
+			candidate: { fullName: "Sam", email: "sam@example.com" },
+		})).toThrow("resumePath");
 	});
 
 	it("does not share empty store arrays across fresh data directories", () => {

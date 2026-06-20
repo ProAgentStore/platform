@@ -562,7 +562,10 @@ For managed VMs, PAGS must define retention and deletion rules before launch.
 
 ### Phase 4: Job Application Agent on Browser Runner
 
-- Convert the job application agent from Worker-first to browser-runner-first.
+- Done: add `job.apply_basic` to the local browser runner for basic resume-upload HTML forms.
+- Done: make `job.apply_basic` approval-gated before submission.
+- Done: cover the fixture job application page with a Playwright e2e.
+- In progress: convert the job application agent from Worker-first to browser-runner-first in the marketplace UX.
 - Add platform adapters:
   - generic HTML form
   - Greenhouse
@@ -570,7 +573,7 @@ For managed VMs, PAGS must define retention and deletion rules before launch.
   - Ashby
   - Workday as best-effort with handoff
 - Add final-submit approval gate.
-- Add local profile/resume management.
+- Add local profile/resume management beyond per-task inputs.
 - Add screenshots and receipts.
 
 ### Phase 5: Managed VM Runtime

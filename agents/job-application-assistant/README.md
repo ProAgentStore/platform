@@ -1,6 +1,44 @@
 # Job Application Assistant
 
-A ProAgentStore agent that accepts a job URL, extracts the posting, prepares a tailored application packet, and submits only when the target exposes a simple safe form and the caller gives explicit confirmation.
+A rentable ProAgentStore agent that helps a user turn a job URL into an application packet and, for basic resume-upload forms, submit through the user's approved local browser runner.
+
+The marketplace/runtime path is browser-runner-first:
+
+```text
+subscribe_agent -> register_instance_runtime -> run_instance_task(type: job.apply_basic) -> approve_instance_task -> instance_task_events
+```
+
+The task runs on the user's machine or managed runner, not in the platform account. The user provides the resume file path and candidate details, and submission is approval-gated by the runner.
+
+## Rent And Use Through MCP
+
+After subscribing to the published agent, register a runner and create an approved job application task:
+
+```bash
+pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pags runner register "$PAGS_INSTANCE_ID" \
+  --endpoint-url "$PAGS_RUNNER_ENDPOINT" \
+  --runner-token "$PAGS_RUNNER_TOKEN" \
+  --pags-token "$PAGS_TOKEN" \
+  --probe
+pags runner run "$PAGS_INSTANCE_ID" \
+  --type job.apply_basic \
+  --input '{"url":"https://example.com/jobs/senior-engineer","resumePath":"/Users/me/resume.pdf","candidate":{"fullName":"Sam Candidate","email":"sam@example.com","phone":"+1 555 0100","location":"Remote"},"coverNote":"I am interested in this role."}' \
+  --pags-token "$PAGS_TOKEN"
+pags runner approve-task "$PAGS_INSTANCE_ID" "$TASK_ID" --pags-token "$PAGS_TOKEN"
+```
+
+The same flow is available through MCP tools:
+
+```text
+subscribe_agent
+register_instance_runtime
+run_instance_task with type=job.apply_basic
+approve_instance_task
+instance_task_events
+```
+
+## Direct Worker API
 
 ## Endpoints
 
@@ -54,7 +92,7 @@ Submission is blocked when the page needs login, captcha, file upload, password 
 
 ## Safety model
 
-This agent does not silently send resume/contact data. It prepares the packet first, reports blockers, and requires the exact `submit <application-id>` confirmation before any external POST/GET submission attempt.
+This agent does not silently send resume/contact data. The rentable browser-runner path creates `job.apply_basic` tasks in `needs_approval` state and submits only after the user approves the task. The direct Worker API prepares the packet first, reports blockers, and requires the exact `submit <application-id>` confirmation before any external POST/GET submission attempt.
 
 ## Development
 

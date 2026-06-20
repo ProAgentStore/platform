@@ -7,6 +7,13 @@
 	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
 	"template": "api",
 	"serverConfig": {
+		"runtime": {
+			"kind": "browser-runner",
+			"taskTypes": ["job.apply_basic"],
+			"approvalRequiredFor": ["job.apply_basic"],
+			"fileUploads": true,
+			"brainPlacement": "pags-control-plane"
+		},
 		"routes": ["job-application-assistant.proagentstore.online/*"]
 	}
 }

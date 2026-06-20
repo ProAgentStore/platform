@@ -132,6 +132,16 @@ pags runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
 pags runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
 ```
 
+The rentable job application agent uses the `job.apply_basic` runner task for basic resume-upload forms. The task is approval-gated and runs on the user's local browser runner:
+
+```bash
+pags runner run "$PAGS_INSTANCE_ID" \
+  --type job.apply_basic \
+  --input '{"url":"https://example.com/jobs/123","resumePath":"/Users/me/resume.pdf","candidate":{"fullName":"Sam Candidate","email":"sam@example.com"},"coverNote":"I am interested in this role."}' \
+  --pags-token "$PAGS_TOKEN"
+pags runner approve-task "$PAGS_INSTANCE_ID" "$TASK_ID" --pags-token "$PAGS_TOKEN"
+```
+
 ```text
 subscribe_agent -> register_instance_runtime -> instance_runtime_status(probe: true) -> run_instance_task -> approve_instance_task -> instance_task_events
 ```
