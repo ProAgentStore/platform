@@ -24,12 +24,13 @@
 		"access": "public"
 	},
 	"scripts": {
-		"build": "tsup src/index.ts --format esm --dts",
+		"build": "pnpm --filter @proagentstore/browser-runner build && tsup src/index.ts --format esm --dts && node scripts/copy-browser-runner.mjs",
 		"dev": "tsx src/index.ts",
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"commander": "^13.0.0"
+		"commander": "^13.0.0",
+		"playwright": "^1.60.0"
 	},
 	"devDependencies": {
 		"tsup": "^8.4.0",

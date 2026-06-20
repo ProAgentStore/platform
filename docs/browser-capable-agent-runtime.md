@@ -321,27 +321,28 @@ instance_task_events
 
 The existing `chat_with_instance` path can remain for text-only interaction, but browser tasks should use task-oriented tools so state, approval, and events are explicit.
 
-Development runner commands:
+User runner commands:
 
 ```bash
-pnpm --filter @proagentstore/browser-runner dev -- --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
-pnpm --filter @proagentstore/cli dev runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
-pnpm --filter @proagentstore/cli dev runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+npm install -g @proagentstore/cli
+pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pags runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pags runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 ```
 
 PAGS registration and task commands:
 
 ```bash
-pnpm --filter @proagentstore/cli dev runner register "$PAGS_INSTANCE_ID" \
+pags runner register "$PAGS_INSTANCE_ID" \
   --endpoint-url "$PAGS_RUNNER_ENDPOINT" \
   --runner-token "$PAGS_RUNNER_TOKEN" \
   --pags-token "$PAGS_TOKEN" \
   --probe
-pnpm --filter @proagentstore/cli dev runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
-pnpm --filter @proagentstore/cli dev runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
-pnpm --filter @proagentstore/cli dev runner approve-task "$PAGS_INSTANCE_ID" "$PAGS_TASK_ID" --pags-token "$PAGS_TOKEN"
-pnpm --filter @proagentstore/cli dev runner cancel-task "$PAGS_INSTANCE_ID" "$PAGS_TASK_ID" --pags-token "$PAGS_TOKEN"
-pnpm --filter @proagentstore/cli dev runner task-events "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN"
+pags runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
+pags runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
+pags runner approve-task "$PAGS_INSTANCE_ID" "$PAGS_TASK_ID" --pags-token "$PAGS_TOKEN"
+pags runner cancel-task "$PAGS_INSTANCE_ID" "$PAGS_TASK_ID" --pags-token "$PAGS_TOKEN"
+pags runner task-events "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN"
 ```
 
 Local job application fixture:

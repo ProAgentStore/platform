@@ -1,8 +1,10 @@
 # ProAgentStore Browser Runner
 
-Local capability runner for ProAgentStore agents.
+Internal local capability runner for ProAgentStore agents.
 
 The PAGS brain stays in the hosted control plane. This process runs on the user's machine and exposes local capabilities such as Playwright, screenshots, downloads, file upload paths, and approval-gated actions.
+
+This package is private in the monorepo. Users install `@proagentstore/cli`; the CLI bundles this runner and starts it with `pags runner start`.
 
 ```bash
 pnpm --filter @proagentstore/browser-runner dev -- --port 49171
@@ -11,7 +13,7 @@ pnpm --filter @proagentstore/browser-runner dev -- --port 49171
 The runner listens on `127.0.0.1` by default. Use `--token` and `--instance-id` when exposing it through Cloudflare Tunnel. PAGS includes `Authorization: Bearer <token>` and `X-PAGS-Instance-Id` on proxied task calls.
 
 ```bash
-pags-browser-runner --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 ```
 
 Local CLI calls to an instance-bound runner need the same instance id:

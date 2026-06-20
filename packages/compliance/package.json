@@ -1,6 +1,7 @@
 {
 	"name": "@proagentstore/compliance",
 	"version": "0.1.0",
+	"private": true,
 	"description": "Compliance checks for AI agents published on proagentstore.online",
 	"license": "MIT",
 	"type": "module",

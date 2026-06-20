@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { writeError, writeLine } from "../output.js";
 
@@ -102,18 +103,31 @@ function findWorkspaceRoot(): string {
 	return process.cwd();
 }
 
+export function bundledRunnerPath(): string {
+	return fileURLToPath(new URL("./browser-runner/index.js", import.meta.url));
+}
+
 function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
 	const root = findWorkspaceRoot();
 	const localPackage = resolve(root, "packages", "browser-runner", "src", "index.ts");
+	const bundledPackage = bundledRunnerPath();
 	const runnerArgs = buildRunnerArgs(opts);
-	const command = existsSync(localPackage) ? "pnpm" : "pags-browser-runner";
-	const args = existsSync(localPackage)
-		? ["--filter", "@proagentstore/browser-runner", "dev", "--", ...runnerArgs]
-		: runnerArgs;
+	let cwd = root;
+	let command = "pags-browser-runner";
+	let args = runnerArgs;
+
+	if (existsSync(localPackage)) {
+		command = "pnpm";
+		args = ["--filter", "@proagentstore/browser-runner", "dev", "--", ...runnerArgs];
+	} else if (existsSync(bundledPackage)) {
+		cwd = process.cwd();
+		command = process.execPath;
+		args = [bundledPackage, ...runnerArgs];
+	}
 
 	return new Promise((resolvePromise, reject) => {
 		const child = spawn(command, args, {
-			cwd: root,
+			cwd,
 			stdio: "inherit",
 			shell: process.platform === "win32",
 		});

@@ -1,6 +1,7 @@
 {
 	"name": "@proagentstore/browser-runner",
 	"version": "0.1.0",
+	"private": true,
 	"description": "Local capability runner for ProAgentStore browser and desktop tasks",
 	"license": "MIT",
 	"type": "module",
@@ -23,9 +24,6 @@
 		"playwright",
 		"agents"
 	],
-	"publishConfig": {
-		"access": "public"
-	},
 	"exports": {
 		".": {
 			"types": "./dist/index.d.ts",

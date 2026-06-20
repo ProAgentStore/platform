@@ -13,8 +13,9 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 
 ```
 platform/
-├── packages/sdk/     @proagentstore/sdk — TypeScript SDK for agents
-├── packages/cli/     @proagentstore/cli — init, check, publish
+├── packages/sdk/     Internal TypeScript SDK for agents
+├── packages/cli/     @proagentstore/cli — init, check, publish, local runner
+├── packages/browser-runner/ Internal Playwright runner bundled into the CLI
 ├── workers/api/      Hono API worker (auth, agents, instances, keys, analytics)
 ├── workers/host/     Marketing site + console + widget
 ├── workers/mcp/      MCP server for Codex, Claude Code, Cursor, and VS Code
@@ -91,24 +92,25 @@ That means the instance runtime path is working and correctly refusing to bill t
 
 ### Local browser runner
 
-Browser-capable agents use PAGS as the control-plane brain and a local runner as the tool executor. The first local runner package lives in `packages/browser-runner`.
+Browser-capable agents use PAGS as the control-plane brain and a local runner as the tool executor. Users install one public package, `@proagentstore/cli`; the Playwright runner is bundled into it.
 
 ```bash
-pnpm --filter @proagentstore/browser-runner dev -- --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
-pnpm --filter @proagentstore/cli dev runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
-pnpm --filter @proagentstore/cli dev runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+npm install -g @proagentstore/cli
+pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pags runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pags runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 ```
 
 When exposing the runner through a tunnel, start it with a token and instance binding, then register only the tunnel URL plus token with PAGS. Runtime registration is instance-scoped: PAGS stores the endpoint and encrypted runner token, then MCP/API proxy task calls to the runner with `X-PAGS-Instance-Id`.
 
 ```bash
-pnpm --filter @proagentstore/cli dev runner register "$PAGS_INSTANCE_ID" \
+pags runner register "$PAGS_INSTANCE_ID" \
   --endpoint-url "$PAGS_RUNNER_ENDPOINT" \
   --runner-token "$PAGS_RUNNER_TOKEN" \
   --pags-token "$PAGS_TOKEN" \
   --probe
-pnpm --filter @proagentstore/cli dev runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
-pnpm --filter @proagentstore/cli dev runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
+pags runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
+pags runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
 ```
 
 ```text

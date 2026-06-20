@@ -1,15 +1,6 @@
 name: Publish to npm
 on:
   workflow_dispatch:
-    inputs:
-      package:
-        description: 'Package to publish'
-        required: true
-        type: choice
-        options:
-          - sdk
-          - cli
-          - browser-runner
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -30,8 +21,8 @@ jobs:
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
 
-      - name: Build package
-        run: pnpm --filter @proagentstore/${{ inputs.package }} build
+      - name: Build CLI
+        run: pnpm --filter @proagentstore/cli build
 
-      - name: Publish
-        run: cd packages/${{ inputs.package }} && npm publish --access public --provenance
+      - name: Publish CLI
+        run: cd packages/cli && npm publish --access public --provenance
