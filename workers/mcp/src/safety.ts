@@ -16,7 +16,7 @@ export function parseScopes(value: string | string[] | null | undefined): McpSco
 	const scopes = parts.filter((part): part is McpScope =>
 		(MCP_SCOPES as readonly string[]).includes(part),
 	);
-	return scopes.length > 0 ? Array.from(new Set(scopes)) : ["read"];
+	return scopes.length > 0 ? Array.from(new Set(scopes)) : [...MCP_SCOPES];
 }
 
 export function hasScope(ctx: SafetyContext, scope: McpScope): boolean {

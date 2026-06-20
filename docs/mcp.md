@@ -104,7 +104,7 @@ OAuth connections can be scoped to:
 - `runtime`
 - `destructive`
 
-If a client does not request a scope, ProAgentStore grants the existing default scope set for compatibility. Use `read` only for inspection agents. Set `MCP_READ_ONLY=1` on the MCP worker to force server-wide read-only mode.
+If a client does not request a ProAgentStore-specific scope, or only requests standard OAuth/OIDC scopes such as `openid email profile`, ProAgentStore grants the existing default scope set for compatibility. Use `read` only for inspection agents. Set `MCP_READ_ONLY=1` on the MCP worker to force server-wide read-only mode.
 
 Mutating tools support `dry_run: true` where useful. Destructive or overwrite-style tools require an exact `confirm` value:
 

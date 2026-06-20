@@ -95,7 +95,7 @@ Confirm before destructive actions.</code></pre>
 
     <section>
       <h2>Auth Scopes And Safety</h2>
-      <p>OAuth connections can request <code>read</code>, <code>write</code>, <code>runtime</code>, and <code>destructive</code> scopes. Write, runtime, and destructive tools enforce those scopes server-side. Set <code>MCP_READ_ONLY=1</code> on the MCP worker to force read-only mode.</p>
+      <p>OAuth connections can request <code>read</code>, <code>write</code>, <code>runtime</code>, and <code>destructive</code> scopes. If a client only requests standard OAuth/OIDC scopes such as <code>openid email profile</code>, ProAgentStore grants the existing default scope set for compatibility. Write, runtime, and destructive tools enforce ProAgentStore scopes server-side. Set <code>MCP_READ_ONLY=1</code> on the MCP worker to force read-only mode.</p>
       <table>
         <thead><tr><th>Control</th><th>Behavior</th></tr></thead>
         <tbody>

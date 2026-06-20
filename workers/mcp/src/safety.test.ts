@@ -35,7 +35,13 @@ describe("MCP safety helpers", () => {
 	it("parses scopes with safe defaults", () => {
 		expect(parseScopes(null)).toEqual(["read", "write", "runtime", "destructive"]);
 		expect(parseScopes("read runtime unknown")).toEqual(["read", "runtime"]);
-		expect(parseScopes("unknown")).toEqual(["read"]);
+		expect(parseScopes("openid email profile")).toEqual([
+			"read",
+			"write",
+			"runtime",
+			"destructive",
+		]);
+		expect(parseScopes("unknown")).toEqual(["read", "write", "runtime", "destructive"]);
 	});
 
 	it("blocks writes in read-only mode", async () => {
