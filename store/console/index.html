@@ -82,9 +82,9 @@
     .kanban-card p{font-size:0.75rem;color:var(--muted);line-height:1.45;margin-bottom:0.55rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
     .kanban-card-meta{display:flex;gap:0.35rem;flex-wrap:wrap;font-size:0.7rem}
     .kanban-empty{padding:0.75rem;color:var(--muted-soft);font-size:0.78rem;line-height:1.45}
-    .runtime-detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem}
-    .runtime-detail-overlay.hidden{display:none}
-    .runtime-detail-panel{width:min(760px,100%);max-height:min(88vh,860px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:0.5rem;box-shadow:0 24px 70px rgba(0,0,0,0.45)}
+    .runtime-detail-section{margin-top:1rem;background:var(--panel);border:1px solid var(--line);border-radius:0.5rem}
+    .runtime-detail-section.hidden{display:none}
+    .runtime-detail-panel{width:100%}
     .runtime-detail-head{display:flex;align-items:start;justify-content:space-between;gap:1rem;padding:1rem 1.1rem;border-bottom:1px solid var(--line)}
     .runtime-detail-head h3{font-size:1rem;margin:0.2rem 0 0}
     .runtime-detail-body{padding:1rem 1.1rem;display:grid;gap:0.85rem}
@@ -92,7 +92,7 @@
     .runtime-detail-field{border:1px solid var(--line);border-radius:0.45rem;padding:0.65rem;background:var(--paper)}
     .runtime-detail-label{font-size:0.68rem;color:var(--muted-soft);text-transform:uppercase;font-weight:800;margin-bottom:0.25rem}
     .runtime-detail-value{font-size:0.82rem;color:var(--ink);overflow-wrap:anywhere}
-    .runtime-detail-pre{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:0.45rem;background:#050505;color:var(--muted);padding:0.75rem;font:0.75rem/1.55 'SF Mono',ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+    .runtime-detail-pre{border:1px solid var(--line);border-radius:0.45rem;background:#050505;color:var(--muted);padding:0.75rem;font:0.75rem/1.55 'SF Mono',ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
     .runtime-detail-actions{display:flex;gap:0.5rem;flex-wrap:wrap;padding:0 1.1rem 1rem}
     .runtime-history{display:grid;gap:0.55rem}
     .runtime-history-item{border:1px solid var(--line);border-radius:0.45rem;background:var(--paper);padding:0.65rem}
@@ -388,6 +388,19 @@
         </div>
       </div>
       <div id="inst-runtime-board" class="kanban-board"></div>
+      <div id="runtime-task-detail" class="runtime-detail-section hidden" role="region" aria-labelledby="runtime-task-detail-title">
+        <section class="runtime-detail-panel">
+          <div class="runtime-detail-head">
+            <div>
+              <div id="runtime-task-detail-status" class="kanban-card-meta"></div>
+              <h3 id="runtime-task-detail-title">Runtime Task Details</h3>
+            </div>
+            <button type="button" class="btn btn-outline btn-sm" onclick="closeRuntimeTaskDetail()">Back to runtime board</button>
+          </div>
+          <div id="runtime-task-detail-body" class="runtime-detail-body"></div>
+          <div id="runtime-task-detail-actions" class="runtime-detail-actions"></div>
+        </section>
+      </div>
       <div id="inst-runtime-events" class="create-form" style="margin-top:1rem">
         <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Recent Runtime Events</h3>
         <div id="inst-runtime-event-list" style="display:flex;flex-direction:column;gap:0.35rem"></div>
@@ -432,20 +445,6 @@
       <div id="inst-kb-list" class="memory-list"></div>
       <div id="inst-kb-empty" class="empty hidden">No documents yet. Add your own for the agent to reference.</div>
     </div>
-  </div>
-
-  <div id="runtime-task-detail" class="runtime-detail-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="runtime-task-detail-title">
-    <section class="runtime-detail-panel">
-      <div class="runtime-detail-head">
-        <div>
-          <div id="runtime-task-detail-status" class="kanban-card-meta"></div>
-          <h3 id="runtime-task-detail-title">Runtime Task Details</h3>
-        </div>
-        <button type="button" class="btn btn-outline btn-sm" onclick="closeRuntimeTaskDetail()">Close</button>
-      </div>
-      <div id="runtime-task-detail-body" class="runtime-detail-body"></div>
-      <div id="runtime-task-detail-actions" class="runtime-detail-actions"></div>
-    </section>
   </div>
 
   <!-- Notifications page -->
@@ -1391,7 +1390,9 @@ console.log(response)</pre>
     // ── Instances (client view) ──────────────────────────────
 
     let currentInstance = null;
+    let currentRuntimeTasks = [];
     let currentRuntimeEvents = [];
+    let currentRuntimeTaskId = null;
     const INSTANCE_RUNTIME_COLUMNS = [
       {
         id: 'waiting',
@@ -1463,9 +1464,10 @@ console.log(response)</pre>
       return (data.instances || []).find(inst => inst.id === instanceId) || { id: instanceId, name: 'Agent' };
     }
 
-    async function openInstance(instanceId, meta, tab = 'chat', updateUrl = true) {
+    async function openInstance(instanceId, meta, tab = 'chat', updateUrl = true, runtimeTaskId = null) {
       meta = await resolveInstanceMeta(instanceId, meta);
       currentInstance = { id: instanceId, ...meta };
+      currentRuntimeTaskId = runtimeTaskId;
       showPage('instance-detail');
       document.getElementById('inst-name').textContent = meta.name || 'Agent';
       document.getElementById('inst-desc').textContent = meta.description || '';
@@ -1473,8 +1475,13 @@ console.log(response)</pre>
       switchInstTab(tab, false);
       loadInstanceMessages();
       loadInstanceKnowledge();
-      loadInstanceRuntime();
-      if (updateUrl) setConsoleUrl(`/instances/${encodeURIComponent(instanceId)}/${tab}`);
+      if (tab !== 'runtime') loadInstanceRuntime();
+      if (updateUrl) {
+        const detailPath = tab === 'runtime' && runtimeTaskId
+          ? `/instances/${encodeURIComponent(instanceId)}/runtime/tasks/${encodeURIComponent(runtimeTaskId)}`
+          : `/instances/${encodeURIComponent(instanceId)}/${tab}`;
+        setConsoleUrl(detailPath);
+      }
     }
 
     function switchInstTab(name, updateUrl = true) {
@@ -1486,6 +1493,14 @@ console.log(response)</pre>
         p.classList.toggle('active', p.id === `inst-tab-${name}`);
       });
       currentInstanceTab = name;
+      if (name !== 'runtime') {
+        currentRuntimeTaskId = null;
+        hideRuntimeTaskDetail();
+      }
+      if (name === 'runtime' && updateUrl) {
+        currentRuntimeTaskId = null;
+        hideRuntimeTaskDetail();
+      }
       if (name === 'runtime') loadInstanceRuntime();
       if (updateUrl && currentInstance) setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/${name}`);
     }
@@ -1498,6 +1513,7 @@ console.log(response)</pre>
       summary.textContent = 'Loading runtime tasks...';
       board.innerHTML = '';
       eventList.innerHTML = '';
+      currentRuntimeTasks = [];
       currentRuntimeEvents = [];
       try {
         const [runtimeRes, tasksRes, eventsRes] = await Promise.allSettled([
@@ -1510,10 +1526,12 @@ console.log(response)</pre>
         const eventsPayload = eventsRes.status === 'fulfilled' ? eventsRes.value : {};
         const tasks = tasksPayload.tasks || [];
         const events = eventsPayload.events || [];
+        currentRuntimeTasks = tasks;
         currentRuntimeEvents = events;
         if (!runtime) {
           summary.textContent = 'No browser runtime is registered for this instance yet.';
           renderInstanceTaskBoard([]);
+          renderCurrentRuntimeTaskDetail(false);
           renderInstanceRuntimeEvents(events.slice(0, 25));
           return;
         }
@@ -1522,10 +1540,12 @@ console.log(response)</pre>
         const status = stale ? 'offline; showing PAGS history' : (runtime.status || 'registered');
         summary.textContent = `${tasks.length} runtime ${taskWord} · ${status} · ${runtime.placement || 'local'}`;
         renderInstanceTaskBoard(tasks);
+        renderCurrentRuntimeTaskDetail(false);
         renderInstanceRuntimeEvents(events.slice(0, 25));
       } catch (e) {
         summary.textContent = `Runtime unavailable: ${e.message}`;
         renderInstanceTaskBoard([]);
+        renderCurrentRuntimeTaskDetail(false);
       }
     }
 
@@ -1619,7 +1639,7 @@ console.log(response)</pre>
         const data = event.data ?? event.payload ?? event.result;
         const dataBlock = data === undefined
           ? ''
-          : `<pre class="runtime-detail-pre" style="margin-top:0.55rem;max-height:180px">${esc(safePrettyJson(data))}</pre>`;
+          : `<pre class="runtime-detail-pre" style="margin-top:0.55rem">${esc(safePrettyJson(data))}</pre>`;
         return `<div class="runtime-history-item">
           <div class="runtime-history-head">
             <span class="runtime-history-type">${esc(event.type || 'event')}</span>
@@ -1631,8 +1651,35 @@ console.log(response)</pre>
       }).join('')}</div>`;
     }
 
-    function openRuntimeTaskDetail(task) {
-      const overlay = document.getElementById('runtime-task-detail');
+    function runtimeTaskDetailUrl(taskId) {
+      return `/instances/${encodeURIComponent(currentInstance.id)}/runtime/tasks/${encodeURIComponent(taskId)}`;
+    }
+
+    function renderCurrentRuntimeTaskDetail(scrollIntoView = false) {
+      if (!currentRuntimeTaskId) {
+        hideRuntimeTaskDetail();
+        return;
+      }
+      const task = currentRuntimeTasks.find(row => row.id === currentRuntimeTaskId);
+      if (!task) {
+        const section = document.getElementById('runtime-task-detail');
+        document.getElementById('inst-runtime-board').classList.add('hidden');
+        document.getElementById('runtime-task-detail-status').innerHTML = '<span class="tag tag-failed">not found</span>';
+        document.getElementById('runtime-task-detail-title').textContent = 'Runtime task not found';
+        document.getElementById('runtime-task-detail-body').innerHTML = `<div class="runtime-detail-field">
+          <div class="runtime-detail-label">Task ID</div>
+          <div class="runtime-detail-value">${esc(currentRuntimeTaskId)}</div>
+        </div>`;
+        document.getElementById('runtime-task-detail-actions').innerHTML = '';
+        section.classList.remove('hidden');
+        if (scrollIntoView) section.scrollIntoView({ block: 'start' });
+        return;
+      }
+      renderRuntimeTaskDetail(task, scrollIntoView);
+    }
+
+    function renderRuntimeTaskDetail(task, scrollIntoView = false) {
+      const section = document.getElementById('runtime-task-detail');
       const title = document.getElementById('runtime-task-detail-title');
       const status = document.getElementById('runtime-task-detail-status');
       const body = document.getElementById('runtime-task-detail-body');
@@ -1677,26 +1724,31 @@ console.log(response)</pre>
           closeRuntimeTaskDetail();
         });
       });
-      overlay.classList.remove('hidden');
-      overlay.querySelector('button').focus();
+      section.classList.remove('hidden');
+      document.getElementById('inst-runtime-board').classList.add('hidden');
+      if (scrollIntoView) section.scrollIntoView({ block: 'start' });
+    }
+
+    function openRuntimeTaskDetail(task, updateUrl = true) {
+      if (!task?.id || !currentInstance) return;
+      currentRuntimeTaskId = task.id;
+      renderRuntimeTaskDetail(task, true);
+      if (updateUrl) setConsoleUrl(runtimeTaskDetailUrl(task.id));
     }
 
     function closeRuntimeTaskDetail() {
-      document.getElementById('runtime-task-detail').classList.add('hidden');
+      currentRuntimeTaskId = null;
+      hideRuntimeTaskDetail();
+      if (currentInstance && currentInstanceTab === 'runtime') {
+        setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/runtime`);
+      }
     }
 
-    document.getElementById('runtime-task-detail').addEventListener('click', (event) => {
-      if (event.target.id === 'runtime-task-detail') closeRuntimeTaskDetail();
-    });
-
-    document.addEventListener('keydown', (event) => {
-      const overlay = document.getElementById('runtime-task-detail');
-      if (event.key === 'Escape' && overlay && !overlay.classList.contains('hidden')) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        closeRuntimeTaskDetail();
-      }
-    });
+    function hideRuntimeTaskDetail() {
+      document.getElementById('runtime-task-detail').classList.add('hidden');
+      document.getElementById('runtime-task-detail-actions').innerHTML = '';
+      document.getElementById('inst-runtime-board').classList.remove('hidden');
+    }
 
     async function handleRuntimeTaskAction(taskId, action) {
       if (!currentInstance || !taskId || !action) return;
@@ -2650,8 +2702,10 @@ console.log(response)</pre>
           return;
         }
         if (page === 'instances' && parts[1]) {
+          const instanceTab = validInstanceTabs.includes(parts[2]) ? parts[2] : 'chat';
+          const runtimeTaskId = instanceTab === 'runtime' && parts[3] === 'tasks' ? parts[4] : null;
           routeApplying = false;
-          await openInstance(parts[1], null, validInstanceTabs.includes(parts[2]) ? parts[2] : 'chat', false);
+          await openInstance(parts[1], null, instanceTab, false, runtimeTaskId);
           routeApplying = true;
           return;
         }

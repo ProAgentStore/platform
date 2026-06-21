@@ -455,18 +455,24 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page
 			.getByRole("button", { name: "Open runtime task task-done" })
 			.click();
-		const taskDialog = page.getByRole("dialog", { name: "job.apply_basic" });
-		await expect(taskDialog).toBeVisible();
-		await expect(taskDialog.getByText("task-done")).toBeVisible();
-		await expect(taskDialog.getByText("https://example.com/success")).toBeVisible();
-		await expect(taskDialog.getByText("Task History")).toBeVisible();
-		await expect(taskDialog.getByText("browser.goto.completed")).toBeVisible();
-		await expect(taskDialog.getByText("job.form.filled")).toBeVisible();
+		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/runtime\/tasks\/task-done$/);
+		const taskDetail = page.locator("#runtime-task-detail");
+		await expect(taskDetail).toBeVisible();
+		await expect(taskDetail.getByRole("heading", { name: "job.apply_basic" })).toBeVisible();
+		await expect(taskDetail.getByText("task-done")).toBeVisible();
+		await expect(taskDetail.getByText("https://example.com/success")).toBeVisible();
+		await expect(taskDetail.getByText("Task History")).toBeVisible();
+		await expect(taskDetail.getByText("browser.goto.completed")).toBeVisible();
+		await expect(taskDetail.getByText("job.form.filled")).toBeVisible();
 		await expect(
-			taskDialog.getByText("Application form fields completed"),
+			taskDetail.getByText("Application form fields completed"),
 		).toBeVisible();
-		await page.keyboard.press("Escape");
-		await expect(taskDialog).toBeHidden();
+		await page.reload();
+		await expect(taskDetail).toBeVisible();
+		await expect(taskDetail.getByText("job.form.filled")).toBeVisible();
+		await page.getByRole("button", { name: "Back to runtime board" }).click();
+		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/runtime$/);
+		await expect(taskDetail).toBeHidden();
 
 		await page.getByRole("button", { name: "Approve" }).click();
 		expect(mock.approvedTaskId).toBe("task-approval");
