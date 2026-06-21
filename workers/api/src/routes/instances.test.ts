@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import {
+	cloudflareAiSetupTask,
+	cloudflareAiSetupTaskId,
+	fagsRuntimeSetupTask,
+	fagsRuntimeSetupTaskId,
+	isCloudflareAiCredentialsError,
 	normalizeRunnerTaskBody,
 	runtimeEventsFromPayload,
 	runtimeTasksFromPayload,
@@ -228,5 +233,41 @@ describe("runtime task protocol shape", () => {
 		expect(runtimeEventsFromPayload({ events: [{ id: "event-1" }, null, { type: "task.completed" }] }))
 			.toEqual([{ id: "event-1" }, { type: "task.completed" }]);
 		expect(runtimeEventsFromPayload({ id: "task-1" })).toEqual([]);
+	});
+
+	it("builds a durable blocker for missing caller-owned Cloudflare AI credentials", () => {
+		const task = cloudflareAiSetupTask(
+			"inst-1",
+			"Add your Cloudflare Workers AI account ID and API token before running this agent.",
+			"2026-06-22T00:00:00.000Z",
+		);
+
+		expect(isCloudflareAiCredentialsError(task.error)).toBe(true);
+		expect(task).toMatchObject({
+			id: cloudflareAiSetupTaskId("inst-1"),
+			type: "setup.cloudflare_workers_ai",
+			status: "blocked",
+			synthetic: true,
+			input: {
+				provider: "cloudflare",
+				profilePath: "/profile",
+			},
+		});
+	});
+
+	it("builds a durable setup task when no FAGS browser runtime is connected", () => {
+		const task = fagsRuntimeSetupTask("inst-1", "2026-06-22T00:00:00.000Z");
+
+		expect(task).toMatchObject({
+			id: fagsRuntimeSetupTaskId("inst-1"),
+			type: "setup.fags_browser_runtime",
+			status: "blocked",
+			synthetic: true,
+			error: "No FAGS browser runtime is registered for this instance.",
+		});
+		expect(task.input).toMatchObject({
+			install: "npm i -g @proagentstore/cli",
+			connect: "pags runner connect inst-1 --pags-token <your-token>",
+		});
 	});
 });

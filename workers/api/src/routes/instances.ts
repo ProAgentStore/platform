@@ -58,6 +58,8 @@ interface RuntimeTaskEventMirrorRow {
 }
 
 const APPROVAL_REQUIRED_RUNNER_TASKS = new Set(["browser.open", "job.apply_basic"]);
+const CLOUDFLARE_AI_SETUP_TASK_TYPE = "setup.cloudflare_workers_ai";
+const FAGS_RUNTIME_SETUP_TASK_TYPE = "setup.fags_browser_runtime";
 
 export function validateRuntimeEndpointUrl(value: string): string {
 	let url: URL;
@@ -141,6 +143,67 @@ function taskId(value: Record<string, unknown>): string | null {
 	return typeof value.id === "string" && value.id.trim() ? value.id : null;
 }
 
+export function cloudflareAiSetupTaskId(instanceId: string): string {
+	return `${instanceId}:setup:cloudflare-workers-ai`;
+}
+
+export function fagsRuntimeSetupTaskId(instanceId: string): string {
+	return `${instanceId}:setup:fags-browser-runtime`;
+}
+
+export function isCloudflareAiCredentialsError(value: unknown): boolean {
+	const text = typeof value === "string" ? value : "";
+	return text.includes("Cloudflare Workers AI account ID and API token") ||
+		text.includes("Stored Cloudflare Workers AI credentials are invalid");
+}
+
+export function cloudflareAiSetupTask(
+	instanceId: string,
+	message: string,
+	now = new Date().toISOString(),
+): Record<string, unknown> {
+	return {
+		id: cloudflareAiSetupTaskId(instanceId),
+		type: CLOUDFLARE_AI_SETUP_TASK_TYPE,
+		status: "blocked",
+		requiresApproval: false,
+		approval: {
+			prompt: "Add caller-owned Cloudflare Workers AI credentials in Profile -> API Keys.",
+		},
+		input: {
+			provider: "cloudflare",
+			profilePath: "/profile",
+		},
+		error: message,
+		createdAt: now,
+		updatedAt: now,
+		synthetic: true,
+	};
+}
+
+export function fagsRuntimeSetupTask(
+	instanceId: string,
+	now = new Date().toISOString(),
+): Record<string, unknown> {
+	return {
+		id: fagsRuntimeSetupTaskId(instanceId),
+		type: FAGS_RUNTIME_SETUP_TASK_TYPE,
+		status: "blocked",
+		requiresApproval: false,
+		approval: {
+			prompt: "Connect the local FAGS browser runtime before creating browser tasks.",
+		},
+		input: {
+			install: "npm i -g @proagentstore/cli",
+			connect: `pags runner connect ${instanceId} --pags-token <your-token>`,
+		},
+		error: "No FAGS browser runtime is registered for this instance.",
+		createdAt: now,
+		updatedAt: now,
+		synthetic: true,
+	};
+}
+
 export function runtimeTasksFromPayload(value: unknown): Record<string, unknown>[] {
 	if (!isRecord(value)) return [];
 	if (Array.isArray(value.tasks)) {
@@ -219,6 +282,19 @@ async function mirroredRuntimeTask(
 		.bind(id, instanceId, userId)
 		.first<RuntimeTaskMirrorRow>();
 	return row ? parsePayload(row.payload) : null;
+}
+
+async function deleteMirroredRuntimeTask(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	id: string,
+): Promise<void> {
+	await env.DB.prepare(
+		"DELETE FROM instance_runtime_tasks WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+	)
+		.bind(id, instanceId, userId)
+		.run();
 }
 
 async function mirrorRuntimeEvent(
@@ -763,7 +839,19 @@ instanceRoutes.get("/:instanceId/tasks", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const runtime = await getRuntime(c.env, instanceId, session.uid);
+	if (!runtime) {
+		const tasks = await mirroredRuntimeTasks(c.env, instanceId, session.uid);
+		const hasRuntimeSetupTask = tasks.some(
+			(task) => isRecord(task) && task.id === fagsRuntimeSetupTaskId(instanceId),
+		);
+		if (!hasRuntimeSetupTask) tasks.unshift(fagsRuntimeSetupTask(instanceId));
+		return c.json({
+			tasks,
+			runtimeUnavailable: true,
+			error: "Runtime not registered",
+		});
+	}
 	try {
 		const res = await callRuntime(c.env, runtime, "/tasks");
 		const payload = await runtimeJson(res);
@@ -875,9 +963,18 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const runtime = await requireRuntime(c.env, instanceId, session.uid);
 	const rawLimit = Number(c.req.query("limit") || "100");
 	const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, Math.trunc(rawLimit))) : 100;
+	const runtime = await getRuntime(c.env, instanceId, session.uid);
+	if (!runtime) {
+		const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
+		const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
+		return c.json({
+			events: events.length ? events : syntheticEventsFromTasks(tasks.length ? tasks : [fagsRuntimeSetupTask(instanceId)]),
+			runtimeUnavailable: true,
+			error: "Runtime not registered",
+		});
+	}
 	try {
 		const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(String(limit))}`);
 		const payload = await runtimeJson(res);
@@ -952,6 +1049,29 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 		.run();
 
 	const data = await doRes.json();
+	if (doRes.ok) {
+		await deleteMirroredRuntimeTask(
+			c.env,
+			instanceId,
+			session.uid,
+			cloudflareAiSetupTaskId(instanceId),
+		);
+	} else if (
+		isRecord(data) &&
+		isCloudflareAiCredentialsError(data.error)
+	) {
+		const task = cloudflareAiSetupTask(instanceId, String(data.error));
+		await mirrorRuntimeTask(c.env, instanceId, session.uid, task);
+		await mirrorSyntheticTaskEvent(
+			c.env,
+			instanceId,
+			session.uid,
+			task,
+			"setup.blocked",
+			task.updatedAt,
+			{ provider: "cloudflare" },
+		);
+	}
 	return c.json(data, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
 });
 
