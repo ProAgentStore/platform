@@ -249,6 +249,68 @@ async function mirrorRuntimeEvent(
 		.run();
 }
 
+async function mirrorSyntheticTaskEvent(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	task: Record<string, unknown>,
+	type: string,
+	createdAt: unknown,
+	data: Record<string, unknown> = {},
+): Promise<void> {
+	const id = taskId(task);
+	if (!id) return;
+	await mirrorRuntimeEvent(env, instanceId, userId, {
+		id: `${id}:${type}`,
+		taskId: id,
+		type,
+		message: `Task ${type.replace("task.", "")}: ${typeof task.type === "string" ? task.type : "task"}`,
+		data: Object.keys(data).length ? data : undefined,
+		createdAt: taskTimestamp(createdAt),
+	});
+}
+
+async function mirrorTaskLifecycleEvents(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	payload: unknown,
+	phase: "created" | "approved" | "cancelled",
+): Promise<void> {
+	const tasks = runtimeTasksFromPayload(payload);
+	await Promise.all(tasks.map(async (task) => {
+		if (phase === "created") {
+			await mirrorSyntheticTaskEvent(env, instanceId, userId, task, "task.created", task.createdAt, {
+				status: task.status,
+			});
+		}
+		if (phase === "approved") {
+			const approval = isRecord(task.approval) ? task.approval : {};
+			await mirrorSyntheticTaskEvent(
+				env,
+				instanceId,
+				userId,
+				task,
+				"task.approved",
+				approval.approvedAt ?? task.updatedAt,
+			);
+			if (task.status === "completed") {
+				await mirrorSyntheticTaskEvent(env, instanceId, userId, task, "task.completed", task.completedAt ?? task.updatedAt, task);
+			}
+			if (task.status === "failed") {
+				await mirrorSyntheticTaskEvent(env, instanceId, userId, task, "task.failed", task.updatedAt, {
+					error: task.error,
+				});
+			}
+		}
+		if (phase === "cancelled") {
+			await mirrorSyntheticTaskEvent(env, instanceId, userId, task, "task.cancelled", task.updatedAt, {
+				status: task.status,
+			});
+		}
+	}));
+}
+
 async function mirrorRuntimeEvents(
 	env: Env,
 	instanceId: string,
@@ -274,6 +336,31 @@ async function mirroredRuntimeEvents(
 		.bind(instanceId, userId, limit)
 		.all<RuntimeTaskEventMirrorRow>();
 	return results.map((row) => parsePayload(row.payload));
+}
+
+function syntheticEventsFromTasks(tasks: unknown[]): unknown[] {
+	return tasks
+		.filter(isRecord)
+		.map((task) => {
+			const id = taskId(task);
+			const status = typeof task.status === "string" ? task.status : "updated";
+			const type = status === "completed"
+				? "task.completed"
+				: status === "failed"
+					? "task.failed"
+					: status === "cancelled"
+						? "task.cancelled"
+						: `task.${status}`;
+			return {
+				id: id ? `${id}:${type}:synthetic` : `event_${crypto.randomUUID()}`,
+				taskId: id,
+				type,
+				message: `Task ${status}: ${typeof task.type === "string" ? task.type : "task"}`,
+				data: task,
+				createdAt: taskTimestamp(task.completedAt ?? task.updatedAt ?? task.createdAt),
+				synthetic: true,
+			};
+		});
 }
 
 function runtimeErrorPayload(payload: unknown): string {
@@ -712,7 +799,10 @@ instanceRoutes.post("/:instanceId/tasks", async (c) => {
 		body: JSON.stringify(body),
 	});
 	const payload = await runtimeJson(res);
-	if (res.ok) await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+	if (res.ok) {
+		await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+		await mirrorTaskLifecycleEvents(c.env, instanceId, session.uid, payload, "created");
+	}
 	return c.json(payload, runtimeStatus(res, 202));
 });
 
@@ -753,7 +843,10 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/approve", async (c) => {
 		{ method: "POST" },
 	);
 	const payload = await runtimeJson(res);
-	if (res.ok) await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+	if (res.ok) {
+		await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+		await mirrorTaskLifecycleEvents(c.env, instanceId, session.uid, payload, "approved");
+	}
 	return c.json(payload, runtimeStatus(res, 200));
 });
 
@@ -770,7 +863,10 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/cancel", async (c) => {
 		{ method: "POST" },
 	);
 	const payload = await runtimeJson(res);
-	if (res.ok) await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+	if (res.ok) {
+		await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+		await mirrorTaskLifecycleEvents(c.env, instanceId, session.uid, payload, "cancelled");
+	}
 	return c.json(payload, runtimeStatus(res, 200));
 });
 
@@ -790,15 +886,19 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 			return c.json(payload, 200);
 		}
 		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
+		const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
 		return c.json({
-			events: await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit),
+			events: events.length ? events : syntheticEventsFromTasks(tasks),
 			runtimeUnavailable: true,
 			error: runtimeErrorPayload(payload),
 		});
 	} catch (error) {
 		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
+		const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
 		return c.json({
-			events: await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit),
+			events: events.length ? events : syntheticEventsFromTasks(tasks),
 			runtimeUnavailable: true,
 			error: error instanceof Error ? error.message : String(error),
 		});
