@@ -55,8 +55,10 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "GET" && path === "/health") {
 		return json(res, 200, {
 			ok: true,
-			service: "proagentstore-browser-runner",
+			service: "freeagentstore-browser-runtime",
 			brainPlacement: "pags",
+			controlPlane: "pags",
+			runtimePlane: "fags",
 			instanceId: runner.config.instanceId,
 		});
 	}

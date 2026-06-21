@@ -156,7 +156,7 @@ describe("runtime endpoint validation", () => {
 });
 
 describe("runtime task protocol shape", () => {
-	it("creates PAGS-brain runner task request shape", () => {
+	it("creates PAGS-brain FAGS-runtime task request shape", () => {
 		const request = {
 			type: "browser.open",
 			input: { url: "https://example.com/jobs/1" },

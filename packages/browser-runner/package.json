@@ -2,7 +2,7 @@
 	"name": "@proagentstore/browser-runner",
 	"version": "0.1.0",
 	"private": true,
-	"description": "Local capability runner for ProAgentStore browser and desktop tasks",
+	"description": "FreeAgentStore browser runtime executor for ProAgentStore browser tasks",
 	"license": "MIT",
 	"type": "module",
 	"bin": {

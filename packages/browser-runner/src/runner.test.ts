@@ -24,10 +24,12 @@ describe("LocalRunner", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("advertises PAGS brain placement and local capabilities", () => {
+	it("advertises FAGS runtime placement, PAGS control plane, and local capabilities", () => {
 		expect(runner.capabilities()).toMatchObject({
-			runtime: "local-browser-runner",
+			runtime: "fags-browser-runtime",
 			brainPlacement: "pags",
+			controlPlane: "pags",
+			runtimePlane: "fags",
 			runnerRole: "tool-executor",
 		});
 		expect(runner.capabilities().capabilities).toContain("browser.playwright");

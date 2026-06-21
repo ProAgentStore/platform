@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 import { LocalRunner } from "../packages/browser-runner/src/runner.js";
 import { startTestJobServer } from "../packages/browser-runner/src/test-job-server.js";
 
-test("local runner submits the fixture job application after approval", async () => {
+test("FAGS runtime submits the fixture job application after approval", async () => {
 	const oldSkipInstall = process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL;
 	process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL = "1";
 	const dataDir = mkdtempSync(join(tmpdir(), "pags-job-runner-e2e-"));

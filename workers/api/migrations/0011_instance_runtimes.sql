@@ -1,6 +1,6 @@
--- Local/managed runtime registrations for browser-capable instances.
--- PAGS owns the brain and task orchestration; the registered runtime is a
--- capability/tool executor for one user's private instance.
+-- Local/managed FAGS runtime registrations for browser-capable instances.
+-- PAGS owns the brain and task orchestration; the registered FAGS runtime is
+-- the browser capability/tool executor for one user's private instance.
 
 CREATE TABLE instance_runtimes (
   instance_id TEXT PRIMARY KEY REFERENCES agent_instances(id),

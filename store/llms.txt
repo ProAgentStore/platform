@@ -80,7 +80,7 @@ list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat
 
 If `chat_with_instance` says it needs a Cloudflare Workers AI account ID and API token, the private runtime is working and correctly waiting for caller-owned AI credentials.
 
-Browser-capable agents use PAGS as the control-plane brain and a local browser runner as the tool executor. Current CLI mode is `pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless`, which starts the local runner and registers a Cloudflare Tunnel endpoint. Target cheapest best-practice mode is outbound CLI polling to PAGS, with tunnel mode retained as fallback/debug.
+Browser-capable agents use PAGS as the control-plane brain and FAGS as the browser runtime/tool executor. Current CLI mode is `pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless`, which starts the FAGS runtime and registers a Cloudflare Tunnel endpoint. Target cheapest best-practice mode is outbound FAGS polling to PAGS, with tunnel mode retained as fallback/debug.
 
 ## Docs
 

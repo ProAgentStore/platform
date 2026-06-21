@@ -30,7 +30,7 @@ function configFromArgs(): RunnerConfig {
 }
 
 if (flag("--help") || flag("-h")) {
-	process.stdout.write(`ProAgentStore browser runner
+	process.stdout.write(`FreeAgentStore browser runtime for ProAgentStore
 
 Usage:
   pags-browser-runner [--host 127.0.0.1] [--port 49171] [--data-dir path] [--token token] [--instance-id id] [--headless]
@@ -50,9 +50,9 @@ Endpoints:
 
 const config = configFromArgs();
 const started = await startRunnerServer(config);
-process.stdout.write(`PAGS browser runner listening at ${started.url}\n`);
+process.stdout.write(`FAGS browser runtime listening at ${started.url}\n`);
 process.stdout.write(`Data dir: ${config.dataDir}\n`);
-process.stdout.write(`Brain placement: PAGS; runner role: tool-executor\n`);
+process.stdout.write("Control plane: PAGS; runtime plane: FAGS; brain placement: PAGS; runner role: tool-executor\n");
 if (config.token) process.stdout.write("Auth: bearer token required\n");
 if (config.instanceId) process.stdout.write(`Instance binding: ${config.instanceId}\n`);
 

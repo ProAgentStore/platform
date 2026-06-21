@@ -440,7 +440,7 @@ instanceRoutes.get("/:instanceId/runtime", async (c) => {
 	return c.json({ runtime: runtime ? runtimeResponse(runtime) : null });
 });
 
-/** Heartbeat from user/CLI after checking the local runner is online. */
+/** Heartbeat from user/CLI after checking the FAGS runtime is online. */
 instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");

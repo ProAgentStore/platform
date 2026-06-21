@@ -14,8 +14,8 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 ```
 platform/
 ├── packages/sdk/     Internal TypeScript SDK for agents
-├── packages/cli/     @proagentstore/cli — init, check, publish, MCP proxy, local runner
-├── packages/browser-runner/ Internal Playwright runner bundled into the CLI
+├── packages/cli/     @proagentstore/cli — init, check, publish, MCP proxy, local runtime
+├── packages/browser-runner/ FAGS Playwright browser runtime bundled into the CLI
 ├── workers/api/      Hono API worker (auth, agents, instances, keys, analytics)
 ├── workers/host/     Marketing site + console + widget
 ├── workers/mcp/      MCP server for Codex, Claude Code, Cursor, and VS Code
@@ -109,9 +109,18 @@ The full MCP-first developer surface is documented at:
 
 MCP safety is enforced server-side. OAuth supports `read`, `write`, `runtime`, and `destructive` scopes; `MCP_READ_ONLY=1` forces read-only mode; mutating tools support `dry_run` where useful; overwrite/destructive tools require exact `confirm` values; and `mcp_audit_log` exposes recent MCP write, runtime, dry-run, denied, and destructive events.
 
-### Local browser runner
+### FAGS browser runtime
 
-Browser-capable agents use PAGS as the control-plane brain and a local runner as the tool executor. Users install one public package, `@proagentstore/cli`; the Playwright runner is bundled into it.
+Browser-capable agents use PAGS as the control-plane brain and FAGS as the browser runtime/tool executor. Users install one public package, `@proagentstore/cli`; the FAGS Playwright runtime is bundled into it.
+
+```text
+PAGS control plane / MCP
+  -> task, auth, approval, audit
+FAGS browser runtime
+  -> Playwright, local files, browser profile
+Real browser
+  -> job boards, uploads, receipts
+```
 
 ```bash
 npm install -g @proagentstore/cli
@@ -120,13 +129,13 @@ pags runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID
 pags runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 ```
 
-Current local runtime mode uses a registered HTTPS endpoint. `runner connect` starts the runner with a token and instance binding, opens a Cloudflare quick tunnel, and registers only the tunnel URL plus token with PAGS. Runtime registration is instance-scoped: PAGS stores the endpoint and encrypted runner token, then MCP/API proxy task calls to the runner with `X-PAGS-Instance-Id`.
+Current local runtime mode uses a registered HTTPS endpoint. `runner connect` starts the FAGS runtime with a token and instance binding, opens a Cloudflare quick tunnel, and registers only the tunnel URL plus token with PAGS. Runtime registration is instance-scoped: PAGS stores the endpoint and encrypted runner token, then MCP/API proxy task calls to the runtime with `X-PAGS-Instance-Id`.
 
 ```bash
 pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 ```
 
-`runner connect` is the current shipped local mode. It is the cheapest usable path today, but the target cheapest best-practice mode is outbound polling from the CLI to PAGS so the user's machine does not need a public tunnel. Manual setup is still available when you want to use a stable named tunnel:
+`runner connect` is the current shipped local mode. It is the cheapest usable path today, but the target cheapest best-practice mode is outbound polling from the FAGS runtime to PAGS so the user's machine does not need a public tunnel. Manual setup is still available when you want to use a stable named tunnel:
 
 ```bash
 pags runner register "$PAGS_INSTANCE_ID" \
@@ -138,7 +147,7 @@ pags runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
 pags runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
 ```
 
-The rentable job application agent uses the `job.apply_basic` runner task for basic resume-upload forms. The task is approval-gated and runs on the user's local browser runner:
+The rentable job application agent uses the `job.apply_basic` runner task for basic resume-upload forms. The task is approval-gated and runs on the user's FAGS browser runtime:
 
 ```bash
 pags runner run "$PAGS_INSTANCE_ID" \

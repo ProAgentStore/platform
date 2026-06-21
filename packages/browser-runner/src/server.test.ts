@@ -33,6 +33,23 @@ describe("runner server", () => {
 		expect(res.status).toBe(401);
 	});
 
+	it("reports FAGS runtime identity when healthy", async () => {
+		const res = await fetch(`${url}/health`, {
+			headers: {
+				Authorization: "Bearer secret",
+				"X-PAGS-Instance-Id": "inst-1",
+			},
+		});
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toMatchObject({
+			service: "freeagentstore-browser-runtime",
+			controlPlane: "pags",
+			runtimePlane: "fags",
+			brainPlacement: "pags",
+		});
+	});
+
+
 	it("creates and reads tasks", async () => {
 		const created = await fetch(`${url}/tasks`, {
 			method: "POST",

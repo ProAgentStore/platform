@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Browser Runtime Architecture — ProAgentStore Docs</title>
-  <meta name="description" content="Architecture for ProAgentStore browser-capable agents, local Playwright runners, outbound polling, Cloudflare Tunnel fallback, managed VM runners, and agent brain placement.">
+  <title>FAGS Browser Runtime Architecture — ProAgentStore Docs</title>
+  <meta name="description" content="Architecture for ProAgentStore browser-capable agents using FAGS browser runtimes, outbound polling, Cloudflare Tunnel fallback, managed FAGS runners, and PAGS brain placement.">
   <link rel="canonical" href="https://proagentstore.online/docs/browser-runtime/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <meta name="theme-color" content="#7c3aed">
@@ -97,11 +97,12 @@
 
     <main>
       <div class="eyebrow">Architecture docs</div>
-      <h1>Browser-Capable Agent Runtime</h1>
-      <p class="lead">Runtime model for agents that need to drive a real browser: PAGS owns the control-plane brain, a local Playwright runner executes browser work, and the cheapest best-practice target is outbound polling from the CLI to PAGS. Cloudflare Tunnel is the current shipped bootstrap path; managed runners are the later paid reliability path.</p>
+      <h1>FAGS Browser Runtime For PAGS Agents</h1>
+      <p class="lead">Runtime model for agents that need to drive a real browser: PAGS owns the control-plane brain, FAGS owns the browser runtime, and the cheapest best-practice target is outbound polling from FAGS to PAGS. Cloudflare Tunnel is the current shipped bootstrap path; managed FAGS runtimes are the later paid reliability path.</p>
       <div class="status">
         <span class="pill proposed">Status: implemented tunnel mode</span>
         <span class="pill">Target: outbound polling</span>
+        <span class="pill">Runtime: FAGS</span>
         <span class="pill">PAS precedent: our loop</span>
         <span class="pill">Reference agent: job applications</span>
       </div>
@@ -109,14 +110,14 @@
       <section id="decision">
         <h2>Decision Status</h2>
         <div class="decision">
-          <p><strong>Current code:</strong> PAGS stores an instance-scoped runtime endpoint and proxies task/status/event calls to a local Playwright runner exposed through Cloudflare Tunnel.</p>
-          <p><strong>Cheapest best-practice target:</strong> the local CLI connects outbound to PAGS, polls for approved tasks, executes them locally, and posts events/results back. Managed browser runners remain the paid reliability path.</p>
+          <p><strong>Current code:</strong> PAGS stores an instance-scoped FAGS runtime endpoint and proxies task/status/event calls to the FAGS Playwright runtime exposed through Cloudflare Tunnel.</p>
+          <p><strong>Cheapest best-practice target:</strong> FAGS connects outbound to PAGS, polls for approved tasks, executes them locally, and posts events/results back. Managed FAGS runtimes remain the paid reliability path.</p>
         </div>
       </section>
 
       <section id="diagram">
         <h2>System Diagram</h2>
-        <div class="diagram" aria-label="PAGS browser runtime system diagram">
+        <div class="diagram" aria-label="PAGS and FAGS browser runtime system diagram">
           <div class="flow">
             <div class="node control">
               <h3>PAGS Control Plane</h3>
@@ -124,8 +125,8 @@
             </div>
             <div class="arrow">-></div>
             <div class="node runner">
-              <h3>Local CLI Runner</h3>
-              <p>Outbound polling target. Executes browser work locally and reports task events/results to PAGS.</p>
+              <h3>FAGS Browser Runtime</h3>
+              <p>Playwright, browser profile, local files, screenshots, uploads, approvals, events, and task results.</p>
             </div>
             <div class="arrow">-></div>
             <div class="node browser">
@@ -134,7 +135,13 @@
             </div>
           </div>
         </div>
-        <p>PAGS starts and observes work. The local runner executes browser actions. Current code reaches it through a tunnel; target local mode uses outbound polling so the user's machine does not expose a public endpoint.</p>
+        <p>PAGS starts and observes work. FAGS executes browser actions. Current code reaches FAGS through a tunnel; target local mode uses outbound polling so the user's machine does not expose a public endpoint.</p>
+        <h3>Current Tunnel Flow</h3>
+        <div class="codeblock">PAGS API/MCP -> Cloudflare Tunnel endpoint -> FAGS browser runtime -> Playwright browser
+PAGS API/MCP &lt;- task events/status/results &lt;- FAGS browser runtime</div>
+        <h3>Target Polling Flow</h3>
+        <div class="codeblock">PAGS task queue &lt;- poll for work &lt;- FAGS browser runtime -> Playwright browser
+PAGS task queue -> task events/results -> FAGS browser runtime</div>
       </section>
 
       <section id="runtimes">
@@ -145,11 +152,11 @@
             <p>Good for text-only/server-only agents. No Playwright. No real browser session.</p>
           </div>
           <div class="card">
-            <strong>Managed Browser Runner</strong>
-            <p>Later paid path. ProAgentStore-managed VM/container with Playwright and persistent browser state.</p>
+            <strong>Managed FAGS Runtime</strong>
+            <p>Later paid path. Managed FAGS VM/container with Playwright and persistent browser state.</p>
           </div>
           <div class="card">
-            <strong>Local Browser Runner</strong>
+            <strong>Local FAGS Runtime</strong>
             <p>Cheapest default target. Node plus Playwright on the user's machine, connected outbound to PAGS. Tunnel mode is shipped today as fallback/bootstrap.</p>
           </div>
         </div>
@@ -169,13 +176,13 @@
               <td>Use for text-only agents, not browser agents.</td>
             </tr>
             <tr>
-              <td>Brain in PAGS, runner local</td>
+              <td>Brain in PAGS, runtime in FAGS</td>
               <td>Cheapest, user-owned browser/files, platform-owned control plane.</td>
               <td>User machine must be online; polling endpoints still need to be built.</td>
               <td>Cheapest best-practice recommendation.</td>
             </tr>
             <tr>
-              <td>Brain in managed VM runner</td>
+              <td>Brain in managed FAGS runtime</td>
               <td>Always-on, managed, supportable, billable, same browser protocol.</td>
               <td>Costs more and needs stronger isolation/retention policy.</td>
               <td>Paid reliability path.</td>
@@ -191,13 +198,13 @@
             <div class="lane">
               <h3>PAGS / MCP</h3>
               <div class="step">Create subscribed instance</div>
-              <div class="step">Queue task for local runner or register tunnel fallback</div>
+              <div class="step">Queue task for FAGS or register tunnel fallback</div>
               <div class="step">Start task with job URL</div>
               <div class="step">Receive events and status</div>
               <div class="step">Approve final submit</div>
             </div>
             <div class="lane">
-              <h3>Browser Runner</h3>
+              <h3>FAGS Browser Runtime</h3>
               <div class="step">Open browser context</div>
               <div class="step">Observe page and detect job board</div>
               <div class="step">Plan and fill application</div>
@@ -213,7 +220,7 @@
         <p>Agents that need browser automation should declare it in their manifest.</p>
         <div class="codeblock">{
   "runtime": {
-    "kind": "browser-runner",
+    "kind": "fags-browser-runtime",
     "brain": "pags",
     "browser": {
       "engine": "playwright",
@@ -229,7 +236,7 @@
     }
   }
 }</div>
-        <p>Current tunnel runtime endpoints should be signed/tokenized and instance-scoped, not open public tunnel URLs. Target polling mode should use PAGS task queues instead of public local endpoints.</p>
+        <p>Current tunnel runtime endpoints should be signed/tokenized and instance-scoped, not open public tunnel URLs. Target polling mode should use PAGS task queues instead of public local FAGS endpoints.</p>
         <div class="codeblock">GET  /health
 GET  /capabilities
 POST /tasks
@@ -242,12 +249,12 @@ GET  /events</div>
       <section id="plan">
         <h2>Implementation Plan</h2>
         <ul>
-          <li>Current: local browser runner, tunnel registration, task/event proxying, and runtime board.</li>
-          <li>Next: add cloud task queue endpoints for outbound local runner polling.</li>
+          <li>Current: FAGS browser runtime, tunnel registration, task/event proxying, and runtime board.</li>
+          <li>Next: add cloud task queue endpoints for outbound FAGS polling.</li>
           <li>Make <code>pags runner connect</code> default to polling and expose tunnel mode as fallback/debug.</li>
           <li>Add MCP tools for registering runtimes, starting tasks, approvals, and event reads.</li>
           <li>Expand the job application agent beyond <code>job.apply_basic</code>.</li>
-          <li>Add VM/container provisioning and runner assignment in PAGS after local polling proves out.</li>
+          <li>Add VM/container provisioning and managed FAGS assignment in PAGS after local polling proves out.</li>
         </ul>
       </section>
     </main>

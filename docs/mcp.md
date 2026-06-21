@@ -137,7 +137,11 @@ Browser-capable instance runtime:
 subscribe_agent -> register_instance_runtime -> instance_runtime_status -> run_instance_task -> approve_instance_task -> instance_task_events
 ```
 
-Current CLI local browser mode uses `pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless`, which starts the local runner, opens a Cloudflare quick tunnel, registers it with PAGS, and keeps it alive. The target cheapest best-practice local mode is outbound polling from the CLI to PAGS, with tunnel mode retained as fallback/debug.
+Current CLI local browser mode uses `pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless`, which starts the FAGS browser runtime, opens a Cloudflare quick tunnel, registers it with PAGS, and keeps it alive. The target cheapest best-practice local mode is outbound polling from FAGS to PAGS, with tunnel mode retained as fallback/debug.
+
+```text
+PAGS MCP/API control plane -> FAGS browser runtime -> Playwright browser
+```
 
 ## Capabilities
 

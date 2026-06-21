@@ -586,16 +586,17 @@ test.describe("ProAgentStore agent detail pages", () => {
 });
 
 test.describe("ProAgentStore architecture docs", () => {
-	test("browser runtime docs show the local runner target architecture", async ({ page }) => {
+	test("browser runtime docs show the FAGS runtime target architecture", async ({ page }) => {
 		await page.goto("/docs/browser-runtime/");
 
 		await expect(
-			page.getByRole("heading", { name: "Browser-Capable Agent Runtime" }),
+			page.getByRole("heading", { name: "FAGS Browser Runtime For PAGS Agents" }),
 		).toBeVisible();
 		await expect(page.getByText("PAS precedent: our loop")).toBeVisible();
-		await expect(page.getByText("Managed Browser Runner").first()).toBeVisible();
-		await expect(page.getByText("Local Browser Runner").first()).toBeVisible();
+		await expect(page.getByText("Managed FAGS Runtime").first()).toBeVisible();
+		await expect(page.getByText("Local FAGS Runtime").first()).toBeVisible();
 		await expect(page.getByText("Target: outbound polling")).toBeVisible();
+		await expect(page.getByText("Runtime: FAGS")).toBeVisible();
 		await expect(page.getByText("Cheapest best-practice recommendation")).toBeVisible();
 	});
 });
