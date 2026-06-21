@@ -30,5 +30,17 @@ jobs:
       - name: Build CLI
         run: pnpm --filter @proagentstore/cli build
 
+      - name: Check published CLI version
+        id: cli-version
+        run: |
+          version="$(node -p "require('./packages/cli/package.json').version")"
+          existing="$(npm view "@proagentstore/cli@$version" version 2>/dev/null || true)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "existing=$existing" >> "$GITHUB_OUTPUT"
+          if [ "$existing" = "$version" ]; then
+            echo "CLI version $version is already published; skipping npm publish."
+          fi
+
       - name: Publish CLI
+        if: steps.cli-version.outputs.existing != steps.cli-version.outputs.version
         run: cd packages/cli && npm publish --access public

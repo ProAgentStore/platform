@@ -586,7 +586,7 @@ test.describe("ProAgentStore agent detail pages", () => {
 });
 
 test.describe("ProAgentStore architecture docs", () => {
-	test("browser runtime docs show the managed-runner architecture", async ({ page }) => {
+	test("browser runtime docs show the local runner target architecture", async ({ page }) => {
 		await page.goto("/docs/browser-runtime/");
 
 		await expect(
@@ -595,7 +595,8 @@ test.describe("ProAgentStore architecture docs", () => {
 		await expect(page.getByText("PAS precedent: our loop")).toBeVisible();
 		await expect(page.getByText("Managed Browser Runner").first()).toBeVisible();
 		await expect(page.getByText("Local Browser Runner").first()).toBeVisible();
-		await expect(page.getByText("MVP recommendation")).toBeVisible();
+		await expect(page.getByText("Target: outbound polling")).toBeVisible();
+		await expect(page.getByText("Cheapest best-practice recommendation")).toBeVisible();
 	});
 });
 
