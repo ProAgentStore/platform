@@ -16,6 +16,10 @@ const runtimeMigration = readFileSync(
 	join(__dirname, "../migrations/0011_instance_runtimes.sql"),
 	"utf-8",
 );
+const runtimeTaskMirrorMigration = readFileSync(
+	join(__dirname, "../migrations/0012_runtime_task_mirror.sql"),
+	"utf-8",
+);
 
 describe("D1 migration 0001_init", () => {
 	it("creates users table", () => {
@@ -94,5 +98,20 @@ describe("D1 migration 0011_instance_runtimes", () => {
 	it("adds lookup indexes", () => {
 		expect(runtimeMigration).toContain("CREATE INDEX idx_instance_runtimes_user");
 		expect(runtimeMigration).toContain("CREATE INDEX idx_instance_runtimes_status");
+	});
+});
+
+describe("D1 migration 0012_runtime_task_mirror", () => {
+	it("creates durable runtime task snapshots and events", () => {
+		expect(runtimeTaskMirrorMigration).toContain("CREATE TABLE instance_runtime_tasks");
+		expect(runtimeTaskMirrorMigration).toContain("CREATE TABLE instance_runtime_task_events");
+		expect(runtimeTaskMirrorMigration).toContain("payload TEXT NOT NULL");
+		expect(runtimeTaskMirrorMigration).toContain("task_id TEXT");
+	});
+
+	it("adds lookup indexes for runtime board reads", () => {
+		expect(runtimeTaskMirrorMigration).toContain("idx_instance_runtime_tasks_instance");
+		expect(runtimeTaskMirrorMigration).toContain("idx_instance_runtime_task_events_instance");
+		expect(runtimeTaskMirrorMigration).toContain("idx_instance_runtime_task_events_task");
 	});
 });

@@ -1472,8 +1472,10 @@ console.log(response)</pre>
           api(`/v1/instances/${currentInstance.id}/task-events?limit=25`),
         ]);
         const runtime = runtimeRes.status === 'fulfilled' ? runtimeRes.value.runtime : null;
-        const tasks = tasksRes.status === 'fulfilled' ? (tasksRes.value.tasks || []) : [];
-        const events = eventsRes.status === 'fulfilled' ? (eventsRes.value.events || []) : [];
+        const tasksPayload = tasksRes.status === 'fulfilled' ? tasksRes.value : {};
+        const eventsPayload = eventsRes.status === 'fulfilled' ? eventsRes.value : {};
+        const tasks = tasksPayload.tasks || [];
+        const events = eventsPayload.events || [];
         if (!runtime) {
           summary.textContent = 'No browser runtime is registered for this instance yet.';
           renderInstanceTaskBoard([]);
@@ -1481,7 +1483,9 @@ console.log(response)</pre>
           return;
         }
         const taskWord = tasks.length === 1 ? 'task' : 'tasks';
-        summary.textContent = `${tasks.length} runtime ${taskWord} · ${runtime.status || 'registered'} · ${runtime.placement || 'local'}`;
+        const stale = tasksPayload.runtimeUnavailable || eventsPayload.runtimeUnavailable;
+        const status = stale ? 'offline; showing PAGS history' : (runtime.status || 'registered');
+        summary.textContent = `${tasks.length} runtime ${taskWord} · ${status} · ${runtime.placement || 'local'}`;
         renderInstanceTaskBoard(tasks);
         renderInstanceRuntimeEvents(events);
       } catch (e) {

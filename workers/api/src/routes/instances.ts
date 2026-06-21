@@ -49,6 +49,14 @@ interface RunnerTaskBody {
 	approvalPrompt?: string;
 }
 
+interface RuntimeTaskMirrorRow {
+	payload: string;
+}
+
+interface RuntimeTaskEventMirrorRow {
+	payload: string;
+}
+
 const APPROVAL_REQUIRED_RUNNER_TASKS = new Set(["browser.open", "job.apply_basic"]);
 
 export function validateRuntimeEndpointUrl(value: string): string {
@@ -105,6 +113,172 @@ function safeParseArray(value: string): unknown[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safeJsonStringify(value: unknown): string {
+	try {
+		return JSON.stringify(value);
+	} catch {
+		return JSON.stringify({ error: "Value could not be serialized" });
+	}
+}
+
+function parsePayload(value: string): unknown {
+	try {
+		return JSON.parse(value) as unknown;
+	} catch {
+		return {};
+	}
+}
+
+function taskTimestamp(value: unknown): string {
+	return typeof value === "string" && value.trim()
+		? value
+		: new Date().toISOString();
+}
+
+function taskId(value: Record<string, unknown>): string | null {
+	return typeof value.id === "string" && value.id.trim() ? value.id : null;
+}
+
+export function runtimeTasksFromPayload(value: unknown): Record<string, unknown>[] {
+	if (!isRecord(value)) return [];
+	if (Array.isArray(value.tasks)) {
+		return value.tasks.filter(isRecord);
+	}
+	return taskId(value) ? [value] : [];
+}
+
+export function runtimeEventsFromPayload(value: unknown): Record<string, unknown>[] {
+	if (!isRecord(value) || !Array.isArray(value.events)) return [];
+	return value.events.filter(isRecord);
+}
+
+async function mirrorRuntimeTask(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	task: Record<string, unknown>,
+): Promise<void> {
+	const id = taskId(task);
+	if (!id) return;
+	const type = typeof task.type === "string" ? task.type.slice(0, 120) : "task";
+	const status = typeof task.status === "string" ? task.status.slice(0, 80) : "queued";
+	const createdAt = taskTimestamp(task.createdAt ?? task.created_at);
+	const updatedAt = taskTimestamp(task.updatedAt ?? task.updated_at ?? createdAt);
+	await env.DB.prepare(
+		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+     ON CONFLICT(id) DO UPDATE SET
+       type = excluded.type,
+       status = excluded.status,
+       payload = excluded.payload,
+       updated_at = excluded.updated_at`,
+	)
+		.bind(id, instanceId, userId, type, status, safeJsonStringify(task), createdAt, updatedAt)
+		.run();
+}
+
+async function mirrorRuntimeTasks(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	payload: unknown,
+): Promise<void> {
+	const tasks = runtimeTasksFromPayload(payload);
+	await Promise.all(tasks.map((task) => mirrorRuntimeTask(env, instanceId, userId, task)));
+}
+
+async function mirroredRuntimeTasks(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	limit = 200,
+): Promise<unknown[]> {
+	const { results } = await env.DB.prepare(
+		`SELECT payload FROM instance_runtime_tasks
+     WHERE instance_id = ?1 AND user_id = ?2
+     ORDER BY updated_at DESC
+     LIMIT ?3`,
+	)
+		.bind(instanceId, userId, limit)
+		.all<RuntimeTaskMirrorRow>();
+	return results.map((row) => parsePayload(row.payload));
+}
+
+async function mirroredRuntimeTask(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	id: string,
+): Promise<unknown | null> {
+	const row = await env.DB.prepare(
+		`SELECT payload FROM instance_runtime_tasks
+     WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
+	)
+		.bind(id, instanceId, userId)
+		.first<RuntimeTaskMirrorRow>();
+	return row ? parsePayload(row.payload) : null;
+}
+
+async function mirrorRuntimeEvent(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	event: Record<string, unknown>,
+): Promise<void> {
+	const id = typeof event.id === "string" && event.id.trim()
+		? event.id
+		: `event_${crypto.randomUUID()}`;
+	const task_id = typeof event.taskId === "string"
+		? event.taskId
+		: typeof event.task_id === "string"
+			? event.task_id
+			: null;
+	const type = typeof event.type === "string" ? event.type.slice(0, 120) : "task.event";
+	const createdAt = taskTimestamp(event.createdAt ?? event.created_at);
+	await env.DB.prepare(
+		`INSERT INTO instance_runtime_task_events (id, instance_id, user_id, task_id, type, payload, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+     ON CONFLICT(id) DO UPDATE SET
+       type = excluded.type,
+       payload = excluded.payload,
+       created_at = excluded.created_at`,
+	)
+		.bind(id, instanceId, userId, task_id, type, safeJsonStringify({ ...event, id }), createdAt)
+		.run();
+}
+
+async function mirrorRuntimeEvents(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	payload: unknown,
+): Promise<void> {
+	const events = runtimeEventsFromPayload(payload);
+	await Promise.all(events.map((event) => mirrorRuntimeEvent(env, instanceId, userId, event)));
+}
+
+async function mirroredRuntimeEvents(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	limit = 100,
+): Promise<unknown[]> {
+	const { results } = await env.DB.prepare(
+		`SELECT payload FROM instance_runtime_task_events
+     WHERE instance_id = ?1 AND user_id = ?2
+     ORDER BY created_at DESC
+     LIMIT ?3`,
+	)
+		.bind(instanceId, userId, limit)
+		.all<RuntimeTaskEventMirrorRow>();
+	return results.map((row) => parsePayload(row.payload));
+}
+
+function runtimeErrorPayload(payload: unknown): string {
+	if (isRecord(payload) && typeof payload.error === "string") return payload.error;
+	return "Runtime unavailable";
 }
 
 export function normalizeRunnerTaskBody(value: unknown): RunnerTaskBody {
@@ -503,8 +677,27 @@ instanceRoutes.get("/:instanceId/tasks", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const runtime = await requireRuntime(c.env, instanceId, session.uid);
-	const res = await callRuntime(c.env, runtime, "/tasks");
-	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+	try {
+		const res = await callRuntime(c.env, runtime, "/tasks");
+		const payload = await runtimeJson(res);
+		if (res.ok) {
+			await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+			return c.json(payload, 200);
+		}
+		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		return c.json({
+			tasks: await mirroredRuntimeTasks(c.env, instanceId, session.uid),
+			runtimeUnavailable: true,
+			error: runtimeErrorPayload(payload),
+		});
+	} catch (error) {
+		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		return c.json({
+			tasks: await mirroredRuntimeTasks(c.env, instanceId, session.uid),
+			runtimeUnavailable: true,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 });
 
 /** Create a task on my registered runtime. */
@@ -518,7 +711,9 @@ instanceRoutes.post("/:instanceId/tasks", async (c) => {
 		method: "POST",
 		body: JSON.stringify(body),
 	});
-	return c.json(await runtimeJson(res), runtimeStatus(res, 202));
+	const payload = await runtimeJson(res);
+	if (res.ok) await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+	return c.json(payload, runtimeStatus(res, 202));
 });
 
 /** Read a task from my registered runtime. */
@@ -527,8 +722,22 @@ instanceRoutes.get("/:instanceId/tasks/:taskId", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const runtime = await requireRuntime(c.env, instanceId, session.uid);
-	const res = await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(c.req.param("taskId"))}`);
-	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+	const taskId = c.req.param("taskId");
+	try {
+		const res = await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(taskId)}`);
+		const payload = await runtimeJson(res);
+		if (res.ok) {
+			await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+			return c.json(payload, 200);
+		}
+		const mirrored = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
+		if (mirrored) return c.json({ ...(isRecord(mirrored) ? mirrored : {}), runtimeUnavailable: true });
+		return c.json(payload, runtimeStatus(res, 200));
+	} catch (error) {
+		const mirrored = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
+		if (mirrored) return c.json({ ...(isRecord(mirrored) ? mirrored : {}), runtimeUnavailable: true });
+		throw error;
+	}
 });
 
 /** Approve a task waiting on local human approval. */
@@ -543,7 +752,9 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/approve", async (c) => {
 		`/tasks/${encodeURIComponent(c.req.param("taskId"))}/approve`,
 		{ method: "POST" },
 	);
-	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+	const payload = await runtimeJson(res);
+	if (res.ok) await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+	return c.json(payload, runtimeStatus(res, 200));
 });
 
 /** Cancel a runtime task. */
@@ -558,7 +769,9 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/cancel", async (c) => {
 		`/tasks/${encodeURIComponent(c.req.param("taskId"))}/cancel`,
 		{ method: "POST" },
 	);
-	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+	const payload = await runtimeJson(res);
+	if (res.ok) await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
+	return c.json(payload, runtimeStatus(res, 200));
 });
 
 /** Read recent task events from my registered runtime. */
@@ -567,9 +780,29 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const runtime = await requireRuntime(c.env, instanceId, session.uid);
-	const limit = c.req.query("limit") || "100";
-	const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(limit)}`);
-	return c.json(await runtimeJson(res), runtimeStatus(res, 200));
+	const rawLimit = Number(c.req.query("limit") || "100");
+	const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, Math.trunc(rawLimit))) : 100;
+	try {
+		const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(String(limit))}`);
+		const payload = await runtimeJson(res);
+		if (res.ok) {
+			await mirrorRuntimeEvents(c.env, instanceId, session.uid, payload);
+			return c.json(payload, 200);
+		}
+		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		return c.json({
+			events: await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit),
+			runtimeUnavailable: true,
+			error: runtimeErrorPayload(payload),
+		});
+	} catch (error) {
+		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		return c.json({
+			events: await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit),
+			runtimeUnavailable: true,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 });
 
 /** Chat with my instance of an agent. */

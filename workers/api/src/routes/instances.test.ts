@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import {
 	normalizeRunnerTaskBody,
+	runtimeEventsFromPayload,
+	runtimeTasksFromPayload,
 	validateRuntimeEndpointUrl,
 } from "./instances.js";
 
@@ -211,5 +213,20 @@ describe("runtime task protocol shape", () => {
 	it("rejects invalid runner task bodies", () => {
 		expect(() => normalizeRunnerTaskBody({ input: {} })).toThrow(HttpError);
 		expect(() => normalizeRunnerTaskBody({ type: "" })).toThrow(HttpError);
+	});
+
+	it("extracts task snapshots from runtime task payloads", () => {
+		expect(runtimeTasksFromPayload({ id: "task-1", status: "completed" })).toHaveLength(1);
+		expect(runtimeTasksFromPayload({ tasks: [{ id: "task-1" }, { nope: true }, null] })).toEqual([
+			{ id: "task-1" },
+			{ nope: true },
+		]);
+		expect(runtimeTasksFromPayload({ events: [] })).toEqual([]);
+	});
+
+	it("extracts runtime events from event payloads", () => {
+		expect(runtimeEventsFromPayload({ events: [{ id: "event-1" }, null, { type: "task.completed" }] }))
+			.toEqual([{ id: "event-1" }, { type: "task.completed" }]);
+		expect(runtimeEventsFromPayload({ id: "task-1" })).toEqual([]);
 	});
 });
