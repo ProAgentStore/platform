@@ -418,6 +418,16 @@ test.describe("ProAgentStore Console smoke", () => {
 		).toBeVisible();
 		await expect(page.getByText("Waiting for approval before submit")).toBeVisible();
 
+		await page
+			.getByRole("button", { name: "Open runtime task task-done" })
+			.click();
+		const taskDialog = page.getByRole("dialog", { name: "job.apply_basic" });
+		await expect(taskDialog).toBeVisible();
+		await expect(taskDialog.getByText("task-done")).toBeVisible();
+		await expect(taskDialog.getByText("https://example.com/success")).toBeVisible();
+		await page.keyboard.press("Escape");
+		await expect(taskDialog).toBeHidden();
+
 		await page.getByRole("button", { name: "Approve" }).click();
 		expect(mock.approvedTaskId).toBe("task-approval");
 	});

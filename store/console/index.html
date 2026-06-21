@@ -82,6 +82,18 @@
     .kanban-card p{font-size:0.75rem;color:var(--muted);line-height:1.45;margin-bottom:0.55rem;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
     .kanban-card-meta{display:flex;gap:0.35rem;flex-wrap:wrap;font-size:0.7rem}
     .kanban-empty{padding:0.75rem;color:var(--muted-soft);font-size:0.78rem;line-height:1.45}
+    .runtime-detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.72);z-index:1000;display:flex;align-items:center;justify-content:center;padding:1rem}
+    .runtime-detail-overlay.hidden{display:none}
+    .runtime-detail-panel{width:min(760px,100%);max-height:min(88vh,860px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:0.5rem;box-shadow:0 24px 70px rgba(0,0,0,0.45)}
+    .runtime-detail-head{display:flex;align-items:start;justify-content:space-between;gap:1rem;padding:1rem 1.1rem;border-bottom:1px solid var(--line)}
+    .runtime-detail-head h3{font-size:1rem;margin:0.2rem 0 0}
+    .runtime-detail-body{padding:1rem 1.1rem;display:grid;gap:0.85rem}
+    .runtime-detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:0.55rem}
+    .runtime-detail-field{border:1px solid var(--line);border-radius:0.45rem;padding:0.65rem;background:var(--paper)}
+    .runtime-detail-label{font-size:0.68rem;color:var(--muted-soft);text-transform:uppercase;font-weight:800;margin-bottom:0.25rem}
+    .runtime-detail-value{font-size:0.82rem;color:var(--ink);overflow-wrap:anywhere}
+    .runtime-detail-pre{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:0.45rem;background:#050505;color:var(--muted);padding:0.75rem;font:0.75rem/1.55 'SF Mono',ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+    .runtime-detail-actions{display:flex;gap:0.5rem;flex-wrap:wrap;padding:0 1.1rem 1rem}
     .agents-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:0.75rem}
     .agent-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1rem;cursor:pointer;transition:border-color 0.15s}
     .agent-card:hover{border-color:var(--accent)}
@@ -414,6 +426,20 @@
       <div id="inst-kb-list" class="memory-list"></div>
       <div id="inst-kb-empty" class="empty hidden">No documents yet. Add your own for the agent to reference.</div>
     </div>
+  </div>
+
+  <div id="runtime-task-detail" class="runtime-detail-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="runtime-task-detail-title">
+    <section class="runtime-detail-panel">
+      <div class="runtime-detail-head">
+        <div>
+          <div id="runtime-task-detail-status" class="kanban-card-meta"></div>
+          <h3 id="runtime-task-detail-title">Runtime Task Details</h3>
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" onclick="closeRuntimeTaskDetail()">Close</button>
+      </div>
+      <div id="runtime-task-detail-body" class="runtime-detail-body"></div>
+      <div id="runtime-task-detail-actions" class="runtime-detail-actions"></div>
+    </section>
   </div>
 
   <!-- Notifications page -->
@@ -1507,6 +1533,9 @@ console.log(response)</pre>
     function runtimeTaskCard(task) {
       const card = document.createElement('article');
       card.className = 'kanban-card';
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      card.setAttribute('aria-label', `Open runtime task ${task.id || task.type || 'task'}`);
       const output = typeof task.output === 'object' && task.output ? JSON.stringify(task.output).slice(0, 180) : String(task.output || '');
       const error = task.error ? `<div style="font-size:0.72rem;color:var(--red);line-height:1.45;margin-top:0.45rem">${esc(task.error)}</div>` : '';
       const approval = task.status === 'needs_approval'
@@ -1532,8 +1561,92 @@ console.log(response)</pre>
           handleRuntimeTaskAction(button.dataset.taskId, button.dataset.taskAction);
         });
       });
+      card.addEventListener('click', () => openRuntimeTaskDetail(task));
+      card.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openRuntimeTaskDetail(task);
+        }
+      });
       return card;
     }
+
+    function safePrettyJson(value) {
+      try {
+        return JSON.stringify(value ?? {}, null, 2);
+      } catch {
+        return String(value || '');
+      }
+    }
+
+    function runtimeDetailField(label, value) {
+      return `<div class="runtime-detail-field">
+        <div class="runtime-detail-label">${esc(label)}</div>
+        <div class="runtime-detail-value">${esc(value)}</div>
+      </div>`;
+    }
+
+    function openRuntimeTaskDetail(task) {
+      const overlay = document.getElementById('runtime-task-detail');
+      const title = document.getElementById('runtime-task-detail-title');
+      const status = document.getElementById('runtime-task-detail-status');
+      const body = document.getElementById('runtime-task-detail-body');
+      const actions = document.getElementById('runtime-task-detail-actions');
+      title.textContent = task.type || 'Runtime task';
+      status.innerHTML = `
+        <span class="tag tag-${esc(task.status || 'queued')}">${esc(String(task.status || 'queued').replace('_', ' '))}</span>
+        ${task.requiresApproval ? '<span class="tag">approval</span>' : ''}
+        ${task.synthetic ? '<span class="tag">history</span>' : ''}`;
+      body.innerHTML = `
+        <div class="runtime-detail-grid">
+          ${runtimeDetailField('Task ID', task.id || '')}
+          ${runtimeDetailField('Status', String(task.status || 'queued').replace('_', ' '))}
+          ${runtimeDetailField('Created', formatTime(task.createdAt))}
+          ${runtimeDetailField('Updated', formatTime(task.updatedAt || task.completedAt))}
+        </div>
+        ${task.approval?.prompt ? `<div class="runtime-detail-field"><div class="runtime-detail-label">Approval Prompt</div><div class="runtime-detail-value">${esc(task.approval.prompt)}</div></div>` : ''}
+        ${task.error ? `<div class="runtime-detail-field"><div class="runtime-detail-label">Error</div><div class="runtime-detail-value" style="color:var(--red)">${esc(task.error)}</div></div>` : ''}
+        <div>
+          <div class="runtime-detail-label">Input</div>
+          <pre class="runtime-detail-pre">${esc(safePrettyJson(task.input))}</pre>
+        </div>
+        <div>
+          <div class="runtime-detail-label">Output</div>
+          <pre class="runtime-detail-pre">${esc(safePrettyJson(task.output))}</pre>
+        </div>`;
+      const approval = task.status === 'needs_approval'
+        ? `<button type="button" class="btn btn-primary btn-sm" data-detail-task-action="approve" data-task-id="${esc(task.id)}">Approve</button>`
+        : '';
+      const cancellable = ['queued', 'running', 'needs_approval'].includes(task.status)
+        ? `<button type="button" class="btn btn-outline btn-sm" data-detail-task-action="cancel" data-task-id="${esc(task.id)}">Cancel</button>`
+        : '';
+      actions.innerHTML = `${approval}${cancellable}`;
+      actions.querySelectorAll('[data-detail-task-action]').forEach(button => {
+        button.addEventListener('click', async () => {
+          await handleRuntimeTaskAction(button.dataset.taskId, button.dataset.detailTaskAction);
+          closeRuntimeTaskDetail();
+        });
+      });
+      overlay.classList.remove('hidden');
+      overlay.querySelector('button').focus();
+    }
+
+    function closeRuntimeTaskDetail() {
+      document.getElementById('runtime-task-detail').classList.add('hidden');
+    }
+
+    document.getElementById('runtime-task-detail').addEventListener('click', (event) => {
+      if (event.target.id === 'runtime-task-detail') closeRuntimeTaskDetail();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      const overlay = document.getElementById('runtime-task-detail');
+      if (event.key === 'Escape' && overlay && !overlay.classList.contains('hidden')) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeRuntimeTaskDetail();
+      }
+    });
 
     async function handleRuntimeTaskAction(taskId, action) {
       if (!currentInstance || !taskId || !action) return;
