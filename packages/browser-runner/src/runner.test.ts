@@ -48,6 +48,22 @@ describe("LocalRunner", () => {
 		expect(saved?.output).toEqual({ ok: true });
 	});
 
+	it("records task lifecycle history", async () => {
+		const task = runner.createTask({
+			type: "echo",
+			input: { history: true },
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+
+		const events = runner.store
+			.listEvents()
+			.filter((event) => event.taskId === task.id)
+			.map((event) => event.type);
+		expect(events).toContain("task.created");
+		expect(events).toContain("task.running");
+		expect(events).toContain("task.completed");
+	});
+
 	it("holds approval-gated tasks until approved", async () => {
 		const task = runner.createTask({
 			type: "echo",

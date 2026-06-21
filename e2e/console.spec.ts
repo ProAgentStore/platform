@@ -240,6 +240,30 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 						message: "Waiting for approval before submit",
 						createdAt: "2026-06-20T01:01:00Z",
 					},
+					{
+						id: "event-2",
+						taskId: "task-done",
+						type: "browser.goto.completed",
+						message: "Job application page loaded",
+						data: { url: "https://example.com/jobs/1", title: "Example Job" },
+						createdAt: "2026-06-20T00:00:30Z",
+					},
+					{
+						id: "event-3",
+						taskId: "task-done",
+						type: "job.form.filled",
+						message: "Application form fields completed",
+						data: { fieldsFilled: ["fullName", "email", "resume"] },
+						createdAt: "2026-06-20T00:01:00Z",
+					},
+					{
+						id: "event-4",
+						taskId: "task-done",
+						type: "task.completed",
+						message: "Task completed: job.apply_basic",
+						data: { submitted: true },
+						createdAt: "2026-06-20T00:02:00Z",
+					},
 				],
 			});
 		}
@@ -435,6 +459,12 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(taskDialog).toBeVisible();
 		await expect(taskDialog.getByText("task-done")).toBeVisible();
 		await expect(taskDialog.getByText("https://example.com/success")).toBeVisible();
+		await expect(taskDialog.getByText("Task History")).toBeVisible();
+		await expect(taskDialog.getByText("browser.goto.completed")).toBeVisible();
+		await expect(taskDialog.getByText("job.form.filled")).toBeVisible();
+		await expect(
+			taskDialog.getByText("Application form fields completed"),
+		).toBeVisible();
 		await page.keyboard.press("Escape");
 		await expect(taskDialog).toBeHidden();
 

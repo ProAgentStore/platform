@@ -84,11 +84,8 @@ export class LocalRunner {
 			updatedAt: now,
 		};
 		this.store.putTask(task);
-		this.store.addEvent({
-			taskId: task.id,
-			type: "task.created",
-			message: `Task created: ${task.type}`,
-			data: { status: task.status },
+		this.addTaskEvent(task, "task.created", `Task created: ${task.type}`, {
+			status: task.status,
 		});
 		if (task.status === "queued") void this.runTask(task.id);
 		return task;
@@ -106,11 +103,7 @@ export class LocalRunner {
 			approvedAt: task.updatedAt,
 		};
 		this.store.putTask(task);
-		this.store.addEvent({
-			taskId: task.id,
-			type: "task.approved",
-			message: `Task approved: ${task.type}`,
-		});
+		this.addTaskEvent(task, "task.approved", `Task approved: ${task.type}`);
 		await this.runTask(task.id);
 		return this.requireTask(id);
 	}
@@ -122,11 +115,7 @@ export class LocalRunner {
 		task.updatedAt = new Date().toISOString();
 		task.completedAt = task.updatedAt;
 		this.store.putTask(task);
-		this.store.addEvent({
-			taskId: task.id,
-			type: "task.cancelled",
-			message: `Task cancelled: ${task.type}`,
-		});
+		this.addTaskEvent(task, "task.cancelled", `Task cancelled: ${task.type}`);
 		return task;
 	}
 
@@ -141,11 +130,7 @@ export class LocalRunner {
 		task.status = "running";
 		task.updatedAt = new Date().toISOString();
 		this.store.putTask(task);
-		this.store.addEvent({
-			taskId: task.id,
-			type: "task.running",
-			message: `Task running: ${task.type}`,
-		});
+		this.addTaskEvent(task, "task.running", `Task running: ${task.type}`);
 
 		try {
 			const output = await this.execute(task);
@@ -154,24 +139,29 @@ export class LocalRunner {
 			task.updatedAt = new Date().toISOString();
 			task.completedAt = task.updatedAt;
 			this.store.putTask(task);
-			this.store.addEvent({
-				taskId: task.id,
-				type: "task.completed",
-				message: `Task completed: ${task.type}`,
-				data: output,
-			});
+			this.addTaskEvent(task, "task.completed", `Task completed: ${task.type}`, output);
 		} catch (error) {
 			task.status = "failed";
 			task.error = error instanceof Error ? error.message : String(error);
 			task.updatedAt = new Date().toISOString();
 			task.completedAt = task.updatedAt;
 			this.store.putTask(task);
-			this.store.addEvent({
-				taskId: task.id,
-				type: "task.failed",
-				message: task.error,
-			});
+			this.addTaskEvent(task, "task.failed", task.error);
 		}
+	}
+
+	private addTaskEvent(
+		task: RunnerTask,
+		type: string,
+		message: string,
+		data?: unknown,
+	): void {
+		this.store.addEvent({
+			taskId: task.id,
+			type,
+			message,
+			data,
+		});
 	}
 
 	private async execute(task: RunnerTask): Promise<unknown> {
@@ -185,35 +175,59 @@ export class LocalRunner {
 			}
 			const context = await this.getBrowserContext();
 			const page = context.pages()[0] || (await context.newPage());
+			this.addTaskEvent(task, "browser.goto.started", "Opening browser page", { url });
 			await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-			return {
+			const output = {
 				url: page.url(),
 				title: await page.title(),
 			};
+			this.addTaskEvent(task, "browser.goto.completed", "Browser page loaded", output);
+			return output;
 		}
 		if (task.type === "job.apply_basic") {
-			return this.applyToBasicJob(task.input);
+			return this.applyToBasicJob(task);
 		}
 		throw new Error(`Unknown task type: ${task.type}`);
 	}
 
-	private async applyToBasicJob(input: Record<string, unknown>): Promise<unknown> {
-		const job = normalizeJobApplicationInput(input);
+	private async applyToBasicJob(task: RunnerTask): Promise<unknown> {
+		const job = normalizeJobApplicationInput(task.input);
 		const context = await this.getBrowserContext();
 		const page = context.pages()[0] || (await context.newPage());
+		this.addTaskEvent(task, "browser.goto.started", "Opening job application page", {
+			url: job.url,
+		});
 		await page.goto(job.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+		this.addTaskEvent(task, "browser.goto.completed", "Job application page loaded", {
+			url: page.url(),
+			title: await page.title(),
+		});
 
+		this.addTaskEvent(task, "job.form.fill.started", "Filling application form", {
+			candidate: {
+				fullName: job.candidate.fullName,
+				email: job.candidate.email,
+			},
+			resumeFile: basename(job.resumePath),
+		});
 		const filledFields = await fillBasicApplicationForm(page, job);
+		this.addTaskEvent(task, "job.form.filled", "Application form fields completed", {
+			fieldsFilled: filledFields,
+			resumeFile: basename(job.resumePath),
+		});
 		const beforeSubmitUrl = page.url();
 		const navigation = page.waitForNavigation({
 			waitUntil: "domcontentloaded",
 			timeout: 15_000,
 		}).catch(() => null);
+		this.addTaskEvent(task, "job.form.submit.started", "Submitting application form", {
+			url: beforeSubmitUrl,
+		});
 		await submitApplicationForm(page);
 		await navigation;
 		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
 
-		return {
+		const output = {
 			taskType: "job.apply_basic",
 			submitted: true,
 			beforeSubmitUrl,
@@ -223,6 +237,8 @@ export class LocalRunner {
 			resumeFile: basename(job.resumePath),
 			visibleText: (await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")).slice(0, 2_000),
 		};
+		this.addTaskEvent(task, "job.form.submit.completed", "Application submission completed", output);
+		return output;
 	}
 
 	private requireTask(id: string): RunnerTask {

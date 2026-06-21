@@ -94,6 +94,12 @@
     .runtime-detail-value{font-size:0.82rem;color:var(--ink);overflow-wrap:anywhere}
     .runtime-detail-pre{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:0.45rem;background:#050505;color:var(--muted);padding:0.75rem;font:0.75rem/1.55 'SF Mono',ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
     .runtime-detail-actions{display:flex;gap:0.5rem;flex-wrap:wrap;padding:0 1.1rem 1rem}
+    .runtime-history{display:grid;gap:0.55rem}
+    .runtime-history-item{border:1px solid var(--line);border-radius:0.45rem;background:var(--paper);padding:0.65rem}
+    .runtime-history-head{display:flex;justify-content:space-between;gap:0.75rem;align-items:start;font-size:0.75rem;color:var(--muted)}
+    .runtime-history-type{font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace;color:var(--ink);overflow-wrap:anywhere}
+    .runtime-history-message{font-size:0.82rem;line-height:1.45;margin-top:0.35rem;color:var(--muted)}
+    .runtime-history-empty{color:var(--muted-soft);font-size:0.82rem}
     .agents-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr));gap:0.75rem}
     .agent-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:1rem;cursor:pointer;transition:border-color 0.15s}
     .agent-card:hover{border-color:var(--accent)}
@@ -1385,6 +1391,7 @@ console.log(response)</pre>
     // ── Instances (client view) ──────────────────────────────
 
     let currentInstance = null;
+    let currentRuntimeEvents = [];
     const INSTANCE_RUNTIME_COLUMNS = [
       {
         id: 'waiting',
@@ -1491,21 +1498,23 @@ console.log(response)</pre>
       summary.textContent = 'Loading runtime tasks...';
       board.innerHTML = '';
       eventList.innerHTML = '';
+      currentRuntimeEvents = [];
       try {
         const [runtimeRes, tasksRes, eventsRes] = await Promise.allSettled([
           api(`/v1/instances/${currentInstance.id}/runtime`),
           api(`/v1/instances/${currentInstance.id}/tasks`),
-          api(`/v1/instances/${currentInstance.id}/task-events?limit=25`),
+          api(`/v1/instances/${currentInstance.id}/task-events?limit=500`),
         ]);
         const runtime = runtimeRes.status === 'fulfilled' ? runtimeRes.value.runtime : null;
         const tasksPayload = tasksRes.status === 'fulfilled' ? tasksRes.value : {};
         const eventsPayload = eventsRes.status === 'fulfilled' ? eventsRes.value : {};
         const tasks = tasksPayload.tasks || [];
         const events = eventsPayload.events || [];
+        currentRuntimeEvents = events;
         if (!runtime) {
           summary.textContent = 'No browser runtime is registered for this instance yet.';
           renderInstanceTaskBoard([]);
-          renderInstanceRuntimeEvents(events);
+          renderInstanceRuntimeEvents(events.slice(0, 25));
           return;
         }
         const taskWord = tasks.length === 1 ? 'task' : 'tasks';
@@ -1513,7 +1522,7 @@ console.log(response)</pre>
         const status = stale ? 'offline; showing PAGS history' : (runtime.status || 'registered');
         summary.textContent = `${tasks.length} runtime ${taskWord} · ${status} · ${runtime.placement || 'local'}`;
         renderInstanceTaskBoard(tasks);
-        renderInstanceRuntimeEvents(events);
+        renderInstanceRuntimeEvents(events.slice(0, 25));
       } catch (e) {
         summary.textContent = `Runtime unavailable: ${e.message}`;
         renderInstanceTaskBoard([]);
@@ -1586,12 +1595,49 @@ console.log(response)</pre>
       </div>`;
     }
 
+    function runtimeEventTaskId(event) {
+      if (!event || typeof event !== 'object') return '';
+      if (typeof event.taskId === 'string') return event.taskId;
+      if (typeof event.task_id === 'string') return event.task_id;
+      if (event.data && typeof event.data === 'object' && typeof event.data.taskId === 'string') return event.data.taskId;
+      return '';
+    }
+
+    function runtimeTaskEvents(task) {
+      const taskId = task?.id || '';
+      return (currentRuntimeEvents || [])
+        .filter(event => runtimeEventTaskId(event) === taskId)
+        .sort((a, b) => String(a.createdAt || a.created_at || '').localeCompare(String(b.createdAt || b.created_at || '')));
+    }
+
+    function renderRuntimeHistory(events) {
+      if (!events.length) {
+        return '<div class="runtime-history-empty">No recorded task history yet.</div>';
+      }
+      return `<div class="runtime-history">${events.map(event => {
+        const createdAt = event.createdAt || event.created_at;
+        const data = event.data ?? event.payload ?? event.result;
+        const dataBlock = data === undefined
+          ? ''
+          : `<pre class="runtime-detail-pre" style="margin-top:0.55rem;max-height:180px">${esc(safePrettyJson(data))}</pre>`;
+        return `<div class="runtime-history-item">
+          <div class="runtime-history-head">
+            <span class="runtime-history-type">${esc(event.type || 'event')}</span>
+            <span>${esc(formatTime(createdAt))}</span>
+          </div>
+          ${event.message ? `<div class="runtime-history-message">${esc(event.message)}</div>` : ''}
+          ${dataBlock}
+        </div>`;
+      }).join('')}</div>`;
+    }
+
     function openRuntimeTaskDetail(task) {
       const overlay = document.getElementById('runtime-task-detail');
       const title = document.getElementById('runtime-task-detail-title');
       const status = document.getElementById('runtime-task-detail-status');
       const body = document.getElementById('runtime-task-detail-body');
       const actions = document.getElementById('runtime-task-detail-actions');
+      const events = runtimeTaskEvents(task);
       title.textContent = task.type || 'Runtime task';
       status.innerHTML = `
         <span class="tag tag-${esc(task.status || 'queued')}">${esc(String(task.status || 'queued').replace('_', ' '))}</span>
@@ -1613,6 +1659,10 @@ console.log(response)</pre>
         <div>
           <div class="runtime-detail-label">Output</div>
           <pre class="runtime-detail-pre">${esc(safePrettyJson(task.output))}</pre>
+        </div>
+        <div>
+          <div class="runtime-detail-label">Task History</div>
+          ${renderRuntimeHistory(events)}
         </div>`;
       const approval = task.status === 'needs_approval'
         ? `<button type="button" class="btn btn-primary btn-sm" data-detail-task-action="approve" data-task-id="${esc(task.id)}">Approve</button>`
