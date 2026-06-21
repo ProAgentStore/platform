@@ -622,7 +622,7 @@ For managed VMs, PAGS must define retention and deletion rules before launch.
 ### Phase 1: Protocol and Docs
 
 - Add this architecture doc.
-- Define browser-runner capability fields for `agent.json`.
+- Define FAGS runtime capability fields for `agent.json`.
 - Define runtime registration schema.
 - Define browser task event schema.
 - Decide whether runtime calls are direct from MCP worker to tunnel or proxied through API worker.
@@ -658,15 +658,15 @@ For managed VMs, PAGS must define retention and deletion rules before launch.
   - `cancel_instance_task`
   - `instance_task_events`
 - Done: add console runtime board for instance task status/events.
-- Done: add `pags runner connect` to start the runner, open a quick tunnel, register it, and probe health.
+- Done: add `pags runner connect` to start the FAGS runtime, open a quick tunnel, register it, and probe health.
 - Add outbound polling task queue endpoints for the cheaper default local mode.
 
-### Phase 4: Job Application Agent on Browser Runner
+### Phase 4: Job Application Agent on FAGS Runtime
 
 - Done: add `job.apply_basic` to the FAGS runtime for basic resume-upload HTML forms.
 - Done: make `job.apply_basic` approval-gated before submission.
 - Done: cover the fixture job application page with a Playwright e2e.
-- In progress: convert the job application agent from Worker-first to FAGS-browser-runtime-first in the marketplace UX.
+- Done: convert the job application agent metadata and marketplace README to FAGS-browser-runtime-first.
 - Add platform adapters:
   - generic HTML form
   - Greenhouse
@@ -721,16 +721,22 @@ Why:
 - It matches PAS: our system runs the loop.
 - It lets the runner stay generic: any agent brain connected to PAGS can use the same local capability executor.
 - It gives us the cheapest secure end-to-end path before VM provisioning and billing are complete.
-- The same runner binary can later run on managed VMs for users who want the paid always-on path.
+- The same FAGS runtime package can later run on managed VMs for users who want the paid always-on path.
 
-MVP scope:
+Current shipped scope:
 
 - PAGS registration and MCP task tools for FAGS runtimes.
 - Local FAGS Node runtime.
 - Playwright persistent profile.
+- Cloudflare Tunnel registration through `pags runner connect`.
+- Job application task with generic HTML support.
+- Human approval before `job.apply_basic` submission.
+
+Next scope:
+
 - Outbound polling between FAGS and PAGS for local runtime tasks.
-- Job application task with generic HTML, Greenhouse, and Lever support.
-- Manual handoff and final-submit approval.
+- Greenhouse and Lever adapters.
+- Manual handoff and final-submit approval for complex forms.
 - Managed VM mode after the protocol proves out locally.
 
 Do not make browser-resident local brains the default. Local outbound polling is the no-VM executor path; Cloudflare Tunnel is a current fallback/debug path; PAGS still owns the first implementation's brain and orchestration.

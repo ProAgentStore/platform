@@ -8,11 +8,12 @@
 	"template": "api",
 	"serverConfig": {
 		"runtime": {
-			"kind": "browser-runner",
+			"kind": "fags-browser-runtime",
 			"taskTypes": ["job.apply_basic"],
 			"approvalRequiredFor": ["job.apply_basic"],
 			"fileUploads": true,
-			"brainPlacement": "pags-control-plane"
+			"brainPlacement": "pags-control-plane",
+			"runtimePlane": "fags"
 		},
 		"routes": ["job-application-assistant.proagentstore.online/*"]
 	}

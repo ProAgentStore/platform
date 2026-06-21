@@ -163,7 +163,7 @@ subscribe_agent -> register_instance_runtime -> instance_runtime_status(probe: t
 
 The browser runtime MCP tools are `register_instance_runtime`, `instance_runtime_status`, `unregister_instance_runtime`, `run_instance_task`, `approve_instance_task`, `cancel_instance_task`, and `instance_task_events`.
 
-The Console also shows browser-runner work as a kanban-style runtime board: open `Console -> My Instances -> <instance> -> Runtime` to see queued, running, approval-gated, blocked, completed, and cancelled tasks plus recent runner events.
+The Console also shows FAGS runtime work as a kanban-style runtime board: open `Console -> My Instances -> <instance> -> Runtime` to see queued, running, approval-gated, blocked, completed, and cancelled tasks plus recent runtime events.
 
 ### Skills and plugins
 

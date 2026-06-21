@@ -204,6 +204,71 @@ components:
         icon_bg:
           type: string
 
+    InstanceRuntime:
+      type: object
+      properties:
+        instanceId:
+          type: string
+          format: uuid
+        placement:
+          type: string
+          enum: [local, managed]
+        endpointUrl:
+          type: string
+          format: uri
+        capabilities:
+          type: array
+          items:
+            type: string
+          example: [browser.playwright, file.upload, human.approval]
+        runnerVersion:
+          type: string
+        status:
+          type: string
+          enum: [registered, online, offline]
+        lastSeenAt:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        hasToken:
+          type: boolean
+
+    FagsRuntimeTask:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          example: job.apply_basic
+        status:
+          type: string
+          enum: [queued, running, needs_user_input, needs_approval, blocked, completed, failed, cancelled]
+        input:
+          type: object
+          additionalProperties: true
+        output:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+        requiresApproval:
+          type: boolean
+        approval:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
     Message:
       type: object
       properties:
@@ -1929,6 +1994,418 @@ paths:
                 $ref: "#/components/schemas/Success"
         "404":
           description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/runtime:
+    post:
+      summary: Register FAGS browser runtime
+      description: |
+        Register or update the FreeAgentStore browser runtime endpoint used by
+        this PAGS instance. PAGS remains the control plane and stores the runtime
+        token without exposing it in responses.
+      operationId: registerInstanceRuntime
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpointUrl]
+              properties:
+                endpointUrl:
+                  type: string
+                  format: uri
+                  description: HTTPS URL for managed runtimes, or localhost HTTP for development.
+                token:
+                  type: string
+                  description: Bearer token configured on the FAGS runtime.
+                placement:
+                  type: string
+                  enum: [local, managed]
+                  default: local
+                capabilities:
+                  type: array
+                  items:
+                    type: string
+                  example: [browser.playwright, file.upload, human.approval]
+                runnerVersion:
+                  type: string
+      responses:
+        "201":
+          description: Runtime registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runtime:
+                    $ref: "#/components/schemas/InstanceRuntime"
+        "400":
+          description: Invalid runtime registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      summary: Get registered FAGS browser runtime
+      operationId: getInstanceRuntime
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Runtime registration, or null when no runtime is registered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runtime:
+                    anyOf:
+                      - $ref: "#/components/schemas/InstanceRuntime"
+                      - type: "null"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      summary: Remove registered FAGS browser runtime
+      operationId: deleteInstanceRuntime
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Runtime removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Success"
+        "404":
+          description: Instance not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/runtime/heartbeat:
+    post:
+      summary: Mark FAGS browser runtime online
+      operationId: heartbeatInstanceRuntime
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Runtime marked online
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  status:
+                    type: string
+                    example: online
+        "404":
+          description: Instance or runtime not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/runtime/status:
+    get:
+      summary: Probe FAGS browser runtime status
+      description: Calls the registered runtime's `/health` and `/capabilities` endpoints through PAGS.
+      operationId: getInstanceRuntimeStatus
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Runtime is reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runtime:
+                    $ref: "#/components/schemas/InstanceRuntime"
+                  health:
+                    type: object
+                    additionalProperties: true
+                  capabilities:
+                    type: object
+                    additionalProperties: true
+        "502":
+          description: Registered runtime could not be reached
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runtime:
+                    $ref: "#/components/schemas/InstanceRuntime"
+                  error:
+                    type: string
+        "404":
+          description: Instance or runtime not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/tasks:
+    get:
+      summary: List FAGS runtime tasks
+      operationId: listInstanceRuntimeTasks
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Tasks from the registered FAGS runtime
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/FagsRuntimeTask"
+        "404":
+          description: Instance or runtime not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      summary: Create FAGS runtime task
+      description: |
+        Create a browser/file task on the registered FAGS runtime. PAGS forces
+        human approval for sensitive task types such as `browser.open` and
+        `job.apply_basic`.
+      operationId: createInstanceRuntimeTask
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type:
+                  type: string
+                  example: job.apply_basic
+                input:
+                  type: object
+                  additionalProperties: true
+                requiresApproval:
+                  type: boolean
+                approvalPrompt:
+                  type: string
+      responses:
+        "202":
+          description: Task accepted by FAGS runtime
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FagsRuntimeTask"
+        "400":
+          description: Invalid task request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Instance or runtime not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/tasks/{taskId}:
+    get:
+      summary: Get FAGS runtime task
+      operationId: getInstanceRuntimeTask
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Task from the registered FAGS runtime
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FagsRuntimeTask"
+        "404":
+          description: Instance, runtime, or task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/tasks/{taskId}/approve:
+    post:
+      summary: Approve FAGS runtime task
+      operationId: approveInstanceRuntimeTask
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Approved task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FagsRuntimeTask"
+        "404":
+          description: Instance, runtime, or task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/tasks/{taskId}/cancel:
+    post:
+      summary: Cancel FAGS runtime task
+      operationId: cancelInstanceRuntimeTask
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Cancelled task
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FagsRuntimeTask"
+        "404":
+          description: Instance, runtime, or task not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /v1/instances/{instanceId}/task-events:
+    get:
+      summary: List FAGS runtime task events
+      operationId: listInstanceRuntimeTaskEvents
+      tags: [Instances]
+      parameters:
+        - name: instanceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Recent runtime task events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+        "404":
+          description: Instance or runtime not found
           content:
             application/json:
               schema:

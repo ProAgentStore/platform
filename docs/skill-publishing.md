@@ -149,6 +149,12 @@ It teaches Codex or Claude to operate ProAgentStore account state only through M
 list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages
 ```
 
+For browser-capable private instances, it also teaches the FAGS runtime sequence:
+
+```text
+subscribe_agent -> register_instance_runtime -> instance_runtime_status -> run_instance_task -> approve_instance_task -> instance_task_events
+```
+
 Use public trial chat only for marketplace previews:
 
 ```text

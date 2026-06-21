@@ -1,26 +1,21 @@
 # Job Application Assistant
 
-A rentable ProAgentStore agent that helps a user turn a job URL into an application packet and, for basic resume-upload forms, submit through the user's approved local browser runner.
+A rentable ProAgentStore agent that helps a user turn a job URL into an application packet and, for basic resume-upload forms, submit through the user's approved FAGS browser runtime.
 
-The marketplace/runtime path is browser-runner-first:
+The marketplace/runtime path is FAGS-browser-runtime-first:
 
 ```text
 subscribe_agent -> register_instance_runtime -> run_instance_task(type: job.apply_basic) -> approve_instance_task -> instance_task_events
 ```
 
-The task runs on the user's machine or managed runner, not in the platform account. The user provides the resume file path and candidate details, and submission is approval-gated by the runner.
+The task runs on the user's FAGS runtime, not in the platform account. The user provides the resume file path and candidate details, and submission is approval-gated by the FAGS runtime.
 
 ## Rent And Use Through MCP
 
-After subscribing to the published agent, register a runner and create an approved job application task:
+After subscribing to the published agent, connect or register the FAGS runtime and create an approved job application task:
 
 ```bash
-pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
-pags runner register "$PAGS_INSTANCE_ID" \
-  --endpoint-url "$PAGS_RUNNER_ENDPOINT" \
-  --runner-token "$PAGS_RUNNER_TOKEN" \
-  --pags-token "$PAGS_TOKEN" \
-  --probe
+pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 pags runner run "$PAGS_INSTANCE_ID" \
   --type job.apply_basic \
   --input '{"url":"https://example.com/jobs/senior-engineer","resumePath":"/Users/me/resume.pdf","candidate":{"fullName":"Sam Candidate","email":"sam@example.com","phone":"+1 555 0100","location":"Remote"},"coverNote":"I am interested in this role."}' \
@@ -92,7 +87,7 @@ Submission is blocked when the page needs login, captcha, file upload, password 
 
 ## Safety model
 
-This agent does not silently send resume/contact data. The rentable browser-runner path creates `job.apply_basic` tasks in `needs_approval` state and submits only after the user approves the task. The direct Worker API prepares the packet first, reports blockers, and requires the exact `submit <application-id>` confirmation before any external POST/GET submission attempt.
+This agent does not silently send resume/contact data. The rentable FAGS runtime path creates `job.apply_basic` tasks in `needs_approval` state and submits only after the user approves the task. The direct Worker API prepares the packet first, reports blockers, and requires the exact `submit <application-id>` confirmation before any external POST/GET submission attempt.
 
 ## Development
 

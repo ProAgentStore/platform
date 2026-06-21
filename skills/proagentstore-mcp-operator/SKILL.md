@@ -63,6 +63,14 @@ list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat
 
 The private instance flow is the product path because it keeps user state, knowledge, memory, and billing credentials separate from the creator's template agent.
 
+Use browser-capable private instances through FAGS runtime tools:
+
+```text
+subscribe_agent -> register_instance_runtime -> instance_runtime_status -> run_instance_task -> approve_instance_task -> instance_task_events
+```
+
+PAGS is the MCP/account control plane. FAGS is the browser runtime that executes Playwright, local file uploads, screenshots, and approval-gated browser actions.
+
 ## Expected Missing-Credentials Response
 
 If `chat_with_instance` returns:
@@ -101,6 +109,16 @@ User runtime tools:
 - `list_instance_knowledge`
 - `delete_instance_knowledge`
 - `cancel_instance`
+
+FAGS browser runtime tools:
+
+- `register_instance_runtime`
+- `instance_runtime_status`
+- `unregister_instance_runtime`
+- `run_instance_task`
+- `approve_instance_task`
+- `cancel_instance_task`
+- `instance_task_events`
 
 Discovery/reference tools:
 

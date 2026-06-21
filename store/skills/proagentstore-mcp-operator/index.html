@@ -105,12 +105,16 @@
     <pre>list_agents -> chat_with_agent</pre>
     <p>Use private instance chat for durable user work:</p>
     <pre>list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages</pre>
+    <p>Use FAGS runtime tools for browser-capable private instances:</p>
+    <pre>subscribe_agent -> register_instance_runtime -> instance_runtime_status -> run_instance_task -> approve_instance_task -> instance_task_events</pre>
+    <p>PAGS is the MCP/account control plane. FAGS is the browser runtime for Playwright, local file uploads, screenshots, and approval-gated browser actions.</p>
 
     <h2>Required MCP tools</h2>
     <ul>
       <li><code>create_agent</code>, <code>scaffold_agent</code>, <code>update_agent</code>, <code>my_agents</code></li>
       <li><code>subscribe_agent</code>, <code>my_instances</code>, <code>chat_with_instance</code>, <code>instance_messages</code></li>
       <li><code>add_instance_knowledge</code>, <code>list_instance_knowledge</code>, <code>delete_instance_knowledge</code>, <code>cancel_instance</code></li>
+      <li><code>register_instance_runtime</code>, <code>instance_runtime_status</code>, <code>run_instance_task</code>, <code>approve_instance_task</code>, <code>instance_task_events</code></li>
       <li><code>list_agents</code>, <code>agent_info</code>, <code>platform_guide</code>, <code>sdk_reference</code></li>
     </ul>
 

@@ -281,7 +281,7 @@ export function registerInstanceTools(
 			const denied = await requirePermission(safetyFor(token), "runtime", "run_instance_task", toolInput);
 			if (denied) return denied;
 			if (dry_run) {
-				return dryRun(safetyFor(token), "run_instance_task", "create runner task", toolInput, {
+				return dryRun(safetyFor(token), "run_instance_task", "create FAGS runtime task", toolInput, {
 					endpoint: `/v1/instances/${instance_id}/tasks`,
 					method: "POST",
 					type,
@@ -323,7 +323,7 @@ export function registerInstanceTools(
 			const denied = await requirePermission(safetyFor(token), "runtime", "approve_instance_task", input);
 			if (denied) return denied;
 			if (dry_run) {
-				return dryRun(safetyFor(token), "approve_instance_task", "approve runner task", input, {
+				return dryRun(safetyFor(token), "approve_instance_task", "approve FAGS runtime task", input, {
 					endpoint: `/v1/instances/${instance_id}/tasks/${task_id}/approve`,
 					method: "POST",
 				});
@@ -356,7 +356,7 @@ export function registerInstanceTools(
 			const denied = await requirePermission(safetyFor(token), "destructive", "cancel_instance_task", input);
 			if (denied) return denied;
 			if (dry_run) {
-				return dryRun(safetyFor(token), "cancel_instance_task", "cancel runner task", input, {
+				return dryRun(safetyFor(token), "cancel_instance_task", "cancel FAGS runtime task", input, {
 					endpoint: `/v1/instances/${instance_id}/tasks/${task_id}/cancel`,
 					method: "POST",
 				});
