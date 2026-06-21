@@ -10,6 +10,8 @@ interface OpsMockOptions {
 	runtime?: Record<string, unknown> | null;
 	runtimeTasks?: Array<Record<string, unknown>>;
 	runtimeEvents?: Array<Record<string, unknown>>;
+	instanceChatStatus?: number;
+	instanceChatBody?: Record<string, unknown>;
 	boardConfig?: Record<string, unknown> | null;
 	ops?: Record<string, unknown>;
 	verifyStatus?: number;
@@ -186,6 +188,14 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			});
 		}
 		if (path === "/v1/instances/inst-1/messages") return json({ messages: [] });
+		if (path === "/v1/instances/inst-1/chat" && method === "POST") {
+			return json(
+				options.instanceChatBody ?? {
+					message: { role: "assistant", content: "Mock assistant reply" },
+				},
+				options.instanceChatStatus ?? 200,
+			);
+		}
 		if (path === "/v1/instances/inst-1/knowledge") return json({ documents: [] });
 		if (path === "/v1/instances/inst-1/runtime") {
 			return json({
@@ -485,6 +495,33 @@ test.describe("ProAgentStore Console smoke", () => {
 		});
 
 		await expect(page.locator("#inst-chat-input")).toBeFocused();
+	});
+
+	test("instance chat links missing Cloudflare credentials to profile setup", async ({
+		page,
+	}) => {
+		await mockSignedInConsole(page, {
+			instanceChatStatus: 402,
+			instanceChatBody: {
+				error:
+					"Add your Cloudflare Workers AI account ID and API token before running this agent.",
+			},
+		});
+
+		await page.goto("/console/instances/inst-1/chat");
+		await page.locator("#inst-chat-input").fill("hello");
+		await page.getByRole("button", { name: "Send" }).click();
+
+		await expect(
+			page.getByText(
+				"Add your Cloudflare Workers AI account ID and API token before running this agent.",
+			),
+		).toBeVisible();
+		await expect(page.getByRole("link", { name: /Profile/ })).toHaveAttribute(
+			"href",
+			"/console/profile",
+		);
+		await expect(page.getByText("Cloudflare Account ID")).toBeVisible();
 	});
 });
 

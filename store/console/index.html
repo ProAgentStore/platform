@@ -1690,6 +1690,18 @@ console.log(response)</pre>
       } catch {}
     }
 
+    function renderInstanceChatError(message) {
+      const text = String(message || 'Unknown error');
+      const needsCloudflareKey = text.includes('Cloudflare Workers AI account ID and API token');
+      const help = needsCloudflareKey
+        ? `<div style="margin-top:0.45rem;font-size:0.78rem;line-height:1.45;color:var(--muted)">
+            Add it in <a href="${consoleUrlPrefix()}/profile">Profile &rarr; API Keys &rarr; Cloudflare Workers AI</a>.
+            Use your Cloudflare Account ID and a Workers AI API token.
+          </div>`
+        : '';
+      return `<div class="chat-msg system">Error: ${esc(text)}${help}</div>`;
+    }
+
     async function sendInstanceMessage() {
       const input = document.getElementById('inst-chat-input');
       const message = input.value.trim();
@@ -1710,10 +1722,10 @@ console.log(response)</pre>
           container.innerHTML += `<div class="chat-msg assistant">${esc(data.message.content)}</div>`;
         }
         if (data.error) {
-          container.innerHTML += `<div class="chat-msg system">Error: ${esc(data.error)}</div>`;
+          container.innerHTML += renderInstanceChatError(data.error);
         }
       } catch (e) {
-        container.innerHTML += `<div class="chat-msg system">Error: ${esc(e.message)}</div>`;
+        container.innerHTML += renderInstanceChatError(e.message);
       }
       document.getElementById('inst-chat-thinking').classList.add('hidden');
       container.scrollTop = container.scrollHeight;
