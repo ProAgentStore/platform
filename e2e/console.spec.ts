@@ -441,6 +441,41 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByRole("heading", { name: "Your Documents" })).toBeVisible();
 		await expect(page.locator("#inst-tab-knowledge")).toHaveClass(/active/);
 	});
+
+	test("profile and notifications have refreshable routes", async ({ page }) => {
+		await mockSignedInConsole(page);
+
+		await page.goto("/console/profile");
+		await expect(
+			page.getByRole("heading", { name: "Profile", exact: true }),
+		).toBeVisible();
+		await expect(page.locator("#profile-login")).toHaveText("@tester");
+
+		await page.goto("/console/notifications");
+		await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
+		await expect(page.locator("#notif-empty")).toBeVisible();
+	});
+
+	test("keyboard chat shortcut focuses the visible instance chat input", async ({
+		page,
+	}) => {
+		await mockSignedInConsole(page);
+
+		await page.goto("/console/instances/inst-1/chat");
+		await expect(page.locator("#inst-tab-chat")).toHaveClass(/active/);
+		await page.evaluate(() => {
+			document.dispatchEvent(
+				new KeyboardEvent("keydown", {
+					key: "K",
+					ctrlKey: true,
+					bubbles: true,
+					cancelable: true,
+				}),
+			);
+		});
+
+		await expect(page.locator("#inst-chat-input")).toBeFocused();
+	});
 });
 
 test.describe("ProAgentStore skill discovery", () => {

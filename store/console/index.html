@@ -193,10 +193,10 @@
       <a href="/about/">About</a>
       <a href="https://github.com/ProAgentStore">GitHub</a>
       <span id="user-nav" class="hidden">
-        <a href="#" onclick="showNotifications();return false" style="position:relative;text-decoration:none;font-size:1.1rem;color:var(--muted)" title="Notifications">
+        <a href="/console/notifications" onclick="showNotifications();return false" style="position:relative;text-decoration:none;font-size:1.1rem;color:var(--muted)" title="Notifications">
           &#128276;<span id="notif-badge" style="display:none;position:absolute;top:-4px;right:-6px;background:var(--red);color:#fff;font-size:0.6rem;width:16px;height:16px;border-radius:50%;text-align:center;line-height:16px"></span>
         </a>
-        <a href="#" onclick="showProfile();return false" class="user-info" style="text-decoration:none" aria-label="Open profile">
+        <a href="/console/profile" onclick="showProfile();return false" class="user-info" style="text-decoration:none" aria-label="Open profile">
           <img id="user-avatar" class="avatar" alt="User avatar" width="28" height="28" loading="lazy">
           <span id="user-login"></span>
         </a>
@@ -2525,9 +2525,17 @@ console.log(response)</pre>
         if (current) { showDashboard(); e.preventDefault(); }
       }
       // Cmd/Ctrl+K: focus chat input (if in agent/instance detail)
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      if ((e.metaKey || e.ctrlKey) && String(e.key).toLowerCase() === 'k') {
         e.preventDefault();
-        const chatInput = document.getElementById('chat-input') || document.getElementById('inst-chat-input');
+        const onInstance = !document.getElementById('instance-detail').classList.contains('hidden');
+        const onAgent = !document.getElementById('agent-detail').classList.contains('hidden');
+        if (onInstance && currentInstanceTab !== 'chat') switchInstTab('chat');
+        if (onAgent && currentAgentTab !== 'chat') switchTab('chat');
+        const chatInput = onInstance
+          ? document.getElementById('inst-chat-input')
+          : onAgent
+            ? document.getElementById('chat-input')
+            : null;
         if (chatInput) chatInput.focus();
       }
       // Cmd/Ctrl+N: toggle create form (if on dashboard)
