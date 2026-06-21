@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +33,12 @@ interface RuntimeRegisterOptions extends PagsRequestOptions, RunnerRequestOption
 	runnerVersion?: string;
 	capability?: string[];
 	probe?: boolean;
+}
+
+interface RunnerConnectOptions extends RunnerStartOptions, PagsRequestOptions {
+	cloudflared?: string;
+	runnerVersion?: string;
+	skipProbe?: boolean;
 }
 
 export const runnerCommand = createRunnerCommand();
@@ -77,6 +84,14 @@ export function buildRunnerArgs(opts: RunnerStartOptions): string[] {
 	return args;
 }
 
+export function buildCloudflaredArgs(localUrl: string): string[] {
+	return ["tunnel", "--url", localUrl];
+}
+
+export function parseCloudflaredTunnelUrl(text: string): string | null {
+	return text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i)?.[0] || null;
+}
+
 export function buildRuntimeRegistrationBody(opts: RuntimeRegisterOptions, capabilities: string[] = []) {
 	return {
 		endpointUrl: clean(opts.endpointUrl) || opts.endpointUrl,
@@ -107,7 +122,7 @@ export function bundledRunnerPath(): string {
 	return fileURLToPath(new URL("./browser-runner/index.js", import.meta.url));
 }
 
-function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
+function runnerSpawnSpec(opts: RunnerStartOptions): { command: string; args: string[]; cwd: string } {
 	const root = findWorkspaceRoot();
 	const localPackage = resolve(root, "packages", "browser-runner", "src", "index.ts");
 	const bundledPackage = bundledRunnerPath();
@@ -124,10 +139,15 @@ function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
 		command = process.execPath;
 		args = [bundledPackage, ...runnerArgs];
 	}
+	return { command, args, cwd };
+}
+
+function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
+	const spec = runnerSpawnSpec(opts);
 
 	return new Promise((resolvePromise, reject) => {
-		const child = spawn(command, args, {
-			cwd,
+		const child = spawn(spec.command, spec.args, {
+			cwd: spec.cwd,
 			stdio: "inherit",
 			shell: process.platform === "win32",
 		});
@@ -137,6 +157,21 @@ function startRunnerForeground(opts: RunnerStartOptions): Promise<void> {
 			else resolvePromise();
 		});
 	});
+}
+
+async function waitForLocalRunner(opts: RunnerRequestOptions, timeoutMs = 15_000): Promise<void> {
+	const started = Date.now();
+	let lastError: unknown;
+	while (Date.now() - started < timeoutMs) {
+		try {
+			await requestRunner("GET", "/health", opts);
+			return;
+		} catch (error) {
+			lastError = error;
+			await new Promise((resolvePromise) => setTimeout(resolvePromise, 500));
+		}
+	}
+	throw new Error(`runner did not become healthy: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }
 
 export async function requestRunner<T>(
@@ -216,8 +251,8 @@ export function createRunnerCommand(): Command {
 	);
 
 	command
-	.command("start")
-	.description("Start the local browser runner in the foreground")
+		.command("start")
+		.description("Start the local browser runner in the foreground")
 	.option("--host <host>", "Host to bind", "127.0.0.1")
 	.option("--port <port>", "Port to bind", "49171")
 	.option("--data-dir <path>", "Runner data directory")
@@ -229,7 +264,123 @@ export function createRunnerCommand(): Command {
 	});
 
 	command
-	.command("status")
+		.command("connect <instanceId>")
+		.description("Start a local runner, open a Cloudflare quick tunnel, and register it with PAGS")
+		.option("--host <host>", "Host to bind", "127.0.0.1")
+		.option("--port <port>", "Port to bind", "49171")
+		.option("--data-dir <path>", "Runner data directory")
+		.option("--token <token>", "Runner bearer token. Defaults to PAGS_RUNNER_TOKEN or a generated token")
+		.option("--headless", "Run Playwright headless")
+		.option("--api-base <url>", "PAGS API base URL")
+		.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
+		.option("--cloudflared <path>", "cloudflared executable", "cloudflared")
+		.option("--runner-version <version>", "Runner version")
+		.option("--skip-probe", "Skip PAGS runtime probe after registration")
+		.action(async (instanceId: string, opts: RunnerConnectOptions) => {
+			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
+			const host = clean(opts.host) || "127.0.0.1";
+			const port = clean(opts.port) || "49171";
+			const localUrl = `http://${host}:${port}`;
+			const runnerOpts: RunnerStartOptions = {
+				...opts,
+				host,
+				port,
+				token: runnerToken,
+				instanceId,
+			};
+			const spec = runnerSpawnSpec(runnerOpts);
+			const runner = spawn(spec.command, spec.args, {
+				cwd: spec.cwd,
+				stdio: ["ignore", "pipe", "pipe"],
+				shell: process.platform === "win32",
+			});
+			runner.stdout?.on("data", (data) => process.stdout.write(data));
+			runner.stderr?.on("data", (data) => process.stderr.write(data));
+			runner.on("exit", (code) => {
+				if (code && code !== 0) writeError(`runner exited with code ${code}`);
+			});
+
+			let tunnel: ReturnType<typeof spawn> | null = null;
+			const shutdown = () => {
+				if (tunnel && !tunnel.killed) tunnel.kill("SIGTERM");
+				if (!runner.killed) runner.kill("SIGTERM");
+			};
+			process.once("SIGINT", () => {
+				shutdown();
+				process.exit(0);
+			});
+			process.once("SIGTERM", () => {
+				shutdown();
+				process.exit(0);
+			});
+
+			try {
+				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId });
+				writeLine(`Local runner healthy at ${localUrl}`);
+
+				const tunnelUrl = await new Promise<string>((resolveTunnel, reject) => {
+					let output = "";
+					const cloudflared = clean(opts.cloudflared) || "cloudflared";
+					tunnel = spawn(cloudflared, buildCloudflaredArgs(localUrl), {
+						stdio: ["ignore", "pipe", "pipe"],
+						shell: process.platform === "win32",
+					});
+					const onData = (data: Buffer) => {
+						const text = data.toString("utf-8");
+						output += text;
+						process.stderr.write(text);
+						const parsed = parseCloudflaredTunnelUrl(output);
+						if (parsed) resolveTunnel(parsed);
+					};
+					tunnel.stdout?.on("data", onData);
+					tunnel.stderr?.on("data", onData);
+					tunnel.on("error", reject);
+					tunnel.on("exit", (code) => {
+						if (code && code !== 0) reject(new Error(`cloudflared exited with code ${code}`));
+					});
+					setTimeout(() => reject(new Error("timed out waiting for cloudflared tunnel URL")), 45_000).unref();
+				});
+
+				writeLine(`Tunnel ready: ${tunnelUrl}`);
+				await waitForLocalRunner({ url: tunnelUrl, token: runnerToken, instanceId }, 30_000);
+				writeLine("Tunnel health check passed");
+
+				const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", {
+					url: tunnelUrl,
+					token: runnerToken,
+					instanceId,
+				});
+				const result = await requestPags("POST", `/v1/instances/${apiPathSegment(instanceId)}/runtime`, opts, {
+					endpointUrl: tunnelUrl,
+					token: runnerToken,
+					placement: "local",
+					capabilities: Array.isArray(capabilities.capabilities)
+						? capabilities.capabilities.filter((item): item is string => typeof item === "string")
+						: [],
+					runnerVersion: clean(opts.runnerVersion) || "",
+				});
+				writeLine(JSON.stringify(result, null, 2));
+				if (!opts.skipProbe) {
+					const status = await requestPags(
+						"GET",
+						`/v1/instances/${apiPathSegment(instanceId)}/runtime/status`,
+						opts,
+					);
+					writeLine(JSON.stringify(status, null, 2));
+				}
+				writeLine("Connected. Keep this process running while the agent uses your local browser.");
+				await new Promise<void>((resolvePromise) => {
+					runner.on("exit", () => resolvePromise());
+					tunnel?.on("exit", () => resolvePromise());
+				});
+			} catch (error) {
+				shutdown();
+				throw error;
+			}
+		});
+
+	command
+		.command("status")
 	.description("Check local runner health and capabilities")
 	.option("--url <url>", "Runner URL")
 	.option("--token <token>", "Runner bearer token")

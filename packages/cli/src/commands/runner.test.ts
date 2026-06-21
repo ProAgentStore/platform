@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	apiPathSegment,
+	buildCloudflaredArgs,
 	buildRuntimeRegistrationBody,
 	buildRunnerArgs,
 	createRunnerCommand,
 	pagsApiBase,
 	pagsHeaders,
+	parseCloudflaredTunnelUrl,
 	requestPags,
 	requestRunner,
 	runnerBaseUrl,
@@ -45,6 +47,21 @@ describe("runner command helpers", () => {
 			"inst-1",
 			"--headless",
 		]);
+	});
+
+	it("builds cloudflared quick tunnel args", () => {
+		expect(buildCloudflaredArgs("http://127.0.0.1:49171")).toEqual([
+			"tunnel",
+			"--url",
+			"http://127.0.0.1:49171",
+		]);
+	});
+
+	it("parses cloudflared quick tunnel URLs", () => {
+		expect(parseCloudflaredTunnelUrl("Visit it at https://abc-def.trycloudflare.com")).toBe(
+			"https://abc-def.trycloudflare.com",
+		);
+		expect(parseCloudflaredTunnelUrl("no tunnel yet")).toBeNull();
 	});
 
 	it("normalizes runner URL", () => {

@@ -13,6 +13,12 @@ pnpm --filter @proagentstore/browser-runner dev -- --port 49171
 The runner listens on `127.0.0.1` by default. Use `--token` and `--instance-id` when exposing it through Cloudflare Tunnel. PAGS includes `Authorization: Bearer <token>` and `X-PAGS-Instance-Id` on proxied task calls.
 
 ```bash
+pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
+```
+
+`runner connect` starts the local runner, opens a Cloudflare quick tunnel, registers the tunnel with PAGS, and keeps both processes alive. Manual mode is still useful for named tunnels:
+
+```bash
 pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 ```
 

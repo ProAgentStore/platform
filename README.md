@@ -123,6 +123,12 @@ pags runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" 
 When exposing the runner through a tunnel, start it with a token and instance binding, then register only the tunnel URL plus token with PAGS. Runtime registration is instance-scoped: PAGS stores the endpoint and encrypted runner token, then MCP/API proxy task calls to the runner with `X-PAGS-Instance-Id`.
 
 ```bash
+pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
+```
+
+`runner connect` is the normal local mode: it starts the browser runner, opens a Cloudflare quick tunnel, registers the tunnel with PAGS, probes runtime health, and keeps the process alive. Manual setup is still available when you want to use a stable named tunnel:
+
+```bash
 pags runner register "$PAGS_INSTANCE_ID" \
   --endpoint-url "$PAGS_RUNNER_ENDPOINT" \
   --runner-token "$PAGS_RUNNER_TOKEN" \

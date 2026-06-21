@@ -230,10 +230,10 @@ The service listens on localhost, for example:
 http://127.0.0.1:49171
 ```
 
-The user exposes it through Cloudflare Tunnel:
+The CLI exposes it through Cloudflare Tunnel and registers it with PAGS:
 
 ```bash
-cloudflared tunnel --url http://127.0.0.1:49171
+pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 ```
 
 For production usage, users should use a named tunnel and stable hostname:
@@ -325,6 +325,12 @@ User runner commands:
 
 ```bash
 npm install -g @proagentstore/cli
+pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
+```
+
+Manual runner commands for stable named tunnels:
+
+```bash
 pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 pags runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 pags runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
