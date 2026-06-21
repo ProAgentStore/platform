@@ -11,20 +11,23 @@ Current implementation:
 - `workers/api` stores instance-scoped runtime registrations and proxies task/status/event calls to the registered runner.
 - `workers/mcp` exposes runtime tools for registering a runner, probing status, running tasks, approving tasks, cancelling tasks, and reading events.
 - The first brain placement target is `brainPlacement = "pags"`: PAGS owns the brain and the local runner acts as a capability/tool executor.
+- The shipped local connection mode is endpoint registration through Cloudflare Tunnel.
+- The cheapest best-practice target is an outbound CLI worker that polls PAGS for approved tasks and posts events/results back, avoiding a public tunnel by default.
 - Browser-resident FAGS-style brains remain a supported later placement, but are not the first PAGS implementation target.
 
 ## Decision Record: Where the Agent Brain Lives
 
-Status: PAGS-first local runner and runtime registration started.
+Status: PAGS-first local runner and runtime registration shipped for tunnel mode. Outbound polling should be the next local runtime protocol.
 
 Decision owner: not finalized. This recommendation follows the PAS Agent Teams precedent: PAS runs the agent loop in our infrastructure, while user-owned keys can be used for billing. It still needs product/engineering approval for PAGS browser agents.
 
-Recommendation for the first PAGS implementation: the agent brain and orchestration live in PAGS-hosted infrastructure. The browser runner is a capability executor that can run either on a managed VM or on the user's local machine through a tunnel.
+Recommendation for the first PAGS implementation: the agent brain and orchestration live in PAGS-hosted infrastructure. The browser runner is a capability executor that can run either on the user's local machine or on a managed VM. For the cheapest best-practice local mode, the runner should connect outbound to PAGS and poll for work. Tunnels remain a shipped bootstrap/debug mode and named tunnels remain useful for advanced users.
 
 That means:
 
+- Local polling mode: PAGS queues task envelopes, the user-owned CLI runner polls outbound, executes tasks locally, and posts events/results back.
+- Local tunnel mode: PAGS calls a registered user-owned local runner endpoint through Cloudflare Tunnel.
 - Managed mode: PAGS assigns a ProAgentStore-managed browser runner VM as the browser/tool executor.
-- Local mode: PAGS assigns a user-owned local runner as the browser/tool executor.
 - PAGS hosted services own orchestration, auth, billing, runtime assignment, task state, and audit trails.
 - A plain Cloudflare Worker can coordinate and route, but it is not the process that runs Playwright.
 
@@ -45,7 +48,8 @@ For a text-only server agent, the brain can still run in a Cloudflare Worker. Fo
 Why this recommendation exists:
 
 - PAS already proves the pattern: run our own agent loop in our infrastructure, keep deterministic system stages separate, and meter/BYO keys as needed.
-- Managed mode remains the paid product path: reliable, always-on, supportable, auditable, and easier to secure.
+- Local polling mode is the cheapest default path: no public endpoint, no tunnel dependency, and no always-open WebSocket or Durable Object requirement.
+- Managed mode remains the paid product path for reliability: always-on, supportable, auditable, and easier to secure.
 - Browser state belongs with the browser process. The managed runner can see DOM, screenshots, downloads, file picker state, and logged-in session directly.
 - Local execution is useful for users who prefer not to pay for VM time or want maximum local control, and it exercises the same protocol before managed VM provisioning exists.
 
@@ -60,8 +64,9 @@ This is not a final business decision. It is the current technical recommendatio
 ## Goals
 
 - Agents can declare that they need browser driving capability.
-- A user can hire a managed browser runtime from ProAgentStore.
-- A user can alternatively run Playwright on their own machine through Cloudflare Tunnel.
+- A user can run Playwright on their own machine through an outbound CLI connection to PAGS.
+- A user can use Cloudflare Tunnel as a shipped bootstrap/debug mode or stable named endpoint.
+- A user can later hire a managed browser runtime from ProAgentStore.
 - Hosted PAGS remains the control plane for discovery, subscriptions, config, auth, logs, and MCP.
 - Browser execution happens in a runtime environment that can actually run Playwright or equivalent browser automation.
 - Sensitive user material such as resumes, cookies, profile data, and job-board sessions stays in the assigned browser runtime.
@@ -110,10 +115,10 @@ Runs agent-specific backend logic.
 There are three runtime modes:
 
 - `hosted-worker`: Cloudflare Worker, for agents that do not need browser automation.
+- `local-browser-runner`: user-owned Node service with Playwright. Target default is outbound polling; current shipped mode uses Cloudflare Tunnel endpoint registration.
 - `managed-browser-runner`: ProAgentStore-managed VM/container with Playwright.
-- `local-browser-runner`: user-owned Node service with Playwright, exposed by Cloudflare Tunnel.
 
-For browser-capable agents, the runtime plane is a managed or local Node process. It exposes an HTTP API that PAGS and MCP can call through a signed task protocol.
+For browser-capable agents, the runtime plane is a managed or local Node process. Current tunnel mode exposes an HTTP API that PAGS and MCP call through a signed/tokenized task protocol. Target local polling mode should keep the HTTP API internal to the CLI and use PAGS cloud task queues as the public interface.
 
 Required runtime endpoints:
 
@@ -172,9 +177,48 @@ The browser execution plane owns:
 
 ## Runtime Modes
 
+### Local Runtime Through Outbound Polling
+
+Target cheapest best-practice mode.
+
+The user runs one CLI process:
+
+```bash
+pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
+```
+
+In target polling mode, that process should:
+
+1. Start the local Playwright runner on localhost.
+2. Authenticate to PAGS with a scoped runner/session token.
+3. Register heartbeat, capabilities, runner version, and instance binding.
+4. Poll PAGS for pending approved task envelopes.
+5. Execute work locally.
+6. Post task events, status, receipts, and non-sensitive results back to PAGS.
+
+The route is:
+
+```text
+PAGS task queue <-poll/post- local CLI runner -> Playwright browser on user machine
+```
+
+Pros:
+
+- Cheapest default runtime path.
+- User machine only makes outbound HTTPS requests.
+- No public tunnel URL for the local machine.
+- No always-on WebSocket/Durable Object requirement.
+- Good enough latency for job applications and other human-paced browser work.
+
+Cons:
+
+- Requires new cloud-side task queue/state endpoints.
+- User machine must be online while work runs.
+- Not ideal for scheduled unattended work unless the CLI is left running.
+
 ### Managed Browser Runner
 
-Default for paid browser agents.
+Paid reliability path after the local protocol proves out.
 
 ProAgentStore provisions or rents an isolated runtime for the user. The runner hosts:
 
@@ -216,7 +260,7 @@ Cons:
 
 ### Local Runtime Through Cloudflare Tunnel
 
-Fallback for users who do not want to pay for a managed browser runtime.
+Current shipped local mode and fallback/debug path.
 
 The user runs a local service:
 
@@ -230,7 +274,7 @@ The service listens on localhost, for example:
 http://127.0.0.1:49171
 ```
 
-The CLI exposes it through Cloudflare Tunnel and registers it with PAGS:
+The CLI currently exposes it through Cloudflare Tunnel and registers it with PAGS:
 
 ```bash
 pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
@@ -248,12 +292,14 @@ Pros:
 
 - User keeps sensitive browser sessions and files locally.
 - Best fit for personal automation and debugging.
-- Lowest runtime cost for the user if they are willing to operate it.
+- Already implemented and published in `@proagentstore/cli`.
+- Lowest setup friction for the current API proxy model.
 
 Cons:
 
 - User machine must be online.
 - User must install Node, Playwright browser dependencies, and Cloudflare Tunnel.
+- Public tunnel dependency is less desirable than outbound polling for default production use.
 - Reliability depends on the local machine.
 - Harder for PAGS to support.
 
@@ -416,7 +462,7 @@ Current MVP:
 - Registration stores the runner bearer token encrypted when `KEY_ENCRYPTION_KEY` is configured.
 - PAGS sends the bearer token plus `X-PAGS-Instance-Id` to the runner.
 - The local runner can bind to one instance id with `--instance-id`.
-- PAGS normalizes runner task payloads and forces approval for `browser.open` before proxying.
+- PAGS normalizes runner task payloads and forces approval for `browser.open` and `job.apply_basic` before proxying.
 
 Suggested model:
 
@@ -564,7 +610,9 @@ For managed VMs, PAGS must define retention and deletion rules before launch.
   - `approve_instance_task`
   - `cancel_instance_task`
   - `instance_task_events`
-- Add console UI for local tunnel URL setup.
+- Done: add console runtime board for instance task status/events.
+- Done: add `pags runner connect` to start the runner, open a quick tunnel, register it, and probe health.
+- Add outbound polling task queue endpoints for the cheaper default local mode.
 
 ### Phase 4: Job Application Agent on Browser Runner
 
@@ -607,7 +655,9 @@ For managed VMs, PAGS must define retention and deletion rules before launch.
 
 ## Open Decisions
 
-- Direct tunnel calls from MCP/API versus API proxying.
+- Polling task queue schema and retention.
+- Whether `pags runner connect` should default to polling and expose tunnel mode as `pags runner tunnel`.
+- Direct tunnel calls from MCP/API versus API proxying for fallback mode.
 - Named tunnel ownership: user-owned Cloudflare account versus PAGS-managed tunnel.
 - Runtime auth: shared secret first or public/private key first.
 - Local storage: JSON for MVP versus SQLite from day one.
@@ -617,13 +667,13 @@ For managed VMs, PAGS must define retention and deletion rules before launch.
 
 ## Recommended MVP
 
-Build the PAGS-first protocol and local runner first, then add managed browser runners behind the same registration and task API.
+Build the PAGS-first protocol and local runner first, make outbound polling the default local connection mode, then add managed browser runners behind the same task model.
 
 Why:
 
 - It matches PAS: our system runs the loop.
 - It lets the runner stay generic: any agent brain connected to PAGS can use the same local capability executor.
-- It gives us a cheap end-to-end path before VM provisioning and billing are complete.
+- It gives us the cheapest secure end-to-end path before VM provisioning and billing are complete.
 - The same runner binary can later run on managed VMs for users who want the paid always-on path.
 
 MVP scope:
@@ -631,9 +681,9 @@ MVP scope:
 - PAGS runtime registration and MCP task tools.
 - Local Node runner.
 - Playwright persistent profile.
-- Runtime assignment from PAGS.
+- Outbound polling between CLI and PAGS for local runner tasks.
 - Job application task with generic HTML, Greenhouse, and Lever support.
 - Manual handoff and final-submit approval.
 - Managed VM mode after the protocol proves out locally.
 
-Do not make browser-resident local brains the default. Local tunnel is the no-VM executor path; PAGS still owns the first implementation's brain and orchestration.
+Do not make browser-resident local brains the default. Local outbound polling is the no-VM executor path; Cloudflare Tunnel is a current fallback/debug path; PAGS still owns the first implementation's brain and orchestration.

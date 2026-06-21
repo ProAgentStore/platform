@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Browser Runtime Architecture — ProAgentStore Docs</title>
-  <meta name="description" content="Architecture for ProAgentStore browser-capable agents, managed VM runners, local Playwright fallback, Cloudflare Tunnel, and agent brain placement.">
+  <meta name="description" content="Architecture for ProAgentStore browser-capable agents, local Playwright runners, outbound polling, Cloudflare Tunnel fallback, managed VM runners, and agent brain placement.">
   <link rel="canonical" href="https://proagentstore.online/docs/browser-runtime/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <meta name="theme-color" content="#7c3aed">
@@ -98,10 +98,10 @@
     <main>
       <div class="eyebrow">Architecture docs</div>
       <h1>Browser-Capable Agent Runtime</h1>
-      <p class="lead">A proposed runtime model for agents that need to drive a real browser: ProAgentStore-managed browser runners by default, with local Playwright through Cloudflare Tunnel only when a user does not want to pay for a managed VM.</p>
+      <p class="lead">Runtime model for agents that need to drive a real browser: PAGS owns the control-plane brain, a local Playwright runner executes browser work, and the cheapest best-practice target is outbound polling from the CLI to PAGS. Cloudflare Tunnel is the current shipped bootstrap path; managed runners are the later paid reliability path.</p>
       <div class="status">
-        <span class="pill proposed">Status: proposed</span>
-        <span class="pill">Decision owner: not finalized</span>
+        <span class="pill proposed">Status: implemented tunnel mode</span>
+        <span class="pill">Target: outbound polling</span>
         <span class="pill">PAS precedent: our loop</span>
         <span class="pill">Reference agent: job applications</span>
       </div>
@@ -109,8 +109,8 @@
       <section id="decision">
         <h2>Decision Status</h2>
         <div class="decision">
-          <p><strong>This is not a ratified product decision.</strong> The current recommendation follows the PAS Agent Teams pattern: our system runs the agent loop, with billing/key choices layered on top. It still needs product and engineering approval for PAGS browser agents.</p>
-          <p>The recommendation is: browser-capable agents run their active brain in ProAgentStore-managed browser runner infrastructure by default. Local machine Playwright is the fallback for users who choose not to spend on a managed VM.</p>
+          <p><strong>Current code:</strong> PAGS stores an instance-scoped runtime endpoint and proxies task/status/event calls to a local Playwright runner exposed through Cloudflare Tunnel.</p>
+          <p><strong>Cheapest best-practice target:</strong> the local CLI connects outbound to PAGS, polls for approved tasks, executes them locally, and posts events/results back. Managed browser runners remain the paid reliability path.</p>
         </div>
       </section>
 
@@ -124,8 +124,8 @@
             </div>
             <div class="arrow">-></div>
             <div class="node runner">
-              <h3>Managed Browser Runner</h3>
-              <p>Default agent brain, LLM calls, task state, Playwright controller, VM storage.</p>
+              <h3>Local CLI Runner</h3>
+              <p>Outbound polling target. Executes browser work locally and reports task events/results to PAGS.</p>
             </div>
             <div class="arrow">-></div>
             <div class="node browser">
@@ -134,7 +134,7 @@
             </div>
           </div>
         </div>
-        <p>PAGS starts and observes work. The managed runner does the active thinking and browser control. Local runner uses the same protocol only when selected as a no-VM option.</p>
+        <p>PAGS starts and observes work. The local runner executes browser actions. Current code reaches it through a tunnel; target local mode uses outbound polling so the user's machine does not expose a public endpoint.</p>
       </section>
 
       <section id="runtimes">
@@ -146,11 +146,11 @@
           </div>
           <div class="card">
             <strong>Managed Browser Runner</strong>
-            <p>Default paid path. ProAgentStore-managed VM/container with Playwright and persistent browser state.</p>
+            <p>Later paid path. ProAgentStore-managed VM/container with Playwright and persistent browser state.</p>
           </div>
           <div class="card">
             <strong>Local Browser Runner</strong>
-            <p>No-VM option. Node plus Playwright on the user's machine, exposed through Cloudflare Tunnel.</p>
+            <p>Cheapest default target. Node plus Playwright on the user's machine, connected outbound to PAGS. Tunnel mode is shipped today as fallback/bootstrap.</p>
           </div>
         </div>
       </section>
@@ -169,16 +169,16 @@
               <td>Use for text-only agents, not browser agents.</td>
             </tr>
             <tr>
+              <td>Brain in PAGS, runner local</td>
+              <td>Cheapest, user-owned browser/files, platform-owned control plane.</td>
+              <td>User machine must be online; polling endpoints still need to be built.</td>
+              <td>Cheapest best-practice recommendation.</td>
+            </tr>
+            <tr>
               <td>Brain in managed VM runner</td>
               <td>Always-on, managed, supportable, billable, same browser protocol.</td>
               <td>Costs more and needs stronger isolation/retention policy.</td>
-              <td>MVP recommendation.</td>
-            </tr>
-            <tr>
-              <td>Brain in local runner</td>
-              <td>User avoids VM spend and can keep sessions/files local.</td>
-              <td>User machine must be online and configured; harder to support.</td>
-              <td>Fallback option, not default.</td>
+              <td>Paid reliability path.</td>
             </tr>
           </tbody>
         </table>
@@ -191,7 +191,7 @@
             <div class="lane">
               <h3>PAGS / MCP</h3>
               <div class="step">Create subscribed instance</div>
-              <div class="step">Assign managed runner or register local tunnel</div>
+              <div class="step">Queue task for local runner or register tunnel fallback</div>
               <div class="step">Start task with job URL</div>
               <div class="step">Receive events and status</div>
               <div class="step">Approve final submit</div>
@@ -214,7 +214,7 @@
         <div class="codeblock">{
   "runtime": {
     "kind": "browser-runner",
-    "brain": "managed-runner-default",
+    "brain": "pags",
     "browser": {
       "engine": "playwright",
       "persistentProfile": true,
@@ -222,13 +222,14 @@
       "fileUploads": true
     },
     "deployment": {
-      "managedVm": true,
+      "localPolling": true,
       "localTunnel": true,
+      "managedVm": true,
       "hostedWorker": false
     }
   }
 }</div>
-        <p>Runtime endpoints should be signed and instance-scoped, not open public tunnel URLs.</p>
+        <p>Current tunnel runtime endpoints should be signed/tokenized and instance-scoped, not open public tunnel URLs. Target polling mode should use PAGS task queues instead of public local endpoints.</p>
         <div class="codeblock">GET  /health
 GET  /capabilities
 POST /tasks
@@ -241,12 +242,12 @@ GET  /events</div>
       <section id="plan">
         <h2>Implementation Plan</h2>
         <ul>
-          <li>Define browser-runner manifest and runtime registration schema.</li>
-          <li>Build the managed Node runner with Playwright persistent profiles.</li>
-          <li>Add VM/container provisioning and runner assignment in PAGS.</li>
+          <li>Current: local browser runner, tunnel registration, task/event proxying, and runtime board.</li>
+          <li>Next: add cloud task queue endpoints for outbound local runner polling.</li>
+          <li>Make <code>pags runner connect</code> default to polling and expose tunnel mode as fallback/debug.</li>
           <li>Add MCP tools for registering runtimes, starting tasks, approvals, and event reads.</li>
-          <li>Move the job application agent to the browser-runner protocol.</li>
-          <li>Add local Cloudflare Tunnel mode as the no-VM fallback.</li>
+          <li>Expand the job application agent beyond <code>job.apply_basic</code>.</li>
+          <li>Add VM/container provisioning and runner assignment in PAGS after local polling proves out.</li>
         </ul>
       </section>
     </main>

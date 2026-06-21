@@ -49,7 +49,7 @@ interface RunnerTaskBody {
 	approvalPrompt?: string;
 }
 
-const APPROVAL_REQUIRED_RUNNER_TASKS = new Set(["browser.open"]);
+const APPROVAL_REQUIRED_RUNNER_TASKS = new Set(["browser.open", "job.apply_basic"]);
 
 export function validateRuntimeEndpointUrl(value: string): string {
 	let url: URL;

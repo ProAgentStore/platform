@@ -120,13 +120,13 @@ pags runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID
 pags runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 ```
 
-When exposing the runner through a tunnel, start it with a token and instance binding, then register only the tunnel URL plus token with PAGS. Runtime registration is instance-scoped: PAGS stores the endpoint and encrypted runner token, then MCP/API proxy task calls to the runner with `X-PAGS-Instance-Id`.
+Current local runtime mode uses a registered HTTPS endpoint. `runner connect` starts the runner with a token and instance binding, opens a Cloudflare quick tunnel, and registers only the tunnel URL plus token with PAGS. Runtime registration is instance-scoped: PAGS stores the endpoint and encrypted runner token, then MCP/API proxy task calls to the runner with `X-PAGS-Instance-Id`.
 
 ```bash
 pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 ```
 
-`runner connect` is the normal local mode: it starts the browser runner, opens a Cloudflare quick tunnel, registers the tunnel with PAGS, probes runtime health, and keeps the process alive. Manual setup is still available when you want to use a stable named tunnel:
+`runner connect` is the current shipped local mode. It is the cheapest usable path today, but the target cheapest best-practice mode is outbound polling from the CLI to PAGS so the user's machine does not need a public tunnel. Manual setup is still available when you want to use a stable named tunnel:
 
 ```bash
 pags runner register "$PAGS_INSTANCE_ID" \

@@ -193,6 +193,21 @@ describe("runtime task protocol shape", () => {
 		});
 	});
 
+	it("normalizes job.apply_basic tasks as approval-required at the PAGS boundary", () => {
+		expect(
+			normalizeRunnerTaskBody({
+				type: "job.apply_basic",
+				input: { url: "https://example.com/jobs/1" },
+				requiresApproval: false,
+			}),
+		).toMatchObject({
+			type: "job.apply_basic",
+			input: { url: "https://example.com/jobs/1" },
+			requiresApproval: true,
+			approvalPrompt: "Approve task job.apply_basic",
+		});
+	});
+
 	it("rejects invalid runner task bodies", () => {
 		expect(() => normalizeRunnerTaskBody({ input: {} })).toThrow(HttpError);
 		expect(() => normalizeRunnerTaskBody({ type: "" })).toThrow(HttpError);

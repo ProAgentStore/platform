@@ -157,7 +157,7 @@ Expected tool flow:
 
       <h3>Connect a local browser runner</h3>
       <pre><code>npm i -g @proagentstore/cli
-pags runner start --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
+pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 
 Expected MCP flow:
 1. subscribe_agent
@@ -166,6 +166,7 @@ Expected MCP flow:
 4. run_instance_task
 5. approve_instance_task
 6. instance_task_events</code></pre>
+      <p>Current CLI mode uses Cloudflare Tunnel to register a local runner endpoint. The target cheapest best-practice mode is outbound polling from the CLI to PAGS, with tunnel mode kept as fallback/debug.</p>
     </section>
 
     <section>

@@ -16,7 +16,7 @@ The runner listens on `127.0.0.1` by default. Use `--token` and `--instance-id` 
 pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 ```
 
-`runner connect` starts the local runner, opens a Cloudflare quick tunnel, registers the tunnel with PAGS, and keeps both processes alive. Manual mode is still useful for named tunnels:
+`runner connect` currently starts the local runner, opens a Cloudflare quick tunnel, registers the tunnel with PAGS, and keeps both processes alive. This is the shipped bootstrap path. The target cheapest best-practice local mode is outbound polling from the CLI to PAGS, with tunnel mode kept as fallback/debug. Manual mode is still useful for named tunnels:
 
 ```bash
 pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"

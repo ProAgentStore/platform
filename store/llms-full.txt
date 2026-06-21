@@ -201,6 +201,8 @@ Browser/runtime tools:
 - `cancel_instance_task`
 - `instance_task_events`
 
+Browser-capable agents use PAGS as the control-plane brain and a browser runner as the tool executor. Current shipped local mode is `pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless`, which starts the local runner, opens a Cloudflare Tunnel endpoint, registers it with PAGS, and keeps it alive. The cheapest best-practice target is outbound CLI polling to PAGS so the user's machine does not expose a public endpoint; tunnel mode should remain fallback/debug.
+
 ## Capability Manifest
 
 Read:
