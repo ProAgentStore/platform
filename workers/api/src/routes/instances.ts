@@ -719,7 +719,6 @@ instanceRoutes.get("/my/instances", async (c) => {
 
 /** Register or update the local/managed runtime for my instance. */
 instanceRoutes.post("/:instanceId/runtime", async (c) => {
-	try {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
