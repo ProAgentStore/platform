@@ -234,9 +234,9 @@
     .status-complete{background:rgba(34,197,94,0.15);color:var(--green)}
     .status-blocked{background:rgba(239,68,68,0.15);color:var(--red)}
 
-    /* Application detail page */
-    #app-detail-layout{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
-    @media(max-width:900px){#app-detail-layout{grid-template-columns:1fr}}
+    /* Application detail + KB layout */
+    #app-detail-layout,#inst-kb-layout{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
+    @media(max-width:900px){#app-detail-layout,#inst-kb-layout{grid-template-columns:1fr}}
 
     .empty{text-align:center;padding:2rem;color:var(--muted-soft);font-size:0.9rem}
     .error{color:var(--red);font-size:0.82rem;margin-top:0.5rem}
@@ -407,15 +407,8 @@
 
     <div class="tabs">
       <button type="button" class="tab active" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
-      <button type="button" class="tab" data-inst-tab="applications" onclick="switchInstTab('applications')">Applications</button>
-      <button type="button" class="tab" data-inst-tab="runtime" onclick="switchInstTab('runtime')">Runtime</button>
-      <button type="button" class="tab" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')">My Documents</button>
-    </div>
-
-    <!-- Instance applications kanban -->
-    <div id="inst-tab-applications" class="tab-panel">
-      <div id="inst-applications-board"></div>
-      <p id="inst-applications-empty" class="hidden" style="color:var(--muted);text-align:center;padding:2rem">No applications yet. Ask the agent to apply for a job.</p>
+      <button type="button" class="tab" data-inst-tab="board" onclick="switchInstTab('board')">Board</button>
+      <button type="button" class="tab" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')">Knowledge</button>
     </div>
 
     <!-- Instance chat -->
@@ -431,74 +424,111 @@
       </div>
     </div>
 
-    <!-- Instance runtime board -->
-    <div id="inst-tab-runtime" class="tab-panel">
+    <!-- Unified Board: runtime tasks + collection records -->
+    <div id="inst-tab-board" class="tab-panel">
       <div class="agent-board-toolbar">
         <div>
-          <h3 style="font-size:1rem;margin-bottom:0.2rem">Runtime Board</h3>
-          <div id="inst-runtime-summary" class="agent-board-summary">Checking runtime...</div>
+          <h3 style="font-size:1rem;margin-bottom:0.2rem">Board</h3>
+          <div id="inst-board-summary" class="agent-board-summary">Loading...</div>
         </div>
         <div class="agent-board-actions">
-          <button type="button" onclick="loadInstanceRuntime()" class="btn btn-outline btn-sm">Refresh</button>
+          <button type="button" onclick="loadUnifiedBoard()" class="btn btn-outline btn-sm">Refresh</button>
         </div>
       </div>
-      <div id="inst-runtime-board" class="kanban-board"></div>
+      <div id="inst-unified-board" class="kanban-board"></div>
       <div id="runtime-task-detail" class="runtime-detail-section hidden" role="region" aria-labelledby="runtime-task-detail-title">
         <section class="runtime-detail-panel">
           <div class="runtime-detail-head">
             <div>
               <div id="runtime-task-detail-status" class="kanban-card-meta"></div>
-              <h3 id="runtime-task-detail-title">Runtime Task Details</h3>
+              <h3 id="runtime-task-detail-title">Task Details</h3>
             </div>
-            <button type="button" class="btn btn-outline btn-sm" onclick="closeRuntimeTaskDetail()">Back to runtime board</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="closeRuntimeTaskDetail()">Back to board</button>
           </div>
           <div id="runtime-task-detail-body" class="runtime-detail-body"></div>
           <div id="runtime-task-detail-actions" class="runtime-detail-actions"></div>
         </section>
       </div>
       <div id="inst-runtime-events" class="create-form" style="margin-top:1rem">
-        <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Recent Runtime Events</h3>
+        <h3 style="font-size:0.95rem;margin-bottom:0.75rem">Recent Activity</h3>
         <div id="inst-runtime-event-list" style="display:flex;flex-direction:column;gap:0.35rem"></div>
       </div>
     </div>
 
-    <!-- Instance knowledge (client's own docs) -->
+    <!-- Knowledge Base: docs + memory + files, browseable + editable + chateable -->
     <div id="inst-tab-knowledge" class="tab-panel">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.5rem">
-        <h3 style="font-size:1rem">Your Documents</h3>
-      </div>
-      <p style="font-size:0.82rem;color:var(--muted);margin-bottom:1rem">Add your own documents for this agent to reference. These are private to you.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem" id="inst-kb-layout">
+        <!-- Left: KB content -->
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+            <h3 style="font-size:1rem;font-weight:700">Knowledge Base</h3>
+            <div style="display:flex;gap:0.35rem;flex-wrap:wrap">
+              <button type="button" onclick="showInstKbForm('paste')" class="btn btn-outline btn-sm">+ Text</button>
+              <button type="button" onclick="showInstKbForm('url')" class="btn btn-outline btn-sm">+ URL</button>
+              <button type="button" onclick="document.getElementById('inst-kb-file').click()" class="btn btn-outline btn-sm">+ File</button>
+              <input type="file" id="inst-kb-file" accept=".txt,.md,.csv,.json,.html" style="display:none" onchange="uploadInstKbFile(this)">
+            </div>
+          </div>
 
-      <div style="display:flex;gap:0.5rem;margin-bottom:1rem;flex-wrap:wrap">
-        <button type="button" onclick="showInstKbForm('paste')" class="btn btn-outline btn-sm">Paste Text</button>
-        <button type="button" onclick="showInstKbForm('url')" class="btn btn-outline btn-sm">Import URL</button>
-        <button type="button" onclick="importInstGoogleDoc()" class="btn btn-outline btn-sm">Google Doc</button>
-        <button type="button" onclick="document.getElementById('inst-kb-file').click()" class="btn btn-outline btn-sm">Upload File</button>
-        <input type="file" id="inst-kb-file" accept=".txt,.md,.csv,.json,.html" style="display:none" onchange="uploadInstKbFile(this)">
-      </div>
+          <div id="inst-kb-form-paste" class="create-form hidden" style="margin-bottom:0.75rem">
+            <div><label>Title</label><input id="inst-kb-title" placeholder="e.g. Company Handbook"></div>
+            <div style="margin-top:0.5rem"><label>Content</label><textarea id="inst-kb-content" placeholder="Paste your text..." style="min-height:100px"></textarea></div>
+            <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+              <button type="button" onclick="addInstKbPaste()" class="btn btn-primary btn-sm">Add</button>
+              <button type="button" onclick="hideInstKbForms()" class="btn btn-outline btn-sm">Cancel</button>
+            </div>
+          </div>
 
-      <div id="inst-kb-form-paste" class="create-form hidden" style="margin-bottom:1rem">
-        <div><label>Title</label><input id="inst-kb-title" placeholder="e.g. Company Handbook"></div>
-        <div style="margin-top:0.5rem"><label>Content</label><textarea id="inst-kb-content" placeholder="Paste your text..." style="min-height:120px"></textarea></div>
-        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
-          <button type="button" onclick="addInstKbPaste()" class="btn btn-primary btn-sm">Add</button>
-          <button type="button" onclick="hideInstKbForms()" class="btn btn-outline btn-sm">Cancel</button>
+          <div id="inst-kb-form-url" class="create-form hidden" style="margin-bottom:0.75rem">
+            <div class="form-row">
+              <div style="flex:2"><label>URL</label><input id="inst-kb-url" placeholder="https://..."></div>
+              <div><label>Title</label><input id="inst-kb-url-title" placeholder="Auto-detected"></div>
+            </div>
+            <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+              <button type="button" onclick="addInstKbUrl()" class="btn btn-primary btn-sm">Import</button>
+              <button type="button" onclick="hideInstKbForms()" class="btn btn-outline btn-sm">Cancel</button>
+            </div>
+          </div>
+
+          <!-- Documents section -->
+          <div class="create-form" style="margin-bottom:0.75rem">
+            <h4 style="font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--muted);margin-bottom:0.65rem">Documents</h4>
+            <div id="inst-kb-list" class="memory-list"></div>
+            <div id="inst-kb-empty" class="empty hidden" style="padding:1rem">No documents yet.</div>
+          </div>
+
+          <!-- Memory section -->
+          <div class="create-form" style="margin-bottom:0.75rem">
+            <h4 style="font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--muted);margin-bottom:0.65rem">Agent Memory</h4>
+            <div id="inst-kb-memory-list" class="memory-list"></div>
+            <div id="inst-kb-memory-empty" class="empty hidden" style="padding:1rem">No memories stored yet.</div>
+          </div>
+
+          <!-- Files section -->
+          <div class="create-form">
+            <h4 style="font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--muted);margin-bottom:0.65rem">Files</h4>
+            <div id="inst-kb-files-list" class="memory-list"></div>
+            <div id="inst-kb-files-empty" class="empty hidden" style="padding:1rem">No files uploaded yet.</div>
+          </div>
+        </div>
+
+        <!-- Right: KB chat -->
+        <div>
+          <div class="create-form" style="padding:0;overflow:hidden;display:flex;flex-direction:column;position:sticky;top:1rem">
+            <div style="padding:0.65rem 0.85rem;border-bottom:1px solid var(--line);font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--muted)">Ask about the knowledge base</div>
+            <div class="chat-container" style="height:calc(100vh - 280px)">
+              <div id="inst-kb-chat-messages" class="chat-messages">
+                <div class="chat-msg system">Ask the agent about what it knows, or ask it to update its knowledge.</div>
+              </div>
+              <div id="inst-kb-chat-thinking" class="thinking hidden">Agent is thinking...</div>
+              <div class="chat-input" style="padding:0.65rem 0.85rem">
+                <input id="inst-kb-chat-input" placeholder="What do you know about...?" onkeydown="if(event.key==='Enter')sendKbChatMessage()">
+                <button type="button" onclick="sendKbChatMessage()">Send</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
-
-      <div id="inst-kb-form-url" class="create-form hidden" style="margin-bottom:1rem">
-        <div class="form-row">
-          <div style="flex:2"><label>URL</label><input id="inst-kb-url" placeholder="https://..."></div>
-          <div><label>Title</label><input id="inst-kb-url-title" placeholder="Auto-detected"></div>
-        </div>
-        <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
-          <button type="button" onclick="addInstKbUrl()" class="btn btn-primary btn-sm">Import</button>
-          <button type="button" onclick="hideInstKbForms()" class="btn btn-outline btn-sm">Cancel</button>
-        </div>
-      </div>
-
-      <div id="inst-kb-list" class="memory-list"></div>
-      <div id="inst-kb-empty" class="empty hidden">No documents yet. Add your own for the agent to reference.</div>
     </div>
   </div>
 
@@ -1569,6 +1599,8 @@ console.log(response)</pre>
     }
 
     async function openInstance(instanceId, meta, tab = 'chat', updateUrl = true, runtimeTaskId = null) {
+      // Normalize old tab names
+      if (tab === 'runtime' || tab === 'applications') tab = 'board';
       meta = await resolveInstanceMeta(instanceId, meta);
       currentInstance = { id: instanceId, ...meta };
       currentRuntimeTaskId = runtimeTaskId;
@@ -1578,11 +1610,9 @@ console.log(response)</pre>
       if (meta.icon_bg) document.getElementById('inst-icon').style.background = meta.icon_bg;
       switchInstTab(tab, false);
       loadInstanceMessages();
-      loadInstanceKnowledge();
-      if (tab !== 'runtime') loadInstanceRuntime();
       if (updateUrl) {
-        const detailPath = tab === 'runtime' && runtimeTaskId
-          ? `/instances/${encodeURIComponent(instanceId)}/runtime/tasks/${encodeURIComponent(runtimeTaskId)}`
+        const detailPath = tab === 'board' && runtimeTaskId
+          ? `/instances/${encodeURIComponent(instanceId)}/board/tasks/${encodeURIComponent(runtimeTaskId)}`
           : `/instances/${encodeURIComponent(instanceId)}/${tab}`;
         setConsoleUrl(detailPath);
       }
@@ -1599,8 +1629,9 @@ console.log(response)</pre>
       // Single scroll: lock body when chat is active
       document.body.classList.toggle('chat-active', name === 'chat');
       currentInstanceTab = name;
-      if (name === 'applications') loadInstanceApplications();
-      if (name !== 'runtime') {
+      if (name === 'board') loadUnifiedBoard();
+      if (name === 'knowledge') loadKnowledgeBase();
+      if (name !== 'board') {
         currentRuntimeTaskId = null;
         hideRuntimeTaskDetail();
       }
@@ -1614,8 +1645,8 @@ console.log(response)</pre>
 
     async function loadInstanceRuntime() {
       if (!currentInstance) return;
-      const summary = document.getElementById('inst-runtime-summary');
-      const board = document.getElementById('inst-runtime-board');
+      const summary = document.getElementById('inst-board-summary');
+      const board = document.getElementById('inst-unified-board');
       const eventList = document.getElementById('inst-runtime-event-list');
       summary.textContent = 'Loading runtime tasks...';
       board.innerHTML = '';
@@ -1659,7 +1690,7 @@ console.log(response)</pre>
 
     function renderInstanceTaskBoard(tasks) {
       renderKanbanBoard({
-        boardId: 'inst-runtime-board',
+        boardId: 'inst-unified-board',
         items: tasks,
         columns: INSTANCE_RUNTIME_COLUMNS,
         renderCard: runtimeTaskCard,
@@ -1760,7 +1791,7 @@ console.log(response)</pre>
     }
 
     function runtimeTaskDetailUrl(taskId) {
-      return `/instances/${encodeURIComponent(currentInstance.id)}/runtime/tasks/${encodeURIComponent(taskId)}`;
+      return `/instances/${encodeURIComponent(currentInstance.id)}/board/tasks/${encodeURIComponent(taskId)}`;
     }
 
     function renderCurrentRuntimeTaskDetail(scrollIntoView = false) {
@@ -1771,7 +1802,7 @@ console.log(response)</pre>
       const task = currentRuntimeTasks.find(row => row.id === currentRuntimeTaskId);
       if (!task) {
         const section = document.getElementById('runtime-task-detail');
-        document.getElementById('inst-runtime-board').classList.add('hidden');
+        document.getElementById('inst-unified-board').classList.add('hidden');
         document.getElementById('runtime-task-detail-status').innerHTML = '<span class="tag tag-failed">not found</span>';
         document.getElementById('runtime-task-detail-title').textContent = 'Runtime task not found';
         document.getElementById('runtime-task-detail-body').innerHTML = `<div class="runtime-detail-field">
@@ -1833,7 +1864,7 @@ console.log(response)</pre>
         });
       });
       section.classList.remove('hidden');
-      document.getElementById('inst-runtime-board').classList.add('hidden');
+      document.getElementById('inst-unified-board').classList.add('hidden');
       if (scrollIntoView) section.scrollIntoView({ block: 'start' });
     }
 
@@ -1847,15 +1878,15 @@ console.log(response)</pre>
     function closeRuntimeTaskDetail() {
       currentRuntimeTaskId = null;
       hideRuntimeTaskDetail();
-      if (currentInstance && currentInstanceTab === 'runtime') {
-        setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/runtime`);
+      if (currentInstance) {
+        setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/board`);
       }
     }
 
     function hideRuntimeTaskDetail() {
       document.getElementById('runtime-task-detail').classList.add('hidden');
       document.getElementById('runtime-task-detail-actions').innerHTML = '';
-      document.getElementById('inst-runtime-board').classList.remove('hidden');
+      document.getElementById('inst-unified-board').classList.remove('hidden');
     }
 
     async function handleRuntimeTaskAction(taskId, action) {
@@ -1901,6 +1932,88 @@ console.log(response)</pre>
       } catch {}
     }
 
+    // ── Unified Board ──────────────────────────────────────────
+    async function loadUnifiedBoard() {
+      await loadInstanceRuntime();
+      await loadInstanceApplications();
+    }
+
+    // ── KB page ──────────────────────────────────────────────
+    async function loadKnowledgeBase() {
+      loadInstanceKnowledge(); // docs
+      loadKbMemory();
+      loadKbFiles();
+    }
+
+    async function loadKbMemory() {
+      if (!currentInstance) return;
+      const list = document.getElementById('inst-kb-memory-list');
+      const empty = document.getElementById('inst-kb-memory-empty');
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/memory`);
+        const items = data.memory || [];
+        if (items.length === 0) { list.innerHTML = ''; empty.classList.remove('hidden'); return; }
+        empty.classList.add('hidden');
+        list.innerHTML = items.map(m => `
+          <div class="memory-item">
+            <div style="flex:1">
+              <div class="key">${esc(m.key)} <span class="type">${esc(m.type)}</span></div>
+              <div class="content">${esc((m.content || '').slice(0, 200))}${m.content?.length > 200 ? '...' : ''}</div>
+            </div>
+          </div>
+        `).join('');
+      } catch { list.innerHTML = ''; empty.classList.remove('hidden'); }
+    }
+
+    async function loadKbFiles() {
+      if (!currentInstance) return;
+      const list = document.getElementById('inst-kb-files-list');
+      const empty = document.getElementById('inst-kb-files-empty');
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/files`);
+        const files = data.files || [];
+        if (files.length === 0) { list.innerHTML = ''; empty.classList.remove('hidden'); return; }
+        empty.classList.add('hidden');
+        list.innerHTML = files.map(f => `
+          <div class="memory-item">
+            <div style="flex:1">
+              <div class="key">${esc(f.name)} <span class="type">${esc(f.mimeType)}</span></div>
+              <div class="content">${esc(f.size)} bytes${f.tags?.length ? ' &middot; ' + f.tags.map(t => esc(t)).join(', ') : ''} &middot; ${esc(f.createdAt?.split('T')[0] || '')}</div>
+            </div>
+          </div>
+        `).join('');
+      } catch { list.innerHTML = ''; empty.classList.remove('hidden'); }
+    }
+
+    async function sendKbChatMessage() {
+      const input = document.getElementById('inst-kb-chat-input');
+      const message = input.value.trim();
+      if (!message || !currentInstance) return;
+      input.value = '';
+
+      const container = document.getElementById('inst-kb-chat-messages');
+      container.innerHTML += `<div class="chat-msg user">${esc(message)}</div>`;
+      container.scrollTop = container.scrollHeight;
+      document.getElementById('inst-kb-chat-thinking').classList.remove('hidden');
+
+      const context = `[Context: The user is browsing the knowledge base and asking about what you know. Use search_knowledge and read_memory tools to answer. If they ask you to update or correct something, use write_memory or the appropriate tool.]\n\n${message}`;
+
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/chat`, {
+          method: 'POST',
+          body: JSON.stringify({ message: context }),
+        });
+        if (data.message) container.innerHTML += `<div class="chat-msg assistant">${renderMd(data.message.content)}</div>`;
+        if (data.error) container.innerHTML += renderInstanceChatError(data.error);
+        // Reload KB after chat (agent may have updated it)
+        loadKbMemory();
+      } catch (e) {
+        container.innerHTML += renderInstanceChatError(e.message);
+      }
+      document.getElementById('inst-kb-chat-thinking').classList.add('hidden');
+      container.scrollTop = container.scrollHeight;
+    }
+
     // ── Applications kanban ─────────────────────────────────────
     const APP_STATUSES = [
       { key: 'queued', label: 'Queued', dot: 'dot-queued' },
@@ -1912,18 +2025,18 @@ console.log(response)</pre>
     ];
 
     async function loadInstanceApplications() {
-      const board = document.getElementById('inst-applications-board');
-      const empty = document.getElementById('inst-applications-empty');
-      if (!board || !currentInstance) return;
+      const boardEl = document.getElementById('inst-unified-board');
+      if (!boardEl || !currentInstance) return;
+      // Append application columns to the existing runtime board
+      const board = boardEl;
       try {
-        const data = await api(`/v1/instances/${currentInstance.id}/collections/applications/records?limit=100`);
+        const data = await api(`/v1/instances/${currentInstance.id}/collections/applications/records?limit=100`).catch(() => ({ records: [] }));
         const records = data.records || [];
-        if (records.length === 0) {
-          board.innerHTML = '';
-          empty.classList.remove('hidden');
-          return;
-        }
-        empty.classList.add('hidden');
+        if (records.length === 0) return;
+
+        // Update the board summary
+        const summary = document.getElementById('inst-board-summary');
+        if (summary) summary.textContent = `${records.length} application${records.length === 1 ? '' : 's'}`;
 
         // Group by status
         const grouped = {};
@@ -1934,7 +2047,8 @@ console.log(response)</pre>
           grouped[status].push(r);
         }
 
-        let html = '<div class="kanban-board">';
+        // Add application columns after the runtime columns
+        let html = '';
         for (const s of APP_STATUSES) {
           const items = grouped[s.key] || [];
           html += `<div class="kanban-column">
@@ -1963,8 +2077,7 @@ console.log(response)</pre>
           }
           html += '</div></div>';
         }
-        html += '</div>';
-        board.innerHTML = html;
+        board.innerHTML += html;
       } catch (e) {
         board.innerHTML = `<p style="color:var(--red);padding:1rem">Failed to load applications: ${esc(e.message)}</p>`;
       }
@@ -3121,7 +3234,7 @@ console.log(response)</pre>
       const parts = routeParts();
       const page = parts[0] || 'agents';
       const validAgentTabs = ['chat', 'knowledge', 'memory', 'tasks', 'settings', 'analytics', 'ops'];
-      const validInstanceTabs = ['chat', 'runtime', 'knowledge', 'applications'];
+      const validInstanceTabs = ['chat', 'board', 'knowledge'];
 
       routeApplying = true;
       try {
@@ -3141,7 +3254,7 @@ console.log(response)</pre>
         }
         if (page === 'instances' && parts[1]) {
           const instanceTab = validInstanceTabs.includes(parts[2]) ? parts[2] : 'chat';
-          const runtimeTaskId = instanceTab === 'runtime' && parts[3] === 'tasks' ? parts[4] : null;
+          const runtimeTaskId = instanceTab === 'board' && parts[3] === 'tasks' ? parts[4] : null;
           routeApplying = false;
           await openInstance(parts[1], null, instanceTab, false, runtimeTaskId);
           routeApplying = true;

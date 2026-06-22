@@ -439,23 +439,23 @@ test.describe("ProAgentStore Console smoke", () => {
 
 		await page.getByRole("button", { name: "My Instances (Client)" }).click();
 		await page.getByText("Job Application Assistant").click();
-		await page.getByRole("button", { name: "Runtime" }).click();
+		await page.getByRole("button", { name: "Board" }).click();
 
-		await expect(page.locator("#inst-runtime-summary")).toContainText(
+		await expect(page.locator("#inst-board-summary")).toContainText(
 			"2 runtime tasks",
 		);
 		await expect(
-			page.locator("#inst-runtime-board").getByText("Waiting"),
+			page.locator("#inst-unified-board").getByText("WAITING"),
 		).toBeVisible();
 		await expect(
-			page.locator("#inst-runtime-board").getByText("job.apply_basic").first(),
+			page.locator("#inst-unified-board").getByText("job.apply_basic").first(),
 		).toBeVisible();
 		await expect(page.getByText("Waiting for approval before submit")).toBeVisible();
 
 		await page
 			.getByRole("button", { name: "Open runtime task task-done" })
 			.click();
-		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/runtime\/tasks\/task-done$/);
+		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/board\/tasks\/task-done$/);
 		const taskDetail = page.locator("#runtime-task-detail");
 		await expect(taskDetail).toBeVisible();
 		await expect(taskDetail.getByRole("heading", { name: "job.apply_basic" })).toBeVisible();
@@ -470,8 +470,8 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.reload();
 		await expect(taskDetail).toBeVisible();
 		await expect(taskDetail.getByText("job.form.filled")).toBeVisible();
-		await page.getByRole("button", { name: "Back to runtime board" }).click();
-		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/runtime$/);
+		await page.getByRole("button", { name: "Back to board" }).click();
+		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/board$/);
 		await expect(taskDetail).toBeHidden();
 
 		await page.getByRole("button", { name: "Approve" }).click();
@@ -481,20 +481,20 @@ test.describe("ProAgentStore Console smoke", () => {
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {
 		await mockSignedInConsole(page);
 
-		await page.goto("/console/instances/inst-1/runtime");
+		await page.goto("/console/instances/inst-1/board");
 
 		await expect(
-			page.getByRole("heading", { name: "Runtime Board" }),
+			page.getByRole("heading", { name: "Board" }),
 		).toBeVisible();
-		await expect(page.locator("#inst-runtime-summary")).toContainText(
+		await expect(page.locator("#inst-board-summary")).toContainText(
 			"2 runtime tasks",
 		);
 
-		await page.getByRole("button", { name: "My Documents" }).click();
+		await page.getByRole("button", { name: "Knowledge" }).click();
 		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/knowledge$/);
 		await page.reload();
 
-		await expect(page.getByRole("heading", { name: "Your Documents" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Knowledge Base" })).toBeVisible();
 		await expect(page.locator("#inst-tab-knowledge")).toHaveClass(/active/);
 	});
 
