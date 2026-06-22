@@ -42,7 +42,12 @@ export async function runUserWorkersAi(
 	// Try Anthropic first (better quality), fall back to Cloudflare
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");
 	if (anthropicKey) {
-		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[] });
+		try {
+			return await runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[] });
+		} catch (err) {
+			// Fall back to Cloudflare if Anthropic fails (bad key, wrong model, etc.)
+			console.error("Anthropic failed, falling back to Cloudflare:", err instanceof Error ? err.message : String(err));
+		}
 	}
 
 	const credentials = await getUserCloudflareAiCredentials(env, userId);
