@@ -2036,9 +2036,18 @@ console.log(response)</pre>
     function renderDetailField(key, value) {
       const val = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value || '');
       const isLong = val.length > 100;
+      const isUrl = /^https?:\/\//.test(val);
+      let display;
+      if (isUrl) {
+        display = `<a href="${escAttr(val)}" target="_blank" rel="noopener" style="word-break:break-all">${esc(val)}</a>`;
+      } else if (isLong) {
+        display = `<div class="runtime-detail-pre">${esc(val)}</div>`;
+      } else {
+        display = esc(val);
+      }
       return `<div class="runtime-detail-field" ${isLong ? 'style="grid-column:1/-1"' : ''}>
         <div class="runtime-detail-label">${esc(key.replace(/_/g, ' '))}</div>
-        <div class="${isLong ? 'runtime-detail-pre' : 'runtime-detail-value'}">${esc(val)}</div>
+        <div class="runtime-detail-value">${display}</div>
       </div>`;
     }
 
@@ -2060,9 +2069,14 @@ console.log(response)</pre>
       const el = document.getElementById('app-detail-activity');
       try {
         const data = await api(`/v1/instances/${currentInstance.id}/activity?limit=50`);
-        const events = (data.events || []).filter(e =>
-          e.data?.recordId === recordId
-        );
+        const events = (data.events || []).filter(e => {
+          if (!e.data) return false;
+          // Match events for this specific record
+          if (e.data.recordId === recordId) return true;
+          // Match tool calls that mention this record
+          if (e.data.tool && e.type === 'tool.called') return false; // skip generic tool calls
+          return false;
+        });
         if (events.length === 0) {
           el.innerHTML = '<div class="runtime-history-empty">No activity for this application yet.</div>';
           return;
@@ -2071,12 +2085,16 @@ console.log(response)</pre>
           const time = e.createdAt?.split('T')[1]?.slice(0,8) || '';
           const date = e.createdAt?.split('T')[0] || '';
           const typeLabel = e.type.replace('collection.record.', '').replace('tool.', '');
+          const dataHtml = e.data ? Object.entries(e.data)
+            .filter(([k]) => k !== 'recordId' && k !== 'collection')
+            .map(([k, v]) => `<span style="color:var(--muted-soft)">${esc(k)}:</span> ${esc(String(v))}`)
+            .join(' &middot; ') : '';
           return `<div class="runtime-history-item">
             <div class="runtime-history-head">
               <span class="runtime-history-type">${esc(typeLabel)}</span>
               <span>${esc(date)} ${esc(time)}</span>
             </div>
-            ${e.data ? `<div class="runtime-history-message">${esc(JSON.stringify(e.data))}</div>` : ''}
+            ${dataHtml ? `<div class="runtime-history-message">${dataHtml}</div>` : ''}
           </div>`;
         }).join('');
       } catch {
@@ -2987,6 +3005,18 @@ console.log(response)</pre>
     /** Render markdown-ish text: code blocks, inline code, bold, italic, lists, links, JSON. */
     function renderMd(raw) {
       let s = raw || '';
+
+      // Strip embedded tool-call JSON from response text (agent sometimes outputs these)
+      s = s.replace(/\{"type"\s*:\s*"function"[\s\S]*?"parameters"\s*:\s*\{[\s\S]*?\}\s*\};?/g, (match) => {
+        try {
+          const obj = JSON.parse(match.replace(/;$/, ''));
+          const name = obj.name || obj.function?.name || '?';
+          return `\n\n*Tool: ${name}*\n\n`;
+        } catch {
+          return '\n\n*[tool call executed]*\n\n';
+        }
+      });
+
       // Detect pure JSON responses
       const trimmed = s.trim();
       if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && (trimmed.endsWith('}') || trimmed.endsWith(']'))) {
@@ -2994,6 +3024,10 @@ console.log(response)</pre>
       }
       // Code blocks ```...```
       s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${esc(code.trim())}</code></pre>`);
+      // Inline JSON blocks (standalone {...} on its own line)
+      s = s.replace(/^(\{[\s\S]*?\})$/gm, (match) => {
+        try { const obj = JSON.parse(match); return renderJson(obj); } catch { return esc(match); }
+      });
       // Inline code
       s = s.replace(/`([^`\n]+)`/g, (_, code) => `<code>${esc(code)}</code>`);
       // Bold **...**
@@ -3002,20 +3036,19 @@ console.log(response)</pre>
       s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
       // Links [text](url)
       s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-      // Bare URLs
-      s = s.replace(/(?<!")https?:\/\/[^\s<)]+/g, url => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
+      // Bare URLs (not already in a tag)
+      s = s.replace(/(?<![="'])https?:\/\/[^\s<)"']+/g, url => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
       // Unordered lists (lines starting with - or *)
       s = s.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
-      s = s.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+      s = s.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => m.includes('<ol>') ? m : `<ul>${m}</ul>`);
       // Numbered lists
       s = s.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-      s = s.replace(/(<li>.*<\/li>\n?)+/g, m => m.includes('<ul>') ? m : `<ol>${m}</ol>`);
+      s = s.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => m.includes('<ul>') ? m : `<ol>${m}</ol>`);
       // Paragraphs (double newline)
       s = s.replace(/\n{2,}/g, '</p><p>');
       s = `<p>${s}</p>`;
-      // Clean up empty paragraphs
       s = s.replace(/<p>\s*<\/p>/g, '');
-      // Single newlines to <br> (outside pre/code)
+      // Single newlines to <br>
       s = s.replace(/(?<!<\/li>|<\/ul>|<\/ol>|<\/pre>|<\/p>)\n(?!<)/g, '<br>');
       return s;
     }
