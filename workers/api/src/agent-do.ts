@@ -774,16 +774,16 @@ export class AgentDO extends DurableObject<Env> {
 		};
 		await this.ctx.storage.put(`kb:${doc.id}`, doc);
 
-		// Vectorize the document for semantic retrieval
+		// Vectorize the document for semantic retrieval (best-effort — don't fail the add)
 		const state = await this.getState();
 		if (state) {
 			const engine = this.getStorageEngine(state.agentId);
-			await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`);
+			await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`).catch(() => {});
 			await engine.logEvent("knowledge.added", undefined, {
 				docId: doc.id,
 				title: doc.title,
 				size: doc.content.length,
-			});
+			}).catch(() => {});
 		}
 
 		return json(doc, 201);

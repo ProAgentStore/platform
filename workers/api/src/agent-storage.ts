@@ -52,7 +52,8 @@ export class AgentStorageEngine {
 
 		for (let i = 0; i < chunks.length; i++) {
 			const chunk = chunks[i];
-			const id = `${this.agentId}:${sourceType}:${sourceId}:${i}`;
+			// Vectorize IDs max 64 bytes — use a short hash
+			const id = await shortId(this.agentId, sourceType, sourceId, i);
 			const embedding = await this.embed(chunk);
 			if (!embedding) continue;
 
@@ -65,7 +66,7 @@ export class AgentStorageEngine {
 						sourceType,
 						sourceId,
 						chunkIndex: i,
-						text: chunk.slice(0, 1000), // Store truncated text in metadata
+						text: chunk.slice(0, 1000),
 					},
 				},
 			]);
@@ -127,14 +128,22 @@ export class AgentStorageEngine {
 	async vectorDelete(sourceType: VectorMeta["sourceType"], sourceId: string): Promise<void> {
 		if (!this.vectorize) return;
 
-		// Find all vector IDs for this source
-		const prefix = `vec:${this.agentId}:${sourceType}:${sourceId}:`;
-		const all = await this.doStorage.list<VectorMeta>({ prefix });
-		const ids = [...all.keys()].map((k) => k.replace("vec:", ""));
+		// Find vector entries by scanning DO storage for matching metadata
+		const all = await this.doStorage.list<VectorMeta>({ prefix: "vec:" });
+		const toDelete: string[] = [];
+		const keysToDelete: string[] = [];
+		for (const [key, meta] of all.entries()) {
+			if (meta.agentId === this.agentId && meta.sourceType === sourceType && meta.sourceId === sourceId) {
+				toDelete.push(meta.id);
+				keysToDelete.push(key);
+			}
+		}
 
-		if (ids.length > 0) {
-			await this.vectorize.deleteByIds(ids);
-			await this.doStorage.delete([...all.keys()]);
+		if (toDelete.length > 0) {
+			await this.vectorize.deleteByIds(toDelete);
+			for (let i = 0; i < keysToDelete.length; i += 128) {
+				await this.doStorage.delete(keysToDelete.slice(i, i + 128));
+			}
 		}
 	}
 
@@ -892,4 +901,24 @@ function isTextMimeType(mimeType: string): boolean {
  */
 function encodeIndexValue(value: string): string {
 	return value.replace(/%/g, "%25").replace(/:/g, "%3A");
+}
+
+/**
+ * Generate a short (<= 64 byte) deterministic ID for Vectorize.
+ * Uses first 12 chars of a SHA-256 hash + chunk index.
+ */
+async function shortId(
+	agentId: string,
+	sourceType: string,
+	sourceId: string,
+	chunkIndex: number,
+): Promise<string> {
+	const input = `${agentId}:${sourceType}:${sourceId}`;
+	const data = new TextEncoder().encode(input);
+	const hash = await crypto.subtle.digest("SHA-256", data);
+	const hex = [...new Uint8Array(hash)]
+		.map((b) => b.toString(16).padStart(2, "0"))
+		.join("");
+	// 12 hex chars (48 bits) + separator + chunk index = well under 64 bytes
+	return `${hex.slice(0, 12)}_${chunkIndex}`;
 }
