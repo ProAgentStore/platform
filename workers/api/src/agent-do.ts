@@ -402,6 +402,9 @@ export class AgentDO extends DurableObject<Env> {
 				"\n\nYou have tools available. Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
 		}
 
+		// Final instruction — strongest position for model attention
+		systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'. Just execute and report the result concisely.";
+
 		const aiMessages: { role: string; content: string }[] = [
 			{ role: "system", content: systemPrompt },
 			...messages.map((m) => ({ role: m.role, content: m.content })),
