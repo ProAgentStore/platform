@@ -22,6 +22,7 @@ import type {
 } from "./agent-types.js";
 import { AGENT_TOOLS, executeTool, type ToolCallRequest } from "./lib/tools.js";
 import { STORAGE_TOOLS, executeStorageTool } from "./lib/storage-tools.js";
+import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
 import {
 	runUserWorkersAi,
 	UserAiCredentialsError,
@@ -454,22 +455,7 @@ export class AgentDO extends DurableObject<Env> {
 				{ messages: aiMessages, tools },
 			)) as Record<string, unknown>;
 
-			// Normalize tool_calls — three possible formats:
-			// 1. REST API OpenAI format: tool_calls[i].function.{name, arguments}
-			// 2. Workers AI binding flat: tool_calls[i].{name, arguments}
-			// 3. Model embeds tool call in response text as JSON (fallback parse)
-			const rawCalls = (rawResult.tool_calls as unknown[]) || [];
-			let toolCalls = rawCalls.map((tc: unknown) => {
-				const call = tc as Record<string, unknown>;
-				if (call.function && typeof call.function === "object") {
-					const fn = call.function as Record<string, unknown>;
-					const args = typeof fn.arguments === "string" ? JSON.parse(fn.arguments) : fn.arguments || {};
-					return { name: fn.name as string, arguments: args as Record<string, unknown> };
-				}
-				return { name: call.name as string, arguments: (call.arguments || {}) as Record<string, unknown> };
-			}).filter((tc) => tc.name);
-
-			// Fallback: parse tool calls from response text (some models embed them)
+			let toolCalls = normalizeToolCalls((rawResult.tool_calls as unknown[]) || []);
 			if (toolCalls.length === 0 && rawResult.response) {
 				toolCalls = parseToolCallsFromText(rawResult.response as string);
 			}
@@ -1193,31 +1179,6 @@ export class AgentDO extends DurableObject<Env> {
  * instead of using the structured tool_calls field.
  * Handles single or multiple: {"name":"...",...}; {"name":"...",...}
  */
-function parseToolCallsFromText(text: string): Array<{ name: string; arguments: Record<string, unknown> }> {
-	const results: Array<{ name: string; arguments: Record<string, unknown> }> = [];
-	// Split on }; or }\n{ boundaries and try parsing each segment
-	const segments = text.split(/\};\s*/).map((s) => s.trim()).filter(Boolean);
-	for (let seg of segments) {
-		// Ensure it ends with }
-		if (!seg.endsWith("}")) seg += "}";
-		// Find the first { that starts a JSON object
-		const start = seg.indexOf("{");
-		if (start === -1) continue;
-		const jsonStr = seg.slice(start);
-		try {
-			const parsed = JSON.parse(jsonStr);
-			const name = parsed.name || parsed.function?.name;
-			if (!name) continue;
-			const rawArgs = parsed.parameters || parsed.arguments || parsed.function?.arguments || {};
-			const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
-			results.push({ name, arguments: args });
-		} catch {
-			continue;
-		}
-	}
-	return results;
-}
-
 function json(data: unknown, status = 200): Response {
 	return new Response(JSON.stringify(data), {
 		status,
