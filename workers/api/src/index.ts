@@ -16,7 +16,7 @@ import { exportRoutes } from "./routes/export.js";
 import { versionRoutes } from "./routes/versions.js";
 import { publicRoutes } from "./routes/public.js";
 import { runRoutes } from "./routes/run.js";
-import { storageRoutes } from "./routes/storage.js";
+import { storageRoutes, instanceStorageRoutes } from "./routes/storage.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
@@ -67,6 +67,7 @@ app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/agents", versionRoutes);     // /v1/agents/:id/versions, /:versionId/rollback
 app.route("/v1/agents", exportRoutes);
 app.route("/v1/agents", storageRoutes); // /v1/agents/:id/collections, /files, /search, /activity, /summaries
+app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collections, /files, /search, /activity
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
