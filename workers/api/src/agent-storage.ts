@@ -362,6 +362,25 @@ export class AgentStorageEngine {
 			}
 		}
 
+		// Dedup guard: reject if a record with the same indexed field values
+		// was inserted in the last 60 seconds (prevents model calling insert_record multiple times)
+		const indexedFields = schema.fields.filter((f) => f.indexed);
+		if (indexedFields.length > 0) {
+			const all = await this.doStorage.list<CollectionRecord>({ prefix: `col:${collection}:` });
+			const cutoff = new Date(Date.now() - 60_000).toISOString();
+			for (const [, existing] of all) {
+				if (existing.createdAt < cutoff) continue;
+				const match = indexedFields.every((f) =>
+					validated[f.name] !== undefined &&
+					existing.data[f.name] !== undefined &&
+					String(validated[f.name]) === String(existing.data[f.name]),
+				);
+				if (match) {
+					throw new Error(`Duplicate: a record with the same values was just created (${existing.id.slice(0, 8)})`);
+				}
+			}
+		}
+
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
 
