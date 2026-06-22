@@ -719,6 +719,7 @@ instanceRoutes.get("/my/instances", async (c) => {
 
 /** Register or update the local/managed runtime for my instance. */
 instanceRoutes.post("/:instanceId/runtime", async (c) => {
+	try {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
@@ -766,6 +767,10 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 
 	const runtime = await requireRuntime(c.env, instanceId, session.uid);
 	return c.json({ runtime: runtimeResponse(runtime) }, 201);
+	} catch (err) {
+		console.error("Runtime registration error:", err instanceof Error ? err.message : String(err));
+		throw err;
+	}
 });
 
 /** Read my registered runtime without exposing its token. */
