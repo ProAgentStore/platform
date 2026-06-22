@@ -235,9 +235,8 @@
     .status-blocked{background:rgba(239,68,68,0.15);color:var(--red)}
 
     /* Application detail page */
-    #application-detail .container{max-width:1200px}
-    #app-detail-layout{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
-    @media(max-width:768px){#app-detail-layout{grid-template-columns:1fr}}
+    #app-detail-layout{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
+    @media(max-width:900px){#app-detail-layout{grid-template-columns:1fr}}
 
     .empty{text-align:center;padding:2rem;color:var(--muted-soft);font-size:0.9rem}
     .error{color:var(--red);font-size:0.82rem;margin-top:0.5rem}
@@ -505,21 +504,24 @@
 
   <!-- Notifications page -->
   <!-- Application detail page -->
-  <div id="application-detail" class="container hidden">
+  <div id="application-detail" class="hidden" style="max-width:1200px;margin:0 auto;padding:1rem 1.5rem">
     <a href="#" id="app-detail-back" class="back-link">&larr; Back to applications</a>
     <div class="agent-header">
       <div id="app-detail-icon" class="agent-icon" style="background:var(--accent)">&#128196;</div>
-      <div>
+      <div style="flex:1">
         <h2 id="app-detail-title"></h2>
-        <div id="app-detail-status" style="margin-top:0.3rem"></div>
+        <div id="app-detail-status" style="margin-top:0.35rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap"></div>
       </div>
     </div>
 
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem" id="app-detail-layout">
-      <!-- Left: application data -->
+    <div id="app-detail-layout">
+      <!-- Left: application data + actions -->
       <div>
         <div class="create-form" style="margin-bottom:0.75rem">
-          <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:0.75rem">Application Details</h3>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem">
+            <h3 style="font-size:0.9rem;font-weight:700">Application Details</h3>
+            <div id="app-detail-actions" style="display:flex;gap:0.35rem;flex-wrap:wrap"></div>
+          </div>
           <div id="app-detail-fields" class="runtime-detail-grid"></div>
         </div>
         <div class="create-form">
@@ -530,9 +532,9 @@
 
       <!-- Right: contextual chat -->
       <div>
-        <div class="create-form" style="padding:0;overflow:hidden">
+        <div class="create-form" style="padding:0;overflow:hidden;display:flex;flex-direction:column">
           <div style="padding:0.65rem 0.85rem;border-bottom:1px solid var(--line);font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--muted)">Chat about this application</div>
-          <div class="chat-container" style="height:calc(100vh - 320px)">
+          <div class="chat-container" style="height:calc(100vh - 300px)">
             <div id="app-detail-chat-messages" class="chat-messages"></div>
             <div id="app-detail-chat-thinking" class="thinking hidden">Agent is thinking...</div>
             <div class="chat-input" style="padding:0.65rem 0.85rem">
@@ -1998,8 +2000,8 @@ console.log(response)</pre>
         // Fields
         const fieldsEl = document.getElementById('app-detail-fields');
         fieldsEl.innerHTML = '';
-        const fieldOrder = ['company', 'role', 'job_title', 'status', 'url', 'cover_note', 'resume_used', 'submitted_at'];
-        const shown = new Set();
+        const fieldOrder = ['company', 'role', 'job_title', 'url', 'cover_note', 'resume_used', 'submitted_at'];
+        const shown = new Set(['status']); // status shown in header, not fields
         for (const key of fieldOrder) {
           if (d[key] !== undefined) {
             shown.add(key);
@@ -2009,14 +2011,20 @@ console.log(response)</pre>
         for (const [k, v] of Object.entries(d)) {
           if (!shown.has(k)) fieldsEl.innerHTML += renderDetailField(k, v);
         }
-        // Also show record metadata
         fieldsEl.innerHTML += renderDetailField('created', data.createdAt);
         fieldsEl.innerHTML += renderDetailField('updated', data.updatedAt);
 
-        // Activity filtered to this record
+        // Status change buttons
+        const actionsEl = document.getElementById('app-detail-actions');
+        const statuses = ['queued', 'pending', 'submitted', 'interview', 'rejected', 'accepted'];
+        actionsEl.innerHTML = statuses.map(s =>
+          `<button class="btn-sm ${s === d.status ? 'btn-primary' : 'btn-outline'}" onclick="updateAppStatus('${esc(id)}','${s}')">${esc(s)}</button>`
+        ).join('');
+
+        // Activity filtered to this specific record
         loadAppDetailActivity(id);
 
-        // Chat - preload messages and set context
+        // Chat
         loadAppDetailChat(company, role);
 
         showPage('application-detail');
@@ -2034,26 +2042,43 @@ console.log(response)</pre>
       </div>`;
     }
 
+    async function updateAppStatus(recordId, newStatus) {
+      if (!currentInstance) return;
+      try {
+        await api(`/v1/instances/${currentInstance.id}/collections/applications/records/${recordId}`, {
+          method: 'PUT',
+          body: JSON.stringify({ data: { status: newStatus } }),
+        });
+        // Reload the detail
+        await showApplicationDetail(recordId);
+      } catch (e) {
+        alert('Failed to update status: ' + e.message);
+      }
+    }
+
     async function loadAppDetailActivity(recordId) {
       const el = document.getElementById('app-detail-activity');
       try {
-        const data = await api(`/v1/instances/${currentInstance.id}/activity?limit=30`);
+        const data = await api(`/v1/instances/${currentInstance.id}/activity?limit=50`);
         const events = (data.events || []).filter(e =>
-          e.data?.recordId === recordId || e.data?.collection === 'applications'
+          e.data?.recordId === recordId
         );
         if (events.length === 0) {
           el.innerHTML = '<div class="runtime-history-empty">No activity for this application yet.</div>';
           return;
         }
-        el.innerHTML = events.map(e => `
-          <div class="runtime-history-item">
+        el.innerHTML = events.map(e => {
+          const time = e.createdAt?.split('T')[1]?.slice(0,8) || '';
+          const date = e.createdAt?.split('T')[0] || '';
+          const typeLabel = e.type.replace('collection.record.', '').replace('tool.', '');
+          return `<div class="runtime-history-item">
             <div class="runtime-history-head">
-              <span class="runtime-history-type">${esc(e.type)}</span>
-              <span>${esc(e.createdAt?.split('T')[1]?.slice(0,8) || '')}</span>
+              <span class="runtime-history-type">${esc(typeLabel)}</span>
+              <span>${esc(date)} ${esc(time)}</span>
             </div>
             ${e.data ? `<div class="runtime-history-message">${esc(JSON.stringify(e.data))}</div>` : ''}
-          </div>
-        `).join('');
+          </div>`;
+        }).join('');
       } catch {
         el.innerHTML = '<div class="runtime-history-empty">Failed to load activity.</div>';
       }
