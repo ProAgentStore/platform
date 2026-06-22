@@ -452,10 +452,12 @@ export class AgentDO extends DurableObject<Env> {
 				{ messages: aiMessages, tools },
 			)) as Record<string, unknown>;
 
-			// Normalize tool_calls — REST API returns OpenAI format: {function:{name,arguments}}
-			// Workers AI binding returns flat: {name, arguments}
+			// Normalize tool_calls — three possible formats:
+			// 1. REST API OpenAI format: tool_calls[i].function.{name, arguments}
+			// 2. Workers AI binding flat: tool_calls[i].{name, arguments}
+			// 3. Model embeds tool call in response text as JSON (fallback parse)
 			const rawCalls = (rawResult.tool_calls as unknown[]) || [];
-			const toolCalls = rawCalls.map((tc: unknown) => {
+			let toolCalls = rawCalls.map((tc: unknown) => {
 				const call = tc as Record<string, unknown>;
 				if (call.function && typeof call.function === "object") {
 					const fn = call.function as Record<string, unknown>;
@@ -464,6 +466,13 @@ export class AgentDO extends DurableObject<Env> {
 				}
 				return { name: call.name as string, arguments: (call.arguments || {}) as Record<string, unknown> };
 			}).filter((tc) => tc.name);
+
+			// Fallback: parse tool calls from response text (some models embed them)
+			if (toolCalls.length === 0 && rawResult.response) {
+				const text = rawResult.response as string;
+				const parsed = parseToolCallFromText(text);
+				if (parsed) toolCalls = [parsed];
+			}
 
 			if (toolCalls.length === 0) {
 				return (rawResult.response as string) || "";
@@ -1167,6 +1176,26 @@ export class AgentDO extends DurableObject<Env> {
 		prompt +=
 			"\n\nYou have persistent memory and tasks. Be helpful, concise, and proactive about completing your tasks.";
 		return prompt;
+	}
+}
+
+/**
+ * Parse a tool call from response text when the model embeds it as JSON
+ * instead of using the structured tool_calls field.
+ * Handles: {"type":"function","name":"...","parameters":{...}}
+ */
+function parseToolCallFromText(text: string): { name: string; arguments: Record<string, unknown> } | null {
+	try {
+		const jsonMatch = text.match(/\{[\s\S]*"name"\s*:\s*"[^"]+[\s\S]*\}/);
+		if (!jsonMatch) return null;
+		const parsed = JSON.parse(jsonMatch[0]);
+		const name = parsed.name || parsed.function?.name;
+		if (!name) return null;
+		const rawArgs = parsed.parameters || parsed.arguments || parsed.function?.arguments || {};
+		const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+		return { name, arguments: args };
+	} catch {
+		return null;
 	}
 }
 
