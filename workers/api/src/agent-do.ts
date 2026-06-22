@@ -471,9 +471,7 @@ export class AgentDO extends DurableObject<Env> {
 
 			// Fallback: parse tool calls from response text (some models embed them)
 			if (toolCalls.length === 0 && rawResult.response) {
-				const text = rawResult.response as string;
-				const parsed = parseToolCallFromText(text);
-				if (parsed) toolCalls = [parsed];
+				toolCalls = parseToolCallsFromText(rawResult.response as string);
 			}
 
 			if (toolCalls.length === 0) {
@@ -1191,23 +1189,26 @@ export class AgentDO extends DurableObject<Env> {
 }
 
 /**
- * Parse a tool call from response text when the model embeds it as JSON
+ * Parse tool calls from response text when the model embeds them as JSON
  * instead of using the structured tool_calls field.
- * Handles: {"type":"function","name":"...","parameters":{...}}
+ * Handles single or multiple: {"name":"...",...}; {"name":"...",...}
  */
-function parseToolCallFromText(text: string): { name: string; arguments: Record<string, unknown> } | null {
-	try {
-		const jsonMatch = text.match(/\{[\s\S]*"name"\s*:\s*"[^"]+[\s\S]*\}/);
-		if (!jsonMatch) return null;
-		const parsed = JSON.parse(jsonMatch[0]);
-		const name = parsed.name || parsed.function?.name;
-		if (!name) return null;
-		const rawArgs = parsed.parameters || parsed.arguments || parsed.function?.arguments || {};
-		const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
-		return { name, arguments: args };
-	} catch {
-		return null;
+function parseToolCallsFromText(text: string): Array<{ name: string; arguments: Record<string, unknown> }> {
+	const results: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+	// Match individual JSON objects (non-greedy)
+	for (const match of text.matchAll(/\{[^{}]*"name"\s*:\s*"[^"]+[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g)) {
+		try {
+			const parsed = JSON.parse(match[0]);
+			const name = parsed.name || parsed.function?.name;
+			if (!name) continue;
+			const rawArgs = parsed.parameters || parsed.arguments || parsed.function?.arguments || {};
+			const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+			results.push({ name, arguments: args });
+		} catch {
+			continue;
+		}
 	}
+	return results;
 }
 
 function json(data: unknown, status = 200): Response {
