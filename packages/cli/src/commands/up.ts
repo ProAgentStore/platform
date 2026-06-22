@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { requireSession } from "./login.js";
 import { writeLine, writeError } from "../output.js";
+import { clearScreen, printLogo, printStatus, printStep, printEvent, waitForKey, type TuiState } from "../tui.js";
 
 const API_BASE = "https://api.proagentstore.online";
 
@@ -10,15 +11,30 @@ export const upCommand = new Command("up")
 	.option("--instance <id>", "Connect to a specific instance only")
 	.action(async (opts: { headless?: boolean; instance?: string }) => {
 		const session = requireSession();
-		writeLine(`Signed in as ${session.user.login}`);
+
+		const state: TuiState = {
+			user: session.user.login,
+			instances: [],
+			activeInstance: "",
+			runner: "starting",
+			tunnel: "offline",
+			tunnelUrl: "",
+			registration: "pending",
+			lastEvent: "Fetching instances...",
+			taskCount: 0,
+		};
+
+		clearScreen();
+		printLogo();
+		printStep("Signed in as " + session.user.login, "ok");
 
 		// Fetch instances
-		writeLine("Fetching your instances...");
+		printStep("Fetching instances...", "wait");
 		const res = await fetch(`${API_BASE}/v1/instances/my/instances`, {
 			headers: { Authorization: `Bearer ${session.token}` },
 		});
 		if (!res.ok) {
-			writeError(`Failed to fetch instances: ${res.status}`);
+			printStep("Failed to fetch instances: " + res.status, "fail");
 			process.exit(1);
 		}
 		const data = await res.json() as { instances?: Array<{ id: string; agent_id: string; status: string; name?: string; slug?: string }> };
@@ -29,30 +45,104 @@ export const upCommand = new Command("up")
 		}
 
 		if (instances.length === 0) {
-			writeError("No active instances found. Subscribe to an agent first at https://proagentstore.online");
+			printStep("No active instances found", "fail");
+			writeLine("  Subscribe to an agent at https://proagentstore.online");
 			process.exit(1);
 		}
 
-		writeLine(`Found ${instances.length} instance${instances.length === 1 ? "" : "s"}:`);
-		for (const inst of instances) {
-			writeLine(`  ${inst.name || inst.slug || inst.id.slice(0, 8)} (${inst.id.slice(0, 8)}...)`);
+		state.instances = instances.map((i) => ({ id: i.id, name: i.name || i.slug || i.id.slice(0, 8) }));
+		printStep(`Found ${instances.length} instance${instances.length === 1 ? "" : "s"}`, "ok");
+		for (const inst of state.instances) {
+			writeLine(`    ${inst.name} (${inst.id.slice(0, 8)}...)`);
 		}
 
 		const target = instances[0];
-		writeLine(`\nConnecting runner to: ${target.name || target.id.slice(0, 8)}...`);
+		state.activeInstance = target.name || target.slug || target.id.slice(0, 8);
+		printStep(`Connecting: ${state.activeInstance}`, "wait");
 
-		// Spawn runner connect with token via env var (avoids shell escaping issues)
+		// Spawn runner connect as child process
 		const { spawn } = await import("node:child_process");
 		const cliPath = process.argv[1];
 		const args = [cliPath, "runner", "connect", target.id];
 		if (opts.headless) args.push("--headless");
 
 		const child = spawn(process.execPath, args, {
-			stdio: "inherit",
+			stdio: ["ignore", "pipe", "pipe"],
 			env: { ...process.env, PAGS_TOKEN: session.token },
 		});
 
+		let tunnelUrl = "";
+
+		const handleOutput = (data: Buffer) => {
+			const text = data.toString("utf-8");
+			for (const line of text.split("\n")) {
+				const trimmed = line.trim();
+				if (!trimmed) continue;
+
+				// Parse tunnel URL
+				const tunnelMatch = trimmed.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
+				if (tunnelMatch) {
+					tunnelUrl = tunnelMatch[0];
+					state.tunnel = "online";
+					state.tunnelUrl = tunnelUrl;
+					state.lastEvent = "Tunnel created";
+					printStatus(state);
+					continue;
+				}
+
+				// Parse runner status
+				if (trimmed.includes("FAGS browser runtime listening")) {
+					state.runner = "online";
+					state.lastEvent = "Runner started";
+					printStatus(state);
+					continue;
+				}
+				if (trimmed.includes("Runtime registered") || trimmed.includes("CONNECTED")) {
+					state.registration = "registered";
+					state.lastEvent = "Registered with PAGS";
+					printStatus(state);
+					continue;
+				}
+				if (trimmed.includes("fetch failed") || trimmed.includes("error")) {
+					state.lastEvent = trimmed.slice(0, 80);
+					if (trimmed.includes("fetch failed")) {
+						state.registration = "failed";
+					}
+					printStatus(state);
+					continue;
+				}
+
+				// Skip cloudflared noise
+				if (trimmed.includes("INF ") && !tunnelMatch) continue;
+
+				state.lastEvent = trimmed.slice(0, 80);
+			}
+		};
+
+		child.stdout?.on("data", handleOutput);
+		child.stderr?.on("data", handleOutput);
+
 		child.on("exit", (code) => {
-			process.exit(code || 0);
+			if (code && code !== 0) {
+				state.runner = "error";
+				state.lastEvent = `Runner exited with code ${code}`;
+				printStatus(state);
+			}
+		});
+
+		// Keep running until quit
+		const shutdown = () => {
+			child.kill();
+			clearScreen();
+			writeLine("  Runner stopped.");
+			process.exit(0);
+		};
+
+		process.on("SIGINT", shutdown);
+		process.on("SIGTERM", shutdown);
+
+		// Wait for child to exit
+		await new Promise<void>((resolve) => {
+			child.on("exit", () => resolve());
 		});
 	});
