@@ -112,8 +112,13 @@ async function runAnthropic(
 	if (!res.ok) {
 		const errObj = (data as { error?: { message?: string; type?: string } }).error;
 		const errMsg = errObj?.message || JSON.stringify(data);
+		const hint = res.status === 404
+			? " — Your API key may not have access to this model. Get a key from console.anthropic.com/settings/keys"
+			: res.status === 401
+				? " — Invalid API key. Update it in Profile → API Keys → Anthropic"
+				: "";
 		throw new UserAiProviderError(
-			`Anthropic (${res.status}): ${errMsg}`,
+			`Anthropic (${res.status}): ${errMsg}${hint}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
 			data,
