@@ -24,10 +24,15 @@ function envWithCloudflareKey(row: {
 			prepare(sql: string) {
 				calls.push(sql);
 				return {
-					bind() {
+					bind(...args: unknown[]) {
 						return {
-							first: async () =>
-								sql.includes("SELECT key_ciphertext") ? row : null,
+							first: async () => {
+								if (!sql.includes("SELECT key_ciphertext")) return null;
+								// Only return row for cloudflare provider queries
+								const provider = args[1];
+								if (provider && provider !== "cloudflare") return null;
+								return row;
+							},
 							run: async () => ({ success: true }),
 						};
 					},
