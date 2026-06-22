@@ -342,8 +342,9 @@ export function createRunnerCommand(): Command {
 				});
 
 				writeLine(`Tunnel ready: ${tunnelUrl}`);
-				await waitForLocalRunner({ url: tunnelUrl, token: runnerToken, instanceId }, 30_000);
-				writeLine("Tunnel health check passed");
+				writeLine("Waiting for tunnel DNS to propagate (up to 60s)...");
+				await waitForLocalRunner({ url: tunnelUrl, token: runnerToken, instanceId }, 60_000);
+				writeLine("Tunnel health check passed ✓");
 
 				const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", {
 					url: tunnelUrl,
@@ -359,16 +360,27 @@ export function createRunnerCommand(): Command {
 						: [],
 					runnerVersion: clean(opts.runnerVersion) || "",
 				});
-				writeLine(JSON.stringify(result, null, 2));
+				writeLine("Runtime registered with PAGS ✓");
 				if (!opts.skipProbe) {
-					const status = await requestPags(
-						"GET",
-						`/v1/instances/${apiPathSegment(instanceId)}/runtime/status`,
-						opts,
-					);
-					writeLine(JSON.stringify(status, null, 2));
+					try {
+						await requestPags(
+							"GET",
+							`/v1/instances/${apiPathSegment(instanceId)}/runtime/status`,
+							opts,
+						);
+						writeLine("PAGS can reach your runtime ✓");
+					} catch {
+						writeLine("⚠️  PAGS probe failed — the tunnel may need more time");
+					}
 				}
-				writeLine("Connected. Keep this process running while the agent uses your FAGS browser runtime.");
+				writeLine("");
+				writeLine("═══════════════════════════════════════════════");
+				writeLine("  ✅ CONNECTED — Browser runner is live");
+				writeLine(`  Instance: ${instanceId.slice(0, 8)}...`);
+				writeLine(`  Tunnel:   ${tunnelUrl}`);
+				writeLine("  The agent can now submit applications via browser.");
+				writeLine("  Keep this terminal open. Press Ctrl+C to disconnect.");
+				writeLine("═══════════════════════════════════════════════");
 				await new Promise<void>((resolvePromise) => {
 					runner.on("exit", () => resolvePromise());
 					tunnel?.on("exit", () => resolvePromise());

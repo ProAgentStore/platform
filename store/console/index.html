@@ -1698,6 +1698,7 @@ console.log(response)</pre>
       slot.innerHTML = `
         <a href="/console/instances" onclick="showDashboard('instances');return false" style="color:var(--muted);text-decoration:none;font-size:1rem;padding:0 0.25rem">&larr;</a>
         <span style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px">${esc(meta.name || 'Agent')}</span>
+        <span id="runtime-status-badge" style="font-size:0.65rem;padding:0.15rem 0.4rem;border-radius:999px;font-weight:700;background:var(--line);color:var(--muted)">...</span>
         <div class="inst-nav-tabs">
           <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
           <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')">Board</button>
@@ -1706,6 +1707,7 @@ console.log(response)</pre>
       `;
       switchInstTab(tab, false);
       loadInstanceMessages();
+      checkRuntimeStatus();
       if (updateUrl) {
         const detailPath = tab === 'board' && runtimeTaskId
           ? `/instances/${encodeURIComponent(instanceId)}/board/tasks/${encodeURIComponent(runtimeTaskId)}`
@@ -2390,6 +2392,29 @@ console.log(response)</pre>
           </div>`
         : '';
       return `<div class="chat-msg system">Error: ${esc(text)}${help}</div>`;
+    }
+
+    async function checkRuntimeStatus() {
+      if (!currentInstance) return;
+      const badge = document.getElementById('runtime-status-badge');
+      if (!badge) return;
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/runtime`);
+        const rt = data.runtime;
+        if (rt && rt.endpoint_url) {
+          badge.textContent = '● Runner connected';
+          badge.style.background = 'rgba(34,197,94,0.15)';
+          badge.style.color = 'var(--green)';
+        } else {
+          badge.textContent = '○ No runner';
+          badge.style.background = 'var(--line)';
+          badge.style.color = 'var(--muted)';
+        }
+      } catch {
+        badge.textContent = '○ No runner';
+        badge.style.background = 'var(--line)';
+        badge.style.color = 'var(--muted)';
+      }
     }
 
     async function clearInstanceChat() {
