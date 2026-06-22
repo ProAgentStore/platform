@@ -342,9 +342,6 @@ export function createRunnerCommand(): Command {
 				});
 
 				writeLine(`Tunnel ready: ${tunnelUrl}`);
-				writeLine("Waiting for tunnel DNS to propagate (up to 60s)...");
-				await waitForLocalRunner({ url: tunnelUrl, token: runnerToken, instanceId }, 60_000);
-				writeLine("Tunnel health check passed ✓");
 
 				const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", {
 					url: tunnelUrl,
@@ -361,18 +358,6 @@ export function createRunnerCommand(): Command {
 					runnerVersion: clean(opts.runnerVersion) || "",
 				});
 				writeLine("Runtime registered with PAGS ✓");
-				if (!opts.skipProbe) {
-					try {
-						await requestPags(
-							"GET",
-							`/v1/instances/${apiPathSegment(instanceId)}/runtime/status`,
-							opts,
-						);
-						writeLine("PAGS can reach your runtime ✓");
-					} catch {
-						writeLine("⚠️  PAGS probe failed — the tunnel may need more time");
-					}
-				}
 				writeLine("");
 				writeLine("═══════════════════════════════════════════════");
 				writeLine("  ✅ CONNECTED — Browser runner is live");
