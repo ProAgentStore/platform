@@ -27,6 +27,13 @@ bucket_name = "pags-agents"
 name = "AGENT"
 class_name = "AgentDO"
 
+[ai]
+binding = "AI"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "pags-agents"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["AgentDO"]

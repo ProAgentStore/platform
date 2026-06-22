@@ -1,0 +1,895 @@
+/**
+ * Agent Storage Engine — manages all persistent data for an agent DO.
+ *
+ * Layers:
+ * - DO storage: structured records, memory, conversations, activity log
+ * - R2: binary file storage (resumes, documents, media)
+ * - Vectorize: semantic embeddings for RAG retrieval
+ */
+import type {
+	ActivityEvent,
+	CollectionField,
+	CollectionRecord,
+	CollectionSchema,
+	ConversationSummary,
+	ExtractedFact,
+	FileMeta,
+	UserContext,
+	VectorMeta,
+	VectorSearchResult,
+} from "./agent-storage-types.js";
+import type { AgentMessage, MemoryEntry } from "./agent-types.js";
+
+const MAX_EVENTS = 500;
+const SUMMARY_THRESHOLD = 20;
+const MAX_COLLECTION_RECORDS = 10_000;
+const MAX_COLLECTIONS = 50;
+const CHUNK_SIZE = 512; // characters per vector chunk
+
+export class AgentStorageEngine {
+	constructor(
+		private doStorage: DurableObjectStorage,
+		private r2: R2Bucket | null,
+		private vectorize: VectorizeIndex | null,
+		private ai: Ai | null,
+		private agentId: string,
+	) {}
+
+	// ── Vector Storage ────────────────────────────────────────────────────────
+
+	/**
+	 * Embed and store text chunks in Vectorize for semantic retrieval.
+	 */
+	async vectorizeStore(
+		sourceType: VectorMeta["sourceType"],
+		sourceId: string,
+		text: string,
+	): Promise<string[]> {
+		if (!this.vectorize || !this.ai) return [];
+
+		const chunks = chunkText(text, CHUNK_SIZE);
+		const ids: string[] = [];
+
+		for (let i = 0; i < chunks.length; i++) {
+			const chunk = chunks[i];
+			const id = `${this.agentId}:${sourceType}:${sourceId}:${i}`;
+			const embedding = await this.embed(chunk);
+			if (!embedding) continue;
+
+			await this.vectorize.upsert([
+				{
+					id,
+					values: embedding,
+					metadata: {
+						agentId: this.agentId,
+						sourceType,
+						sourceId,
+						chunkIndex: i,
+						text: chunk.slice(0, 1000), // Store truncated text in metadata
+					},
+				},
+			]);
+
+			const meta: VectorMeta = {
+				id,
+				agentId: this.agentId,
+				sourceType,
+				sourceId,
+				chunkIndex: i,
+				text: chunk,
+				createdAt: new Date().toISOString(),
+			};
+			await this.doStorage.put(`vec:${id}`, meta);
+			ids.push(id);
+		}
+
+		return ids;
+	}
+
+	/**
+	 * Semantic search across all agent vectors.
+	 */
+	async vectorSearch(
+		query: string,
+		topK = 5,
+		filter?: { sourceType?: VectorMeta["sourceType"] },
+	): Promise<VectorSearchResult[]> {
+		if (!this.vectorize || !this.ai) return [];
+
+		const embedding = await this.embed(query);
+		if (!embedding) return [];
+
+		const vectorFilter: VectorizeVectorMetadataFilter = {
+			agentId: this.agentId,
+		};
+		if (filter?.sourceType) {
+			vectorFilter.sourceType = filter.sourceType;
+		}
+
+		const results = await this.vectorize.query(embedding, {
+			topK,
+			filter: vectorFilter,
+			returnMetadata: "all",
+		});
+
+		return results.matches.map((match) => ({
+			id: match.id,
+			score: match.score,
+			text: (match.metadata?.text as string) || "",
+			sourceType: (match.metadata?.sourceType as VectorMeta["sourceType"]) || "knowledge",
+			sourceId: (match.metadata?.sourceId as string) || "",
+		}));
+	}
+
+	/**
+	 * Remove all vectors for a given source.
+	 */
+	async vectorDelete(sourceType: VectorMeta["sourceType"], sourceId: string): Promise<void> {
+		if (!this.vectorize) return;
+
+		// Find all vector IDs for this source
+		const prefix = `vec:${this.agentId}:${sourceType}:${sourceId}:`;
+		const all = await this.doStorage.list<VectorMeta>({ prefix });
+		const ids = [...all.keys()].map((k) => k.replace("vec:", ""));
+
+		if (ids.length > 0) {
+			await this.vectorize.deleteByIds(ids);
+			await this.doStorage.delete([...all.keys()]);
+		}
+	}
+
+	private async embed(text: string): Promise<number[] | null> {
+		if (!this.ai) return null;
+		try {
+			const result = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
+				text: [text],
+			});
+			return (result as { data: number[][] }).data?.[0] || null;
+		} catch {
+			return null;
+		}
+	}
+
+	// ── File Storage ──────────────────────────────────────────────────────────
+
+	/**
+	 * Upload a file to R2 with metadata tracking in DO.
+	 */
+	async fileUpload(opts: {
+		name: string;
+		path?: string;
+		mimeType: string;
+		data: ArrayBuffer | ReadableStream | string;
+		userId?: string;
+		tags?: string[];
+	}): Promise<FileMeta> {
+		if (!this.r2) throw new Error("R2 storage not available");
+
+		const id = crypto.randomUUID();
+		const r2Key = `agents/${this.agentId}/files/${id}/${opts.name}`;
+
+		await this.r2.put(r2Key, opts.data, {
+			httpMetadata: { contentType: opts.mimeType },
+			customMetadata: {
+				agentId: this.agentId,
+				originalName: opts.name,
+				...(opts.userId ? { userId: opts.userId } : {}),
+			},
+		});
+
+		const obj = await this.r2.head(r2Key);
+		const meta: FileMeta = {
+			id,
+			agentId: this.agentId,
+			userId: opts.userId,
+			name: opts.name,
+			path: opts.path || `/${opts.name}`,
+			mimeType: opts.mimeType,
+			size: obj?.size || 0,
+			tags: opts.tags || [],
+			r2Key,
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		};
+
+		await this.doStorage.put(`file:${id}`, meta);
+
+		// Auto-vectorize text-based files
+		if (isTextMimeType(opts.mimeType) && typeof opts.data === "string") {
+			await this.vectorizeStore("file", id, opts.data.slice(0, 10_000));
+		}
+
+		await this.logEvent("file.uploaded", undefined, {
+			fileId: id,
+			name: opts.name,
+			size: meta.size,
+			mimeType: opts.mimeType,
+		});
+
+		return meta;
+	}
+
+	/**
+	 * Read a file's contents from R2.
+	 */
+	async fileGet(id: string): Promise<{ meta: FileMeta; body: ReadableStream } | null> {
+		const meta = await this.doStorage.get<FileMeta>(`file:${id}`);
+		if (!meta || !this.r2) return null;
+
+		const obj = await this.r2.get(meta.r2Key);
+		if (!obj) return null;
+
+		return { meta, body: obj.body };
+	}
+
+	/**
+	 * List files with optional filters.
+	 */
+	async fileList(opts?: {
+		userId?: string;
+		tags?: string[];
+		mimeType?: string;
+	}): Promise<FileMeta[]> {
+		const all = await this.doStorage.list<FileMeta>({ prefix: "file:" });
+		let files = [...all.values()];
+
+		if (opts?.userId) files = files.filter((f) => f.userId === opts.userId);
+		if (opts?.tags?.length) {
+			files = files.filter((f) => opts.tags!.some((t) => f.tags.includes(t)));
+		}
+		if (opts?.mimeType) {
+			files = files.filter((f) => f.mimeType.startsWith(opts.mimeType!));
+		}
+
+		return files.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	}
+
+	/**
+	 * Delete a file from R2 and DO.
+	 */
+	async fileDelete(id: string): Promise<boolean> {
+		const meta = await this.doStorage.get<FileMeta>(`file:${id}`);
+		if (!meta) return false;
+
+		if (this.r2) await this.r2.delete(meta.r2Key);
+		await this.doStorage.delete(`file:${id}`);
+		await this.vectorDelete("file", id);
+		await this.logEvent("file.deleted", undefined, { fileId: id, name: meta.name });
+		return true;
+	}
+
+	// ── Collections (Structured Storage) ──────────────────────────────────────
+
+	/**
+	 * Define a new collection (like creating a table).
+	 * Schemas are stored at `schema:{name}` for fast listing without scanning records.
+	 */
+	async collectionCreate(name: string, fields: CollectionField[]): Promise<CollectionSchema> {
+		const existing = await this.doStorage.get<CollectionSchema>(`schema:${name}`);
+		if (existing) throw new Error(`Collection "${name}" already exists`);
+
+		const allSchemas = await this.doStorage.list({ prefix: "schema:" });
+		if (allSchemas.size >= MAX_COLLECTIONS) {
+			throw new Error(`Maximum ${MAX_COLLECTIONS} collections reached`);
+		}
+
+		const schema: CollectionSchema = {
+			name,
+			fields,
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+			recordCount: 0,
+		};
+		await this.doStorage.put(`schema:${name}`, schema);
+		await this.logEvent("collection.created", undefined, { collection: name, fields: fields.length });
+		return schema;
+	}
+
+	/**
+	 * Get collection schema.
+	 */
+	async collectionGet(name: string): Promise<CollectionSchema | null> {
+		return (await this.doStorage.get<CollectionSchema>(`schema:${name}`)) || null;
+	}
+
+	/**
+	 * List all collections (fast — only scans schema keys, not records).
+	 */
+	async collectionList(): Promise<CollectionSchema[]> {
+		const all = await this.doStorage.list<CollectionSchema>({ prefix: "schema:" });
+		return [...all.values()];
+	}
+
+	/**
+	 * Delete a collection and all its records.
+	 */
+	async collectionDelete(name: string): Promise<boolean> {
+		const schema = await this.collectionGet(name);
+		if (!schema) return false;
+
+		// Delete schema
+		await this.doStorage.delete(`schema:${name}`);
+
+		// Delete all records and indexes
+		const records = await this.doStorage.list({ prefix: `col:${name}:` });
+		const indexes = await this.doStorage.list({ prefix: `idx:${name}:` });
+		const allKeys = [...records.keys(), ...indexes.keys()];
+		for (let i = 0; i < allKeys.length; i += 128) {
+			await this.doStorage.delete(allKeys.slice(i, i + 128));
+		}
+
+		// Delete vectors for collection records
+		await this.vectorDelete("collection", name);
+		return true;
+	}
+
+	/**
+	 * Insert a record into a collection.
+	 */
+	async recordInsert(
+		collection: string,
+		data: Record<string, unknown>,
+		userId?: string,
+	): Promise<CollectionRecord> {
+		const schema = await this.collectionGet(collection);
+		if (!schema) throw new Error(`Collection "${collection}" not found`);
+		if (schema.recordCount >= MAX_COLLECTION_RECORDS) {
+			throw new Error(`Collection "${collection}" is full (max ${MAX_COLLECTION_RECORDS} records)`);
+		}
+
+		const validated = validateRecord(schema, data);
+
+		// Enforce unique constraints
+		for (const field of schema.fields) {
+			if (field.unique && validated[field.name] !== undefined) {
+				const encoded = encodeIndexValue(String(validated[field.name]));
+				const existing = await this.doStorage.list({
+					prefix: `idx:${collection}:${field.name}:${encoded}:`,
+					limit: 1,
+				});
+				if (existing.size > 0) {
+					throw new Error(`Duplicate value for unique field "${field.name}": ${String(validated[field.name])}`);
+				}
+			}
+		}
+
+		const id = crypto.randomUUID();
+		const now = new Date().toISOString();
+
+		const record: CollectionRecord = {
+			id,
+			collection,
+			data: validated,
+			createdAt: now,
+			updatedAt: now,
+		};
+
+		await this.doStorage.put(`col:${collection}:${id}`, record);
+
+		// Build indexes for indexed + unique fields
+		for (const field of schema.fields) {
+			if ((field.indexed || field.unique) && validated[field.name] !== undefined) {
+				const value = encodeIndexValue(String(validated[field.name]));
+				await this.doStorage.put(`idx:${collection}:${field.name}:${value}:${id}`, id);
+			}
+		}
+
+		// Update record count
+		schema.recordCount++;
+		await this.doStorage.put(`schema:${collection}`, schema);
+
+		await this.logEvent("collection.record.created", userId, {
+			collection,
+			recordId: id,
+		});
+
+		return record;
+	}
+
+	/**
+	 * Get a record by ID.
+	 */
+	async recordGet(collection: string, id: string): Promise<CollectionRecord | null> {
+		return (await this.doStorage.get<CollectionRecord>(`col:${collection}:${id}`)) || null;
+	}
+
+	/**
+	 * Update a record.
+	 */
+	async recordUpdate(
+		collection: string,
+		id: string,
+		data: Record<string, unknown>,
+		userId?: string,
+	): Promise<CollectionRecord | null> {
+		const existing = await this.doStorage.get<CollectionRecord>(`col:${collection}:${id}`);
+		if (!existing) return null;
+
+		const schema = await this.collectionGet(collection);
+		if (!schema) return null;
+
+		// Remove old indexes for fields being updated
+		for (const field of schema.fields) {
+			if (field.indexed && existing.data[field.name] !== undefined) {
+				const oldValue = encodeIndexValue(String(existing.data[field.name]));
+				await this.doStorage.delete(`idx:${collection}:${field.name}:${oldValue}:${id}`);
+			}
+		}
+
+		const merged = { ...existing.data, ...data };
+		const validated = validateRecord(schema, merged);
+
+		existing.data = validated;
+		existing.updatedAt = new Date().toISOString();
+		await this.doStorage.put(`col:${collection}:${id}`, existing);
+
+		// Rebuild indexes
+		for (const field of schema.fields) {
+			if (field.indexed && validated[field.name] !== undefined) {
+				const value = encodeIndexValue(String(validated[field.name]));
+				await this.doStorage.put(`idx:${collection}:${field.name}:${value}:${id}`, id);
+			}
+		}
+
+		await this.logEvent("collection.record.updated", userId, {
+			collection,
+			recordId: id,
+		});
+
+		return existing;
+	}
+
+	/**
+	 * Delete a record.
+	 */
+	async recordDelete(collection: string, id: string, userId?: string): Promise<boolean> {
+		const existing = await this.doStorage.get<CollectionRecord>(`col:${collection}:${id}`);
+		if (!existing) return false;
+
+		const schema = await this.collectionGet(collection);
+
+		// Remove indexes
+		if (schema) {
+			for (const field of schema.fields) {
+				if (field.indexed && existing.data[field.name] !== undefined) {
+					const value = encodeIndexValue(String(existing.data[field.name]));
+					await this.doStorage.delete(`idx:${collection}:${field.name}:${value}:${id}`);
+				}
+			}
+			schema.recordCount = Math.max(0, schema.recordCount - 1);
+			await this.doStorage.put(`schema:${collection}`, schema);
+		}
+
+		await this.doStorage.delete(`col:${collection}:${id}`);
+		await this.logEvent("collection.record.deleted", userId, { collection, recordId: id });
+		return true;
+	}
+
+	/**
+	 * Query records in a collection with filtering.
+	 */
+	async recordQuery(
+		collection: string,
+		opts?: {
+			where?: Record<string, unknown>;
+			limit?: number;
+			offset?: number;
+			orderBy?: string;
+			orderDir?: "asc" | "desc";
+		},
+	): Promise<{ records: CollectionRecord[]; total: number }> {
+		const schema = await this.collectionGet(collection);
+		if (!schema) throw new Error(`Collection "${collection}" not found`);
+
+		const limit = Math.min(opts?.limit || 50, 200);
+		const offset = opts?.offset || 0;
+
+		// If filtering on an indexed field, use the index
+		if (opts?.where && Object.keys(opts.where).length === 1) {
+			const [field, value] = Object.entries(opts.where)[0];
+			const fieldDef = schema.fields.find((f) => f.name === field);
+			if (fieldDef?.indexed) {
+				const encodedValue = encodeIndexValue(String(value));
+				const indexPrefix = `idx:${collection}:${field}:${encodedValue}:`;
+				const indexed = await this.doStorage.list<string>({ prefix: indexPrefix });
+				const ids = [...indexed.values()];
+				const records: CollectionRecord[] = [];
+				for (const id of ids.slice(offset, offset + limit)) {
+					const rec = await this.doStorage.get<CollectionRecord>(`col:${collection}:${id}`);
+					if (rec) records.push(rec);
+				}
+				return { records, total: ids.length };
+			}
+		}
+
+		// Full scan with filtering (schemas are stored at `schema:` prefix, not here)
+		const all = await this.doStorage.list<CollectionRecord>({ prefix: `col:${collection}:` });
+		let records = [...all.values()];
+
+		// Apply where filter
+		if (opts?.where) {
+			records = records.filter((r) =>
+				Object.entries(opts.where!).every(([k, v]) => r.data[k] === v),
+			);
+		}
+
+		const total = records.length;
+
+		// Sort
+		if (opts?.orderBy) {
+			const dir = opts.orderDir === "desc" ? -1 : 1;
+			records.sort((a, b) => {
+				const av = String(a.data[opts.orderBy!] ?? a[opts.orderBy as keyof CollectionRecord] ?? "");
+				const bv = String(b.data[opts.orderBy!] ?? b[opts.orderBy as keyof CollectionRecord] ?? "");
+				return av.localeCompare(bv) * dir;
+			});
+		}
+
+		return { records: records.slice(offset, offset + limit), total };
+	}
+
+	// ── Activity Log ──────────────────────────────────────────────────────────
+
+	/**
+	 * Append an activity event.
+	 * Pruning is amortized: only runs every ~50 events (probabilistic).
+	 */
+	async logEvent(
+		type: ActivityEvent["type"],
+		userId?: string,
+		data?: Record<string, unknown>,
+		channel?: string,
+	): Promise<ActivityEvent> {
+		const event: ActivityEvent = {
+			id: crypto.randomUUID(),
+			type,
+			agentId: this.agentId,
+			userId,
+			channel,
+			data,
+			createdAt: new Date().toISOString(),
+		};
+		await this.doStorage.put(`evt:${event.createdAt}:${event.id}`, event);
+
+		// Amortized pruning: ~2% chance per write (roughly every 50 events)
+		if (Math.random() < 0.02) {
+			const all = await this.doStorage.list({ prefix: "evt:" });
+			if (all.size > MAX_EVENTS) {
+				const keys = [...all.keys()];
+				const toDelete = keys.slice(0, keys.length - MAX_EVENTS);
+				for (let i = 0; i < toDelete.length; i += 128) {
+					await this.doStorage.delete(toDelete.slice(i, i + 128));
+				}
+			}
+		}
+
+		return event;
+	}
+
+	/**
+	 * Get recent activity events.
+	 */
+	async getEvents(opts?: {
+		limit?: number;
+		type?: ActivityEvent["type"];
+		userId?: string;
+	}): Promise<ActivityEvent[]> {
+		const limit = opts?.limit || 50;
+		const all = await this.doStorage.list<ActivityEvent>({
+			prefix: "evt:",
+			reverse: true,
+			limit: limit * 2, // Over-fetch for filtering
+		});
+		let events = [...all.values()];
+
+		if (opts?.type) events = events.filter((e) => e.type === opts.type);
+		if (opts?.userId) events = events.filter((e) => e.userId === opts.userId);
+
+		return events.slice(0, limit);
+	}
+
+	// ── Conversation Summarization ────────────────────────────────────────────
+
+	/**
+	 * Check if conversation needs summarization and generate if so.
+	 * Returns the summary if generated, null otherwise.
+	 */
+	async maybeSummarize(model: string): Promise<ConversationSummary | null> {
+		if (!this.ai) return null;
+
+		// Count messages since last summary
+		const summaries = await this.doStorage.list<ConversationSummary>({
+			prefix: "sum:",
+			reverse: true,
+			limit: 1,
+		});
+		const lastSummary = [...summaries.values()][0];
+		const lastTimestamp = lastSummary?.messageRange.to || "0";
+
+		// Get messages since last summary
+		const messages = await this.doStorage.list<AgentMessage>({
+			prefix: "msg:",
+			startAfter: `msg:${lastTimestamp}`,
+		});
+
+		if (messages.size < SUMMARY_THRESHOLD) return null;
+
+		const msgList = [...messages.values()];
+		return this.generateSummary(msgList, model);
+	}
+
+	/**
+	 * Force generate a summary for given messages.
+	 */
+	async generateSummary(
+		messages: AgentMessage[],
+		model: string,
+	): Promise<ConversationSummary | null> {
+		if (!this.ai || messages.length === 0) return null;
+
+		const transcript = messages
+			.map((m) => `[${m.role}]: ${m.content}`)
+			.join("\n")
+			.slice(0, 8_000);
+
+		try {
+			const result = (await this.ai.run(model as Parameters<Ai["run"]>[0], {
+				messages: [
+					{
+						role: "system",
+						content: `Summarize this conversation segment. Output JSON:
+{
+  "summary": "2-3 sentence summary of what was discussed and decided",
+  "facts": [{"subject":"...", "predicate":"...", "object":"...", "confidence": 0.9}]
+}
+Extract key facts about the user, their preferences, decisions made, and information shared. Only include facts with high confidence.`,
+					},
+					{ role: "user", content: transcript },
+				],
+			})) as { response?: string };
+
+			const text = result.response || "";
+			const jsonMatch = text.match(/\{[\s\S]*\}/);
+			if (!jsonMatch) return null;
+
+			const parsed = JSON.parse(jsonMatch[0]) as {
+				summary: string;
+				facts: ExtractedFact[];
+			};
+
+			const sessionId = crypto.randomUUID();
+			const summary: ConversationSummary = {
+				id: sessionId,
+				sessionId,
+				messageRange: {
+					from: messages[0].createdAt,
+					to: messages[messages.length - 1].createdAt,
+					count: messages.length,
+				},
+				summary: parsed.summary || "",
+				facts: Array.isArray(parsed.facts) ? parsed.facts.slice(0, 20) : [],
+				createdAt: new Date().toISOString(),
+			};
+
+			await this.doStorage.put(`sum:${sessionId}`, summary);
+
+			// Store extracted facts as memory entries
+			for (const fact of summary.facts) {
+				if (fact.confidence >= 0.8) {
+					const key = `fact:${fact.subject}:${fact.predicate}`.slice(0, 100);
+					const entry: MemoryEntry = {
+						key,
+						type: "knowledge",
+						content: `${fact.subject} ${fact.predicate} ${fact.object}`,
+						updatedAt: new Date().toISOString(),
+					};
+					await this.doStorage.put(`mem:${key}`, entry);
+				}
+			}
+
+			// Vectorize the summary for future retrieval
+			await this.vectorizeStore("message", sessionId, summary.summary);
+
+			await this.logEvent("summary.generated", undefined, {
+				sessionId,
+				messageCount: messages.length,
+				factsExtracted: summary.facts.length,
+			});
+
+			return summary;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Get all conversation summaries.
+	 */
+	async getSummaries(limit = 20): Promise<ConversationSummary[]> {
+		const all = await this.doStorage.list<ConversationSummary>({
+			prefix: "sum:",
+			reverse: true,
+			limit,
+		});
+		return [...all.values()];
+	}
+
+	// ── Per-User Context ──────────────────────────────────────────────────────
+
+	/**
+	 * Get or create user context for this agent.
+	 */
+	async getUserContext(userId: string): Promise<UserContext> {
+		const key = `uctx:${userId}`;
+		const existing = await this.doStorage.get<UserContext>(key);
+		if (existing) return existing;
+
+		const ctx: UserContext = {
+			userId,
+			agentId: this.agentId,
+			preferences: {},
+			lastSeen: new Date().toISOString(),
+			messageCount: 0,
+		};
+		await this.doStorage.put(key, ctx);
+		return ctx;
+	}
+
+	/**
+	 * Update user context (called on each interaction).
+	 */
+	async touchUserContext(userId: string): Promise<UserContext> {
+		const ctx = await this.getUserContext(userId);
+		ctx.lastSeen = new Date().toISOString();
+		ctx.messageCount++;
+		await this.doStorage.put(`uctx:${userId}`, ctx);
+		return ctx;
+	}
+
+	/**
+	 * Set a user preference.
+	 */
+	async setUserPreference(userId: string, key: string, value: string): Promise<void> {
+		const ctx = await this.getUserContext(userId);
+		ctx.preferences[key] = value;
+		await this.doStorage.put(`uctx:${userId}`, ctx);
+	}
+
+	// ── RAG Context Builder ───────────────────────────────────────────────────
+
+	/**
+	 * Build relevant context for a chat message using vector search + summaries.
+	 * Returns empty string if no relevant context is found.
+	 */
+	async buildRAGContext(query: string): Promise<string> {
+		const maxChars = 6_000;
+		const parts: string[] = [];
+		let totalChars = 0;
+
+		const results = await this.vectorSearch(query, 8);
+		if (results.length > 0) {
+			parts.push("## Relevant Knowledge");
+			for (const result of results) {
+				if (totalChars + result.text.length > maxChars) break;
+				parts.push(`[${result.sourceType}] (score: ${result.score.toFixed(2)})\n${result.text}`);
+				totalChars += result.text.length;
+			}
+		}
+
+		const summaries = await this.getSummaries(5);
+		if (summaries.length > 0 && totalChars < maxChars) {
+			parts.push("\n## Conversation History");
+			for (const sum of summaries) {
+				if (totalChars + sum.summary.length > maxChars) break;
+				parts.push(`[${sum.messageRange.from.split("T")[0]}] ${sum.summary}`);
+				totalChars += sum.summary.length;
+			}
+		}
+
+		return parts.join("\n\n");
+	}
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+function chunkText(text: string, size: number): string[] {
+	const chunks: string[] = [];
+	// Split on sentence boundaries when possible
+	const sentences = text.split(/(?<=[.!?])\s+/);
+	let current = "";
+
+	for (const sentence of sentences) {
+		if (current.length + sentence.length > size && current.length > 0) {
+			chunks.push(current.trim());
+			current = "";
+		}
+		current += `${sentence} `;
+	}
+	if (current.trim()) chunks.push(current.trim());
+
+	// If any chunk is still too large, hard-split
+	const result: string[] = [];
+	for (const chunk of chunks) {
+		if (chunk.length <= size) {
+			result.push(chunk);
+		} else {
+			for (let i = 0; i < chunk.length; i += size) {
+				result.push(chunk.slice(i, i + size));
+			}
+		}
+	}
+
+	return result.filter((c) => c.length > 20); // Skip tiny fragments
+}
+
+function validateRecord(
+	schema: CollectionSchema,
+	data: Record<string, unknown>,
+): Record<string, unknown> {
+	const result: Record<string, unknown> = {};
+
+	for (const field of schema.fields) {
+		const value = data[field.name];
+
+		if (value === undefined || value === null) {
+			if (field.required) {
+				throw new Error(`Field "${field.name}" is required`);
+			}
+			if (field.default !== undefined) {
+				result[field.name] = field.default;
+			}
+			continue;
+		}
+
+		// Type coercion/validation
+		switch (field.type) {
+			case "string":
+				result[field.name] = String(value).slice(0, 10_000);
+				break;
+			case "number": {
+				const num = Number(value);
+				if (Number.isNaN(num)) throw new Error(`Field "${field.name}" must be a number`);
+				result[field.name] = num;
+				break;
+			}
+			case "boolean":
+				result[field.name] = Boolean(value);
+				break;
+			case "date":
+				result[field.name] = typeof value === "string" ? value : new Date(value as number).toISOString();
+				break;
+			case "json":
+				result[field.name] = value;
+				break;
+			case "reference":
+				result[field.name] = String(value);
+				break;
+		}
+	}
+
+	// Allow extra fields not in schema (flexible mode)
+	for (const [key, value] of Object.entries(data)) {
+		if (!(key in result)) {
+			result[key] = value;
+		}
+	}
+
+	return result;
+}
+
+function isTextMimeType(mimeType: string): boolean {
+	return (
+		mimeType.startsWith("text/") ||
+		mimeType === "application/json" ||
+		mimeType === "application/xml" ||
+		mimeType === "application/javascript"
+	);
+}
+
+/**
+ * Encode a value for use in index keys. Replaces `:` with `%3A` to avoid
+ * key structure ambiguity (index format: `idx:{col}:{field}:{value}:{id}`).
+ */
+function encodeIndexValue(value: string): string {
+	return value.replace(/%/g, "%25").replace(/:/g, "%3A");
+}

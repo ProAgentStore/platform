@@ -2,6 +2,8 @@ export interface Env {
 	DB: D1Database;
 	STORAGE: R2Bucket;
 	AGENT: DurableObjectNamespace;
+	AI: Ai;
+	VECTORIZE: VectorizeIndex;
 	GITHUB_CLIENT_ID: string;
 	GITHUB_CLIENT_SECRET: string;
 	GITHUB_ORG?: string;

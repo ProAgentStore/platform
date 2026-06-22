@@ -3,8 +3,15 @@
  *
  * Holds conversation history, memory, tasks, and runs the agent loop.
  * Inspired by archagent's bridge/agent-loop pattern, rebuilt on CF Durable Objects.
+ *
+ * Storage layers:
+ * - DO storage: conversation, memory, tasks, collections, activity log
+ * - R2: binary file storage (resumes, documents, media)
+ * - Vectorize: semantic embeddings for RAG retrieval
+ * - Collections: agent-defined structured storage (like tables)
  */
 import { DurableObject } from "cloudflare:workers";
+import { AgentStorageEngine } from "./agent-storage.js";
 import type {
 	AgentMessage,
 	AgentState,
@@ -14,6 +21,7 @@ import type {
 	MemoryEntry,
 } from "./agent-types.js";
 import { AGENT_TOOLS, executeTool, type ToolCallRequest } from "./lib/tools.js";
+import { STORAGE_TOOLS, executeStorageTool } from "./lib/storage-tools.js";
 import {
 	runUserWorkersAi,
 	UserAiCredentialsError,
@@ -50,6 +58,16 @@ const TOOL_CAPABLE_MODELS = new Set([
 ]);
 
 export class AgentDO extends DurableObject<Env> {
+	private getStorageEngine(agentId: string): AgentStorageEngine {
+		return new AgentStorageEngine(
+			this.ctx.storage,
+			this.env.STORAGE || null,
+			this.env.VECTORIZE || null,
+			this.env.AI || null,
+			agentId,
+		);
+	}
+
 	/**
 	 * Initialize agent state. Called once when the agent is first created.
 	 */
@@ -158,6 +176,54 @@ export class AgentDO extends DurableObject<Env> {
 			if (path === "/state" && request.method === "PUT")
 				return this.handleUpdateState(request);
 
+			// Collections (structured storage)
+			if (path === "/collections" && request.method === "GET")
+				return this.handleListCollections();
+			if (path === "/collections" && request.method === "POST")
+				return this.handleCreateCollection(request);
+			if (path.match(/^\/collections\/[^/]+$/) && request.method === "GET")
+				return this.handleGetCollection(path.slice("/collections/".length));
+			if (path.match(/^\/collections\/[^/]+$/) && request.method === "DELETE")
+				return this.handleDeleteCollection(path.slice("/collections/".length));
+			if (path.match(/^\/collections\/[^/]+\/records$/) && request.method === "GET")
+				return this.handleQueryRecords(path.split("/")[2], url);
+			if (path.match(/^\/collections\/[^/]+\/records$/) && request.method === "POST")
+				return this.handleInsertRecord(path.split("/")[2], request);
+			if (path.match(/^\/collections\/[^/]+\/records\/[^/]+$/) && request.method === "GET")
+				return this.handleGetRecord(path.split("/")[2], path.split("/")[4]);
+			if (path.match(/^\/collections\/[^/]+\/records\/[^/]+$/) && request.method === "PUT")
+				return this.handleUpdateRecord(path.split("/")[2], path.split("/")[4], request);
+			if (path.match(/^\/collections\/[^/]+\/records\/[^/]+$/) && request.method === "DELETE")
+				return this.handleDeleteRecord(path.split("/")[2], path.split("/")[4]);
+
+			// Files
+			if (path === "/files" && request.method === "GET")
+				return this.handleListFiles(url);
+			if (path === "/files" && request.method === "POST")
+				return this.handleUploadFile(request);
+			if (path.match(/^\/files\/[^/]+$/) && request.method === "GET")
+				return this.handleGetFile(path.slice("/files/".length));
+			if (path.match(/^\/files\/[^/]+$/) && request.method === "DELETE")
+				return this.handleDeleteFile(path.slice("/files/".length));
+
+			// Vector search
+			if (path === "/search" && request.method === "POST")
+				return this.handleVectorSearch(request);
+
+			// Activity log
+			if (path === "/activity" && request.method === "GET")
+				return this.handleGetActivity(url);
+
+			// Summaries
+			if (path === "/summaries" && request.method === "GET")
+				return this.handleGetSummaries(url);
+			if (path === "/summarize" && request.method === "POST")
+				return this.handleForceSummarize();
+
+			// User context
+			if (path.match(/^\/users\/[^/]+\/context$/) && request.method === "GET")
+				return this.handleGetUserContext(path.split("/")[2]);
+
 			return json({ error: "Not found" }, 404);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
@@ -223,12 +289,15 @@ export class AgentDO extends DurableObject<Env> {
 		await this.appendMessage(userMsg);
 		this.broadcast({ type: "message", message: userMsg });
 
+		const engine = this.getStorageEngine(state.agentId);
+		await engine.logEvent("chat.message", userId, { messageId: userMsg.id });
+
 		// Run agent loop
 		await this.ctx.storage.put("state", { ...state, status: "thinking" });
 		this.broadcast({ type: "status", status: "thinking" });
 
 		try {
-			const response = await this.think(state, userId);
+			const response = await this.think(state, engine, userId);
 
 			const assistantMsg: AgentMessage = {
 				id: crypto.randomUUID(),
@@ -242,6 +311,9 @@ export class AgentDO extends DurableObject<Env> {
 			await this.ctx.storage.put("state", { ...state, status: "idle" });
 			this.broadcast({ type: "message", message: assistantMsg });
 			this.broadcast({ type: "status", status: "idle" });
+
+			await engine.logEvent("chat.response", userId, { messageId: assistantMsg.id });
+			engine.maybeSummarize(state.model).catch(() => {});
 
 			return json({ message: assistantMsg });
 		} catch (err) {
@@ -269,32 +341,25 @@ export class AgentDO extends DurableObject<Env> {
 
 	/**
 	 * The agent loop — build context, call Workers AI, return response.
-	 * This is where archagent's agent-loop.ts concept lives.
+	 *
+	 * Context: RAG search → memory → tasks → user context.
+	 * Knowledge is retrieved via vector search, not dumped wholesale.
 	 */
-	private async think(state: AgentState, userId?: string): Promise<string> {
+	private async think(
+		state: AgentState,
+		engine: AgentStorageEngine,
+		userId?: string,
+	): Promise<string> {
 		const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
 		const memory = await this.getAllMemory();
 		const tasks = await this.getAllTasks();
-		const knowledge = await this.getAllKnowledge();
 
-		// Build system prompt with knowledge + memory + tasks context
+		const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
+
 		let systemPrompt = state.systemPrompt;
 
-		// Inject knowledge base — the core of what makes this agent useful
-		if (knowledge.length > 0) {
-			systemPrompt +=
-				"\n\n## Knowledge Base\nAnswer questions using the following documents. Cite the document title when referencing information.\n";
-			let totalLen = 0;
-			const MAX_KB_CHARS = 30_000; // Keep context manageable
-			for (const doc of knowledge) {
-				if (totalLen + doc.content.length > MAX_KB_CHARS) {
-					systemPrompt += `\n### ${doc.title}\n${doc.content.slice(0, MAX_KB_CHARS - totalLen)}...[truncated]\n`;
-					break;
-				}
-				systemPrompt += `\n### ${doc.title}\n${doc.content}\n`;
-				totalLen += doc.content.length;
-			}
-		}
+		const ragContext = await engine.buildRAGContext(lastUserMessage);
+		if (ragContext) systemPrompt += `\n\n${ragContext}`;
 
 		if (memory.length > 0) {
 			systemPrompt += "\n\n## Your Memory\n";
@@ -302,21 +367,30 @@ export class AgentDO extends DurableObject<Env> {
 				systemPrompt += `- [${m.type}] ${m.key}: ${m.content}\n`;
 			}
 		}
-		if (tasks.length > 0) {
-			const active = tasks.filter((t) => t.status !== "complete");
-			if (active.length > 0) {
-				systemPrompt += "\n\n## Active Tasks\n";
-				for (const t of active) {
-					systemPrompt += `- [${t.status}] ${t.title}: ${t.description}\n`;
+
+		const activeTasks = tasks.filter((t) => t.status !== "complete");
+		if (activeTasks.length > 0) {
+			systemPrompt += "\n\n## Active Tasks\n";
+			for (const t of activeTasks) {
+				systemPrompt += `- [${t.status}] ${t.title}: ${t.description}\n`;
+			}
+		}
+
+		if (userId) {
+			const userCtx = await engine.getUserContext(userId);
+			await engine.touchUserContext(userId);
+			if (Object.keys(userCtx.preferences).length > 0) {
+				systemPrompt += "\n\n## User Preferences\n";
+				for (const [key, value] of Object.entries(userCtx.preferences)) {
+					systemPrompt += `- ${key}: ${value}\n`;
 				}
 			}
 		}
 
 		const useTools = TOOL_CAPABLE_MODELS.has(state.model);
-
 		if (useTools) {
 			systemPrompt +=
-				"\n\nYou have tools available. Use them to manage your memory, tasks, fetch data, and store files. Call tools when the user asks you to remember something, work on a task, or fetch external data.";
+				"\n\nYou have tools available. Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
 		}
 
 		const aiMessages: { role: string; content: string }[] = [
@@ -336,7 +410,8 @@ export class AgentDO extends DurableObject<Env> {
 		}
 
 		// Tool-capable model: build tool definitions and run the tool-use loop
-		const tools = AGENT_TOOLS.map((t) => ({
+		const allTools = [...AGENT_TOOLS, ...STORAGE_TOOLS];
+		const tools = allTools.map((t) => ({
 			type: "function" as const,
 			function: {
 				name: t.name,
@@ -376,19 +451,33 @@ export class AgentDO extends DurableObject<Env> {
 			}
 
 			const toolResults: string[] = [];
+			const storageToolNames = new Set(STORAGE_TOOLS.map((t) => t.name));
 			for (const tc of result.tool_calls) {
-				const callReq: ToolCallRequest = { name: tc.name, input: tc.arguments };
-				const toolResult = await executeTool(
-					callReq,
-					this.ctx.storage,
-					this.env.STORAGE,
-					state.agentId,
-				);
+				let toolResult;
+				if (storageToolNames.has(tc.name)) {
+					toolResult = await executeStorageTool(
+						{ name: tc.name, input: tc.arguments },
+						engine,
+					);
+				} else {
+					const callReq: ToolCallRequest = { name: tc.name, input: tc.arguments };
+					toolResult = await executeTool(
+						callReq,
+						this.ctx.storage,
+						this.env.STORAGE,
+						state.agentId,
+					);
+				}
 				toolResults.push(`[${tc.name}]: ${toolResult.content}`);
 				this.broadcast({
 					type: "tool_call",
 					tool: tc.name,
 					result: toolResult,
+				});
+				// Log tool call as activity
+				await engine.logEvent("tool.called", userId, {
+					tool: tc.name,
+					success: toolResult.success,
 				});
 			}
 
@@ -684,11 +773,34 @@ export class AgentDO extends DurableObject<Env> {
 			addedAt: new Date().toISOString(),
 		};
 		await this.ctx.storage.put(`kb:${doc.id}`, doc);
+
+		// Vectorize the document for semantic retrieval
+		const state = await this.getState();
+		if (state) {
+			const engine = this.getStorageEngine(state.agentId);
+			await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`);
+			await engine.logEvent("knowledge.added", undefined, {
+				docId: doc.id,
+				title: doc.title,
+				size: doc.content.length,
+			});
+		}
+
 		return json(doc, 201);
 	}
 
 	private async handleDeleteKnowledge(id: string): Promise<Response> {
-		await this.ctx.storage.delete(`kb:${decodeURIComponent(id)}`);
+		const decodedId = decodeURIComponent(id);
+		await this.ctx.storage.delete(`kb:${decodedId}`);
+
+		// Remove vectors
+		const state = await this.getState();
+		if (state) {
+			const engine = this.getStorageEngine(state.agentId);
+			await engine.vectorDelete("knowledge", decodedId);
+			await engine.logEvent("knowledge.removed", undefined, { docId: decodedId });
+		}
+
 		return json({ success: true });
 	}
 
@@ -741,6 +853,231 @@ export class AgentDO extends DurableObject<Env> {
 				400,
 			);
 		}
+	}
+
+	// ── Collections ───────────────────────────────────────────────────────────
+
+	private async handleListCollections(): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const collections = await engine.collectionList();
+		return json({ collections });
+	}
+
+	private async handleCreateCollection(request: Request): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const { name, fields } = await request.json<{ name: string; fields: unknown[] }>();
+		if (!name || !fields) return json({ error: "name and fields required" }, 400);
+		const schema = await engine.collectionCreate(name, fields as import("./agent-storage-types.js").CollectionField[]);
+		return json(schema, 201);
+	}
+
+	private async handleGetCollection(name: string): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const schema = await engine.collectionGet(decodeURIComponent(name));
+		return schema ? json(schema) : json({ error: "Not found" }, 404);
+	}
+
+	private async handleDeleteCollection(name: string): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		await engine.collectionDelete(decodeURIComponent(name));
+		return json({ success: true });
+	}
+
+	private async handleQueryRecords(collection: string, url: URL): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const where = url.searchParams.get("where");
+		const result = await engine.recordQuery(decodeURIComponent(collection), {
+			where: where ? JSON.parse(where) : undefined,
+			orderBy: url.searchParams.get("order_by") || undefined,
+			orderDir: (url.searchParams.get("order_dir") as "asc" | "desc") || undefined,
+			limit: Number(url.searchParams.get("limit")) || 50,
+			offset: Number(url.searchParams.get("offset")) || 0,
+		});
+		return json(result);
+	}
+
+	private async handleInsertRecord(collection: string, request: Request): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const { data } = await request.json<{ data: Record<string, unknown> }>();
+		if (!data) return json({ error: "data required" }, 400);
+		const record = await engine.recordInsert(decodeURIComponent(collection), data);
+		return json(record, 201);
+	}
+
+	private async handleGetRecord(collection: string, id: string): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const record = await engine.recordGet(decodeURIComponent(collection), decodeURIComponent(id));
+		return record ? json(record) : json({ error: "Not found" }, 404);
+	}
+
+	private async handleUpdateRecord(collection: string, id: string, request: Request): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const { data } = await request.json<{ data: Record<string, unknown> }>();
+		if (!data) return json({ error: "data required" }, 400);
+		const record = await engine.recordUpdate(
+			decodeURIComponent(collection),
+			decodeURIComponent(id),
+			data,
+		);
+		return record ? json(record) : json({ error: "Not found" }, 404);
+	}
+
+	private async handleDeleteRecord(collection: string, id: string): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const deleted = await engine.recordDelete(
+			decodeURIComponent(collection),
+			decodeURIComponent(id),
+		);
+		return deleted ? json({ success: true }) : json({ error: "Not found" }, 404);
+	}
+
+	// ── Files ─────────────────────────────────────────────────────────────────
+
+	private async handleListFiles(url: URL): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const tags = url.searchParams.get("tags")?.split(",").filter(Boolean);
+		const files = await engine.fileList({
+			userId: url.searchParams.get("user_id") || undefined,
+			tags: tags?.length ? tags : undefined,
+			mimeType: url.searchParams.get("mime_type") || undefined,
+		});
+		return json({ files });
+	}
+
+	private async handleUploadFile(request: Request): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const body = await request.json<{
+			name: string;
+			content: string;
+			mime_type?: string;
+			path?: string;
+			tags?: string[];
+			user_id?: string;
+		}>();
+		if (!body.name || !body.content)
+			return json({ error: "name and content required" }, 400);
+		const meta = await engine.fileUpload({
+			name: body.name,
+			path: body.path,
+			mimeType: body.mime_type || "text/plain",
+			data: body.content,
+			userId: body.user_id,
+			tags: body.tags,
+		});
+		return json(meta, 201);
+	}
+
+	private async handleGetFile(id: string): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const file = await engine.fileGet(decodeURIComponent(id));
+		if (!file) return json({ error: "Not found" }, 404);
+		return new Response(file.body, {
+			headers: {
+				"Content-Type": file.meta.mimeType,
+				"Content-Disposition": `inline; filename="${file.meta.name}"`,
+				"X-File-Meta": JSON.stringify({
+					id: file.meta.id,
+					name: file.meta.name,
+					size: file.meta.size,
+					tags: file.meta.tags,
+				}),
+			},
+		});
+	}
+
+	private async handleDeleteFile(id: string): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const deleted = await engine.fileDelete(decodeURIComponent(id));
+		return deleted ? json({ success: true }) : json({ error: "Not found" }, 404);
+	}
+
+	// ── Vector Search ─────────────────────────────────────────────────────────
+
+	private async handleVectorSearch(request: Request): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const { query, top_k, source_type } = await request.json<{
+			query: string;
+			top_k?: number;
+			source_type?: string;
+		}>();
+		if (!query) return json({ error: "query required" }, 400);
+		const results = await engine.vectorSearch(query, top_k || 5, {
+			sourceType: source_type as "knowledge" | "message" | "file" | "collection" | undefined,
+		});
+		return json({ results });
+	}
+
+	// ── Activity Log ──────────────────────────────────────────────────────────
+
+	private async handleGetActivity(url: URL): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const events = await engine.getEvents({
+			limit: Number(url.searchParams.get("limit")) || 50,
+			type: url.searchParams.get("type") as import("./agent-storage-types.js").ActivityEvent["type"] | undefined,
+			userId: url.searchParams.get("user_id") || undefined,
+		});
+		return json({ events });
+	}
+
+	// ── Summaries ─────────────────────────────────────────────────────────────
+
+	private async handleGetSummaries(url: URL): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const limit = Number(url.searchParams.get("limit")) || 20;
+		const summaries = await engine.getSummaries(limit);
+		return json({ summaries });
+	}
+
+	private async handleForceSummarize(): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const summary = await engine.maybeSummarize(state.model);
+		return summary
+			? json({ summary })
+			: json({ message: "Not enough messages to summarize" });
+	}
+
+	// ── User Context ──────────────────────────────────────────────────────────
+
+	private async handleGetUserContext(userId: string): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const ctx = await engine.getUserContext(decodeURIComponent(userId));
+		return json(ctx);
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────────────
