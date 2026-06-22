@@ -395,3 +395,30 @@ instanceStorageRoutes.post("/:id/knowledge", async (c) => {
 		body: JSON.stringify(await c.req.json()),
 	});
 });
+
+instanceStorageRoutes.delete("/:id/memory/:key", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const key = c.req.param("key");
+	return proxyDO(c, instance.id, `/memory/${encodeURIComponent(key)}`, { method: "DELETE" });
+});
+
+instanceStorageRoutes.delete("/:id/knowledge/:docId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const docId = c.req.param("docId");
+	return proxyDO(c, instance.id, `/knowledge/${encodeURIComponent(docId)}`, { method: "DELETE" });
+});
+
+instanceStorageRoutes.get("/:id/messages", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const query = new URL(c.req.url).search;
+	return proxyDO(c, instance.id, `/messages${query}`);
+});
+
+instanceStorageRoutes.delete("/:id/messages", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/messages", { method: "DELETE" });
+});
