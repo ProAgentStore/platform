@@ -503,7 +503,8 @@
         <div class="chat-input">
           <input id="inst-chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendInstanceMessage()">
           <button type="button" onclick="sendInstanceMessage()">Send</button>
-          <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy chat as JSON">&#128203;</button>
+          <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy last 10 messages">&#128203;</button>
+          <button type="button" class="btn-sm btn-outline" onclick="clearInstanceChat()" title="Clear chat history">&#128465;</button>
         </div>
       </div>
     </div>
@@ -2250,7 +2251,7 @@ console.log(response)</pre>
         const statuses = ['queued', 'pending', 'submitted', 'interview', 'rejected', 'accepted'];
         actionsEl.innerHTML = statuses.map(s =>
           `<button class="btn-sm ${s === d.status ? 'btn-primary' : 'btn-outline'}" onclick="updateAppStatus('${esc(id)}','${s}')">${esc(s)}</button>`
-        ).join('');
+        ).join('') + `<button class="btn-sm btn-danger" onclick="deleteApplication('${esc(id)}')" title="Delete application">&#128465; Delete</button>`;
 
         // Activity filtered to this specific record
         loadAppDetailActivity(id);
@@ -2389,6 +2390,25 @@ console.log(response)</pre>
           </div>`
         : '';
       return `<div class="chat-msg system">Error: ${esc(text)}${help}</div>`;
+    }
+
+    async function clearInstanceChat() {
+      if (!currentInstance) return;
+      if (!confirm('Clear all chat history? This cannot be undone.')) return;
+      try {
+        await api(`/v1/instances/${currentInstance.id}/messages`, { method: 'DELETE' });
+        document.getElementById('inst-chat-messages').innerHTML = '';
+      } catch (e) { alert('Failed: ' + e.message); }
+    }
+
+    async function deleteApplication(id) {
+      if (!currentInstance) return;
+      if (!confirm('Delete this application? This cannot be undone.')) return;
+      try {
+        await api(`/v1/instances/${currentInstance.id}/collections/applications/records/${id}`, { method: 'DELETE' });
+        showPage('instance-detail');
+        switchInstTab('board');
+      } catch (e) { alert('Failed: ' + e.message); }
     }
 
     async function sendInstanceMessage() {
