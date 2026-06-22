@@ -415,8 +415,14 @@ export class AgentDO extends DurableObject<Env> {
 			return result.response || "";
 		}
 
-		// Tool-capable model: build tool definitions and run the tool-use loop
-		const allTools = [...AGENT_TOOLS, ...STORAGE_TOOLS];
+		// Tool-capable model: send the most useful tools (not all 24 — too many overwhelms the model)
+		const CORE_TOOLS = new Set([
+			"read_memory", "write_memory", "get_tasks", "create_task", "update_task",
+			"search_knowledge", "upload_file", "list_files",
+			"create_collection", "list_collections", "insert_record", "query_records", "update_record",
+			"get_activity", "get_user_context", "set_user_preference",
+		]);
+		const allTools = [...AGENT_TOOLS, ...STORAGE_TOOLS].filter((t) => CORE_TOOLS.has(t.name));
 		const tools = allTools.map((t) => ({
 			type: "function" as const,
 			function: {
