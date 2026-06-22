@@ -612,6 +612,7 @@
               <div class="chat-input" style="padding:0.65rem 0.85rem">
                 <input id="inst-kb-chat-input" placeholder="What do you know about...?" onkeydown="if(event.key==='Enter')sendKbChatMessage()">
                 <button type="button" onclick="sendKbChatMessage()">Send</button>
+                <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance')" title="Copy last 10 messages">&#128203;</button>
               </div>
             </div>
           </div>
@@ -658,6 +659,7 @@
             <div class="chat-input" style="padding:0.65rem 0.85rem">
               <input id="app-detail-chat-input" placeholder="Ask about this application..." onkeydown="if(event.key==='Enter')sendAppDetailMessage()">
               <button type="button" onclick="sendAppDetailMessage()">Send</button>
+              <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance')" title="Copy last 10 messages">&#128203;</button>
             </div>
           </div>
         </div>
@@ -3206,19 +3208,21 @@ console.log(response)</pre>
 
     async function copyChatHistory(type) {
       try {
-        const endpoint = type === 'instance'
-          ? `/v1/instances/${currentInstance.id}/messages?limit=200`
-          : `/v1/agents/${currentAgent.id}/messages?limit=200`;
-        const data = await api(endpoint);
+        const id = (type === 'agent') ? currentAgent?.id : currentInstance?.id;
+        if (!id) return;
+        const base = (type === 'agent') ? `/v1/agents/${id}` : `/v1/instances/${id}`;
+        const data = await api(`${base}/messages?limit=10`);
         const messages = (data.messages || []).map(m => ({
-          role: m.role, content: m.content, timestamp: m.createdAt,
+          role: m.role,
+          content: (m.content || '').replace(/^\[Context:[\s\S]*?\]\s*\n*/i, ''),
+          timestamp: m.createdAt,
         }));
         const json = JSON.stringify(messages, null, 2);
         await navigator.clipboard.writeText(json);
         const btn = event.target;
-        const orig = btn.textContent;
+        const orig = btn.innerHTML;
         btn.textContent = 'Copied!';
-        setTimeout(() => { btn.textContent = orig; }, 1500);
+        setTimeout(() => { btn.innerHTML = orig; }, 1500);
       } catch (e) {
         alert('Failed to copy: ' + e.message);
       }
