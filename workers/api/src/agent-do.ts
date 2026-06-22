@@ -1195,10 +1195,17 @@ export class AgentDO extends DurableObject<Env> {
  */
 function parseToolCallsFromText(text: string): Array<{ name: string; arguments: Record<string, unknown> }> {
 	const results: Array<{ name: string; arguments: Record<string, unknown> }> = [];
-	// Match individual JSON objects (non-greedy)
-	for (const match of text.matchAll(/\{[^{}]*"name"\s*:\s*"[^"]+[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g)) {
+	// Split on }; or }\n{ boundaries and try parsing each segment
+	const segments = text.split(/\};\s*/).map((s) => s.trim()).filter(Boolean);
+	for (let seg of segments) {
+		// Ensure it ends with }
+		if (!seg.endsWith("}")) seg += "}";
+		// Find the first { that starts a JSON object
+		const start = seg.indexOf("{");
+		if (start === -1) continue;
+		const jsonStr = seg.slice(start);
 		try {
-			const parsed = JSON.parse(match[0]);
+			const parsed = JSON.parse(jsonStr);
 			const name = parsed.name || parsed.function?.name;
 			if (!name) continue;
 			const rawArgs = parsed.parameters || parsed.arguments || parsed.function?.arguments || {};
