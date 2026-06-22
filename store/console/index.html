@@ -2201,9 +2201,17 @@ console.log(response)</pre>
         // Set URL
         setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/applications/${encodeURIComponent(id)}`);
 
-        // Header
         const company = d.company || d.Company || '?';
         const role = d.role || d.job_title || '?';
+
+        // Inject nav into header bar
+        const slot = document.getElementById('inst-nav-slot');
+        slot.innerHTML = `
+          <a href="#" onclick="showPage('instance-detail');switchInstTab('board');return false" style="color:var(--muted);text-decoration:none;font-size:1rem;padding:0 0.25rem">&larr;</a>
+          <span style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px">${esc(company)} — ${esc(role)}</span>
+          <span class="tag tag-${escAttr(d.status || 'queued')}" style="font-size:0.72rem">${esc(d.status || 'queued')}</span>
+        `;
+
         document.getElementById('app-detail-title').textContent = `${company} — ${role}`;
         document.getElementById('app-detail-status').innerHTML =
           `<span class="tag tag-${escAttr(d.status || 'queued')}">${esc(d.status || 'queued')}</span>` +
@@ -2213,7 +2221,7 @@ console.log(response)</pre>
         document.getElementById('app-detail-back').onclick = (e) => {
           e.preventDefault();
           showPage('instance-detail');
-          switchInstTab('applications');
+          switchInstTab('board');
         };
 
         // Fields
@@ -3474,7 +3482,7 @@ console.log(response)</pre>
         const onAppDetail = !document.getElementById('application-detail').classList.contains('hidden');
         if (onAppDetail) {
           showPage('instance-detail');
-          switchInstTab('applications');
+          switchInstTab('board');
           e.preventDefault();
           return;
         }
