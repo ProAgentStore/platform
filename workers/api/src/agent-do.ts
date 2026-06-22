@@ -446,7 +446,10 @@ export class AgentDO extends DurableObject<Env> {
 			},
 		}));
 
+		const allToolLog: string[] = [];
+		const storageToolNames = new Set(STORAGE_TOOLS.map((t) => t.name));
 		const MAX_TOOL_ROUNDS = 3;
+
 		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
 			const rawResult = (await runUserWorkersAi(
 				this.env,
@@ -461,11 +464,13 @@ export class AgentDO extends DurableObject<Env> {
 			}
 
 			if (toolCalls.length === 0) {
-				return (rawResult.response as string) || "";
+				const response = (rawResult.response as string) || "";
+				return allToolLog.length > 0
+					? `${allToolLog.join("\n")}\n\n${response}`
+					: response;
 			}
 
 			const toolResults: string[] = [];
-			const storageToolNames = new Set(STORAGE_TOOLS.map((t) => t.name));
 			for (const tc of toolCalls) {
 				let toolResult;
 				if (storageToolNames.has(tc.name)) {
@@ -482,27 +487,16 @@ export class AgentDO extends DurableObject<Env> {
 						state.agentId,
 					);
 				}
+				const icon = toolResult.success ? "\u2705" : "\u274c";
+				const shortContent = toolResult.content.slice(0, 120);
+				allToolLog.push(`${icon} **${tc.name}** ${shortContent}`);
 				toolResults.push(`[${tc.name}]: ${toolResult.content}`);
-				this.broadcast({
-					type: "tool_call",
-					tool: tc.name,
-					result: toolResult,
-				});
-				// Log tool call as activity
-				await engine.logEvent("tool.called", userId, {
-					tool: tc.name,
-					success: toolResult.success,
-				});
+				this.broadcast({ type: "tool_call", tool: tc.name, result: toolResult });
+				await engine.logEvent("tool.called", userId, { tool: tc.name, success: toolResult.success });
 			}
 
-			aiMessages.push({
-				role: "assistant",
-				content: `I called tools:\n${toolResults.join("\n")}`,
-			});
-			aiMessages.push({
-				role: "user",
-				content: "Continue based on the tool results above.",
-			});
+			aiMessages.push({ role: "assistant", content: `I called tools:\n${toolResults.join("\n")}` });
+			aiMessages.push({ role: "user", content: "Continue based on the tool results above." });
 		}
 
 		const final = (await runUserWorkersAi(
@@ -511,7 +505,10 @@ export class AgentDO extends DurableObject<Env> {
 			state.model,
 			{ messages: aiMessages },
 		)) as { response?: string };
-		return final.response || "";
+		const response = final.response || "";
+		return allToolLog.length > 0
+			? `${allToolLog.join("\n")}\n\n${response}`
+			: response;
 	}
 
 	// ── WebSocket ──────────────────────────────────────────────────────────────
