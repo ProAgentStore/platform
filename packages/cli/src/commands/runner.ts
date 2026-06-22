@@ -344,7 +344,7 @@ export function createRunnerCommand(): Command {
 				writeLine(`Tunnel ready: ${tunnelUrl}`);
 
 				const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", {
-					url: tunnelUrl,
+					url: localUrl,
 					token: runnerToken,
 					instanceId,
 				});
