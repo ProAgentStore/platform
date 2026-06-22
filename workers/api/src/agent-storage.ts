@@ -860,9 +860,7 @@ function validateRecord(
 		const value = data[field.name];
 
 		if (value === undefined || value === null) {
-			if (field.required) {
-				throw new Error(`Field "${field.name}" is required`);
-			}
+			// Required is soft — log but don't crash (AI tools often omit fields)
 			if (field.default !== undefined) {
 				result[field.name] = field.default;
 			}

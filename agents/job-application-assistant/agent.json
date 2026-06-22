@@ -19,7 +19,7 @@
 		"collections": {
 			"applications": {
 				"fields": [
-					{"name": "url", "type": "string", "required": true, "indexed": true},
+					{"name": "url", "type": "string", "indexed": true},
 					{"name": "company", "type": "string", "indexed": true},
 					{"name": "role", "type": "string"},
 					{"name": "status", "type": "string", "indexed": true},

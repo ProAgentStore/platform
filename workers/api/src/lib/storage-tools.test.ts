@@ -152,7 +152,7 @@ describe("storage tools", () => {
 		expect(result.success).toBe(false);
 	});
 
-	it("validates required fields on insert", async () => {
+	it("allows missing required fields (soft for AI tools)", async () => {
 		const engine = makeEngine();
 		await engine.collectionCreate("strict", [{ name: "title", type: "string", required: true }]);
 
@@ -160,7 +160,7 @@ describe("storage tools", () => {
 			{ name: "insert_record", input: { collection: "strict", data: JSON.stringify({}) } },
 			engine,
 		);
-		expect(result.success).toBe(false);
-		expect(result.content).toContain("required");
+		// Required is soft — succeeds, field just omitted
+		expect(result.success).toBe(true);
 	});
 });

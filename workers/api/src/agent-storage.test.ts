@@ -89,7 +89,7 @@ describe("AgentStorageEngine", () => {
 			await expect(engine.collectionCreate("items", [])).rejects.toThrow("already exists");
 		});
 
-		it("validates required fields on insert", async () => {
+		it("allows missing required fields (soft validation for AI tools)", async () => {
 			const storage = mockDoStorage();
 			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
 
@@ -97,7 +97,10 @@ describe("AgentStorageEngine", () => {
 				{ name: "title", type: "string", required: true },
 			]);
 
-			await expect(engine.recordInsert("tasks", {})).rejects.toThrow("required");
+			// Required is soft — insert succeeds, field just omitted
+			const record = await engine.recordInsert("tasks", {});
+			expect(record.id).toBeDefined();
+			expect(record.data.title).toBeUndefined();
 		});
 
 		it("enforces unique constraints", async () => {
