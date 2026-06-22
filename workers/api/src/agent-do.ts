@@ -277,6 +277,10 @@ export class AgentDO extends DurableObject<Env> {
 			state.welcomeMessage = state.welcomeMessage || "";
 			state.isPublished = state.isPublished || false;
 		}
+		// Auto-recover stuck status (e.g., DO timed out mid-"thinking")
+		if (state.status === "thinking" || state.status === "error") {
+			state.status = "idle";
+		}
 		await this.ctx.storage.put("state", state);
 
 		// Save user message
@@ -753,6 +757,8 @@ export class AgentDO extends DurableObject<Env> {
 			state.personality = updates.personality;
 		if (updates.goal !== undefined) state.goal = updates.goal;
 		if (updates.model !== undefined) state.model = updates.model;
+		// Allow resetting stuck status (e.g., "thinking" after a timeout)
+		if (updates.status !== undefined) state.status = updates.status;
 		if (updates.welcomeMessage !== undefined)
 			state.welcomeMessage = updates.welcomeMessage;
 		if (updates.isPublished !== undefined)

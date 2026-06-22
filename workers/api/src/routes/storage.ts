@@ -266,6 +266,45 @@ instanceStorageRoutes.post("/:id/collections/:name/records", async (c) => {
 	});
 });
 
+instanceStorageRoutes.get("/:id/collections/:name/records/:recordId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const name = c.req.param("name");
+	const recordId = c.req.param("recordId");
+	return proxyDO(c, instance.id, `/collections/${encodeURIComponent(name)}/records/${encodeURIComponent(recordId)}`);
+});
+
+instanceStorageRoutes.put("/:id/collections/:name/records/:recordId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const name = c.req.param("name");
+	const recordId = c.req.param("recordId");
+	return proxyDO(c, instance.id, `/collections/${encodeURIComponent(name)}/records/${encodeURIComponent(recordId)}`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	});
+});
+
+instanceStorageRoutes.delete("/:id/collections/:name/records/:recordId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const name = c.req.param("name");
+	const recordId = c.req.param("recordId");
+	return proxyDO(c, instance.id, `/collections/${encodeURIComponent(name)}/records/${encodeURIComponent(recordId)}`, {
+		method: "DELETE",
+	});
+});
+
+instanceStorageRoutes.delete("/:id/collections/:name", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const name = c.req.param("name");
+	return proxyDO(c, instance.id, `/collections/${encodeURIComponent(name)}`, {
+		method: "DELETE",
+	});
+});
+
 instanceStorageRoutes.get("/:id/files", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
