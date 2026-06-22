@@ -428,7 +428,12 @@ export class AgentDO extends DurableObject<Env> {
 			"create_collection", "list_collections", "insert_record", "query_records", "update_record",
 			"get_activity", "get_user_context", "set_user_preference",
 		]);
-		const allTools = [...AGENT_TOOLS, ...STORAGE_TOOLS].filter((t) => CORE_TOOLS.has(t.name));
+		// Deduplicate by name (STORAGE_TOOLS versions take priority over AGENT_TOOLS)
+		const toolMap = new Map<string, typeof AGENT_TOOLS[number]>();
+		for (const t of [...AGENT_TOOLS, ...STORAGE_TOOLS]) {
+			if (CORE_TOOLS.has(t.name)) toolMap.set(t.name, t);
+		}
+		const allTools = [...toolMap.values()];
 		const tools = allTools.map((t) => ({
 			type: "function" as const,
 			function: {
