@@ -234,6 +234,11 @@
     .status-complete{background:rgba(34,197,94,0.15);color:var(--green)}
     .status-blocked{background:rgba(239,68,68,0.15);color:var(--red)}
 
+    /* Application detail page */
+    #application-detail .container{max-width:1200px}
+    #app-detail-layout{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+    @media(max-width:768px){#app-detail-layout{grid-template-columns:1fr}}
+
     .empty{text-align:center;padding:2rem;color:var(--muted-soft);font-size:0.9rem}
     .error{color:var(--red);font-size:0.82rem;margin-top:0.5rem}
     .loading{text-align:center;padding:2rem;color:var(--muted)}
@@ -499,6 +504,47 @@
   </div>
 
   <!-- Notifications page -->
+  <!-- Application detail page -->
+  <div id="application-detail" class="container hidden">
+    <a href="#" id="app-detail-back" class="back-link">&larr; Back to applications</a>
+    <div class="agent-header">
+      <div id="app-detail-icon" class="agent-icon" style="background:var(--accent)">&#128196;</div>
+      <div>
+        <h2 id="app-detail-title"></h2>
+        <div id="app-detail-status" style="margin-top:0.3rem"></div>
+      </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem" id="app-detail-layout">
+      <!-- Left: application data -->
+      <div>
+        <div class="create-form" style="margin-bottom:0.75rem">
+          <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:0.75rem">Application Details</h3>
+          <div id="app-detail-fields" class="runtime-detail-grid"></div>
+        </div>
+        <div class="create-form">
+          <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:0.75rem">Activity</h3>
+          <div id="app-detail-activity" class="runtime-history"></div>
+        </div>
+      </div>
+
+      <!-- Right: contextual chat -->
+      <div>
+        <div class="create-form" style="padding:0;overflow:hidden">
+          <div style="padding:0.65rem 0.85rem;border-bottom:1px solid var(--line);font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--muted)">Chat about this application</div>
+          <div class="chat-container" style="height:calc(100vh - 320px)">
+            <div id="app-detail-chat-messages" class="chat-messages"></div>
+            <div id="app-detail-chat-thinking" class="thinking hidden">Agent is thinking...</div>
+            <div class="chat-input" style="padding:0.65rem 0.85rem">
+              <input id="app-detail-chat-input" placeholder="Ask about this application..." onkeydown="if(event.key==='Enter')sendAppDetailMessage()">
+              <button type="button" onclick="sendAppDetailMessage()">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div id="notifications-page" class="container hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
       <h1 class="page-title" style="margin-bottom:0">Notifications</h1>
@@ -985,9 +1031,10 @@ console.log(response)</pre>
 
     /** Show one page, hide all others. */
     function showPage(id) {
-      for (const p of ['login-page', 'dashboard', 'agent-detail', 'instance-detail', 'profile-page', 'notifications-page']) {
+      for (const p of ['login-page', 'dashboard', 'agent-detail', 'instance-detail', 'application-detail', 'profile-page', 'notifications-page']) {
         document.getElementById(p).classList.toggle('hidden', p !== id);
       }
+      document.body.classList.toggle('chat-active', id === 'application-detail');
     }
 
     async function handleOAuthCallback() {
@@ -1921,31 +1968,133 @@ console.log(response)</pre>
       }
     }
 
+    let currentAppRecord = null;
+
     async function showApplicationDetail(id) {
       if (!currentInstance) return;
       try {
         const data = await api(`/v1/instances/${currentInstance.id}/collections/applications/records/${id}`);
+        currentAppRecord = data;
         const d = data.data || {};
-        const parts = [];
-        for (const [k, v] of Object.entries(d)) {
-          const val = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v || '');
-          parts.push(`<div class="runtime-detail-field"><div class="runtime-detail-label">${esc(k)}</div><div class="runtime-detail-value" style="white-space:pre-wrap">${esc(val)}</div></div>`);
+
+        // Set URL
+        setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/applications/${encodeURIComponent(id)}`);
+
+        // Header
+        const company = d.company || d.Company || '?';
+        const role = d.role || d.job_title || '?';
+        document.getElementById('app-detail-title').textContent = `${company} — ${role}`;
+        document.getElementById('app-detail-status').innerHTML =
+          `<span class="tag tag-${escAttr(d.status || 'queued')}">${esc(d.status || 'queued')}</span>` +
+          (d.url ? ` <a href="${escAttr(d.url)}" target="_blank" rel="noopener" style="font-size:0.82rem;margin-left:0.5rem">${esc(d.url)}</a>` : '');
+
+        // Back link
+        document.getElementById('app-detail-back').onclick = (e) => {
+          e.preventDefault();
+          showPage('instance-detail');
+          switchInstTab('applications');
+        };
+
+        // Fields
+        const fieldsEl = document.getElementById('app-detail-fields');
+        fieldsEl.innerHTML = '';
+        const fieldOrder = ['company', 'role', 'job_title', 'status', 'url', 'cover_note', 'resume_used', 'submitted_at'];
+        const shown = new Set();
+        for (const key of fieldOrder) {
+          if (d[key] !== undefined) {
+            shown.add(key);
+            fieldsEl.innerHTML += renderDetailField(key, d[key]);
+          }
         }
-        const detail = document.createElement('div');
-        detail.className = 'runtime-detail-section';
-        detail.innerHTML = `
-          <div class="runtime-detail-head">
-            <div><h3>${esc(d.company || '?')} — ${esc(d.role || d.job_title || '?')}</h3>
-            <span class="tag tag-${escAttr(d.status || 'queued')}" style="margin-top:0.35rem;display:inline-block">${esc(d.status || 'queued')}</span></div>
-            <button class="btn-sm btn-outline" onclick="this.closest('.runtime-detail-section').remove()">Close</button>
-          </div>
-          <div class="runtime-detail-body">
-            <div class="runtime-detail-grid">${parts.join('')}</div>
-          </div>`;
-        document.getElementById('inst-applications-board').appendChild(detail);
+        for (const [k, v] of Object.entries(d)) {
+          if (!shown.has(k)) fieldsEl.innerHTML += renderDetailField(k, v);
+        }
+        // Also show record metadata
+        fieldsEl.innerHTML += renderDetailField('created', data.createdAt);
+        fieldsEl.innerHTML += renderDetailField('updated', data.updatedAt);
+
+        // Activity filtered to this record
+        loadAppDetailActivity(id);
+
+        // Chat - preload messages and set context
+        loadAppDetailChat(company, role);
+
+        showPage('application-detail');
       } catch (e) {
         alert('Failed to load application: ' + e.message);
       }
+    }
+
+    function renderDetailField(key, value) {
+      const val = typeof value === 'object' ? JSON.stringify(value, null, 2) : String(value || '');
+      const isLong = val.length > 100;
+      return `<div class="runtime-detail-field" ${isLong ? 'style="grid-column:1/-1"' : ''}>
+        <div class="runtime-detail-label">${esc(key.replace(/_/g, ' '))}</div>
+        <div class="${isLong ? 'runtime-detail-pre' : 'runtime-detail-value'}">${esc(val)}</div>
+      </div>`;
+    }
+
+    async function loadAppDetailActivity(recordId) {
+      const el = document.getElementById('app-detail-activity');
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/activity?limit=30`);
+        const events = (data.events || []).filter(e =>
+          e.data?.recordId === recordId || e.data?.collection === 'applications'
+        );
+        if (events.length === 0) {
+          el.innerHTML = '<div class="runtime-history-empty">No activity for this application yet.</div>';
+          return;
+        }
+        el.innerHTML = events.map(e => `
+          <div class="runtime-history-item">
+            <div class="runtime-history-head">
+              <span class="runtime-history-type">${esc(e.type)}</span>
+              <span>${esc(e.createdAt?.split('T')[1]?.slice(0,8) || '')}</span>
+            </div>
+            ${e.data ? `<div class="runtime-history-message">${esc(JSON.stringify(e.data))}</div>` : ''}
+          </div>
+        `).join('');
+      } catch {
+        el.innerHTML = '<div class="runtime-history-empty">Failed to load activity.</div>';
+      }
+    }
+
+    function loadAppDetailChat(company, role) {
+      const container = document.getElementById('app-detail-chat-messages');
+      container.innerHTML = `<div class="chat-msg system">Discussing: ${esc(company)} — ${esc(role)}</div>`;
+    }
+
+    async function sendAppDetailMessage() {
+      const input = document.getElementById('app-detail-chat-input');
+      const message = input.value.trim();
+      if (!message || !currentInstance || !currentAppRecord) return;
+      input.value = '';
+
+      const container = document.getElementById('app-detail-chat-messages');
+      container.innerHTML += `<div class="chat-msg user">${esc(message)}</div>`;
+      container.scrollTop = container.scrollHeight;
+      document.getElementById('app-detail-chat-thinking').classList.remove('hidden');
+
+      // Prefix the message with context about this specific application
+      const d = currentAppRecord.data || {};
+      const context = `[Context: We are discussing the application to ${d.company || '?'} for the ${d.role || d.job_title || '?'} role. Application ID: ${currentAppRecord.id}. Status: ${d.status || '?'}. URL: ${d.url || 'none'}]\n\n${message}`;
+
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/chat`, {
+          method: 'POST',
+          body: JSON.stringify({ message: context }),
+        });
+        if (data.message) {
+          container.innerHTML += `<div class="chat-msg assistant">${renderMd(data.message.content)}</div>`;
+        }
+        if (data.error) {
+          container.innerHTML += renderInstanceChatError(data.error);
+        }
+      } catch (e) {
+        container.innerHTML += renderInstanceChatError(e.message);
+      }
+      document.getElementById('app-detail-chat-thinking').classList.add('hidden');
+      container.scrollTop = container.scrollHeight;
     }
 
     function renderInstanceChatError(message) {
@@ -2914,13 +3063,21 @@ console.log(response)</pre>
       const parts = routeParts();
       const page = parts[0] || 'agents';
       const validAgentTabs = ['chat', 'knowledge', 'memory', 'tasks', 'settings', 'analytics', 'ops'];
-      const validInstanceTabs = ['chat', 'runtime', 'knowledge'];
+      const validInstanceTabs = ['chat', 'runtime', 'knowledge', 'applications'];
 
       routeApplying = true;
       try {
         if (page === 'agents' && parts[1]) {
           routeApplying = false;
           await openAgent(parts[1], validAgentTabs.includes(parts[2]) ? parts[2] : 'chat', false);
+          routeApplying = true;
+          return;
+        }
+        if (page === 'instances' && parts[1] && parts[2] === 'applications' && parts[3]) {
+          // Deep link to application detail: /instances/:id/applications/:recordId
+          routeApplying = false;
+          await openInstance(parts[1], null, 'applications', false);
+          await showApplicationDetail(parts[3]);
           routeApplying = true;
           return;
         }
@@ -2976,6 +3133,13 @@ console.log(response)</pre>
     document.addEventListener('keydown', (e) => {
       // Escape: go back to dashboard from any detail view
       if (e.key === 'Escape') {
+        const onAppDetail = !document.getElementById('application-detail').classList.contains('hidden');
+        if (onAppDetail) {
+          showPage('instance-detail');
+          switchInstTab('applications');
+          e.preventDefault();
+          return;
+        }
         const current = ['agent-detail', 'instance-detail', 'profile-page', 'notifications-page']
           .find(id => !document.getElementById(id).classList.contains('hidden'));
         if (current) { showDashboard(); e.preventDefault(); }
@@ -2983,6 +3147,8 @@ console.log(response)</pre>
       // Cmd/Ctrl+K: focus chat input (if in agent/instance detail)
       if ((e.metaKey || e.ctrlKey) && String(e.key).toLowerCase() === 'k') {
         e.preventDefault();
+        const onAppDetail = !document.getElementById('application-detail').classList.contains('hidden');
+        if (onAppDetail) { document.getElementById('app-detail-chat-input')?.focus(); return; }
         const onInstance = !document.getElementById('instance-detail').classList.contains('hidden');
         const onAgent = !document.getElementById('agent-detail').classList.contains('hidden');
         if (onInstance && currentInstanceTab !== 'chat') switchInstTab('chat');
