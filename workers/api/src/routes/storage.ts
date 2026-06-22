@@ -342,12 +342,6 @@ instanceStorageRoutes.get("/:id/activity", async (c) => {
 // Instance memory, state, and knowledge — these are on chatRoutes for agents
 // but instances need their own routes since the agent table lookup fails
 
-instanceStorageRoutes.delete("/:id/messages", async (c) => {
-	const session = await requireUser(c);
-	const instance = await resolveOwnedInstance(c, session);
-	return proxyDO(c, instance.id, "/messages", { method: "DELETE" });
-});
-
 instanceStorageRoutes.get("/:id/memory", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
