@@ -59,7 +59,7 @@ async function runAnthropic(
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
 
 	const anthropicBody: Record<string, unknown> = {
-		model: "claude-sonnet-4-20250514",
+		model: "claude-3-5-sonnet-20241022",
 		max_tokens: 1024,
 		messages: messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
 	};
