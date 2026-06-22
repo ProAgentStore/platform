@@ -31,7 +31,8 @@
       --line:#262626;--line-strong:#404040;
       --radius:0.75rem;
     }
-    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100vh}
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100vh;overflow:auto}
+    body.chat-active{overflow:hidden}
     a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
     button{font-family:var(--font-body);cursor:pointer;border:none;background:none;color:inherit}
 
@@ -149,14 +150,25 @@
     .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
     .tab-panel{display:none}.tab-panel.active{display:block}
 
-    /* Chat */
-    .chat-container{display:flex;flex-direction:column;height:500px}
+    /* Chat — single scroll, fills viewport */
+    .chat-container{display:flex;flex-direction:column;height:calc(100vh - 200px);min-height:300px}
     .chat-messages{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:0.75rem;padding:0.5rem 0}
-    .chat-msg{max-width:80%;padding:0.65rem 0.85rem;border-radius:var(--radius);font-size:0.88rem;line-height:1.5;white-space:pre-wrap}
-    .chat-msg.user{background:var(--accent);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+    .chat-msg{max-width:85%;padding:0.65rem 0.85rem;border-radius:var(--radius);font-size:0.88rem;line-height:1.6}
+    .chat-msg.user{background:var(--accent);color:#fff;align-self:flex-end;border-bottom-right-radius:4px;white-space:pre-wrap}
     .chat-msg.assistant{background:var(--panel);border:1px solid var(--line);align-self:flex-start;border-bottom-left-radius:4px}
-    .chat-msg.system{background:rgba(234,179,8,0.1);color:var(--yellow);align-self:center;font-size:0.78rem;border-radius:999px;padding:0.3rem 0.85rem}
-    .chat-input{display:flex;gap:0.5rem;padding-top:0.75rem;border-top:1px solid var(--line)}
+    .chat-msg.system{background:rgba(234,179,8,0.1);color:var(--yellow);align-self:center;font-size:0.78rem;border-radius:999px;padding:0.3rem 0.85rem;white-space:pre-wrap}
+    .chat-msg.assistant p{margin:0 0 0.5rem}.chat-msg.assistant p:last-child{margin-bottom:0}
+    .chat-msg.assistant ul,.chat-msg.assistant ol{margin:0.3rem 0 0.5rem 1.2rem;padding:0}
+    .chat-msg.assistant li{margin-bottom:0.2rem}
+    .chat-msg.assistant code{background:rgba(255,255,255,0.08);padding:0.1rem 0.35rem;border-radius:0.25rem;font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:0.82em}
+    .chat-msg.assistant pre{background:#050505;border:1px solid var(--line);border-radius:0.45rem;padding:0.65rem;margin:0.4rem 0;overflow-x:auto;font-size:0.8em;line-height:1.55}
+    .chat-msg.assistant pre code{background:none;padding:0;font-size:inherit}
+    .chat-msg.assistant strong{font-weight:700;color:var(--ink-strong)}
+    .chat-msg.assistant em{font-style:italic;color:var(--muted)}
+    .chat-msg.assistant a{color:var(--accent)}
+    .chat-msg.assistant .json-block{background:#050505;border:1px solid var(--line);border-radius:0.45rem;padding:0.65rem;margin:0.4rem 0;overflow-x:auto;font-family:'SF Mono',ui-monospace,Menlo,monospace;font-size:0.8em;line-height:1.55;color:var(--muted)}
+    .chat-msg.assistant .json-key{color:#7dd3fc}.chat-msg.assistant .json-str{color:#86efac}.chat-msg.assistant .json-num{color:#fbbf24}.chat-msg.assistant .json-bool{color:#c084fc}
+    .chat-input{display:flex;gap:0.5rem;padding-top:0.75rem;border-top:1px solid var(--line);flex-shrink:0}
     .chat-input input{flex:1}
     .chat-input button{padding:0.5rem 1rem;background:var(--accent);color:#fff;border-radius:0.5rem;font-weight:600;font-size:0.85rem}
     .thinking{color:var(--muted);font-style:italic;font-size:0.82rem;padding:0.5rem 0}
@@ -1207,6 +1219,7 @@ console.log(response)</pre>
 
     function showDashboard(tab = 'agents', updateUrl = true) {
       showPage('dashboard');
+      document.body.classList.remove('chat-active');
       currentAgent = null;
       currentInstance = null;
       loadAgents();
@@ -1300,6 +1313,7 @@ console.log(response)</pre>
 	      container.querySelectorAll('.tab-panel').forEach(p => {
 	        p.classList.toggle('active', p.id === `tab-${name}`);
 	      });
+	      document.body.classList.toggle('chat-active', name === 'chat');
 	      currentAgentTab = name;
 	      if (name === 'ops') loadOps();
 	      if (updateUrl && currentAgent) setConsoleUrl(`/agents/${encodeURIComponent(currentAgent.id)}/${name}`);
@@ -1313,7 +1327,8 @@ console.log(response)</pre>
         const container = document.getElementById('chat-messages');
         container.innerHTML = '';
         for (const m of (data.messages || [])) {
-          container.innerHTML += `<div class="chat-msg ${m.role}">${esc(m.content)}</div>`;
+          const content = m.role === 'assistant' ? renderMd(m.content) : esc(m.content);
+          container.innerHTML += `<div class="chat-msg ${m.role}">${content}</div>`;
         }
         container.scrollTop = container.scrollHeight;
       } catch {}
@@ -1336,7 +1351,7 @@ console.log(response)</pre>
           body: JSON.stringify({ message }),
         });
         if (data.message) {
-          container.innerHTML += `<div class="chat-msg assistant">${esc(data.message.content)}</div>`;
+          container.innerHTML += `<div class="chat-msg assistant">${renderMd(data.message.content)}</div>`;
         }
       } catch (e) {
         container.innerHTML += `<div class="chat-msg system">Error: ${esc(e.message)}</div>`;
@@ -1497,6 +1512,8 @@ console.log(response)</pre>
       container.querySelectorAll('.tab-panel').forEach(p => {
         p.classList.toggle('active', p.id === `inst-tab-${name}`);
       });
+      // Single scroll: lock body when chat is active
+      document.body.classList.toggle('chat-active', name === 'chat');
       currentInstanceTab = name;
       if (name !== 'runtime') {
         currentRuntimeTaskId = null;
@@ -1792,7 +1809,8 @@ console.log(response)</pre>
         const container = document.getElementById('inst-chat-messages');
         container.innerHTML = '';
         for (const m of (data.messages || [])) {
-          container.innerHTML += `<div class="chat-msg ${esc(m.role)}">${esc(m.content)}</div>`;
+          const content = m.role === 'assistant' ? renderMd(m.content) : esc(m.content);
+          container.innerHTML += `<div class="chat-msg ${esc(m.role)}">${content}</div>`;
         }
         container.scrollTop = container.scrollHeight;
       } catch {}
@@ -1827,7 +1845,7 @@ console.log(response)</pre>
           body: JSON.stringify({ message }),
         });
         if (data.message) {
-          container.innerHTML += `<div class="chat-msg assistant">${esc(data.message.content)}</div>`;
+          container.innerHTML += `<div class="chat-msg assistant">${renderMd(data.message.content)}</div>`;
         }
         if (data.error) {
           container.innerHTML += renderInstanceChatError(data.error);
@@ -2639,6 +2657,53 @@ console.log(response)</pre>
     // ── Helpers ──────────────────────────────────────────────────
 
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+
+    /** Render markdown-ish text: code blocks, inline code, bold, italic, lists, links, JSON. */
+    function renderMd(raw) {
+      let s = raw || '';
+      // Detect pure JSON responses
+      const trimmed = s.trim();
+      if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && (trimmed.endsWith('}') || trimmed.endsWith(']'))) {
+        try { const obj = JSON.parse(trimmed); return renderJson(obj); } catch {}
+      }
+      // Code blocks ```...```
+      s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${esc(code.trim())}</code></pre>`);
+      // Inline code
+      s = s.replace(/`([^`\n]+)`/g, (_, code) => `<code>${esc(code)}</code>`);
+      // Bold **...**
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      // Italic *...*
+      s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
+      // Links [text](url)
+      s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      // Bare URLs
+      s = s.replace(/(?<!")https?:\/\/[^\s<)]+/g, url => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
+      // Unordered lists (lines starting with - or *)
+      s = s.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
+      s = s.replace(/(<li>.*<\/li>\n?)+/g, m => `<ul>${m}</ul>`);
+      // Numbered lists
+      s = s.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
+      s = s.replace(/(<li>.*<\/li>\n?)+/g, m => m.includes('<ul>') ? m : `<ol>${m}</ol>`);
+      // Paragraphs (double newline)
+      s = s.replace(/\n{2,}/g, '</p><p>');
+      s = `<p>${s}</p>`;
+      // Clean up empty paragraphs
+      s = s.replace(/<p>\s*<\/p>/g, '');
+      // Single newlines to <br> (outside pre/code)
+      s = s.replace(/(?<!<\/li>|<\/ul>|<\/ol>|<\/pre>|<\/p>)\n(?!<)/g, '<br>');
+      return s;
+    }
+
+    /** Pretty-print JSON with syntax highlighting. */
+    function renderJson(obj) {
+      const s = JSON.stringify(obj, null, 2);
+      const highlighted = esc(s)
+        .replace(/"([^"]+)"(?=\s*:)/g, '<span class="json-key">"$1"</span>')
+        .replace(/:\s*"([^"]*)"/g, ': <span class="json-str">"$1"</span>')
+        .replace(/:\s*(\d+\.?\d*)/g, ': <span class="json-num">$1</span>')
+        .replace(/:\s*(true|false|null)/g, ': <span class="json-bool">$1</span>');
+      return `<div class="json-block">${highlighted}</div>`;
+    }
     function escAttr(s) {
       return String(s || '')
         .replace(/&/g, '&amp;')
