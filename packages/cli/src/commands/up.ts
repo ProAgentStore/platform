@@ -38,31 +38,24 @@ export const upCommand = new Command("up")
 			writeLine(`  ${inst.name || inst.slug || inst.id.slice(0, 8)} (${inst.id.slice(0, 8)}...)`);
 		}
 
-		// Connect to the first instance (multi-instance support later)
 		const target = instances[0];
 		writeLine(`\nConnecting runner to: ${target.name || target.id.slice(0, 8)}...`);
 
-		// Import and run the connect command logic
-		const { runnerCommand } = await import("./runner.js");
-		const connectCmd = runnerCommand.commands.find((c) => c.name() === "connect");
-		if (!connectCmd) {
-			writeError("Runner connect command not found");
-			process.exit(1);
-		}
-
-		// Build args and run connect
+		// Spawn `pags runner connect <id> --pags-token <token>` as a child process
+		const { spawn } = await import("node:child_process");
+		const cliPath = process.argv[1]; // path to the current CLI entry point
 		const args = [
-			"node", "pags", "runner", "connect", target.id,
+			cliPath, "runner", "connect", target.id,
 			"--pags-token", session.token,
 		];
 		if (opts.headless) args.push("--headless");
 
-		// Re-parse with the connect subcommand
-		process.argv = args;
-		try {
-			await connectCmd.parseAsync(args.slice(2), { from: "user" });
-		} catch (err) {
-			writeError(err instanceof Error ? err.message : String(err));
-			process.exit(1);
-		}
+		const child = spawn(process.execPath, args, {
+			stdio: "inherit",
+			env: process.env,
+		});
+
+		child.on("exit", (code) => {
+			process.exit(code || 0);
+		});
 	});
