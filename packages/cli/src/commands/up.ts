@@ -41,18 +41,15 @@ export const upCommand = new Command("up")
 		const target = instances[0];
 		writeLine(`\nConnecting runner to: ${target.name || target.id.slice(0, 8)}...`);
 
-		// Spawn `pags runner connect <id> --pags-token <token>` as a child process
+		// Spawn runner connect with token via env var (avoids shell escaping issues)
 		const { spawn } = await import("node:child_process");
-		const cliPath = process.argv[1]; // path to the current CLI entry point
-		const args = [
-			cliPath, "runner", "connect", target.id,
-			"--pags-token", session.token,
-		];
+		const cliPath = process.argv[1];
+		const args = [cliPath, "runner", "connect", target.id];
 		if (opts.headless) args.push("--headless");
 
 		const child = spawn(process.execPath, args, {
 			stdio: "inherit",
-			env: process.env,
+			env: { ...process.env, PAGS_TOKEN: session.token },
 		});
 
 		child.on("exit", (code) => {
