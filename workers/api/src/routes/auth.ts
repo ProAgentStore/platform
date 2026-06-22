@@ -101,6 +101,7 @@ authRoutes.get("/config", async (c) => {
 	return c.json({
 		// Use FAS shared OAuth (same approach as FAGS console)
 		oauth_url: `${FAS_API}/v1/auth/github/start`,
+		google_oauth_url: `${FAS_API}/v1/auth/google/start`,
 		app_id: "pags-console",
 		response_mode: "query",
 	});
