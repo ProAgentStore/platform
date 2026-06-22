@@ -437,7 +437,7 @@ export class AgentDO extends DurableObject<Env> {
 			},
 		}));
 
-		const MAX_TOOL_ROUNDS = 5;
+		const MAX_TOOL_ROUNDS = 3;
 		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
 			const result = (await runUserWorkersAi(
 				this.env,

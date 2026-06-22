@@ -36,17 +36,30 @@ export async function runUserWorkersAi(
 ): Promise<unknown> {
 	const credentials = await getUserCloudflareAiCredentials(env, userId);
 	const encodedModel = model.split("/").map(encodeURIComponent).join("/");
-	const res = await fetch(
-		`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(credentials.accountId)}/ai/run/${encodedModel}`,
-		{
-			method: "POST",
-			headers: {
-				Authorization: `Bearer ${credentials.token}`,
-				"Content-Type": "application/json",
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 25_000);
+	let res: Response;
+	try {
+		res = await fetch(
+			`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(credentials.accountId)}/ai/run/${encodedModel}`,
+			{
+				method: "POST",
+				headers: {
+					Authorization: `Bearer ${credentials.token}`,
+					"Content-Type": "application/json",
+				},
+				body: JSON.stringify(body),
+				signal: controller.signal,
 			},
-			body: JSON.stringify(body),
-		},
-	);
+		);
+	} catch (err) {
+		clearTimeout(timeout);
+		if (err instanceof Error && err.name === "AbortError") {
+			throw new UserAiProviderError("AI request timed out (25s)", 504);
+		}
+		throw err;
+	}
+	clearTimeout(timeout);
 	const data = await res.json().catch(() => ({}));
 	if (!res.ok) {
 		throw new UserAiProviderError(
