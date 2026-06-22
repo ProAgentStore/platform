@@ -140,6 +140,10 @@
     input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
     textarea{resize:vertical;min-height:60px}
 
+    /* Instance detail layout */
+    #instance-detail{display:flex;flex-direction:column;height:calc(100vh - 49px)}
+    #instance-detail.hidden{display:none}
+
     /* Instance nav tabs (in header) */
     .inst-nav-tabs{display:flex;gap:0;border:1px solid var(--line);border-radius:0.5rem;overflow:hidden}
     .inst-nav-tabs .tab{padding:0.3rem 0.7rem;font-size:0.78rem;border-bottom:none;border-radius:0;margin:0;text-transform:none;letter-spacing:0}
@@ -250,7 +254,7 @@
     .empty{text-align:center;padding:2rem;color:var(--muted-soft);font-size:0.9rem}
     .error{color:var(--red);font-size:0.82rem;margin-top:0.5rem}
     .loading{text-align:center;padding:2rem;color:var(--muted)}
-    .hidden{display:none}
+    .hidden{display:none !important}
 
     /* ── Mobile ─────────────────────────────────────────────── */
     @media(max-width:900px){
@@ -486,7 +490,7 @@
   </div>
 
   <!-- Instance detail (client view) -->
-  <div id="instance-detail" class="hidden" style="display:flex;flex-direction:column;height:calc(100vh - 49px)">
+  <div id="instance-detail" class="hidden">
     <div id="inst-desc" style="display:none"></div>
     <div id="inst-icon" style="display:none"></div>
     <div style="flex:1;overflow:auto;padding:0 1rem 1rem">
