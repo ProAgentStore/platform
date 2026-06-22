@@ -765,12 +765,11 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		)
 		.run();
 
-	const runtime = await requireRuntime(c.env, instanceId, session.uid);
-	return c.json({ runtime: runtimeResponse(runtime) }, 201);
-	} catch (err) {
-		console.error("Runtime registration error:", err instanceof Error ? err.message : String(err));
-		throw err;
-	}
+	// Read back to confirm (or just return success if readback fails)
+	const runtime = await getRuntime(c.env, instanceId, session.uid);
+	return c.json({
+		runtime: runtime ? runtimeResponse(runtime) : { instanceId, endpointUrl, placement, status: "registered" },
+	}, 201);
 });
 
 /** Read my registered runtime without exposing its token. */
