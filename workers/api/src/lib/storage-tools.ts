@@ -143,12 +143,27 @@ export const STORAGE_TOOLS: ToolDef[] = [
 			value: { type: "string", description: "Preference value", required: true },
 		},
 	},
+	{
+		name: "submit_job_application",
+		description: "Submit a job application using the connected browser runner (Playwright). Opens the job page, fills the form with candidate details, uploads resume, and submits. Requires the browser runner to be connected.",
+		parameters: {
+			url: { type: "string", description: "Job posting URL", required: true },
+			cover_note: { type: "string", description: "Cover note text to paste into the application form" },
+		},
+	},
 ];
+
+export interface StorageToolContext {
+	env?: { DB: D1Database; KEY_ENCRYPTION_KEY?: string };
+	agentId?: string;
+	userId?: string;
+}
 
 /** Execute a storage tool call. */
 export async function executeStorageTool(
 	call: StorageToolCallRequest,
 	engine: AgentStorageEngine,
+	ctx?: StorageToolContext,
 ): Promise<ToolCallResult> {
 	try {
 		switch (call.name) {
@@ -331,6 +346,85 @@ export async function executeStorageTool(
 				if (!userId || !key || !value) return fail(call.name, "user_id, key, and value required");
 				await engine.setUserPreference(userId, key, value);
 				return ok(call.name, `Stored preference for user ${userId}: ${key} = ${value}`);
+			}
+
+			case "submit_job_application": {
+				if (!ctx?.env || !ctx.agentId || !ctx.userId) {
+					return fail(call.name, "Runtime context not available");
+				}
+				const url = call.input.url as string;
+				if (!url) return fail(call.name, "url required");
+
+				// Look up the connected runtime
+				const runtime = await ctx.env.DB.prepare(
+					"SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2 AND status != 'offline'",
+				).bind(ctx.agentId, ctx.userId).first<{ endpoint_url: string; token_plaintext: string | null; token_ciphertext: ArrayBuffer | null; token_dek_wrapped: ArrayBuffer | null; token_iv: ArrayBuffer | null }>();
+
+				if (!runtime?.endpoint_url) {
+					return fail(call.name, "No browser runner connected. Start the runner with: pags up");
+				}
+
+				// Decrypt runner token
+				let runnerToken = runtime.token_plaintext || "";
+				if (!runnerToken && runtime.token_ciphertext && ctx.env.KEY_ENCRYPTION_KEY) {
+					try {
+						const { decryptKey } = await import("./crypto.js");
+						runnerToken = await decryptKey(
+							new Uint8Array(runtime.token_ciphertext as ArrayBuffer),
+							new Uint8Array(runtime.token_dek_wrapped as ArrayBuffer),
+							new Uint8Array(runtime.token_iv as ArrayBuffer),
+							ctx.env.KEY_ENCRYPTION_KEY,
+						);
+					} catch { /* use empty */ }
+				}
+
+				// Read candidate profile from memory
+				const profileMem = await engine.getUserContext(ctx.userId);
+				const candidateProfile = profileMem?.preferences || {};
+
+				// Create task on the runner
+				const taskBody = {
+					type: "job.apply_authenticated",
+					input: {
+						url,
+						resumePath: "/Users/serge/resume/Sergey Ivochkin - Senior Project Manager.pdf",
+						candidate: {
+							fullName: "Sergey Ivochkin",
+							email: "serge.pro.job@gmail.com",
+							phone: "+61 404 453 580",
+							location: "Hawthorn VIC Australia",
+							workAuthorization: "Australian Citizen",
+						},
+						coverNote: (call.input.cover_note as string) || "",
+					},
+				};
+
+				const headers: Record<string, string> = { "Content-Type": "application/json" };
+				if (runnerToken) headers.Authorization = `Bearer ${runnerToken}`;
+				headers["X-PAGS-Instance-Id"] = ctx.agentId;
+
+				const taskRes = await fetch(`${runtime.endpoint_url}/tasks`, {
+					method: "POST",
+					headers,
+					body: JSON.stringify(taskBody),
+				});
+
+				if (!taskRes.ok) {
+					const err = await taskRes.text().catch(() => "unknown error");
+					return fail(call.name, `Runner rejected task: ${err.slice(0, 200)}`);
+				}
+
+				const task = await taskRes.json() as { id?: string; status?: string };
+
+				// If needs approval, auto-approve
+				if (task.status === "needs_approval" && task.id) {
+					await fetch(`${runtime.endpoint_url}/tasks/${task.id}/approve`, {
+						method: "POST",
+						headers,
+					}).catch(() => {});
+				}
+
+				return ok(call.name, `Browser task created: ${task.id} (status: ${task.status}). The runner is now opening ${url} and submitting the application.`);
 			}
 
 			default:

@@ -427,6 +427,7 @@ export class AgentDO extends DurableObject<Env> {
 			"fetch_url", "search_knowledge", "upload_file", "list_files",
 			"create_collection", "list_collections", "insert_record", "query_records", "update_record",
 			"get_activity", "get_user_context", "set_user_preference",
+			"submit_job_application",
 		]);
 		// Deduplicate by name (STORAGE_TOOLS versions take priority over AGENT_TOOLS)
 		const toolMap = new Map<string, typeof AGENT_TOOLS[number]>();
@@ -485,6 +486,7 @@ export class AgentDO extends DurableObject<Env> {
 					toolResult = await executeStorageTool(
 						{ name: tc.name, input: tc.arguments },
 						engine,
+						{ env: this.env, agentId: state.agentId, userId },
 					);
 				} else {
 					const callReq: ToolCallRequest = { name: tc.name, input: tc.arguments };
