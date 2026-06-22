@@ -71,7 +71,7 @@ export const upCommand = new Command("up")
 			env: { ...process.env, PAGS_TOKEN: session.token },
 		});
 
-		let tunnelUrl = "";
+		const logs: string[] = [];
 
 		const handleOutput = (data: Buffer) => {
 			const text = data.toString("utf-8");
@@ -79,18 +79,19 @@ export const upCommand = new Command("up")
 				const trimmed = line.trim();
 				if (!trimmed) continue;
 
+				logs.push(trimmed);
+				if (logs.length > 200) logs.shift();
+
 				// Parse tunnel URL
 				const tunnelMatch = trimmed.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
 				if (tunnelMatch) {
-					tunnelUrl = tunnelMatch[0];
 					state.tunnel = "online";
-					state.tunnelUrl = tunnelUrl;
+					state.tunnelUrl = tunnelMatch[0];
 					state.lastEvent = "Tunnel created";
 					printStatus(state);
 					continue;
 				}
 
-				// Parse runner status
 				if (trimmed.includes("FAGS browser runtime listening")) {
 					state.runner = "online";
 					state.lastEvent = "Runner started";
@@ -99,38 +100,44 @@ export const upCommand = new Command("up")
 				}
 				if (trimmed.includes("Runtime registered") || trimmed.includes("CONNECTED")) {
 					state.registration = "registered";
-					state.lastEvent = "Registered with PAGS";
+					state.lastEvent = "Registered with PAGS — ready for tasks";
 					printStatus(state);
 					continue;
 				}
-				if (trimmed.includes("fetch failed") || trimmed.includes("error")) {
-					state.lastEvent = trimmed.slice(0, 80);
-					if (trimmed.includes("fetch failed")) {
-						state.registration = "failed";
-					}
+				if (trimmed.includes("fetch failed")) {
+					state.registration = "failed";
+					state.lastEvent = "PAGS registration failed (will retry on next task)";
 					printStatus(state);
 					continue;
 				}
 
 				// Skip cloudflared noise
-				if (trimmed.includes("INF ") && !tunnelMatch) continue;
+				if (trimmed.includes("INF ")) continue;
 
-				state.lastEvent = trimmed.slice(0, 80);
+				// Show errors
+				if (/error|Error|EADDRINUSE|ECONNREFUSED|failed/i.test(trimmed)) {
+					state.lastEvent = trimmed.slice(0, 80);
+					printStatus(state);
+				}
 			}
 		};
 
 		child.stdout?.on("data", handleOutput);
 		child.stderr?.on("data", handleOutput);
 
+		let childDead = false;
 		child.on("exit", (code) => {
+			childDead = true;
 			if (code && code !== 0) {
 				state.runner = "error";
-				state.lastEvent = `Runner exited with code ${code}`;
+				state.lastEvent = `Runner exited (code ${code})`;
+				// Show last few log lines as error context
+				const recent = logs.slice(-5).filter(l => !l.includes("INF "));
+				if (recent.length) state.lastEvent += ": " + recent[recent.length - 1].slice(0, 60);
 				printStatus(state);
 			}
 		});
 
-		// Keep running until quit
 		const shutdown = () => {
 			child.kill();
 			clearScreen();
@@ -141,8 +148,45 @@ export const upCommand = new Command("up")
 		process.on("SIGINT", shutdown);
 		process.on("SIGTERM", shutdown);
 
-		// Wait for child to exit
-		await new Promise<void>((resolve) => {
-			child.on("exit", () => resolve());
-		});
+		// Interactive loop — stay alive even if child dies
+		while (true) {
+			const key = await waitForKey(["r", "l", "q"]);
+			if (key === "q") {
+				shutdown();
+				break;
+			}
+			if (key === "l") {
+				clearScreen();
+				writeLine("  Recent logs (last 30 lines):");
+				writeLine("");
+				for (const line of logs.slice(-30)) {
+					writeLine("  " + line);
+				}
+				writeLine("");
+				writeLine("  Press any key to go back...");
+				await waitForKey(["r", "l", "q", " ", "\r"]);
+				printStatus(state);
+			}
+			if (key === "r") {
+				if (childDead) {
+					// Restart
+					writeLine("  Restarting runner...");
+					state.runner = "starting";
+					state.tunnel = "offline";
+					state.tunnelUrl = "";
+					state.registration = "pending";
+					state.lastEvent = "Restarting...";
+					// Re-exec pags up
+					const { execSync } = await import("node:child_process");
+					try {
+						execSync(`${process.execPath} ${process.argv[1]} up${opts.headless ? " --headless" : ""}`, {
+							stdio: "inherit",
+							env: process.env,
+						});
+					} catch {}
+					process.exit(0);
+				}
+				printStatus(state);
+			}
+		}
 	});
