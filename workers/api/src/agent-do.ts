@@ -41,7 +41,7 @@ export type {
 } from "./agent-types.js";
 
 const DEFAULT_MODEL = "@cf/meta/llama-3.2-3b-instruct";
-const MAX_CONTEXT_MESSAGES = 50;
+const MAX_CONTEXT_MESSAGES = 10;
 const DEPRECATED_MODELS = new Set([
 	"@cf/meta/llama-3.1-8b-instruct",
 	"@cf/meta/llama-3.1-70b-instruct",
@@ -156,6 +156,8 @@ export class AgentDO extends DurableObject<Env> {
 			// Messages history
 			if (path === "/messages" && request.method === "GET")
 				return this.handleGetMessages(url);
+			if (path === "/messages" && request.method === "DELETE")
+				return this.handleClearMessages();
 
 			// Knowledge base
 			if (path === "/knowledge" && request.method === "GET")
@@ -599,6 +601,15 @@ export class AgentDO extends DurableObject<Env> {
 		const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
 		const messages = await this.getRecentMessages(limit);
 		return json({ messages });
+	}
+
+	private async handleClearMessages(): Promise<Response> {
+		const all = await this.ctx.storage.list({ prefix: "msg:" });
+		const keys = [...all.keys()];
+		for (let i = 0; i < keys.length; i += 128) {
+			await this.ctx.storage.delete(keys.slice(i, i + 128));
+		}
+		return json({ deleted: keys.length });
 	}
 
 	// ── Memory ─────────────────────────────────────────────────────────────────
