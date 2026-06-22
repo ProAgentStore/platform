@@ -299,3 +299,54 @@ instanceStorageRoutes.get("/:id/activity", async (c) => {
 	const query = new URL(c.req.url).search;
 	return proxyDO(c, instance.id, `/activity${query}`);
 });
+
+// Instance memory, state, and knowledge — these are on chatRoutes for agents
+// but instances need their own routes since the agent table lookup fails
+
+instanceStorageRoutes.get("/:id/memory", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/memory");
+});
+
+instanceStorageRoutes.put("/:id/memory", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/memory", {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	});
+});
+
+instanceStorageRoutes.get("/:id/state", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/state");
+});
+
+instanceStorageRoutes.put("/:id/state", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/state", {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	});
+});
+
+instanceStorageRoutes.get("/:id/knowledge", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/knowledge");
+});
+
+instanceStorageRoutes.post("/:id/knowledge", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/knowledge", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	});
+});
