@@ -3232,7 +3232,13 @@ console.log(response)</pre>
     function chatBubble(role, rawContent) {
       const content = role === 'assistant' ? renderMd(rawContent) : esc(rawContent);
       const copyBtn = `<button class="copy-msg" onclick="copyMsgText(this)" title="Copy">&#128203;</button>`;
-      return `<div class="chat-msg ${esc(role)}" data-raw="${escAttr(rawContent)}">${copyBtn}${content}</div>`;
+      const el = document.createElement('div');
+      el.className = `chat-msg ${role}`;
+      el.setAttribute('data-raw', rawContent || '');
+      el.innerHTML = copyBtn + content;
+      const tmp = document.createElement('div');
+      tmp.appendChild(el);
+      return tmp.innerHTML;
     }
     function copyMsgText(btn) {
       const raw = btn.parentElement.getAttribute('data-raw') || btn.parentElement.innerText;
@@ -3247,50 +3253,84 @@ console.log(response)</pre>
     function renderMd(raw) {
       let s = raw || '';
 
-      // Strip embedded tool-call JSON from response text (agent sometimes outputs these)
-      s = s.replace(/\{"type"\s*:\s*"function"[\s\S]*?"parameters"\s*:\s*\{[\s\S]*?\}\s*\};?/g, (match) => {
-        try {
-          const obj = JSON.parse(match.replace(/;$/, ''));
-          const name = obj.name || obj.function?.name || '?';
-          return `\n\n*Tool: ${name}*\n\n`;
-        } catch {
-          return '\n\n*[tool call executed]*\n\n';
-        }
+      // Strip embedded tool-call JSON blobs
+      s = s.replace(/\{[^{}]*"type"\s*:\s*"function"[^{}]*"name"\s*:\s*"([^"]+)"[^{}]*(?:\{[^{}]*\}[^{}]*)*\};?/g,
+        (_, name) => `\n\n> *Tool executed: ${name}*\n\n`);
+
+      // Pure JSON response
+      const trimmed = s.trim();
+      if (/^[\[{]/.test(trimmed) && /[\]}]$/.test(trimmed)) {
+        try { return renderJson(JSON.parse(trimmed)); } catch {}
+      }
+
+      // Fenced code blocks (preserve, don't process inside)
+      const codeBlocks = [];
+      s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+        codeBlocks.push(`<pre><code>${esc(code.trim())}</code></pre>`);
+        return `\x00CB${codeBlocks.length - 1}\x00`;
       });
 
-      // Detect pure JSON responses
-      const trimmed = s.trim();
-      if ((trimmed.startsWith('{') || trimmed.startsWith('[')) && (trimmed.endsWith('}') || trimmed.endsWith(']'))) {
-        try { const obj = JSON.parse(trimmed); return renderJson(obj); } catch {}
-      }
-      // Code blocks ```...```
-      s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => `<pre><code>${esc(code.trim())}</code></pre>`);
-      // Inline JSON blocks (standalone {...} on its own line)
-      s = s.replace(/^(\{[\s\S]*?\})$/gm, (match) => {
-        try { const obj = JSON.parse(match); return renderJson(obj); } catch { return esc(match); }
-      });
       // Inline code
-      s = s.replace(/`([^`\n]+)`/g, (_, code) => `<code>${esc(code)}</code>`);
-      // Bold **...**
+      s = s.replace(/`([^`\n]+)`/g, (_, c) => `<code>${esc(c)}</code>`);
+
+      // Headers
+      s = s.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
+      s = s.replace(/^###\s+(.+)$/gm, '<h4>$1</h4>');
+      s = s.replace(/^##\s+(.+)$/gm, '<h3>$1</h3>');
+
+      // Bold then italic (order matters)
       s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      // Italic *...*
-      s = s.replace(/(?<!\*)\*([^*]+)\*(?!\*)/g, '<em>$1</em>');
-      // Links [text](url)
+      s = s.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>');
+
+      // Blockquotes
+      s = s.replace(/^>\s+(.+)$/gm, '<blockquote>$1</blockquote>');
+
+      // Links
       s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-      // Bare URLs (not already in a tag)
-      s = s.replace(/(?<![="'])https?:\/\/[^\s<)"']+/g, url => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
-      // Unordered lists (lines starting with - or *)
-      s = s.replace(/^[\-\*]\s+(.+)$/gm, '<li>$1</li>');
-      s = s.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => m.includes('<ol>') ? m : `<ul>${m}</ul>`);
-      // Numbered lists
-      s = s.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>');
-      s = s.replace(/(<li>[\s\S]*?<\/li>\n?)+/g, m => m.includes('<ul>') ? m : `<ol>${m}</ol>`);
-      // Paragraphs (double newline)
-      s = s.replace(/\n{2,}/g, '</p><p>');
-      s = `<p>${s}</p>`;
+      s = s.replace(/(?<![="'\/])https?:\/\/[^\s<)"']+/g, u => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`);
+
+      // Process lists block by block (split on double newline)
+      const blocks = s.split(/\n{2,}/);
+      const out = [];
+      for (const block of blocks) {
+        const lines = block.split('\n');
+        // Check if all lines are unordered list items
+        if (lines.every(l => /^[\-\*]\s+/.test(l.trim()) || !l.trim())) {
+          out.push('<ul>' + lines.filter(l => l.trim()).map(l => `<li>${l.replace(/^[\-\*]\s+/, '')}</li>`).join('') + '</ul>');
+        }
+        // Check if all lines are numbered list items
+        else if (lines.every(l => /^\d+\.\s+/.test(l.trim()) || !l.trim())) {
+          out.push('<ol>' + lines.filter(l => l.trim()).map(l => `<li>${l.replace(/^\d+\.\s+/, '')}</li>`).join('') + '</ol>');
+        }
+        // Check for indented sub-items (- **Key**: value pattern)
+        else if (lines.some(l => /^\s+[\-\*]\s+/.test(l))) {
+          const items = [];
+          for (const l of lines) {
+            if (/^[\-\*]\s+/.test(l.trim()) || /^\s+[\-\*]\s+/.test(l)) {
+              items.push(`<li>${l.replace(/^\s*[\-\*]\s+/, '')}</li>`);
+            } else if (l.trim()) {
+              items.push(l);
+            }
+          }
+          out.push('<ul>' + items.join('') + '</ul>');
+        }
+        // Regular paragraph
+        else {
+          const text = block.replace(/\n/g, '<br>');
+          if (text.trim() && !text.startsWith('<h') && !text.startsWith('<blockquote') && !text.startsWith('<ul') && !text.startsWith('<ol')) {
+            out.push(`<p>${text}</p>`);
+          } else {
+            out.push(text);
+          }
+        }
+      }
+      s = out.join('');
+
+      // Restore code blocks
+      s = s.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[parseInt(i)]);
+
+      // Clean empty tags
       s = s.replace(/<p>\s*<\/p>/g, '');
-      // Single newlines to <br>
-      s = s.replace(/(?<!<\/li>|<\/ul>|<\/ol>|<\/pre>|<\/p>)\n(?!<)/g, '<br>');
       return s;
     }
 
