@@ -403,8 +403,15 @@
 
     <div class="tabs">
       <button type="button" class="tab active" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
+      <button type="button" class="tab" data-inst-tab="applications" onclick="switchInstTab('applications')">Applications</button>
       <button type="button" class="tab" data-inst-tab="runtime" onclick="switchInstTab('runtime')">Runtime</button>
       <button type="button" class="tab" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')">My Documents</button>
+    </div>
+
+    <!-- Instance applications kanban -->
+    <div id="inst-tab-applications" class="tab-panel">
+      <div id="inst-applications-board"></div>
+      <p id="inst-applications-empty" class="hidden" style="color:var(--muted);text-align:center;padding:2rem">No applications yet. Ask the agent to apply for a job.</p>
     </div>
 
     <!-- Instance chat -->
@@ -1543,6 +1550,7 @@ console.log(response)</pre>
       // Single scroll: lock body when chat is active
       document.body.classList.toggle('chat-active', name === 'chat');
       currentInstanceTab = name;
+      if (name === 'applications') loadInstanceApplications();
       if (name !== 'runtime') {
         currentRuntimeTaskId = null;
         hideRuntimeTaskDetail();
@@ -1842,6 +1850,102 @@ console.log(response)</pre>
         }
         container.scrollTop = container.scrollHeight;
       } catch {}
+    }
+
+    // ── Applications kanban ─────────────────────────────────────
+    const APP_STATUSES = [
+      { key: 'queued', label: 'Queued', dot: 'dot-queued' },
+      { key: 'pending', label: 'Pending', dot: 'dot-needs_approval' },
+      { key: 'submitted', label: 'Submitted', dot: 'dot-running' },
+      { key: 'interview', label: 'Interview', dot: 'dot-running' },
+      { key: 'rejected', label: 'Rejected', dot: 'dot-failed' },
+      { key: 'accepted', label: 'Accepted', dot: 'dot-completed' },
+    ];
+
+    async function loadInstanceApplications() {
+      const board = document.getElementById('inst-applications-board');
+      const empty = document.getElementById('inst-applications-empty');
+      if (!board || !currentInstance) return;
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/collections/applications/records?limit=100`);
+        const records = data.records || [];
+        if (records.length === 0) {
+          board.innerHTML = '';
+          empty.classList.remove('hidden');
+          return;
+        }
+        empty.classList.add('hidden');
+
+        // Group by status
+        const grouped = {};
+        for (const s of APP_STATUSES) grouped[s.key] = [];
+        for (const r of records) {
+          const status = r.data.status || 'queued';
+          if (!grouped[status]) grouped[status] = [];
+          grouped[status].push(r);
+        }
+
+        let html = '<div class="kanban-board">';
+        for (const s of APP_STATUSES) {
+          const items = grouped[s.key] || [];
+          html += `<div class="kanban-column">
+            <div class="kanban-header">
+              <div class="kanban-title"><span class="kanban-dot ${s.dot}"></span>${esc(s.label)}</div>
+              <span class="kanban-count">${items.length}</span>
+            </div>
+            <div class="kanban-items">`;
+          if (items.length === 0) {
+            html += '<div class="kanban-empty">No applications</div>';
+          }
+          for (const r of items) {
+            const d = r.data;
+            const company = d.company || d.Company || '?';
+            const role = d.role || d.job_title || d.Role || '?';
+            const url = d.url || '';
+            const date = r.createdAt ? r.createdAt.split('T')[0] : '';
+            html += `<div class="kanban-card" onclick="showApplicationDetail('${esc(r.id)}')">
+              <h3>${esc(company)}</h3>
+              <p>${esc(role)}</p>
+              <div class="kanban-card-meta">
+                ${date ? `<span class="tag tag-cat">${esc(date)}</span>` : ''}
+                ${url ? `<a href="${escAttr(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="tag tag-cat" style="text-decoration:underline">Link</a>` : ''}
+              </div>
+            </div>`;
+          }
+          html += '</div></div>';
+        }
+        html += '</div>';
+        board.innerHTML = html;
+      } catch (e) {
+        board.innerHTML = `<p style="color:var(--red);padding:1rem">Failed to load applications: ${esc(e.message)}</p>`;
+      }
+    }
+
+    async function showApplicationDetail(id) {
+      if (!currentInstance) return;
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/collections/applications/records/${id}`);
+        const d = data.data || {};
+        const parts = [];
+        for (const [k, v] of Object.entries(d)) {
+          const val = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v || '');
+          parts.push(`<div class="runtime-detail-field"><div class="runtime-detail-label">${esc(k)}</div><div class="runtime-detail-value" style="white-space:pre-wrap">${esc(val)}</div></div>`);
+        }
+        const detail = document.createElement('div');
+        detail.className = 'runtime-detail-section';
+        detail.innerHTML = `
+          <div class="runtime-detail-head">
+            <div><h3>${esc(d.company || '?')} — ${esc(d.role || d.job_title || '?')}</h3>
+            <span class="tag tag-${escAttr(d.status || 'queued')}" style="margin-top:0.35rem;display:inline-block">${esc(d.status || 'queued')}</span></div>
+            <button class="btn-sm btn-outline" onclick="this.closest('.runtime-detail-section').remove()">Close</button>
+          </div>
+          <div class="runtime-detail-body">
+            <div class="runtime-detail-grid">${parts.join('')}</div>
+          </div>`;
+        document.getElementById('inst-applications-board').appendChild(detail);
+      } catch (e) {
+        alert('Failed to load application: ' + e.message);
+      }
     }
 
     function renderInstanceChatError(message) {
