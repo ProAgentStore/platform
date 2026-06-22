@@ -358,6 +358,18 @@ test.describe("ProAgentStore Console smoke", () => {
 		expect(bundle).toContain("triggerDeploy");
 	});
 
+	test("console assets use short cache headers because filenames are stable", async ({
+		page,
+	}) => {
+		const css = await page.request.get("/console.css");
+		const js = await page.request.get("/console-core.js");
+
+		expect(css.ok()).toBe(true);
+		expect(js.ok()).toBe(true);
+		expect(css.headers()["cache-control"]).toContain("max-age=300");
+		expect(js.headers()["cache-control"]).toContain("max-age=300");
+	});
+
 	test("signed-in creator console shows an agent status board", async ({ page }) => {
 		await mockSignedInConsole(page, {
 			agents: [

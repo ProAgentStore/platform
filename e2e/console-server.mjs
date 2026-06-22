@@ -53,8 +53,12 @@ createServer((req, res) => {
 		return;
 	}
 
+	const isConsoleAsset =
+		url.pathname === "/console.css" ||
+		/^\/console-(core|instances|agent-data|profile|utils-init)\.js$/.test(url.pathname);
 	res.writeHead(200, {
 		"Content-Type": contentTypes[extname(file)] || "application/octet-stream",
+		...(isConsoleAsset ? { "Cache-Control": "public, max-age=300" } : {}),
 	});
 	createReadStream(file).pipe(res);
 }).listen(port, "127.0.0.1", () => {

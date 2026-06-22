@@ -47,9 +47,14 @@ const JS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Origin": "*",
 };
 
+const CONSOLE_JS_HEADERS: Record<string, string> = {
+	...JS_HEADERS,
+	"Cache-Control": "public, max-age=300",
+};
+
 const CSS_HEADERS: Record<string, string> = {
 	"Content-Type": "text/css; charset=utf-8",
-	"Cache-Control": "public, max-age=3600",
+	"Cache-Control": "public, max-age=300",
 	"X-Content-Type-Options": "nosniff",
 };
 
@@ -95,11 +100,11 @@ export default {
 		// JS assets
 		if (path === "/widget.js") return new Response(widgetJs, { headers: JS_HEADERS });
 		if (path === "/auth-widget.js") return new Response(authWidgetJs, { headers: JS_HEADERS });
-		if (path === "/console-core.js") return new Response(consoleCoreJs, { headers: JS_HEADERS });
-		if (path === "/console-instances.js") return new Response(consoleInstancesJs, { headers: JS_HEADERS });
-		if (path === "/console-agent-data.js") return new Response(consoleAgentDataJs, { headers: JS_HEADERS });
-		if (path === "/console-profile.js") return new Response(consoleProfileJs, { headers: JS_HEADERS });
-		if (path === "/console-utils-init.js") return new Response(consoleUtilsInitJs, { headers: JS_HEADERS });
+		if (path === "/console-core.js") return new Response(consoleCoreJs, { headers: CONSOLE_JS_HEADERS });
+		if (path === "/console-instances.js") return new Response(consoleInstancesJs, { headers: CONSOLE_JS_HEADERS });
+		if (path === "/console-agent-data.js") return new Response(consoleAgentDataJs, { headers: CONSOLE_JS_HEADERS });
+		if (path === "/console-profile.js") return new Response(consoleProfileJs, { headers: CONSOLE_JS_HEADERS });
+		if (path === "/console-utils-init.js") return new Response(consoleUtilsInitJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console.css") return new Response(consoleCss, { headers: CSS_HEADERS });
 
 		// Favicon
