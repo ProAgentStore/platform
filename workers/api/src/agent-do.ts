@@ -169,6 +169,8 @@ export class AgentDO extends DurableObject<Env> {
 				return this.handleIngestUrl(request);
 
 			// State
+			if (path === "/init-collections" && request.method === "POST")
+				return this.handleInitCollections(request);
 			if (path === "/init" && request.method === "POST")
 				return this.handleInit(request);
 			if (path === "/state" && request.method === "GET")
@@ -676,11 +678,43 @@ export class AgentDO extends DurableObject<Env> {
 			personality?: string;
 			goal?: string;
 			model?: string;
+			collections?: Record<string, { fields: import("./agent-storage-types.js").CollectionField[] }>;
 		}>();
 		if (!config.agentId || !config.name)
 			return json({ error: "agentId and name required" }, 400);
 		await this.init(config);
+
+		// Auto-create declared collections
+		if (config.collections) {
+			const engine = this.getStorageEngine(config.agentId);
+			for (const [name, schema] of Object.entries(config.collections)) {
+				await engine.collectionCreate(name, schema.fields).catch(() => {});
+			}
+		}
+
 		return json({ success: true }, 201);
+	}
+
+	private async handleInitCollections(request: Request): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const { collections } = await request.json<{
+			collections: Record<string, { fields: import("./agent-storage-types.js").CollectionField[] }>;
+		}>();
+		if (!collections) return json({ error: "collections required" }, 400);
+
+		const engine = this.getStorageEngine(state.agentId);
+		const created: string[] = [];
+		const skipped: string[] = [];
+		for (const [name, schema] of Object.entries(collections)) {
+			try {
+				await engine.collectionCreate(name, schema.fields);
+				created.push(name);
+			} catch {
+				skipped.push(name);
+			}
+		}
+		return json({ created, skipped });
 	}
 
 	private async getState(): Promise<AgentState | null> {

@@ -8,6 +8,7 @@ import { McpAgent } from "agents/mcp";
 import { z } from "zod";
 import { apiBase, apiCall, authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
 import { registerInstanceTools } from "./instance-tools.js";
+import { registerStorageTools } from "./storage-tools.js";
 import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
 import {
 	audit,
@@ -571,6 +572,13 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		);
 
 		registerInstanceTools(
+			this.server,
+			this.env,
+			(provided) => this.token(provided),
+			(provided) => this.safety(provided),
+		);
+
+		registerStorageTools(
 			this.server,
 			this.env,
 			(provided) => this.token(provided),

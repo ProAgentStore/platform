@@ -36,6 +36,18 @@ async function proxyDO(
 	return Response.json(data, { status: doRes.status as ContentfulStatusCode });
 }
 
+// ── Collection initialization ────────────────────────────────────────────────
+
+storageRoutes.post("/:id/init-collections", async (c) => {
+	await requireUser(c);
+	const agent = await resolveAgent(c);
+	return proxyDO(c, agent.id, "/init-collections", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	});
+});
+
 // ── Collections ─────────────────────────────────────────────────────────────
 
 storageRoutes.get("/:id/collections", async (c) => {
