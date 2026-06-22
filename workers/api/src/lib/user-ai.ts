@@ -39,19 +39,18 @@ export async function runUserWorkersAi(
 	model: string,
 	body: unknown,
 ): Promise<unknown> {
-	// Try Anthropic first (better quality), fall back to Cloudflare
+	// BYOK: try providers in order of what the user has configured
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");
 	if (anthropicKey) {
-		try {
-			return await runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[] });
-		} catch (err) {
-			// Fall back to Cloudflare if Anthropic fails (bad key, wrong model, etc.)
-			console.error("Anthropic failed, falling back to Cloudflare:", err instanceof Error ? err.message : String(err));
-		}
+		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[] });
 	}
 
-	const credentials = await getUserCloudflareAiCredentials(env, userId);
-	return runCloudflareAi(env, userId, credentials, model, body);
+	const cfCredentials = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
+	if (cfCredentials) {
+		return runCloudflareAi(env, userId, cfCredentials, model, body);
+	}
+
+	throw new UserAiCredentialsError("Add an API key in Profile → API Keys (Anthropic or Cloudflare Workers AI).");
 }
 
 async function runAnthropic(
@@ -114,10 +113,16 @@ async function runAnthropic(
 		const errObj = (data as { error?: { message?: string; type?: string } }).error;
 		const errMsg = errObj?.message || JSON.stringify(data);
 		throw new UserAiProviderError(
-			`Anthropic: ${errMsg}`,
+			`Anthropic (${res.status}): ${errMsg}`,
 			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
 			data,
+		);
+	}
+	if (!data.content) {
+		throw new UserAiProviderError(
+			`Anthropic: unexpected response: ${JSON.stringify(data).slice(0, 200)}`,
+			502,
 		);
 	}
 
