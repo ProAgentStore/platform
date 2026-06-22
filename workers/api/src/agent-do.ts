@@ -424,7 +424,7 @@ export class AgentDO extends DurableObject<Env> {
 		// Tool-capable model: send the most useful tools (not all 24 — too many overwhelms the model)
 		const CORE_TOOLS = new Set([
 			"read_memory", "write_memory", "get_tasks", "create_task", "update_task",
-			"search_knowledge", "upload_file", "list_files",
+			"fetch_url", "search_knowledge", "upload_file", "list_files",
 			"create_collection", "list_collections", "insert_record", "query_records", "update_record",
 			"get_activity", "get_user_context", "set_user_preference",
 		]);
