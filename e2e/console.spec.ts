@@ -337,11 +337,25 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.goto("/");
 
 		const html = await page.locator("html").evaluate((el) => el.innerHTML);
-		expect(html).toContain("AI Billing");
-		expect(html).toContain("Runtime Health");
-		expect(html).toContain("Verify Key");
-		expect(html).toContain("Cloudflare account ID");
-		expect(html).toContain("triggerDeploy");
+		const scripts = await Promise.all(
+			[
+				"/console-core.js",
+				"/console-instances.js",
+				"/console-agent-data.js",
+				"/console-profile.js",
+				"/console-utils-init.js",
+			].map(async (path) => {
+				const res = await page.request.get(path);
+				expect(res.ok()).toBe(true);
+				return res.text();
+			}),
+		);
+		const bundle = [html, ...scripts].join("\n");
+		expect(bundle).toContain("AI Billing");
+		expect(bundle).toContain("Runtime Health");
+		expect(bundle).toContain("Verify Key");
+		expect(bundle).toContain("Cloudflare account ID");
+		expect(bundle).toContain("triggerDeploy");
 	});
 
 	test("signed-in creator console shows an agent status board", async ({ page }) => {

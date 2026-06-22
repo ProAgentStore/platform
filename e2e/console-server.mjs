@@ -18,6 +18,12 @@ const contentTypes = {
 
 function resolveStorePath(pathname) {
 	const cleanPath = decodeURIComponent(pathname).replace(/\/+$/, "") || "/";
+	if (
+		cleanPath === "/console.css" ||
+		/^\/console-(core|instances|agent-data|profile|utils-init)\.js$/.test(cleanPath)
+	) {
+		return join(storeRoot, "console", cleanPath.slice(1));
+	}
 	if (cleanPath === "/" || cleanPath === "/console" || cleanPath.startsWith("/console/")) {
 		return join(storeRoot, "console", "index.html");
 	}
