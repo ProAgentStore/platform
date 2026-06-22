@@ -65,13 +65,20 @@ async function runAnthropic(
 	};
 	if (systemMsg) anthropicBody.system = systemMsg.content;
 
-	// Convert tools to Anthropic format
+	// Convert tools to Anthropic format (deduplicate by name)
 	if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
-		anthropicBody.tools = (body.tools as Array<{ type: string; function: { name: string; description: string; parameters: unknown } }>).map((t) => ({
-			name: t.function?.name || (t as Record<string, unknown>).name,
-			description: t.function?.description || (t as Record<string, unknown>).description,
-			input_schema: t.function?.parameters || (t as Record<string, unknown>).parameters || { type: "object", properties: {} },
-		}));
+		const seen = new Set<string>();
+		anthropicBody.tools = [];
+		for (const t of body.tools as Array<{ type: string; function?: { name: string; description: string; parameters: unknown }; name?: string; description?: string; parameters?: unknown }>) {
+			const name = t.function?.name || t.name;
+			if (!name || seen.has(name)) continue;
+			seen.add(name);
+			(anthropicBody.tools as unknown[]).push({
+				name,
+				description: t.function?.description || t.description || "",
+				input_schema: t.function?.parameters || t.parameters || { type: "object", properties: {} },
+			});
+		}
 	}
 
 	const controller = new AbortController();
@@ -99,9 +106,11 @@ async function runAnthropic(
 
 	const data = await res.json().catch(() => ({})) as Record<string, unknown>;
 	if (!res.ok) {
+		const errObj = (data as { error?: { message?: string; type?: string } }).error;
+		const errMsg = errObj?.message || JSON.stringify(data);
 		throw new UserAiProviderError(
-			`Anthropic API failed: ${(data as { error?: { message?: string } }).error?.message || res.status}`,
-			res.status === 401 ? 400 : 502,
+			`Anthropic: ${errMsg}`,
+			res.status === 401 || res.status === 403 ? 400 : 502,
 			res.status,
 			data,
 		);
