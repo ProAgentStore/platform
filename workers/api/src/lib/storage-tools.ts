@@ -378,10 +378,6 @@ export async function executeStorageTool(
 					} catch { /* use empty */ }
 				}
 
-				// Read candidate profile from memory
-				const profileMem = await engine.getUserContext(ctx.userId);
-				const candidateProfile = profileMem?.preferences || {};
-
 				// Create task on the runner
 				const taskBody = {
 					type: "job.apply_authenticated",

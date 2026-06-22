@@ -23,7 +23,6 @@ export function parseToolCallsFromText(text: string): Array<{ name: string; argu
 			const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
 			results.push({ name, arguments: args });
 		} catch {
-			continue;
 		}
 	}
 	return results;
@@ -33,11 +32,11 @@ export function parseToolCallsFromText(text: string): Array<{ name: string; argu
 function findMatchingBrace(text: string, start: number): number {
 	let depth = 0;
 	let inString = false;
-	let escape = false;
+	let escaped = false;
 	for (let i = start; i < text.length; i++) {
 		const ch = text[i];
-		if (escape) { escape = false; continue; }
-		if (ch === "\\") { escape = true; continue; }
+		if (escaped) { escaped = false; continue; }
+		if (ch === "\\") { escaped = true; continue; }
 		if (ch === '"') { inString = !inString; continue; }
 		if (inString) continue;
 		if (ch === "{") depth++;

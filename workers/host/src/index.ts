@@ -3,7 +3,7 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, consoleCss, consoleCoreJs, consoleInstancesJs, consoleAgentDataJs, consoleProfileJs, consoleUtilsInitJs, agentDetailPage,
 	widgetJs, authWidgetJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
 	faviconSvg, manifestJson,
@@ -45,6 +45,12 @@ const JS_HEADERS: Record<string, string> = {
 	"Cache-Control": "public, max-age=3600",
 	"X-Content-Type-Options": "nosniff",
 	"Access-Control-Allow-Origin": "*",
+};
+
+const CSS_HEADERS: Record<string, string> = {
+	"Content-Type": "text/css; charset=utf-8",
+	"Cache-Control": "public, max-age=3600",
+	"X-Content-Type-Options": "nosniff",
 };
 
 function b64ToBytes(b64: string): Uint8Array {
@@ -89,6 +95,12 @@ export default {
 		// JS assets
 		if (path === "/widget.js") return new Response(widgetJs, { headers: JS_HEADERS });
 		if (path === "/auth-widget.js") return new Response(authWidgetJs, { headers: JS_HEADERS });
+		if (path === "/console-core.js") return new Response(consoleCoreJs, { headers: JS_HEADERS });
+		if (path === "/console-instances.js") return new Response(consoleInstancesJs, { headers: JS_HEADERS });
+		if (path === "/console-agent-data.js") return new Response(consoleAgentDataJs, { headers: JS_HEADERS });
+		if (path === "/console-profile.js") return new Response(consoleProfileJs, { headers: JS_HEADERS });
+		if (path === "/console-utils-init.js") return new Response(consoleUtilsInitJs, { headers: JS_HEADERS });
+		if (path === "/console.css") return new Response(consoleCss, { headers: CSS_HEADERS });
 
 		// Favicon
 		if (path === "/favicon.svg" || path === "/favicon.ico") {

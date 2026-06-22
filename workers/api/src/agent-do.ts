@@ -20,11 +20,14 @@ import type {
 	KnowledgeDoc,
 	MemoryEntry,
 } from "./agent-types.js";
-import { AGENT_TOOLS, executeTool, type ToolCallRequest } from "./lib/tools.js";
-import { STORAGE_TOOLS, executeStorageTool } from "./lib/storage-tools.js";
-import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
 import {
-	runUserWorkersAi,
+	buildSystemPrompt,
+	defaultGuardrails,
+	DEFAULT_MODEL,
+	ensureStateDefaults,
+} from "./agent-do-prompt.js";
+import { runAgentThink } from "./agent-think.js";
+import {
 	UserAiCredentialsError,
 	UserAiProviderError,
 } from "./lib/user-ai.js";
@@ -41,22 +44,7 @@ export type {
 	ToolResult,
 } from "./agent-types.js";
 
-const DEFAULT_MODEL = "@cf/meta/llama-3.2-3b-instruct";
 const MAX_CONTEXT_MESSAGES = 10;
-const DEPRECATED_MODELS = new Set([
-	"@cf/meta/llama-3.1-8b-instruct",
-	"@cf/meta/llama-3.1-70b-instruct",
-	"@cf/mistral/mistral-7b-instruct-v0.2",
-	"@cf/qwen/qwen1.5-14b-chat-awq",
-]);
-
-/** Models that support structured function calling (tool_calls in response). */
-const TOOL_CAPABLE_MODELS = new Set([
-	"@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-	"@cf/meta/llama-4-scout-17b-16e-instruct",
-	"@cf/mistralai/mistral-small-3.1-24b-instruct",
-	"@cf/qwen/qwen2.5-coder-32b-instruct",
-]);
 
 export class AgentDO extends DurableObject<Env> {
 	private getStorageEngine(agentId: string): AgentStorageEngine {
@@ -81,13 +69,7 @@ export class AgentDO extends DurableObject<Env> {
 		guardrails?: Partial<Guardrails>;
 		welcomeMessage?: string;
 	}): Promise<void> {
-		const guardrails: Guardrails = {
-			topicRestrictions: config.guardrails?.topicRestrictions || "",
-			blockedTerms: config.guardrails?.blockedTerms || [],
-			responseStyle: config.guardrails?.responseStyle || "",
-			maxResponseLength: config.guardrails?.maxResponseLength || 0,
-			requireCitations: config.guardrails?.requireCitations || false,
-		};
+		const guardrails = defaultGuardrails(config.guardrails);
 		const state: AgentState = {
 			agentId: config.agentId,
 			name: config.name,
@@ -95,7 +77,7 @@ export class AgentDO extends DurableObject<Env> {
 			goal: config.goal || "",
 			model: config.model || DEFAULT_MODEL,
 			status: "idle",
-			systemPrompt: this.buildSystemPrompt(
+			systemPrompt: buildSystemPrompt(
 				config.name,
 				config.personality,
 				config.goal,
@@ -264,26 +246,7 @@ export class AgentDO extends DurableObject<Env> {
 			if (!state) return json({ error: "Failed to initialize agent" }, 500);
 		}
 
-		// Auto-heal deprecated models
-		if (!state.model || DEPRECATED_MODELS.has(state.model)) {
-			state.model = DEFAULT_MODEL;
-		}
-		// Auto-migrate old state missing new fields
-		if (!state.guardrails) {
-			state.guardrails = {
-				topicRestrictions: "",
-				blockedTerms: [],
-				responseStyle: "",
-				maxResponseLength: 0,
-				requireCitations: false,
-			};
-			state.welcomeMessage = state.welcomeMessage || "";
-			state.isPublished = state.isPublished || false;
-		}
-		// Auto-recover stuck status (e.g., DO timed out mid-"thinking")
-		if (state.status === "thinking" || state.status === "error") {
-			state.status = "idle";
-		}
+		ensureStateDefaults(state);
 		await this.ctx.storage.put("state", state);
 
 		// Save user message
@@ -362,163 +325,17 @@ export class AgentDO extends DurableObject<Env> {
 		const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
 		const memory = await this.getAllMemory();
 		const tasks = await this.getAllTasks();
-
-		const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
-
-		let systemPrompt = state.systemPrompt;
-
-		const ragContext = await engine.buildRAGContext(lastUserMessage);
-		if (ragContext) systemPrompt += `\n\n${ragContext}`;
-
-		if (memory.length > 0) {
-			systemPrompt += "\n\n## Your Memory\n";
-			for (const m of memory) {
-				systemPrompt += `- [${m.type}] ${m.key}: ${m.content}\n`;
-			}
-		}
-
-		const activeTasks = tasks.filter((t) => t.status !== "complete");
-		if (activeTasks.length > 0) {
-			systemPrompt += "\n\n## Active Tasks\n";
-			for (const t of activeTasks) {
-				systemPrompt += `- [${t.status}] ${t.title}: ${t.description}\n`;
-			}
-		}
-
-		if (userId) {
-			const userCtx = await engine.getUserContext(userId);
-			await engine.touchUserContext(userId);
-			if (Object.keys(userCtx.preferences).length > 0) {
-				systemPrompt += "\n\n## User Preferences\n";
-				for (const [key, value] of Object.entries(userCtx.preferences)) {
-					systemPrompt += `- ${key}: ${value}\n`;
-				}
-			}
-		}
-
-		const useTools = TOOL_CAPABLE_MODELS.has(state.model);
-		if (useTools) {
-			systemPrompt +=
-				"\n\nYou have tools available. Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
-		}
-
-		// Final instruction — strongest position for model attention
-		systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'. Just execute and report the result concisely.";
-
-		const aiMessages: { role: string; content: string }[] = [
-			{ role: "system", content: systemPrompt },
-			...messages.map((m) => ({ role: m.role, content: m.content })),
-		];
-
-		// Simple path: no tool support — just call the model and return
-		if (!useTools) {
-			const result = (await runUserWorkersAi(
-				this.env,
-				userId,
-				state.model,
-				{ messages: aiMessages },
-			)) as { response?: string };
-			return result.response || "";
-		}
-
-		// Tool-capable model: send the most useful tools (not all 24 — too many overwhelms the model)
-		const CORE_TOOLS = new Set([
-			"read_memory", "write_memory", "get_tasks", "create_task", "update_task",
-			"fetch_url", "search_knowledge", "upload_file", "list_files",
-			"create_collection", "list_collections", "insert_record", "query_records", "update_record",
-			"get_activity", "get_user_context", "set_user_preference",
-			"submit_job_application",
-		]);
-		// Deduplicate by name (STORAGE_TOOLS versions take priority over AGENT_TOOLS)
-		const toolMap = new Map<string, typeof AGENT_TOOLS[number]>();
-		for (const t of [...AGENT_TOOLS, ...STORAGE_TOOLS]) {
-			if (CORE_TOOLS.has(t.name)) toolMap.set(t.name, t);
-		}
-		const allTools = [...toolMap.values()];
-		const tools = allTools.map((t) => ({
-			type: "function" as const,
-			function: {
-				name: t.name,
-				description: t.description,
-				parameters: {
-					type: "object",
-					properties: Object.fromEntries(
-						Object.entries(t.parameters).map(([k, v]) => [
-							k,
-							{ type: v.type, description: v.description },
-						]),
-					),
-					required: Object.entries(t.parameters)
-						.filter(([, v]) => v.required)
-						.map(([k]) => k),
-				},
-			},
-		}));
-
-		const allToolLog: string[] = [];
-		const storageToolNames = new Set(STORAGE_TOOLS.map((t) => t.name));
-		const MAX_TOOL_ROUNDS = 3;
-
-		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-			const rawResult = (await runUserWorkersAi(
-				this.env,
-				userId,
-				state.model,
-				{ messages: aiMessages, tools },
-			)) as Record<string, unknown>;
-
-			let toolCalls = normalizeToolCalls((rawResult.tool_calls as unknown[]) || []);
-			if (toolCalls.length === 0 && rawResult.response) {
-				toolCalls = parseToolCallsFromText(rawResult.response as string);
-			}
-
-			if (toolCalls.length === 0) {
-				const response = (rawResult.response as string) || "";
-				return allToolLog.length > 0
-					? `${allToolLog.join("\n")}\n\n${response}`
-					: response;
-			}
-
-			const toolResults: string[] = [];
-			for (const tc of toolCalls) {
-				let toolResult;
-				if (storageToolNames.has(tc.name)) {
-					toolResult = await executeStorageTool(
-						{ name: tc.name, input: tc.arguments },
-						engine,
-						{ env: this.env, agentId: state.agentId, userId },
-					);
-				} else {
-					const callReq: ToolCallRequest = { name: tc.name, input: tc.arguments };
-					toolResult = await executeTool(
-						callReq,
-						this.ctx.storage,
-						this.env.STORAGE,
-						state.agentId,
-					);
-				}
-				const icon = toolResult.success ? "\u2705" : "\u274c";
-				const shortContent = toolResult.content.slice(0, 120);
-				allToolLog.push(`${icon} **${tc.name}** ${shortContent}`);
-				toolResults.push(`[${tc.name}]: ${toolResult.content}`);
-				this.broadcast({ type: "tool_call", tool: tc.name, result: toolResult });
-				await engine.logEvent("tool.called", userId, { tool: tc.name, success: toolResult.success });
-			}
-
-			aiMessages.push({ role: "assistant", content: `I called tools:\n${toolResults.join("\n")}` });
-			aiMessages.push({ role: "user", content: "Continue based on the tool results above." });
-		}
-
-		const final = (await runUserWorkersAi(
-			this.env,
+		return runAgentThink({
+			state,
+			engine,
+			messages,
+			memory,
+			tasks,
 			userId,
-			state.model,
-			{ messages: aiMessages },
-		)) as { response?: string };
-		const response = final.response || "";
-		return allToolLog.length > 0
-			? `${allToolLog.join("\n")}\n\n${response}`
-			: response;
+			env: this.env,
+			doStorage: this.ctx.storage,
+			broadcast: (data) => this.broadcast(data),
+		});
 	}
 
 	// ── WebSocket ──────────────────────────────────────────────────────────────
@@ -754,15 +571,7 @@ export class AgentDO extends DurableObject<Env> {
 		if (!state) return json({ error: "Not initialized" }, 404);
 		// Auto-migrate old state missing new fields
 		if (!state.guardrails) {
-			state.guardrails = {
-				topicRestrictions: "",
-				blockedTerms: [],
-				responseStyle: "",
-				maxResponseLength: 0,
-				requireCitations: false,
-			};
-			state.welcomeMessage = state.welcomeMessage || "";
-			state.isPublished = state.isPublished || false;
+			ensureStateDefaults(state);
 			await this.ctx.storage.put("state", state);
 		}
 		const { systemPrompt: _, ...public_ } = state;
@@ -790,7 +599,7 @@ export class AgentDO extends DurableObject<Env> {
 		if (updates.guardrails) {
 			state.guardrails = { ...state.guardrails, ...updates.guardrails };
 		}
-		state.systemPrompt = this.buildSystemPrompt(
+		state.systemPrompt = buildSystemPrompt(
 			state.name,
 			state.personality,
 			state.goal,
@@ -1142,42 +951,6 @@ export class AgentDO extends DurableObject<Env> {
 		const engine = this.getStorageEngine(state.agentId);
 		const ctx = await engine.getUserContext(decodeURIComponent(userId));
 		return json(ctx);
-	}
-
-	// ── Helpers ────────────────────────────────────────────────────────────────
-
-	private buildSystemPrompt(
-		name: string,
-		personality?: string,
-		goal?: string,
-		guardrails?: Guardrails,
-	): string {
-		let prompt = `You are ${name}, a server-powered AI agent on ProAgentStore.`;
-		if (personality) prompt += `\n\nPersonality: ${personality}`;
-		if (goal) prompt += `\n\nGoal: ${goal}`;
-
-		if (guardrails) {
-			if (guardrails.topicRestrictions) {
-				prompt += `\n\nTopic restrictions: ${guardrails.topicRestrictions}. If the user asks about anything outside this scope, politely decline and redirect to your area of expertise.`;
-			}
-			if (guardrails.blockedTerms.length > 0) {
-				prompt += `\n\nNever use these words or phrases: ${guardrails.blockedTerms.join(", ")}`;
-			}
-			if (guardrails.responseStyle) {
-				prompt += `\n\nResponse style: ${guardrails.responseStyle}`;
-			}
-			if (guardrails.maxResponseLength > 0) {
-				prompt += `\n\nKeep responses under ${guardrails.maxResponseLength} characters.`;
-			}
-			if (guardrails.requireCitations) {
-				prompt +=
-					"\n\nAlways cite which knowledge base document you are drawing from when answering.";
-			}
-		}
-
-		prompt +=
-			"\n\nYou have persistent memory and tasks. Be helpful, concise, and proactive about completing your tasks.";
-		return prompt;
 	}
 }
 

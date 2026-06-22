@@ -348,7 +348,7 @@ export function createRunnerCommand(): Command {
 					token: runnerToken,
 					instanceId,
 				});
-				const result = await requestPags("POST", `/v1/instances/${apiPathSegment(instanceId)}/runtime`, opts, {
+				await requestPags("POST", `/v1/instances/${apiPathSegment(instanceId)}/runtime`, opts, {
 					endpointUrl: tunnelUrl,
 					token: runnerToken,
 					placement: "local",

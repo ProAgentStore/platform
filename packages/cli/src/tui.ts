@@ -1,6 +1,5 @@
 import chalk from "chalk";
 import readline from "node:readline";
-import type { StoredSession } from "./commands/login.js";
 
 const ACCENT = "#7c3aed";
 const c = chalk.hex(ACCENT);

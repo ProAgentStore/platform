@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { requireSession } from "./login.js";
-import { writeLine, writeError } from "../output.js";
-import { clearScreen, printLogo, printStatus, printStep, printEvent, waitForKey, type TuiState } from "../tui.js";
+import { writeLine } from "../output.js";
+import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 
 const API_BASE = "https://api.proagentstore.online";
 

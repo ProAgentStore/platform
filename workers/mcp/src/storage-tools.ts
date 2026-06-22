@@ -50,7 +50,7 @@ export function registerStorageTools(
 			if (!t) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "write", "create_collection", { agent_id, name });
 			if (denied) return denied;
-			let parsedFields;
+			let parsedFields: unknown;
 			try { parsedFields = JSON.parse(fields); } catch { return text("Invalid fields JSON"); }
 			const data = await authedCall(`/v1/agents/${agent_id}/collections`, t, {
 				method: "POST",
@@ -100,7 +100,7 @@ export function registerStorageTools(
 			if (!t) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "write", "insert_record", { agent_id, collection });
 			if (denied) return denied;
-			let parsed;
+			let parsed: unknown;
 			try { parsed = JSON.parse(dataStr); } catch { return text("Invalid data JSON"); }
 			const result = await authedCall(`/v1/agents/${agent_id}/collections/${collection}/records`, t, {
 				method: "POST",
@@ -127,7 +127,7 @@ export function registerStorageTools(
 			if (!t) return authRequired();
 			const denied = await requirePermission(safetyFor(token), "write", "update_record", { agent_id, collection, record_id });
 			if (denied) return denied;
-			let parsed;
+			let parsed: unknown;
 			try { parsed = JSON.parse(dataStr); } catch { return text("Invalid data JSON"); }
 			const result = await authedCall(`/v1/agents/${agent_id}/collections/${collection}/records/${record_id}`, t, {
 				method: "PUT",

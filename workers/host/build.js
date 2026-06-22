@@ -37,6 +37,30 @@ const pages = {
 		path.join(storeDir, "console", "index.html"),
 		"utf-8",
 	),
+	consoleCss: fs.readFileSync(
+		path.join(storeDir, "console", "console.css"),
+		"utf-8",
+	),
+	consoleCoreJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-core.js"),
+		"utf-8",
+	),
+	consoleInstancesJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-instances.js"),
+		"utf-8",
+	),
+	consoleAgentDataJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-agent-data.js"),
+		"utf-8",
+	),
+	consoleProfileJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-profile.js"),
+		"utf-8",
+	),
+	consoleUtilsInitJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-utils-init.js"),
+		"utf-8",
+	),
 	agentDetailPage: fs.readFileSync(
 		path.join(storeDir, "agents", "detail.html"),
 		"utf-8",
