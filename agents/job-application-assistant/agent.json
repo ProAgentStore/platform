@@ -9,12 +9,45 @@
 	"serverConfig": {
 		"runtime": {
 			"kind": "fags-browser-runtime",
-			"taskTypes": ["job.apply_basic"],
-			"approvalRequiredFor": ["job.apply_basic"],
+			"taskTypes": ["job.apply_basic", "job.apply_authenticated"],
+			"approvalRequiredFor": ["job.apply_basic", "job.apply_authenticated"],
 			"fileUploads": true,
 			"brainPlacement": "pags-control-plane",
 			"runtimePlane": "fags"
 		},
-		"routes": ["job-application-assistant.proagentstore.online/*"]
+		"routes": ["job-application-assistant.proagentstore.online/*"],
+		"collections": {
+			"applications": {
+				"fields": [
+					{"name": "url", "type": "string", "required": true, "indexed": true},
+					{"name": "company", "type": "string", "indexed": true},
+					{"name": "role", "type": "string"},
+					{"name": "status", "type": "string", "indexed": true},
+					{"name": "submitted_at", "type": "date"},
+					{"name": "resume_used", "type": "string"},
+					{"name": "cover_note", "type": "string"},
+					{"name": "response", "type": "json"}
+				]
+			},
+			"sites": {
+				"fields": [
+					{"name": "domain", "type": "string", "required": true, "unique": true, "indexed": true},
+					{"name": "login_url", "type": "string"},
+					{"name": "email", "type": "string"},
+					{"name": "has_account", "type": "boolean"},
+					{"name": "last_used", "type": "date"},
+					{"name": "notes", "type": "string"}
+				]
+			},
+			"companies": {
+				"fields": [
+					{"name": "name", "type": "string", "required": true, "unique": true, "indexed": true},
+					{"name": "careers_url", "type": "string"},
+					{"name": "industry", "type": "string"},
+					{"name": "notes", "type": "string"},
+					{"name": "applications_count", "type": "number"}
+				]
+			}
+		}
 	}
 }
