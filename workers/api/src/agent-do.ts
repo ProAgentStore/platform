@@ -439,26 +439,33 @@ export class AgentDO extends DurableObject<Env> {
 
 		const MAX_TOOL_ROUNDS = 3;
 		for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-			const result = (await runUserWorkersAi(
+			const rawResult = (await runUserWorkersAi(
 				this.env,
 				userId,
 				state.model,
 				{ messages: aiMessages, tools },
-			)) as {
-				response?: string;
-				tool_calls?: Array<{
-					name: string;
-					arguments: Record<string, unknown>;
-				}>;
-			};
+			)) as Record<string, unknown>;
 
-			if (!result.tool_calls || result.tool_calls.length === 0) {
-				return result.response || "";
+			// Normalize tool_calls — REST API returns OpenAI format: {function:{name,arguments}}
+			// Workers AI binding returns flat: {name, arguments}
+			const rawCalls = (rawResult.tool_calls as unknown[]) || [];
+			const toolCalls = rawCalls.map((tc: unknown) => {
+				const call = tc as Record<string, unknown>;
+				if (call.function && typeof call.function === "object") {
+					const fn = call.function as Record<string, unknown>;
+					const args = typeof fn.arguments === "string" ? JSON.parse(fn.arguments) : fn.arguments || {};
+					return { name: fn.name as string, arguments: args as Record<string, unknown> };
+				}
+				return { name: call.name as string, arguments: (call.arguments || {}) as Record<string, unknown> };
+			}).filter((tc) => tc.name);
+
+			if (toolCalls.length === 0) {
+				return (rawResult.response as string) || "";
 			}
 
 			const toolResults: string[] = [];
 			const storageToolNames = new Set(STORAGE_TOOLS.map((t) => t.name));
-			for (const tc of result.tool_calls) {
+			for (const tc of toolCalls) {
 				let toolResult;
 				if (storageToolNames.has(tc.name)) {
 					toolResult = await executeStorageTool(
