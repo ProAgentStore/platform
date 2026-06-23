@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { gunzipSync } from "node:zlib";
+import { arch, homedir, platform } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
@@ -86,6 +89,129 @@ export function buildRunnerArgs(opts: RunnerStartOptions): string[] {
 
 export function buildCloudflaredArgs(localUrl: string): string[] {
 	return ["tunnel", "--url", localUrl];
+}
+
+interface CloudflaredAsset {
+	asset: string;
+	executableName: string;
+	archive: boolean;
+}
+
+export function cloudflaredAssetForPlatform(
+	os = platform(),
+	cpu = arch(),
+): CloudflaredAsset {
+	if (os === "darwin") {
+		if (cpu === "arm64") {
+			return {
+				asset: "cloudflared-darwin-arm64.tgz",
+				executableName: "cloudflared",
+				archive: true,
+			};
+		}
+		if (cpu === "x64") {
+			return {
+				asset: "cloudflared-darwin-amd64.tgz",
+				executableName: "cloudflared",
+				archive: true,
+			};
+		}
+	}
+	if (os === "linux") {
+		if (cpu === "x64") {
+			return {
+				asset: "cloudflared-linux-amd64",
+				executableName: "cloudflared",
+				archive: false,
+			};
+		}
+		if (cpu === "arm64") {
+			return {
+				asset: "cloudflared-linux-arm64",
+				executableName: "cloudflared",
+				archive: false,
+			};
+		}
+	}
+	if (os === "win32" && cpu === "x64") {
+		return {
+			asset: "cloudflared-windows-amd64.exe",
+			executableName: "cloudflared.exe",
+			archive: false,
+		};
+	}
+	throw new Error(
+		`Automatic cloudflared download is not supported on ${os}/${cpu}. Install cloudflared and pass --cloudflared <path>.`,
+	);
+}
+
+export function cloudflaredDownloadUrl(asset: string): string {
+	return `https://github.com/cloudflare/cloudflared/releases/latest/download/${asset}`;
+}
+
+export function extractCloudflaredBinary(asset: CloudflaredAsset, bytes: Uint8Array): Buffer {
+	const buffer = Buffer.from(bytes);
+	if (!asset.archive) return buffer;
+	const tar = gunzipSync(buffer);
+	for (let offset = 0; offset + 512 <= tar.length;) {
+		const header = tar.subarray(offset, offset + 512);
+		if (header.every((byte) => byte === 0)) break;
+		const rawName = header.subarray(0, 100).toString("utf8");
+		const name = rawName.slice(0, rawName.indexOf("\0") === -1 ? undefined : rawName.indexOf("\0"));
+		const rawSize = header.subarray(124, 136).toString("utf8").replace(/\0.*$/, "").trim();
+		const size = Number.parseInt(rawSize || "0", 8);
+		const contentStart = offset + 512;
+		const contentEnd = contentStart + size;
+		if (name.split("/").pop() === asset.executableName) {
+			return tar.subarray(contentStart, contentEnd);
+		}
+		offset = contentStart + Math.ceil(size / 512) * 512;
+	}
+	throw new Error(`Downloaded ${asset.asset} did not contain ${asset.executableName}`);
+}
+
+function cloudflaredCacheDir(): string {
+	return resolve(homedir(), ".config", "proagentstore", "bin");
+}
+
+function cachedCloudflaredPath(asset: CloudflaredAsset): string {
+	const suffix = asset.asset.replace(/[^a-zA-Z0-9._-]/g, "-");
+	return resolve(cloudflaredCacheDir(), `${asset.executableName}-${suffix}`);
+}
+
+async function commandAvailable(command: string): Promise<boolean> {
+	return new Promise((resolvePromise) => {
+		const child = spawn(command, ["--version"], {
+			stdio: "ignore",
+			shell: process.platform === "win32",
+		});
+		child.on("error", () => resolvePromise(false));
+		child.on("exit", (code) => resolvePromise(code === 0));
+	});
+}
+
+async function downloadCloudflared(asset: CloudflaredAsset): Promise<string> {
+	const target = cachedCloudflaredPath(asset);
+	if (existsSync(target)) return target;
+	await mkdir(cloudflaredCacheDir(), { recursive: true });
+	const url = cloudflaredDownloadUrl(asset.asset);
+	writeLine(`cloudflared not found; downloading ${asset.asset}...`);
+	const res = await fetch(url);
+	if (!res.ok) {
+		throw new Error(`cloudflared download failed: ${res.status} ${res.statusText}`);
+	}
+	const binary = extractCloudflaredBinary(asset, new Uint8Array(await res.arrayBuffer()));
+	await writeFile(target, binary);
+	if (process.platform !== "win32") await chmod(target, 0o755);
+	writeLine(`cloudflared cached at ${target}`);
+	return target;
+}
+
+async function resolveCloudflaredCommand(requested?: string): Promise<string> {
+	const explicit = clean(requested);
+	if (explicit && explicit !== "cloudflared") return explicit;
+	if (await commandAvailable("cloudflared")) return "cloudflared";
+	return downloadCloudflared(cloudflaredAssetForPlatform());
 }
 
 export function parseCloudflaredTunnelUrl(text: string): string | null {
@@ -273,7 +399,7 @@ export function createRunnerCommand(): Command {
 		.option("--headless", "Run Playwright headless")
 		.option("--api-base <url>", "PAGS API base URL")
 		.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
-		.option("--cloudflared <path>", "cloudflared executable", "cloudflared")
+		.option("--cloudflared <path>", "cloudflared executable")
 		.option("--runner-version <version>", "Runner version")
 		.option("--skip-probe", "Skip PAGS FAGS-runtime probe after registration")
 		.action(async (instanceId: string, opts: RunnerConnectOptions) => {
@@ -320,24 +446,27 @@ export function createRunnerCommand(): Command {
 
 				const tunnelUrl = await new Promise<string>((resolveTunnel, reject) => {
 					let output = "";
-					const cloudflared = clean(opts.cloudflared) || "cloudflared";
-					tunnel = spawn(cloudflared, buildCloudflaredArgs(localUrl), {
-						stdio: ["ignore", "pipe", "pipe"],
-						shell: process.platform === "win32",
-					});
-					const onData = (data: Buffer) => {
-						const text = data.toString("utf-8");
-						output += text;
-						process.stderr.write(text);
-						const parsed = parseCloudflaredTunnelUrl(output);
-						if (parsed) resolveTunnel(parsed);
-					};
-					tunnel.stdout?.on("data", onData);
-					tunnel.stderr?.on("data", onData);
-					tunnel.on("error", reject);
-					tunnel.on("exit", (code) => {
-						if (code && code !== 0) reject(new Error(`cloudflared exited with code ${code}`));
-					});
+					resolveCloudflaredCommand(opts.cloudflared)
+						.then((cloudflared) => {
+							tunnel = spawn(cloudflared, buildCloudflaredArgs(localUrl), {
+								stdio: ["ignore", "pipe", "pipe"],
+								shell: process.platform === "win32",
+							});
+							const onData = (data: Buffer) => {
+								const text = data.toString("utf-8");
+								output += text;
+								process.stderr.write(text);
+								const parsed = parseCloudflaredTunnelUrl(output);
+								if (parsed) resolveTunnel(parsed);
+							};
+							tunnel.stdout?.on("data", onData);
+							tunnel.stderr?.on("data", onData);
+							tunnel.on("error", reject);
+							tunnel.on("exit", (code) => {
+								if (code && code !== 0) reject(new Error(`cloudflared exited with code ${code}`));
+							});
+						})
+						.catch(reject);
 					setTimeout(() => reject(new Error("timed out waiting for cloudflared tunnel URL")), 45_000).unref();
 				});
 

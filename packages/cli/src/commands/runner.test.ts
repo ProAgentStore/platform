@@ -1,10 +1,14 @@
+import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	apiPathSegment,
 	buildCloudflaredArgs,
 	buildRuntimeRegistrationBody,
 	buildRunnerArgs,
+	cloudflaredAssetForPlatform,
+	cloudflaredDownloadUrl,
 	createRunnerCommand,
+	extractCloudflaredBinary,
 	pagsApiBase,
 	pagsHeaders,
 	parseCloudflaredTunnelUrl,
@@ -55,6 +59,50 @@ describe("runner command helpers", () => {
 			"--url",
 			"http://127.0.0.1:49171",
 		]);
+	});
+
+	it("selects cloudflared release assets for supported npm platforms", () => {
+		expect(cloudflaredAssetForPlatform("darwin", "arm64")).toEqual({
+			asset: "cloudflared-darwin-arm64.tgz",
+			executableName: "cloudflared",
+			archive: true,
+		});
+		expect(cloudflaredAssetForPlatform("darwin", "x64")).toMatchObject({
+			asset: "cloudflared-darwin-amd64.tgz",
+			archive: true,
+		});
+		expect(cloudflaredAssetForPlatform("linux", "x64")).toMatchObject({
+			asset: "cloudflared-linux-amd64",
+			archive: false,
+		});
+		expect(cloudflaredAssetForPlatform("win32", "x64")).toMatchObject({
+			asset: "cloudflared-windows-amd64.exe",
+			executableName: "cloudflared.exe",
+		});
+		expect(() => cloudflaredAssetForPlatform("freebsd", "x64")).toThrow(
+			"Automatic cloudflared download is not supported",
+		);
+	});
+
+	it("builds the official cloudflared latest release download URL", () => {
+		expect(cloudflaredDownloadUrl("cloudflared-darwin-arm64.tgz")).toBe(
+			"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz",
+		);
+	});
+
+	it("extracts the cloudflared binary from the macOS release archive", () => {
+		const tgz = gzipSync(makeTar({ cloudflared: "binary-content" }));
+
+		expect(
+			extractCloudflaredBinary(
+				{
+					asset: "cloudflared-darwin-arm64.tgz",
+					executableName: "cloudflared",
+					archive: true,
+				},
+				tgz,
+			).toString("utf8"),
+		).toBe("binary-content");
 	});
 
 	it("parses cloudflared quick tunnel URLs", () => {
@@ -198,3 +246,25 @@ describe("runner command helpers", () => {
 		expect(writeSpy).toHaveBeenCalled();
 	});
 });
+
+function makeTar(files: Record<string, string>): Buffer {
+	const chunks: Buffer[] = [];
+	for (const [name, content] of Object.entries(files)) {
+		const body = Buffer.from(content);
+		const header = Buffer.alloc(512);
+		header.write(name, 0, "utf8");
+		header.write("0000777\0", 100, "ascii");
+		header.write("0000000\0", 108, "ascii");
+		header.write("0000000\0", 116, "ascii");
+		header.write(body.length.toString(8).padStart(11, "0") + "\0", 124, "ascii");
+		header.write("00000000000\0", 136, "ascii");
+		header.fill(" ", 148, 156);
+		header.write("0", 156, "ascii");
+		let checksum = 0;
+		for (const byte of header) checksum += byte;
+		header.write(checksum.toString(8).padStart(6, "0") + "\0 ", 148, "ascii");
+		chunks.push(header, body, Buffer.alloc(Math.ceil(body.length / 512) * 512 - body.length));
+	}
+	chunks.push(Buffer.alloc(1024));
+	return Buffer.concat(chunks);
+}
