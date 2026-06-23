@@ -268,6 +268,57 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 	}
 });
 
+// ── Human takeover relay (console ⇄ PAGS ⇄ runner, through the tunnel) ──────
+
+/** List active human-takeover sessions on my instance's runtime. */
+instanceRoutes.get("/:instanceId/takeover", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const res = await callRuntime(c.env, runtime, "/takeover");
+	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
+});
+
+/** Live JPEG frame of a paused (needs_human) task's browser page. */
+instanceRoutes.get("/:instanceId/takeover/:taskId/frame", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/frame`);
+	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
+});
+
+/** Relay a human's mouse/keyboard input into the taken-over page. */
+instanceRoutes.post("/:instanceId/takeover/:taskId/input", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const body = await c.req.text();
+	const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/input`, {
+		method: "POST",
+		body,
+	});
+	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
+});
+
+/** End a human-takeover session. */
+instanceRoutes.post("/:instanceId/takeover/:taskId/end", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/end`, {
+		method: "POST",
+	});
+	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
+});
+
 /** Remove my registered runtime. */
 instanceRoutes.delete("/:instanceId/runtime", async (c) => {
 	const session = await requireUser(c);
