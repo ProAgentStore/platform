@@ -9,6 +9,7 @@ import {
 	normalizeRunnerTaskBody,
 	runtimeEventsFromPayload,
 	runtimeTasksFromPayload,
+	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 } from "./instances.js";
 
@@ -163,6 +164,13 @@ describe("runtime endpoint validation", () => {
 });
 
 describe("runtime task protocol shape", () => {
+	it("transfers runtime ownership on upsert when the authenticated user changes", () => {
+		expect(UPSERT_INSTANCE_RUNTIME_SQL).toContain(
+			"ON CONFLICT(instance_id) DO UPDATE SET",
+		);
+		expect(UPSERT_INSTANCE_RUNTIME_SQL).toContain("user_id = excluded.user_id");
+	});
+
 	it("creates PAGS-brain FAGS-runtime task request shape", () => {
 		const request = {
 			type: "browser.open",

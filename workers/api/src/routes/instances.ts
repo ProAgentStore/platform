@@ -32,6 +32,7 @@ import {
 	safeCapabilities,
 	syntheticEventsFromTasks,
 	updateRuntimeStatus,
+	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 	type InstanceRow,
 	type RuntimeRegistrationBody,
@@ -46,6 +47,7 @@ export {
 	normalizeRunnerTaskBody,
 	runtimeEventsFromPayload,
 	runtimeTasksFromPayload,
+	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
 
@@ -191,26 +193,7 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	const placement = body.placement === "managed" ? "managed" : "local";
 	const runnerVersion = String(body.runnerVersion || "").slice(0, 80);
 
-	await c.env.DB.prepare(
-		`INSERT INTO instance_runtimes (
-       instance_id, user_id, placement, endpoint_url,
-       token_ciphertext, token_dek_wrapped, token_iv, token_plaintext,
-       capabilities, runner_version, status, last_seen_at, created_at, updated_at
-     )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'registered', datetime('now'), datetime('now'), datetime('now'))
-     ON CONFLICT(instance_id) DO UPDATE SET
-       placement = excluded.placement,
-       endpoint_url = excluded.endpoint_url,
-       token_ciphertext = excluded.token_ciphertext,
-       token_dek_wrapped = excluded.token_dek_wrapped,
-       token_iv = excluded.token_iv,
-       token_plaintext = excluded.token_plaintext,
-       capabilities = excluded.capabilities,
-       runner_version = excluded.runner_version,
-       status = 'registered',
-       last_seen_at = datetime('now'),
-       updated_at = datetime('now')`,
-	)
+	await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)
 		.bind(
 			instanceId,
 			session.uid,

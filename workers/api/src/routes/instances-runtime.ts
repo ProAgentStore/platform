@@ -38,6 +38,26 @@ export interface RuntimeRegistrationBody {
 	runnerVersion?: string;
 }
 
+export const UPSERT_INSTANCE_RUNTIME_SQL = `INSERT INTO instance_runtimes (
+       instance_id, user_id, placement, endpoint_url,
+       token_ciphertext, token_dek_wrapped, token_iv, token_plaintext,
+       capabilities, runner_version, status, last_seen_at, created_at, updated_at
+     )
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'registered', datetime('now'), datetime('now'), datetime('now'))
+     ON CONFLICT(instance_id) DO UPDATE SET
+       user_id = excluded.user_id,
+       placement = excluded.placement,
+       endpoint_url = excluded.endpoint_url,
+       token_ciphertext = excluded.token_ciphertext,
+       token_dek_wrapped = excluded.token_dek_wrapped,
+       token_iv = excluded.token_iv,
+       token_plaintext = excluded.token_plaintext,
+       capabilities = excluded.capabilities,
+       runner_version = excluded.runner_version,
+       status = 'registered',
+       last_seen_at = datetime('now'),
+       updated_at = datetime('now')`;
+
 export interface RunnerTaskBody {
 	type: string;
 	input?: Record<string, unknown>;
@@ -585,5 +605,4 @@ export async function updateRuntimeStatus(
 		.bind(status, instanceId, userId)
 		.run();
 }
-
 
