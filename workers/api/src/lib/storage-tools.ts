@@ -145,10 +145,19 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "submit_job_application",
-		description: "Submit a job application using the connected browser runner (Playwright). Opens the job page, fills the form with candidate details, uploads resume, and submits. Requires the browser runner to be connected.",
+		description: "Create an approval-gated browser runner task to submit a job application. This only creates the browser task; the application is not submitted until the user approves the task and the runner completes it. Do not mark application records as submitted from this tool result alone.",
 		parameters: {
 			url: { type: "string", description: "Job posting URL", required: true },
+			resume_path: { type: "string", description: "Absolute local path to the resume file on the connected runner machine", required: true },
+			full_name: { type: "string", description: "Candidate full name", required: true },
+			email: { type: "string", description: "Candidate email", required: true },
+			phone: { type: "string", description: "Candidate phone number" },
+			location: { type: "string", description: "Candidate location" },
+			linkedin: { type: "string", description: "Candidate LinkedIn URL" },
+			portfolio: { type: "string", description: "Candidate portfolio URL" },
+			work_authorization: { type: "string", description: "Candidate work authorization status" },
 			cover_note: { type: "string", description: "Cover note text to paste into the application form" },
+			authenticated: { type: "boolean", description: "Use an authenticated application flow when true. Defaults to true." },
 		},
 	},
 ];
@@ -352,8 +361,17 @@ export async function executeStorageTool(
 				if (!ctx?.env || !ctx.agentId || !ctx.userId) {
 					return fail(call.name, "Runtime context not available");
 				}
-				const url = call.input.url as string;
+				const url = stringInput(call.input.url);
 				if (!url) return fail(call.name, "url required");
+				const resumePath = stringInput(call.input.resume_path) || stringInput(call.input.resumePath);
+				if (!resumePath) {
+					return fail(call.name, "resume_path required: provide an absolute local file path on the connected runner machine.");
+				}
+				const candidateInput = isPlainRecord(call.input.candidate) ? call.input.candidate : {};
+				const fullName = stringInput(candidateInput.fullName) || stringInput(candidateInput.full_name) || stringInput(call.input.full_name) || stringInput(call.input.fullName);
+				const email = stringInput(candidateInput.email) || stringInput(call.input.email);
+				if (!fullName) return fail(call.name, "full_name required");
+				if (!email) return fail(call.name, "email required");
 
 				// Look up the connected runtime
 				const runtime = await ctx.env.DB.prepare(
@@ -379,19 +397,26 @@ export async function executeStorageTool(
 				}
 
 				// Create task on the runner
+				const authenticated = call.input.authenticated !== false;
 				const taskBody = {
-					type: "job.apply_authenticated",
+					type: authenticated ? "job.apply_authenticated" : "job.apply_basic",
 					input: {
 						url,
-						resumePath: "/Users/serge/resume/Sergey Ivochkin - Senior Project Manager.pdf",
+						resumePath,
 						candidate: {
-							fullName: "Sergey Ivochkin",
-							email: "serge.pro.job@gmail.com",
-							phone: "+61 404 453 580",
-							location: "Hawthorn VIC Australia",
-							workAuthorization: "Australian Citizen",
+							fullName,
+							email,
+							phone: optionalInput(candidateInput.phone) || optionalInput(call.input.phone),
+							location: optionalInput(candidateInput.location) || optionalInput(call.input.location),
+							linkedin: optionalInput(candidateInput.linkedin) || optionalInput(call.input.linkedin),
+							portfolio: optionalInput(candidateInput.portfolio) || optionalInput(call.input.portfolio),
+							workAuthorization:
+								optionalInput(candidateInput.workAuthorization) ||
+								optionalInput(candidateInput.work_authorization) ||
+								optionalInput(call.input.work_authorization) ||
+								optionalInput(call.input.workAuthorization),
 						},
-						coverNote: (call.input.cover_note as string) || "",
+						coverNote: optionalInput(call.input.cover_note) || optionalInput(call.input.coverNote) || "",
 					},
 				};
 
@@ -412,15 +437,13 @@ export async function executeStorageTool(
 
 				const task = await taskRes.json() as { id?: string; status?: string };
 
-				// If needs approval, auto-approve
-				if (task.status === "needs_approval" && task.id) {
-					await fetch(`${runtime.endpoint_url}/tasks/${task.id}/approve`, {
-						method: "POST",
-						headers,
-					}).catch(() => {});
-				}
-
-				return ok(call.name, `Browser task created: ${task.id} (status: ${task.status}). The runner is now opening ${url} and submitting the application.`);
+				const approval = task.status === "needs_approval" && task.id
+					? ` Approve it in the console or run: pags runner approve-task ${ctx.agentId} ${task.id}`
+					: "";
+				return ok(
+					call.name,
+					`Browser task created: ${task.id ?? "unknown"} (status: ${task.status ?? "unknown"}). This has not submitted the application yet. Do not mark the application record submitted until this runner task completes successfully.${approval}`,
+				);
 			}
 
 			default:
@@ -441,6 +464,19 @@ function ok(name: string, content: string): ToolCallResult {
 
 function fail(name: string, content: string): ToolCallResult {
 	return { name, content, success: false };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringInput(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
+}
+
+function optionalInput(value: unknown): string | undefined {
+	const text = stringInput(value);
+	return text || undefined;
 }
 
 function guessMimeType(filename: string): string {

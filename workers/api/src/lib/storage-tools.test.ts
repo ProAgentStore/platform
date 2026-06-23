@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { executeStorageTool } from "./storage-tools.js";
 import { AgentStorageEngine } from "../agent-storage.js";
 
@@ -26,7 +26,29 @@ function makeEngine() {
 	return new AgentStorageEngine(mockDoStorage(), null, null, null, "test-agent");
 }
 
+function mockRuntimeEnv() {
+	const first = vi.fn(async () => ({
+		endpoint_url: "https://runner.example.test",
+		token_plaintext: "runner-token",
+		token_ciphertext: null,
+		token_dek_wrapped: null,
+		token_iv: null,
+	}));
+	const bind = vi.fn(() => ({ first }));
+	const prepare = vi.fn(() => ({ bind }));
+	return {
+		env: { DB: { prepare } as unknown as D1Database },
+		prepare,
+		bind,
+		first,
+	};
+}
+
 describe("storage tools", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
 	it("create_collection + insert_record + query_records round-trip", async () => {
 		const engine = makeEngine();
 
@@ -162,5 +184,88 @@ describe("storage tools", () => {
 		);
 		// Required is soft — succeeds, field just omitted
 		expect(result.success).toBe(true);
+	});
+
+	it("creates job application task with caller-provided candidate details", async () => {
+		const engine = makeEngine();
+		const runtime = mockRuntimeEnv();
+		const fetchMock = vi.fn(async () => new Response(
+			JSON.stringify({ id: "task_123", status: "needs_approval" }),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await executeStorageTool(
+			{
+				name: "submit_job_application",
+				input: {
+					url: "https://example.com/jobs/1",
+					resume_path: "/Users/serge-ivo/Downloads/Rafia Sarfaraz Mobile Developer CV.pdf",
+					full_name: "Rafia Sarfaraz",
+					email: "rafia@example.com",
+					phone: "0585421626",
+					location: "Dubai, UAE",
+					linkedin: "https://linkedin.com/in/rafia",
+					work_authorization: "Requires sponsorship",
+					cover_note: "Interested in the role.",
+				},
+			},
+			engine,
+			{ env: runtime.env, agentId: "instance-1", userId: "user-1" },
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.content).toContain("task_123");
+		expect(result.content).toContain("has not submitted");
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock).toHaveBeenCalledWith("https://runner.example.test/tasks", expect.any(Object));
+
+		const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(init.headers).toMatchObject({
+			Authorization: "Bearer runner-token",
+			"X-PAGS-Instance-Id": "instance-1",
+		});
+		const body = JSON.parse(String(init.body));
+		expect(body).toEqual({
+			type: "job.apply_authenticated",
+			input: {
+				url: "https://example.com/jobs/1",
+				resumePath: "/Users/serge-ivo/Downloads/Rafia Sarfaraz Mobile Developer CV.pdf",
+				candidate: {
+					fullName: "Rafia Sarfaraz",
+					email: "rafia@example.com",
+					phone: "0585421626",
+					location: "Dubai, UAE",
+					linkedin: "https://linkedin.com/in/rafia",
+					workAuthorization: "Requires sponsorship",
+				},
+				coverNote: "Interested in the role.",
+			},
+		});
+		expect(JSON.stringify(body)).not.toContain("Sergey Ivochkin");
+	});
+
+	it("does not create job application task without local resume path", async () => {
+		const engine = makeEngine();
+		const runtime = mockRuntimeEnv();
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await executeStorageTool(
+			{
+				name: "submit_job_application",
+				input: {
+					url: "https://example.com/jobs/1",
+					full_name: "Rafia Sarfaraz",
+					email: "rafia@example.com",
+				},
+			},
+			engine,
+			{ env: runtime.env, agentId: "instance-1", userId: "user-1" },
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.content).toContain("resume_path required");
+		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
