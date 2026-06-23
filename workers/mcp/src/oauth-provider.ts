@@ -1,6 +1,6 @@
 import { MCP_SCOPES, parseScopes } from "./safety.js";
 
-const AUTH_IN_FLIGHT_COOKIE = "pags_mcp_oauth_inflight";
+type AuthProvider = "github" | "google";
 
 export interface OAuthConfig {
 	issuer: string;
@@ -115,15 +115,6 @@ function json(data: unknown, status = 200): Response {
 	});
 }
 
-function cookieValue(request: Request, name: string): string | null {
-	const raw = request.headers.get("Cookie") ?? "";
-	for (const part of raw.split(";")) {
-		const [k, ...v] = part.trim().split("=");
-		if (k === name) return v.join("=") || "";
-	}
-	return null;
-}
-
 function escapeHtml(value: string): string {
 	return value.replace(/[&<>"']/g, (ch) => ({
 		"&": "&amp;",
@@ -134,11 +125,10 @@ function escapeHtml(value: string): string {
 	})[ch] || ch);
 }
 
-function authAlreadyInProgress(): Response {
-	return new Response(
-		"<!doctype html><title>ProAgentStore sign-in</title><p>ProAgentStore MCP sign-in is already in progress in another tab. Complete that sign-in, then return to your MCP client.</p>",
-		{ headers: { "Content-Type": "text/html; charset=utf-8" } },
-	);
+function startEndpointFor(config: OAuthConfig, provider: AuthProvider): string {
+	const base = config.authStart.replace(/\/(?:github|google)\/start$/, "");
+	if (base === config.authStart) return config.authStart;
+	return `${base}/${provider}/start`;
 }
 
 async function register(request: Request, config: OAuthConfig): Promise<Response> {
@@ -193,7 +183,6 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
 	if (codeChallengeMethod && codeChallengeMethod !== "S256") {
 		return new Response("only S256 is supported", { status: 400 });
 	}
-	if (cookieValue(request, AUTH_IN_FLIGHT_COOKIE)) return authAlreadyInProgress();
 
 	const clientRaw = await config.kv.get(`client:${clientId}`);
 	if (!clientRaw) return new Response("invalid client_id", { status: 400 });
@@ -209,8 +198,12 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
 		{ expirationTtl: 600 },
 	);
 
-	const continueUrl = new URL("/authorize/continue", config.issuer);
-	continueUrl.searchParams.set("nonce", nonce);
+	const continueWith = (provider: AuthProvider): string => {
+		const continueUrl = new URL("/authorize/continue", config.issuer);
+		continueUrl.searchParams.set("nonce", nonce);
+		continueUrl.searchParams.set("provider", provider);
+		return escapeHtml(continueUrl.toString());
+	};
 	const clientName = client.client_name ? escapeHtml(client.client_name) : "your MCP client";
 	return new Response(
 		`<!doctype html>
@@ -224,21 +217,26 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
     main{max-width:440px;padding:32px;border:1px solid #e5e7eb;border-radius:12px;background:white;box-shadow:0 12px 32px rgba(15,23,42,.08)}
     h1{font-size:22px;margin:0 0 12px}
     p{line-height:1.5;margin:0 0 20px;color:#374151}
-    a{display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:8px;background:#7c3aed;color:white;text-decoration:none;font-weight:700}
+    .actions{display:flex;flex-direction:column;gap:12px}
+    a{display:inline-flex;align-items:center;justify-content:center;padding:10px 16px;border-radius:8px;text-decoration:none;font-weight:700;border:1px solid transparent}
+    a.github{background:#111827;color:white}
+    a.google{background:white;color:#111827;border-color:#d1d5db}
   </style>
 </head>
 <body>
   <main>
     <h1>Connect ProAgentStore MCP</h1>
     <p>${clientName} wants to use ProAgentStore MCP tools as your account.</p>
-    <a href="${escapeHtml(continueUrl.toString())}" autofocus>Continue with GitHub</a>
+    <div class="actions">
+      <a class="github" href="${continueWith("github")}" autofocus>Continue with GitHub</a>
+      <a class="google" href="${continueWith("google")}">Continue with Google</a>
+    </div>
   </main>
 </body>
 </html>`,
 		{
 			headers: {
 				"Content-Type": "text/html; charset=utf-8",
-				"Set-Cookie": `${AUTH_IN_FLIGHT_COOKIE}=1; Max-Age=120; Path=/; Secure; HttpOnly; SameSite=Lax`,
 			},
 		},
 	);
@@ -251,7 +249,8 @@ async function continueAuthorize(request: Request, config: OAuthConfig): Promise
 	const reqRaw = await config.kv.get(`authreq:${nonce}`);
 	if (!reqRaw) return new Response("invalid or expired nonce", { status: 400 });
 
-	const authUrl = new URL(config.authStart);
+	const provider: AuthProvider = url.searchParams.get("provider") === "google" ? "google" : "github";
+	const authUrl = new URL(startEndpointFor(config, provider));
 	authUrl.searchParams.set("response_mode", "query");
 	authUrl.searchParams.set("app_id", "pags-mcp");
 	const callbackUrl = new URL("/oauth/callback", config.issuer);
@@ -332,7 +331,6 @@ async function oauthCallback(request: Request, config: OAuthConfig): Promise<Res
 		status: 302,
 		headers: {
 			Location: redirect.toString(),
-			"Set-Cookie": `${AUTH_IN_FLIGHT_COOKIE}=; Max-Age=0; Path=/; Secure; HttpOnly; SameSite=Lax`,
 		},
 	});
 }
