@@ -90,6 +90,16 @@ describe("LocalRunner job.apply_basic e2e", () => {
 		const data = handoff?.data as { challengeType?: string; screenshotBase64?: string };
 		expect(data.challengeType).toBe("cloudflare-turnstile");
 		expect(data.screenshotBase64).toMatch(/^data:image\/jpeg;base64,/);
+
+		// Live remote-control transport: a takeover session is registered, a live
+		// frame is available, and input is relayed into the real page via CDP.
+		expect(runner.listTakeovers()).toContain(task.id);
+		const frame = await runner.takeoverFrame(task.id);
+		expect(frame).toMatch(/^data:image\/jpeg;base64,/);
+		await runner.takeoverInput(task.id, { type: "move", x: 20, y: 20 });
+		await runner.takeoverInput(task.id, { type: "click", x: 20, y: 20 });
+		await runner.endTakeover(task.id);
+		expect(runner.listTakeovers()).not.toContain(task.id);
 	}, 60_000);
 
 	it("fails honestly (no false success) when a required field can't be filled", async () => {

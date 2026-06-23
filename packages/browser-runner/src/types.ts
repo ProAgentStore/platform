@@ -63,3 +63,12 @@ export interface CreateTaskRequest {
 	requiresApproval?: boolean;
 	approvalPrompt?: string;
 }
+
+/** A remote-control input event relayed to a human-takeover session. */
+export interface TakeoverInput {
+	type: "move" | "click" | "key" | "text";
+	x?: number;
+	y?: number;
+	key?: string;
+	text?: string;
+}

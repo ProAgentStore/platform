@@ -3,13 +3,14 @@ import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BrowserContext, Page } from "playwright";
+import type { BrowserContext, CDPSession, Page } from "playwright";
 import { RunnerStore } from "./store.js";
 import type {
 	CreateTaskRequest,
 	RunnerCapability,
 	RunnerConfig,
 	RunnerTask,
+	TakeoverInput,
 } from "./types.js";
 
 const CAPABILITIES: RunnerCapability[] = [
@@ -84,6 +85,8 @@ export class LocalRunner {
 	private browserContext: BrowserContext | null = null;
 	private chromiumInstallChecked = false;
 	readonly store: RunnerStore;
+	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
+	private takeovers = new Map<string, { page: Page; cdp?: CDPSession }>();
 
 	constructor(readonly config: RunnerConfig) {
 		mkdirSync(config.dataDir, { recursive: true });
@@ -226,10 +229,67 @@ export class LocalRunner {
 			url: page.url(),
 		});
 		const screenshotBase64 = await captureScreenshotDataUrl(page);
+		// Keep this page alive and register a remote-control session so a human
+		// can view the screen and solve the challenge from the PAGS console.
+		this.takeovers.set(task.id, { page });
 		throw new HumanHandoffError(
 			`Human verification required (${challenge}). A person must take over to complete and submit this application.`,
 			{ reason: "challenge", challengeType: challenge, url: page.url(), attempts: 1, screenshotBase64 },
 		);
+	}
+
+	/** Active human-takeover task ids (for status/discovery). */
+	listTakeovers(): string[] {
+		return [...this.takeovers.keys()];
+	}
+
+	private requireTakeover(taskId: string): { page: Page; cdp?: CDPSession } {
+		const session = this.takeovers.get(taskId);
+		if (!session) {
+			throw new RunnerInputError("No active human-takeover session for this task");
+		}
+		return session;
+	}
+
+	/** A current JPEG frame of the taken-over page, as a data URL (the live screen). */
+	async takeoverFrame(taskId: string): Promise<string> {
+		const session = this.requireTakeover(taskId);
+		const buf = await session.page.screenshot({ type: "jpeg", quality: 55 });
+		return `data:image/jpeg;base64,${buf.toString("base64")}`;
+	}
+
+	/** Relay a human's mouse/keyboard input into the real page via CDP. */
+	async takeoverInput(taskId: string, input: TakeoverInput): Promise<void> {
+		const session = this.requireTakeover(taskId);
+		if (!session.cdp) {
+			session.cdp = await session.page.context().newCDPSession(session.page);
+		}
+		const cdp = session.cdp;
+		const x = input.x ?? 0;
+		const y = input.y ?? 0;
+		switch (input.type) {
+			case "move":
+				await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+				return;
+			case "click":
+				await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+				await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+				return;
+			case "text":
+				await cdp.send("Input.insertText", { text: input.text ?? "" });
+				return;
+			case "key":
+				await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: input.key ?? "" });
+				await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: input.key ?? "" });
+				return;
+		}
+	}
+
+	/** End a takeover session (human finished or gave up). */
+	async endTakeover(taskId: string): Promise<void> {
+		const session = this.takeovers.get(taskId);
+		if (session?.cdp) await session.cdp.detach().catch(() => undefined);
+		this.takeovers.delete(taskId);
 	}
 
 	private async execute(task: RunnerTask): Promise<unknown> {

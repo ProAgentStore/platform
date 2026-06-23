@@ -6,7 +6,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { URL } from "node:url";
 import { LocalRunner, RunnerInputError } from "./runner.js";
-import type { CreateTaskRequest, RunnerConfig } from "./types.js";
+import type { CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -104,6 +104,26 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "GET" && path === "/events") {
 		const limit = clampLimit(url.searchParams.get("limit"), 100, 500);
 		return json(res, 200, { events: runner.store.listEvents(limit) });
+	}
+
+	// ── Human takeover (remote view + control) ──────────────────────────────
+	if (req.method === "GET" && path === "/takeover") {
+		return json(res, 200, { takeovers: runner.listTakeovers() });
+	}
+	const frameMatch = path.match(/^\/takeover\/([^/]+)\/frame$/);
+	if (req.method === "GET" && frameMatch) {
+		return json(res, 200, { frame: await runner.takeoverFrame(frameMatch[1]) });
+	}
+	const inputMatch = path.match(/^\/takeover\/([^/]+)\/input$/);
+	if (req.method === "POST" && inputMatch) {
+		const body = await readJson<TakeoverInput>(req);
+		await runner.takeoverInput(inputMatch[1], body);
+		return json(res, 200, { ok: true });
+	}
+	const endMatch = path.match(/^\/takeover\/([^/]+)\/end$/);
+	if (req.method === "POST" && endMatch) {
+		await runner.endTakeover(endMatch[1]);
+		return json(res, 200, { ok: true });
 	}
 
 	return json(res, 404, { error: "Not found" });
