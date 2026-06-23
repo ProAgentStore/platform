@@ -21,6 +21,13 @@
         empty: 'No task is running right now.',
       },
       {
+        id: 'needs_human',
+        title: 'Needs you',
+        color: '#f59e0b',
+        statuses: ['needs_human'],
+        empty: 'No tasks waiting on you.',
+      },
+      {
         id: 'blocked',
         title: 'Blocked',
         color: 'var(--red)',
@@ -185,6 +192,65 @@
       });
     }
 
+    // Live Browser: remote view + control of a paused (needs_human) task, so the
+    // user can solve a CAPTCHA / human challenge the agent can't.
+    function openTakeover(taskId) {
+      const inst = currentInstance && currentInstance.id;
+      if (!inst) return;
+      const overlay = document.createElement('div');
+      overlay.id = 'takeover-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.86);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px';
+      overlay.innerHTML = `
+        <div style="color:#fff;font-size:0.9rem;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center">
+          <span>🖥 Live browser — solve the challenge, then click <b>Done</b></span>
+          <span id="takeover-status" style="color:#9ca3af;font-size:0.78rem">connecting…</span>
+        </div>
+        <img id="takeover-frame" alt="live browser" style="max-width:96vw;max-height:78vh;border:2px solid #f59e0b;border-radius:8px;cursor:crosshair;background:#111" />
+        <div style="display:flex;gap:8px">
+          <button id="takeover-done" class="btn btn-primary btn-sm">Done — finish</button>
+          <button id="takeover-close" class="btn btn-outline btn-sm" style="color:#fff;border-color:#555">Close</button>
+        </div>`;
+      document.body.appendChild(overlay);
+      const img = overlay.querySelector('#takeover-frame');
+      const statusEl = overlay.querySelector('#takeover-status');
+      let alive = true;
+
+      async function poll() {
+        while (alive) {
+          try {
+            const data = await api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/frame`);
+            if (data && data.frame) { img.src = data.frame; statusEl.textContent = 'live'; }
+          } catch (e) { statusEl.textContent = 'frame error'; }
+          await new Promise(r => setTimeout(r, 600));
+        }
+      }
+      function sendInput(payload) {
+        api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/input`, { method: 'POST', body: JSON.stringify(payload) }).catch(() => {});
+      }
+      function toPageCoords(ev) {
+        const rect = img.getBoundingClientRect();
+        const sx = img.naturalWidth ? img.naturalWidth / rect.width : 1;
+        const sy = img.naturalHeight ? img.naturalHeight / rect.height : 1;
+        return { x: Math.round((ev.clientX - rect.left) * sx), y: Math.round((ev.clientY - rect.top) * sy) };
+      }
+      img.addEventListener('click', (ev) => { const c = toPageCoords(ev); sendInput({ type: 'click', x: c.x, y: c.y }); });
+      function onKey(ev) {
+        if (!alive) return;
+        if (ev.key && ev.key.length === 1) sendInput({ type: 'text', text: ev.key });
+        else if (ev.key) sendInput({ type: 'key', key: ev.key });
+        ev.preventDefault();
+      }
+      document.addEventListener('keydown', onKey);
+      function teardown() { alive = false; document.removeEventListener('keydown', onKey); overlay.remove(); }
+      overlay.querySelector('#takeover-close').addEventListener('click', teardown);
+      overlay.querySelector('#takeover-done').addEventListener('click', async () => {
+        await api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/end`, { method: 'POST' }).catch(() => {});
+        teardown();
+        loadUnifiedBoard();
+      });
+      poll();
+    }
+
     function runtimeTaskCard(task) {
       const card = document.createElement('article');
       card.className = 'kanban-card';
@@ -199,6 +265,9 @@
       const cancellable = ['queued', 'running', 'needs_approval'].includes(task.status)
         ? `<button type="button" class="btn btn-outline btn-sm" data-task-action="cancel" data-task-id="${esc(task.id)}">Cancel</button>`
         : '';
+      const takeover = task.status === 'needs_human'
+        ? `<button type="button" class="btn btn-primary btn-sm" data-task-action="takeover" data-task-id="${esc(task.id)}">🖥 Take over</button>`
+        : '';
       card.innerHTML = `
         <h3>${esc(task.type || 'task')}</h3>
         <p>${esc(task.approval?.prompt || task.id)}</p>
@@ -209,10 +278,11 @@
         </div>
         ${error}
         ${output ? `<div style="font-size:0.72rem;color:var(--muted);line-height:1.45;margin-top:0.45rem;overflow-wrap:anywhere">${esc(output)}${output.length >= 180 ? '...' : ''}</div>` : ''}
-        ${approval || cancellable ? `<div style="display:flex;gap:0.4rem;margin-top:0.65rem;flex-wrap:wrap">${approval}${cancellable}</div>` : ''}`;
+        ${approval || cancellable || takeover ? `<div style="display:flex;gap:0.4rem;margin-top:0.65rem;flex-wrap:wrap">${takeover}${approval}${cancellable}</div>` : ''}`;
       card.querySelectorAll('[data-task-action]').forEach(button => {
         button.addEventListener('click', async (event) => {
           event.stopPropagation();
+          if (button.dataset.taskAction === 'takeover') { openTakeover(button.dataset.taskId); return; }
           await handleRuntimeTaskAction(button.dataset.taskId, button.dataset.taskAction, button);
         });
       });
