@@ -121,17 +121,68 @@ describe("handleOAuthRoute", () => {
 		);
 
 		expect(res?.status).toBe(200);
-			expect(res?.headers.get("Set-Cookie")).toContain(
-				"pags_mcp_oauth_inflight=1",
-			);
 			if (!res) throw new Error("Expected OAuth response");
+			// The in-flight cookie that used to deadlock retries is gone.
+			expect(res.headers.get("Set-Cookie")).toBeNull();
 			const html = await res.text();
 		expect(html).toContain("Connect ProAgentStore MCP");
 		expect(html).toContain("Codex wants to use ProAgentStore MCP tools");
 		expect(html).toContain("/authorize/continue?nonce=");
+		// Both providers are offered.
+		expect(html).toContain("provider=github");
+		expect(html).toContain("provider=google");
 	});
 
-	it("redirects to FAS OAuth after the user continues", async () => {
+	it("redirects to FAS GitHub OAuth after the user continues", async () => {
+		const kv = makeKv({
+			"authreq:nonce-1": JSON.stringify({
+				clientId: "client-1",
+				redirectUri: "http://127.0.0.1:9876/callback",
+				codeChallenge: "abc",
+				state: null,
+			}),
+		});
+
+		const res = await handleOAuthRoute(
+			new Request(
+				"https://mcp.proagentstore.online/authorize/continue?nonce=nonce-1&provider=github",
+			),
+			config(kv),
+		);
+
+		expect(res?.status).toBe(302);
+		expect(res?.headers.get("Location")).toContain(
+			"https://api.freeappstore.online/v1/auth/github/start",
+		);
+		expect(res?.headers.get("Location")).toContain("app_id=pags-mcp");
+		expect(res?.headers.get("Location")).toContain("response_mode=query");
+	});
+
+	it("redirects to FAS Google OAuth when provider=google", async () => {
+		const kv = makeKv({
+			"authreq:nonce-1": JSON.stringify({
+				clientId: "client-1",
+				redirectUri: "http://127.0.0.1:9876/callback",
+				codeChallenge: "abc",
+				state: null,
+			}),
+		});
+
+		const res = await handleOAuthRoute(
+			new Request(
+				"https://mcp.proagentstore.online/authorize/continue?nonce=nonce-1&provider=google",
+			),
+			config(kv),
+		);
+
+		expect(res?.status).toBe(302);
+		expect(res?.headers.get("Location")).toContain(
+			"https://api.freeappstore.online/v1/auth/google/start",
+		);
+		expect(res?.headers.get("Location")).toContain("app_id=pags-mcp");
+	});
+
+	it("defaults to GitHub when no provider is given", async () => {
 		const kv = makeKv({
 			"authreq:nonce-1": JSON.stringify({
 				clientId: "client-1",
@@ -152,8 +203,6 @@ describe("handleOAuthRoute", () => {
 		expect(res?.headers.get("Location")).toContain(
 			"https://api.freeappstore.online/v1/auth/github/start",
 		);
-		expect(res?.headers.get("Location")).toContain("app_id=pags-mcp");
-		expect(res?.headers.get("Location")).toContain("response_mode=query");
 	});
 
 	it("resolves scoped OAuth access tokens", async () => {
