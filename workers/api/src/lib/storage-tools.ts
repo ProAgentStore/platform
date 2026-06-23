@@ -160,10 +160,24 @@ export const STORAGE_TOOLS: ToolDef[] = [
 			authenticated: { type: "boolean", description: "Use an authenticated application flow when true. Defaults to true." },
 		},
 	},
+	{
+		name: "find_confirmation_link",
+		description: "Search the user's connected Gmail (read-only) for a recent confirmation/verification email and return the action link to open — e.g. to confirm a newly registered account. Only available when the user has connected Gmail and granted this agent email permission.",
+		parameters: {
+			from: { type: "string", description: "Sender to filter by, e.g. a domain like 'coles' or 'noreply@coles.com.au'" },
+			subject: { type: "string", description: "Words expected in the subject, e.g. 'confirm your account'" },
+			within_days: { type: "number", description: "How many days back to search (1-7, default 1)" },
+		},
+	},
 ];
 
 export interface StorageToolContext {
-	env?: { DB: D1Database; KEY_ENCRYPTION_KEY?: string };
+	env?: {
+		DB: D1Database;
+		KEY_ENCRYPTION_KEY?: string;
+		GOOGLE_CLIENT_ID?: string;
+		GOOGLE_CLIENT_SECRET?: string;
+	};
 	agentId?: string;
 	userId?: string;
 }
@@ -444,6 +458,74 @@ export async function executeStorageTool(
 					call.name,
 					`Browser task created: ${task.id ?? "unknown"} (status: ${task.status ?? "unknown"}). The task is queued and waiting for approval — this has not submitted the application yet. Do NOT call submit_job_application again for this job; the task already exists. Do not mark the application record submitted until this runner task completes successfully.${approval}`,
 				);
+			}
+
+			case "find_confirmation_link": {
+				if (!ctx?.env || !ctx.userId) {
+					return fail(call.name, "Email access requires an authenticated user context.");
+				}
+				if (!ctx.env.KEY_ENCRYPTION_KEY) {
+					return fail(call.name, "Key encryption is not configured on this deployment.");
+				}
+				// Read the encrypted Gmail refresh token from the user's vault.
+				const row = await ctx.env.DB.prepare(
+					"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
+				)
+					.bind(ctx.userId)
+					.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+				if (!row) {
+					return fail(
+						call.name,
+						"Gmail is not connected. Ask the user to connect Gmail in the agent's settings before retrying.",
+					);
+				}
+				const { decryptKey } = await import("./crypto.js");
+				const {
+					mintGmailAccessToken,
+					findMatchingMessage,
+					rankConfirmationLinks,
+					buildQuery,
+					GmailError,
+				} = await import("./gmail.js");
+				try {
+					const refreshToken = await decryptKey(
+						new Uint8Array(row.key_ciphertext),
+						new Uint8Array(row.dek_wrapped),
+						new Uint8Array(row.iv),
+						ctx.env.KEY_ENCRYPTION_KEY,
+					);
+					const accessToken = await mintGmailAccessToken(ctx.env, refreshToken);
+					const query = buildQuery({
+						from: typeof call.input.from === "string" ? call.input.from : undefined,
+						subject: typeof call.input.subject === "string" ? call.input.subject : undefined,
+						withinDays: typeof call.input.within_days === "number" ? call.input.within_days : undefined,
+					});
+					const match = await findMatchingMessage(accessToken, query);
+					if (!match) {
+						return ok(
+							call.name,
+							`No matching email found yet for query: ${query}. The confirmation email may not have arrived — wait a moment and try again.`,
+						);
+					}
+					const ranked = rankConfirmationLinks(match.links, typeof call.input.from === "string" ? call.input.from : undefined);
+					if (ranked.length === 0) {
+						return ok(
+							call.name,
+							`Found email "${match.subject}" from ${match.from} but it contained no links.`,
+						);
+					}
+					await engine.logEvent("email.confirmation_link_found", ctx.userId, {
+						subject: match.subject,
+						from: match.from,
+					});
+					return ok(
+						call.name,
+						`Found email "${match.subject}" from ${match.from} (${match.date}).\nMost likely confirmation link: ${ranked[0]}\nOther links: ${ranked.slice(1, 4).join(", ") || "none"}\nOpen the confirmation link with a browser.open runner task to complete verification.`,
+					);
+				} catch (err) {
+					if (err instanceof GmailError) return fail(call.name, err.message);
+					throw err;
+				}
 			}
 
 			default:

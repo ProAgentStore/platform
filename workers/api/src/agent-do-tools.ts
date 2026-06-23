@@ -22,10 +22,14 @@ const CORE_TOOLS = new Set([
 	"submit_job_application",
 ]);
 
-export function buildAgentToolDefinitions() {
+export function buildAgentToolDefinitions(opts?: { emailEnabled?: boolean }) {
+	const enabled = new Set(CORE_TOOLS);
+	// Permission-gated tools are only offered to the model when the user granted them.
+	if (opts?.emailEnabled) enabled.add("find_confirmation_link");
+
 	const toolMap = new Map<string, (typeof AGENT_TOOLS)[number]>();
 	for (const t of [...AGENT_TOOLS, ...STORAGE_TOOLS]) {
-		if (CORE_TOOLS.has(t.name)) toolMap.set(t.name, t);
+		if (enabled.has(t.name)) toolMap.set(t.name, t);
 	}
 	return [...toolMap.values()].map((t) => ({
 		type: "function" as const,

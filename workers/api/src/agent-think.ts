@@ -77,7 +77,9 @@ export async function runAgentThink(opts: {
 		return result.response || "";
 	}
 
-	const tools = buildAgentToolDefinitions();
+	const tools = buildAgentToolDefinitions({
+		emailEnabled: state.permissions?.email === true,
+	});
 	const allToolLog: string[] = [];
 	const storageToolNames = storageToolNameSet();
 	const maxToolRounds = 3;

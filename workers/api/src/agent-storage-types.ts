@@ -117,6 +117,7 @@ export interface ActivityEvent {
 		| "cron.triggered"
 		| "webhook.received"
 		| "summary.generated"
+		| "email.confirmation_link_found"
 		| "error";
 	agentId: string;
 	userId?: string;

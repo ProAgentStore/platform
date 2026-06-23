@@ -10,6 +10,7 @@ import { billingRoutes } from "./routes/billing.js";
 import { chatRoutes } from "./routes/chat.js";
 import { instanceRoutes } from "./routes/instances.js";
 import { keysRoutes } from "./routes/keys.js";
+import { emailRoutes } from "./routes/email.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { exportRoutes } from "./routes/export.js";
@@ -70,6 +71,7 @@ app.route("/v1/agents", storageRoutes); // /v1/agents/:id/collections, /files, /
 app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collections, /files, /search, /activity
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
+app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);
 

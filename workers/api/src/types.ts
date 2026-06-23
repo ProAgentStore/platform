@@ -12,6 +12,9 @@ export interface Env {
 	KEY_ENCRYPTION_KEY?: string;
 	STRIPE_SECRET_KEY?: string;
 	STRIPE_WEBHOOK_SECRET?: string;
+	/** Google OAuth client used for the Gmail email-access connection. */
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
 }
 
 export interface SessionPayload {

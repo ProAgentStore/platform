@@ -67,4 +67,11 @@ export interface AgentState {
 	guardrails: Guardrails;
 	welcomeMessage: string; // First message shown to users
 	isPublished: boolean;
+	/** Capabilities the user has explicitly granted this agent. Off by default. */
+	permissions?: AgentPermissions;
+}
+
+export interface AgentPermissions {
+	/** Allow the agent to read the owner's connected Gmail (read-only, scoped). */
+	email?: boolean;
 }

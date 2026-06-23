@@ -600,6 +600,9 @@ export class AgentDO extends DurableObject<Env> {
 		if (updates.guardrails) {
 			state.guardrails = { ...state.guardrails, ...updates.guardrails };
 		}
+		if (updates.permissions) {
+			state.permissions = { ...state.permissions, ...updates.permissions };
+		}
 		state.systemPrompt = buildSystemPrompt(
 			state.name,
 			state.personality,
