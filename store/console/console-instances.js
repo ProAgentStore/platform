@@ -337,6 +337,26 @@
       }
     }
 
+    // Pull any data:image base64 values out of a data object so they render as
+    // real images instead of dumping thousands of base64 chars into the JSON.
+    function extractDataImages(data) {
+      const images = [];
+      const walk = (v) => {
+        if (typeof v === 'string') {
+          if (/^data:image\//.test(v)) { images.push(v); return '[screenshot below]'; }
+          return v;
+        }
+        if (Array.isArray(v)) return v.map(walk);
+        if (v && typeof v === 'object') {
+          const out = {};
+          for (const k of Object.keys(v)) out[k] = walk(v[k]);
+          return out;
+        }
+        return v;
+      };
+      return { images, rest: walk(data) };
+    }
+
     function runtimeDetailField(label, value) {
       return `<div class="runtime-detail-field">
         <div class="runtime-detail-label">${esc(label)}</div>
@@ -366,9 +386,18 @@
       return `<div class="runtime-history">${events.map(event => {
         const createdAt = event.createdAt || event.created_at;
         const data = event.data ?? event.payload ?? event.result;
-        const dataBlock = data === undefined
-          ? ''
-          : `<pre class="runtime-detail-pre" style="margin-top:0.55rem">${esc(safePrettyJson(data))}</pre>`;
+        let dataBlock = '';
+        if (data !== undefined) {
+          const { images, rest } = extractDataImages(data);
+          const imgBlock = images.map(src =>
+            `<img src="${esc(src)}" alt="screenshot" style="display:block;max-width:100%;margin-top:0.55rem;border:1px solid var(--line);border-radius:6px" />`
+          ).join('');
+          const hasRest = rest && (typeof rest !== 'object' || Object.keys(rest).length > 0);
+          const jsonBlock = hasRest
+            ? `<pre class="runtime-detail-pre" style="margin-top:0.55rem">${esc(safePrettyJson(rest))}</pre>`
+            : '';
+          dataBlock = jsonBlock + imgBlock;
+        }
         return `<div class="runtime-history-item">
           <div class="runtime-history-head">
             <span class="runtime-history-type">${esc(event.type || 'event')}</span>
@@ -446,9 +475,13 @@
       const cancellable = ['queued', 'running', 'needs_approval'].includes(task.status)
         ? `<button type="button" class="btn btn-outline btn-sm" data-detail-task-action="cancel" data-task-id="${esc(task.id)}">Cancel</button>`
         : '';
-      actions.innerHTML = `${approval}${cancellable}`;
+      const takeover = task.status === 'needs_human'
+        ? `<button type="button" class="btn btn-primary btn-sm" data-detail-task-action="takeover" data-task-id="${esc(task.id)}">🖥 Take over (live screen)</button>`
+        : '';
+      actions.innerHTML = `${takeover}${approval}${cancellable}`;
       actions.querySelectorAll('[data-detail-task-action]').forEach(button => {
         button.addEventListener('click', async () => {
+          if (button.dataset.detailTaskAction === 'takeover') { openTakeover(button.dataset.taskId); return; }
           await handleRuntimeTaskAction(button.dataset.taskId, button.dataset.detailTaskAction, button);
           closeRuntimeTaskDetail();
         });
