@@ -106,6 +106,21 @@ describe("LocalRunner", () => {
 		expect(task.requiresApproval).toBe(true);
 	});
 
+	it("rejects job application tasks with missing local resume files before approval", () => {
+		expect(() => runner.createTask({
+			type: "job.apply_authenticated",
+			input: {
+				url: "https://example.com/jobs/1",
+				resumePath: "/resumes/test-candidate-resume.pdf",
+				candidate: {
+					fullName: "Test Candidate",
+					email: "candidate@example.com",
+				},
+			},
+		})).toThrow("existing local resumePath");
+		expect(runner.store.listTasks()).toHaveLength(0);
+	});
+
 	it("validates basic job application input", () => {
 		const resumePath = join(dir, "resume.txt");
 		writeFileSync(resumePath, "Resume body");

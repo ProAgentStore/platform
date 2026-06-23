@@ -211,9 +211,9 @@
         ${output ? `<div style="font-size:0.72rem;color:var(--muted);line-height:1.45;margin-top:0.45rem;overflow-wrap:anywhere">${esc(output)}${output.length >= 180 ? '...' : ''}</div>` : ''}
         ${approval || cancellable ? `<div style="display:flex;gap:0.4rem;margin-top:0.65rem;flex-wrap:wrap">${approval}${cancellable}</div>` : ''}`;
       card.querySelectorAll('[data-task-action]').forEach(button => {
-        button.addEventListener('click', (event) => {
+        button.addEventListener('click', async (event) => {
           event.stopPropagation();
-          handleRuntimeTaskAction(button.dataset.taskId, button.dataset.taskAction);
+          await handleRuntimeTaskAction(button.dataset.taskId, button.dataset.taskAction, button);
         });
       });
       card.addEventListener('click', () => openRuntimeTaskDetail(task));
@@ -346,7 +346,7 @@
       actions.innerHTML = `${approval}${cancellable}`;
       actions.querySelectorAll('[data-detail-task-action]').forEach(button => {
         button.addEventListener('click', async () => {
-          await handleRuntimeTaskAction(button.dataset.taskId, button.dataset.detailTaskAction);
+          await handleRuntimeTaskAction(button.dataset.taskId, button.dataset.detailTaskAction, button);
           closeRuntimeTaskDetail();
         });
       });
@@ -376,14 +376,23 @@
       document.getElementById('inst-unified-board').classList.remove('hidden');
     }
 
-    async function handleRuntimeTaskAction(taskId, action) {
+    async function handleRuntimeTaskAction(taskId, action, sourceButton = null) {
       if (!currentInstance || !taskId || !action) return;
       if (action === 'cancel' && !confirm('Cancel this runtime task?')) return;
       const suffix = action === 'approve' ? 'approve' : 'cancel';
+      const originalText = sourceButton?.textContent;
+      if (sourceButton) {
+        sourceButton.disabled = true;
+        sourceButton.textContent = action === 'approve' ? 'Approving...' : 'Cancelling...';
+      }
       try {
         await api(`/v1/instances/${currentInstance.id}/tasks/${encodeURIComponent(taskId)}/${suffix}`, { method: 'POST' });
-        loadInstanceRuntime();
+        await loadInstanceRuntime();
       } catch (e) {
+        if (sourceButton) {
+          sourceButton.disabled = false;
+          sourceButton.textContent = originalText || (action === 'approve' ? 'Approve' : 'Cancel');
+        }
         alert(e.message);
       }
     }
@@ -546,7 +555,13 @@
 
         // Update the board summary
         const summary = document.getElementById('inst-board-summary');
-        if (summary) summary.textContent = `${records.length} application${records.length === 1 ? '' : 's'}`;
+        if (summary) {
+          const applicationText = `${records.length} application${records.length === 1 ? '' : 's'}`;
+          const runtimeText = summary.textContent && !summary.textContent.startsWith('Loading')
+            ? summary.textContent
+            : '';
+          summary.textContent = runtimeText ? `${runtimeText} · ${applicationText}` : applicationText;
+        }
 
         // Group by status
         const grouped = {};

@@ -84,6 +84,7 @@ export class LocalRunner {
 
 	createTask(request: CreateTaskRequest): RunnerTask {
 		const normalized = normalizeCreateTaskRequest(request);
+		validateTaskInput(normalized.type, normalized.input);
 		const now = new Date().toISOString();
 		const requiresApproval =
 			normalized.requiresApproval || APPROVAL_REQUIRED_TASKS.has(normalized.type);
@@ -425,11 +426,11 @@ export class LocalRunner {
 export function normalizeJobApplicationInput(input: Record<string, unknown>): JobApplicationInput {
 	const url = stringValue(input.url);
 	if (!url || !/^https?:\/\//.test(url)) {
-		throw new RunnerInputError("job.apply_basic requires an http(s) url");
+		throw new RunnerInputError("job application requires an http(s) url");
 	}
 	const resumePath = resolve(stringValue(input.resumePath));
 	if (!resumePath || !existsSync(resumePath)) {
-		throw new RunnerInputError("job.apply_basic requires an existing resumePath");
+		throw new RunnerInputError("job application requires an existing local resumePath");
 	}
 	const candidate = isRecord(input.candidate) ? input.candidate : {};
 	const fullName = stringValue(candidate.fullName);
@@ -610,6 +611,16 @@ function normalizeCreateTaskRequest(request: CreateTaskRequest): Required<Create
 			? request.approvalPrompt.trim().slice(0, 500)
 			: "",
 	};
+}
+
+function validateTaskInput(type: string, input: Record<string, unknown>): void {
+	if (type === "job.apply_basic") {
+		normalizeJobApplicationInput(input);
+		return;
+	}
+	if (type === "job.apply_authenticated") {
+		normalizeAuthenticatedJobInput(input);
+	}
 }
 
 export function fileUrl(path: string): string {
