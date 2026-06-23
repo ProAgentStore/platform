@@ -461,6 +461,17 @@ async function fillBasicApplicationForm(
 ): Promise<string[]> {
 	const filled: string[] = [];
 	const candidate = job.candidate;
+
+	// Modern ATS forms (Lever, Greenhouse, Ashby) render their fields client-side
+	// after load. Wait for the form to actually appear before scanning, instead
+	// of failing in a few hundred ms against an empty DOM.
+	await page
+		.waitForSelector('input[type="file"], form input, form textarea', {
+			state: "attached",
+			timeout: 20_000,
+		})
+		.catch(() => undefined);
+
 	const fillSpecs: Array<[string, string | undefined, string[]]> = [
 		["fullName", candidate.fullName, [
 			'input[name="fullName"]',
@@ -515,10 +526,14 @@ async function fillBasicApplicationForm(
 		filled.push("workAuthorization");
 	}
 
+	// The résumé input is often hidden (a styled button proxies it), so wait for
+	// it to be ATTACHED rather than visible — setInputFiles works on hidden inputs.
 	const resumeInput = page.locator(
-		'input[type="file"][name*="resume" i], input[type="file"][name*="cv" i], input[type="file"]',
+		'input[type="file"][name*="resume" i], input[type="file"][name*="cv" i], input[type="file"][accept*="pdf" i], input[type="file"]',
 	).first();
-	if (await resumeInput.count() === 0) {
+	try {
+		await resumeInput.waitFor({ state: "attached", timeout: 15_000 });
+	} catch {
 		throw new Error("No resume upload field found on the application form");
 	}
 	await resumeInput.setInputFiles(job.resumePath);
@@ -569,16 +584,37 @@ async function selectOrFillFirst(
 }
 
 async function submitApplicationForm(page: Page): Promise<void> {
+	const form = page.locator("form").first();
+	if (await form.count() === 0) throw new Error("No application form found to submit");
+
+	// Never report a false success: if native validation would block the submit
+	// (e.g. an unfilled required field, or a required <select> whose options
+	// don't match the candidate's value), surface exactly which fields failed
+	// instead of clicking into a no-op.
+	const invalidFields = await form.evaluate((node) => {
+		const f = node as HTMLFormElement;
+		if (typeof f.checkValidity !== "function" || f.checkValidity()) return [] as string[];
+		return Array.from(f.elements)
+			.filter((el): el is HTMLInputElement => {
+				const candidate = el as Partial<HTMLInputElement>;
+				return typeof candidate.checkValidity === "function" && !candidate.checkValidity();
+			})
+			.map((el) => el.name || el.getAttribute("aria-label") || el.type || "field")
+			.filter(Boolean);
+	});
+	if (Array.isArray(invalidFields) && invalidFields.length > 0) {
+		throw new Error(
+			`Application not submitted — these required fields could not be completed: ${invalidFields.join(", ")}`,
+		);
+	}
+
 	const submit = page.locator(
-		'form button[type="submit"], form input[type="submit"], button:has-text("Submit"), input[type="submit"]',
+		'form button[type="submit"], form input[type="submit"], button:has-text("Submit"), button:has-text("Apply"), input[type="submit"]',
 	).first();
 	if (await submit.count() > 0) {
 		await submit.click({ timeout: 10_000 });
 		return;
 	}
-
-	const form = page.locator("form").first();
-	if (await form.count() === 0) throw new Error("No application form found to submit");
 	await form.evaluate((node) => {
 		const htmlForm = node as HTMLFormElement;
 		if (typeof htmlForm.requestSubmit === "function") htmlForm.requestSubmit();
