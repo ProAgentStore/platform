@@ -251,11 +251,22 @@ export class LocalRunner {
 		return session;
 	}
 
-	/** A current JPEG frame of the taken-over page, as a data URL (the live screen). */
-	async takeoverFrame(taskId: string): Promise<string> {
+	/**
+	 * A current JPEG frame of the taken-over page plus the page's CSS viewport
+	 * size, so the UI can map a click on the (possibly retina-scaled) image back
+	 * to the CSS-pixel coordinates that CDP Input expects.
+	 */
+	async takeoverFrame(taskId: string): Promise<{ frame: string; width: number; height: number }> {
 		const session = this.requireTakeover(taskId);
 		const buf = await session.page.screenshot({ type: "jpeg", quality: 55 });
-		return `data:image/jpeg;base64,${buf.toString("base64")}`;
+		const viewport = await session.page
+			.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+			.catch(() => ({ width: 0, height: 0 }));
+		return {
+			frame: `data:image/jpeg;base64,${buf.toString("base64")}`,
+			width: viewport.width,
+			height: viewport.height,
+		};
 	}
 
 	/** Relay a human's mouse/keyboard input into the real page via CDP. */

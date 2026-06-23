@@ -95,7 +95,9 @@ describe("LocalRunner job.apply_basic e2e", () => {
 		// frame is available, and input is relayed into the real page via CDP.
 		expect(runner.listTakeovers()).toContain(task.id);
 		const frame = await runner.takeoverFrame(task.id);
-		expect(frame).toMatch(/^data:image\/jpeg;base64,/);
+		expect(frame.frame).toMatch(/^data:image\/jpeg;base64,/);
+		expect(frame.width).toBeGreaterThan(0);
+		expect(frame.height).toBeGreaterThan(0);
 		await runner.takeoverInput(task.id, { type: "move", x: 20, y: 20 });
 		await runner.takeoverInput(task.id, { type: "click", x: 20, y: 20 });
 		await runner.endTakeover(task.id);

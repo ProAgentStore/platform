@@ -5,6 +5,9 @@
     let currentRuntimeTasks = [];
     let currentRuntimeEvents = [];
     let currentRuntimeTaskId = null;
+    // Board shows only active tasks (waiting/running/needs you) by default so the
+    // task that needs your attention isn't buried under old runs.
+    let showAllRuntimeTasks = false;
     const INSTANCE_RUNTIME_COLUMNS = [
       {
         id: 'waiting',
@@ -183,13 +186,35 @@
     }
 
     function renderInstanceTaskBoard(tasks) {
+      const activeIds = ['waiting', 'running', 'needs_human'];
+      const cols = showAllRuntimeTasks
+        ? INSTANCE_RUNTIME_COLUMNS
+        : INSTANCE_RUNTIME_COLUMNS.filter(c => activeIds.includes(c.id));
+      const allowed = new Set(cols.flatMap(c => c.statuses));
+      const all = tasks || [];
+      const shown = showAllRuntimeTasks ? all : all.filter(t => allowed.has(t.status));
       renderKanbanBoard({
         boardId: 'inst-unified-board',
-        items: tasks,
-        columns: INSTANCE_RUNTIME_COLUMNS,
+        items: shown,
+        columns: cols,
         renderCard: runtimeTaskCard,
-        columnForItem: task => INSTANCE_RUNTIME_COLUMNS.find(col => col.statuses.includes(task.status)) || INSTANCE_RUNTIME_COLUMNS[0],
+        columnForItem: task => cols.find(col => col.statuses.includes(task.status)) || cols[0],
       });
+      const summary = document.getElementById('inst-board-summary');
+      if (summary) {
+        const prev = summary.querySelector('.rt-history-toggle');
+        if (prev) prev.remove();
+        const hidden = all.length - shown.length;
+        const label = showAllRuntimeTasks ? 'show only active' : (hidden > 0 ? `show history (${hidden})` : '');
+        if (label) {
+          const btn = document.createElement('button');
+          btn.className = 'rt-history-toggle';
+          btn.style.cssText = 'margin-left:8px;background:none;border:none;color:#7c3aed;cursor:pointer;font-size:0.78rem;text-decoration:underline';
+          btn.textContent = label;
+          btn.addEventListener('click', () => { showAllRuntimeTasks = !showAllRuntimeTasks; renderInstanceTaskBoard(currentRuntimeTasks); });
+          summary.appendChild(btn);
+        }
+      }
     }
 
     // Live Browser: remote view + control of a paused (needs_human) task, so the
@@ -214,12 +239,20 @@
       const img = overlay.querySelector('#takeover-frame');
       const statusEl = overlay.querySelector('#takeover-status');
       let alive = true;
+      // CSS viewport of the real page (reported by the runner) — clicks map to
+      // these coordinates, which is what CDP Input expects regardless of DPR.
+      let pageW = 0, pageH = 0;
 
       async function poll() {
         while (alive) {
           try {
             const data = await api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/frame`);
-            if (data && data.frame) { img.src = data.frame; statusEl.textContent = 'live'; }
+            if (data && data.frame) {
+              img.src = data.frame;
+              if (data.width) pageW = data.width;
+              if (data.height) pageH = data.height;
+              statusEl.textContent = 'live';
+            }
           } catch (e) { statusEl.textContent = 'frame error'; }
           await new Promise(r => setTimeout(r, 600));
         }
@@ -229,9 +262,9 @@
       }
       function toPageCoords(ev) {
         const rect = img.getBoundingClientRect();
-        const sx = img.naturalWidth ? img.naturalWidth / rect.width : 1;
-        const sy = img.naturalHeight ? img.naturalHeight / rect.height : 1;
-        return { x: Math.round((ev.clientX - rect.left) * sx), y: Math.round((ev.clientY - rect.top) * sy) };
+        const w = pageW || img.naturalWidth || rect.width;
+        const h = pageH || img.naturalHeight || rect.height;
+        return { x: Math.round((ev.clientX - rect.left) / rect.width * w), y: Math.round((ev.clientY - rect.top) / rect.height * h) };
       }
       img.addEventListener('click', (ev) => { const c = toPageCoords(ev); sendInput({ type: 'click', x: c.x, y: c.y }); });
       function onKey(ev) {

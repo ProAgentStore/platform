@@ -112,7 +112,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	const frameMatch = path.match(/^\/takeover\/([^/]+)\/frame$/);
 	if (req.method === "GET" && frameMatch) {
-		return json(res, 200, { frame: await runner.takeoverFrame(frameMatch[1]) });
+		return json(res, 200, await runner.takeoverFrame(frameMatch[1]));
 	}
 	const inputMatch = path.match(/^\/takeover\/([^/]+)\/input$/);
 	if (req.method === "POST" && inputMatch) {
