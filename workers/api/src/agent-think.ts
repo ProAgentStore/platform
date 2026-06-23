@@ -82,7 +82,9 @@ export async function runAgentThink(opts: {
 	});
 	const allToolLog: string[] = [];
 	const storageToolNames = storageToolNameSet();
-	const maxToolRounds = 3;
+	// Multi-step tasks (e.g. read goal + list files + fetch job page, THEN
+	// submit the application) need headroom; 3 rounds ran out before acting.
+	const maxToolRounds = 8;
 	// Guard against the model re-issuing the same tool call across rounds, which
 	// otherwise creates duplicate side effects (e.g. three identical job tasks).
 	const executedCalls = new Set<string>();
