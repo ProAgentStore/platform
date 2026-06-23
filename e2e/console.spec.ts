@@ -10,6 +10,7 @@ interface OpsMockOptions {
 	runtime?: Record<string, unknown> | null;
 	runtimeTasks?: Array<Record<string, unknown>>;
 	runtimeEvents?: Array<Record<string, unknown>>;
+	appRecords?: Array<Record<string, unknown>>;
 	instanceChatStatus?: number;
 	instanceChatBody?: Record<string, unknown>;
 	boardConfig?: Record<string, unknown> | null;
@@ -268,6 +269,9 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				],
 			});
 		}
+		if (path === "/v1/instances/inst-1/collections/applications/records") {
+			return json({ records: options.appRecords ?? [] });
+		}
 		if (path === "/v1/instances/inst-1/tasks/task-approval/approve" && method === "POST") {
 			approvedTaskId = "task-approval";
 			return json({ id: "task-approval", status: "running" });
@@ -461,7 +465,21 @@ test.describe("ProAgentStore Console smoke", () => {
 	test("signed-in user can inspect instance runtime tasks as a board", async ({
 		page,
 	}) => {
-		const mock = await mockSignedInConsole(page);
+		const mock = await mockSignedInConsole(page, {
+			appRecords: [
+				{
+					id: "app-1",
+					createdAt: "2026-06-20T02:00:00Z",
+					updatedAt: "2026-06-20T02:00:00Z",
+					data: {
+						company: "Acme",
+						role: "Engineer",
+						status: "queued",
+						url: "https://example.com/jobs/1",
+					},
+				},
+			],
+		});
 		await page.goto("/");
 
 		await page.getByRole("button", { name: "My Instances (Client)" }).click();

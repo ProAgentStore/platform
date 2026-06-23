@@ -557,18 +557,22 @@
           grouped[status].push(r);
         }
 
-        // Add application columns after the runtime columns
-        let html = '';
+        // Add application columns after the runtime columns without rewriting the
+        // existing runtime task cards; those cards own their click listeners.
         for (const s of APP_STATUSES) {
           const items = grouped[s.key] || [];
-          html += `<div class="kanban-column">
+          const column = document.createElement('section');
+          column.className = 'kanban-column';
+          column.setAttribute('aria-label', `${s.label} applications column`);
+          column.innerHTML = `
             <div class="kanban-header">
               <div class="kanban-title"><span class="kanban-dot ${s.dot}"></span>${esc(s.label)}</div>
               <span class="kanban-count">${items.length}</span>
             </div>
-            <div class="kanban-items">`;
+            <div class="kanban-items"></div>`;
+          const list = column.querySelector('.kanban-items');
           if (items.length === 0) {
-            html += '<div class="kanban-empty">No applications</div>';
+            list.innerHTML = '<div class="kanban-empty">No applications</div>';
           }
           for (const r of items) {
             const d = r.data;
@@ -576,18 +580,30 @@
             const role = d.role || d.job_title || d.Role || '?';
             const url = d.url || '';
             const date = r.createdAt ? r.createdAt.split('T')[0] : '';
-            html += `<div class="kanban-card" onclick="showApplicationDetail('${esc(r.id)}')">
+            const card = document.createElement('article');
+            card.className = 'kanban-card';
+            card.tabIndex = 0;
+            card.setAttribute('role', 'button');
+            card.setAttribute('aria-label', `Open application ${company} ${role}`);
+            card.innerHTML = `
               <h3>${esc(company)}</h3>
               <p>${esc(role)}</p>
               <div class="kanban-card-meta">
                 ${date ? `<span class="tag tag-cat">${esc(date)}</span>` : ''}
                 ${url ? `<a href="${escAttr(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="tag tag-cat" style="text-decoration:underline">Link</a>` : ''}
               </div>
-            </div>`;
+            `;
+            card.addEventListener('click', () => showApplicationDetail(r.id));
+            card.addEventListener('keydown', (event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                showApplicationDetail(r.id);
+              }
+            });
+            list.appendChild(card);
           }
-          html += '</div></div>';
+          board.appendChild(column);
         }
-        board.innerHTML += html;
       } catch (e) {
         board.innerHTML = `<p style="color:var(--red);padding:1rem">Failed to load applications: ${esc(e.message)}</p>`;
       }
