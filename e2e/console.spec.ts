@@ -203,6 +203,7 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 					instanceId: "inst-1",
 					status: "online",
 					placement: "local",
+					endpointUrl: "https://runner.example.com",
 				},
 			});
 		}
@@ -502,6 +503,29 @@ test.describe("ProAgentStore Console smoke", () => {
 
 		await page.getByRole("button", { name: "Approve" }).click();
 		expect(mock.approvedTaskId).toBe("task-approval");
+	});
+
+	test("signed-in user sees connected runner status in the instance top nav", async ({
+		page,
+	}) => {
+		await mockSignedInConsole(page, {
+			runtime: {
+				instanceId: "inst-1",
+				status: "online",
+				placement: "local",
+				endpointUrl: "https://runner.example.com",
+			},
+		});
+		await page.goto("/");
+
+		await page.getByRole("button", { name: "My Instances (Client)" }).click();
+		await page.getByText("Job Application Assistant").click();
+
+		await expect(page.locator("#runtime-status-badge")).toHaveText("● Runner online");
+		await expect(page.locator("#runtime-status-badge")).toHaveAttribute(
+			"title",
+			"https://runner.example.com",
+		);
 	});
 
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {

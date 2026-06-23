@@ -798,17 +798,21 @@
       try {
         const data = await api(`/v1/instances/${currentInstance.id}/runtime`);
         const rt = data.runtime;
-        if (rt?.endpoint_url) {
-          badge.textContent = '● Runner connected';
-          badge.style.background = 'rgba(34,197,94,0.15)';
-          badge.style.color = 'var(--green)';
+        if (rt?.endpointUrl || rt?.endpoint_url) {
+          const online = rt.status === 'online';
+          badge.textContent = online ? '● Runner online' : '● Runner registered';
+          badge.title = rt.endpointUrl || rt.endpoint_url;
+          badge.style.background = online ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.12)';
+          badge.style.color = online ? 'var(--green)' : 'var(--yellow)';
         } else {
           badge.textContent = '○ No runner';
+          badge.title = '';
           badge.style.background = 'var(--line)';
           badge.style.color = 'var(--muted)';
         }
       } catch {
         badge.textContent = '○ No runner';
+        badge.title = '';
         badge.style.background = 'var(--line)';
         badge.style.color = 'var(--muted)';
       }
