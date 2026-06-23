@@ -57,6 +57,9 @@ export interface FileMeta {
 	size: number;
 	tags: string[];
 	r2Key: string;
+	extractionStatus?: "none" | "extracted" | "unsupported" | "failed";
+	extractedTextLength?: number;
+	extractionError?: string;
 	createdAt: string;
 	updatedAt: string;
 }

@@ -480,11 +480,19 @@
           <div class="memory-item">
             <div style="flex:1">
               <div class="key">${esc(f.name)} <span class="type">${esc(f.mimeType)}</span></div>
-              <div class="content">${esc(f.size)} bytes${f.tags?.length ? ' &middot; ' + f.tags.map(t => esc(t)).join(', ') : ''} &middot; ${esc(f.createdAt?.split('T')[0] || '')}</div>
+              <div class="content">${esc(f.size)} bytes${f.tags?.length ? ' &middot; ' + f.tags.map(t => esc(t)).join(', ') : ''} &middot; ${esc(f.createdAt?.split('T')[0] || '')}${fileExtractionLabel(f)}</div>
             </div>
           </div>
         `).join('');
       } catch { list.innerHTML = ''; empty.classList.remove('hidden'); }
+    }
+
+    function fileExtractionLabel(file) {
+      if (!file?.extractionStatus) return '';
+      if (file.extractionStatus === 'extracted') return ` &middot; indexed ${Number(file.extractedTextLength || 0).toLocaleString()} chars`;
+      if (file.extractionStatus === 'unsupported') return ' &middot; stored, text extraction unavailable';
+      if (file.extractionStatus === 'failed') return ' &middot; stored, text extraction failed';
+      return ' &middot; stored';
     }
 
     async function sendKbChatMessage() {
@@ -922,3 +930,57 @@
       loadInstanceKnowledge(); input.value = '';
     }
 
+    async function uploadInstFile(input) {
+      const file = input.files?.[0]; if (!file || !currentInstance) return;
+      const status = document.getElementById('inst-file-upload-status');
+      status.textContent = `Uploading ${file.name}...`;
+      status.classList.remove('hidden');
+      try {
+        const contentBase64 = await fileToBase64(file);
+        const uploaded = await api(`/v1/instances/${currentInstance.id}/files`, {
+          method: 'POST',
+          body: JSON.stringify({
+            name: file.name,
+            contentBase64,
+            mime_type: file.type || guessFileMimeType(file.name),
+            path: `/${file.name}`,
+            tags: [],
+            extract_text: true,
+          }),
+        });
+        const suffix = uploaded.extractionStatus === 'extracted'
+          ? ` Indexed ${Number(uploaded.extractedTextLength || 0).toLocaleString()} characters.`
+          : uploaded.extractionStatus === 'unsupported'
+            ? ' Stored original. Text extraction is not available for this type.'
+            : uploaded.extractionStatus === 'failed'
+              ? ' Stored original. Text extraction failed.'
+              : ' Stored original.';
+        status.textContent = `Uploaded ${file.name}.${suffix}`;
+        loadKbFiles();
+      } catch (e) {
+        status.textContent = `Upload failed: ${e.message}`;
+      } finally {
+        input.value = '';
+        setTimeout(() => status.classList.add('hidden'), 5000);
+      }
+    }
+
+    function fileToBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+        reader.onerror = () => reject(reader.error || new Error('File read failed'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function guessFileMimeType(name) {
+      const ext = String(name || '').split('.').pop()?.toLowerCase();
+      if (ext === 'pdf') return 'application/pdf';
+      if (ext === 'json') return 'application/json';
+      if (ext === 'csv') return 'text/csv';
+      if (ext === 'md') return 'text/markdown';
+      if (ext === 'html' || ext === 'htm') return 'text/html';
+      if (ext === 'txt') return 'text/plain';
+      return 'application/octet-stream';
+    }

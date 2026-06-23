@@ -12,6 +12,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { AgentStorageEngine } from "./agent-storage.js";
+import { bytesFromBase64 } from "./agent-storage-utils.js";
 import type {
 	AgentMessage,
 	AgentState,
@@ -844,20 +845,26 @@ export class AgentDO extends DurableObject<Env> {
 		const body = await request.json<{
 			name: string;
 			content: string;
+			contentBase64?: string;
 			mime_type?: string;
 			path?: string;
 			tags?: string[];
 			user_id?: string;
+			extract_text?: boolean;
 		}>();
-		if (!body.name || !body.content)
-			return json({ error: "name and content required" }, 400);
+		if (!body.name || (!body.content && !body.contentBase64))
+			return json({ error: "name and content or contentBase64 required" }, 400);
+		const data = body.contentBase64
+			? bytesFromBase64(body.contentBase64).slice().buffer
+			: body.content;
 		const meta = await engine.fileUpload({
 			name: body.name,
 			path: body.path,
 			mimeType: body.mime_type || "text/plain",
-			data: body.content,
+			data,
 			userId: body.user_id,
 			tags: body.tags,
+			extractText: body.extract_text !== false,
 		});
 		return json(meta, 201);
 	}

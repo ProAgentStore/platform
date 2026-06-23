@@ -230,7 +230,7 @@
             <div style="display:flex;gap:0.35rem;flex-wrap:wrap">
               <button type="button" onclick="showInstKbForm('paste')" class="btn btn-outline btn-sm">+ Text</button>
               <button type="button" onclick="showInstKbForm('url')" class="btn btn-outline btn-sm">+ URL</button>
-              <button type="button" onclick="document.getElementById('inst-kb-file').click()" class="btn btn-outline btn-sm">+ File</button>
+              <button type="button" onclick="document.getElementById('inst-kb-file').click()" class="btn btn-outline btn-sm">+ Knowledge File</button>
               <input type="file" id="inst-kb-file" accept=".txt,.md,.csv,.json,.html" style="display:none" onchange="uploadInstKbFile(this)">
             </div>
           </div>
@@ -271,7 +271,12 @@
 
           <!-- Files section -->
           <div class="create-form">
-            <h4 style="font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--muted);margin-bottom:0.65rem">Files</h4>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.65rem">
+              <h4 style="font-size:0.82rem;font-weight:700;text-transform:uppercase;letter-spacing:0.03em;color:var(--muted);margin:0">Files</h4>
+              <button type="button" onclick="document.getElementById('inst-file-upload').click()" class="btn btn-outline btn-sm">Upload File</button>
+              <input type="file" id="inst-file-upload" style="display:none" onchange="uploadInstFile(this)">
+            </div>
+            <div id="inst-file-upload-status" class="hidden" style="font-size:0.78rem;color:var(--muted);margin-bottom:0.65rem"></div>
             <div id="inst-kb-files-list" class="memory-list"></div>
             <div id="inst-kb-files-empty" class="empty hidden" style="padding:1rem">No files uploaded yet.</div>
           </div>

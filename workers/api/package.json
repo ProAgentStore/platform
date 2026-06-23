@@ -8,7 +8,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"hono": "^4.7.0"
+		"hono": "^4.7.0",
+		"unpdf": "1.6.2"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20250530.0",

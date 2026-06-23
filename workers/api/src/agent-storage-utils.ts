@@ -1,4 +1,5 @@
 import type { CollectionSchema } from "./agent-storage-types.js";
+import { extractText as extractPdfTextWithPdfJs } from "unpdf";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,167 @@ export function isTextMimeType(mimeType: string): boolean {
 	);
 }
 
+export function bytesFromBase64(value: string): Uint8Array {
+	const clean = value.replace(/^data:[^,]+,/, "").replace(/\s/g, "");
+	const binary = atob(clean);
+	const bytes = new Uint8Array(binary.length);
+	for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+	return bytes;
+}
+
+export interface ExtractedFileText {
+	text: string;
+	status: "none" | "extracted" | "unsupported" | "failed";
+	error?: string;
+}
+
+export async function extractFileText(input: {
+	name: string;
+	mimeType: string;
+	data: string | ArrayBuffer | Uint8Array;
+}): Promise<ExtractedFileText> {
+	try {
+		const bytes = fileBytes(input.data);
+		const mimeType = input.mimeType.toLowerCase();
+		const name = input.name.toLowerCase();
+		if (isTextMimeType(mimeType) || /\.(txt|md|csv|json|html?|xml|js|ts|css)$/i.test(name)) {
+			const text = new TextDecoder("utf-8").decode(bytes).trim();
+			return text ? { text, status: "extracted" } : { text: "", status: "none" };
+		}
+		if (mimeType === "application/pdf" || name.endsWith(".pdf")) {
+			const text = await extractPdfText(bytes);
+			return text ? { text, status: "extracted" } : { text: "", status: "unsupported" };
+		}
+		return { text: "", status: "unsupported" };
+	} catch (error) {
+		return {
+			text: "",
+			status: "failed",
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+}
+
+function fileBytes(data: string | ArrayBuffer | Uint8Array): Uint8Array {
+	if (typeof data === "string") return new TextEncoder().encode(data);
+	if (data instanceof Uint8Array) return data;
+	return new Uint8Array(data);
+}
+
+async function extractPdfText(bytes: Uint8Array): Promise<string> {
+	const pdfJsText = await extractPdfTextViaPdfJs(bytes);
+	if (pdfJsText) return pdfJsText;
+	const raw = latin1(bytes);
+	const parts: string[] = [];
+	const streamRegex = /<<(.*?)>>\s*stream\r?\n?([\s\S]*?)\r?\n?endstream/g;
+	for (const match of raw.matchAll(streamRegex)) {
+		const dict = match[1] || "";
+		const body = match[2] || "";
+		let stream = body;
+		if (/\/FlateDecode\b/.test(dict)) {
+			const decompressed = await inflatePdfStream(latin1Bytes(body));
+			if (!decompressed) continue;
+			stream = latin1(decompressed);
+		}
+		parts.push(...pdfTextStrings(stream));
+	}
+	if (parts.length === 0) parts.push(...pdfTextStrings(raw));
+	const text = normalizeExtractedText(parts.join(" "));
+	return isReadableExtractedText(text) ? text : "";
+}
+
+async function extractPdfTextViaPdfJs(bytes: Uint8Array): Promise<string> {
+	try {
+		const result = await extractPdfTextWithPdfJs(new Uint8Array(bytes), { mergePages: true });
+		const text = normalizeExtractedText(result.text);
+		return isReadableExtractedText(text) ? text : "";
+	} catch {
+		return "";
+	}
+}
+
+async function inflatePdfStream(bytes: Uint8Array): Promise<Uint8Array | null> {
+	try {
+		const ds = new DecompressionStream("deflate");
+		const writer = ds.writable.getWriter();
+		await writer.write(bytes);
+		await writer.close();
+		return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+	} catch {
+		return null;
+	}
+}
+
+function pdfTextStrings(value: string): string[] {
+	const chunks: string[] = [];
+	for (const match of value.matchAll(/\((?:\\.|[^\\)])*\)|<([0-9a-fA-F\s]{4,})>/g)) {
+		const token = match[0];
+		if (token.startsWith("(")) chunks.push(decodePdfLiteral(token.slice(1, -1)));
+		else chunks.push(decodePdfHex(match[1] || ""));
+	}
+	return chunks.filter((chunk) => /[A-Za-z0-9]/.test(chunk));
+}
+
+function decodePdfLiteral(value: string): string {
+	return value
+		.replace(/\\([nrtbf()\\])/g, (_, ch: string) => {
+			if (ch === "n") return "\n";
+			if (ch === "r") return "\r";
+			if (ch === "t") return "\t";
+			if (ch === "b") return "\b";
+			if (ch === "f") return "\f";
+			return ch;
+		})
+		.replace(/\\([0-7]{1,3})/g, (_, oct: string) => String.fromCharCode(Number.parseInt(oct, 8)));
+}
+
+function decodePdfHex(value: string): string {
+	const hex = value.replace(/\s/g, "");
+	if (!hex) return "";
+	const evenHex = hex.length % 2 === 0 ? hex : `${hex}0`;
+	const bytes = new Uint8Array(evenHex.length / 2);
+	for (let i = 0; i < evenHex.length; i += 2) {
+		bytes[i / 2] = Number.parseInt(evenHex.slice(i, i + 2), 16);
+	}
+	if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+		let out = "";
+		for (let i = 2; i + 1 < bytes.length; i += 2) {
+			out += String.fromCharCode((bytes[i] << 8) | bytes[i + 1]);
+		}
+		return out;
+	}
+	return new TextDecoder("utf-8").decode(bytes);
+}
+
+function latin1(bytes: Uint8Array): string {
+	let out = "";
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	}
+	return out;
+}
+
+function latin1Bytes(value: string): Uint8Array {
+	const bytes = new Uint8Array(value.length);
+	for (let i = 0; i < value.length; i++) bytes[i] = value.charCodeAt(i) & 0xff;
+	return bytes;
+}
+
+function normalizeExtractedText(value: string): string {
+	return value.replace(/\s+/g, " ").trim();
+}
+
+function isReadableExtractedText(value: string): boolean {
+	if (value.length < 4) return false;
+	const sample = value.slice(0, 4000);
+	const printable = [...sample].filter((char) => {
+		const code = char.charCodeAt(0);
+		return code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127);
+	}).length;
+	const letters = (sample.match(/[A-Za-z]/g) || []).length;
+	return printable / sample.length > 0.9 && letters >= Math.min(8, sample.length / 4);
+}
+
 /**
  * Encode a value for use in index keys. Replaces `:` with `%3A` to avoid
  * key structure ambiguity (index format: `idx:{col}:{field}:{value}:{id}`).
@@ -121,4 +283,3 @@ export async function shortId(
 	// 12 hex chars (48 bits) + separator + chunk index = well under 64 bytes
 	return `${hex.slice(0, 12)}_${chunkIndex}`;
 }
-

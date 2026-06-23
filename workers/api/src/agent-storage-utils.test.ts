@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { CollectionSchema } from "./agent-storage-types.js";
 import {
+	bytesFromBase64,
 	chunkText,
 	encodeIndexValue,
+	extractFileText,
 	isTextMimeType,
 	shortId,
 	validateRecord,
@@ -82,6 +84,50 @@ describe("agent storage utility helpers", () => {
 		expect(isTextMimeType("application/xml")).toBe(true);
 		expect(isTextMimeType("application/javascript")).toBe(true);
 		expect(isTextMimeType("image/png")).toBe(false);
+	});
+
+	it("decodes base64 file payloads", () => {
+		expect(new TextDecoder().decode(bytesFromBase64("aGVsbG8="))).toBe("hello");
+		expect(new TextDecoder().decode(bytesFromBase64("data:text/plain;base64,aGVsbG8="))).toBe("hello");
+	});
+
+	it("extracts text files for indexing", async () => {
+		await expect(
+			extractFileText({
+				name: "notes.md",
+				mimeType: "text/markdown",
+				data: "# Notes\nCandidate prefers mobile roles.",
+			}),
+		).resolves.toMatchObject({
+			status: "extracted",
+			text: "# Notes\nCandidate prefers mobile roles.",
+		});
+	});
+
+	it("extracts simple text-layer PDF content", async () => {
+		const pdf = `%PDF-1.4
+1 0 obj
+<< /Length 54 >>
+stream
+BT
+/F1 12 Tf
+72 720 Td
+(Rafia Sarfaraz Mobile Developer) Tj
+ET
+endstream
+endobj
+%%EOF`;
+
+		await expect(
+			extractFileText({
+				name: "resume.pdf",
+				mimeType: "application/pdf",
+				data: new TextEncoder().encode(pdf),
+			}),
+		).resolves.toMatchObject({
+			status: "extracted",
+			text: "Rafia Sarfaraz Mobile Developer",
+		});
 	});
 
 	it("escapes index key separators without double-encoding escape markers", () => {

@@ -19,7 +19,7 @@ import type {
 	VectorSearchResult,
 } from "./agent-storage-types.js";
 import type { AgentMessage, MemoryEntry } from "./agent-types.js";
-import { chunkText, encodeIndexValue, isTextMimeType, shortId, validateRecord } from "./agent-storage-utils.js";
+import { chunkText, encodeIndexValue, extractFileText, shortId, validateRecord } from "./agent-storage-utils.js";
 
 const MAX_EVENTS = 500;
 const SUMMARY_THRESHOLD = 20;
@@ -172,11 +172,23 @@ export class AgentStorageEngine {
 		data: ArrayBuffer | ReadableStream | string;
 		userId?: string;
 		tags?: string[];
+		extractText?: boolean;
 	}): Promise<FileMeta> {
 		if (!this.r2) throw new Error("R2 storage not available");
 
 		const id = crypto.randomUUID();
 		const r2Key = `agents/${this.agentId}/files/${id}/${opts.name}`;
+		const extractableData =
+			typeof opts.data === "string" || opts.data instanceof ArrayBuffer
+				? opts.data
+				: null;
+		const extracted = opts.extractText === false || !extractableData
+			? { text: "", status: "none" as const }
+			: await extractFileText({
+				name: opts.name,
+				mimeType: opts.mimeType,
+				data: extractableData,
+			});
 
 		await this.r2.put(r2Key, opts.data, {
 			httpMetadata: { contentType: opts.mimeType },
@@ -198,15 +210,18 @@ export class AgentStorageEngine {
 			size: obj?.size || 0,
 			tags: opts.tags || [],
 			r2Key,
+			extractionStatus: extracted.status,
+			extractedTextLength: extracted.text.length,
+			extractionError: extracted.error,
 			createdAt: new Date().toISOString(),
 			updatedAt: new Date().toISOString(),
 		};
 
 		await this.doStorage.put(`file:${id}`, meta);
 
-		// Auto-vectorize text-based files
-		if (isTextMimeType(opts.mimeType) && typeof opts.data === "string") {
-			await this.vectorizeStore("file", id, opts.data.slice(0, 10_000));
+		if (extracted.text) {
+			await this.doStorage.put(`filetext:${id}`, extracted.text.slice(0, 100_000));
+			await this.vectorizeStore("file", id, extracted.text.slice(0, 100_000));
 		}
 
 		await this.logEvent("file.uploaded", undefined, {
@@ -214,6 +229,8 @@ export class AgentStorageEngine {
 			name: opts.name,
 			size: meta.size,
 			mimeType: opts.mimeType,
+			extractionStatus: meta.extractionStatus,
+			extractedTextLength: meta.extractedTextLength,
 		});
 
 		return meta;
@@ -818,4 +835,3 @@ Extract key facts about the user, their preferences, decisions made, and informa
 		return parts.join("\n\n");
 	}
 }
-
