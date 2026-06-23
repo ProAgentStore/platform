@@ -18,7 +18,28 @@ const CAPABILITIES: RunnerCapability[] = [
 	"downloads",
 	"file.upload",
 	"human.approval",
+	"human.takeover",
 ];
+
+/** How many times a task may attempt an action before handing off to a human. */
+export const MAX_AUTONOMOUS_ATTEMPTS = 3;
+
+/** Raised when the model/runner cannot proceed and a human must take over. */
+export class HumanHandoffError extends Error {
+	constructor(
+		message: string,
+		readonly handoff: {
+			reason: "challenge" | "exhausted_attempts";
+			challengeType?: string;
+			url: string;
+			attempts: number;
+			screenshotBase64?: string;
+		},
+	) {
+		super(message);
+		this.name = "HumanHandoffError";
+	}
+}
 const APPROVAL_REQUIRED_TASKS = new Set(["browser.open", "job.apply_basic", "job.apply_authenticated"]);
 const require = createRequire(import.meta.url);
 
@@ -160,6 +181,16 @@ export class LocalRunner {
 			this.store.putTask(task);
 			this.addTaskEvent(task, "task.completed", `Task completed: ${task.type}`, output);
 		} catch (error) {
+			if (error instanceof HumanHandoffError) {
+				// Not a failure — the autonomous attempt is paused for a human to
+				// take over (solve a challenge, finish a step the model can't).
+				task.status = "needs_human";
+				task.error = error.message;
+				task.updatedAt = new Date().toISOString();
+				this.store.putTask(task);
+				this.addTaskEvent(task, "job.human_handoff_required", error.message, error.handoff);
+				return;
+			}
 			task.status = "failed";
 			task.error = error instanceof Error ? error.message : String(error);
 			task.updatedAt = new Date().toISOString();
@@ -181,6 +212,24 @@ export class LocalRunner {
 			message,
 			data,
 		});
+	}
+
+	/**
+	 * Before submitting, bail to a human if the page shows an anti-bot challenge.
+	 * The model can't solve CAPTCHAs, so retrying is pointless — hand off instead.
+	 */
+	private async guardHumanChallenge(task: RunnerTask, page: Page): Promise<void> {
+		const challenge = await detectHumanChallenge(page);
+		if (!challenge) return;
+		this.addTaskEvent(task, "job.human_challenge_detected", `Human challenge detected: ${challenge}`, {
+			challengeType: challenge,
+			url: page.url(),
+		});
+		const screenshotBase64 = await captureScreenshotDataUrl(page);
+		throw new HumanHandoffError(
+			`Human verification required (${challenge}). A person must take over to complete and submit this application.`,
+			{ reason: "challenge", challengeType: challenge, url: page.url(), attempts: 1, screenshotBase64 },
+		);
 	}
 
 	private async execute(task: RunnerTask): Promise<unknown> {
@@ -237,6 +286,7 @@ export class LocalRunner {
 			fieldsFilled: filledFields,
 			resumeFile: basename(job.resumePath),
 		});
+		await this.guardHumanChallenge(task, page);
 		const beforeSubmitUrl = page.url();
 		const navigation = page.waitForNavigation({
 			waitUntil: "domcontentloaded",
@@ -351,6 +401,7 @@ export class LocalRunner {
 			fieldsFilled: filledFields,
 			resumeFile: basename(input.resumePath),
 		});
+		await this.guardHumanChallenge(task, page);
 
 		// Step 5: Submit
 		const beforeSubmitUrl = page.url();
@@ -620,6 +671,34 @@ async function submitApplicationForm(page: Page): Promise<void> {
 		if (typeof htmlForm.requestSubmit === "function") htmlForm.requestSubmit();
 		else htmlForm.submit();
 	});
+}
+
+/**
+ * Detect an anti-bot human challenge on the page (reCAPTCHA, hCaptcha,
+ * Cloudflare Turnstile, generic captcha). These can't be solved by the model,
+ * so they trigger a handoff to a human rather than wasted retries.
+ */
+async function detectHumanChallenge(page: Page): Promise<string | null> {
+	const checks: Array<[string, string]> = [
+		["recaptcha", 'iframe[src*="recaptcha"], .g-recaptcha'],
+		["hcaptcha", 'iframe[src*="hcaptcha"], .h-captcha'],
+		["cloudflare-turnstile", 'iframe[src*="challenges.cloudflare.com"], .cf-turnstile'],
+		["captcha", 'iframe[title*="captcha" i], [class*="captcha" i], [id*="captcha" i]'],
+	];
+	for (const [type, selector] of checks) {
+		if ((await page.locator(selector).count().catch(() => 0)) > 0) return type;
+	}
+	return null;
+}
+
+/** Capture a downscaled JPEG screenshot as a data URL for the human-takeover UI. */
+async function captureScreenshotDataUrl(page: Page): Promise<string | undefined> {
+	try {
+		const buf = await page.screenshot({ type: "jpeg", quality: 55 });
+		return `data:image/jpeg;base64,${buf.toString("base64")}`;
+	} catch {
+		return undefined;
+	}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

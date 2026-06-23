@@ -3,12 +3,14 @@ export type RunnerCapability =
 	| "browser.screenshot"
 	| "downloads"
 	| "file.upload"
-	| "human.approval";
+	| "human.approval"
+	| "human.takeover";
 
 export type TaskStatus =
 	| "queued"
 	| "running"
 	| "needs_approval"
+	| "needs_human"
 	| "blocked"
 	| "completed"
 	| "failed"

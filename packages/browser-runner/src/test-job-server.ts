@@ -60,7 +60,7 @@ async function route(
 		return;
 	}
 	if (req.method === "GET" && url.pathname === "/jobs/software-engineer") {
-		html(res, 200, jobPage());
+		html(res, 200, jobPage({ challenge: url.searchParams.get("challenge") === "1" }));
 		return;
 	}
 	if (req.method === "POST" && url.pathname === "/apply") {
@@ -86,7 +86,10 @@ async function route(
 	html(res, 404, "<h1>Not found</h1>");
 }
 
-function jobPage(): string {
+function jobPage(opts: { challenge?: boolean } = {}): string {
+	const challenge = opts.challenge
+		? '<div class="cf-turnstile" data-sitekey="test">Verify you are human</div>'
+		: "";
 	return page("Senior Software Engineer", `
     <main>
       <section class="job">
@@ -111,6 +114,7 @@ function jobPage(): string {
         </label>
         <label>Resume <input name="resume" type="file" accept=".pdf,.txt,.doc,.docx" required /></label>
         <label>Cover note <textarea name="coverNote" rows="5" required></textarea></label>
+        ${challenge}
         <button type="submit">Submit application</button>
       </form>
     </main>

@@ -62,6 +62,36 @@ describe("LocalRunner job.apply_basic e2e", () => {
 		expect(sub.resume?.size).toBeGreaterThan(0);
 	}, 60_000);
 
+	it("hands off to a human (needs_human) when a CAPTCHA challenge is present", async () => {
+		const task = runner.createTask({
+			type: "job.apply_basic",
+			input: {
+				url: `${server.jobUrl}?challenge=1`,
+				resumePath: resume(),
+				candidate: {
+					fullName: "Test Candidate",
+					email: "test@example.com",
+					workAuthorization: "Authorized to work in the United States",
+				},
+				coverNote: "Excited to apply.",
+			},
+		});
+
+		const done = await runner.approveTask(task.id);
+
+		// Not a failure — it's paused for a human to take over.
+		expect(done.status).toBe("needs_human");
+		expect(server.submissions.length).toBe(0);
+
+		const handoff = runner.store
+			.listEvents()
+			.find((e) => e.type === "job.human_handoff_required");
+		expect(handoff).toBeTruthy();
+		const data = handoff?.data as { challengeType?: string; screenshotBase64?: string };
+		expect(data.challengeType).toBe("cloudflare-turnstile");
+		expect(data.screenshotBase64).toMatch(/^data:image\/jpeg;base64,/);
+	}, 60_000);
+
 	it("fails honestly (no false success) when a required field can't be filled", async () => {
 		const task = runner.createTask({
 			type: "job.apply_basic",
