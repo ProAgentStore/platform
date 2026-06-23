@@ -81,6 +81,9 @@ export async function runAgentThink(opts: {
 	const allToolLog: string[] = [];
 	const storageToolNames = storageToolNameSet();
 	const maxToolRounds = 3;
+	// Guard against the model re-issuing the same tool call across rounds, which
+	// otherwise creates duplicate side effects (e.g. three identical job tasks).
+	const executedCalls = new Set<string>();
 
 	for (let round = 0; round < maxToolRounds; round++) {
 		const rawResult = (await runUserWorkersAi(
@@ -103,7 +106,17 @@ export async function runAgentThink(opts: {
 		}
 
 		const toolResults: string[] = [];
+		let executedThisRound = 0;
 		for (const tc of toolCalls) {
+			const signature = `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`;
+			if (executedCalls.has(signature)) {
+				toolResults.push(
+					`[${tc.name}]: Already executed this exact call this turn — not repeating. Use the earlier result.`,
+				);
+				continue;
+			}
+			executedCalls.add(signature);
+			executedThisRound++;
 			let toolResult: ToolCallResult;
 			if (storageToolNames.has(tc.name)) {
 				toolResult = await executeStorageTool(
@@ -130,6 +143,9 @@ export async function runAgentThink(opts: {
 
 		aiMessages.push({ role: "assistant", content: `I called tools:\n${toolResults.join("\n")}` });
 		aiMessages.push({ role: "user", content: "Continue based on the tool results above." });
+		// The model only re-requested calls it already made — nothing new will
+		// happen in another round, so stop and let it write the final response.
+		if (executedThisRound === 0) break;
 	}
 
 	const final = (await runUserWorkersAi(

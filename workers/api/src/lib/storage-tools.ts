@@ -442,7 +442,7 @@ export async function executeStorageTool(
 					: "";
 				return ok(
 					call.name,
-					`Browser task created: ${task.id ?? "unknown"} (status: ${task.status ?? "unknown"}). This has not submitted the application yet. Do not mark the application record submitted until this runner task completes successfully.${approval}`,
+					`Browser task created: ${task.id ?? "unknown"} (status: ${task.status ?? "unknown"}). The task is queued and waiting for approval — this has not submitted the application yet. Do NOT call submit_job_application again for this job; the task already exists. Do not mark the application record submitted until this runner task completes successfully.${approval}`,
 				);
 			}
 
