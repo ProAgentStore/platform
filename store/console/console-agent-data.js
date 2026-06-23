@@ -320,7 +320,7 @@
               requireCitations: document.getElementById('s-citations').checked,
             },
             permissions: {
-              email: document.getElementById('s-perm-email').checked,
+              email: !!(document.getElementById('s-perm-email') || {}).checked,
             },
           }),
         });
