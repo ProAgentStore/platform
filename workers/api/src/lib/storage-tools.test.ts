@@ -200,13 +200,13 @@ describe("storage tools", () => {
 				name: "submit_job_application",
 				input: {
 					url: "https://example.com/jobs/1",
-					resume_path: "/Users/serge-ivo/Downloads/Rafia Sarfaraz Mobile Developer CV.pdf",
-					full_name: "Rafia Sarfaraz",
-					email: "rafia@example.com",
-					phone: "0585421626",
-					location: "Dubai, UAE",
-					linkedin: "https://linkedin.com/in/rafia",
-					work_authorization: "Requires sponsorship",
+					resume_path: "/tmp/test-candidate-resume.pdf",
+					full_name: "Test Candidate",
+					email: "candidate@example.com",
+					phone: "+1 555 0100",
+					location: "Test City",
+					linkedin: "https://linkedin.example/test-candidate",
+					work_authorization: "Authorized to work",
 					cover_note: "Interested in the role.",
 				},
 			},
@@ -230,19 +230,19 @@ describe("storage tools", () => {
 			type: "job.apply_authenticated",
 			input: {
 				url: "https://example.com/jobs/1",
-				resumePath: "/Users/serge-ivo/Downloads/Rafia Sarfaraz Mobile Developer CV.pdf",
+				resumePath: "/tmp/test-candidate-resume.pdf",
 				candidate: {
-					fullName: "Rafia Sarfaraz",
-					email: "rafia@example.com",
-					phone: "0585421626",
-					location: "Dubai, UAE",
-					linkedin: "https://linkedin.com/in/rafia",
-					workAuthorization: "Requires sponsorship",
+					fullName: "Test Candidate",
+					email: "candidate@example.com",
+					phone: "+1 555 0100",
+					location: "Test City",
+					linkedin: "https://linkedin.example/test-candidate",
+					workAuthorization: "Authorized to work",
 				},
 				coverNote: "Interested in the role.",
 			},
 		});
-		expect(JSON.stringify(body)).not.toContain("Sergey Ivochkin");
+		expect(body.input.candidate.fullName).toBe("Test Candidate");
 	});
 
 	it("does not create job application task without local resume path", async () => {
@@ -256,8 +256,8 @@ describe("storage tools", () => {
 				name: "submit_job_application",
 				input: {
 					url: "https://example.com/jobs/1",
-					full_name: "Rafia Sarfaraz",
-					email: "rafia@example.com",
+					full_name: "Test Candidate",
+					email: "candidate@example.com",
 				},
 			},
 			engine,

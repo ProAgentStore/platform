@@ -9,8 +9,8 @@ test("FAGS runtime registers, logs in, and submits application on auth-required 
 	const oldSkipInstall = process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL;
 	process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL = "1";
 	const dataDir = mkdtempSync(join(tmpdir(), "pags-auth-job-e2e-"));
-	const resumePath = join(dataDir, "sam-resume.txt");
-	writeFileSync(resumePath, "Sam Candidate resume - 5 years TypeScript");
+	const resumePath = join(dataDir, "test-resume.txt");
+	writeFileSync(resumePath, "Test Candidate resume - 5 years TypeScript");
 	const fixture = await startTestJobServerAuth();
 	const runner = new LocalRunner({
 		host: "127.0.0.1",
@@ -27,16 +27,16 @@ test("FAGS runtime registers, logs in, and submits application on auth-required 
 				url: fixture.jobUrl,
 				resumePath,
 				candidate: {
-					fullName: "Sam Candidate",
-					email: "sam@example.com",
+					fullName: "Test Candidate",
+					email: "candidate@example.com",
 					phone: "+1 555 0100",
 					location: "Remote",
 					workAuthorization: "Authorized to work in the United States",
 				},
 				coverNote: "I am interested in building browser agents.",
 				registration: {
-					fullName: "Sam Candidate",
-					email: "sam@example.com",
+					fullName: "Test Candidate",
+					email: "candidate@example.com",
 					password: "secret123",
 				},
 			},
@@ -49,17 +49,17 @@ test("FAGS runtime registers, logs in, and submits application on auth-required 
 			taskType: "job.apply_authenticated",
 			submitted: true,
 			authenticated: true,
-			resumeFile: "sam-resume.txt",
+			resumeFile: "test-resume.txt",
 		});
 
 		expect(fixture.submissions).toHaveLength(1);
 		expect(fixture.submissions[0].fields).toMatchObject({
-			fullName: "Sam Candidate",
-			email: "sam@example.com",
+			fullName: "Test Candidate",
+			email: "candidate@example.com",
 			coverNote: "I am interested in building browser agents.",
 		});
 		expect(fixture.users).toHaveLength(1);
-		expect(fixture.users[0].email).toBe("sam@example.com");
+		expect(fixture.users[0].email).toBe("candidate@example.com");
 
 		// Test 2: Apply with existing credentials (login)
 		await runner.close();
@@ -76,13 +76,13 @@ test("FAGS runtime registers, logs in, and submits application on auth-required 
 				url: fixture.jobUrl,
 				resumePath,
 				candidate: {
-					fullName: "Sam Candidate",
-					email: "sam@example.com",
+					fullName: "Test Candidate",
+					email: "candidate@example.com",
 					workAuthorization: "Authorized to work in the United States",
 				},
 				coverNote: "Second application with existing account.",
 				credentials: {
-					email: "sam@example.com",
+					email: "candidate@example.com",
 					password: "secret123",
 				},
 				accountExists: true,

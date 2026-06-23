@@ -9,8 +9,8 @@ test("FAGS runtime submits the fixture job application after approval", async ()
 	const oldSkipInstall = process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL;
 	process.env.PAGS_SKIP_PLAYWRIGHT_INSTALL = "1";
 	const dataDir = mkdtempSync(join(tmpdir(), "pags-job-runner-e2e-"));
-	const resumePath = join(dataDir, "sam-resume.txt");
-	writeFileSync(resumePath, "Sam Candidate resume");
+	const resumePath = join(dataDir, "test-resume.txt");
+	writeFileSync(resumePath, "Test Candidate resume");
 	const fixture = await startTestJobServer();
 	const runner = new LocalRunner({
 		host: "127.0.0.1",
@@ -26,12 +26,12 @@ test("FAGS runtime submits the fixture job application after approval", async ()
 				url: fixture.jobUrl,
 				resumePath,
 				candidate: {
-					fullName: "Sam Candidate",
-					email: "sam@example.com",
+					fullName: "Test Candidate",
+					email: "candidate@example.com",
 					phone: "+1 555 0100",
 					location: "Remote",
-					linkedin: "https://linkedin.com/in/sam",
-					portfolio: "https://sam.dev",
+					linkedin: "https://linkedin.example/test-candidate",
+					portfolio: "https://portfolio.example",
 					workAuthorization: "Authorized to work in the United States",
 				},
 				coverNote: "I am interested in building safe browser agents.",
@@ -44,19 +44,19 @@ test("FAGS runtime submits the fixture job application after approval", async ()
 		expect(approved.output).toMatchObject({
 			taskType: "job.apply_basic",
 			submitted: true,
-			resumeFile: "sam-resume.txt",
+			resumeFile: "test-resume.txt",
 		});
 
 		expect(fixture.submissions).toHaveLength(1);
 		expect(fixture.submissions[0].fields).toMatchObject({
-			fullName: "Sam Candidate",
-			email: "sam@example.com",
+			fullName: "Test Candidate",
+			email: "candidate@example.com",
 			coverNote: "I am interested in building safe browser agents.",
 		});
 		expect(fixture.submissions[0].resume).toMatchObject({
-			filename: "sam-resume.txt",
+			filename: "test-resume.txt",
 			contentType: "text/plain",
-			size: 20,
+			size: 21,
 		});
 	} finally {
 		await runner.close();

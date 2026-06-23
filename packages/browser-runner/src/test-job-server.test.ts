@@ -26,16 +26,16 @@ describe("test job application server", () => {
 
 	it("accepts a resume upload and redirects to a success page", async () => {
 		const form = new FormData();
-		form.set("fullName", "Sam Candidate");
-		form.set("email", "sam@example.com");
+		form.set("fullName", "Test Candidate");
+		form.set("email", "candidate@example.com");
 		form.set("phone", "+1 555 0100");
 		form.set("location", "Remote");
-		form.set("linkedin", "https://linkedin.com/in/sam");
-		form.set("portfolio", "https://sam.dev");
+		form.set("linkedin", "https://linkedin.example/test-candidate");
+		form.set("portfolio", "https://portfolio.example");
 		form.set("workAuthorization", "Authorized to work in the United States");
 		form.set(
 			"resume",
-			new File(["Resume body"], "sam-resume.txt", { type: "text/plain" }),
+			new File(["Resume body"], "test-resume.txt", { type: "text/plain" }),
 		);
 		form.set("coverNote", "I am interested in the role.");
 
@@ -53,17 +53,17 @@ describe("test job application server", () => {
 		const successHtml = await success.text();
 		expect(success.status).toBe(200);
 		expect(successHtml).toContain("Application received");
-		expect(successHtml).toContain("Sam Candidate");
-		expect(successHtml).toContain("sam-resume.txt");
+		expect(successHtml).toContain("Test Candidate");
+		expect(successHtml).toContain("test-resume.txt");
 
 		expect(server.submissions).toHaveLength(1);
 		expect(server.submissions[0].fields).toMatchObject({
-			fullName: "Sam Candidate",
-			email: "sam@example.com",
+			fullName: "Test Candidate",
+			email: "candidate@example.com",
 			coverNote: "I am interested in the role.",
 		});
 		expect(server.submissions[0].resume).toMatchObject({
-			filename: "sam-resume.txt",
+			filename: "test-resume.txt",
 			contentType: "text/plain",
 			size: 11,
 		});

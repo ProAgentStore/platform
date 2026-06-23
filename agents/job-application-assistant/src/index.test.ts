@@ -11,11 +11,11 @@ import {
 } from "./lib.js";
 
 const profile = normalizeProfile({
-	fullName: "Sam Candidate",
-	email: "sam@example.com",
+	fullName: "Test Candidate",
+	email: "candidate@example.com",
 	phone: "+1 555 0100",
-	linkedin: "https://linkedin.com/in/sam",
-	portfolio: "https://sam.dev",
+	linkedin: "https://linkedin.example/test-candidate",
+	portfolio: "https://portfolio.example",
 	location: "Remote",
 	resumeText:
 		"Built distributed TypeScript systems for high-volume workflow automation. Led product engineering teams shipping customer-facing tools. Improved application conversion with structured experiments.",
@@ -99,10 +99,10 @@ describe("application preparation and submission planning", () => {
 		const draft = buildFallbackDraft(job, profile);
 
 		expect(mapProfileToFields(job.forms[0].fields, profile, draft, {})).toMatchObject({
-			first_name: "Sam",
+			first_name: "Test",
 			last_name: "Candidate",
-			email: "sam@example.com",
-			linkedin: "https://linkedin.com/in/sam",
+			email: "candidate@example.com",
+			linkedin: "https://linkedin.example/test-candidate",
 			why_this_role: draft.coverLetter,
 		});
 	});
@@ -126,8 +126,8 @@ describe("application preparation and submission planning", () => {
 		expect(request.url).toBe("https://jobs.example.com/apply");
 		expect(request.init.method).toBe("POST");
 		expect(request.fields).toMatchObject({
-			full_name: "Sam Candidate",
-			email: "sam@example.com",
+			full_name: "Test Candidate",
+			email: "candidate@example.com",
 		});
 	});
 

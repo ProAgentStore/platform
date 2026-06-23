@@ -37,7 +37,7 @@ describe("test job server with auth", () => {
 		const res = await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam+Candidate&email=sam@example.com&password=secret123",
+			body: "fullName=Test+Candidate&email=candidate@example.com&password=secret123",
 			redirect: "manual",
 		});
 
@@ -47,22 +47,22 @@ describe("test job server with auth", () => {
 		expect(cookie).toContain("session=sess_");
 
 		expect(server.users).toHaveLength(1);
-		expect(server.users[0].email).toBe("sam@example.com");
-		expect(server.users[0].fullName).toBe("Sam Candidate");
+		expect(server.users[0].email).toBe("candidate@example.com");
+		expect(server.users[0].fullName).toBe("Test Candidate");
 	});
 
 	it("rejects registration with duplicate email", async () => {
 		await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam&email=sam@example.com&password=secret123",
+			body: "fullName=Test&email=candidate@example.com&password=secret123",
 			redirect: "manual",
 		});
 
 		const res = await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam+2&email=sam@example.com&password=other456",
+			body: "fullName=Test+2&email=candidate@example.com&password=other456",
 			redirect: "manual",
 		});
 
@@ -75,7 +75,7 @@ describe("test job server with auth", () => {
 		const res = await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam&email=sam@example.com&password=ab",
+			body: "fullName=Test&email=candidate@example.com&password=ab",
 			redirect: "manual",
 		});
 
@@ -87,14 +87,14 @@ describe("test job server with auth", () => {
 		await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam&email=sam@example.com&password=secret123",
+			body: "fullName=Test&email=candidate@example.com&password=secret123",
 			redirect: "manual",
 		});
 
 		const res = await fetch(`${server.url}/login`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "email=sam@example.com&password=secret123&next=/apply",
+			body: "email=candidate@example.com&password=secret123&next=/apply",
 			redirect: "manual",
 		});
 
@@ -107,14 +107,14 @@ describe("test job server with auth", () => {
 		await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam&email=sam@example.com&password=secret123",
+			body: "fullName=Test&email=candidate@example.com&password=secret123",
 			redirect: "manual",
 		});
 
 		const res = await fetch(`${server.url}/login`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "email=sam@example.com&password=wrong",
+			body: "email=candidate@example.com&password=wrong",
 			redirect: "manual",
 		});
 
@@ -127,7 +127,7 @@ describe("test job server with auth", () => {
 		const regRes = await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam+Candidate&email=sam@example.com&password=secret123",
+			body: "fullName=Test+Candidate&email=candidate@example.com&password=secret123",
 			redirect: "manual",
 		});
 		const cookie = (regRes.headers.get("set-cookie") || "").split(";")[0];
@@ -138,19 +138,19 @@ describe("test job server with auth", () => {
 		});
 		expect(applyPageRes.status).toBe(200);
 		const applyHtml = await applyPageRes.text();
-		expect(applyHtml).toContain('value="Sam Candidate"');
-		expect(applyHtml).toContain('value="sam@example.com"');
+		expect(applyHtml).toContain('value="Test Candidate"');
+		expect(applyHtml).toContain('value="candidate@example.com"');
 
 		// Submit application
 		const form = new FormData();
-		form.set("fullName", "Sam Candidate");
-		form.set("email", "sam@example.com");
+		form.set("fullName", "Test Candidate");
+		form.set("email", "candidate@example.com");
 		form.set("phone", "+1 555 0100");
 		form.set("location", "Remote");
-		form.set("linkedin", "https://linkedin.com/in/sam");
-		form.set("portfolio", "https://sam.dev");
+		form.set("linkedin", "https://linkedin.example/test-candidate");
+		form.set("portfolio", "https://portfolio.example");
 		form.set("workAuthorization", "Authorized to work in the United States");
-		form.set("resume", new File(["Resume body"], "sam-resume.txt", { type: "text/plain" }));
+		form.set("resume", new File(["Resume body"], "test-resume.txt", { type: "text/plain" }));
 		form.set("coverNote", "I am interested in the role.");
 
 		const submitRes = await fetch(`${server.url}/apply`, {
@@ -171,17 +171,17 @@ describe("test job server with auth", () => {
 		expect(successRes.status).toBe(200);
 		const successHtml = await successRes.text();
 		expect(successHtml).toContain("Application received");
-		expect(successHtml).toContain("Sam Candidate");
+		expect(successHtml).toContain("Test Candidate");
 
 		// Verify submission stored
 		expect(server.submissions).toHaveLength(1);
 		expect(server.submissions[0].fields).toMatchObject({
-			fullName: "Sam Candidate",
-			email: "sam@example.com",
+			fullName: "Test Candidate",
+			email: "candidate@example.com",
 		});
 		expect(server.submissions[0].userId).toBe(server.users[0].id);
 		expect(server.submissions[0].resume).toMatchObject({
-			filename: "sam-resume.txt",
+			filename: "test-resume.txt",
 			size: 11,
 		});
 	});
@@ -191,14 +191,14 @@ describe("test job server with auth", () => {
 		const regRes = await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam&email=sam@example.com&password=secret123",
+			body: "fullName=Test&email=candidate@example.com&password=secret123",
 			redirect: "manual",
 		});
 		const cookie = (regRes.headers.get("set-cookie") || "").split(";")[0];
 
 		const form = new FormData();
-		form.set("fullName", "Sam");
-		form.set("email", "sam@example.com");
+		form.set("fullName", "Test");
+		form.set("email", "candidate@example.com");
 		form.set("resume", new File(["cv"], "cv.txt", { type: "text/plain" }));
 		form.set("coverNote", "Hello");
 		form.set("workAuthorization", "Authorized to work in the United States");
@@ -223,7 +223,7 @@ describe("test job server with auth", () => {
 		const regRes = await fetch(`${server.url}/register`, {
 			method: "POST",
 			headers: { "Content-Type": "application/x-www-form-urlencoded" },
-			body: "fullName=Sam&email=sam@example.com&password=secret123",
+			body: "fullName=Test&email=candidate@example.com&password=secret123",
 			redirect: "manual",
 		});
 		const cookie = (regRes.headers.get("set-cookie") || "").split(";")[0];

@@ -18,7 +18,7 @@ After subscribing to the published agent, connect or register the FAGS runtime a
 pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 pags runner run "$PAGS_INSTANCE_ID" \
   --type job.apply_basic \
-  --input '{"url":"https://example.com/jobs/senior-engineer","resumePath":"/Users/me/resume.pdf","candidate":{"fullName":"Sam Candidate","email":"sam@example.com","phone":"+1 555 0100","location":"Remote"},"coverNote":"I am interested in this role."}' \
+  --input '{"url":"https://example.com/jobs/senior-engineer","resumePath":"/path/to/resume.pdf","candidate":{"fullName":"Test Candidate","email":"candidate@example.com","phone":"+1 555 0100","location":"Remote"},"coverNote":"I am interested in this role."}' \
   --pags-token "$PAGS_TOKEN"
 pags runner approve-task "$PAGS_INSTANCE_ID" "$TASK_ID" --pags-token "$PAGS_TOKEN"
 ```
@@ -56,11 +56,11 @@ curl -X POST https://job-application-assistant.proagentstore.online/applications
   -d '{
     "jobUrl": "https://example.com/jobs/senior-product-engineer",
     "profile": {
-      "fullName": "Sam Candidate",
-      "email": "sam@example.com",
+      "fullName": "Test Candidate",
+      "email": "candidate@example.com",
       "phone": "+1 555 0100",
-      "linkedin": "https://linkedin.com/in/sam",
-      "portfolio": "https://sam.dev",
+      "linkedin": "https://linkedin.example/test-candidate",
+      "portfolio": "https://portfolio.example",
       "resumeText": "Senior full-stack engineer...",
       "location": "Remote"
     },

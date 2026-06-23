@@ -152,7 +152,7 @@ The rentable job application agent uses the `job.apply_basic` runner task for ba
 ```bash
 pags runner run "$PAGS_INSTANCE_ID" \
   --type job.apply_basic \
-  --input '{"url":"https://example.com/jobs/123","resumePath":"/Users/me/resume.pdf","candidate":{"fullName":"Sam Candidate","email":"sam@example.com"},"coverNote":"I am interested in this role."}' \
+  --input '{"url":"https://example.com/jobs/123","resumePath":"/path/to/resume.pdf","candidate":{"fullName":"Test Candidate","email":"candidate@example.com"},"coverNote":"I am interested in this role."}' \
   --pags-token "$PAGS_TOKEN"
 pags runner approve-task "$PAGS_INSTANCE_ID" "$TASK_ID" --pags-token "$PAGS_TOKEN"
 ```

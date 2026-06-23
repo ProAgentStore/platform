@@ -112,7 +112,7 @@ stream
 BT
 /F1 12 Tf
 72 720 Td
-(Rafia Sarfaraz Mobile Developer) Tj
+(Test Candidate Software Engineer) Tj
 ET
 endstream
 endobj
@@ -126,7 +126,7 @@ endobj
 			}),
 		).resolves.toMatchObject({
 			status: "extracted",
-			text: "Rafia Sarfaraz Mobile Developer",
+			text: "Test Candidate Software Engineer",
 		});
 	});
 

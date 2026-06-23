@@ -96,8 +96,8 @@ describe("LocalRunner", () => {
 				url: "https://example.com/jobs/1",
 				resumePath,
 				candidate: {
-					fullName: "Sam Candidate",
-					email: "sam@example.com",
+					fullName: "Test Candidate",
+					email: "candidate@example.com",
 				},
 			},
 		});
@@ -114,8 +114,8 @@ describe("LocalRunner", () => {
 			url: "https://example.com/jobs/1",
 			resumePath,
 			candidate: {
-				fullName: " Sam Candidate ",
-				email: " sam@example.com ",
+				fullName: " Test Candidate ",
+				email: " candidate@example.com ",
 				phone: " +1 555 0100 ",
 			},
 			coverNote: " Interested ",
@@ -123,8 +123,8 @@ describe("LocalRunner", () => {
 			url: "https://example.com/jobs/1",
 			resumePath,
 			candidate: {
-				fullName: "Sam Candidate",
-				email: "sam@example.com",
+				fullName: "Test Candidate",
+				email: "candidate@example.com",
 				phone: "+1 555 0100",
 			},
 			coverNote: "Interested",
@@ -133,12 +133,12 @@ describe("LocalRunner", () => {
 		expect(() => normalizeJobApplicationInput({
 			url: "ftp://example.com/jobs/1",
 			resumePath,
-			candidate: { fullName: "Sam", email: "sam@example.com" },
+			candidate: { fullName: "Test", email: "candidate@example.com" },
 		})).toThrow("http");
 		expect(() => normalizeJobApplicationInput({
 			url: "https://example.com/jobs/1",
 			resumePath: join(dir, "missing.txt"),
-			candidate: { fullName: "Sam", email: "sam@example.com" },
+			candidate: { fullName: "Test", email: "candidate@example.com" },
 		})).toThrow("resumePath");
 	});
 

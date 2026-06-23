@@ -319,7 +319,7 @@ pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 For production usage, users should use a named tunnel and stable hostname:
 
 ```text
-https://serge-job-runner.example.com
+https://local-runner.example.com
 ```
 
 The PAGS console stores the FAGS runtime endpoint and verification fingerprint. The local machine stores browser state and files.
