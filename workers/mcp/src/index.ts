@@ -41,6 +41,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	private userToken: string | null = null;
 	private scopes: string[] | null = null;
 	private subject: string | undefined;
+	private toolsRegistered = false;
 
 	private token(provided?: string): string | null {
 		return provided || this.userToken;
@@ -55,9 +56,17 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 	}
 
 	async init() {
+		// Refresh per-request auth from props on every start.
 		this.userToken = this.props?.authToken || null;
 		this.scopes = this.props?.mcpScopes || null;
 		this.subject = this.props?.mcpSubject;
+
+		// McpAgent.onStart() calls init() on every DO start, but `this.server`
+		// persists for the life of the instance. Registering tools twice on the
+		// same server throws "Tool ... is already registered", which cancels the
+		// MCP stream and makes clients hang until they time out. Register once.
+		if (this.toolsRegistered) return;
+		this.toolsRegistered = true;
 
 		this.server.tool(
 			"list_agents",
