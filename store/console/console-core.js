@@ -440,6 +440,10 @@ const API = 'https://api.proagentstore.online';
         document.getElementById('s-maxlen').value = gr.maxResponseLength || '';
         document.getElementById('s-citations').checked = gr.requireCitations || false;
 
+        // Settings — permissions & connections
+        document.getElementById('s-perm-email').checked = !!(doState.permissions && doState.permissions.email);
+        if (typeof refreshGmailStatus === 'function') refreshGmailStatus();
+
         switchTab(tab, false);
         loadMessages();
         loadKnowledge();

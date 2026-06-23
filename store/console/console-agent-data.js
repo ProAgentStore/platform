@@ -319,11 +319,59 @@
               maxResponseLength: parseInt(document.getElementById('s-maxlen').value, 10) || 0,
               requireCitations: document.getElementById('s-citations').checked,
             },
+            permissions: {
+              email: document.getElementById('s-perm-email').checked,
+            },
           }),
         });
 
         alert('Saved!');
         openAgent(currentAgent.id);
+      } catch (e) { alert(e.message); }
+    }
+
+    async function refreshGmailStatus() {
+      const label = document.getElementById('gmail-status');
+      const connectBtn = document.getElementById('gmail-connect-btn');
+      const disconnectBtn = document.getElementById('gmail-disconnect-btn');
+      if (!label) return;
+      try {
+        const data = await api('/v1/email/status');
+        if (!data.configured) {
+          label.textContent = 'Gmail: not available on this deployment';
+          if (connectBtn) connectBtn.style.display = 'none';
+          if (disconnectBtn) disconnectBtn.style.display = 'none';
+          return;
+        }
+        if (data.connected) {
+          label.textContent = 'Gmail: connected ✓';
+          if (connectBtn) connectBtn.style.display = 'none';
+          if (disconnectBtn) disconnectBtn.style.display = '';
+        } else {
+          label.textContent = 'Gmail: not connected';
+          if (connectBtn) connectBtn.style.display = '';
+          if (disconnectBtn) disconnectBtn.style.display = 'none';
+        }
+      } catch (e) {
+        label.textContent = 'Gmail: status unavailable';
+      }
+    }
+
+    async function connectGmail() {
+      try {
+        const data = await api('/v1/email/google/start');
+        if (data.url) {
+          window.open(data.url, '_blank', 'noopener');
+          alert('Complete the Google sign-in in the new tab, then come back and click Save All Settings (or reopen this agent) to refresh the status.');
+        }
+      } catch (e) { alert(e.message); }
+    }
+
+    async function disconnectGmail() {
+      if (!confirm('Disconnect Gmail? Agents will no longer be able to read confirmation emails.')) return;
+      try {
+        await api('/v1/email/google', { method: 'DELETE' });
+        refreshGmailStatus();
       } catch (e) { alert(e.message); }
     }
 

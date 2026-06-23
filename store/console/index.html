@@ -620,6 +620,19 @@
       </div>
 
       <div class="create-form" style="margin-bottom:1rem">
+        <h3>Permissions &amp; Connections</h3>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.6rem">Connect Gmail (read-only) so this agent can find confirmation/verification links — e.g. to confirm a new account during an authenticated job application. Off by default.</p>
+        <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.6rem">
+          <span id="gmail-status" style="font-size:0.85rem;color:var(--muted)">Gmail: checking…</span>
+          <button type="button" id="gmail-connect-btn" onclick="connectGmail()" class="btn btn-outline btn-sm">Connect Gmail</button>
+          <button type="button" id="gmail-disconnect-btn" onclick="disconnectGmail()" class="btn btn-outline btn-sm" style="display:none">Disconnect</button>
+        </div>
+        <label style="display:inline-flex;align-items:center;gap:0.5rem;cursor:pointer">
+          <input type="checkbox" id="s-perm-email"> Allow this agent to read confirmation emails (Gmail)
+        </label>
+      </div>
+
+      <div class="create-form" style="margin-bottom:1rem">
         <h3>Model &amp; Publishing</h3>
         <div class="form-row">
           <div><label>Visibility</label>
