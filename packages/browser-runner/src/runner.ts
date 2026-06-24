@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BrowserContext, CDPSession, Page } from "playwright";
+import { humanApproach } from "./human-mouse.js";
 import { RunnerStore } from "./store.js";
 import type {
 	CreateTaskRequest,
@@ -899,6 +900,9 @@ async function submitApplicationForm(page: Page): Promise<void> {
 		'form button[type="submit"], form input[type="submit"], button:has-text("Submit"), button:has-text("Apply"), input[type="submit"]',
 	).first();
 	if (await submit.count() > 0) {
+		// Humanize the approach: arrive at the button along a natural arc before
+		// the real click, so behavioral anti-bot scoring sees a hand, not a jump.
+		await humanApproach(page, await submit.boundingBox().catch(() => null));
 		await submit.click({ timeout: 10_000 });
 		return;
 	}
@@ -1174,6 +1178,9 @@ async function submitForm(page: Page): Promise<void> {
 		'button[type="submit"], input[type="submit"]',
 	).first();
 	if (await submit.count() > 0) {
+		// Humanize the approach: arrive at the button along a natural arc before
+		// the real click, so behavioral anti-bot scoring sees a hand, not a jump.
+		await humanApproach(page, await submit.boundingBox().catch(() => null));
 		await submit.click({ timeout: 10_000 });
 		return;
 	}
