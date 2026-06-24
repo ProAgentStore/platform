@@ -90,7 +90,7 @@ export class LocalRunner {
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
 		string,
-		{ page: Page; cdp?: CDPSession; latestFrame?: string; width?: number; height?: number; screencasting?: boolean }
+		{ page: Page; cdp?: CDPSession; latestFrame?: string; width?: number; height?: number; cssW?: number; cssH?: number; screencasting?: boolean }
 	>();
 
 	constructor(readonly config: RunnerConfig) {
@@ -299,10 +299,23 @@ export class LocalRunner {
 			session.width = session.width || viewport.width;
 			session.height = session.height || viewport.height;
 		}
+		// Report the page's real CSS viewport — that is exactly the coordinate
+		// space CDP Input expects, so a relayed click lands precisely on target on
+		// any display (scaled / retina included). Screencast metadata can diverge
+		// from innerWidth on fractional-scale displays; innerWidth never lies.
+		if (!session.cssW) {
+			const vp = await session.page
+				.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }))
+				.catch(() => null);
+			if (vp?.w) {
+				session.cssW = vp.w;
+				session.cssH = vp.h;
+			}
+		}
 		return {
 			frame: `data:image/jpeg;base64,${session.latestFrame ?? ""}`,
-			width: session.width ?? 1280,
-			height: session.height ?? 720,
+			width: session.cssW ?? session.width ?? 1280,
+			height: session.cssH ?? session.height ?? 720,
 		};
 	}
 
