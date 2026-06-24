@@ -224,16 +224,18 @@
       if (!inst) return;
       const overlay = document.createElement('div');
       overlay.id = 'takeover-overlay';
-      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.86);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px';
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#0b0b0f;display:flex;flex-direction:column';
       overlay.innerHTML = `
-        <div style="color:#fff;font-size:0.9rem;display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:center">
-          <span>🖥 Live browser — solve the challenge, then click <b>Done</b></span>
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;background:#16161c;color:#fff;font-size:0.85rem;flex:0 0 auto">
+          <span>🖥 Live browser — your mouse, scroll &amp; keyboard go through. Solve it, then <b>Done</b>.</span>
           <span id="takeover-status" style="color:#9ca3af;font-size:0.78rem">connecting…</span>
-        </div>
-        <img id="takeover-frame" alt="live browser" style="max-width:96vw;max-height:78vh;border:2px solid #f59e0b;border-radius:8px;cursor:crosshair;background:#111" />
-        <div style="display:flex;gap:8px">
-          <button id="takeover-done" class="btn btn-primary btn-sm">Done — finish</button>
+          <span style="flex:1"></span>
+          <button id="takeover-fs" class="btn btn-outline btn-sm" style="color:#fff;border-color:#555">Fullscreen</button>
+          <button id="takeover-done" class="btn btn-primary btn-sm">Done</button>
           <button id="takeover-close" class="btn btn-outline btn-sm" style="color:#fff;border-color:#555">Close</button>
+        </div>
+        <div id="takeover-stage" style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden">
+          <img id="takeover-frame" alt="live browser" tabindex="0" style="max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair;outline:none" />
         </div>`;
       document.body.appendChild(overlay);
       const img = overlay.querySelector('#takeover-frame');
@@ -254,33 +256,58 @@
               statusEl.textContent = 'live';
             }
           } catch (e) { statusEl.textContent = 'frame error'; }
-          await new Promise(r => setTimeout(r, 600));
+          await new Promise(r => setTimeout(r, 300));
         }
       }
       function sendInput(payload) {
         api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/input`, { method: 'POST', body: JSON.stringify(payload) }).catch(() => {});
       }
-      function toPageCoords(ev) {
+      function toCoords(ev) {
         const rect = img.getBoundingClientRect();
         const w = pageW || img.naturalWidth || rect.width;
         const h = pageH || img.naturalHeight || rect.height;
         return { x: Math.round((ev.clientX - rect.left) / rect.width * w), y: Math.round((ev.clientY - rect.top) / rect.height * h) };
       }
-      img.addEventListener('click', (ev) => { const c = toPageCoords(ev); sendInput({ type: 'click', x: c.x, y: c.y }); });
+      // Forward the full mouse/scroll/keyboard stream to the real browser.
+      let lastMove = 0;
+      img.addEventListener('mousemove', (ev) => {
+        const now = Date.now(); if (now - lastMove < 60) return; lastMove = now;
+        const c = toCoords(ev); sendInput({ type: 'move', x: c.x, y: c.y });
+      });
+      img.addEventListener('mousedown', (ev) => { ev.preventDefault(); img.focus(); const c = toCoords(ev); sendInput({ type: 'down', x: c.x, y: c.y }); });
+      img.addEventListener('mouseup', (ev) => { ev.preventDefault(); const c = toCoords(ev); sendInput({ type: 'up', x: c.x, y: c.y }); });
+      img.addEventListener('contextmenu', (ev) => ev.preventDefault());
+      let lastWheel = 0;
+      img.addEventListener('wheel', (ev) => {
+        ev.preventDefault();
+        const now = Date.now(); if (now - lastWheel < 45) return; lastWheel = now;
+        const c = toCoords(ev); sendInput({ type: 'scroll', x: c.x, y: c.y, deltaX: Math.round(ev.deltaX), deltaY: Math.round(ev.deltaY) });
+      }, { passive: false });
       function onKey(ev) {
         if (!alive) return;
+        if (ev.metaKey || ev.ctrlKey) return; // let browser shortcuts (Cmd+R, etc.) work
         if (ev.key && ev.key.length === 1) sendInput({ type: 'text', text: ev.key });
         else if (ev.key) sendInput({ type: 'key', key: ev.key });
         ev.preventDefault();
       }
-      document.addEventListener('keydown', onKey);
-      function teardown() { alive = false; document.removeEventListener('keydown', onKey); overlay.remove(); }
+      document.addEventListener('keydown', onKey, true);
+      function teardown() {
+        alive = false;
+        document.removeEventListener('keydown', onKey, true);
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        overlay.remove();
+      }
+      overlay.querySelector('#takeover-fs').addEventListener('click', () => {
+        if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        else overlay.requestFullscreen().catch(() => {});
+      });
       overlay.querySelector('#takeover-close').addEventListener('click', teardown);
       overlay.querySelector('#takeover-done').addEventListener('click', async () => {
         await api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/end`, { method: 'POST' }).catch(() => {});
         teardown();
         loadUnifiedBoard();
       });
+      img.focus();
       poll();
     }
 

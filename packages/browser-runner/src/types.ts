@@ -66,9 +66,11 @@ export interface CreateTaskRequest {
 
 /** A remote-control input event relayed to a human-takeover session. */
 export interface TakeoverInput {
-	type: "move" | "click" | "key" | "text";
+	type: "move" | "down" | "up" | "click" | "scroll" | "key" | "text";
 	x?: number;
 	y?: number;
+	deltaX?: number;
+	deltaY?: number;
 	key?: string;
 	text?: string;
 }
