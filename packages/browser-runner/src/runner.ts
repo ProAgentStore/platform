@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BrowserContext, CDPSession, Page } from "playwright";
@@ -639,13 +640,29 @@ export class LocalRunner {
 		// Prefer the real Chrome build (better TLS/fingerprint → fewer CAPTCHAs);
 		// fall back to bundled Chromium if Chrome isn't installed. Disable with
 		// PAGS_RUNNER_CHROMIUM=1.
+		//
+		// Real-profile mode (PAGS_RUNNER_REAL_PROFILE=1, or an explicit
+		// PAGS_RUNNER_CHROME_USER_DATA_DIR) uses YOUR actual Chrome profile —
+		// cookies, logins, browsing history — which is the strongest way to look
+		// human to CAPTCHA reputation scoring. Requires your normal Chrome to be
+		// CLOSED (Chrome locks a profile to one running instance). Otherwise we
+		// use a dedicated chrome-profile so we never fight your open browser.
 		const preferChrome = process.env.PAGS_RUNNER_CHROMIUM !== "1";
+		const realProfileDir = resolveRealChromeProfileDir();
 		try {
 			if (!preferChrome) throw new Error("chromium forced");
-			this.browserContext = await playwright.chromium.launchPersistentContext(
-				join(this.config.dataDir, "chrome-profile"),
-				{ ...baseOpts, channel: "chrome" },
-			);
+			if (realProfileDir) {
+				this.browserContext = await playwright.chromium.launchPersistentContext(realProfileDir.userDataDir, {
+					...baseOpts,
+					channel: "chrome",
+					args: [...baseOpts.args, `--profile-directory=${realProfileDir.profile}`],
+				});
+			} else {
+				this.browserContext = await playwright.chromium.launchPersistentContext(
+					join(this.config.dataDir, "chrome-profile"),
+					{ ...baseOpts, channel: "chrome" },
+				);
+			}
 		} catch {
 			this.browserContext = await playwright.chromium.launchPersistentContext(profileDir, baseOpts);
 		}
@@ -924,6 +941,28 @@ async function captureScreenshotDataUrl(page: Page): Promise<string | undefined>
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Resolve the user's real Chrome profile when real-profile mode is enabled
+ * (PAGS_RUNNER_REAL_PROFILE=1 or an explicit PAGS_RUNNER_CHROME_USER_DATA_DIR),
+ * so the runner reuses their cookies/logins/history. Returns null otherwise.
+ */
+function resolveRealChromeProfileDir(): { userDataDir: string; profile: string } | null {
+	const explicit = process.env.PAGS_RUNNER_CHROME_USER_DATA_DIR;
+	if (process.env.PAGS_RUNNER_REAL_PROFILE !== "1" && !explicit) return null;
+	const expand = (p: string) => (p.startsWith("~") ? join(homedir(), p.slice(1)) : p);
+	const profile = process.env.PAGS_RUNNER_CHROME_PROFILE || "Default";
+	if (explicit) return { userDataDir: expand(explicit), profile };
+	let userDataDir: string;
+	if (process.platform === "darwin") {
+		userDataDir = join(homedir(), "Library", "Application Support", "Google", "Chrome");
+	} else if (process.platform === "win32") {
+		userDataDir = join(homedir(), "AppData", "Local", "Google", "Chrome", "User Data");
+	} else {
+		userDataDir = join(homedir(), ".config", "google-chrome");
+	}
+	return existsSync(userDataDir) ? { userDataDir, profile } : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
