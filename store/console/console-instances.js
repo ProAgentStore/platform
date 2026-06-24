@@ -231,7 +231,7 @@
           <span id="takeover-status" style="color:#9ca3af;font-size:0.78rem">connecting…</span>
           <span style="flex:1"></span>
           <button id="takeover-fs" class="btn btn-outline btn-sm" style="color:#fff;border-color:#555">Fullscreen</button>
-          <button id="takeover-done" class="btn btn-primary btn-sm">Done</button>
+          <button id="takeover-done" class="btn btn-primary btn-sm">Done — submit</button>
           <button id="takeover-close" class="btn btn-outline btn-sm" style="color:#fff;border-color:#555">Close</button>
         </div>
         <div id="takeover-stage" style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden">
@@ -309,6 +309,48 @@
         const now = Date.now(); if (now - lastWheel < 45) return; lastWheel = now;
         const c = toCoords(ev); sendInput({ type: 'scroll', x: c.x, y: c.y, deltaX: Math.round(ev.deltaX), deltaY: Math.round(ev.deltaY) });
       }, { passive: false });
+
+      // Mobile touch: 1 finger = tap/drag (down/move/up), 2 fingers = scroll.
+      function touchCoords(t) {
+        const rect = img.getBoundingClientRect();
+        const w = pageW || img.width || rect.width;
+        const h = pageH || img.height || rect.height;
+        return { x: Math.round((t.clientX - rect.left) / rect.width * w), y: Math.round((t.clientY - rect.top) / rect.height * h) };
+      }
+      let touchMode = null, lastTouchY = 0, lastTouchX = 0;
+      img.addEventListener('touchstart', (ev) => {
+        ev.preventDefault();
+        if (ev.touches.length >= 2) {
+          touchMode = 'scroll';
+          lastTouchY = ev.touches[0].clientY; lastTouchX = ev.touches[0].clientX;
+          return;
+        }
+        touchMode = 'drag';
+        const c = touchCoords(ev.touches[0]); cursorPos = c; render();
+        sendInput({ type: 'move', x: c.x, y: c.y });
+        sendInput({ type: 'down', x: c.x, y: c.y });
+      }, { passive: false });
+      img.addEventListener('touchmove', (ev) => {
+        ev.preventDefault();
+        const now = Date.now();
+        if (touchMode === 'scroll' && ev.touches.length) {
+          const dy = lastTouchY - ev.touches[0].clientY;
+          const dx = lastTouchX - ev.touches[0].clientX;
+          lastTouchY = ev.touches[0].clientY; lastTouchX = ev.touches[0].clientX;
+          if (now - lastWheel < 45) return; lastWheel = now;
+          const c = cursorPos || { x: 0, y: 0 };
+          sendInput({ type: 'scroll', x: c.x, y: c.y, deltaX: Math.round(dx), deltaY: Math.round(dy) });
+          return;
+        }
+        const c = touchCoords(ev.touches[0]); cursorPos = c; render();
+        if (now - lastMove < 60) return; lastMove = now;
+        sendInput({ type: 'move', x: c.x, y: c.y });
+      }, { passive: false });
+      img.addEventListener('touchend', (ev) => {
+        ev.preventDefault();
+        if (touchMode === 'drag' && cursorPos) sendInput({ type: 'up', x: cursorPos.x, y: cursorPos.y });
+        touchMode = null;
+      }, { passive: false });
       function onKey(ev) {
         if (!alive) return;
         if (ev.metaKey || ev.ctrlKey) return; // let browser shortcuts (Cmd+R, etc.) work
@@ -328,10 +370,15 @@
         else overlay.requestFullscreen().catch(() => {});
       });
       overlay.querySelector('#takeover-close').addEventListener('click', teardown);
-      overlay.querySelector('#takeover-done').addEventListener('click', async () => {
-        await api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/end`, { method: 'POST' }).catch(() => {});
-        teardown();
-        loadUnifiedBoard();
+      const doneBtn = overlay.querySelector('#takeover-done');
+      doneBtn.addEventListener('click', async () => {
+        doneBtn.disabled = true; doneBtn.textContent = 'Submitting…';
+        try {
+          const r = await api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/resume`, { method: 'POST' });
+          if (r && r.submitted) { statusEl.textContent = 'submitted ✓'; teardown(); loadUnifiedBoard(); return; }
+          statusEl.textContent = (r && r.reason) ? r.reason : 'Not submitted yet';
+        } catch (e) { statusEl.textContent = 'submit error'; }
+        doneBtn.disabled = false; doneBtn.textContent = 'Done — submit';
       });
       img.focus();
       poll();

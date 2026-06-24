@@ -306,6 +306,19 @@ instanceRoutes.post("/:instanceId/takeover/:taskId/input", async (c) => {
 	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
 });
 
+/** Resume after a human solved the challenge — re-check + submit. */
+instanceRoutes.post("/:instanceId/takeover/:taskId/resume", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/resume`, {
+		method: "POST",
+	});
+	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
+});
+
 /** End a human-takeover session. */
 instanceRoutes.post("/:instanceId/takeover/:taskId/end", async (c) => {
 	const session = await requireUser(c);

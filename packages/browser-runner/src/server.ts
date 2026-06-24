@@ -120,6 +120,10 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		await runner.takeoverInput(inputMatch[1], body);
 		return json(res, 200, { ok: true });
 	}
+	const resumeMatch = path.match(/^\/takeover\/([^/]+)\/resume$/);
+	if (req.method === "POST" && resumeMatch) {
+		return json(res, 200, await runner.resumeTakeover(resumeMatch[1]));
+	}
 	const endMatch = path.match(/^\/takeover\/([^/]+)\/end$/);
 	if (req.method === "POST" && endMatch) {
 		await runner.endTakeover(endMatch[1]);

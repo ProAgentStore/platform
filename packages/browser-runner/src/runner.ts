@@ -348,6 +348,59 @@ export class LocalRunner {
 		}
 	}
 
+	/**
+	 * Resume after a human takeover: verify the challenge is actually gone, then
+	 * finish the application (submit). If a challenge or an unfilled required
+	 * field remains, it does NOT submit — it reports what's left so the human can
+	 * fix it in the live view and try again. Completes the task on success.
+	 */
+	async resumeTakeover(taskId: string): Promise<{ submitted: boolean; reason?: string; output?: unknown }> {
+		const session = this.requireTakeover(taskId);
+		const task = this.store.getTask(taskId);
+		if (!task) throw new RunnerInputError("Task not found");
+		const page = session.page;
+
+		const challenge = await detectHumanChallenge(page);
+		if (challenge) {
+			this.addTaskEvent(task, "job.human_challenge_present", `Challenge still on the page: ${challenge}`);
+			return { submitted: false, reason: `The ${challenge} challenge is still showing — solve it in the live view, then submit again.` };
+		}
+
+		this.addTaskEvent(task, "job.resumed", "Human cleared the challenge; resuming submission");
+		const beforeSubmitUrl = page.url();
+		try {
+			const navigation = page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
+			this.addTaskEvent(task, "job.form.submit.started", "Submitting application form", { url: beforeSubmitUrl });
+			await submitApplicationForm(page);
+			await navigation;
+			await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			this.addTaskEvent(task, "job.resume.blocked", reason);
+			return { submitted: false, reason };
+		}
+
+		const output = {
+			taskType: task.type,
+			submitted: true,
+			resumedAfterHuman: true,
+			beforeSubmitUrl,
+			finalUrl: page.url(),
+			title: await page.title().catch(() => ""),
+			visibleText: (await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")).slice(0, 1_500),
+		};
+		this.addTaskEvent(task, "job.form.submit.completed", "Application submitted after human takeover", output);
+		task.status = "completed";
+		task.output = output;
+		task.error = undefined;
+		task.updatedAt = new Date().toISOString();
+		task.completedAt = task.updatedAt;
+		this.store.putTask(task);
+		this.addTaskEvent(task, "task.completed", `Task completed: ${task.type}`, output);
+		await this.endTakeover(taskId);
+		return { submitted: true, output };
+	}
+
 	/** End a takeover session (human finished or gave up). */
 	async endTakeover(taskId: string): Promise<void> {
 		const session = this.takeovers.get(taskId);

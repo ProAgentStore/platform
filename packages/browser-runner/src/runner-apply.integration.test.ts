@@ -100,6 +100,13 @@ describe("LocalRunner job.apply_basic e2e", () => {
 		expect(frame.height).toBeGreaterThan(0);
 		await runner.takeoverInput(task.id, { type: "move", x: 20, y: 20 });
 		await runner.takeoverInput(task.id, { type: "click", x: 20, y: 20 });
+
+		// Resume must NOT submit while the challenge is still on the page.
+		const blocked = await runner.resumeTakeover(task.id);
+		expect(blocked.submitted).toBe(false);
+		expect(blocked.reason).toMatch(/challenge/i);
+		expect(server.submissions.length).toBe(0);
+
 		await runner.endTakeover(task.id);
 		expect(runner.listTakeovers()).not.toContain(task.id);
 	}, 60_000);
