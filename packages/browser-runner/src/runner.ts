@@ -96,6 +96,10 @@ export class LocalRunner {
 	constructor(readonly config: RunnerConfig) {
 		mkdirSync(config.dataDir, { recursive: true });
 		this.store = new RunnerStore(config.dataDir);
+		// Tasks paused/running on a previous process are orphaned now — their
+		// pages and takeover sessions are gone. Fail them so the board is clean.
+		const expired = this.store.expireInFlightTasks();
+		if (expired > 0) console.log(`[runner] expired ${expired} orphaned in-flight task(s) from a previous session`);
 	}
 
 	capabilities() {

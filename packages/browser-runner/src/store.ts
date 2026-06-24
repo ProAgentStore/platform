@@ -48,6 +48,30 @@ export class RunnerStore {
 		return this.read().tasks.find((task) => task.id === id) || null;
 	}
 
+	/**
+	 * On process startup, any persisted task still in an in-flight state
+	 * (needs_human / running) is orphaned — its live browser page and takeover
+	 * session died with the previous process and can't be resumed. Fail them so
+	 * they don't linger as stale "Needs you" cards. Returns the count expired.
+	 */
+	expireInFlightTasks(): number {
+		const data = this.read();
+		const now = new Date().toISOString();
+		let expired = 0;
+		for (const task of data.tasks) {
+			if (task.status === "needs_human" || task.status === "running") {
+				task.status = "failed";
+				task.error =
+					"Runner restarted — this paused task was orphaned (its browser session is gone). Re-run it to try again.";
+				task.updatedAt = now;
+				task.completedAt = now;
+				expired += 1;
+			}
+		}
+		if (expired > 0) this.write(data);
+		return expired;
+	}
+
 	putTask(task: RunnerTask): RunnerTask {
 		const data = this.read();
 		const index = data.tasks.findIndex((row) => row.id === task.id);
