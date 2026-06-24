@@ -425,11 +425,16 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 	const cand = (body.candidate ?? {}) as Record<string, unknown>;
 	const url = String(body.url ?? "");
 	const resumePath = String(body.resumePath ?? body.resume_path ?? "");
-	const fullName = String(cand.fullName ?? cand.full_name ?? body.full_name ?? "");
-	const email = String(cand.email ?? body.email ?? "");
+
+	// Candidate identity comes from the instance KB (the résumé) — the single
+	// source of truth — so the email is always the one the user maintains there,
+	// never a hardcoded/work address. Request fields override only if provided.
+	const kb = await readKbCandidate(c.env, instanceId);
+	const fullName = String(cand.fullName ?? cand.full_name ?? body.full_name ?? kb.fullName ?? "");
+	const email = String(cand.email ?? body.email ?? kb.email ?? "");
 	if (!/^https?:\/\//.test(url)) return c.json({ error: "url (http/https) required" }, 400);
 	if (!resumePath) return c.json({ error: "resumePath required (absolute path on the runner machine)" }, 400);
-	if (!fullName || !email) return c.json({ error: "candidate.fullName and candidate.email required" }, 400);
+	if (!fullName || !email) return c.json({ error: "no candidate email in the KB — add your résumé (with email) to the instance knowledge, or pass candidate.email" }, 400);
 
 	const job = {
 		url,
@@ -782,4 +787,28 @@ function optionalStr(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Pull the candidate's name + email from the instance KB (the résumé doc) — the
+ * single source of truth, so applications never use a stale/work email. Returns
+ * empty strings when the KB has nothing usable.
+ */
+async function readKbCandidate(env: Env, instanceId: string): Promise<{ fullName: string; email: string }> {
+	try {
+		const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
+		const res = await stub.fetch(new Request("https://agent/knowledge"));
+		const data = (await res.json()) as { knowledge?: Array<{ title?: string; content?: string }> };
+		const docs = data.knowledge ?? [];
+		// Prefer the résumé/CV doc; else any doc that contains an email.
+		const resume =
+			docs.find((d) => /resume|cv/i.test(String(d.title ?? "")) && /@/.test(String(d.content ?? ""))) ??
+			docs.find((d) => /@/.test(String(d.content ?? "")));
+		if (!resume) return { fullName: "", email: "" };
+		const email = (String(resume.content ?? "").match(/[\w.+-]+@[\w.-]+\.\w+/) ?? [""])[0];
+		const fullName = String(resume.title ?? "").replace(/\s*(resume|cv)\s*$/i, "").trim();
+		return { fullName, email };
+	} catch {
+		return { fullName: "", email: "" };
+	}
 }
