@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { BrowserContext, CDPSession, Page } from "playwright";
 import { humanApproach } from "./human-mouse.js";
+import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from "./challenge.js";
+import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
 import { RunnerStore } from "./store.js";
 import type {
 	CreateTaskRequest,
@@ -973,125 +974,7 @@ async function submitApplicationForm(page: Page): Promise<void> {
 	});
 }
 
-/**
- * Detect an anti-bot human challenge on the page (reCAPTCHA, hCaptcha,
- * Cloudflare Turnstile, generic captcha). These can't be solved by the model,
- * so they trigger a handoff to a human rather than wasted retries.
- */
-async function detectHumanChallenge(page: Page): Promise<string | null> {
-	// Specific widget classes first so the label is accurate (hCaptcha ships a
-	// reCAPTCHA-compat shim, so a generic reCAPTCHA check would mislabel it).
-	const checks: Array<[string, string]> = [
-		["hcaptcha", 'iframe[src*="hcaptcha"], .h-captcha'],
-		["cloudflare-turnstile", 'iframe[src*="challenges.cloudflare.com"], .cf-turnstile'],
-		["recaptcha", 'iframe[src*="recaptcha"], .g-recaptcha'],
-		["captcha", 'iframe[title*="captcha" i], [class*="captcha" i], [id*="captcha" i]'],
-	];
-	for (const [type, selector] of checks) {
-		if ((await page.locator(selector).count().catch(() => 0)) > 0) return type;
-	}
-	return null;
-}
 
-/**
- * Whether a detected challenge has actually been solved — i.e. the widget has
- * produced a response token. A solved captcha keeps its widget in the DOM, so
- * presence alone isn't "still blocked"; the token is the real signal.
- */
-async function challengeSolved(page: Page): Promise<boolean> {
-	return page
-		.evaluate(() => {
-			const names = ["h-captcha-response", "g-recaptcha-response", "cf-turnstile-response"];
-			for (const n of names) {
-				const el = document.querySelector(`textarea[name="${n}"], input[name="${n}"]`) as
-					| HTMLInputElement
-					| HTMLTextAreaElement
-					| null;
-				if (el && typeof el.value === "string" && el.value.length > 0) return true;
-			}
-			return false;
-		})
-		.catch(() => false);
-}
-
-/** Capture a downscaled JPEG screenshot as a data URL for the human-takeover UI. */
-async function captureScreenshotDataUrl(page: Page): Promise<string | undefined> {
-	try {
-		const buf = await page.screenshot({ type: "jpeg", quality: 55 });
-		return `data:image/jpeg;base64,${buf.toString("base64")}`;
-	} catch {
-		return undefined;
-	}
-}
-
-/**
- * Resolve the user's real Chrome profile when real-profile mode is enabled
- * (PAGS_RUNNER_REAL_PROFILE=1 or an explicit PAGS_RUNNER_CHROME_USER_DATA_DIR),
- * so the runner reuses their cookies/logins/history. Returns null otherwise.
- */
-/**
- * Seed a dedicated profile directory with a copy of the user's real Chrome
- * profile — cookies, logins, history, local storage. This gives the runner the
- * user's signed-in sessions and a human browsing reputation WITHOUT attaching to
- * the live profile, so it never fights Chrome's single-instance lock and the
- * user can keep their normal Chrome open. Seeds once; delete the dir to refresh.
- * Returns the seeded user-data-dir, or null if the source profile is unreadable.
- */
-function seedProfileCopy(real: { userDataDir: string; profile: string }, destUserDataDir: string): string | null {
-	if (existsSync(destUserDataDir)) return destUserDataDir; // already seeded
-	const srcProfile = join(real.userDataDir, real.profile);
-	if (!existsSync(srcProfile)) return null;
-	const destProfile = join(destUserDataDir, "Default");
-	mkdirSync(destProfile, { recursive: true });
-	try {
-		// "Local State" holds the os_crypt key (Keychain-wrapped) that decrypts
-		// cookies + saved passwords — without it the copied cookies are unreadable.
-		copyFileSync(join(real.userDataDir, "Local State"), join(destUserDataDir, "Local State"));
-	} catch {
-		// best-effort
-	}
-	const items = [
-		"Cookies",
-		"Cookies-journal",
-		"Login Data",
-		"Login Data-journal",
-		"Web Data",
-		"History",
-		"Preferences",
-		"Bookmarks",
-		"Favicons",
-		"Network",
-		"Local Storage",
-		"Session Storage",
-		"Sessions",
-		"IndexedDB",
-	];
-	for (const item of items) {
-		try {
-			cpSync(join(srcProfile, item), join(destProfile, item), { recursive: true });
-		} catch {
-			// best-effort per item
-		}
-	}
-	return destUserDataDir;
-}
-
-function resolveRealChromeProfileDir(): { userDataDir: string; profile: string } | null {
-	const explicit = process.env.PAGS_RUNNER_CHROME_USER_DATA_DIR;
-	if (process.env.PAGS_RUNNER_REAL_PROFILE !== "1" && !explicit) return null;
-	const expand = (p: string) => (p.startsWith("~") ? join(homedir(), p.slice(1)) : p);
-	const profile = process.env.PAGS_RUNNER_CHROME_PROFILE || "Default";
-	if (explicit) return { userDataDir: expand(explicit), profile };
-	let userDataDir: string;
-	if (process.platform === "darwin") {
-		userDataDir = join(homedir(), "Library", "Application Support", "Google", "Chrome");
-	} else if (process.platform === "win32") {
-		userDataDir = join(homedir(), "AppData", "Local", "Google", "Chrome", "User Data");
-	} else {
-		userDataDir = join(homedir(), ".config", "google-chrome");
-	}
-	return existsSync(userDataDir) ? { userDataDir, profile } : null;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
