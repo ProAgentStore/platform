@@ -162,6 +162,8 @@ export class LocalRunner {
 		task.completedAt = task.updatedAt;
 		this.store.putTask(task);
 		this.addTaskEvent(task, "task.cancelled", `Task cancelled: ${task.type}`);
+		// Tear down any live takeover session for this task (free the page + CDP).
+		void this.endTakeover(id).catch(() => undefined);
 		return task;
 	}
 
@@ -630,7 +632,15 @@ export class LocalRunner {
 			headless: this.config.headless,
 			acceptDownloads: true,
 			downloadsPath,
+			// Light anti-detection: drop the most obvious automation tell so fewer
+			// CAPTCHAs trigger in the first place (the human still solves the rest).
+			args: ["--disable-blink-features=AutomationControlled"],
 		});
+		await this.browserContext
+			.addInitScript(() => {
+				Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+			})
+			.catch(() => undefined);
 		return this.browserContext;
 	}
 
@@ -858,10 +868,12 @@ async function submitApplicationForm(page: Page): Promise<void> {
  * so they trigger a handoff to a human rather than wasted retries.
  */
 async function detectHumanChallenge(page: Page): Promise<string | null> {
+	// Specific widget classes first so the label is accurate (hCaptcha ships a
+	// reCAPTCHA-compat shim, so a generic reCAPTCHA check would mislabel it).
 	const checks: Array<[string, string]> = [
-		["recaptcha", 'iframe[src*="recaptcha"], .g-recaptcha'],
 		["hcaptcha", 'iframe[src*="hcaptcha"], .h-captcha'],
 		["cloudflare-turnstile", 'iframe[src*="challenges.cloudflare.com"], .cf-turnstile'],
+		["recaptcha", 'iframe[src*="recaptcha"], .g-recaptcha'],
 		["captcha", 'iframe[title*="captcha" i], [class*="captcha" i], [id*="captcha" i]'],
 	];
 	for (const [type, selector] of checks) {
