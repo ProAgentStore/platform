@@ -860,11 +860,38 @@ export class LocalRunner {
 				break;
 			case "check": {
 				const loc = locate();
-				// Custom checkboxes hide the real <input> (opacity:0 / behind a label).
-				// Try a clean check, then force, then click the visible label text.
-				if (await loc.check({ timeout: 6_000 }).then(() => true).catch(() => false)) break;
-				if (await loc.check({ force: true, timeout: 4_000 }).then(() => true).catch(() => false)) break;
-				if (action.name) await page.getByText(action.name.slice(0, 40), { exact: false }).first().click({ force: true, timeout: 4_000 });
+				// Custom checkboxes hide the real <input> (opacity:0 / behind a label /
+				// a div[role=checkbox]). Try Playwright's check, then force, then a
+				// direct DOM tick matched by the checkbox's label text.
+				if (await loc.check({ timeout: 5_000 }).then(() => true).catch(() => false)) break;
+				if (await loc.check({ force: true, timeout: 3_000 }).then(() => true).catch(() => false)) break;
+				const ticked = await page
+					.evaluate((rawName: string) => {
+						const norm = (s: string | null | undefined) => (s || "").toLowerCase().replace(/\s+/g, " ").trim();
+						const needle = norm(rawName).slice(0, 30);
+						const boxes = Array.from(document.querySelectorAll<HTMLElement>('input[type="checkbox"], [role="checkbox"]'));
+						const labelOf = (b: HTMLElement) => {
+							const forId = b.id ? document.querySelector(`label[for="${b.id}"]`)?.textContent : "";
+							return norm(b.closest("label")?.textContent || b.getAttribute("aria-label") || forId || b.parentElement?.textContent || "");
+						};
+						const tick = (b: HTMLElement) => {
+							if (b instanceof HTMLInputElement) {
+								b.checked = true;
+								b.dispatchEvent(new Event("input", { bubbles: true }));
+								b.dispatchEvent(new Event("change", { bubbles: true }));
+							} else {
+								b.setAttribute("aria-checked", "true");
+							}
+							b.click?.();
+						};
+						const match = boxes.find((b) => { const l = labelOf(b); return needle && (l.includes(needle) || (l.length > 12 && needle.includes(l.slice(0, 12)))); });
+						const target = match || (boxes.length === 1 ? boxes[0] : undefined);
+						if (!target) return false;
+						tick(target);
+						return true;
+					}, action.name ?? "")
+					.catch(() => false);
+				if (!ticked) throw new RunnerInputError("could not find/tick the checkbox");
 				break;
 			}
 			case "upload": {
