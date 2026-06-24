@@ -25,6 +25,46 @@ export const STORAGE_TOOLS: ToolDef[] = [
 		},
 	},
 
+	// ── Knowledge base management (editable via chat) ───────────────────────────
+	{
+		name: "list_knowledge",
+		description:
+			"List the documents in the knowledge base with their id, title and size. Use this first to find which document to read, amend, or delete.",
+		parameters: {},
+	},
+	{
+		name: "read_knowledge",
+		description: "Read the full text of one knowledge-base document by id (e.g. before amending it).",
+		parameters: {
+			id: { type: "string", description: "Document id from list_knowledge", required: true },
+		},
+	},
+	{
+		name: "update_knowledge",
+		description:
+			"Amend a knowledge-base document — replace its content and/or title. To make a small edit, read_knowledge first, change the text, then pass the FULL new content here.",
+		parameters: {
+			id: { type: "string", description: "Document id from list_knowledge", required: true },
+			content: { type: "string", description: "The full new content of the document" },
+			title: { type: "string", description: "New title (optional)" },
+		},
+	},
+	{
+		name: "delete_knowledge",
+		description: "Permanently delete a knowledge-base document by id. Confirm with the user first.",
+		parameters: {
+			id: { type: "string", description: "Document id from list_knowledge", required: true },
+		},
+	},
+	{
+		name: "add_knowledge",
+		description: "Add a new document to the knowledge base (max 20 documents).",
+		parameters: {
+			title: { type: "string", description: "Document title", required: true },
+			content: { type: "string", description: "Document content (text)", required: true },
+		},
+	},
+
 	// ── File Storage ──────────────────────────────────────────────────────────
 	{
 		name: "upload_file",
@@ -202,6 +242,48 @@ export async function executeStorageTool(
 					return ok(call.name, "No relevant results found. The knowledge base may be empty or the query didn't match any stored content.");
 				}
 				return ok(call.name, JSON.stringify(results, null, 2));
+			}
+
+			case "list_knowledge": {
+				const docs = await engine.listKnowledge();
+				if (docs.length === 0) return ok(call.name, "The knowledge base is empty.");
+				return ok(call.name, JSON.stringify(docs, null, 2));
+			}
+
+			case "read_knowledge": {
+				const id = call.input.id as string;
+				if (!id) return fail(call.name, "id required");
+				const doc = await engine.readKnowledge(id);
+				if (!doc) return fail(call.name, `No knowledge document with id ${id}. Use list_knowledge to get valid ids.`);
+				return ok(call.name, JSON.stringify({ id: doc.id, title: doc.title, content: doc.content }, null, 2));
+			}
+
+			case "update_knowledge": {
+				const id = call.input.id as string;
+				if (!id) return fail(call.name, "id required");
+				const content = call.input.content as string | undefined;
+				const title = call.input.title as string | undefined;
+				if (!content && !title) return fail(call.name, "provide new content and/or title");
+				const updated = await engine.updateKnowledge(id, { content, title });
+				if (!updated) return fail(call.name, `No knowledge document with id ${id}.`);
+				return ok(call.name, `Updated "${updated.title}" (${updated.content.length} chars).`);
+			}
+
+			case "delete_knowledge": {
+				const id = call.input.id as string;
+				if (!id) return fail(call.name, "id required");
+				const deleted = await engine.deleteKnowledge(id);
+				if (!deleted) return fail(call.name, `No knowledge document with id ${id}.`);
+				return ok(call.name, `Deleted "${deleted.title}".`);
+			}
+
+			case "add_knowledge": {
+				const title = call.input.title as string;
+				const content = call.input.content as string;
+				if (!title || !content) return fail(call.name, "title and content required");
+				const doc = await engine.addKnowledge(title, content);
+				if (!doc) return fail(call.name, "Knowledge base is full (max 20 documents). Delete one first.");
+				return ok(call.name, `Added "${doc.title}" (id ${doc.id}).`);
 			}
 
 			case "upload_file": {

@@ -269,3 +269,38 @@ describe("storage tools", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
+
+describe("knowledge base edit tools (editable via chat)", () => {
+	it("add → list → read → update → delete round-trips through the engine", async () => {
+		const engine = makeEngine();
+
+		const add = await executeStorageTool({ name: "add_knowledge", input: { title: "Resume", content: "Senior PM, 20 years" } }, engine);
+		expect(add.success).toBe(true);
+		const id = add.content.match(/id (\S+)\)/)?.[1];
+		expect(id).toBeTruthy();
+
+		const list = await executeStorageTool({ name: "list_knowledge", input: {} }, engine);
+		expect(list.content).toContain("Resume");
+
+		const read = await executeStorageTool({ name: "read_knowledge", input: { id } }, engine);
+		expect(read.content).toContain("Senior PM");
+
+		const upd = await executeStorageTool({ name: "update_knowledge", input: { id, content: "Senior PM, 21 years, AWS" } }, engine);
+		expect(upd.success).toBe(true);
+		const read2 = await executeStorageTool({ name: "read_knowledge", input: { id } }, engine);
+		expect(read2.content).toContain("21 years");
+
+		const del = await executeStorageTool({ name: "delete_knowledge", input: { id } }, engine);
+		expect(del.success).toBe(true);
+		const list2 = await executeStorageTool({ name: "list_knowledge", input: {} }, engine);
+		expect(list2.content).toMatch(/empty/i);
+	});
+
+	it("fails clearly on missing id and unknown document", async () => {
+		const engine = makeEngine();
+		expect((await executeStorageTool({ name: "read_knowledge", input: {} }, engine)).success).toBe(false);
+		const d = await executeStorageTool({ name: "delete_knowledge", input: { id: "nope" } }, engine);
+		expect(d.success).toBe(false);
+		expect(d.content).toMatch(/No knowledge document/i);
+	});
+});

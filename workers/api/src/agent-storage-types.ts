@@ -104,6 +104,7 @@ export interface ActivityEvent {
 		| "tool.result"
 		| "knowledge.added"
 		| "knowledge.removed"
+		| "knowledge.updated"
 		| "file.uploaded"
 		| "file.deleted"
 		| "collection.created"

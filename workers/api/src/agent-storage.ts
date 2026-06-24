@@ -18,7 +18,7 @@ import type {
 	VectorMeta,
 	VectorSearchResult,
 } from "./agent-storage-types.js";
-import type { AgentMessage, MemoryEntry } from "./agent-types.js";
+import type { AgentMessage, KnowledgeDoc, MemoryEntry } from "./agent-types.js";
 import { chunkText, encodeIndexValue, extractFileText, shortId, validateRecord } from "./agent-storage-utils.js";
 
 const MAX_EVENTS = 500;
@@ -146,6 +146,63 @@ export class AgentStorageEngine {
 				await this.doStorage.delete(keysToDelete.slice(i, i + 128));
 			}
 		}
+	}
+
+	// ── Knowledge base (editable via chat) ─────────────────────────────────────
+
+	/** List knowledge documents (id, title, size) — not the full content. */
+	async listKnowledge(): Promise<Array<{ id: string; title: string; chars: number; source?: string }>> {
+		const all = await this.doStorage.list<KnowledgeDoc>({ prefix: "kb:" });
+		return [...all.values()].map((d) => ({ id: d.id, title: d.title, chars: d.content?.length ?? 0, source: d.source }));
+	}
+
+	/** Read one knowledge document's full content. */
+	async readKnowledge(id: string): Promise<KnowledgeDoc | null> {
+		return (await this.doStorage.get<KnowledgeDoc>(`kb:${id}`)) ?? null;
+	}
+
+	/** Delete a knowledge document and its vectors. Returns false if not found. */
+	async deleteKnowledge(id: string): Promise<KnowledgeDoc | null> {
+		const existing = await this.doStorage.get<KnowledgeDoc>(`kb:${id}`);
+		if (!existing) return null;
+		await this.doStorage.delete(`kb:${id}`);
+		await this.vectorDelete("knowledge", id).catch(() => undefined);
+		await this.logEvent("knowledge.removed", undefined, { docId: id, title: existing.title }).catch(() => undefined);
+		return existing;
+	}
+
+	/** Amend a knowledge document's title and/or content, re-vectorizing it. */
+	async updateKnowledge(id: string, patch: { title?: string; content?: string }): Promise<KnowledgeDoc | null> {
+		const existing = await this.doStorage.get<KnowledgeDoc>(`kb:${id}`);
+		if (!existing) return null;
+		if (patch.content && patch.content.length > 100_000) throw new Error("Document too large (max 100KB)");
+		const updated: KnowledgeDoc = {
+			...existing,
+			title: patch.title ?? existing.title,
+			content: patch.content ?? existing.content,
+		};
+		await this.doStorage.put(`kb:${id}`, updated);
+		await this.vectorizeStore("knowledge", id, `${updated.title}\n\n${updated.content}`).catch(() => undefined);
+		await this.logEvent("knowledge.updated", undefined, { docId: id, title: updated.title }).catch(() => undefined);
+		return updated;
+	}
+
+	/** Add a new knowledge document (max 20). Returns null if the KB is full. */
+	async addKnowledge(title: string, content: string): Promise<KnowledgeDoc | null> {
+		if (content.length > 100_000) throw new Error("Document too large (max 100KB)");
+		const existing = await this.doStorage.list({ prefix: "kb:" });
+		if (existing.size >= 20) return null;
+		const doc: KnowledgeDoc = {
+			id: crypto.randomUUID(),
+			title,
+			content,
+			source: "paste",
+			addedAt: new Date().toISOString(),
+		};
+		await this.doStorage.put(`kb:${doc.id}`, doc);
+		await this.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`).catch(() => undefined);
+		await this.logEvent("knowledge.added", undefined, { docId: doc.id, title }).catch(() => undefined);
+		return doc;
 	}
 
 	private async embed(text: string): Promise<number[] | null> {
