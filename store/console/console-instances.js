@@ -115,6 +115,11 @@
       }
     }
 
+    function switchKbTab(name) {
+      document.querySelectorAll('#inst-tab-knowledge [data-kb-tab]').forEach(t => t.classList.toggle('active', t.dataset.kbTab === name));
+      document.querySelectorAll('#inst-tab-knowledge [data-kb-panel]').forEach(p => { p.hidden = p.dataset.kbPanel !== name; });
+    }
+
     function switchInstTab(name, updateUrl = true) {
       // Update tab active state in both header slot and instance-detail
       document.querySelectorAll('[data-inst-tab]').forEach(t => {
@@ -606,6 +611,9 @@
       });
       section.classList.remove('hidden');
       document.getElementById('inst-unified-board').classList.add('hidden');
+      // The global "Recent Activity" feed is redundant here — the task has its
+      // own Activity tab. Hide it while drilled into a task.
+      document.getElementById('inst-runtime-events')?.classList.add('hidden');
       if (scrollIntoView) section.scrollIntoView({ block: 'start' });
     }
 
@@ -628,6 +636,7 @@
       document.getElementById('runtime-task-detail').classList.add('hidden');
       document.getElementById('runtime-task-detail-actions').innerHTML = '';
       document.getElementById('inst-unified-board').classList.remove('hidden');
+      document.getElementById('inst-runtime-events')?.classList.remove('hidden');
     }
 
     async function handleRuntimeTaskAction(taskId, action, sourceButton = null) {
