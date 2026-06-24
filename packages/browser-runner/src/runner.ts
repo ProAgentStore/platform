@@ -32,7 +32,7 @@ export class HumanHandoffError extends Error {
 	constructor(
 		message: string,
 		readonly handoff: {
-			reason: "challenge" | "exhausted_attempts";
+			reason: "challenge" | "exhausted_attempts" | "assist";
 			challengeType?: string;
 			url: string;
 			attempts: number;
@@ -455,6 +455,20 @@ export class LocalRunner {
 			// If the page presents an anti-bot challenge, hand off to a human to
 			// solve it via takeover (the same path job applications use).
 			await this.guardHumanChallenge(task, page);
+			// holdForTakeover: hand the page straight to a human to drive — for
+			// complex multi-step sites (e.g. a Dayforce/Workday ATS) the agent
+			// can't auto-fill, the human completes it in the live view.
+			if (task.input.holdForTakeover) {
+				const screenshotBase64 = await captureScreenshotDataUrl(page);
+				this.takeovers.set(task.id, { page });
+				this.addTaskEvent(task, "browser.takeover.ready", "Page ready for human takeover", { url: page.url() });
+				throw new HumanHandoffError("Ready for you to take over and complete this page.", {
+					reason: "assist",
+					url: page.url(),
+					attempts: 0,
+					screenshotBase64,
+				});
+			}
 			const output = {
 				url: page.url(),
 				title: await page.title(),
