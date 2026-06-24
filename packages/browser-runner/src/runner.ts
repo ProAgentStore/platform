@@ -238,8 +238,9 @@ export class LocalRunner {
 		// Keep this page alive and register a remote-control session so a human
 		// can view the screen and solve the challenge from the PAGS console.
 		this.takeovers.set(task.id, { page });
+		const isApply = task.type === "job.apply_basic" || task.type === "job.apply_authenticated";
 		throw new HumanHandoffError(
-			`Human verification required (${challenge}). A person must take over to complete and submit this application.`,
+			`Human verification required (${challenge}). A person must take over to solve it${isApply ? " and submit this application" : ""}.`,
 			{ reason: "challenge", challengeType: challenge, url: page.url(), attempts: 1, screenshotBase64 },
 		);
 	}
@@ -369,30 +370,36 @@ export class LocalRunner {
 			return { submitted: false, reason: `The ${challenge} challenge isn't solved yet — complete it in the live view, then submit again.` };
 		}
 
-		this.addTaskEvent(task, "job.resumed", "Human cleared the challenge; resuming submission");
+		this.addTaskEvent(task, "job.resumed", "Human cleared the challenge; resuming");
 		const beforeSubmitUrl = page.url();
-		try {
-			const navigation = page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
-			this.addTaskEvent(task, "job.form.submit.started", "Submitting application form", { url: beforeSubmitUrl });
-			await submitApplicationForm(page);
-			await navigation;
-			await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
-		} catch (error) {
-			const reason = error instanceof Error ? error.message : String(error);
-			this.addTaskEvent(task, "job.resume.blocked", reason);
-			return { submitted: false, reason };
+		// Application tasks finish by submitting the form; other tasks (e.g.
+		// browser.open / a captcha test) just need the challenge cleared.
+		const submitsForm = task.type === "job.apply_basic" || task.type === "job.apply_authenticated";
+		if (submitsForm) {
+			try {
+				const navigation = page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
+				this.addTaskEvent(task, "job.form.submit.started", "Submitting application form", { url: beforeSubmitUrl });
+				await submitApplicationForm(page);
+				await navigation;
+				await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				this.addTaskEvent(task, "job.resume.blocked", reason);
+				return { submitted: false, reason };
+			}
 		}
 
 		const output = {
 			taskType: task.type,
-			submitted: true,
+			submitted: submitsForm,
+			challengeCleared: true,
 			resumedAfterHuman: true,
 			beforeSubmitUrl,
 			finalUrl: page.url(),
 			title: await page.title().catch(() => ""),
 			visibleText: (await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")).slice(0, 1_500),
 		};
-		this.addTaskEvent(task, "job.form.submit.completed", "Application submitted after human takeover", output);
+		this.addTaskEvent(task, submitsForm ? "job.form.submit.completed" : "task.resumed.completed", submitsForm ? "Application submitted after human takeover" : "Challenge cleared after human takeover", output);
 		task.status = "completed";
 		task.output = output;
 		task.error = undefined;
@@ -427,6 +434,9 @@ export class LocalRunner {
 			const page = context.pages()[0] || (await context.newPage());
 			this.addTaskEvent(task, "browser.goto.started", "Opening browser page", { url });
 			await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+			// If the page presents an anti-bot challenge, hand off to a human to
+			// solve it via takeover (the same path job applications use).
+			await this.guardHumanChallenge(task, page);
 			const output = {
 				url: page.url(),
 				title: await page.title(),
