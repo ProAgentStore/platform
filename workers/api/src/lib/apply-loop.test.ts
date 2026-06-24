@@ -75,6 +75,29 @@ describe("runApplyLoop", () => {
 		expect(decideCalls).toBe(3);
 	});
 
+	it("hands off when the brain repeats one control with no progress (clicks 'succeed')", async () => {
+		const acted: BrowserAction[] = [];
+		const deps: ApplyDeps = {
+			snapshot: async () => page('- button "Sign in"'),
+			act: async (a) => { acted.push(a); return { url: "x", challenge: null }; }, // succeeds, no error
+			decide: async () => ({ action: { action: "click", role: "button", name: "Sign in" } }),
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 40 });
+		expect(result.outcome).toBe("stuck"); // fixation → handoff, not endless thrash
+		expect(acted.length).toBe(3); // acted 3×, then handed off on the 4th identical decision before acting
+	});
+
+	it("does NOT treat repeated scrolls as fixation", async () => {
+		let n = 0;
+		const deps: ApplyDeps = {
+			snapshot: async () => page("- text: long page"),
+			act: async () => ({ url: "x", challenge: null }),
+			decide: async () => (n++ < 8 ? { action: { action: "scroll", dy: 600 } } : { finish: { status: "blocked", detail: "done scrolling" } }),
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 40 });
+		expect(result.outcome).toBe("blocked"); // scrolling many times is fine, no false handoff
+	});
+
 	it("feeds a failed action back into the log so the brain can adapt", async () => {
 		const logsSeen: string[][] = [];
 		let d = 0;

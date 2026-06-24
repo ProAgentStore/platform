@@ -83,6 +83,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	let repeatFails = 0;
 	let pageKey = "";
 	let failsOnPage = 0;
+	const recentKeys: string[] = [];
 
 	for (let step = 0; step < maxSteps; step++) {
 		const snap = await deps.snapshot();
@@ -110,8 +111,21 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 
-		const actResult = await deps.act(decision.action);
 		const key = JSON.stringify(decision.action);
+		// Fixation guard (before acting): the brain keeps poking the SAME control
+		// with no progress — e.g. a login that silently fails, so the click
+		// "succeeds" but nothing advances (and repeated tries can trip a captcha).
+		// Hand off rather than thrash. Scroll/wait are exempt (legit repetition).
+		if (decision.action.action !== "scroll" && decision.action.action !== "wait") {
+			recentKeys.push(key);
+			if (recentKeys.length > 7) recentKeys.shift();
+			if (recentKeys.filter((k) => k === key).length >= 4) {
+				await deps.onEvent?.("agent.stuck", `Repeated "${describeAction(decision.action)}" with no progress — handing off`, { action: decision.action });
+				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog] };
+			}
+		}
+
+		const actResult = await deps.act(decision.action);
 		if (actResult?.error) {
 			// Feed the failure back so the brain adapts instead of blindly repeating.
 			repeatFails = key === lastActionKey ? repeatFails + 1 : 1;
