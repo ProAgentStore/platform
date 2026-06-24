@@ -68,6 +68,17 @@
     @media(max-width:900px){.layout{grid-template-columns:1fr}aside{position:static}.grid{grid-template-columns:1fr}.flow,.swimlane{min-width:680px}}
     @media(max-width:640px){.container{padding:0 1rem}header .container{align-items:flex-start}.brand{min-width:0}nav{justify-content:flex-end;gap:.65rem}.diagram{margin-left:-1rem;margin-right:-1rem;border-radius:0;border-left:0;border-right:0}}
   </style>
+<style id="m-fix">
+@media(max-width:640px){
+html,body{overflow-x:hidden;max-width:100%}
+header .container{flex-wrap:wrap;row-gap:0.4rem}
+nav{margin-left:0!important;flex-wrap:wrap;gap:0.4rem 0.85rem;width:100%;font-size:0.82rem}
+pre,code{max-width:100%;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+img,video,canvas{max-width:100%;height:auto}
+table{display:block;overflow-x:auto}
+.container{padding-left:1rem;padding-right:1rem}
+}
+</style>
 </head>
 <body>
   <header>

@@ -321,3 +321,16 @@
     @supports(padding-bottom:env(safe-area-inset-bottom)){
       .chat-input{padding-bottom:env(safe-area-inset-bottom)}
     }
+
+    /* ── Mobile hardening: never let anything overflow horizontally ── */
+    .tab{flex-shrink:0}
+    pre,.runtime-detail-pre{max-width:100%;overflow-x:auto;overflow-wrap:anywhere}
+    .token-field{max-width:100%}
+    @media(max-width:640px){
+      html,body{overflow-x:hidden;max-width:100%}
+      pre,.runtime-detail-pre{white-space:pre-wrap;word-break:break-word}
+      .runtime-detail-head h3{font-size:0.95rem;overflow-wrap:anywhere}
+      .agent-board-toolbar .tabs,.tabs{overflow-x:auto;-webkit-overflow-scrolling:touch}
+      table{display:block;overflow-x:auto;max-width:100%}
+      .btn,button{max-width:100%}
+    }

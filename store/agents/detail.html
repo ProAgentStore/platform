@@ -79,6 +79,17 @@
     @media(max-width:960px){.hero{grid-template-columns:1fr}.actions{justify-content:flex-start}.dashboard{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}.side{grid-template-columns:1fr 1fr}.chat{height:470px}}
     @media(max-width:640px){.container{padding:0 1rem}header .container{align-items:flex-start}nav{gap:.7rem;flex-wrap:wrap;justify-content:flex-end}.hero-main{flex-direction:column}.grid,.side{grid-template-columns:1fr}.actions{width:100%}.btn{flex:1}.chat{height:430px}.msg{max-width:92%}}
   </style>
+<style id="m-fix">
+@media(max-width:640px){
+html,body{overflow-x:hidden;max-width:100%}
+header .container{flex-wrap:wrap;row-gap:0.4rem}
+nav{margin-left:0!important;flex-wrap:wrap;gap:0.4rem 0.85rem;width:100%;font-size:0.82rem}
+pre,code{max-width:100%;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+img,video,canvas{max-width:100%;height:auto}
+table{display:block;overflow-x:auto}
+.container{padding-left:1rem;padding-right:1rem}
+}
+</style>
 </head>
 <body>
   <header>

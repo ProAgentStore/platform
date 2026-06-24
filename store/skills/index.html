@@ -45,6 +45,17 @@
     footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;font-size:.8rem;color:var(--muted-soft);margin-top:4rem}
     footer a{color:var(--muted)}
   </style>
+<style id="m-fix">
+@media(max-width:640px){
+html,body{overflow-x:hidden;max-width:100%}
+header .container{flex-wrap:wrap;row-gap:0.4rem}
+nav{margin-left:0!important;flex-wrap:wrap;gap:0.4rem 0.85rem;width:100%;font-size:0.82rem}
+pre,code{max-width:100%;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
+img,video,canvas{max-width:100%;height:auto}
+table{display:block;overflow-x:auto}
+.container{padding-left:1rem;padding-right:1rem}
+}
+</style>
 </head>
 <body>
   <header>

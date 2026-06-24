@@ -57,7 +57,7 @@
   <!-- Dashboard (post-login) -->
   <div id="dashboard" class="container hidden">
     <!-- Tab switcher: Creator / Client -->
-    <div style="display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:1.25rem">
+    <div class="tabs" style="display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:1.25rem;overflow-x:auto;-webkit-overflow-scrolling:touch">
       <button type="button" class="tab active" id="dash-tab-agents" onclick="switchDashTab('agents')">My Agents (Creator)</button>
       <button type="button" class="tab" id="dash-tab-instances" onclick="switchDashTab('instances')">My Instances (Client)</button>
       <button type="button" class="tab" id="dash-tab-dashboard" onclick="switchDashTab('dashboard')">Dashboard</button>
