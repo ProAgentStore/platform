@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readlinkSync, unlinkSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -652,13 +652,14 @@ export class LocalRunner {
 		try {
 			if (!preferChrome) throw new Error("chromium forced");
 			if (realProfileDir) {
-				clearStaleChromeLock(realProfileDir.userDataDir);
-				this.browserContext = await playwright.chromium.launchPersistentContext(realProfileDir.userDataDir, {
+				const seededDir = seedProfileCopy(realProfileDir, join(this.config.dataDir, "real-profile-copy"));
+				if (!seededDir) throw new Error(`could not read your real Chrome profile at ${realProfileDir.userDataDir}`);
+				this.browserContext = await playwright.chromium.launchPersistentContext(seededDir, {
 					...baseOpts,
 					channel: "chrome",
-					args: [...baseOpts.args, `--profile-directory=${realProfileDir.profile}`],
+					args: [...baseOpts.args, "--profile-directory=Default"],
 				});
-				console.log(`[runner] using your real Chrome profile: ${realProfileDir.userDataDir} (${realProfileDir.profile})`);
+				console.log(`[runner] launched a private copy of your real Chrome profile (signed-in sessions seeded from "${realProfileDir.profile}")`);
 			} else {
 				this.browserContext = await playwright.chromium.launchPersistentContext(
 					join(this.config.dataDir, "chrome-profile"),
@@ -955,36 +956,50 @@ async function captureScreenshotDataUrl(page: Page): Promise<string | undefined>
  * so the runner reuses their cookies/logins/history. Returns null otherwise.
  */
 /**
- * Chrome refuses to open a profile whose SingletonLock exists, even if the
- * owning process is long dead (a crash/force-quit leaves it behind). When the
- * recorded PID is not alive, the lock is stale — remove it so real-profile mode
- * can launch. If the PID IS alive, Chrome really is open: leave it (the launch
- * will fail loudly and the user is told to quit Chrome).
+ * Seed a dedicated profile directory with a copy of the user's real Chrome
+ * profile — cookies, logins, history, local storage. This gives the runner the
+ * user's signed-in sessions and a human browsing reputation WITHOUT attaching to
+ * the live profile, so it never fights Chrome's single-instance lock and the
+ * user can keep their normal Chrome open. Seeds once; delete the dir to refresh.
+ * Returns the seeded user-data-dir, or null if the source profile is unreadable.
  */
-function clearStaleChromeLock(userDataDir: string): void {
-	const lockPath = join(userDataDir, "SingletonLock");
-	let target: string;
+function seedProfileCopy(real: { userDataDir: string; profile: string }, destUserDataDir: string): string | null {
+	if (existsSync(destUserDataDir)) return destUserDataDir; // already seeded
+	const srcProfile = join(real.userDataDir, real.profile);
+	if (!existsSync(srcProfile)) return null;
+	const destProfile = join(destUserDataDir, "Default");
+	mkdirSync(destProfile, { recursive: true });
 	try {
-		target = readlinkSync(lockPath);
+		// "Local State" holds the os_crypt key (Keychain-wrapped) that decrypts
+		// cookies + saved passwords — without it the copied cookies are unreadable.
+		copyFileSync(join(real.userDataDir, "Local State"), join(destUserDataDir, "Local State"));
 	} catch {
-		return; // no lock (or not a symlink) — nothing to clear
+		// best-effort
 	}
-	const pid = Number(target.split("-").pop());
-	if (Number.isFinite(pid) && pid > 0) {
+	const items = [
+		"Cookies",
+		"Cookies-journal",
+		"Login Data",
+		"Login Data-journal",
+		"Web Data",
+		"History",
+		"Preferences",
+		"Bookmarks",
+		"Favicons",
+		"Network",
+		"Local Storage",
+		"Session Storage",
+		"Sessions",
+		"IndexedDB",
+	];
+	for (const item of items) {
 		try {
-			process.kill(pid, 0); // throws if the process is gone
-			return; // owner is alive — do not touch
+			cpSync(join(srcProfile, item), join(destProfile, item), { recursive: true });
 		} catch {
-			// owner is dead — fall through and clear
+			// best-effort per item
 		}
 	}
-	for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
-		try {
-			unlinkSync(join(userDataDir, f));
-		} catch {
-			// best-effort
-		}
-	}
+	return destUserDataDir;
 }
 
 function resolveRealChromeProfileDir(): { userDataDir: string; profile: string } | null {
