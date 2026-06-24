@@ -4,7 +4,7 @@
  */
 import {
 	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, consoleCss, consoleCoreJs, consoleInstancesJs, consoleAgentDataJs, consoleProfileJs, consoleUtilsInitJs, agentDetailPage,
-	widgetJs, authWidgetJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
+	widgetJs, authWidgetJs, swJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
@@ -100,6 +100,15 @@ export default {
 		// JS assets
 		if (path === "/widget.js") return new Response(widgetJs, { headers: JS_HEADERS });
 		if (path === "/auth-widget.js") return new Response(authWidgetJs, { headers: JS_HEADERS });
+		if (path === "/sw.js") {
+			return new Response(swJs, {
+				headers: {
+					"Content-Type": "application/javascript; charset=utf-8",
+					"Service-Worker-Allowed": "/",
+					"Cache-Control": "no-cache",
+				},
+			});
+		}
 		if (path === "/console-core.js") return new Response(consoleCoreJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-instances.js") return new Response(consoleInstancesJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-agent-data.js") return new Response(consoleAgentDataJs, { headers: CONSOLE_JS_HEADERS });

@@ -15,6 +15,10 @@ export interface Env {
 	/** Google OAuth client used for the Gmail email-access connection. */
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;
+	/** Web Push (VAPID). Public key is non-secret; private key is a secret. */
+	VAPID_PUBLIC_KEY?: string;
+	VAPID_PRIVATE_KEY?: string;
+	VAPID_SUBJECT?: string;
 }
 
 export interface SessionPayload {
