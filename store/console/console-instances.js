@@ -611,9 +611,12 @@
       });
       section.classList.remove('hidden');
       document.getElementById('inst-unified-board').classList.add('hidden');
-      // The global "Recent Activity" feed is redundant here — the task has its
-      // own Activity tab. Hide it while drilled into a task.
-      document.getElementById('inst-runtime-events')?.classList.add('hidden');
+      // Scope the activity feed to THIS task — its full history, every event,
+      // newest first — always visible below the detail (not the global feed).
+      const heading = document.getElementById('inst-activity-heading');
+      if (heading) heading.textContent = 'Full task activity';
+      renderInstanceRuntimeEvents(runtimeTaskEvents(task).slice().reverse());
+      document.getElementById('inst-runtime-events')?.classList.remove('hidden');
       if (scrollIntoView) section.scrollIntoView({ block: 'start' });
     }
 
@@ -636,6 +639,10 @@
       document.getElementById('runtime-task-detail').classList.add('hidden');
       document.getElementById('runtime-task-detail-actions').innerHTML = '';
       document.getElementById('inst-unified-board').classList.remove('hidden');
+      // Back on the board: restore the cross-task "Recent Activity" feed.
+      const heading = document.getElementById('inst-activity-heading');
+      if (heading) heading.textContent = 'Recent Activity';
+      renderInstanceRuntimeEvents((currentRuntimeEvents || []).slice(0, 25));
       document.getElementById('inst-runtime-events')?.classList.remove('hidden');
     }
 
