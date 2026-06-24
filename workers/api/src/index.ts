@@ -23,6 +23,8 @@ import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
 export { AgentDO } from "./agent-do.js";
+// Re-export the job-application Workflow class for wrangler
+export { JobApplyWorkflow } from "./workflows/job-apply.js";
 
 const app = new Hono<{ Bindings: Env }>();
 

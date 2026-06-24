@@ -1,0 +1,249 @@
+import { runUserWorkersAi } from "./user-ai.js";
+import type { Env } from "../types.js";
+
+/** The candidate + job context the brain applies with. */
+export interface ApplyJob {
+	url: string;
+	resumePath: string;
+	candidate: {
+		fullName: string;
+		email: string;
+		phone?: string;
+		location?: string;
+		linkedin?: string;
+		portfolio?: string;
+		workAuthorization?: string;
+	};
+	coverNote?: string;
+	/** Notes from a previous successful run on this ATS (the per-ATS cache). */
+	cacheHint?: string;
+}
+
+/** One action the runner performs on the live page (mirrors the runner's BrowserAction). */
+export interface BrowserAction {
+	action: "click" | "type" | "select" | "check" | "upload" | "navigate" | "scroll" | "key" | "wait";
+	role?: string;
+	name?: string;
+	nth?: number;
+	text?: string;
+	file?: string;
+	url?: string;
+	key?: string;
+	dy?: number;
+	ms?: number;
+}
+
+export interface PageSnapshot {
+	url: string;
+	title: string;
+	snapshot: string;
+	challenge: string | null;
+}
+
+export type ApplyOutcome = "submitted" | "expired" | "blocked" | "captcha" | "failed" | "max_steps";
+
+export interface ApplyDecision {
+	thought?: string;
+	action?: BrowserAction;
+	finish?: { status: "submitted" | "expired" | "blocked"; detail: string };
+}
+
+export interface ApplyResult {
+	outcome: ApplyOutcome;
+	detail?: string;
+	challenge?: string | null;
+	url?: string;
+	steps: number;
+}
+
+/** Side-effecting hooks the loop drives — real ones hit the runner; tests mock them. */
+export interface ApplyDeps {
+	snapshot: () => Promise<PageSnapshot>;
+	act: (action: BrowserAction) => Promise<{ url: string; challenge: string | null }>;
+	decide: (params: { job: ApplyJob; actionLog: string[]; snapshot: PageSnapshot }) => Promise<ApplyDecision>;
+	onEvent?: (type: string, message: string, data?: unknown) => Promise<void> | void;
+}
+
+/**
+ * The remote brain's apply loop: look at the page, decide one action, do it,
+ * repeat — until the application is submitted, the job is expired, or a CAPTCHA
+ * forces a human handoff. Pure orchestration over {@link ApplyDeps} so it can be
+ * unit-tested without a browser, an LLM, or a deployed Workflow.
+ */
+export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number } = {}): Promise<ApplyResult> {
+	const maxSteps = opts.maxSteps ?? 40;
+	const actionLog: string[] = [];
+	let lastUrl = "";
+
+	for (let step = 0; step < maxSteps; step++) {
+		const snap = await deps.snapshot();
+		lastUrl = snap.url;
+
+		// A CAPTCHA can't be solved by the model — hand off to the human, same session.
+		if (snap.challenge) {
+			await deps.onEvent?.("agent.captcha", `CAPTCHA detected (${snap.challenge}) — handing off`, { challenge: snap.challenge, url: snap.url });
+			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step };
+		}
+
+		const decision = await deps.decide({ job, actionLog, snapshot: snap });
+		await deps.onEvent?.(
+			"agent.decision",
+			decision.finish ? `finish: ${decision.finish.status}` : decision.action ? describeAction(decision.action) : "thinking",
+			{ thought: decision.thought, action: decision.action, finish: decision.finish },
+		);
+
+		if (decision.finish) {
+			return { outcome: decision.finish.status, detail: decision.finish.detail, url: snap.url, steps: step };
+		}
+		if (!decision.action) {
+			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step };
+		}
+
+		await deps.act(decision.action);
+		actionLog.push(describeAction(decision.action));
+	}
+	return { outcome: "max_steps", detail: `stopped after ${maxSteps} actions`, url: lastUrl, steps: maxSteps };
+}
+
+/** Human-readable one-liner for an action (for the action log + activity trace). */
+export function describeAction(a: BrowserAction): string {
+	switch (a.action) {
+		case "type": return `type "${a.text ?? ""}" into ${a.role ?? "field"} "${a.name ?? ""}"`;
+		case "select": return `select "${a.text ?? ""}" in "${a.name ?? ""}"`;
+		case "check": return `check "${a.name ?? ""}"`;
+		case "click": return `click ${a.role ?? "button"} "${a.name ?? ""}"`;
+		case "upload": return `upload résumé to "${a.name ?? "file field"}"`;
+		case "navigate": return `navigate to ${a.url ?? ""}`;
+		case "scroll": return `scroll ${a.dy ?? 600}px`;
+		case "key": return `press ${a.key ?? "Enter"}`;
+		case "wait": return `wait ${a.ms ?? 1000}ms`;
+		default: return a.action;
+	}
+}
+
+// ── The LLM decision step ────────────────────────────────────────────────────
+
+function tool(name: string, description: string, props: Record<string, { type: string; description: string }>, required: string[]) {
+	return { type: "function" as const, function: { name, description, parameters: { type: "object", properties: props, required } } };
+}
+
+/** The browser actions exposed to Claude as tools — addressed by ARIA role + accessible name. */
+export const BROWSER_TOOLS = [
+	tool("type", "Type text into a field identified by its ARIA role and accessible name.", {
+		role: { type: "string", description: 'usually "textbox"' },
+		name: { type: "string", description: "the field's label/accessible name from the snapshot" },
+		text: { type: "string", description: "text to type" },
+	}, ["name", "text"]),
+	tool("select", "Choose an option in a dropdown/combobox.", {
+		name: { type: "string", description: "the select's label" },
+		value: { type: "string", description: "the option label to choose" },
+	}, ["name", "value"]),
+	tool("check", "Check a radio button or checkbox by its label.", {
+		name: { type: "string", description: "the option's label" },
+	}, ["name"]),
+	tool("click", "Click a button or link by its accessible name.", {
+		role: { type: "string", description: '"button" or "link"' },
+		name: { type: "string", description: "the control's visible text/label" },
+	}, ["name"]),
+	tool("upload", "Upload the candidate's résumé to a file field by its label (the file is attached automatically).", {
+		name: { type: "string", description: "the upload control's label, e.g. \"Resume\"" },
+	}, ["name"]),
+	tool("navigate", "Go to a URL (e.g. the application page).", {
+		url: { type: "string", description: "absolute http(s) URL" },
+	}, ["url"]),
+	tool("scroll", "Scroll the page vertically to reveal more.", {
+		dy: { type: "number", description: "pixels (positive = down)" },
+	}, []),
+	tool("press_key", "Press a keyboard key like Enter or Tab.", {
+		key: { type: "string", description: "e.g. Enter, Tab, Escape" },
+	}, ["key"]),
+	tool("finish", "End the application: status submitted (you saw a confirmation), expired (job closed), or blocked (cannot proceed truthfully).", {
+		status: { type: "string", description: "submitted | expired | blocked" },
+		detail: { type: "string", description: "short explanation / confirmation text" },
+	}, ["status", "detail"]),
+];
+
+/** Build the system prompt that turns Claude into a job-application driver. */
+export function applySystemPrompt(job: ApplyJob): string {
+	const c = job.candidate;
+	const lines = [
+		"You are a job-application agent operating a real web browser through tools.",
+		"You see each page as an ARIA snapshot (roles + accessible names + values). You act ONLY through the provided tools — there are no CSS selectors. Address elements by their role + accessible name exactly as they appear in the snapshot.",
+		"",
+		"Goal: complete and SUBMIT this job application for the candidate, walking through every step (Apply button, account creation/login if required, multi-step forms, screening questions).",
+		"",
+		"CANDIDATE:",
+		`- Full name: ${c.fullName}`,
+		`- Email: ${c.email}`,
+		c.phone ? `- Phone: ${c.phone}` : "",
+		c.location ? `- Location: ${c.location}` : "",
+		c.linkedin ? `- LinkedIn: ${c.linkedin}` : "",
+		c.portfolio ? `- Portfolio: ${c.portfolio}` : "",
+		c.workAuthorization ? `- Work authorization: ${c.workAuthorization}` : "",
+		job.coverNote ? `- Cover note: ${job.coverNote}` : "",
+		"- Résumé: attach via the `upload` tool whenever there is a file upload (the file is supplied automatically — never ask for a path).",
+		"",
+		"RULES:",
+		"- Do exactly ONE tool call per turn — the next page snapshot follows.",
+		"- Answer screening questions truthfully from the candidate data. If an answer isn't in the data and isn't critical, pick the most reasonable option. NEVER fabricate experience, qualifications, or work authorization.",
+		"- If a CAPTCHA / 'verify you are human' appears, do nothing — the system hands off to a human automatically.",
+		"- If the job is closed/expired, call finish(status:\"expired\").",
+		"- When you see a submission confirmation, call finish(status:\"submitted\") with the confirmation text.",
+		"- If you genuinely cannot proceed truthfully, call finish(status:\"blocked\") explaining why.",
+		"- Be decisive and brief. Do not narrate.",
+		job.cacheHint ? `\nNOTES FROM A PRIOR SUCCESSFUL RUN ON THIS ATS (use to move faster):\n${job.cacheHint}` : "",
+	];
+	return lines.filter((l) => l !== "").join("\n");
+}
+
+/** Map a Claude tool call to a loop decision (a BrowserAction or a finish). */
+export function toolCallToDecision(call: { name: string; arguments: Record<string, unknown> }, job: ApplyJob, thought?: string): ApplyDecision {
+	const a = call.arguments || {};
+	const str = (v: unknown) => (typeof v === "string" ? v : v == null ? undefined : String(v));
+	const num = (v: unknown) => (typeof v === "number" ? v : undefined);
+	switch (call.name) {
+		case "type": return { thought, action: { action: "type", role: str(a.role) || "textbox", name: str(a.name), text: str(a.text) ?? "" } };
+		case "select": return { thought, action: { action: "select", role: "combobox", name: str(a.name), text: str(a.value) } };
+		case "check": return { thought, action: { action: "check", role: "checkbox", name: str(a.name) } };
+		case "click": return { thought, action: { action: "click", role: str(a.role) || "button", name: str(a.name) } };
+		case "upload": return { thought, action: { action: "upload", name: str(a.name) || "Resume", file: job.resumePath } };
+		case "navigate": return { thought, action: { action: "navigate", url: str(a.url) } };
+		case "scroll": return { thought, action: { action: "scroll", dy: num(a.dy) ?? 600 } };
+		case "press_key": return { thought, action: { action: "key", key: str(a.key) || "Enter" } };
+		case "finish": {
+			const status = str(a.status);
+			const valid = status === "submitted" || status === "expired" || status === "blocked" ? status : "blocked";
+			return { thought, finish: { status: valid, detail: str(a.detail) || "" } };
+		}
+		default: return { thought, finish: { status: "blocked", detail: `unknown tool ${call.name}` } };
+	}
+}
+
+/** The real decision step: ask Claude (BYOK) for the next action given the current page. */
+export async function decideAction(
+	env: Env,
+	userId: string,
+	params: { job: ApplyJob; actionLog: string[]; snapshot: PageSnapshot },
+): Promise<ApplyDecision> {
+	const userMsg = [
+		`Actions so far:\n${params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)"}`,
+		`\nCURRENT PAGE — ${params.snapshot.title || ""} <${params.snapshot.url}>`,
+		params.snapshot.snapshot,
+		"\nDo the single next action toward submitting the application. Call exactly one tool.",
+	].join("\n");
+
+	const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
+		messages: [
+			{ role: "system", content: applySystemPrompt(params.job) },
+			{ role: "user", content: userMsg },
+		],
+		tools: BROWSER_TOOLS,
+	})) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }> };
+
+	const call = res.tool_calls?.[0];
+	if (!call) {
+		// No tool call — treat the prose as a blocked/finish signal.
+		return { thought: res.response, finish: { status: "blocked", detail: res.response || "no action chosen" } };
+	}
+	return toolCallToDecision(call, params.job, res.response);
+}

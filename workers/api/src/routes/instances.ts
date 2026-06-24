@@ -410,6 +410,46 @@ instanceRoutes.post("/:instanceId/tasks", async (c) => {
 	return c.json(payload, runtimeStatus(res, 202));
 });
 
+/**
+ * Start the remote LLM brain on a job application. Kicks off the JobApplyWorkflow
+ * which drives the connected runner page-by-page (snapshot → Claude → act),
+ * handing off to a human only for a CAPTCHA. Returns the workflow instance id.
+ */
+instanceRoutes.post("/:instanceId/apply", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	await requireRuntime(c.env, instanceId, session.uid); // 400s early if no runner
+
+	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+	const cand = (body.candidate ?? {}) as Record<string, unknown>;
+	const url = String(body.url ?? "");
+	const resumePath = String(body.resumePath ?? body.resume_path ?? "");
+	const fullName = String(cand.fullName ?? cand.full_name ?? body.full_name ?? "");
+	const email = String(cand.email ?? body.email ?? "");
+	if (!/^https?:\/\//.test(url)) return c.json({ error: "url (http/https) required" }, 400);
+	if (!resumePath) return c.json({ error: "resumePath required (absolute path on the runner machine)" }, 400);
+	if (!fullName || !email) return c.json({ error: "candidate.fullName and candidate.email required" }, 400);
+
+	const job = {
+		url,
+		resumePath,
+		candidate: {
+			fullName,
+			email,
+			phone: optionalStr(cand.phone),
+			location: optionalStr(cand.location),
+			linkedin: optionalStr(cand.linkedin),
+			portfolio: optionalStr(cand.portfolio),
+			workAuthorization: optionalStr(cand.workAuthorization ?? cand.work_authorization),
+		},
+		coverNote: optionalStr(body.coverNote ?? body.cover_note),
+	};
+
+	const instance = await c.env.JOB_APPLY.create({ params: { instanceId, userId: session.uid, job } });
+	return c.json({ workflowId: instance.id, status: "running", url }, 202);
+});
+
 /** Read a task from my registered runtime. */
 instanceRoutes.get("/:instanceId/tasks/:taskId", async (c) => {
 	const session = await requireUser(c);
@@ -724,3 +764,10 @@ instanceRoutes.post("/:instanceId/cancel", async (c) => {
 
 	return c.json({ success: true });
 });
+
+/** Trim a value to a non-empty string, or undefined. */
+function optionalStr(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}

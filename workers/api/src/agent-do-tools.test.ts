@@ -19,7 +19,9 @@ describe("agent tool definition helpers", () => {
 				"submit_job_application",
 			]),
 		);
-		expect(names).not.toContain("delete_file");
+		// Permission-gated tools are absent unless explicitly enabled.
+		expect(names).not.toContain("find_confirmation_link");
+		expect(buildAgentToolDefinitions({ emailEnabled: true }).map((t) => t.function.name)).toContain("find_confirmation_link");
 
 		for (const tool of tools) {
 			expect(tool.type).toBe("function");

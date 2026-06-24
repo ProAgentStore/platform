@@ -4,6 +4,8 @@ export interface Env {
 	AGENT: DurableObjectNamespace;
 	AI: Ai;
 	VECTORIZE: VectorizeIndex;
+	/** Remote LLM brain that drives the runner through a job application. */
+	JOB_APPLY: Workflow;
 	GITHUB_CLIENT_ID: string;
 	GITHUB_CLIENT_SECRET: string;
 	GITHUB_ORG?: string;

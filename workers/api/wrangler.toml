@@ -34,6 +34,12 @@ binding = "AI"
 binding = "VECTORIZE"
 index_name = "pags-agents"
 
+# Remote LLM brain that drives the browser runner through a job application.
+[[workflows]]
+name = "pags-job-apply"
+binding = "JOB_APPLY"
+class_name = "JobApplyWorkflow"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["AgentDO"]
