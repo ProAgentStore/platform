@@ -254,9 +254,17 @@
         if (img.width !== lastImg.naturalWidth) { img.width = lastImg.naturalWidth; img.height = lastImg.naturalHeight; }
         ctx.drawImage(lastImg, 0, 0);
         if (cursorPos) {
-          ctx.beginPath(); ctx.arc(cursorPos.x, cursorPos.y, 9, 0, Math.PI * 2);
-          ctx.strokeStyle = 'rgba(245,158,11,0.95)'; ctx.lineWidth = 2; ctx.stroke();
-          ctx.beginPath(); ctx.arc(cursorPos.x, cursorPos.y, 2.5, 0, Math.PI * 2);
+          // cursorPos is in page (CSS) space, but the canvas is the frame's
+          // device-pixel size (retina screencast = 2x). Scale the cursor so the
+          // dot sits EXACTLY where the relayed click lands — otherwise on a 2x
+          // display it draws at half-position and you aim at the wrong spot.
+          const sx = pageW ? lastImg.naturalWidth / pageW : 1;
+          const sy = pageH ? lastImg.naturalHeight / pageH : 1;
+          const cx = cursorPos.x * sx, cy = cursorPos.y * sy;
+          const r = 9 * sx;
+          ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(245,158,11,0.95)'; ctx.lineWidth = 2 * sx; ctx.stroke();
+          ctx.beginPath(); ctx.arc(cx, cy, r / 3.6, 0, Math.PI * 2);
           ctx.fillStyle = 'rgba(245,158,11,0.95)'; ctx.fill();
         }
       }
