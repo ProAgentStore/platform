@@ -1005,7 +1005,7 @@ export class LocalRunner {
 		await this.endTakeover(taskId).catch(() => undefined);
 		const task = this.store.getTask(taskId);
 		if (task) {
-			const success = outcome === "submitted" || outcome === "expired";
+			const success = outcome === "submitted" || outcome === "ready" || outcome === "expired";
 			task.status = success ? "completed" : "failed";
 			task.output = { outcome, detail };
 			if (!success) task.error = detail || outcome;

@@ -17,6 +17,8 @@ export interface ApplyJob {
 	coverNote?: string;
 	/** Stable password to use when an ATS requires an account (same every run). */
 	password?: string;
+	/** Test mode: fill everything and reach Submit, but DON'T click it. */
+	dryRun?: boolean;
 	/** Notes from a previous successful run on this ATS (the per-ATS cache). */
 	cacheHint?: string;
 }
@@ -42,12 +44,12 @@ export interface PageSnapshot {
 	challenge: string | null;
 }
 
-export type ApplyOutcome = "submitted" | "expired" | "blocked" | "captcha" | "stuck" | "failed" | "max_steps";
+export type ApplyOutcome = "submitted" | "ready" | "expired" | "blocked" | "captcha" | "stuck" | "failed" | "max_steps";
 
 export interface ApplyDecision {
 	thought?: string;
 	action?: BrowserAction;
-	finish?: { status: "submitted" | "expired" | "blocked"; detail: string };
+	finish?: { status: "submitted" | "ready" | "expired" | "blocked"; detail: string };
 }
 
 export interface ApplyResult {
@@ -214,7 +216,9 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"You are a job-application agent operating a real web browser through tools.",
 		"You see each page as an ARIA snapshot (roles + accessible names + values). You act ONLY through the provided tools — there are no CSS selectors. Address elements by their role + accessible name exactly as they appear in the snapshot.",
 		"",
-		"Goal: complete and SUBMIT this job application for the candidate, walking through every step (Apply button, account creation/login if required, multi-step forms, screening questions).",
+		job.dryRun
+			? "Goal (TEST MODE): walk the whole application — Apply, any account/login, every form step, screening questions, résumé upload — and fill EVERYTHING, but DO NOT submit. When the form is fully filled and you've reached the final Submit/Send button, call finish(status:\"ready\", detail:\"<what you filled / what the submit button says>\"). Never click the final submit."
+			: "Goal: complete and SUBMIT this job application for the candidate, walking through every step (Apply button, account creation/login if required, multi-step forms, screening questions).",
 		"",
 		"CANDIDATE:",
 		`- Full name: ${c.fullName}`,
@@ -263,8 +267,8 @@ export function toolCallToDecision(call: { name: string; arguments: Record<strin
 		case "press_key": return { thought, action: { action: "key", key: str(a.key) || "Enter" } };
 		case "finish": {
 			const status = str(a.status);
-			const valid = status === "submitted" || status === "expired" || status === "blocked" ? status : "blocked";
-			return { thought, finish: { status: valid, detail: str(a.detail) || "" } };
+			const valid = status === "submitted" || status === "ready" || status === "expired" || status === "blocked" ? status : "blocked";
+			return { thought, finish: { status: valid as "submitted" | "ready" | "expired" | "blocked", detail: str(a.detail) || "" } };
 		}
 		default: return { thought, finish: { status: "blocked", detail: `unknown tool ${call.name}` } };
 	}
