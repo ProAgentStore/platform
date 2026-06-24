@@ -235,10 +235,11 @@
           <button id="takeover-close" class="btn btn-outline btn-sm" style="color:#fff;border-color:#555">Close</button>
         </div>
         <div id="takeover-stage" style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden">
-          <img id="takeover-frame" alt="live browser" tabindex="0" style="max-width:100%;max-height:100%;object-fit:contain;cursor:crosshair;outline:none" />
+          <canvas id="takeover-frame" tabindex="0" style="max-width:100%;max-height:100%;cursor:crosshair;outline:none"></canvas>
         </div>`;
       document.body.appendChild(overlay);
       const img = overlay.querySelector('#takeover-frame');
+      const ctx = img.getContext('2d');
       const statusEl = overlay.querySelector('#takeover-status');
       let alive = true;
       // CSS viewport of the real page (reported by the runner) — clicks map to
@@ -250,9 +251,19 @@
           try {
             const data = await api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/frame`);
             if (data && data.frame) {
-              img.src = data.frame;
               if (data.width) pageW = data.width;
               if (data.height) pageH = data.height;
+              // Draw onto the canvas (overwrites in place — no blank flash).
+              await new Promise((res) => {
+                const im = new Image();
+                im.onload = () => {
+                  if (img.width !== im.naturalWidth) { img.width = im.naturalWidth; img.height = im.naturalHeight; }
+                  ctx.drawImage(im, 0, 0);
+                  res();
+                };
+                im.onerror = () => res();
+                im.src = data.frame;
+              });
               statusEl.textContent = 'live';
             }
           } catch (e) { statusEl.textContent = 'frame error'; }
@@ -264,8 +275,8 @@
       }
       function toCoords(ev) {
         const rect = img.getBoundingClientRect();
-        const w = pageW || img.naturalWidth || rect.width;
-        const h = pageH || img.naturalHeight || rect.height;
+        const w = pageW || img.width || rect.width;
+        const h = pageH || img.height || rect.height;
         return { x: Math.round((ev.clientX - rect.left) / rect.width * w), y: Math.round((ev.clientY - rect.top) / rect.height * h) };
       }
       // Forward the full mouse/scroll/keyboard stream to the real browser.
