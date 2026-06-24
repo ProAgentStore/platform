@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readlinkSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -652,18 +652,24 @@ export class LocalRunner {
 		try {
 			if (!preferChrome) throw new Error("chromium forced");
 			if (realProfileDir) {
+				clearStaleChromeLock(realProfileDir.userDataDir);
 				this.browserContext = await playwright.chromium.launchPersistentContext(realProfileDir.userDataDir, {
 					...baseOpts,
 					channel: "chrome",
 					args: [...baseOpts.args, `--profile-directory=${realProfileDir.profile}`],
 				});
+				console.log(`[runner] using your real Chrome profile: ${realProfileDir.userDataDir} (${realProfileDir.profile})`);
 			} else {
 				this.browserContext = await playwright.chromium.launchPersistentContext(
 					join(this.config.dataDir, "chrome-profile"),
 					{ ...baseOpts, channel: "chrome" },
 				);
 			}
-		} catch {
+		} catch (err) {
+			if (realProfileDir) {
+				const msg = err instanceof Error ? err.message.split("\n")[0] : String(err);
+				console.warn(`[runner] real-profile launch failed (${msg}); falling back to a dedicated profile. Fully quit Chrome (Cmd+Q) to use your real profile.`);
+			}
 			this.browserContext = await playwright.chromium.launchPersistentContext(profileDir, baseOpts);
 		}
 		await this.browserContext
@@ -948,6 +954,39 @@ async function captureScreenshotDataUrl(page: Page): Promise<string | undefined>
  * (PAGS_RUNNER_REAL_PROFILE=1 or an explicit PAGS_RUNNER_CHROME_USER_DATA_DIR),
  * so the runner reuses their cookies/logins/history. Returns null otherwise.
  */
+/**
+ * Chrome refuses to open a profile whose SingletonLock exists, even if the
+ * owning process is long dead (a crash/force-quit leaves it behind). When the
+ * recorded PID is not alive, the lock is stale — remove it so real-profile mode
+ * can launch. If the PID IS alive, Chrome really is open: leave it (the launch
+ * will fail loudly and the user is told to quit Chrome).
+ */
+function clearStaleChromeLock(userDataDir: string): void {
+	const lockPath = join(userDataDir, "SingletonLock");
+	let target: string;
+	try {
+		target = readlinkSync(lockPath);
+	} catch {
+		return; // no lock (or not a symlink) — nothing to clear
+	}
+	const pid = Number(target.split("-").pop());
+	if (Number.isFinite(pid) && pid > 0) {
+		try {
+			process.kill(pid, 0); // throws if the process is gone
+			return; // owner is alive — do not touch
+		} catch {
+			// owner is dead — fall through and clear
+		}
+	}
+	for (const f of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+		try {
+			unlinkSync(join(userDataDir, f));
+		} catch {
+			// best-effort
+		}
+	}
+}
+
 function resolveRealChromeProfileDir(): { userDataDir: string; profile: string } | null {
 	const explicit = process.env.PAGS_RUNNER_CHROME_USER_DATA_DIR;
 	if (process.env.PAGS_RUNNER_REAL_PROFILE !== "1" && !explicit) return null;
