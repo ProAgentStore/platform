@@ -6,18 +6,38 @@ import type { Page } from "playwright";
  * so they trigger a handoff to a human rather than wasted retries.
  */
 export async function detectHumanChallenge(page: Page): Promise<string | null> {
-	// Specific widget classes first so the label is accurate (hCaptcha ships a
-	// reCAPTCHA-compat shim, so a generic reCAPTCHA check would mislabel it).
-	const checks: Array<[string, string]> = [
-		["hcaptcha", 'iframe[src*="hcaptcha"], .h-captcha'],
+	// hCaptcha + Turnstile mount as explicit widgets — their presence means a
+	// human challenge (these aren't sprinkled invisibly across the web).
+	for (const [type, selector] of [
+		["hcaptcha", 'iframe[src*="hcaptcha.com"], .h-captcha'],
 		["cloudflare-turnstile", 'iframe[src*="challenges.cloudflare.com"], .cf-turnstile'],
-		["recaptcha", 'iframe[src*="recaptcha"], .g-recaptcha'],
-		["captcha", 'iframe[title*="captcha" i], [class*="captcha" i], [id*="captcha" i]'],
-	];
-	for (const [type, selector] of checks) {
+	] as Array<[string, string]>) {
 		if ((await page.locator(selector).count().catch(() => 0)) > 0) return type;
 	}
-	return null;
+	// reCAPTCHA is the trap: the invisible v3 "protected by reCAPTCHA" badge is on
+	// countless pages and needs NO human. Only hand off for a VISIBLE, interactive
+	// widget — the "I'm not a robot" checkbox (anchor) or the image-challenge popup
+	// (bframe) — never the badge or the size=invisible variant.
+	const recaptcha = await page
+		.evaluate(() => {
+			const visible = (el: Element) => {
+				const r = el.getBoundingClientRect();
+				const s = getComputedStyle(el);
+				return r.width > 100 && r.height > 50 && s.visibility !== "hidden" && s.display !== "none" && s.opacity !== "0";
+			};
+			for (const f of Array.from(document.querySelectorAll("iframe"))) {
+				const src = f.getAttribute("src") || "";
+				if (!/recaptcha/.test(src)) continue;
+				if (f.closest(".grecaptcha-badge")) continue; // invisible v3 badge
+				if (/size=invisible/.test(src)) continue; // invisible variant
+				if (/bframe/.test(src) && visible(f)) return true; // image-challenge popup
+				if (/anchor/.test(src) && visible(f)) return true; // checkbox
+			}
+			const div = document.querySelector('.g-recaptcha:not([data-size="invisible"])');
+			return !!(div && visible(div));
+		})
+		.catch(() => false);
+	return recaptcha ? "recaptcha" : null;
 }
 
 /**

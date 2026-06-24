@@ -72,6 +72,15 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(snap.challenge).toBe("cloudflare-turnstile");
 	}, 60_000);
 
+	it("does NOT hand off for an invisible reCAPTCHA badge, but DOES for a visible checkbox", async () => {
+		// The Dayforce false-positive: an invisible v3 badge must be ignored.
+		await runner.browserAct({ action: "navigate", url: `${server.jobUrl}?invisible_recaptcha=1` });
+		expect((await runner.browserSnapshot()).challenge).toBeNull();
+		// A visible "I'm not a robot" checkbox IS a real challenge.
+		await runner.browserAct({ action: "navigate", url: `${server.jobUrl}?recaptcha=1` });
+		expect((await runner.browserSnapshot()).challenge).toBe("recaptcha");
+	}, 60_000);
+
 	it("agent handoff lifecycle: same-session pause → solved → resume → complete", async () => {
 		// Agent-driven task: created running, never auto-executed by the runner.
 		const task = runner.createTask({ type: "job.apply_agent", input: { url: server.jobUrl } });

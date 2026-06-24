@@ -63,6 +63,8 @@ async function route(
 		html(res, 200, jobPage({
 			challenge: url.searchParams.get("challenge") === "1",
 			hcaptcha: url.searchParams.get("hcaptcha") === "1",
+			invisibleRecaptcha: url.searchParams.get("invisible_recaptcha") === "1",
+			recaptcha: url.searchParams.get("recaptcha") === "1",
 		}));
 		return;
 	}
@@ -89,13 +91,22 @@ async function route(
 	html(res, 404, "<h1>Not found</h1>");
 }
 
-function jobPage(opts: { challenge?: boolean; hcaptcha?: boolean } = {}): string {
+function jobPage(opts: { challenge?: boolean; hcaptcha?: boolean; invisibleRecaptcha?: boolean; recaptcha?: boolean } = {}): string {
 	let challenge = "";
 	if (opts.hcaptcha) {
 		// Real hCaptcha widget using hCaptcha's official always-passes TEST sitekey
 		// — lets a human actually solve a challenge end-to-end with zero real-world impact.
 		challenge =
 			'<div class="h-captcha" data-sitekey="10000000-ffff-ffff-ffff-000000000001"></div>\n        <script src="https://js.hcaptcha.com/1/api.js" async defer></script>';
+	} else if (opts.invisibleRecaptcha) {
+		// The invisible v3 badge — present on countless pages, needs NO human. Must
+		// NOT be treated as a challenge (the false positive that bailed to the user).
+		challenge =
+			'<div class="grecaptcha-badge"><iframe title="reCAPTCHA" src="https://example.test/recaptcha/api2/anchor?size=invisible&k=x" style="width:256px;height:60px;display:block"></iframe></div>';
+	} else if (opts.recaptcha) {
+		// A VISIBLE "I'm not a robot" checkbox — a real human challenge.
+		challenge =
+			'<div class="g-recaptcha"><iframe title="reCAPTCHA" src="https://example.test/recaptcha/api2/anchor?k=x" style="width:304px;height:78px;display:block"></iframe></div>';
 	} else if (opts.challenge) {
 		challenge = '<div class="cf-turnstile" data-sitekey="test">Verify you are human</div>';
 	}
