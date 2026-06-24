@@ -44,3 +44,6 @@ new_classes = ["AgentDO"]
 # SESSION_SIGNING_KEY
 # STRIPE_SECRET_KEY
 # STRIPE_WEBHOOK_SECRET
+# VAPID_PUBLIC_KEY  (Web Push, also non-secret — served via /v1/push/vapid-key)
+# VAPID_PRIVATE_KEY (Web Push signing — secret)
+# VAPID_SUBJECT     (mailto: contact)
