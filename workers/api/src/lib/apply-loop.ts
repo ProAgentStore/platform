@@ -79,10 +79,14 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	let lastUrl = "";
 	let lastActionKey = "";
 	let repeatFails = 0;
+	let pageKey = "";
+	let failsOnPage = 0;
 
 	for (let step = 0; step < maxSteps; step++) {
 		const snap = await deps.snapshot();
 		lastUrl = snap.url;
+		// Reset the per-page failure counter whenever we move to a new page.
+		if (snap.url !== pageKey) { pageKey = snap.url; failsOnPage = 0; }
 
 		// A CAPTCHA can't be solved by the model — hand off to the human, same session.
 		if (snap.challenge) {
@@ -110,11 +114,14 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			// Feed the failure back so the brain adapts instead of blindly repeating.
 			repeatFails = key === lastActionKey ? repeatFails + 1 : 1;
 			lastActionKey = key;
+			failsOnPage += 1;
 			actionLog.push(`${describeAction(decision.action)} — FAILED: ${actResult.error}`);
 			await deps.onEvent?.("agent.action_failed", `${describeAction(decision.action)} failed: ${actResult.error}`, { action: decision.action, error: actResult.error });
-			if (repeatFails >= 3) {
-				// Can't proceed after trying → hand off to the human for THIS step
-				// (the workflow turns "stuck" into a takeover), then resume.
+			// Can't proceed after trying → hand off to the human for THIS step (the
+			// workflow turns "stuck" into a takeover), then resume. Trips on a pure
+			// repeat (3×) OR on several different-but-failing attempts on one page (the
+			// brain thrashing a stubborn widget), so it never burns to max-steps.
+			if (repeatFails >= 3 || failsOnPage >= 4) {
 				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog] };
 			}
 		} else {
