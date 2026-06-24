@@ -429,6 +429,18 @@ export class LocalRunner {
 		return { submitted: true, output };
 	}
 
+	/**
+	 * Always attach files via Playwright, never a native OS dialog: intercept any
+	 * file chooser this page opens (e.g. a résumé upload) and set the file
+	 * programmatically. Works even when a REMOTE human clicks the upload button
+	 * during a takeover — no local file picker is ever needed.
+	 */
+	private armFileAutoAttach(page: Page, filePath: string): void {
+		page.on("filechooser", (chooser) => {
+			chooser.setFiles(filePath).catch(() => undefined);
+		});
+	}
+
 	/** End a takeover session (human finished or gave up). */
 	async endTakeover(taskId: string): Promise<void> {
 		const session = this.takeovers.get(taskId);
@@ -450,6 +462,15 @@ export class LocalRunner {
 			}
 			const context = await this.getBrowserContext();
 			const page = context.pages()[0] || (await context.newPage());
+			// Auto-attach a file (e.g. résumé) via Playwright for any upload the
+			// human triggers in the takeover — never a native picker.
+			const attachPath = stringValue(task.input.resumePath ?? task.input.attachPath);
+			if (attachPath && existsSync(resolve(attachPath))) {
+				this.armFileAutoAttach(page, resolve(attachPath));
+				this.addTaskEvent(task, "browser.file.armed", "File will auto-attach via Playwright", {
+					file: basename(resolve(attachPath)),
+				});
+			}
 			this.addTaskEvent(task, "browser.goto.started", "Opening browser page", { url });
 			await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
 			// If the page presents an anti-bot challenge, hand off to a human to
@@ -489,6 +510,9 @@ export class LocalRunner {
 		const job = normalizeJobApplicationInput(task.input);
 		const context = await this.getBrowserContext();
 		const page = context.pages()[0] || (await context.newPage());
+		// Any file chooser (résumé, supporting docs) auto-attaches via Playwright,
+		// including if the flow hands off and a human clicks upload in takeover.
+		this.armFileAutoAttach(page, job.resumePath);
 		this.addTaskEvent(task, "browser.goto.started", "Opening job application page", {
 			url: job.url,
 		});
