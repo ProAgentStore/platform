@@ -904,6 +904,13 @@ export class LocalRunner {
 		await page.waitForTimeout(700).catch(() => undefined);
 		const active = await this.getActivePage();
 		await active.waitForLoadState("domcontentloaded", { timeout: 6_000 }).catch(() => undefined);
+		// SPA route changes (Dayforce/Workday) swap the view via XHR without a full
+		// load, so domcontentloaded fires instantly and the snapshot can catch the
+		// PRE-swap DOM (still showing the button just clicked → a wasted re-click).
+		// Wait for the network to go idle after navigation-ish actions.
+		if (action.action === "click" || action.action === "navigate" || action.action === "key") {
+			await active.waitForLoadState("networkidle", { timeout: 3_500 }).catch(() => undefined);
+		}
 		return {
 			ok: true,
 			url: active.url(),

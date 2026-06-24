@@ -71,7 +71,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		let result: ApplyResult = { outcome: "failed", detail: "did not start", steps: 0 };
 		const transcript: string[] = [];
 		for (let round = 0; round < 12; round++) {
-			result = await runApplyLoop(deps, job, { maxSteps: 40 });
+			result = await runApplyLoop(deps, job, { maxSteps: 60 });
 			transcript.push(...(result.transcript ?? []));
 			if (result.outcome !== "captcha" && result.outcome !== "stuck") break;
 
