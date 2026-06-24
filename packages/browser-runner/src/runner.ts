@@ -874,9 +874,18 @@ export class LocalRunner {
 				const file = resolve(String(action.file ?? ""));
 				if (!file || !existsSync(file)) throw new RunnerInputError("upload requires an existing local file path");
 				let done = false;
+				// 1. Label-associated input (some forms).
 				if (action.name) {
-					done = await page.getByLabel(action.name).setInputFiles(file, { timeout: 5_000 }).then(() => true).catch(() => false);
+					done = await page.getByLabel(action.name).setInputFiles(file, { timeout: 4_000 }).then(() => true).catch(() => false);
 				}
+				// 2. The real <input type=file> directly — most ATS (Greenhouse, Lever…)
+				//    hide it behind a styled "Attach" button; setInputFiles works on a
+				//    hidden input and fires the change event, no native dialog.
+				if (!done) {
+					done = await page.locator('input[type="file"]').first().setInputFiles(file, { timeout: 4_000 }).then(() => true).catch(() => false);
+				}
+				// 3. Styled uploader with no input at all: click the trigger + intercept
+				//    the native file chooser.
 				if (!done) {
 					const chooserP = page.waitForEvent("filechooser", { timeout: 8_000 }).catch(() => null);
 					await locate().click({ timeout: 8_000 }).catch(() => undefined);
