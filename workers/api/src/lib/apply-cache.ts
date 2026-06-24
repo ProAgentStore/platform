@@ -1,5 +1,20 @@
 import type { Env } from "../types.js";
 
+/**
+ * A stable, strong password for ATS account creation — the SAME every run for a
+ * given user, so a second application to a site where the user already has an
+ * account can log in instead of failing to re-register. Derived (HMAC of the
+ * user id under the session secret), so it's reproducible without storage and
+ * not guessable. Always contains upper/lower/digit/symbol (the "Pj9!" prefix).
+ */
+export async function deriveJobPassword(env: Env, userId: string): Promise<string> {
+	const secret = env.SESSION_SIGNING_KEY || "pags-fallback-secret";
+	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`jobpw:${userId}`));
+	const b64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/[+/=]/g, "");
+	return `Pj9!${b64.slice(0, 16)}`;
+}
+
 /** The ATS host an application targets, used as the per-ATS cache key (no www). */
 export function atsHost(url: string): string {
 	try {

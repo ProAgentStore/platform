@@ -236,7 +236,7 @@
           <span id="takeover-status" style="color:#9ca3af;font-size:0.78rem">connecting…</span>
           <span style="flex:1"></span>
           <button id="takeover-fs" class="btn btn-outline btn-sm" style="color:#fff;border-color:#555">Fullscreen</button>
-          <button id="takeover-done" class="btn btn-primary btn-sm">Done — submit</button>
+          <button id="takeover-done" class="btn btn-primary btn-sm">Done</button>
           <button id="takeover-close" class="btn btn-outline btn-sm" style="color:#fff;border-color:#555">Close</button>
         </div>
         <div id="takeover-stage" style="flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden">
@@ -385,13 +385,15 @@
       overlay.querySelector('#takeover-close').addEventListener('click', teardown);
       const doneBtn = overlay.querySelector('#takeover-done');
       doneBtn.addEventListener('click', async () => {
-        doneBtn.disabled = true; doneBtn.textContent = 'Submitting…';
+        doneBtn.disabled = true; doneBtn.textContent = 'Working…';
         try {
           const r = await api(`/v1/instances/${inst}/takeover/${encodeURIComponent(taskId)}/resume`, { method: 'POST' });
-          if (r && r.submitted) { statusEl.textContent = 'submitted ✓'; teardown(); loadUnifiedBoard(); return; }
-          statusEl.textContent = (r && r.reason) ? r.reason : 'Not submitted yet';
+          // submitted = old single-shot flow; resumed = agent-driven flow handing
+          // back to the brain. Both mean "done here" → close + refresh the board.
+          if (r && (r.submitted || r.resumed)) { statusEl.textContent = r.submitted ? 'submitted ✓' : 'handed back — agent continuing ✓'; teardown(); loadUnifiedBoard(); return; }
+          statusEl.textContent = (r && r.reason) ? r.reason : 'Not done yet';
         } catch (e) { statusEl.textContent = 'submit error'; }
-        doneBtn.disabled = false; doneBtn.textContent = 'Done — submit';
+        doneBtn.disabled = false; doneBtn.textContent = 'Done';
       });
       img.focus();
       poll();

@@ -15,6 +15,8 @@ export interface ApplyJob {
 		workAuthorization?: string;
 	};
 	coverNote?: string;
+	/** Stable password to use when an ATS requires an account (same every run). */
+	password?: string;
 	/** Notes from a previous successful run on this ATS (the per-ATS cache). */
 	cacheHint?: string;
 }
@@ -210,6 +212,11 @@ export function applySystemPrompt(job: ApplyJob): string {
 		c.workAuthorization ? `- Work authorization: ${c.workAuthorization}` : "",
 		job.coverNote ? `- Cover note: ${job.coverNote}` : "",
 		"- Résumé: attach via the `upload` tool whenever there is a file upload (the file is supplied automatically — never ask for a path).",
+		job.password ? `- Account password: ${job.password} — use EXACTLY this in both Password and Confirm password. Never invent a different password.` : "",
+		"",
+		"ACCOUNT:",
+		"- If the site requires an account to apply, create one with the candidate email + the account password above.",
+		"- If the email is ALREADY REGISTERED (you see 'already exists', 'account exists', 'email is taken', or it asks you to sign in), do NOT keep trying to register — choose Sign in / Log in and use the same email + the account password above.",
 		"",
 		"RULES:",
 		"- Do exactly ONE tool call per turn — the next page snapshot follows.",

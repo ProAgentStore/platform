@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { deriveJobPassword } from "../lib/apply-cache.js";
 import { createNotification } from "./notifications.js";
 import type { Env } from "../types.js";
 import {
@@ -449,6 +450,9 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 			workAuthorization: optionalStr(cand.workAuthorization ?? cand.work_authorization),
 		},
 		coverNote: optionalStr(body.coverNote ?? body.cover_note),
+		// Stable per-user account password — same every run, so a repeat application
+		// to a site where the account already exists logs in instead of failing.
+		password: optionalStr(body.password) ?? (await deriveJobPassword(c.env, session.uid)),
 	};
 
 	// Create the agent-driven task on the runner (the board card + activity +

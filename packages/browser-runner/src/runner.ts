@@ -371,7 +371,7 @@ export class LocalRunner {
 	 * field remains, it does NOT submit — it reports what's left so the human can
 	 * fix it in the live view and try again. Completes the task on success.
 	 */
-	async resumeTakeover(taskId: string): Promise<{ submitted: boolean; reason?: string; output?: unknown }> {
+	async resumeTakeover(taskId: string): Promise<{ submitted: boolean; resumed?: boolean; reason?: string; output?: unknown }> {
 		const session = this.requireTakeover(taskId);
 		const task = this.store.getTask(taskId);
 		if (!task) throw new RunnerInputError("Task not found");
@@ -383,7 +383,7 @@ export class LocalRunner {
 		if (task.type === "job.apply_agent") {
 			session.humanDone = true;
 			this.addTaskEvent(task, "job.resumed", "Human finished the step — handing back to the agent");
-			return { submitted: false, reason: "handed back to the agent" };
+			return { submitted: false, resumed: true, reason: "handed back to the agent — the agent is continuing" };
 		}
 
 		const challenge = await detectHumanChallenge(page);

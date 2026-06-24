@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { atsHost, getAtsCacheHint, saveAtsCache } from "./apply-cache.js";
+import { atsHost, deriveJobPassword, getAtsCacheHint, saveAtsCache } from "./apply-cache.js";
 import type { Env } from "../types.js";
+
+describe("deriveJobPassword", () => {
+	const env = { SESSION_SIGNING_KEY: "test-secret" } as unknown as Env;
+	it("is stable per user, differs across users, and meets complexity", async () => {
+		const p1 = await deriveJobPassword(env, "user-1");
+		expect(await deriveJobPassword(env, "user-1")).toBe(p1); // same every run
+		expect(await deriveJobPassword(env, "user-2")).not.toBe(p1); // per-user
+		expect(p1).toMatch(/[A-Z]/);
+		expect(p1).toMatch(/[a-z]/);
+		expect(p1).toMatch(/[0-9]/);
+		expect(p1).toMatch(/[^A-Za-z0-9]/);
+		expect(p1.length).toBeGreaterThanOrEqual(12);
+	});
+});
 
 describe("atsHost", () => {
 	it("extracts the host without www", () => {
