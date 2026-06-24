@@ -76,3 +76,30 @@ export interface TakeoverInput {
 	keyCode?: number;
 	text?: string;
 }
+
+/**
+ * One browser action the remote LLM brain asks the runner to perform on the
+ * live active page. Elements are addressed by ARIA role + accessible name (the
+ * same vocabulary as the snapshot the brain reads) — no CSS selectors.
+ */
+export interface BrowserAction {
+	action: "click" | "type" | "select" | "check" | "upload" | "navigate" | "scroll" | "key" | "wait";
+	/** ARIA role of the target element, e.g. "textbox" | "button" | "link" | "combobox" | "radio" | "checkbox". */
+	role?: string;
+	/** Accessible name of the target (from the snapshot). */
+	name?: string;
+	/** Disambiguate when role+name match several elements (default: first). */
+	nth?: number;
+	/** Text to type / option label to select. */
+	text?: string;
+	/** Absolute local file path to upload (action: upload). */
+	file?: string;
+	/** Destination URL (action: navigate). */
+	url?: string;
+	/** Key to press (action: key), e.g. "Enter" | "Tab" | "Escape". */
+	key?: string;
+	/** Pixels to scroll vertically (action: scroll, default 600). */
+	dy?: number;
+	/** Milliseconds to wait (action: wait, capped at 5000). */
+	ms?: number;
+}

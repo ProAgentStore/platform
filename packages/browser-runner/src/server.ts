@@ -6,7 +6,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { URL } from "node:url";
 import { LocalRunner, RunnerInputError } from "./runner.js";
-import type { CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
+import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -104,6 +104,15 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "GET" && path === "/events") {
 		const limit = clampLimit(url.searchParams.get("limit"), 100, 500);
 		return json(res, 200, { events: runner.store.listEvents(limit) });
+	}
+
+	// ── Brain-driven browser control (remote LLM acts on the live page) ─────
+	if (req.method === "POST" && path === "/browser/snapshot") {
+		return json(res, 200, await runner.browserSnapshot());
+	}
+	if (req.method === "POST" && path === "/browser/act") {
+		const body = await readJson<BrowserAction>(req);
+		return json(res, 200, await runner.browserAct(body));
 	}
 
 	// ── Human takeover (remote view + control) ──────────────────────────────

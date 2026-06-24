@@ -9,6 +9,7 @@ import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from 
 import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
 import { RunnerStore } from "./store.js";
 import type {
+	BrowserAction,
 	CreateTaskRequest,
 	RunnerCapability,
 	RunnerConfig,
@@ -87,6 +88,12 @@ export interface AuthenticatedJobInput extends JobApplicationInput {
 export class LocalRunner {
 	private browserContext: BrowserContext | null = null;
 	private chromiumInstallChecked = false;
+	/**
+	 * The single page the brain and the human takeover both act on. Tracked so
+	 * that when an ATS opens a new tab/popup, the active page follows it — the
+	 * remote brain and the human never diverge onto different pages.
+	 */
+	private activePage: Page | null = null;
 	readonly store: RunnerStore;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
@@ -750,7 +757,126 @@ export class LocalRunner {
 				Object.defineProperty(navigator, "webdriver", { get: () => undefined });
 			})
 			.catch(() => undefined);
+		// Follow the active page: when the ATS opens a new tab/popup it becomes the
+		// page both the brain and the human takeover act on. Without this, the
+		// runner blindly used pages()[0] and the two could diverge.
+		this.browserContext.on("page", (p) => this.trackPage(p));
+		const initial = this.browserContext.pages()[0];
+		if (initial) this.trackPage(initial);
 		return this.browserContext;
+	}
+
+	/** Mark a page as the active one; fall back to the newest remaining page when it closes. */
+	private trackPage(page: Page): void {
+		this.activePage = page;
+		page.once("close", () => {
+			if (this.activePage === page) {
+				this.activePage = this.browserContext?.pages().at(-1) ?? null;
+			}
+		});
+	}
+
+	/** The page the brain drives and the human takes over — created on demand. */
+	private async getActivePage(): Promise<Page> {
+		const context = await this.getBrowserContext();
+		if (this.activePage && !this.activePage.isClosed()) return this.activePage;
+		const page = context.pages().at(-1) ?? (await context.newPage());
+		this.activePage = page;
+		return page;
+	}
+
+	/**
+	 * What the remote brain "sees": a compact ARIA tree (roles + accessible names
+	 * + values + states) of the active page — the same representation the brain
+	 * acts on via {@link browserAct}. No raw HTML/screenshots → cheap on tokens.
+	 */
+	async browserSnapshot(): Promise<{ url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean }> {
+		const page = await this.getActivePage();
+		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
+		const full = await page.locator("body").ariaSnapshot().catch(() => "");
+		const MAX = 16_000;
+		const snapshot = full.length > MAX ? `${full.slice(0, MAX)}\n… [snapshot truncated]` : full;
+		return {
+			url: page.url(),
+			title: await page.title().catch(() => ""),
+			snapshot,
+			challenge: await detectHumanChallenge(page),
+			truncated: full.length > MAX,
+		};
+	}
+
+	/**
+	 * Perform one brain-issued action on the active page. Elements are addressed
+	 * by ARIA role + accessible name (from the snapshot) via Playwright's
+	 * getByRole — robust and selector-free. Returns the resulting page state.
+	 */
+	async browserAct(action: BrowserAction): Promise<{ ok: boolean; url: string; title: string; challenge: string | null }> {
+		const page = await this.getActivePage();
+		const locate = () => {
+			const role = action.role as Parameters<Page["getByRole"]>[0] | undefined;
+			let loc = role
+				? page.getByRole(role, action.name ? { name: action.name } : undefined)
+				: page.getByText(action.name ?? "", { exact: false });
+			loc = typeof action.nth === "number" ? loc.nth(action.nth) : loc.first();
+			return loc;
+		};
+		switch (action.action) {
+			case "navigate":
+				if (!action.url || !/^https?:\/\//.test(action.url)) throw new RunnerInputError("navigate requires an http(s) url");
+				await page.goto(action.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+				break;
+			case "type":
+				await locate().fill(String(action.text ?? ""), { timeout: 10_000 });
+				break;
+			case "click":
+				await locate().click({ timeout: 10_000 });
+				break;
+			case "select":
+				await locate().selectOption({ label: String(action.text ?? "") }, { timeout: 10_000 }).catch(() => locate().selectOption(String(action.text ?? ""), { timeout: 10_000 }));
+				break;
+			case "check":
+				await locate().check({ timeout: 10_000 });
+				break;
+			case "upload": {
+				// Always attach via Playwright — never a native dialog. Handles both a
+				// direct <input type=file> (set files on it) and a styled "Upload"
+				// button that opens a native chooser (intercept the filechooser).
+				const file = resolve(String(action.file ?? ""));
+				if (!file || !existsSync(file)) throw new RunnerInputError("upload requires an existing local file path");
+				let done = false;
+				if (action.name) {
+					done = await page.getByLabel(action.name).setInputFiles(file, { timeout: 5_000 }).then(() => true).catch(() => false);
+				}
+				if (!done) {
+					const chooserP = page.waitForEvent("filechooser", { timeout: 8_000 }).catch(() => null);
+					await locate().click({ timeout: 8_000 }).catch(() => undefined);
+					const chooser = await chooserP;
+					if (chooser) await chooser.setFiles(file);
+					else throw new RunnerInputError("no file upload control found for upload action");
+				}
+				break;
+			}
+			case "key":
+				await page.keyboard.press(String(action.key ?? "Enter"));
+				break;
+			case "scroll":
+				await page.mouse.wheel(0, action.dy ?? 600);
+				break;
+			case "wait":
+				await page.waitForTimeout(Math.min(5_000, action.ms ?? 1_000));
+				break;
+			default:
+				throw new RunnerInputError(`Unknown browser action: ${(action as BrowserAction).action}`);
+		}
+		// Let any navigation/async render settle before the next snapshot.
+		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
+		const active = await this.getActivePage();
+		return {
+			ok: true,
+			url: active.url(),
+			title: await active.title().catch(() => ""),
+			challenge: await detectHumanChallenge(active),
+		};
 	}
 
 	private ensureChromiumInstalled(): void {
