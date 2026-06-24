@@ -845,15 +845,28 @@ export class LocalRunner {
 			case "type":
 				await locate().fill(String(action.text ?? ""), { timeout: 10_000 });
 				break;
-			case "click":
-				await locate().click({ timeout: 10_000 });
+			case "click": {
+				const loc = locate();
+				// Force-fallback: custom-styled controls hide the real element behind a
+				// label/overlay, so a normal click times out. force bypasses the
+				// actionability checks and dispatches the click anyway.
+				if (!(await loc.click({ timeout: 8_000 }).then(() => true).catch(() => false))) {
+					await loc.click({ force: true, timeout: 5_000 });
+				}
 				break;
+			}
 			case "select":
 				await locate().selectOption({ label: String(action.text ?? "") }, { timeout: 10_000 }).catch(() => locate().selectOption(String(action.text ?? ""), { timeout: 10_000 }));
 				break;
-			case "check":
-				await locate().check({ timeout: 10_000 });
+			case "check": {
+				const loc = locate();
+				// Custom checkboxes hide the real <input> (opacity:0 / behind a label).
+				// Try a clean check, then force, then click the visible label text.
+				if (await loc.check({ timeout: 6_000 }).then(() => true).catch(() => false)) break;
+				if (await loc.check({ force: true, timeout: 4_000 }).then(() => true).catch(() => false)) break;
+				if (action.name) await page.getByText(action.name.slice(0, 40), { exact: false }).first().click({ force: true, timeout: 4_000 });
 				break;
+			}
 			case "upload": {
 				// Always attach via Playwright — never a native dialog. Handles both a
 				// direct <input type=file> (set files on it) and a styled "Upload"
