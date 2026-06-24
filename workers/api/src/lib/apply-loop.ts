@@ -54,6 +54,8 @@ export interface ApplyResult {
 	challenge?: string | null;
 	url?: string;
 	steps: number;
+	/** The actions taken this run — fed back into the per-ATS cache on success. */
+	transcript?: string[];
 }
 
 /** Side-effecting hooks the loop drives — real ones hit the runner; tests mock them. */
@@ -82,7 +84,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		// A CAPTCHA can't be solved by the model — hand off to the human, same session.
 		if (snap.challenge) {
 			await deps.onEvent?.("agent.captcha", `CAPTCHA detected (${snap.challenge}) — handing off`, { challenge: snap.challenge, url: snap.url });
-			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step };
+			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 
 		const decision = await deps.decide({ job, actionLog, snapshot: snap });
@@ -93,16 +95,16 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		);
 
 		if (decision.finish) {
-			return { outcome: decision.finish.status, detail: decision.finish.detail, url: snap.url, steps: step };
+			return { outcome: decision.finish.status, detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 		if (!decision.action) {
-			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step };
+			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 
 		await deps.act(decision.action);
 		actionLog.push(describeAction(decision.action));
 	}
-	return { outcome: "max_steps", detail: `stopped after ${maxSteps} actions`, url: lastUrl, steps: maxSteps };
+	return { outcome: "max_steps", detail: `stopped after ${maxSteps} actions`, url: lastUrl, steps: maxSteps, transcript: [...actionLog] };
 }
 
 /** Human-readable one-liner for an action (for the action log + activity trace). */

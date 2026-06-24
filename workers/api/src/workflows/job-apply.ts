@@ -1,6 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { decideAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { callRunner, getRunnerConn, type RunnerConn } from "../lib/runner-client.js";
+import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import type { Env } from "../types.js";
 
 export interface JobApplyParams {
@@ -33,6 +34,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			return { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
 		}
 
+		// Per-ATS cache: replay the known-good route from a prior success here.
+		const host = atsHost(job.url);
+		const cacheHint = await step.do("load-cache", async () => (await getAtsCacheHint(env, userId, host)) ?? "");
+		if (cacheHint) job.cacheHint = cacheHint;
+
 		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url }));
 
 		// Durable-step wrappers for the tested pure loop. The call order is
@@ -52,8 +58,10 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// Drive; on a CAPTCHA hand off to the human (same session), wait, resume,
 		// and re-enter the loop until the application reaches a terminal outcome.
 		let result: ApplyResult = { outcome: "failed", detail: "did not start", steps: 0 };
+		const transcript: string[] = [];
 		for (let round = 0; round < 12; round++) {
 			result = await runApplyLoop(deps, job, { maxSteps: 40 });
+			transcript.push(...(result.transcript ?? []));
 			if (result.outcome !== "captcha") break;
 
 			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, challenge: result.challenge ?? "captcha" }));
@@ -72,6 +80,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		}
 
 		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
+
+		// Remember the route that worked, for the next application to this ATS.
+		if (result.outcome === "submitted" && transcript.length) {
+			await step.do("save-cache", async () => { await saveAtsCache(env, userId, host, transcript); return null; });
+		}
 		return result;
 	}
 }
