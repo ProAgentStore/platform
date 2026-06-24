@@ -86,7 +86,10 @@ export class LocalRunner {
 	private chromiumInstallChecked = false;
 	readonly store: RunnerStore;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
-	private takeovers = new Map<string, { page: Page; cdp?: CDPSession }>();
+	private takeovers = new Map<
+		string,
+		{ page: Page; cdp?: CDPSession; latestFrame?: string; width?: number; height?: number; screencasting?: boolean }
+	>();
 
 	constructor(readonly config: RunnerConfig) {
 		mkdirSync(config.dataDir, { recursive: true });
@@ -243,7 +246,7 @@ export class LocalRunner {
 		return [...this.takeovers.keys()];
 	}
 
-	private requireTakeover(taskId: string): { page: Page; cdp?: CDPSession } {
+	private requireTakeover(taskId: string): NonNullable<ReturnType<typeof this.takeovers.get>> {
 		const session = this.takeovers.get(taskId);
 		if (!session) {
 			throw new RunnerInputError("No active human-takeover session for this task");
@@ -251,21 +254,46 @@ export class LocalRunner {
 		return session;
 	}
 
+	/** Begin a continuous CDP screencast for a takeover (no viewport disruption). */
+	private async ensureScreencast(taskId: string): Promise<void> {
+		const session = this.requireTakeover(taskId);
+		if (!session.cdp) {
+			session.cdp = await session.page.context().newCDPSession(session.page);
+		}
+		if (session.screencasting) return;
+		session.screencasting = true;
+		const cdp = session.cdp;
+		cdp.on("Page.screencastFrame", (params: { data: string; sessionId: number; metadata?: { deviceWidth?: number; deviceHeight?: number } }) => {
+			session.latestFrame = params.data;
+			if (params.metadata?.deviceWidth) session.width = Math.round(params.metadata.deviceWidth);
+			if (params.metadata?.deviceHeight) session.height = Math.round(params.metadata.deviceHeight);
+			cdp.send("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined);
+		});
+		await cdp.send("Page.startScreencast", { format: "jpeg", quality: 50, everyNthFrame: 1 });
+	}
+
 	/**
-	 * A current JPEG frame of the taken-over page plus the page's CSS viewport
-	 * size, so the UI can map a click on the (possibly retina-scaled) image back
-	 * to the CSS-pixel coordinates that CDP Input expects.
+	 * The latest screencast frame of the taken-over page plus its CSS viewport
+	 * size. Uses a continuous CDP screencast (not page.screenshot, which forces
+	 * a viewport metrics override and makes the real window flicker/zoom).
 	 */
 	async takeoverFrame(taskId: string): Promise<{ frame: string; width: number; height: number }> {
 		const session = this.requireTakeover(taskId);
-		const buf = await session.page.screenshot({ type: "jpeg", quality: 55 });
-		const viewport = await session.page
-			.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
-			.catch(() => ({ width: 0, height: 0 }));
+		await this.ensureScreencast(taskId);
+		// Until the first screencast frame arrives, fall back to a single shot.
+		if (!session.latestFrame) {
+			const buf = await session.page.screenshot({ type: "jpeg", quality: 55 }).catch(() => null);
+			if (buf) session.latestFrame = buf.toString("base64");
+			const viewport = await session.page
+				.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+				.catch(() => ({ width: 0, height: 0 }));
+			session.width = session.width || viewport.width;
+			session.height = session.height || viewport.height;
+		}
 		return {
-			frame: `data:image/jpeg;base64,${buf.toString("base64")}`,
-			width: viewport.width,
-			height: viewport.height,
+			frame: `data:image/jpeg;base64,${session.latestFrame ?? ""}`,
+			width: session.width ?? 1280,
+			height: session.height ?? 720,
 		};
 	}
 
@@ -323,7 +351,10 @@ export class LocalRunner {
 	/** End a takeover session (human finished or gave up). */
 	async endTakeover(taskId: string): Promise<void> {
 		const session = this.takeovers.get(taskId);
-		if (session?.cdp) await session.cdp.detach().catch(() => undefined);
+		if (session?.cdp) {
+			if (session.screencasting) await session.cdp.send("Page.stopScreencast").catch(() => undefined);
+			await session.cdp.detach().catch(() => undefined);
+		}
 		this.takeovers.delete(taskId);
 	}
 
