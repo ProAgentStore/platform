@@ -361,9 +361,9 @@ export class LocalRunner {
 		const page = session.page;
 
 		const challenge = await detectHumanChallenge(page);
-		if (challenge) {
-			this.addTaskEvent(task, "job.human_challenge_present", `Challenge still on the page: ${challenge}`);
-			return { submitted: false, reason: `The ${challenge} challenge is still showing — solve it in the live view, then submit again.` };
+		if (challenge && !(await challengeSolved(page))) {
+			this.addTaskEvent(task, "job.human_challenge_present", `Challenge not yet solved: ${challenge}`);
+			return { submitted: false, reason: `The ${challenge} challenge isn't solved yet — complete it in the live view, then submit again.` };
 		}
 
 		this.addTaskEvent(task, "job.resumed", "Human cleared the challenge; resuming submission");
@@ -868,6 +868,27 @@ async function detectHumanChallenge(page: Page): Promise<string | null> {
 		if ((await page.locator(selector).count().catch(() => 0)) > 0) return type;
 	}
 	return null;
+}
+
+/**
+ * Whether a detected challenge has actually been solved — i.e. the widget has
+ * produced a response token. A solved captcha keeps its widget in the DOM, so
+ * presence alone isn't "still blocked"; the token is the real signal.
+ */
+async function challengeSolved(page: Page): Promise<boolean> {
+	return page
+		.evaluate(() => {
+			const names = ["h-captcha-response", "g-recaptcha-response", "cf-turnstile-response"];
+			for (const n of names) {
+				const el = document.querySelector(`textarea[name="${n}"], input[name="${n}"]`) as
+					| HTMLInputElement
+					| HTMLTextAreaElement
+					| null;
+				if (el && typeof el.value === "string" && el.value.length > 0) return true;
+			}
+			return false;
+		})
+		.catch(() => false);
 }
 
 /** Capture a downscaled JPEG screenshot as a data URL for the human-takeover UI. */

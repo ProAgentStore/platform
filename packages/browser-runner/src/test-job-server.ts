@@ -60,7 +60,10 @@ async function route(
 		return;
 	}
 	if (req.method === "GET" && url.pathname === "/jobs/software-engineer") {
-		html(res, 200, jobPage({ challenge: url.searchParams.get("challenge") === "1" }));
+		html(res, 200, jobPage({
+			challenge: url.searchParams.get("challenge") === "1",
+			hcaptcha: url.searchParams.get("hcaptcha") === "1",
+		}));
 		return;
 	}
 	if (req.method === "POST" && url.pathname === "/apply") {
@@ -86,10 +89,16 @@ async function route(
 	html(res, 404, "<h1>Not found</h1>");
 }
 
-function jobPage(opts: { challenge?: boolean } = {}): string {
-	const challenge = opts.challenge
-		? '<div class="cf-turnstile" data-sitekey="test">Verify you are human</div>'
-		: "";
+function jobPage(opts: { challenge?: boolean; hcaptcha?: boolean } = {}): string {
+	let challenge = "";
+	if (opts.hcaptcha) {
+		// Real hCaptcha widget using hCaptcha's official always-passes TEST sitekey
+		// — lets a human actually solve a challenge end-to-end with zero real-world impact.
+		challenge =
+			'<div class="h-captcha" data-sitekey="10000000-ffff-ffff-ffff-000000000001"></div>\n        <script src="https://js.hcaptcha.com/1/api.js" async defer></script>';
+	} else if (opts.challenge) {
+		challenge = '<div class="cf-turnstile" data-sitekey="test">Verify you are human</div>';
+	}
 	return page("Senior Software Engineer", `
     <main>
       <section class="job">
