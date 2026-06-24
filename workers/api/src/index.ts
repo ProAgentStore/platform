@@ -9,6 +9,7 @@ import { authRoutes } from "./routes/auth.js";
 import { billingRoutes } from "./routes/billing.js";
 import { chatRoutes } from "./routes/chat.js";
 import { instanceRoutes } from "./routes/instances.js";
+import { credentialRoutes } from "./routes/credentials.js";
 import { keysRoutes } from "./routes/keys.js";
 import { emailRoutes } from "./routes/email.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
@@ -66,6 +67,7 @@ app.route("/v1/agents", agentRoutes);
 app.route("/v1/agents", chatRoutes); // /v1/agents/:id/chat, /ws, /messages, /memory, /tasks
 app.route("/v1/agents", runRoutes); // /v1/agents/:id/run, /executions
 app.route("/v1/instances", instanceRoutes); // /v1/instances/:agentId/subscribe, /my/instances, /:id/chat, etc.
+app.route("/v1/instances", credentialRoutes); // /v1/instances/:id/credentials (vault)
 app.route("/v1/agents", analyticsRoutes); // /v1/agents/:id/analytics
 app.route("/v1/dashboard", dashboardRoutes);
 app.route("/v1/notifications", notificationRoutes);

@@ -8,7 +8,80 @@
       loadInstanceKnowledge(); // docs
       loadKbMemory();
       loadKbFiles();
+      loadCredentials();
       loadKbChatHistory();
+    }
+
+    // ── Credentials vault ───────────────────────────────────────
+    async function loadCredentials() {
+      const list = document.getElementById('inst-cred-list');
+      const empty = document.getElementById('inst-cred-empty');
+      if (!list) return;
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/credentials`);
+        const creds = data.credentials || [];
+        if (empty) empty.classList.toggle('hidden', creds.length > 0);
+        list.innerHTML = creds.map(cr => {
+          const badges = [cr.hasPassword ? 'password' : '', cr.hasPin ? 'PIN' : '', cr.hasRecoveryCodes ? 'recovery' : ''].filter(Boolean)
+            .map(b => `<span class="type">${esc(b)}</span>`).join(' ');
+          const used = cr.lastUsedAt ? ` · used ${esc(String(cr.lastUsedAt).slice(0,10))}` : '';
+          return `<div class="memory-item">
+            <div class="key">🔐 ${esc(cr.domain)} ${badges}</div>
+            <div class="content">${esc(cr.username || '(no username)')}${cr.loginUrl ? ` · <a href="${esc(cr.loginUrl)}" target="_blank" rel="noopener">login</a>` : ''}${used}${cr.comments ? `<br><span style="color:var(--muted)">${esc(cr.comments)}</span>` : ''}</div>
+            <div style="display:flex;gap:0.35rem;margin-top:0.4rem;flex-wrap:wrap">
+              <button type="button" class="btn btn-outline btn-sm" onclick="revealCred('${esc(cr.id)}')">Reveal</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="editCred('${esc(cr.id)}')">Edit</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="deleteCred('${esc(cr.id)}', '${esc(cr.domain)}')">Delete</button>
+            </div>
+            <div id="cred-reveal-${esc(cr.id)}" class="content hidden" style="margin-top:0.4rem;font-family:monospace;white-space:pre-wrap"></div>
+          </div>`;
+        }).join('');
+      } catch (e) { list.innerHTML = `<div class="empty" style="padding:1rem">Could not load credentials.</div>`; }
+    }
+
+    function showCredForm() { document.getElementById('inst-cred-form').classList.remove('hidden'); }
+    function hideCredForm() {
+      const f = document.getElementById('inst-cred-form'); if (f) f.classList.add('hidden');
+      ['id','domain','loginurl','username','password','pin','recovery','comments','history'].forEach(k => { const el = document.getElementById('cred-' + k); if (el) el.value = ''; });
+    }
+
+    async function saveCredential() {
+      const v = (k) => (document.getElementById('cred-' + k) || {}).value || '';
+      const domain = v('domain').trim();
+      if (!domain) { alert('Site / domain is required'); return; }
+      const id = v('id');
+      const body = { domain, loginUrl: v('loginurl'), username: v('username'), password: v('password'), pin: v('pin'), recoveryCodes: v('recovery'), comments: v('comments'), recoveryHistory: v('history') };
+      try {
+        await api(`/v1/instances/${currentInstance.id}/credentials${id ? '/' + encodeURIComponent(id) : ''}`, { method: id ? 'PUT' : 'POST', body: JSON.stringify(body) });
+        hideCredForm(); loadCredentials();
+      } catch (e) { alert('Could not save credential: ' + (e && e.message || e)); }
+    }
+
+    async function revealCred(id) {
+      const box = document.getElementById('cred-reveal-' + id);
+      if (!box) return;
+      if (!box.classList.contains('hidden')) { box.classList.add('hidden'); return; }
+      try {
+        const c = await api(`/v1/instances/${currentInstance.id}/credentials/${encodeURIComponent(id)}/reveal`);
+        box.textContent = `username: ${c.username || '—'}\npassword: ${c.password || '—'}\npin: ${c.pin || '—'}\nrecovery codes: ${c.recoveryCodes || '—'}${c.recoveryHistory ? `\nrecovery history: ${c.recoveryHistory}` : ''}`;
+        box.classList.remove('hidden');
+      } catch (e) { box.textContent = 'Could not reveal.'; box.classList.remove('hidden'); }
+    }
+
+    async function editCred(id) {
+      try {
+        const c = await api(`/v1/instances/${currentInstance.id}/credentials/${encodeURIComponent(id)}/reveal`);
+        const set = (k, val) => { const el = document.getElementById('cred-' + k); if (el) el.value = val || ''; };
+        set('id', c.id); set('domain', c.domain); set('loginurl', c.loginUrl); set('username', c.username);
+        set('password', c.password); set('pin', c.pin); set('recovery', c.recoveryCodes); set('comments', c.comments); set('history', c.recoveryHistory);
+        showCredForm();
+      } catch (e) { alert('Could not load credential for editing.'); }
+    }
+
+    async function deleteCred(id, domain) {
+      if (!confirm(`Delete the saved credential for ${domain}?`)) return;
+      try { await api(`/v1/instances/${currentInstance.id}/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' }); loadCredentials(); }
+      catch (e) { alert('Could not delete credential.'); }
     }
 
     async function loadKbChatHistory() {

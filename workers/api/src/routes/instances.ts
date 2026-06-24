@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { deriveJobPassword } from "../lib/apply-cache.js";
+import { findCredentialForHost } from "../lib/credentials.js";
 import { createNotification } from "./notifications.js";
 import type { Env } from "../types.js";
 import {
@@ -431,8 +432,12 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 	// source of truth — so the email is always the one the user maintains there,
 	// never a hardcoded/work address. Request fields override only if provided.
 	const kb = await readKbCandidate(c.env, instanceId);
+	// A saved credential for this site (the vault) is authoritative — its real
+	// password lets the brain sign in to an existing account, and its username is
+	// the login identity. This is what makes repeat applications "just work".
+	const cred = await findCredentialForHost(c.env, instanceId, session.uid, url);
 	const fullName = String(cand.fullName ?? cand.full_name ?? body.full_name ?? kb.fullName ?? "");
-	const email = String(cand.email ?? body.email ?? kb.email ?? "");
+	const email = String(cand.email ?? body.email ?? cred?.username ?? kb.email ?? "");
 	if (!/^https?:\/\//.test(url)) return c.json({ error: "url (http/https) required" }, 400);
 	if (!resumePath) return c.json({ error: "resumePath required (absolute path on the runner machine)" }, 400);
 	if (!fullName || !email) return c.json({ error: "no candidate email in the KB — add your résumé (with email) to the instance knowledge, or pass candidate.email" }, 400);
@@ -450,9 +455,9 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 			workAuthorization: optionalStr(cand.workAuthorization ?? cand.work_authorization),
 		},
 		coverNote: optionalStr(body.coverNote ?? body.cover_note),
-		// Stable per-user account password — same every run, so a repeat application
-		// to a site where the account already exists logs in instead of failing.
-		password: optionalStr(body.password) ?? (await deriveJobPassword(c.env, session.uid)),
+		// Saved credential password wins (lets the brain sign into the real existing
+		// account); else the stable derived password for a first-time signup.
+		password: cred?.password ?? optionalStr(body.password) ?? (await deriveJobPassword(c.env, session.uid)),
 	};
 
 	// Create the agent-driven task on the runner (the board card + activity +

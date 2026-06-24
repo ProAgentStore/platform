@@ -226,6 +226,7 @@
         <button type="button" class="tab active" data-kb-tab="docs" onclick="switchKbTab('docs')">Documents</button>
         <button type="button" class="tab" data-kb-tab="memory" onclick="switchKbTab('memory')">Memory</button>
         <button type="button" class="tab" data-kb-tab="files" onclick="switchKbTab('files')">Files</button>
+        <button type="button" class="tab" data-kb-tab="credentials" onclick="switchKbTab('credentials')">Credentials</button>
         <button type="button" class="tab" data-kb-tab="chat" onclick="switchKbTab('chat')">Chat</button>
       </div>
       <div data-kb-panel="docs">
@@ -273,6 +274,36 @@
         <div id="inst-file-upload-status" class="hidden" style="font-size:0.78rem;color:var(--muted);margin-bottom:0.65rem"></div>
         <div id="inst-kb-files-list" class="memory-list"></div>
         <div id="inst-kb-files-empty" class="empty hidden" style="padding:1rem">No files uploaded yet.</div>
+      </div>
+      <div data-kb-panel="credentials" hidden>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.5rem">
+          <h3 style="font-size:1rem;font-weight:700;margin:0">🔐 Credentials</h3>
+          <button type="button" onclick="showCredForm()" class="btn btn-outline btn-sm">+ Add credential</button>
+        </div>
+        <p style="font-size:0.74rem;color:var(--muted);margin:0 0 0.75rem">Site logins the agent signs in with (e.g. an ATS account). Passwords, PINs &amp; recovery codes are <b>encrypted at rest</b> — decrypted only when the agent logs in, never shown unless you reveal them.</p>
+        <div id="inst-cred-form" class="create-form hidden" style="margin-bottom:0.75rem">
+          <input type="hidden" id="cred-id">
+          <div class="form-row">
+            <div style="flex:2"><label>Site / domain *</label><input id="cred-domain" placeholder="dayforcehcm.com" autocomplete="off"></div>
+            <div style="flex:2"><label>Login URL</label><input id="cred-loginurl" placeholder="https://…/login" autocomplete="off"></div>
+          </div>
+          <div class="form-row" style="margin-top:0.5rem">
+            <div style="flex:2"><label>Username / email</label><input id="cred-username" placeholder="you@example.com" autocomplete="off"></div>
+            <div style="flex:2"><label>Password</label><input id="cred-password" type="password" placeholder="••••••••" autocomplete="new-password"></div>
+          </div>
+          <div class="form-row" style="margin-top:0.5rem">
+            <div><label>PIN</label><input id="cred-pin" placeholder="optional" autocomplete="off"></div>
+            <div style="flex:2"><label>Recovery codes</label><input id="cred-recovery" placeholder="optional" autocomplete="off"></div>
+          </div>
+          <div style="margin-top:0.5rem"><label>Comments</label><input id="cred-comments" placeholder="notes…" autocomplete="off"></div>
+          <div style="margin-top:0.5rem"><label>Recovery history</label><textarea id="cred-history" placeholder="resets, recovery events, dates…" style="min-height:48px"></textarea></div>
+          <div style="display:flex;gap:0.5rem;margin-top:0.5rem">
+            <button type="button" onclick="saveCredential()" class="btn btn-primary btn-sm">Save</button>
+            <button type="button" onclick="hideCredForm()" class="btn btn-outline btn-sm">Cancel</button>
+          </div>
+        </div>
+        <div id="inst-cred-list" class="memory-list"></div>
+        <div id="inst-cred-empty" class="empty hidden" style="padding:1rem">No credentials saved yet.</div>
       </div>
       <div data-kb-panel="chat" hidden>
         <div class="create-form" style="padding:0;overflow:hidden;display:flex;flex-direction:column">
