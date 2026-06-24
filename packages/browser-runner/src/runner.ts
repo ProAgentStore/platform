@@ -98,7 +98,7 @@ export class LocalRunner {
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
 		string,
-		{ page: Page; cdp?: CDPSession; latestFrame?: string; width?: number; height?: number; cssW?: number; cssH?: number; screencasting?: boolean }
+		{ page: Page; cdp?: CDPSession; latestFrame?: string; width?: number; height?: number; cssW?: number; cssH?: number; screencasting?: boolean; reason?: string; humanDone?: boolean }
 	>();
 
 	constructor(readonly config: RunnerConfig) {
@@ -406,6 +406,15 @@ export class LocalRunner {
 		const task = this.store.getTask(taskId);
 		if (!task) throw new RunnerInputError("Task not found");
 		const page = session.page;
+
+		// Agent-driven applications are steered by the remote workflow. "Resume"
+		// here just signals the human finished the stuck step (or solved a captcha);
+		// the workflow polls humanDone and continues driving. Do NOT complete/submit.
+		if (task.type === "job.apply_agent") {
+			session.humanDone = true;
+			this.addTaskEvent(task, "job.resumed", "Human finished the step — handing back to the agent");
+			return { submitted: false, reason: "handed back to the agent" };
+		}
 
 		const challenge = await detectHumanChallenge(page);
 		if (challenge && !(await challengeSolved(page))) {
@@ -964,18 +973,23 @@ export class LocalRunner {
 	 * for remote takeover and flip the task to needs_human so the console shows
 	 * the take-over view. The brain pauses; the human solves it on this page.
 	 */
-	async browserHandoff(taskId: string, challenge: string): Promise<{ ok: boolean; screenshotBase64?: string }> {
+	async browserHandoff(taskId: string, label: string, reason = "challenge"): Promise<{ ok: boolean; screenshotBase64?: string }> {
 		const page = await this.getActivePage();
-		this.takeovers.set(taskId, { page });
+		this.takeovers.set(taskId, { page, reason, humanDone: false });
 		const screenshotBase64 = await captureScreenshotDataUrl(page);
 		const task = this.store.getTask(taskId);
 		if (task) {
 			task.status = "needs_human";
 			task.updatedAt = new Date().toISOString();
 			this.store.putTask(task);
-			this.addTaskEvent(task, "job.human_handoff_required", `Take over to solve the ${challenge} — the agent will continue once it's solved.`, {
-				reason: "challenge",
-				challengeType: challenge,
+			const message =
+				reason === "stuck"
+					? `Take over: the agent is stuck on "${label}". Do that one step (e.g. tick the box / click continue) in the live view, then click Resume.`
+					: `Take over to solve the ${label} — the agent will continue once it's solved.`;
+			this.addTaskEvent(task, "job.human_handoff_required", message, {
+				reason,
+				challengeType: reason === "challenge" ? label : undefined,
+				stuckOn: reason === "stuck" ? label : undefined,
 				url: page.url(),
 				screenshotBase64,
 			});
@@ -983,10 +997,14 @@ export class LocalRunner {
 		return { ok: true, screenshotBase64 };
 	}
 
-	/** Whether the handed-off challenge has been solved (so the brain can resume). */
+	/** Whether the brain can resume: a solved captcha (auto), or a human "Resume" for a stuck step. */
 	async browserHandoffStatus(taskId: string): Promise<{ solved: boolean; challenge: string | null }> {
-		const page = this.takeovers.get(taskId)?.page ?? (await this.getActivePage());
+		const session = this.takeovers.get(taskId);
+		const page = session?.page ?? (await this.getActivePage());
 		if (page.isClosed()) return { solved: true, challenge: null };
+		// A stuck handoff resumes only when the human explicitly clicks Resume —
+		// there's nothing to auto-detect.
+		if (session?.reason === "stuck") return { solved: !!session.humanDone, challenge: null };
 		const challenge = await detectHumanChallenge(page);
 		const solved = !challenge || (await challengeSolved(page));
 		return { solved, challenge };

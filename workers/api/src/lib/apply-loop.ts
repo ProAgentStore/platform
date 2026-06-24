@@ -40,7 +40,7 @@ export interface PageSnapshot {
 	challenge: string | null;
 }
 
-export type ApplyOutcome = "submitted" | "expired" | "blocked" | "captcha" | "failed" | "max_steps";
+export type ApplyOutcome = "submitted" | "expired" | "blocked" | "captcha" | "stuck" | "failed" | "max_steps";
 
 export interface ApplyDecision {
 	thought?: string;
@@ -113,7 +113,9 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			actionLog.push(`${describeAction(decision.action)} — FAILED: ${actResult.error}`);
 			await deps.onEvent?.("agent.action_failed", `${describeAction(decision.action)} failed: ${actResult.error}`, { action: decision.action, error: actResult.error });
 			if (repeatFails >= 3) {
-				return { outcome: "failed", detail: `the same action failed 3× (${actResult.error}); the brain could not get past this page`, url: snap.url, steps: step, transcript: [...actionLog] };
+				// Can't proceed after trying → hand off to the human for THIS step
+				// (the workflow turns "stuck" into a takeover), then resume.
+				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog] };
 			}
 		} else {
 			repeatFails = 0;

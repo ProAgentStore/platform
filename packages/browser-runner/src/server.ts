@@ -119,8 +119,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, runner.browserEvent(b.taskId, b.type, b.message, b.data));
 	}
 	if (req.method === "POST" && path === "/browser/handoff") {
-		const b = await readJson<{ taskId: string; challenge: string }>(req);
-		return json(res, 200, await runner.browserHandoff(b.taskId, b.challenge));
+		const b = await readJson<{ taskId: string; challenge?: string; label?: string; reason?: string }>(req);
+		return json(res, 200, await runner.browserHandoff(b.taskId, b.label ?? b.challenge ?? "this step", b.reason ?? "challenge"));
 	}
 	if (req.method === "POST" && path === "/browser/handoff-status") {
 		const b = await readJson<{ taskId: string }>(req);

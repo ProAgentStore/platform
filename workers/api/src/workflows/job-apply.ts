@@ -73,9 +73,13 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		for (let round = 0; round < 12; round++) {
 			result = await runApplyLoop(deps, job, { maxSteps: 40 });
 			transcript.push(...(result.transcript ?? []));
-			if (result.outcome !== "captcha") break;
+			if (result.outcome !== "captcha" && result.outcome !== "stuck") break;
 
-			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, challenge: result.challenge ?? "captcha" }));
+			// Captcha → auto-resume when solved; stuck step → resume when the human
+			// clicks Resume. Both hand off to the same console takeover, same session.
+			const reason = result.outcome === "captcha" ? "challenge" : "stuck";
+			const label = result.outcome === "captcha" ? result.challenge ?? "captcha" : result.detail ?? "this step";
+			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined }));
 
 			let solved = false;
 			for (let poll = 0; poll < CAPTCHA_WAIT_POLLS && !solved; poll++) {

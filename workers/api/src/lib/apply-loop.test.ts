@@ -69,8 +69,8 @@ describe("runApplyLoop", () => {
 			decide: async () => { decideCalls++; return { action: { action: "click", role: "button", name: "Apply" } }; },
 		};
 		const result = await runApplyLoop(deps, JOB, { maxSteps: 40 });
-		expect(result.outcome).toBe("failed");
-		expect(result.detail).toMatch(/3×/);
+		expect(result.outcome).toBe("stuck"); // hands off to the human for this step
+		expect(result.detail).toContain("Apply"); // the stuck action
 		expect(acted).toHaveLength(3); // stops after the third identical failure, not 40
 		expect(decideCalls).toBe(3);
 	});
