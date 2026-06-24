@@ -501,27 +501,37 @@
         <span class="tag tag-${esc(task.status || 'queued')}">${esc(String(task.status || 'queued').replace('_', ' '))}</span>
         ${task.requiresApproval ? '<span class="tag">approval</span>' : ''}
         ${task.synthetic ? '<span class="tag">history</span>' : ''}`;
+      const isError = task.status === 'needs_human' ? false : !!task.error;
       body.innerHTML = `
-        <div class="runtime-detail-grid">
-          ${runtimeDetailField('Task ID', task.id || '')}
-          ${runtimeDetailField('Status', String(task.status || 'queued').replace('_', ' '))}
-          ${runtimeDetailField('Created', formatTime(task.createdAt))}
-          ${runtimeDetailField('Updated', formatTime(task.updatedAt || task.completedAt))}
+        <div class="rt-tabs" style="display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:0.85rem;flex-wrap:wrap">
+          <button type="button" class="rt-tab" data-rt-tab="overview">Overview</button>
+          <button type="button" class="rt-tab" data-rt-tab="activity">Activity${events.length ? ` (${events.length})` : ''}</button>
+          <button type="button" class="rt-tab" data-rt-tab="input">Input</button>
+          <button type="button" class="rt-tab" data-rt-tab="output">Output</button>
         </div>
-        ${task.approval?.prompt ? `<div class="runtime-detail-field"><div class="runtime-detail-label">Approval Prompt</div><div class="runtime-detail-value">${esc(task.approval.prompt)}</div></div>` : ''}
-        ${task.error ? `<div class="runtime-detail-field"><div class="runtime-detail-label">Error</div><div class="runtime-detail-value" style="color:var(--red)">${esc(task.error)}</div></div>` : ''}
-        <div>
-          <div class="runtime-detail-label">Input</div>
-          <pre class="runtime-detail-pre">${esc(safePrettyJson(task.input))}</pre>
+        <div data-rt-panel="overview">
+          <div class="runtime-detail-grid">
+            ${runtimeDetailField('Task ID', task.id || '')}
+            ${runtimeDetailField('Status', String(task.status || 'queued').replace('_', ' '))}
+            ${runtimeDetailField('Created', formatTime(task.createdAt))}
+            ${runtimeDetailField('Updated', formatTime(task.updatedAt || task.completedAt))}
+          </div>
+          ${task.approval?.prompt ? `<div class="runtime-detail-field"><div class="runtime-detail-label">Approval Prompt</div><div class="runtime-detail-value">${esc(task.approval.prompt)}</div></div>` : ''}
+          ${task.error ? `<div class="runtime-detail-field"><div class="runtime-detail-label">${task.status === 'needs_human' ? '⚠️ Needs you' : 'Error'}</div><div class="runtime-detail-value" style="color:${isError ? 'var(--red)' : '#f59e0b'}">${esc(task.error)}</div></div>` : ''}
         </div>
-        <div>
-          <div class="runtime-detail-label">Output</div>
-          <pre class="runtime-detail-pre">${esc(safePrettyJson(task.output))}</pre>
-        </div>
-        <div>
-          <div class="runtime-detail-label">Task History</div>
-          ${renderRuntimeHistory(events)}
-        </div>`;
+        <div data-rt-panel="activity" hidden>${renderRuntimeHistory(events)}</div>
+        <div data-rt-panel="input" hidden><pre class="runtime-detail-pre">${esc(safePrettyJson(task.input))}</pre></div>
+        <div data-rt-panel="output" hidden><pre class="runtime-detail-pre">${esc(safePrettyJson(task.output))}</pre></div>`;
+      const rtTabs = body.querySelectorAll('.rt-tab');
+      const showTab = (name) => {
+        rtTabs.forEach(t => {
+          const on = t.dataset.rtTab === name;
+          t.style.cssText = `background:none;border:none;border-bottom:2px solid ${on ? '#7c3aed' : 'transparent'};padding:0.4rem 0.75rem;cursor:pointer;font-size:0.82rem;font-weight:600;color:${on ? '#7c3aed' : 'var(--muted)'}`;
+        });
+        body.querySelectorAll('[data-rt-panel]').forEach(p => { p.hidden = p.dataset.rtPanel !== name; });
+      };
+      rtTabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.rtTab)));
+      showTab(task.status === 'needs_human' ? 'overview' : 'overview');
       const approval = task.status === 'needs_approval'
         ? `<button type="button" class="btn btn-primary btn-sm" data-detail-task-action="approve" data-task-id="${esc(task.id)}">Approve</button>`
         : '';
@@ -586,20 +596,39 @@
       }
     }
 
+    function eventIcon(type) {
+      const t = String(type || '');
+      if (t.includes('human_handoff') || t.includes('human_challenge')) return '🖥';
+      if (t.endsWith('.failed')) return '❌';
+      if (t.endsWith('.completed') || t.endsWith('.filled')) return '✅';
+      if (t.endsWith('.cancelled')) return '🚫';
+      if (t.endsWith('.approved')) return '👍';
+      if (t.endsWith('.created')) return '🆕';
+      if (t.endsWith('.running') || t.endsWith('.started')) return '▶️';
+      if (t.startsWith('browser.goto')) return '🌐';
+      if (t.startsWith('job.form')) return '📝';
+      if (t.startsWith('file')) return '📎';
+      return '•';
+    }
+
     function renderInstanceRuntimeEvents(events) {
       const list = document.getElementById('inst-runtime-event-list');
       list.innerHTML = '';
       if (!events.length) {
-        list.innerHTML = '<div style="color:var(--muted-soft);font-size:0.82rem">No runtime events yet.</div>';
+        list.innerHTML = '<div style="color:var(--muted-soft);font-size:0.82rem">No activity yet.</div>';
         return;
       }
       for (const event of events) {
         const row = document.createElement('div');
-        row.style.cssText = 'display:grid;grid-template-columns:130px 1fr auto;gap:0.6rem;align-items:start;border-bottom:1px solid var(--line);padding:0.4rem 0;font-size:0.78rem';
+        row.style.cssText = 'display:flex;gap:0.55rem;align-items:baseline;border-bottom:1px solid var(--line);padding:0.4rem 0;font-size:0.8rem';
+        const label = String(event.type || 'event').replace(/[._]/g, ' ');
         row.innerHTML = `
-          <span style="color:var(--muted);font-family:'SF Mono',monospace">${esc(event.type || 'event')}</span>
-          <span>${esc(event.message || '')}</span>
-          <span style="color:var(--muted-soft);white-space:nowrap">${esc(formatTime(event.createdAt))}</span>`;
+          <span style="flex:0 0 auto;font-size:0.9rem;line-height:1">${eventIcon(event.type)}</span>
+          <span style="flex:1;min-width:0">
+            <span style="display:block;overflow-wrap:anywhere">${esc(event.message || label)}</span>
+            <span style="color:var(--muted-soft);font-size:0.7rem">${esc(label)}</span>
+          </span>
+          <span style="flex:0 0 auto;color:var(--muted-soft);white-space:nowrap;font-size:0.72rem">${esc(formatTime(event.createdAt))}</span>`;
         list.appendChild(row);
       }
     }
