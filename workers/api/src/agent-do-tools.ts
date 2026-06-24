@@ -16,6 +16,8 @@ const CORE_TOOLS = new Set([
 	"add_knowledge",
 	"upload_file",
 	"list_files",
+	"read_file",
+	"delete_file",
 	"create_collection",
 	"list_collections",
 	"insert_record",
