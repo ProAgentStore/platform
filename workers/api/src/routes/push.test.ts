@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../types.js";
-import { sendPushToUser } from "./push.js";
+import { isSafePushEndpoint, sendPushToUser } from "./push.js";
 
 const b64url = (b: Uint8Array) =>
 	btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -50,6 +50,34 @@ function mockEnv(subs: unknown[], extra: Record<string, unknown>): { env: Env; d
 }
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("isSafePushEndpoint (SSRF guard)", () => {
+	it("accepts real public https push endpoints", () => {
+		expect(isSafePushEndpoint("https://fcm.googleapis.com/fcm/send/abc")).toBe(true);
+		expect(isSafePushEndpoint("https://web.push.apple.com/QABC")).toBe(true);
+		expect(isSafePushEndpoint("https://updates.push.services.mozilla.com/wpush/v2/x")).toBe(true);
+	});
+	it("rejects non-https, private, internal, credentialed, and odd-port hosts", () => {
+		for (const bad of [
+			"http://fcm.googleapis.com/x",
+			"https://localhost/x",
+			"https://127.0.0.1/x",
+			"https://10.0.0.5/x",
+			"https://169.254.169.254/latest/meta-data/",
+			"https://192.168.1.1/x",
+			"https://172.16.0.1/x",
+			"https://router.local/x",
+			"https://internal/x",
+			"https://[::1]/x",
+			"https://user:pass@fcm.googleapis.com/x",
+			"https://fcm.googleapis.com:8080/x",
+			"ftp://example.com/x",
+			"not a url",
+		]) {
+			expect(isSafePushEndpoint(bad), bad).toBe(false);
+		}
+	});
+});
 
 describe("sendPushToUser", () => {
 	it("returns 0 and sends nothing when VAPID is not configured", async () => {

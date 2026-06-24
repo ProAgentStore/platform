@@ -55,6 +55,7 @@ app.use("/v1/*", rateLimitDefault());
 app.use("/v1/agents/*/chat", rateLimitStrict());
 app.use("/v1/agents/*/run", rateLimitStrict());
 app.use("/v1/instances/*/chat", rateLimitStrict());
+app.use("/v1/push/test", rateLimitStrict()); // sends real pushes — abuse-prone
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 
