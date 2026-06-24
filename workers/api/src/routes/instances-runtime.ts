@@ -313,6 +313,42 @@ export async function deleteMirroredRuntimeTask(
 		.run();
 }
 
+/**
+ * When a runner (re)registers, any task that was mid-flight on the PREVIOUS
+ * session is orphaned — its browser page / takeover session died with the old
+ * process and can never be resumed. Mark those (needs_human / running) as failed
+ * so they drop out of the live board instead of lingering as stale "Needs you"
+ * cards forever. Returns how many were expired.
+ */
+export async function expireOrphanedRuntimeTasks(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<number> {
+	const { results } = await env.DB.prepare(
+		`SELECT id, payload FROM instance_runtime_tasks
+     WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('needs_human', 'running')`,
+	)
+		.bind(instanceId, userId)
+		.all<RuntimeTaskMirrorRow>();
+	if (!results.length) return 0;
+	const now = new Date().toISOString();
+	const reason =
+		"Runner reconnected — this paused task was orphaned (its browser session is gone). Re-run it to try again.";
+	let expired = 0;
+	for (const row of results) {
+		const task = parsePayload(row.payload);
+		if (!isRecord(task)) continue;
+		task.status = "failed";
+		task.error = reason;
+		task.updatedAt = now;
+		task.completedAt = now;
+		await mirrorRuntimeTask(env, instanceId, userId, task);
+		expired += 1;
+	}
+	return expired;
+}
+
 export async function mirrorRuntimeEvent(
 	env: Env,
 	instanceId: string,

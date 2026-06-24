@@ -11,6 +11,7 @@ import {
 	encodeRuntimeToken,
 	fagsRuntimeSetupTask,
 	fagsRuntimeSetupTaskId,
+	expireOrphanedRuntimeTasks,
 	getRuntime,
 	isCloudflareAiCredentialsError,
 	isRecord,
@@ -207,6 +208,10 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 			runnerVersion,
 		)
 		.run();
+
+	// A fresh runner session can't own tasks paused on the previous one — expire
+	// them so the board doesn't keep stale "Needs you" cards after a restart.
+	await expireOrphanedRuntimeTasks(c.env, instanceId, session.uid).catch(() => undefined);
 
 	// Read back to confirm (or just return success if readback fails)
 	const runtime = await getRuntime(c.env, instanceId, session.uid);
