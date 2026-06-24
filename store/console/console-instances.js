@@ -269,13 +269,16 @@
         return { x: Math.round((ev.clientX - rect.left) / rect.width * w), y: Math.round((ev.clientY - rect.top) / rect.height * h) };
       }
       // Forward the full mouse/scroll/keyboard stream to the real browser.
-      let lastMove = 0;
+      // Stream moves only while dragging (button down) to avoid flooding with
+      // idle hover events; a click still sends down→up so hover-on-click works.
+      let lastMove = 0, dragging = false;
       img.addEventListener('mousemove', (ev) => {
-        const now = Date.now(); if (now - lastMove < 60) return; lastMove = now;
+        if (!dragging) return;
+        const now = Date.now(); if (now - lastMove < 50) return; lastMove = now;
         const c = toCoords(ev); sendInput({ type: 'move', x: c.x, y: c.y });
       });
-      img.addEventListener('mousedown', (ev) => { ev.preventDefault(); img.focus(); const c = toCoords(ev); sendInput({ type: 'down', x: c.x, y: c.y }); });
-      img.addEventListener('mouseup', (ev) => { ev.preventDefault(); const c = toCoords(ev); sendInput({ type: 'up', x: c.x, y: c.y }); });
+      img.addEventListener('mousedown', (ev) => { ev.preventDefault(); img.focus(); dragging = true; const c = toCoords(ev); sendInput({ type: 'move', x: c.x, y: c.y }); sendInput({ type: 'down', x: c.x, y: c.y }); });
+      window.addEventListener('mouseup', (ev) => { if (!dragging) return; dragging = false; ev.preventDefault?.(); const c = toCoords(ev); sendInput({ type: 'up', x: c.x, y: c.y }); });
       img.addEventListener('contextmenu', (ev) => ev.preventDefault());
       let lastWheel = 0;
       img.addEventListener('wheel', (ev) => {

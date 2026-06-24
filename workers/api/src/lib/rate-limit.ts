@@ -43,8 +43,14 @@ export function rateLimitDefault() {
 			c.req.header("CF-Connecting-IP") ||
 			c.req.header("X-Forwarded-For") ||
 			"unknown";
-		const { allowed, remaining } = getRateLimit(`default:${ip}`, 60);
-		c.header("X-RateLimit-Limit", "60");
+		// Interactive human-takeover (live frame polling + mouse/scroll/keyboard
+		// relay) generates far more requests than ordinary API use, so it gets a
+		// much higher bucket instead of tripping the 60/min general limit.
+		const isTakeover = c.req.path.includes("/takeover");
+		const limit = isTakeover ? 3000 : 60;
+		const key = isTakeover ? `takeover:${ip}` : `default:${ip}`;
+		const { allowed, remaining } = getRateLimit(key, limit);
+		c.header("X-RateLimit-Limit", String(limit));
 		c.header("X-RateLimit-Remaining", String(remaining));
 		if (!allowed) {
 			return c.json(
