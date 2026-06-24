@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BrowserContext, CDPSession, Page } from "playwright";
+import type { BrowserContext, CDPSession, Locator, Page } from "playwright";
 import { humanApproach } from "./human-mouse.js";
 import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from "./challenge.js";
 import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
@@ -845,16 +845,9 @@ export class LocalRunner {
 			case "type":
 				await locate().fill(String(action.text ?? ""), { timeout: 10_000 });
 				break;
-			case "click": {
-				const loc = locate();
-				// Force-fallback: custom-styled controls hide the real element behind a
-				// label/overlay, so a normal click times out. force bypasses the
-				// actionability checks and dispatches the click anyway.
-				if (!(await loc.click({ timeout: 8_000 }).then(() => true).catch(() => false))) {
-					await loc.click({ force: true, timeout: 5_000 });
-				}
+			case "click":
+				if (!(await this.clickRobustly(page, locate()))) throw new RunnerInputError("could not click the target");
 				break;
-			}
 			case "select":
 				await locate().selectOption({ label: String(action.text ?? "") }, { timeout: 10_000 }).catch(() => locate().selectOption(String(action.text ?? ""), { timeout: 10_000 }));
 				break;
@@ -891,7 +884,8 @@ export class LocalRunner {
 						return true;
 					}, action.name ?? "")
 					.catch(() => false);
-				if (!ticked) throw new RunnerInputError("could not find/tick the checkbox");
+				if (ticked) break;
+				if (!(await this.clickRobustly(page, locate()))) throw new RunnerInputError("could not find/tick the checkbox");
 				break;
 			}
 			case "upload": {
@@ -937,6 +931,23 @@ export class LocalRunner {
 			title: await active.title().catch(() => ""),
 			challenge: await detectHumanChallenge(active),
 		};
+	}
+
+	/**
+	 * Click an element through escalating fallbacks: normal → force (bypass
+	 * actionability) → scroll-into-view + click the element's CENTER COORDINATES
+	 * with the mouse. The coordinate click defeats custom-styled controls (hidden
+	 * inputs, overlays) that swallow locator clicks. Returns false only if the
+	 * element can't be located/positioned at all.
+	 */
+	private async clickRobustly(page: Page, loc: Locator): Promise<boolean> {
+		if (await loc.click({ timeout: 6_000 }).then(() => true).catch(() => false)) return true;
+		if (await loc.click({ force: true, timeout: 4_000 }).then(() => true).catch(() => false)) return true;
+		await loc.scrollIntoViewIfNeeded({ timeout: 3_000 }).catch(() => undefined);
+		const box = await loc.boundingBox().catch(() => null);
+		if (!box) return false;
+		await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => undefined);
+		return true;
 	}
 
 	// ── Agent-driven application lifecycle (called by the remote Workflow brain) ──
