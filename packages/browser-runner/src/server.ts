@@ -114,6 +114,26 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		const body = await readJson<BrowserAction>(req);
 		return json(res, 200, await runner.browserAct(body));
 	}
+	if (req.method === "POST" && path === "/browser/event") {
+		const b = await readJson<{ taskId: string; type: string; message: string; data?: unknown }>(req);
+		return json(res, 200, runner.browserEvent(b.taskId, b.type, b.message, b.data));
+	}
+	if (req.method === "POST" && path === "/browser/handoff") {
+		const b = await readJson<{ taskId: string; challenge: string }>(req);
+		return json(res, 200, await runner.browserHandoff(b.taskId, b.challenge));
+	}
+	if (req.method === "POST" && path === "/browser/handoff-status") {
+		const b = await readJson<{ taskId: string }>(req);
+		return json(res, 200, await runner.browserHandoffStatus(b.taskId));
+	}
+	if (req.method === "POST" && path === "/browser/resume") {
+		const b = await readJson<{ taskId: string }>(req);
+		return json(res, 200, await runner.browserResume(b.taskId));
+	}
+	if (req.method === "POST" && path === "/browser/complete") {
+		const b = await readJson<{ taskId: string; outcome: string; detail?: string }>(req);
+		return json(res, 200, await runner.browserComplete(b.taskId, b.outcome, b.detail));
+	}
 
 	// ── Human takeover (remote view + control) ──────────────────────────────
 	if (req.method === "GET" && path === "/takeover") {

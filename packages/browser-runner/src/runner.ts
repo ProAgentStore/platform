@@ -118,7 +118,7 @@ export class LocalRunner {
 			runtimePlane: "fags",
 			runnerRole: "tool-executor",
 			capabilities: CAPABILITIES,
-			taskTypes: ["echo", "browser.open", "job.apply_basic", "job.apply_authenticated"],
+			taskTypes: ["echo", "browser.open", "job.apply_basic", "job.apply_authenticated", "job.apply_agent"],
 			approvalRequiredFor: [...APPROVAL_REQUIRED_TASKS],
 		};
 	}
@@ -127,6 +127,23 @@ export class LocalRunner {
 		const normalized = normalizeCreateTaskRequest(request);
 		validateTaskInput(normalized.type, normalized.input);
 		const now = new Date().toISOString();
+		// Agent-driven applications are steered by the remote Workflow brain via the
+		// /browser/* endpoints — the runner never auto-executes them. The task exists
+		// for the console board, the activity trace, and takeover keying.
+		if (normalized.type === "job.apply_agent") {
+			const task: RunnerTask = {
+				id: `task_${crypto.randomUUID()}`,
+				type: normalized.type,
+				status: "running",
+				input: normalized.input,
+				requiresApproval: false,
+				createdAt: now,
+				updatedAt: now,
+			};
+			this.store.putTask(task);
+			this.addTaskEvent(task, "task.created", "Job application started (agent-driven)", { status: "running", url: normalized.input.url });
+			return task;
+		}
 		const requiresApproval =
 			normalized.requiresApproval || APPROVAL_REQUIRED_TASKS.has(normalized.type);
 		const task: RunnerTask = {
@@ -877,6 +894,78 @@ export class LocalRunner {
 			title: await active.title().catch(() => ""),
 			challenge: await detectHumanChallenge(active),
 		};
+	}
+
+	// ── Agent-driven application lifecycle (called by the remote Workflow brain) ──
+
+	/** Append a decision/event to the agent task's activity (the console trace). */
+	browserEvent(taskId: string, type: string, message: string, data?: unknown): { ok: boolean } {
+		const task = this.store.getTask(taskId);
+		if (task) this.addTaskEvent(task, type, message, data);
+		return { ok: true };
+	}
+
+	/**
+	 * Hand off for a CAPTCHA in the SAME session: register the live active page
+	 * for remote takeover and flip the task to needs_human so the console shows
+	 * the take-over view. The brain pauses; the human solves it on this page.
+	 */
+	async browserHandoff(taskId: string, challenge: string): Promise<{ ok: boolean; screenshotBase64?: string }> {
+		const page = await this.getActivePage();
+		this.takeovers.set(taskId, { page });
+		const screenshotBase64 = await captureScreenshotDataUrl(page);
+		const task = this.store.getTask(taskId);
+		if (task) {
+			task.status = "needs_human";
+			task.updatedAt = new Date().toISOString();
+			this.store.putTask(task);
+			this.addTaskEvent(task, "job.human_handoff_required", `Take over to solve the ${challenge} — the agent will continue once it's solved.`, {
+				reason: "challenge",
+				challengeType: challenge,
+				url: page.url(),
+				screenshotBase64,
+			});
+		}
+		return { ok: true, screenshotBase64 };
+	}
+
+	/** Whether the handed-off challenge has been solved (so the brain can resume). */
+	async browserHandoffStatus(taskId: string): Promise<{ solved: boolean; challenge: string | null }> {
+		const page = this.takeovers.get(taskId)?.page ?? (await this.getActivePage());
+		if (page.isClosed()) return { solved: true, challenge: null };
+		const challenge = await detectHumanChallenge(page);
+		const solved = !challenge || (await challengeSolved(page));
+		return { solved, challenge };
+	}
+
+	/** End the takeover and return the task to running so the brain drives again. */
+	async browserResume(taskId: string): Promise<{ ok: boolean }> {
+		await this.endTakeover(taskId).catch(() => undefined);
+		const task = this.store.getTask(taskId);
+		if (task) {
+			task.status = "running";
+			task.updatedAt = new Date().toISOString();
+			this.store.putTask(task);
+			this.addTaskEvent(task, "job.resumed", "Challenge solved — agent resuming the application.");
+		}
+		return { ok: true };
+	}
+
+	/** Finalize an agent-driven application (submitted/expired → completed; else failed). */
+	async browserComplete(taskId: string, outcome: string, detail?: string): Promise<{ ok: boolean }> {
+		await this.endTakeover(taskId).catch(() => undefined);
+		const task = this.store.getTask(taskId);
+		if (task) {
+			const success = outcome === "submitted" || outcome === "expired";
+			task.status = success ? "completed" : "failed";
+			task.output = { outcome, detail };
+			if (!success) task.error = detail || outcome;
+			task.updatedAt = new Date().toISOString();
+			task.completedAt = task.updatedAt;
+			this.store.putTask(task);
+			this.addTaskEvent(task, success ? "task.completed" : "task.failed", detail || `Application ${outcome}`, { outcome, detail });
+		}
+		return { ok: true };
 	}
 
 	private ensureChromiumInstalled(): void {

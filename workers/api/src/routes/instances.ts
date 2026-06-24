@@ -419,7 +419,7 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	await requireRuntime(c.env, instanceId, session.uid); // 400s early if no runner
+	const runtime = await requireRuntime(c.env, instanceId, session.uid); // 400s early if no runner
 
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const cand = (body.candidate ?? {}) as Record<string, unknown>;
@@ -446,8 +446,20 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 		coverNote: optionalStr(body.coverNote ?? body.cover_note),
 	};
 
-	const instance = await c.env.JOB_APPLY.create({ params: { instanceId, userId: session.uid, job } });
-	return c.json({ workflowId: instance.id, status: "running", url }, 202);
+	// Create the agent-driven task on the runner (the board card + activity +
+	// takeover key the workflow drives), then start the brain.
+	const taskRes = await callRuntime(c.env, runtime, "/tasks", {
+		method: "POST",
+		body: JSON.stringify({ type: "job.apply_agent", input: { url, resumePath } }),
+	});
+	const taskPayload = await runtimeJson(taskRes);
+	if (!taskRes.ok) return c.json(taskPayload, runtimeStatus(taskRes, 502));
+	await mirrorRuntimeTasks(c.env, instanceId, session.uid, taskPayload);
+	const taskId = isRecord(taskPayload) ? String(taskPayload.id ?? "") : "";
+	if (!taskId) return c.json({ error: "runner did not return a task id" }, 502);
+
+	const instance = await c.env.JOB_APPLY.create({ params: { instanceId, userId: session.uid, taskId, job } });
+	return c.json({ workflowId: instance.id, taskId, status: "running", url }, 202);
 });
 
 /** Read a task from my registered runtime. */

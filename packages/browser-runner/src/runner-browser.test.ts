@@ -71,4 +71,33 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		const snap = await runner.browserSnapshot();
 		expect(snap.challenge).toBe("cloudflare-turnstile");
 	}, 60_000);
+
+	it("agent handoff lifecycle: same-session pause → solved → resume → complete", async () => {
+		// Agent-driven task: created running, never auto-executed by the runner.
+		const task = runner.createTask({ type: "job.apply_agent", input: { url: server.jobUrl } });
+		expect(task.status).toBe("running");
+
+		// Brain drives onto a CAPTCHA page, then hands off.
+		await runner.browserAct({ action: "navigate", url: `${server.jobUrl}?challenge=1` });
+		const handoff = await runner.browserHandoff(task.id, "cloudflare-turnstile");
+		expect(handoff.screenshotBase64).toMatch(/^data:image\/jpeg;base64,/);
+		// Same-session takeover is registered on the live page; task waits for a human.
+		expect(runner.listTakeovers()).toContain(task.id);
+		expect(runner.store.getTask(task.id)?.status).toBe("needs_human");
+
+		// Still blocked while the challenge is unsolved.
+		expect(await runner.browserHandoffStatus(task.id)).toEqual({ solved: false, challenge: "cloudflare-turnstile" });
+
+		// Human solves it (the same live page advances past the challenge).
+		await runner.browserAct({ action: "navigate", url: server.jobUrl });
+		expect((await runner.browserHandoffStatus(task.id)).solved).toBe(true);
+
+		// Brain resumes on the same session, then finishes.
+		await runner.browserResume(task.id);
+		expect(runner.store.getTask(task.id)?.status).toBe("running");
+		expect(runner.listTakeovers()).not.toContain(task.id);
+
+		await runner.browserComplete(task.id, "submitted", "Application received");
+		expect(runner.store.getTask(task.id)?.status).toBe("completed");
+	}, 60_000);
 });
