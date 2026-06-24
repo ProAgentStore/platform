@@ -298,10 +298,25 @@ export class LocalRunner {
 			case "text":
 				await cdp.send("Input.insertText", { text: input.text ?? "" });
 				return;
-			case "key":
-				await cdp.send("Input.dispatchKeyEvent", { type: "keyDown", key: input.key ?? "" });
-				await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key: input.key ?? "" });
+			case "key": {
+				// Special keys (Enter, Backspace, Delete, Escape, Tab, arrows…)
+				// need the virtual key code + code to register, not just the name.
+				const key = input.key ?? "";
+				const base: Record<string, unknown> = { key };
+				if (input.code) base.code = input.code;
+				if (typeof input.keyCode === "number") {
+					base.windowsVirtualKeyCode = input.keyCode;
+					base.nativeVirtualKeyCode = input.keyCode;
+				}
+				const text = key === "Enter" ? "\r" : undefined;
+				await cdp.send("Input.dispatchKeyEvent", {
+					type: text ? "keyDown" : "rawKeyDown",
+					...base,
+					...(text ? { text } : {}),
+				});
+				await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 				return;
+			}
 		}
 	}
 

@@ -72,5 +72,7 @@ export interface TakeoverInput {
 	deltaX?: number;
 	deltaY?: number;
 	key?: string;
+	code?: string;
+	keyCode?: number;
 	text?: string;
 }

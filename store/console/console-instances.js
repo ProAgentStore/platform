@@ -245,6 +245,21 @@
       // CSS viewport of the real page (reported by the runner) — clicks map to
       // these coordinates, which is what CDP Input expects regardless of DPR.
       let pageW = 0, pageH = 0;
+      let lastImg = null, cursorPos = null;
+
+      // Redraw the latest frame plus a synthetic cursor (the screenshot doesn't
+      // include the OS pointer, so we show where you're aiming).
+      function render() {
+        if (!lastImg) return;
+        if (img.width !== lastImg.naturalWidth) { img.width = lastImg.naturalWidth; img.height = lastImg.naturalHeight; }
+        ctx.drawImage(lastImg, 0, 0);
+        if (cursorPos) {
+          ctx.beginPath(); ctx.arc(cursorPos.x, cursorPos.y, 9, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(245,158,11,0.95)'; ctx.lineWidth = 2; ctx.stroke();
+          ctx.beginPath(); ctx.arc(cursorPos.x, cursorPos.y, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(245,158,11,0.95)'; ctx.fill();
+        }
+      }
 
       async function poll() {
         while (alive) {
@@ -256,11 +271,7 @@
               // Draw onto the canvas (overwrites in place — no blank flash).
               await new Promise((res) => {
                 const im = new Image();
-                im.onload = () => {
-                  if (img.width !== im.naturalWidth) { img.width = im.naturalWidth; img.height = im.naturalHeight; }
-                  ctx.drawImage(im, 0, 0);
-                  res();
-                };
+                im.onload = () => { lastImg = im; render(); res(); };
                 im.onerror = () => res();
                 im.src = data.frame;
               });
@@ -284,10 +295,11 @@
       // idle hover events; a click still sends down→up so hover-on-click works.
       let lastMove = 0, dragging = false;
       img.addEventListener('mousemove', (ev) => {
-        if (!dragging) return;
-        const now = Date.now(); if (now - lastMove < 50) return; lastMove = now;
-        const c = toCoords(ev); sendInput({ type: 'move', x: c.x, y: c.y });
+        cursorPos = toCoords(ev); render();
+        const now = Date.now(); if (now - lastMove < 60) return; lastMove = now;
+        sendInput({ type: 'move', x: cursorPos.x, y: cursorPos.y });
       });
+      img.addEventListener('mouseleave', () => { cursorPos = null; render(); });
       img.addEventListener('mousedown', (ev) => { ev.preventDefault(); img.focus(); dragging = true; const c = toCoords(ev); sendInput({ type: 'move', x: c.x, y: c.y }); sendInput({ type: 'down', x: c.x, y: c.y }); });
       window.addEventListener('mouseup', (ev) => { if (!dragging) return; dragging = false; ev.preventDefault?.(); const c = toCoords(ev); sendInput({ type: 'up', x: c.x, y: c.y }); });
       img.addEventListener('contextmenu', (ev) => ev.preventDefault());
@@ -301,7 +313,7 @@
         if (!alive) return;
         if (ev.metaKey || ev.ctrlKey) return; // let browser shortcuts (Cmd+R, etc.) work
         if (ev.key && ev.key.length === 1) sendInput({ type: 'text', text: ev.key });
-        else if (ev.key) sendInput({ type: 'key', key: ev.key });
+        else if (ev.key) sendInput({ type: 'key', key: ev.key, code: ev.code, keyCode: ev.keyCode });
         ev.preventDefault();
       }
       document.addEventListener('keydown', onKey, true);
