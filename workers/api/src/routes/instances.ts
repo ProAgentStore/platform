@@ -798,8 +798,8 @@ async function readKbCandidate(env: Env, instanceId: string): Promise<{ fullName
 	try {
 		const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
 		const res = await stub.fetch(new Request("https://agent/knowledge"));
-		const data = (await res.json()) as { knowledge?: Array<{ title?: string; content?: string }> };
-		const docs = data.knowledge ?? [];
+		const data = (await res.json()) as { documents?: Array<{ title?: string; content?: string }>; knowledge?: Array<{ title?: string; content?: string }> };
+		const docs = data.documents ?? data.knowledge ?? [];
 		// Prefer the résumé/CV doc; else any doc that contains an email.
 		const resume =
 			docs.find((d) => /resume|cv/i.test(String(d.title ?? "")) && /@/.test(String(d.content ?? ""))) ??
