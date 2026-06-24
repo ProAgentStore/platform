@@ -68,17 +68,26 @@
     @media(max-width:900px){.layout{grid-template-columns:1fr}aside{position:static}.grid{grid-template-columns:1fr}.flow,.swimlane{min-width:680px}}
     @media(max-width:640px){.container{padding:0 1rem}header .container{align-items:flex-start}.brand{min-width:0}nav{justify-content:flex-end;gap:.65rem}.diagram{margin-left:-1rem;margin-right:-1rem;border-radius:0;border-left:0;border-right:0}}
   </style>
+
 <style id="m-fix">
+.m-menu-btn{display:none}
 @media(max-width:640px){
 html,body{overflow-x:hidden;max-width:100%}
-header .container{flex-wrap:wrap;row-gap:0.4rem}
-nav{margin-left:0!important;flex-wrap:wrap;gap:0.4rem 0.85rem;width:100%;font-size:0.82rem}
 pre,code{max-width:100%;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
 img,video,canvas{max-width:100%;height:auto}
 table{display:block;overflow-x:auto}
-.container{padding-left:1rem;padding-right:1rem}
+.container,.c{padding-left:1rem;padding-right:1rem}
+header{position:relative;flex-wrap:wrap}
+header>div{position:relative;flex-wrap:nowrap}
+.m-menu-btn{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;width:40px;height:40px;border:1px solid var(--line,#262626);border-radius:9px;background:transparent;color:var(--ink,#fafafa);font-size:1.25rem;line-height:1;cursor:pointer;flex-shrink:0;padding:0}
+header nav{display:none!important;position:absolute;top:100%;left:0;right:0;width:100%;flex-direction:column!important;gap:0!important;background:var(--panel,#171717);border-bottom:1px solid var(--line,#262626);padding:0.25rem 1rem 0.6rem;z-index:1000;margin:0!important;box-shadow:0 10px 25px -8px rgba(0,0,0,0.5)}
+header.m-open nav{display:flex!important}
+header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;border-bottom:1px solid var(--line,#1f1f1f);font-size:0.98rem;text-align:left}
 }
 </style>
+<script>
+(function(){function init(){var h=document.querySelector("header");if(!h)return;var nav=h.querySelector("nav");if(!nav||h.querySelector(".m-menu-btn"))return;var b=document.createElement("button");b.className="m-menu-btn";b.setAttribute("aria-label","Menu");b.type="button";b.textContent="☰";b.addEventListener("click",function(e){e.stopPropagation();h.classList.toggle("m-open");b.textContent=h.classList.contains("m-open")?"✕":"☰";});nav.parentNode.insertBefore(b,nav);function close(){h.classList.remove("m-open");b.textContent="☰";}document.addEventListener("click",close);nav.addEventListener("click",close);}if(document.readyState!=="loading")init();else document.addEventListener("DOMContentLoaded",init);})();
+</script>
 </head>
 <body>
   <header>
