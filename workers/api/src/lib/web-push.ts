@@ -148,4 +148,4 @@ export async function sendWebPush(
 }
 
 // Exposed for unit tests.
-export const __test = { b64urlToBytes, bytesToB64url, concat };
+export const __test = { b64urlToBytes, bytesToB64url, concat, encryptPayload, vapidAuthHeader };
