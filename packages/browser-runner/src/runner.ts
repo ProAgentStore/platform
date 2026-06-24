@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -583,6 +583,7 @@ export class LocalRunner {
 		// Step 3: Look for the apply form (might be on current page or linked)
 		const applyLink = await page.locator('a[href*="apply"], a:has-text("Apply")').first();
 		if (await applyLink.count() > 0) {
+			await humanApproach(page, await applyLink.boundingBox().catch(() => null));
 			await applyLink.click();
 			await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
 		}
@@ -663,7 +664,11 @@ export class LocalRunner {
 		try {
 			if (!preferChrome) throw new Error("chromium forced");
 			if (realProfileDir) {
-				const seededDir = seedProfileCopy(realProfileDir, join(this.config.dataDir, "real-profile-copy"));
+				// The seed is a snapshot; PAGS_RUNNER_REFRESH_PROFILE=1 re-copies it
+				// so logins/cookies pick up changes from your everyday Chrome.
+				const seedDir = join(this.config.dataDir, "real-profile-copy");
+				if (process.env.PAGS_RUNNER_REFRESH_PROFILE === "1") rmSync(seedDir, { recursive: true, force: true });
+				const seededDir = seedProfileCopy(realProfileDir, seedDir);
 				if (!seededDir) throw new Error(`could not read your real Chrome profile at ${realProfileDir.userDataDir}`);
 				this.browserContext = await playwright.chromium.launchPersistentContext(seededDir, {
 					...baseOpts,
