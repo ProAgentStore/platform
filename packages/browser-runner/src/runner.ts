@@ -628,14 +628,27 @@ export class LocalRunner {
 				`Playwright is not installed. Run pnpm install in the PAGS platform repo. ${error instanceof Error ? error.message : String(error)}`,
 			);
 		});
-		this.browserContext = await playwright.chromium.launchPersistentContext(profileDir, {
+		const baseOpts = {
 			headless: this.config.headless,
 			acceptDownloads: true,
 			downloadsPath,
 			// Light anti-detection: drop the most obvious automation tell so fewer
 			// CAPTCHAs trigger in the first place (the human still solves the rest).
 			args: ["--disable-blink-features=AutomationControlled"],
-		});
+		};
+		// Prefer the real Chrome build (better TLS/fingerprint → fewer CAPTCHAs);
+		// fall back to bundled Chromium if Chrome isn't installed. Disable with
+		// PAGS_RUNNER_CHROMIUM=1.
+		const preferChrome = process.env.PAGS_RUNNER_CHROMIUM !== "1";
+		try {
+			if (!preferChrome) throw new Error("chromium forced");
+			this.browserContext = await playwright.chromium.launchPersistentContext(
+				join(this.config.dataDir, "chrome-profile"),
+				{ ...baseOpts, channel: "chrome" },
+			);
+		} catch {
+			this.browserContext = await playwright.chromium.launchPersistentContext(profileDir, baseOpts);
+		}
 		await this.browserContext
 			.addInitScript(() => {
 				Object.defineProperty(navigator, "webdriver", { get: () => undefined });
