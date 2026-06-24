@@ -17,7 +17,7 @@
     ::selection{background:var(--accent);color:#fff}
 
     /* Header — single bar for everything */
-    header{border-bottom:1px solid var(--line);padding:0.45rem 0.75rem;display:flex;align-items:center;gap:0.65rem;height:48px;background:var(--panel)}
+    header{border-bottom:1px solid var(--line);padding:0.45rem 0.75rem;display:flex;align-items:center;gap:0.65rem;height:48px;background:var(--panel);position:sticky;top:0;z-index:60}
     .brand{display:flex;align-items:center;gap:0.45rem;text-decoration:none;color:var(--ink);flex-shrink:0}
     .brand:hover{text-decoration:none}
     .brand-mark{width:28px;height:28px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#6366f1);display:flex;align-items:center;justify-content:center;font-size:0.85rem}
@@ -327,7 +327,7 @@
     pre,.runtime-detail-pre{max-width:100%;overflow-x:auto;overflow-wrap:anywhere}
     .token-field{max-width:100%}
     @media(max-width:640px){
-      html,body{overflow-x:hidden;max-width:100%}
+      html,body{overflow-x:clip;max-width:100%}
       pre,.runtime-detail-pre{white-space:pre-wrap;word-break:break-word}
       .runtime-detail-head h3{font-size:0.95rem;overflow-wrap:anywhere}
       .agent-board-toolbar .tabs,.tabs{overflow-x:auto;-webkit-overflow-scrolling:touch}

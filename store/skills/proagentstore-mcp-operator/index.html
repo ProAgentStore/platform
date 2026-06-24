@@ -50,15 +50,18 @@
     footer a{color:var(--muted)}
   </style>
 
+
 <style id="m-fix">
+html{overflow-x:clip}
+header{position:sticky;top:0;z-index:50;background:var(--paper,#0a0a0a)}
 .m-menu-btn{display:none}
 @media(max-width:640px){
-html,body{overflow-x:hidden;max-width:100%}
+body{overflow-x:clip;max-width:100%}
 pre,code{max-width:100%;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
 img,video,canvas{max-width:100%;height:auto}
 table{display:block;overflow-x:auto}
 .container,.c{padding-left:1rem;padding-right:1rem}
-header{position:relative;flex-wrap:wrap}
+header{flex-wrap:wrap}
 header>div{position:relative;flex-wrap:nowrap}
 .m-menu-btn{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;width:40px;height:40px;border:1px solid var(--line,#262626);border-radius:9px;background:transparent;color:var(--ink,#fafafa);font-size:1.25rem;line-height:1;cursor:pointer;flex-shrink:0;padding:0}
 header nav{display:none!important;position:absolute;top:100%;left:0;right:0;width:100%;flex-direction:column!important;gap:0!important;background:var(--panel,#171717);border-bottom:1px solid var(--line,#262626);padding:0.25rem 1rem 0.6rem;z-index:1000;margin:0!important;box-shadow:0 10px 25px -8px rgba(0,0,0,0.5)}
