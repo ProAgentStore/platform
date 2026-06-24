@@ -61,7 +61,8 @@ export interface ApplyResult {
 /** Side-effecting hooks the loop drives — real ones hit the runner; tests mock them. */
 export interface ApplyDeps {
 	snapshot: () => Promise<PageSnapshot>;
-	act: (action: BrowserAction) => Promise<{ url: string; challenge: string | null }>;
+	/** Perform an action. A Playwright failure comes back as `error` (never throws) so the brain can adapt. */
+	act: (action: BrowserAction) => Promise<{ url: string; challenge: string | null; error?: string }>;
 	decide: (params: { job: ApplyJob; actionLog: string[]; snapshot: PageSnapshot }) => Promise<ApplyDecision>;
 	onEvent?: (type: string, message: string, data?: unknown) => Promise<void> | void;
 }
@@ -76,6 +77,8 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	const maxSteps = opts.maxSteps ?? 40;
 	const actionLog: string[] = [];
 	let lastUrl = "";
+	let lastActionKey = "";
+	let repeatFails = 0;
 
 	for (let step = 0; step < maxSteps; step++) {
 		const snap = await deps.snapshot();
@@ -101,8 +104,22 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 
-		await deps.act(decision.action);
-		actionLog.push(describeAction(decision.action));
+		const actResult = await deps.act(decision.action);
+		const key = JSON.stringify(decision.action);
+		if (actResult?.error) {
+			// Feed the failure back so the brain adapts instead of blindly repeating.
+			repeatFails = key === lastActionKey ? repeatFails + 1 : 1;
+			lastActionKey = key;
+			actionLog.push(`${describeAction(decision.action)} — FAILED: ${actResult.error}`);
+			await deps.onEvent?.("agent.action_failed", `${describeAction(decision.action)} failed: ${actResult.error}`, { action: decision.action, error: actResult.error });
+			if (repeatFails >= 3) {
+				return { outcome: "failed", detail: `the same action failed 3× (${actResult.error}); the brain could not get past this page`, url: snap.url, steps: step, transcript: [...actionLog] };
+			}
+		} else {
+			repeatFails = 0;
+			lastActionKey = "";
+			actionLog.push(describeAction(decision.action));
+		}
 	}
 	return { outcome: "max_steps", detail: `stopped after ${maxSteps} actions`, url: lastUrl, steps: maxSteps, transcript: [...actionLog] };
 }
@@ -187,6 +204,8 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"",
 		"RULES:",
 		"- Do exactly ONE tool call per turn — the next page snapshot follows.",
+		"- If the action log shows your last action FAILED (e.g. a click timed out), DO NOT repeat it. The page likely already advanced, opened a new tab, or the element moved — re-read the CURRENT snapshot and act on what's there now (a different button, the next field, or scroll to find it).",
+		"- After clicking something like Apply/Next/Continue, expect the page to change; act on the NEW snapshot, not the element you just clicked.",
 		"- Answer screening questions truthfully from the candidate data. If an answer isn't in the data and isn't critical, pick the most reasonable option. NEVER fabricate experience, qualifications, or work authorization.",
 		"- If a CAPTCHA / 'verify you are human' appears, do nothing — the system hands off to a human automatically.",
 		"- If the job is closed/expired, call finish(status:\"expired\").",

@@ -44,11 +44,22 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// Durable-step wrappers for the tested pure loop. The call order is
 		// deterministic, so the monotonic counter yields stable, replayable step
 		// names — even across captcha handoffs (it never resets).
+		// Bounded retries: a Playwright failure is a SIGNAL for the brain, not a
+		// transient error to hammer — so act catches it and returns it as data.
+		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
 		const deps: ApplyDeps = {
-			snapshot: () => step.do(`s${n++}-snapshot`, () => callRunner<PageSnapshot>(conn, "/browser/snapshot")) as Promise<PageSnapshot>,
-			decide: (p) => step.do(`s${n++}-decide`, () => decideAction(env, userId, p)) as Promise<ApplyDecision>,
-			act: (a) => step.do(`s${n++}-act`, async () => { await callRunner(conn, "/browser/act", a); return { url: "", challenge: null as string | null }; }) as Promise<{ url: string; challenge: string | null }>,
+			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot")) as Promise<PageSnapshot>,
+			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideAction(env, userId, p)) as Promise<ApplyDecision>,
+			act: (a) => step.do(`s${n++}-act`, retry, async () => {
+				try {
+					const r = await callRunner<{ url: string; challenge: string | null }>(conn, "/browser/act", a);
+					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined };
+				} catch (e) {
+					// Return the failure to the brain instead of throwing (which would retry the same dead click).
+					return { url: "", challenge: null as string | null, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
+				}
+			}) as Promise<{ url: string; challenge: string | null; error?: string }>,
 			onEvent: (type, message, data) => step.do(`s${n++}-event`, async () => {
 				await callRunner(conn, "/browser/event", { taskId, type, message, data }).catch(() => undefined);
 				return null;

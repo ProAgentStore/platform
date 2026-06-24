@@ -885,9 +885,12 @@ export class LocalRunner {
 			default:
 				throw new RunnerInputError(`Unknown browser action: ${(action as BrowserAction).action}`);
 		}
-		// Let any navigation/async render settle before the next snapshot.
-		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
+		// A click may trigger SPA navigation or open a new tab/popup. Give it a beat
+		// to settle and follow the (possibly new) active page, so the next snapshot
+		// reflects the new state — not the element the brain just clicked.
+		await page.waitForTimeout(700).catch(() => undefined);
 		const active = await this.getActivePage();
+		await active.waitForLoadState("domcontentloaded", { timeout: 6_000 }).catch(() => undefined);
 		return {
 			ok: true,
 			url: active.url(),

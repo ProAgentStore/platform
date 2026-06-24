@@ -60,6 +60,39 @@ describe("runApplyLoop", () => {
 		expect(result.steps).toBe(3);
 	});
 
+	it("breaks the loop after the same action fails 3× (no infinite retry)", async () => {
+		const acted: BrowserAction[] = [];
+		let decideCalls = 0;
+		const deps: ApplyDeps = {
+			snapshot: async () => page("- button \"Apply\""),
+			act: async (a) => { acted.push(a); return { url: "x", challenge: null, error: "Timeout 10000ms exceeded" }; },
+			decide: async () => { decideCalls++; return { action: { action: "click", role: "button", name: "Apply" } }; },
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 40 });
+		expect(result.outcome).toBe("failed");
+		expect(result.detail).toMatch(/3×/);
+		expect(acted).toHaveLength(3); // stops after the third identical failure, not 40
+		expect(decideCalls).toBe(3);
+	});
+
+	it("feeds a failed action back into the log so the brain can adapt", async () => {
+		const logsSeen: string[][] = [];
+		let d = 0;
+		const decisions: ApplyDecision[] = [
+			{ action: { action: "click", role: "button", name: "Apply" } },
+			{ action: { action: "click", role: "button", name: "Start" } },
+			{ finish: { status: "submitted", detail: "done" } },
+		];
+		const deps: ApplyDeps = {
+			snapshot: async () => page("page"),
+			act: async () => (d === 1 ? { url: "x", challenge: null, error: "click timed out" } : { url: "x", challenge: null }),
+			decide: async (p) => { logsSeen.push([...p.actionLog]); return decisions[Math.min(d++, decisions.length - 1)]; },
+		};
+		await runApplyLoop(deps, JOB, { maxSteps: 10 });
+		// The 3rd decision sees the 2nd action recorded as FAILED.
+		expect(logsSeen[2].some((l) => /FAILED: click timed out/.test(l))).toBe(true);
+	});
+
 	it("reports an event for every decision", async () => {
 		const events: string[] = [];
 		const { deps } = scriptedDeps([page("x"), page("done")], [{ action: { action: "click", name: "Apply" } }, { finish: { status: "submitted", detail: "ok" } }]);
