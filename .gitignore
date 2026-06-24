@@ -9,3 +9,4 @@ playwright-report/
 test-results/
 .vibe-check/
 .gstack/
+package-lock.json

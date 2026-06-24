@@ -42,7 +42,6 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"patchright": "^1.61.1",
 		"playwright": "^1.60.0"
 	},
 	"devDependencies": {
