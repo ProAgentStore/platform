@@ -1,4 +1,4 @@
-// ProAgentStore service worker — PWA + Web Push.
+// ProAgentStore service worker — PWA + Web Push. (v1 — push + PWA)
 // Shows a notification when an agent needs you (e.g. a CAPTCHA handoff) and
 // deep-links straight into the console / takeover on tap.
 
