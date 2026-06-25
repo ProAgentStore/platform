@@ -646,6 +646,7 @@
     }
 
     async function loadInstanceKnowledge() {
+      loadApplyResumeStatus();
       try {
         const data = await api(`/v1/instances/${currentInstance.id}/knowledge`);
         const list = document.getElementById('inst-kb-list');
@@ -694,6 +695,41 @@
       const file = input.files?.[0]; if (!file) return;
       await api(`/v1/instances/${currentInstance.id}/knowledge`, { method: 'POST', body: JSON.stringify({ title: file.name, content: await file.text(), source: 'upload' }) });
       loadInstanceKnowledge(); input.value = '';
+    }
+
+    // Résumé transfer: store the actual file on the platform so a remote runner
+    // can download + attach it during an application.
+    async function loadApplyResumeStatus() {
+      const el = document.getElementById('apply-resume-status');
+      if (!el || !currentInstance) return;
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/apply-resume/status`);
+        if (d.uploaded) {
+          el.innerHTML = `✓ ${esc(d.name || 'résumé')} · ${Math.round((d.size || 0) / 1024)} KB — <a href="#" onclick="deleteApplyResume();return false" style="color:var(--red)">remove</a>`;
+          el.style.color = 'var(--green)';
+        } else {
+          el.textContent = 'No résumé uploaded yet — the agent can’t attach one without this.';
+          el.style.color = 'var(--muted)';
+        }
+      } catch { el.textContent = ''; }
+    }
+    async function uploadApplyResume(input) {
+      const file = input.files?.[0]; if (!file || !currentInstance) return;
+      if (file.size > 8 * 1024 * 1024) { alert('Résumé too large (max 8MB).'); return; }
+      const el = document.getElementById('apply-resume-status');
+      if (el) { el.textContent = 'Uploading…'; el.style.color = 'var(--muted)'; }
+      try {
+        await api(`/v1/instances/${currentInstance.id}/apply-resume?name=${encodeURIComponent(file.name)}`, {
+          method: 'PUT', body: file, headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        });
+        input.value = '';
+        await loadApplyResumeStatus();
+      } catch (e) { alert('Upload failed: ' + e.message); if (el) el.textContent = ''; }
+    }
+    async function deleteApplyResume() {
+      if (!currentInstance || !confirm('Remove the stored résumé?')) return;
+      await api(`/v1/instances/${currentInstance.id}/apply-resume`, { method: 'DELETE' }).catch(() => {});
+      await loadApplyResumeStatus();
     }
 
     async function uploadInstFile(input) {

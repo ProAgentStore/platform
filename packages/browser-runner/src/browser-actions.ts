@@ -13,7 +13,7 @@ export type ClickRobustly = (page: Page, loc: Locator) => Promise<boolean>;
  * matches, hidden checkboxes, and hidden file inputs. Pure over `page`; the
  * runner passes its clickRobustly helper. The caller handles post-action settle.
  */
-export async function performBrowserAction(page: Page, action: BrowserAction, clickRobustly: ClickRobustly): Promise<void> {
+export async function performBrowserAction(page: Page, action: BrowserAction, clickRobustly: ClickRobustly, resumeFile?: string | null): Promise<void> {
 	const locate = () => {
 		const role = action.role as Parameters<Page["getByRole"]>[0] | undefined;
 		let loc = role
@@ -122,8 +122,14 @@ export async function performBrowserAction(page: Page, action: BrowserAction, cl
 			// Always attach via Playwright — never a native dialog. Handles both a
 			// direct <input type=file> (set files on it) and a styled "Upload"
 			// button that opens a native chooser (intercept the filechooser).
-			const file = resolve(String(action.file ?? ""));
-			if (!file || !existsSync(file)) throw new RunnerInputError("upload requires an existing local file path");
+			// The LLM doesn't know the runner's local path, so prefer the résumé the
+			// runner already resolved (downloaded from the platform); fall back to an
+			// explicit action.file only if it's a real local file.
+			const explicit = action.file ? resolve(String(action.file)) : "";
+			const file = resumeFile && existsSync(resumeFile)
+				? resumeFile
+				: explicit && existsSync(explicit) ? explicit : "";
+			if (!file) throw new RunnerInputError("no résumé available to upload — upload one in the console (Knowledge → Résumé)");
 			let done = false;
 			// 1. Label-associated input (some forms).
 			if (action.name) {

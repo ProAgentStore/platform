@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -429,6 +429,35 @@ export class LocalRunner {
 		});
 	}
 
+	private resumeFileCache = new Map<string, string>();
+	/**
+	 * Resolve a résumé reference to a LOCAL file path. A remote runner gets a
+	 * signed URL (the file lives in the platform's R2) — download it once and
+	 * cache it. A same-machine run may still pass a local path.
+	 */
+	private async resolveResumeFile(ref: string): Promise<string | null> {
+		if (/^https?:\/\//i.test(ref)) {
+			const cached = this.resumeFileCache.get(ref);
+			if (cached && existsSync(cached)) return cached;
+			try {
+				const res = await fetch(ref);
+				if (!res.ok) return null;
+				const buf = Buffer.from(await res.arrayBuffer());
+				const disp = res.headers.get("content-disposition") || "";
+				const name = (disp.match(/filename="?([^"]+)"?/i)?.[1] || "resume.pdf").replace(/[^\w.\-]/g, "_");
+				const dir = join(this.config.dataDir, "uploads");
+				mkdirSync(dir, { recursive: true });
+				const dest = join(dir, name);
+				writeFileSync(dest, buf);
+				this.resumeFileCache.set(ref, dest);
+				return dest;
+			} catch {
+				return null;
+			}
+		}
+		return existsSync(resolve(ref)) ? resolve(ref) : null;
+	}
+
 	/** End a takeover session (human finished or gave up). */
 	async endTakeover(taskId: string): Promise<void> {
 		const session = this.takeovers.get(taskId);
@@ -625,13 +654,16 @@ export class LocalRunner {
 	async browserAct(action: BrowserAction, resumePath?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null }> {
 		const page = await this.getActivePage();
 		// Arm résumé auto-attach so a file chooser never blocks the flow (see method).
-		if (resumePath && existsSync(resolve(resumePath))) {
-			this.applyResumePath = resolve(resumePath);
+		// resumePath may be a signed URL (remote runner) or a local path — resolve to
+		// a real local file either way.
+		if (resumePath) {
+			const local = await this.resolveResumeFile(resumePath);
+			if (local) this.applyResumePath = local;
 		}
 		if (this.applyResumePath) this.armFileAutoAttach(page, this.applyResumePath);
 		// The selector-free action switch lives in browser-actions.ts (kept this
 		// file from ballooning); the post-action settle + result stay here.
-		await performBrowserAction(page, action, (p, loc) => this.clickRobustly(p, loc));
+		await performBrowserAction(page, action, (p, loc) => this.clickRobustly(p, loc), this.applyResumePath);
 		// A click may trigger SPA navigation or open a new tab/popup. Give it a beat
 		// to settle and follow the (possibly new) active page, so the next snapshot
 		// reflects the new state — not the element the brain just clicked.

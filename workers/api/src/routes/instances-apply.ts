@@ -13,6 +13,31 @@ export class ApplyError extends Error {
 	}
 }
 
+// ── Résumé transfer mechanism ────────────────────────────────────────────────
+// The runner can be on a remote machine that doesn't have the user's résumé. So
+// the user uploads it once via the web (stored in R2), and the runner DOWNLOADS
+// it from a short-lived signed URL when an application needs a file upload.
+const API_PUBLIC_BASE = "https://api.proagentstore.online";
+const resumeKey = (userId: string, instanceId: string) => `apply-resume/${userId}/${instanceId}`;
+
+async function resumeHmac(env: Env, data: string): Promise<string> {
+	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.SESSION_SIGNING_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
+	return btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function signedResumeUrl(env: Env, userId: string, instanceId: string): Promise<string> {
+	const exp = Date.now() + 2 * 60 * 60 * 1000; // 2h — long enough for a run
+	const token = await resumeHmac(env, `${userId}.${instanceId}.${exp}`);
+	const q = new URLSearchParams({ uid: userId, exp: String(exp), token });
+	return `${API_PUBLIC_BASE}/v1/instances/${encodeURIComponent(instanceId)}/apply-resume?${q.toString()}`;
+}
+/** A reference the runner can resolve: a signed URL if a résumé is on the platform, else the legacy local path. */
+async function resolveResumeReference(env: Env, instanceId: string, userId: string, resumePath: string): Promise<string> {
+	const head = await env.STORAGE?.head?.(resumeKey(userId, instanceId))?.catch(() => null) ?? null;
+	if (head) return signedResumeUrl(env, userId, instanceId);
+	return resumePath;
+}
+
 /** Trim a value to a non-empty string, or undefined. */
 function trimmed(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
@@ -36,9 +61,11 @@ export interface StartApplyInput {
  */
 export async function startJobApply(env: Env, instanceId: string, userId: string, input: StartApplyInput): Promise<{ workflowId: string; taskId: string }> {
 	const url = String(input.url ?? "");
-	const resumePath = String(input.resumePath ?? "");
 	if (!/^https?:\/\//.test(url)) throw new ApplyError("url (http/https) required");
-	if (!resumePath) throw new ApplyError("resumePath required (an absolute path on the runner machine)");
+	// Prefer a résumé uploaded to the platform (a signed URL the runner downloads);
+	// fall back to a local path only if one was passed.
+	const resumePath = await resolveResumeReference(env, instanceId, userId, String(input.resumePath ?? ""));
+	if (!resumePath) throw new ApplyError("no résumé on file — upload one in the console (Knowledge → Résumé) so the agent can attach it");
 
 	const runtime = await requireRuntime(env, instanceId, userId); // throws if no runner
 	const cand = input.candidate ?? {};
@@ -103,6 +130,54 @@ export async function readInstanceConfig(env: Env, instanceId: string, userId: s
  * `/apply` trigger itself stays in instances.ts next to task creation.
  */
 export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
+	/** Upload my résumé (binary) — stored in R2 so a remote runner can fetch it. */
+	router.put("/:instanceId/apply-resume", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const name = (c.req.query("name") || "resume.pdf").replace(/[^\w.\- ]/g, "_").slice(0, 120);
+		const body = await c.req.arrayBuffer();
+		if (!body.byteLength) return c.json({ error: "empty file" }, 400);
+		if (body.byteLength > 8 * 1024 * 1024) return c.json({ error: "résumé too large (max 8MB)" }, 400);
+		await c.env.STORAGE.put(resumeKey(session.uid, instanceId), body, { customMetadata: { name } });
+		return c.json({ ok: true, name, size: body.byteLength });
+	});
+
+	/** Whether a résumé is on file (for the console). */
+	router.get("/:instanceId/apply-resume/status", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const head = await c.env.STORAGE.head(resumeKey(session.uid, instanceId)).catch(() => null);
+		return c.json({ uploaded: !!head, name: head?.customMetadata?.name || null, size: head?.size || 0 });
+	});
+
+	/** Remove the stored résumé. */
+	router.delete("/:instanceId/apply-resume", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		await c.env.STORAGE.delete(resumeKey(session.uid, instanceId)).catch(() => undefined);
+		return c.json({ ok: true });
+	});
+
+	/** Signed résumé download — the runner fetches this (the token is the auth, no session). */
+	router.get("/:instanceId/apply-resume", async (c) => {
+		const instanceId = c.req.param("instanceId");
+		const uid = c.req.query("uid") || "";
+		const exp = c.req.query("exp") || "";
+		const token = c.req.query("token") || "";
+		if (!uid || !exp || !token || Date.now() > Number(exp)) return c.json({ error: "unauthorized" }, 401);
+		const expected = await resumeHmac(c.env, `${uid}.${instanceId}.${exp}`);
+		if (expected !== token) return c.json({ error: "unauthorized" }, 401);
+		const obj = await c.env.STORAGE.get(resumeKey(uid, instanceId));
+		if (!obj) return c.json({ error: "no résumé on file" }, 404);
+		const name = (obj.customMetadata?.name as string) || "resume.pdf";
+		return new Response(obj.body, {
+			headers: { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${name}"` },
+		});
+	});
+
 	/** List active human-takeover sessions on my instance's runtime. */
 	router.get("/:instanceId/takeover", async (c) => {
 		const session = await requireUser(c);
