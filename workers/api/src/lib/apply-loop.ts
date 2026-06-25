@@ -305,6 +305,8 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"- If the action log shows your last action FAILED (e.g. a click timed out), DO NOT repeat it. The page likely already advanced, opened a new tab, or the element moved — re-read the CURRENT snapshot and act on what's there now (a different button, the next field, or scroll to find it).",
 		"- After clicking something like Apply/Next/Continue, expect the page to change; act on the NEW snapshot, not the element you just clicked.",
 		"- For ANY dropdown, combobox, or autocomplete/typeahead field (including a city/location box), use the `select` tool with the value — it opens the control, filters if needed, and picks the option for you. Do NOT `type` then `click` a suggestion for these.",
+		"- To FIX or CLEAR a field that has the wrong value (e.g. text landed in the wrong box), just call `type` again with the correct value on that field — it REPLACES the existing text. There is no triple-click, double-click, or clear tool; never call those.",
+		"- The ONLY tools that exist are: type, select, check, click, upload, navigate, scroll, press_key, request_user_info, finish. Never call any other tool name.",
 		"- NEVER invent data. Use ONLY the candidate values above. Do not make up a phone number, salary, address, or any value you weren't given. For a REQUIRED field you don't have a value for, call request_user_info(field, why) to ask the user and wait — do NOT guess or fabricate.",
 		"- Demographic / EEO / voluntary self-identification questions (gender, race, ethnicity, veteran status, disability): ALWAYS choose \"Decline to self-identify\" / \"I don't wish to answer\" / \"Prefer not to say\" unless a candidate value above explicitly provides it. Never guess these.",
 		"- You may answer genuine screening questions (years of experience, work authorization) from the candidate data; if a required one isn't answerable from the data, use request_user_info rather than fabricating.",
@@ -339,7 +341,17 @@ export function toolCallToDecision(call: { name: string; arguments: Record<strin
 			const valid = status === "submitted" || status === "ready" || status === "expired" || status === "blocked" ? status : "blocked";
 			return { thought, finish: { status: valid as "submitted" | "ready" | "expired" | "blocked", detail: str(a.detail) || "" } };
 		}
-		default: return { thought, finish: { status: "blocked", detail: `unknown tool ${call.name}` } };
+		case "clear":
+		case "double_click":
+		case "triple_click":
+			// The brain invents these to select/clear a field before retyping. A plain
+			// click is the safe equivalent; it then overwrites with `type` (which fills).
+			return { thought, action: { action: "click", role: str(a.role) || "textbox", name: str(a.name) } };
+		default:
+			// Don't end the whole application on one unrecognized tool — re-read the
+			// page and try again (the step cap prevents a runaway loop). Far better
+			// than blocking a half-filled form.
+			return { thought, action: { action: "wait", ms: 300 } };
 	}
 }
 
