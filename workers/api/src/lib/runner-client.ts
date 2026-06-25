@@ -6,6 +6,9 @@ export interface RunnerConn {
 	endpointUrl: string;
 	token: string;
 	instanceId: string;
+	/** Carried so callRunner can re-resolve the URL if the runner reconnects. */
+	userId: string;
+	env: Env;
 }
 
 /**
@@ -40,24 +43,38 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
 			/* fall through with empty token */
 		}
 	}
-	return { endpointUrl: row.endpoint_url.replace(/\/$/, ""), token, instanceId };
+	return { endpointUrl: row.endpoint_url.replace(/\/$/, ""), token, instanceId, userId, env };
 }
 
 /** POST a JSON request to a runner endpoint with the instance auth headers. */
 export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown): Promise<T> {
-	const headers: Record<string, string> = {
-		"Content-Type": "application/json",
-		"X-PAGS-Instance-Id": conn.instanceId,
+	const attempt = async (): Promise<T> => {
+		const headers: Record<string, string> = { "Content-Type": "application/json", "X-PAGS-Instance-Id": conn.instanceId };
+		if (conn.token) headers.Authorization = `Bearer ${conn.token}`;
+		const res = await fetch(`${conn.endpointUrl}${path}`, {
+			method: "POST",
+			headers,
+			body: body === undefined ? undefined : JSON.stringify(body),
+		});
+		if (!res.ok) {
+			const detail = await res.text().catch(() => "");
+			throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
+		}
+		return (await res.json()) as T;
 	};
-	if (conn.token) headers.Authorization = `Bearer ${conn.token}`;
-	const res = await fetch(`${conn.endpointUrl}${path}`, {
-		method: "POST",
-		headers,
-		body: body === undefined ? undefined : JSON.stringify(body),
-	});
-	if (!res.ok) {
-		const detail = await res.text().catch(() => "");
-		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
+	try {
+		return await attempt();
+	} catch (err) {
+		// The runner's tunnel can drop and respawn with a NEW url (the watchdog
+		// re-registers it WITHOUT killing the browser). Re-resolve the current url
+		// from the DB and retry once — so an in-progress application continues on the
+		// SAME live page instead of dying on a stale tunnel.
+		const fresh = await getRunnerConn(conn.env, conn.instanceId, conn.userId).catch(() => null);
+		if (fresh && fresh.endpointUrl !== conn.endpointUrl) {
+			conn.endpointUrl = fresh.endpointUrl;
+			conn.token = fresh.token;
+			return await attempt();
+		}
+		throw err;
 	}
-	return (await res.json()) as T;
 }
