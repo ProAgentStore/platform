@@ -34,13 +34,15 @@ function mockRuntimeEnv() {
 		token_dek_wrapped: null,
 		token_iv: null,
 	}));
-	const bind = vi.fn(() => ({ first }));
+	const bind = vi.fn(() => ({ first, run: vi.fn(async () => ({})), all: vi.fn(async () => ({ results: [] })) }));
 	const prepare = vi.fn(() => ({ bind }));
+	const create = vi.fn(async () => ({ id: "wf_123" }));
 	return {
-		env: { DB: { prepare } as unknown as D1Database },
+		env: { DB: { prepare } as unknown as D1Database, JOB_APPLY: { create }, SESSION_SIGNING_KEY: "test-secret" } as unknown as { DB: D1Database },
 		prepare,
 		bind,
 		first,
+		create,
 	};
 }
 
@@ -214,35 +216,17 @@ describe("storage tools", () => {
 			{ env: runtime.env, agentId: "instance-1", userId: "user-1" },
 		);
 
+		// New behavior: starts the LLM-driven JobApplyWorkflow (no legacy selector task).
 		expect(result.success).toBe(true);
-		expect(result.content).toContain("task_123");
-		expect(result.content).toContain("has not submitted");
-		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(result.content).toContain("Application started");
+		expect(result.content).toContain("task_123"); // runner task id
+		expect(runtime.create).toHaveBeenCalledTimes(1); // JOB_APPLY.create — the brain started
+		// It creates the agent-driven task (job.apply_agent), not a legacy approval task.
 		expect(fetchMock).toHaveBeenCalledWith("https://runner.example.test/tasks", expect.any(Object));
-
 		const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-		expect(init.headers).toMatchObject({
-			Authorization: "Bearer runner-token",
-			"X-PAGS-Instance-Id": "instance-1",
-		});
 		const body = JSON.parse(String(init.body));
-		expect(body).toEqual({
-			type: "job.apply_authenticated",
-			input: {
-				url: "https://example.com/jobs/1",
-				resumePath: "/tmp/test-candidate-resume.pdf",
-				candidate: {
-					fullName: "Test Candidate",
-					email: "candidate@example.com",
-					phone: "+1 555 0100",
-					location: "Test City",
-					linkedin: "https://linkedin.example/test-candidate",
-					workAuthorization: "Authorized to work",
-				},
-				coverNote: "Interested in the role.",
-			},
-		});
-		expect(body.input.candidate.fullName).toBe("Test Candidate");
+		expect(body.type).toBe("job.apply_agent");
+		expect(body.input.url).toBe("https://example.com/jobs/1");
 	});
 
 	it("does not create job application task without local resume path", async () => {

@@ -1,8 +1,90 @@
 import type { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import { listAtsCache } from "../lib/apply-cache.js";
+import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
+import { findCredentialForHost } from "../lib/credentials.js";
+import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
 import type { Env } from "../types.js";
-import { callRuntime, requireOwnedInstance, requireRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
+import { callRuntime, isRecord, mirrorRuntimeTasks, requireOwnedInstance, requireRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
+
+/** An apply failure with an HTTP-ish status so callers can map it. */
+export class ApplyError extends Error {
+	constructor(message: string, readonly status = 400) {
+		super(message);
+	}
+}
+
+/** Trim a value to a non-empty string, or undefined. */
+function trimmed(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const t = value.trim();
+	return t.length > 0 ? t : undefined;
+}
+
+export interface StartApplyInput {
+	url: string;
+	resumePath: string;
+	candidate?: Record<string, unknown>;
+	coverNote?: string;
+	dryRun?: boolean;
+}
+
+/**
+ * The single entry point for the LLM-driven job application: builds the job from
+ * the structured Profile + credentials vault + Special Instructions, creates the
+ * agent-driven runner task, and starts the JobApplyWorkflow brain. Used by BOTH
+ * the /apply route and the chat agent's apply tool — there is no other apply path.
+ */
+export async function startJobApply(env: Env, instanceId: string, userId: string, input: StartApplyInput): Promise<{ workflowId: string; taskId: string }> {
+	const url = String(input.url ?? "");
+	const resumePath = String(input.resumePath ?? "");
+	if (!/^https?:\/\//.test(url)) throw new ApplyError("url (http/https) required");
+	if (!resumePath) throw new ApplyError("resumePath required (an absolute path on the runner machine)");
+
+	const runtime = await requireRuntime(env, instanceId, userId); // throws if no runner
+	const cand = input.candidate ?? {};
+	const rawProfile = await getProfile(env, userId);
+	const prof = profileToCandidate(rawProfile);
+	const prefs = profileToPreferences(rawProfile);
+	const cfg = await readInstanceConfig(env, instanceId, userId);
+	const cred = await findCredentialForHost(env, instanceId, userId, url);
+	const fullName = String(cand.fullName ?? cand.full_name ?? prof.fullName ?? "");
+	const email = String(cand.email ?? cred?.username ?? prof.email ?? "");
+	if (!fullName || !email) throw new ApplyError("no candidate name/email in your Profile — fill it in the console (Profile → Candidate Profile)");
+
+	const job = {
+		url,
+		resumePath,
+		candidate: {
+			fullName,
+			email,
+			phone: trimmed(cand.phone) ?? prof.phone,
+			location: trimmed(cand.location) ?? prof.location,
+			linkedin: trimmed(cand.linkedin) ?? prof.linkedin,
+			portfolio: trimmed(cand.portfolio) ?? prof.portfolio,
+			workAuthorization: trimmed(cand.workAuthorization ?? cand.work_authorization) ?? prof.workAuthorization,
+			salaryExpectation: prof.salaryExpectation,
+		},
+		coverNote: trimmed(input.coverNote),
+		password: cred?.password ?? (await deriveJobPassword(env, userId)),
+		hasStoredLogin: !!cred,
+		dryRun: input.dryRun === true,
+		specialInstructions: trimmed(cfg.specialInstructions),
+		preferences: prefs,
+	};
+
+	const taskRes = await callRuntime(env, runtime, "/tasks", {
+		method: "POST",
+		body: JSON.stringify({ type: "job.apply_agent", input: { url, resumePath } }),
+	});
+	const taskPayload = await runtimeJson(taskRes);
+	if (!taskRes.ok) throw new ApplyError("the runner rejected the task", 502);
+	await mirrorRuntimeTasks(env, instanceId, userId, taskPayload);
+	const taskId = isRecord(taskPayload) ? String(taskPayload.id ?? "") : "";
+	if (!taskId) throw new ApplyError("the runner did not return a task id", 502);
+
+	const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job } });
+	return { workflowId: instance.id, taskId };
+}
 
 /** Read the instance's JSON config (client-side settings incl. specialInstructions). */
 export async function readInstanceConfig(env: Env, instanceId: string, userId: string): Promise<Record<string, unknown>> {
@@ -120,5 +202,27 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const runtime = await requireRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/end`, { method: "POST" });
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
+	});
+
+	/** Start the LLM-driven job application (the ONLY apply path). dryRun fills everything but never submits. */
+	router.post("/:instanceId/apply", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const url = String(body.url ?? "");
+		try {
+			const { workflowId, taskId } = await startJobApply(c.env, instanceId, session.uid, {
+				url,
+				resumePath: String(body.resumePath ?? body.resume_path ?? ""),
+				candidate: (body.candidate ?? {}) as Record<string, unknown>,
+				coverNote: typeof body.coverNote === "string" ? body.coverNote : typeof body.cover_note === "string" ? body.cover_note : undefined,
+				dryRun: body.dryRun === true || body.dry_run === true,
+			});
+			return c.json({ workflowId, taskId, status: "running", url }, 202);
+		} catch (e) {
+			if (e instanceof ApplyError) return c.json({ error: e.message }, e.status === 502 ? 502 : 400);
+			throw e;
+		}
 	});
 }

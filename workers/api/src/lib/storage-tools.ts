@@ -185,19 +185,13 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "submit_job_application",
-		description: "Create an approval-gated browser runner task to submit a job application. This only creates the browser task; the application is not submitted until the user approves the task and the runner completes it. Do not mark application records as submitted from this tool result alone.",
+		description: "Start the LLM-driven job application: an agent drives a real browser to fill and submit the form, using the user's saved candidate Profile. Call it ONCE per job. It does not finish instantly — it runs in the background and pauses in the console Board only for a captcha, a stuck widget, or a missing value. Do not call it again for the same job, and do not claim the application is submitted from this tool result. Requires a connected runner (pags up).",
 		parameters: {
 			url: { type: "string", description: "Job posting URL", required: true },
 			resume_path: { type: "string", description: "Absolute local path to the resume file on the connected runner machine", required: true },
-			full_name: { type: "string", description: "Candidate full name", required: true },
-			email: { type: "string", description: "Candidate email", required: true },
-			phone: { type: "string", description: "Candidate phone number" },
-			location: { type: "string", description: "Candidate location" },
-			linkedin: { type: "string", description: "Candidate LinkedIn URL" },
-			portfolio: { type: "string", description: "Candidate portfolio URL" },
-			work_authorization: { type: "string", description: "Candidate work authorization status" },
-			cover_note: { type: "string", description: "Cover note text to paste into the application form" },
-			authenticated: { type: "boolean", description: "Use an authenticated application flow when true. Defaults to true." },
+			full_name: { type: "string", description: "Candidate full name (optional — falls back to the saved Profile)" },
+			email: { type: "string", description: "Candidate email (optional — falls back to the saved Profile)" },
+			cover_note: { type: "string", description: "Cover note text for the application form" },
 		},
 	},
 	{
@@ -461,85 +455,39 @@ export async function executeStorageTool(
 				if (!url) return fail(call.name, "url required");
 				const resumePath = stringInput(call.input.resume_path) || stringInput(call.input.resumePath);
 				if (!resumePath) {
-					return fail(call.name, "resume_path required: provide an absolute local file path on the connected runner machine.");
+					return fail(call.name, "resume_path required: an absolute local file path on the connected runner machine.");
 				}
 				const candidateInput = isPlainRecord(call.input.candidate) ? call.input.candidate : {};
-				const fullName = stringInput(candidateInput.fullName) || stringInput(candidateInput.full_name) || stringInput(call.input.full_name) || stringInput(call.input.fullName);
-				const email = stringInput(candidateInput.email) || stringInput(call.input.email);
-				if (!fullName) return fail(call.name, "full_name required");
-				if (!email) return fail(call.name, "email required");
-
-				// Look up the connected runtime
-				const runtime = await ctx.env.DB.prepare(
-					"SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2 AND status != 'offline'",
-				).bind(ctx.agentId, ctx.userId).first<{ endpoint_url: string; token_plaintext: string | null; token_ciphertext: ArrayBuffer | null; token_dek_wrapped: ArrayBuffer | null; token_iv: ArrayBuffer | null }>();
-
-				if (!runtime?.endpoint_url) {
-					return fail(call.name, "No browser runner connected. Start the runner with: pags up");
-				}
-
-				// Decrypt runner token
-				let runnerToken = runtime.token_plaintext || "";
-				if (!runnerToken && runtime.token_ciphertext && ctx.env.KEY_ENCRYPTION_KEY) {
-					try {
-						const { decryptKey } = await import("./crypto.js");
-						runnerToken = await decryptKey(
-							new Uint8Array(runtime.token_ciphertext as ArrayBuffer),
-							new Uint8Array(runtime.token_dek_wrapped as ArrayBuffer),
-							new Uint8Array(runtime.token_iv as ArrayBuffer),
-							ctx.env.KEY_ENCRYPTION_KEY,
-						);
-					} catch { /* use empty */ }
-				}
-
-				// Create task on the runner
-				const authenticated = call.input.authenticated !== false;
-				const taskBody = {
-					type: authenticated ? "job.apply_authenticated" : "job.apply_basic",
-					input: {
+				// One apply path: start the LLM-driven JobApplyWorkflow (same as the
+				// console /apply). The brain drives the real browser; no selectors, no
+				// approval gate. It pauses for the user only on captcha/stuck/needs_input.
+				try {
+					const { startJobApply } = await import("../routes/instances-apply.js");
+					// ctx.env is the full worker Env at runtime (the tool context types it
+					// narrowly); startJobApply needs JOB_APPLY + runtime bindings.
+					const fullEnv = ctx.env as unknown as Parameters<typeof startJobApply>[0];
+					const { workflowId, taskId } = await startJobApply(fullEnv, ctx.agentId, ctx.userId, {
 						url,
 						resumePath,
 						candidate: {
-							fullName,
-							email,
+							fullName: stringInput(candidateInput.fullName) || stringInput(candidateInput.full_name) || stringInput(call.input.full_name) || stringInput(call.input.fullName),
+							email: stringInput(candidateInput.email) || stringInput(call.input.email),
 							phone: optionalInput(candidateInput.phone) || optionalInput(call.input.phone),
 							location: optionalInput(candidateInput.location) || optionalInput(call.input.location),
 							linkedin: optionalInput(candidateInput.linkedin) || optionalInput(call.input.linkedin),
-							portfolio: optionalInput(candidateInput.portfolio) || optionalInput(call.input.portfolio),
-							workAuthorization:
-								optionalInput(candidateInput.workAuthorization) ||
-								optionalInput(candidateInput.work_authorization) ||
-								optionalInput(call.input.work_authorization) ||
-								optionalInput(call.input.workAuthorization),
+							workAuthorization: optionalInput(candidateInput.workAuthorization) || optionalInput(candidateInput.work_authorization) || optionalInput(call.input.work_authorization) || optionalInput(call.input.workAuthorization),
 						},
-						coverNote: optionalInput(call.input.cover_note) || optionalInput(call.input.coverNote) || "",
-					},
-				};
-
-				const headers: Record<string, string> = { "Content-Type": "application/json" };
-				if (runnerToken) headers.Authorization = `Bearer ${runnerToken}`;
-				headers["X-PAGS-Instance-Id"] = ctx.agentId;
-
-				const taskRes = await fetch(`${runtime.endpoint_url}/tasks`, {
-					method: "POST",
-					headers,
-					body: JSON.stringify(taskBody),
-				});
-
-				if (!taskRes.ok) {
-					const err = await taskRes.text().catch(() => "unknown error");
-					return fail(call.name, `Runner rejected task: ${err.slice(0, 200)}`);
+						coverNote: optionalInput(call.input.cover_note) || optionalInput(call.input.coverNote),
+					});
+					return ok(
+						call.name,
+						`Application started — the agent is now driving the browser (workflow ${workflowId}, task ${taskId}). It fills the form from the candidate Profile and pauses in the console Board only for a captcha, a stuck widget, or a missing value. Do NOT call submit_job_application again for this job, and do NOT say it's submitted — it completes when the workflow finishes.`,
+					);
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					if (/runner|runtime|registered|offline/i.test(msg)) return fail(call.name, "No browser runner connected. Start the runner with: pags up");
+					return fail(call.name, msg);
 				}
-
-				const task = await taskRes.json() as { id?: string; status?: string };
-
-				const approval = task.status === "needs_approval" && task.id
-					? ` Approve it in the console or run: pags runner approve-task ${ctx.agentId} ${task.id}`
-					: "";
-				return ok(
-					call.name,
-					`Browser task created: ${task.id ?? "unknown"} (status: ${task.status ?? "unknown"}). The task is queued and waiting for approval — this has not submitted the application yet. Do NOT call submit_job_application again for this job; the task already exists. Do not mark the application record submitted until this runner task completes successfully.${approval}`,
-				);
 			}
 
 			case "find_confirmation_link": {
