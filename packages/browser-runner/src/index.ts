@@ -63,3 +63,12 @@ const shutdown = async () => {
 
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
+
+// Self-exit if our parent (the `runner connect` CLI) dies — otherwise we'd orphan
+// and keep holding the port, making the NEXT `pags up` fail with EADDRINUSE / a 401
+// against our stale token. When the parent dies we're reparented (ppid changes to
+// launchd/init), so a changed ppid means it's gone.
+const parentPid = process.ppid;
+setInterval(() => {
+	if (process.ppid !== parentPid) void shutdown();
+}, 3000).unref();

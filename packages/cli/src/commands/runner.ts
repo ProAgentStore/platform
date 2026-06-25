@@ -5,8 +5,23 @@ import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { arch, homedir, platform } from "node:os";
 import { resolve } from "node:path";
+import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { loadSession } from "./login.js";
+
+/** First free TCP port at/after `start` on 127.0.0.1 — avoids EADDRINUSE collisions. */
+async function findFreePort(start: number): Promise<number> {
+	for (let p = start; p < start + 25; p++) {
+		const free = await new Promise<boolean>((res) => {
+			const s = createServer();
+			s.once("error", () => res(false));
+			s.once("listening", () => s.close(() => res(true)));
+			s.listen(p, "127.0.0.1");
+		});
+		if (free) return p;
+	}
+	return start;
+}
 import { Command } from "commander";
 import { writeError, writeLine } from "../output.js";
 
@@ -408,7 +423,9 @@ export function createRunnerCommand(): Command {
 		.action(async (instanceId: string, opts: RunnerConnectOptions) => {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
-			const port = clean(opts.port) || "49171";
+			// Pick a free port so a stale/orphaned runner on 49171 can't cause an
+			// EADDRINUSE or a 401 (stale token) on the next `pags up`.
+			const port = clean(opts.port) || String(await findFreePort(49171));
 			const localUrl = `http://${host}:${port}`;
 			const runnerOpts: RunnerStartOptions = {
 				...opts,
