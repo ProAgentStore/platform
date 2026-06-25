@@ -142,6 +142,11 @@ async function runAnthropic(
 	const content = (data.content as Array<{ type: string; text?: string; name?: string; input?: unknown }>) || [];
 	const textParts = content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
 	const toolUse = content.filter((c) => c.type === "tool_use");
+	const u = (data.usage as Record<string, number>) || {};
+	const usage = {
+		input: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+		output: u.output_tokens || 0,
+	};
 
 	if (toolUse.length > 0) {
 		return {
@@ -150,9 +155,10 @@ async function runAnthropic(
 				name: t.name,
 				arguments: t.input || {},
 			})),
+			usage,
 		};
 	}
-	return { response: textParts };
+	return { response: textParts, usage };
 }
 
 async function runCloudflareAi(

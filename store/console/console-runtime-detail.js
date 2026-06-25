@@ -15,6 +15,11 @@
         ${task.requiresApproval ? '<span class="tag">approval</span>' : ''}
         ${task.synthetic ? '<span class="tag">history</span>' : ''}`;
       const isError = task.status === 'needs_human' ? false : !!task.error;
+      // Tokens spent: the apply brain reports a running cumulative on each decision
+      // event; the latest (max) is the task total.
+      let tokIn = 0, tokOut = 0;
+      for (const e of events) { const d = (e && e.data) || {}; if (typeof d.tokensInput === 'number') tokIn = Math.max(tokIn, d.tokensInput); if (typeof d.tokensOutput === 'number') tokOut = Math.max(tokOut, d.tokensOutput); }
+      const tokenField = (tokIn || tokOut) ? runtimeDetailField('Tokens used', `${(tokIn + tokOut).toLocaleString()} · ${tokIn.toLocaleString()} in / ${tokOut.toLocaleString()} out`) : '';
       body.innerHTML = `
         <div class="rt-tabs" style="display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:0.85rem;flex-wrap:wrap">
           <button type="button" class="rt-tab" data-rt-tab="overview">Overview</button>
@@ -28,6 +33,7 @@
             ${runtimeDetailField('Status', String(task.status || 'queued').replace('_', ' '))}
             ${runtimeDetailField('Created', formatTime(task.createdAt))}
             ${runtimeDetailField('Updated', formatTime(task.updatedAt || task.completedAt))}
+            ${tokenField}
           </div>
           ${task.approval?.prompt ? `<div class="runtime-detail-field"><div class="runtime-detail-label">Approval Prompt</div><div class="runtime-detail-value">${esc(task.approval.prompt)}</div></div>` : ''}
           ${task.error ? `<div class="runtime-detail-field"><div class="runtime-detail-label">${task.status === 'needs_human' ? '⚠️ Needs you' : 'Error'}</div><div class="runtime-detail-value" style="color:${isError ? 'var(--red)' : '#f59e0b'}">${esc(task.error)}</div></div>` : ''}

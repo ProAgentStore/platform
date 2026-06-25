@@ -65,6 +65,8 @@ export interface ApplyDecision {
 	finish?: { status: "submitted" | "ready" | "expired" | "blocked"; detail: string };
 	/** The agent needs a value from the user (ask-and-hold). */
 	needsInput?: { field: string; why?: string };
+	/** Token usage for the LLM call that produced this decision. */
+	usage?: { input: number; output: number };
 }
 
 export interface ApplyResult {
@@ -110,6 +112,9 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	let repeatFails = 0;
 	let pageKey = "";
 	let failsOnPage = 0;
+	let tokIn = 0;
+	let tokOut = 0;
+	let actedLast = false;
 	const recentKeys: string[] = [];
 
 	for (let step = 0; step < maxSteps; step++) {
@@ -125,7 +130,16 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		// across DIFFERENT pages (an "Apply now" → login → form funnel) is real
 		// progress, not fixation — so it must not count toward the stuck guard.
 		const progressKey = `${snap.url}::${snap.snapshot.length}`;
-		if (progressKey !== pageKey) { pageKey = progressKey; failsOnPage = 0; recentKeys.length = 0; }
+		if (progressKey !== pageKey) {
+			pageKey = progressKey; failsOnPage = 0; recentKeys.length = 0; actedLast = false;
+		} else if (actedLast) {
+			// The previous action produced NO visible change. The brain can't tell that
+			// its "successful" click did nothing, so surface it — this nudges it to vary
+			// its approach (scroll, dismiss a banner, a different control) BEFORE it
+			// fixates into the stuck handoff.
+			actionLog.push("⚠ that action caused NO visible change to the page — the control may be wrong, disabled, or covered by a cookie/consent banner; try a DIFFERENT element or approach, do NOT repeat it");
+			actedLast = false;
+		}
 
 		// A CAPTCHA can't be solved by the model — hand off to the human, same session.
 		// But don't re-hand-off for the page a human already solved one on (lingering
@@ -136,10 +150,11 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		}
 
 		const decision = await deps.decide({ job, actionLog, snapshot: snap });
+		if (decision.usage) { tokIn += decision.usage.input; tokOut += decision.usage.output; }
 		await deps.onEvent?.(
 			"agent.decision",
 			decision.finish ? `finish: ${decision.finish.status}` : decision.action ? describeAction(decision.action) : "thinking",
-			{ thought: decision.thought, action: decision.action, finish: decision.finish },
+			{ thought: decision.thought, action: decision.action, finish: decision.finish, tokensInput: tokIn, tokensOutput: tokOut },
 		);
 
 		if (decision.finish) {
@@ -193,6 +208,9 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			repeatFails = 0;
 			lastActionKey = "";
 			actionLog.push(describeAction(decision.action));
+			// A click/select/check/type is expected to change the page; if the NEXT
+			// snapshot shows no change, the loop top tells the brain so it adapts.
+			actedLast = decision.action.action !== "scroll" && decision.action.action !== "wait";
 		}
 	}
 	return { outcome: "max_steps", detail: `stopped after ${maxSteps} actions`, url: lastUrl, steps: maxSteps, transcript: [...actionLog] };
@@ -384,12 +402,14 @@ export async function decideAction(
 			{ role: "user", content: userMsg },
 		],
 		tools: BROWSER_TOOLS,
-	})) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }> };
+	})) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
 
 	const call = res.tool_calls?.[0];
 	if (!call) {
 		// No tool call — treat the prose as a blocked/finish signal.
-		return { thought: res.response, finish: { status: "blocked", detail: res.response || "no action chosen" } };
+		return { thought: res.response, finish: { status: "blocked", detail: res.response || "no action chosen" }, usage: res.usage };
 	}
-	return toolCallToDecision(call, params.job, res.response);
+	const decision = toolCallToDecision(call, params.job, res.response);
+	decision.usage = res.usage;
+	return decision;
 }
