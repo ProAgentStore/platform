@@ -219,12 +219,14 @@
     async function refreshRuntimeSilently() {
       if (!currentInstance || !boardIsVisible()) { stopRuntimePolling(); return; }
       try {
-        const [tasksRes, eventsRes] = await Promise.allSettled([
+        const [tasksRes, eventsRes, appsRes] = await Promise.allSettled([
           api(`/v1/instances/${currentInstance.id}/tasks`),
           api(`/v1/instances/${currentInstance.id}/task-events?limit=500`),
+          api(`/v1/instances/${currentInstance.id}/collections/applications/records?limit=100`),
         ]);
         if (tasksRes.status === 'fulfilled') currentRuntimeTasks = tasksRes.value.tasks || currentRuntimeTasks;
         if (eventsRes.status === 'fulfilled') currentRuntimeEvents = eventsRes.value.events || currentRuntimeEvents;
+        if (appsRes.status === 'fulfilled') currentAppRecords = appsRes.value.records || currentAppRecords;
         if (currentRuntimeTaskId) {
           const task = currentRuntimeTasks.find(t => t.id === currentRuntimeTaskId);
           if (task) renderInstanceRuntimeEvents(runtimeTaskEvents(task).slice().reverse()); // live Activity tab
@@ -237,13 +239,13 @@
     }
 
     function renderInstanceTaskBoard(tasks) {
-      const activeIds = ['waiting', 'running', 'needs_human'];
-      const cols = showAllRuntimeTasks
-        ? INSTANCE_RUNTIME_COLUMNS
-        : INSTANCE_RUNTIME_COLUMNS.filter(c => activeIds.includes(c.id));
+      // ALWAYS show every column (a stable board). The Active/All filter only hides
+      // finished/old task CARDS — it never removes columns.
+      const cols = INSTANCE_RUNTIME_COLUMNS;
+      const activeIds = ['queued', 'waiting', 'running', 'needs_approval', 'needs_human'];
       const allowed = new Set(cols.flatMap(c => c.statuses));
-      const all = tasks || [];
-      const shown = showAllRuntimeTasks ? all : all.filter(t => allowed.has(t.status));
+      const all = (tasks || []).filter(t => allowed.has(t.status));
+      const shown = showAllRuntimeTasks ? all : all.filter(t => activeIds.includes(t.status));
       renderKanbanBoard({
         boardId: 'inst-unified-board',
         items: shown,
@@ -251,6 +253,9 @@
         renderCard: runtimeTaskCard,
         columnForItem: task => cols.find(col => col.statuses.includes(task.status)) || cols[0],
       });
+      // Re-append the application columns from cache (renderKanbanBoard cleared the
+      // board). Synchronous → the columns never blink/disappear on a poll.
+      renderApplicationColumns();
       // Reflect the count of hidden (history) tasks on the prominent toggle.
       const hidden = all.length - shown.length;
       const allBtn = document.querySelector('#board-filter-toggle [data-board-filter="all"]');

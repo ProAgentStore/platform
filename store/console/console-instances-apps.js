@@ -229,84 +229,70 @@
       { key: 'accepted', label: 'Accepted', dot: 'dot-completed' },
     ];
 
+    // Cached application records so the columns can be rendered SYNCHRONOUSLY (no
+    // fetch) every time the board re-renders — which is what stops the columns from
+    // blinking/disappearing on each poll.
+    let currentAppRecords = [];
+
     async function loadInstanceApplications() {
-      const boardEl = document.getElementById('inst-unified-board');
-      if (!boardEl || !currentInstance) return;
-      // Append application columns to the existing runtime board
-      const board = boardEl;
+      if (!currentInstance) return;
       try {
         const data = await api(`/v1/instances/${currentInstance.id}/collections/applications/records?limit=100`).catch(() => ({ records: [] }));
-        const records = data.records || [];
-        if (records.length === 0) return;
+        currentAppRecords = data.records || [];
+      } catch (e) { /* keep the previous cache */ }
+      renderInstanceTaskBoard(currentRuntimeTasks); // full board re-render with fresh apps
+    }
 
-        // Update the board summary
-        const summary = document.getElementById('inst-board-summary');
-        if (summary) {
-          const applicationText = `${records.length} application${records.length === 1 ? '' : 's'}`;
-          const runtimeText = summary.textContent && !summary.textContent.startsWith('Loading')
-            ? summary.textContent
-            : '';
-          summary.textContent = runtimeText ? `${runtimeText} · ${applicationText}` : applicationText;
+    // Sync: append the application columns (always ALL of them) from the cache onto
+    // the board that renderInstanceTaskBoard just (re)built. No await → no flicker.
+    function renderApplicationColumns() {
+      const board = document.getElementById('inst-unified-board');
+      if (!board) return;
+      const records = currentAppRecords || [];
+      const grouped = {};
+      for (const s of APP_STATUSES) grouped[s.key] = [];
+      for (const r of records) { const status = (r.data && r.data.status) || 'queued'; (grouped[status] = grouped[status] || []).push(r); }
+      for (const s of APP_STATUSES) {
+        const items = grouped[s.key] || [];
+        const column = document.createElement('section');
+        column.className = 'kanban-column';
+        column.dataset.appCol = '1';
+        column.setAttribute('aria-label', `${s.label} applications column`);
+        column.innerHTML = `
+          <div class="kanban-header">
+            <div class="kanban-title"><span class="kanban-dot ${s.dot}"></span>${esc(s.label)}</div>
+            <span class="kanban-count">${items.length}</span>
+          </div>
+          <div class="kanban-items"></div>`;
+        const list = column.querySelector('.kanban-items');
+        if (items.length === 0) {
+          list.innerHTML = '<div class="kanban-empty">No applications</div>';
         }
-
-        // Group by status
-        const grouped = {};
-        for (const s of APP_STATUSES) grouped[s.key] = [];
-        for (const r of records) {
-          const status = r.data.status || 'queued';
-          if (!grouped[status]) grouped[status] = [];
-          grouped[status].push(r);
+        for (const r of items) {
+          const d = r.data || {};
+          const company = d.company || d.Company || '?';
+          const role = d.role || d.job_title || d.Role || '?';
+          const url = d.url || '';
+          const date = r.createdAt ? r.createdAt.split('T')[0] : '';
+          const card = document.createElement('article');
+          card.className = 'kanban-card';
+          card.tabIndex = 0;
+          card.setAttribute('role', 'button');
+          card.setAttribute('aria-label', `Open application ${company} ${role}`);
+          card.innerHTML = `
+            <h3>${esc(company)}</h3>
+            <p>${esc(role)}</p>
+            <div class="kanban-card-meta">
+              ${date ? `<span class="tag tag-cat">${esc(date)}</span>` : ''}
+              ${url ? `<a href="${escAttr(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="tag tag-cat" style="text-decoration:underline">Link</a>` : ''}
+            </div>`;
+          card.addEventListener('click', () => showApplicationDetail(r.id));
+          card.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); showApplicationDetail(r.id); }
+          });
+          list.appendChild(card);
         }
-
-        // Add application columns after the runtime columns without rewriting the
-        // existing runtime task cards; those cards own their click listeners.
-        for (const s of APP_STATUSES) {
-          const items = grouped[s.key] || [];
-          const column = document.createElement('section');
-          column.className = 'kanban-column';
-          column.setAttribute('aria-label', `${s.label} applications column`);
-          column.innerHTML = `
-            <div class="kanban-header">
-              <div class="kanban-title"><span class="kanban-dot ${s.dot}"></span>${esc(s.label)}</div>
-              <span class="kanban-count">${items.length}</span>
-            </div>
-            <div class="kanban-items"></div>`;
-          const list = column.querySelector('.kanban-items');
-          if (items.length === 0) {
-            list.innerHTML = '<div class="kanban-empty">No applications</div>';
-          }
-          for (const r of items) {
-            const d = r.data;
-            const company = d.company || d.Company || '?';
-            const role = d.role || d.job_title || d.Role || '?';
-            const url = d.url || '';
-            const date = r.createdAt ? r.createdAt.split('T')[0] : '';
-            const card = document.createElement('article');
-            card.className = 'kanban-card';
-            card.tabIndex = 0;
-            card.setAttribute('role', 'button');
-            card.setAttribute('aria-label', `Open application ${company} ${role}`);
-            card.innerHTML = `
-              <h3>${esc(company)}</h3>
-              <p>${esc(role)}</p>
-              <div class="kanban-card-meta">
-                ${date ? `<span class="tag tag-cat">${esc(date)}</span>` : ''}
-                ${url ? `<a href="${escAttr(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="tag tag-cat" style="text-decoration:underline">Link</a>` : ''}
-              </div>
-            `;
-            card.addEventListener('click', () => showApplicationDetail(r.id));
-            card.addEventListener('keydown', (event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                showApplicationDetail(r.id);
-              }
-            });
-            list.appendChild(card);
-          }
-          board.appendChild(column);
-        }
-      } catch (e) {
-        board.innerHTML = `<p style="color:var(--red);padding:1rem">Failed to load applications: ${esc(e.message)}</p>`;
+        board.appendChild(column);
       }
     }
 
