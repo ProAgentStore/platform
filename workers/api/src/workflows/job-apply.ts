@@ -93,6 +93,8 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 			if (!solved) {
 				await step.do(`complete-timeout-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "failed", detail: `${reason} not resolved in time` }));
+				// Save the partial run's learnings (incl. what got stuck) before bailing.
+				if (transcript.length) await step.do(`save-cache-timeout-${round}`, async () => { await saveAtsCache(env, userId, host, transcript, result.outcome); return null; });
 				return { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps };
 			}
 			// Persist a supplied value to the Profile + feed it into the run so it's never asked again.
