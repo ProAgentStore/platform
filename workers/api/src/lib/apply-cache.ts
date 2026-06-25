@@ -12,7 +12,9 @@ export async function deriveJobPassword(env: Env, userId: string): Promise<strin
 	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 	const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`jobpw:${userId}`));
 	const b64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/[+/=]/g, "");
-	return `Pj9!${b64.slice(0, 16)}`;
+	// 14 chars total (Pj9! + 10) — keeps upper/lower/digit/symbol but fits sites
+	// that cap password length (Bendigo enforces ≤18; some ATSes ≤16).
+	return `Pj9!${b64.slice(0, 10)}`;
 }
 
 /** The ATS host an application targets, used as the per-ATS cache key (no www). */
