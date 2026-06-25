@@ -251,21 +251,17 @@
         renderCard: runtimeTaskCard,
         columnForItem: task => cols.find(col => col.statuses.includes(task.status)) || cols[0],
       });
-      const summary = document.getElementById('inst-board-summary');
-      if (summary) {
-        const prev = summary.querySelector('.rt-history-toggle');
-        if (prev) prev.remove();
-        const hidden = all.length - shown.length;
-        const label = showAllRuntimeTasks ? 'show only active' : (hidden > 0 ? `show history (${hidden})` : '');
-        if (label) {
-          const btn = document.createElement('button');
-          btn.className = 'rt-history-toggle';
-          btn.style.cssText = 'margin-left:8px;background:none;border:none;color:#7c3aed;cursor:pointer;font-size:0.78rem;text-decoration:underline';
-          btn.textContent = label;
-          btn.addEventListener('click', () => { showAllRuntimeTasks = !showAllRuntimeTasks; renderInstanceTaskBoard(currentRuntimeTasks); });
-          summary.appendChild(btn);
-        }
-      }
+      // Reflect the count of hidden (history) tasks on the prominent toggle.
+      const hidden = all.length - shown.length;
+      const allBtn = document.querySelector('#board-filter-toggle [data-board-filter="all"]');
+      if (allBtn) allBtn.textContent = hidden > 0 && !showAllRuntimeTasks ? `All (${hidden} hidden)` : 'All';
+    }
+
+    // Prominent Active/All board filter (segmented control in the toolbar).
+    function setBoardFilter(mode) {
+      showAllRuntimeTasks = (mode === 'all');
+      document.querySelectorAll('#board-filter-toggle [data-board-filter]').forEach(b => b.classList.toggle('active', b.dataset.boardFilter === mode));
+      renderInstanceTaskBoard(currentRuntimeTasks);
     }
 
     // Live Browser: remote view + control of a paused (needs_human) task, so the

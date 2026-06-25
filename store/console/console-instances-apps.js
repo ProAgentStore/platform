@@ -362,12 +362,15 @@
         fieldsEl.innerHTML += renderDetailField('created', data.createdAt);
         fieldsEl.innerHTML += renderDetailField('updated', data.updatedAt);
 
-        // Status change buttons
+        // Compact status changer: one dropdown (current status selected) + delete.
         const actionsEl = document.getElementById('app-detail-actions');
-        const statuses = ['queued', 'pending', 'submitted', 'interview', 'rejected', 'accepted'];
-        actionsEl.innerHTML = statuses.map(s =>
-          `<button class="btn-sm ${s === d.status ? 'btn-primary' : 'btn-outline'}" onclick="updateAppStatus('${esc(id)}','${s}')">${esc(s)}</button>`
-        ).join('') + `<button class="btn-sm btn-danger" onclick="deleteApplication('${esc(id)}')" title="Delete application">&#128465; Delete</button>`;
+        const cur = d.status || 'queued';
+        actionsEl.innerHTML =
+          `<label class="app-status-label">Status</label>` +
+          `<select class="app-status-select" title="Change status" onchange="updateAppStatus('${esc(id)}', this.value)">` +
+          APP_STATUSES.map(s => `<option value="${escAttr(s.key)}"${s.key === cur ? ' selected' : ''}>${esc(s.label)}</option>`).join('') +
+          `</select>` +
+          `<button class="btn-sm btn-danger" onclick="deleteApplication('${esc(id)}')" title="Delete application">&#128465;</button>`;
 
         // Activity filtered to this specific record
         loadAppDetailActivity(id);

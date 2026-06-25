@@ -197,6 +197,10 @@
           <div id="inst-board-summary" class="agent-board-summary">Loading...</div>
         </div>
         <div class="agent-board-actions">
+          <div class="view-toggle" id="board-filter-toggle" role="group" aria-label="Filter tasks">
+            <button type="button" data-board-filter="active" class="active" onclick="setBoardFilter('active')">Active</button>
+            <button type="button" data-board-filter="all" onclick="setBoardFilter('all')">All</button>
+          </div>
           <button type="button" onclick="loadUnifiedBoard()" class="btn btn-outline btn-sm">Refresh</button>
         </div>
       </div>
