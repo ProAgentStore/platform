@@ -56,6 +56,8 @@ export class LocalRunner {
 	 * remote brain and the human never diverge onto different pages.
 	 */
 	private activePage: Page | null = null;
+	private readonly fileAttachArmed = new WeakSet<Page>();
+	private applyResumePath: string | null = null;
 	readonly store: RunnerStore;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
@@ -414,7 +416,14 @@ export class LocalRunner {
 	 * programmatically. Works even when a REMOTE human clicks the upload button
 	 * during a takeover — no local file picker is ever needed.
 	 */
+	// Auto-attach the résumé to ANY file chooser on the page — whether the brain uses
+	// the `upload` tool or just CLICKS a styled upload widget (SuccessFactors, Workday…
+	// render the real <input type=file> hidden behind a button/drop-zone). Playwright's
+	// filechooser event fires BEFORE the native OS dialog, so the file attaches without
+	// a blocking dialog, regardless of the upload DOM. Idempotent per page.
 	private armFileAutoAttach(page: Page, filePath: string): void {
+		if (this.fileAttachArmed.has(page)) return;
+		this.fileAttachArmed.add(page);
 		page.on("filechooser", (chooser) => {
 			chooser.setFiles(filePath).catch(() => undefined);
 		});
@@ -562,6 +571,7 @@ export class LocalRunner {
 	/** Mark a page as the active one; fall back to the newest remaining page when it closes. */
 	private trackPage(page: Page): void {
 		this.activePage = page;
+		if (this.applyResumePath) this.armFileAutoAttach(page, this.applyResumePath);
 		page.once("close", () => {
 			if (this.activePage === page) {
 				this.activePage = this.browserContext?.pages().at(-1) ?? null;
@@ -603,8 +613,13 @@ export class LocalRunner {
 	 * by ARIA role + accessible name (from the snapshot) via Playwright's
 	 * getByRole — robust and selector-free. Returns the resulting page state.
 	 */
-	async browserAct(action: BrowserAction): Promise<{ ok: boolean; url: string; title: string; challenge: string | null }> {
+	async browserAct(action: BrowserAction, resumePath?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null }> {
 		const page = await this.getActivePage();
+		// Arm résumé auto-attach so a file chooser never blocks the flow (see method).
+		if (resumePath && existsSync(resolve(resumePath))) {
+			this.applyResumePath = resolve(resumePath);
+		}
+		if (this.applyResumePath) this.armFileAutoAttach(page, this.applyResumePath);
 		// The selector-free action switch lives in browser-actions.ts (kept this
 		// file from ballooning); the post-action settle + result stay here.
 		await performBrowserAction(page, action, (p, loc) => this.clickRobustly(p, loc));

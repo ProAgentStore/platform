@@ -60,7 +60,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					return { url: "", challenge: null as string | null, error: "DRY-RUN (test mode): the final submit is BLOCKED — do not submit. Call finish(status:\"ready\") now." };
 				}
 				try {
-					const r = await callRunner<{ url: string; challenge: string | null }>(conn, "/browser/act", a);
+					// Pass resumePath so the runner arms file-chooser auto-attach (résumé
+					// uploads never pop a blocking native dialog, whatever the ATS DOM).
+					const r = await callRunner<{ url: string; challenge: string | null }>(conn, "/browser/act", { ...a, resumePath: job.resumePath });
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined };
 				} catch (e) {
 					// Return the failure to the brain instead of throwing (which would retry the same dead click).

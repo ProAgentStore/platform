@@ -283,7 +283,7 @@ export function applySystemPrompt(job: ApplyJob): string {
 			? ["- Values you asked the user for (use these, don't ask again):", ...Object.entries(job.providedAnswers).map(([k, v]) => `  • ${k}: ${v}`)]
 			: []),
 		job.coverNote ? `- Cover note: ${job.coverNote}` : "",
-		"- Résumé: attach via the `upload` tool whenever there is a file upload (the file is supplied automatically — never ask for a path).",
+		"- Résumé / file uploads: ALWAYS use the `upload` tool on the upload control (the file is supplied automatically — never ask for a path). Do NOT `click` a 'Browse' / 'Choose file' / 'Upload your CV' button to open a file picker — use `upload` directly on it.",
 		job.password ? `- Account password: ${job.password} — use EXACTLY this in both Password and Confirm password. Never invent a different password.` : "",
 		"",
 		"ACCOUNT:",

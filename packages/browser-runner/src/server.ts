@@ -111,8 +111,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, await runner.browserSnapshot());
 	}
 	if (req.method === "POST" && path === "/browser/act") {
-		const body = await readJson<BrowserAction>(req);
-		return json(res, 200, await runner.browserAct(body));
+		const body = await readJson<BrowserAction & { resumePath?: string }>(req);
+		return json(res, 200, await runner.browserAct(body, body.resumePath));
 	}
 	if (req.method === "POST" && path === "/browser/event") {
 		const b = await readJson<{ taskId: string; type: string; message: string; data?: unknown }>(req);
