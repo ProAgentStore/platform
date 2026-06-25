@@ -6,6 +6,7 @@ import { gunzipSync } from "node:zlib";
 import { arch, homedir, platform } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadSession } from "./login.js";
 import { Command } from "commander";
 import { writeError, writeLine } from "../output.js";
 
@@ -55,7 +56,9 @@ export function pagsApiBase(url?: string): string {
 }
 
 export function pagsHeaders(token?: string): Record<string, string> {
-	const resolved = clean(token) || clean(process.env.PAGS_TOKEN);
+	// Fall back to the saved login (pags login) so `runner connect` works without
+	// PAGS_TOKEN — same token `pags up` uses.
+	const resolved = clean(token) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
 	return resolved ? { Authorization: `Bearer ${resolved}` } : {};
 }
 

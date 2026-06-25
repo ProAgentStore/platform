@@ -108,12 +108,13 @@
       switchInstTab(tab, false);
       loadInstanceMessages();
       checkRuntimeStatus();
-      // Keep the runner badge live: re-probe every 8s while this instance is open.
+      // Keep the runner badge live: re-probe every 4s while this instance is open,
+      // so it flips online↔offline within seconds of the runner coming up or dying.
       if (runtimeBadgeTimer) clearInterval(runtimeBadgeTimer);
       runtimeBadgeTimer = setInterval(() => {
         const page = document.getElementById('instance-detail');
         if (currentInstance && page && !page.classList.contains('hidden')) checkRuntimeStatus();
-      }, 8000);
+      }, 4000);
       if (updateUrl) {
         const detailPath = tab === 'board' && runtimeTaskId
           ? `/instances/${encodeURIComponent(instanceId)}/board/tasks/${encodeURIComponent(runtimeTaskId)}`
