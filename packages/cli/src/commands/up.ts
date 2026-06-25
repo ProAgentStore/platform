@@ -200,7 +200,7 @@ export const upCommand = new Command("up")
 				}
 				writeLine("");
 				writeLine("  Press any key to go back...");
-				await waitForKey(["r", "l", "q", " ", "\r"]);
+				await waitForKey([]); // any key goes back
 				printStatus(state);
 			}
 			if (key === "r") {

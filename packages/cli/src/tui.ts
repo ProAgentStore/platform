@@ -120,9 +120,12 @@ export async function waitForKey(keys: string[]): Promise<string> {
 				process.exit(0);
 			}
 			const val = (str || "").trim().toLowerCase();
-			if (keys.includes(val)) {
+			// Empty keys list = "any key" (so "Press any key to go back" actually
+			// works). Otherwise match the char OR the key name (so Enter/Space, which
+			// trim to "", are caught via key.name).
+			if (keys.length === 0 || keys.includes(val) || (key?.name && keys.includes(key.name))) {
 				cleanup();
-				resolve(val);
+				resolve(val || key?.name || "");
 			}
 		};
 
