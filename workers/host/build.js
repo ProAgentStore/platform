@@ -53,6 +53,10 @@ const pages = {
 		path.join(storeDir, "console", "console-takeover.js"),
 		"utf-8",
 	),
+	consoleRuntimeDetailJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-runtime-detail.js"),
+		"utf-8",
+	),
 	consoleInstancesAppsJs: fs.readFileSync(
 		path.join(storeDir, "console", "console-instances-apps.js"),
 		"utf-8",

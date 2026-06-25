@@ -3,7 +3,7 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, consoleCss, consoleCoreJs, consoleInstancesJs, consoleTakeoverJs, consoleInstancesAppsJs, consoleAgentDataJs, consoleProfileJs, consoleUtilsInitJs, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, consoleCss, consoleCoreJs, consoleInstancesJs, consoleTakeoverJs, consoleRuntimeDetailJs, consoleInstancesAppsJs, consoleAgentDataJs, consoleProfileJs, consoleUtilsInitJs, agentDetailPage,
 	widgetJs, authWidgetJs, swJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
 	faviconSvg, manifestJson,
@@ -112,6 +112,7 @@ export default {
 		if (path === "/console-core.js") return new Response(consoleCoreJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-instances.js") return new Response(consoleInstancesJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-takeover.js") return new Response(consoleTakeoverJs, { headers: CONSOLE_JS_HEADERS });
+		if (path === "/console-runtime-detail.js") return new Response(consoleRuntimeDetailJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-instances-apps.js") return new Response(consoleInstancesAppsJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-agent-data.js") return new Response(consoleAgentDataJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-profile.js") return new Response(consoleProfileJs, { headers: CONSOLE_JS_HEADERS });
