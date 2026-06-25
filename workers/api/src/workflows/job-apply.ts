@@ -53,6 +53,12 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot")) as Promise<PageSnapshot>,
 			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideAction(env, userId, p)) as Promise<ApplyDecision>,
 			act: (a) => step.do(`s${n++}-act`, retry, async () => {
+				// Hard dry-run guard: in test mode, NEVER let a submit click reach the
+				// page — block it here (the brain can't override the runtime) and tell
+				// the brain to finish(ready). This is what makes dryRun actually safe.
+				if (job.dryRun && a.action === "click" && /submit|send application|apply now/i.test(String(a.name ?? ""))) {
+					return { url: "", challenge: null as string | null, error: "DRY-RUN (test mode): the final submit is BLOCKED — do not submit. Call finish(status:\"ready\") now." };
+				}
 				try {
 					const r = await callRunner<{ url: string; challenge: string | null }>(conn, "/browser/act", a);
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined };

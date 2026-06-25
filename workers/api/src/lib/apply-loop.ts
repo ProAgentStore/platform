@@ -271,6 +271,7 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"- You may answer genuine screening questions (years of experience, work authorization) from the candidate data; if a required one isn't answerable from the data, use request_user_info rather than fabricating.",
 		"- If a CAPTCHA / 'verify you are human' appears, do nothing — the system hands off to a human automatically.",
 		"- If the job is closed/expired, call finish(status:\"expired\").",
+		job.dryRun ? "- ⛔ TEST MODE — DO NOT SUBMIT. Fill everything; when you reach the final Submit/Send button, STOP and call finish(status:\"ready\"). (Submit clicks are blocked anyway.)" : "",
 		"- When you see a submission confirmation, call finish(status:\"submitted\") with the confirmation text.",
 		"- If you genuinely cannot proceed truthfully, call finish(status:\"blocked\") explaining why.",
 		"- Be decisive and brief. Do not narrate.",
