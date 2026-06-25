@@ -839,16 +839,26 @@ export class LocalRunner {
 			case "select": {
 				const value = String(action.text ?? "");
 				const loc = locate();
+				const pickOption = async () => {
+					const opt = page.getByRole("option", { name: value, exact: false }).first();
+					if ((await opt.count().catch(() => 0)) === 0) return false;
+					return opt.click({ timeout: 2_500 }).then(() => true).catch(() => false);
+				};
 				// 1. Native <select>.
 				if (await loc.selectOption({ label: value }, { timeout: 4_000 }).then(() => true).catch(() => false)) break;
 				if (await loc.selectOption(value, { timeout: 3_000 }).then(() => true).catch(() => false)) break;
-				// 2. Custom React combobox: open it, then click the matching option /
-				//    suggestion. Covers ATS dropdowns + typeahead selects.
+				// 2. Custom combobox / typeahead: open it, try a visible matching option.
 				await this.clickRobustly(page, loc);
-				await page.waitForTimeout(400).catch(() => undefined);
-				const opt = page.getByRole("option", { name: value, exact: false }).first();
-				if ((await opt.count().catch(() => 0)) > 0) { await this.clickRobustly(page, opt); break; }
-				await page.getByText(value, { exact: false }).first().click({ timeout: 4_000, force: true }).catch(() => undefined);
+				await page.waitForTimeout(350).catch(() => undefined);
+				if (await pickOption()) break;
+				// 3. Typeahead: type to filter, then pick the suggestion — by click, else
+				//    keyboard (ArrowDown+Enter), which beats clicking a dropdown that
+				//    closes on blur.
+				await page.keyboard.type(value, { delay: 15 }).catch(() => undefined);
+				await page.waitForTimeout(550).catch(() => undefined);
+				if (await pickOption()) break;
+				await page.keyboard.press("ArrowDown").catch(() => undefined);
+				await page.keyboard.press("Enter").catch(() => undefined);
 				break;
 			}
 			case "check": {
