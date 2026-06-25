@@ -99,6 +99,7 @@
         <a href="/console/instances" onclick="showDashboard('instances');return false" style="color:var(--muted);text-decoration:none;font-size:1rem;padding:0 0.25rem">&larr;</a>
         <span style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px">${esc(meta.name || 'Agent')}</span>
         <span id="runtime-status-badge" onclick="showRunnerGuide()" title="What is this? Click for setup help" style="cursor:pointer;font-size:0.65rem;padding:0.15rem 0.4rem;border-radius:999px;font-weight:700;background:var(--line);color:var(--muted)">...</span>
+        <button id="header-stop-btn" type="button" onclick="stopActiveAgentWork()" title="Stop the agent now" style="display:none;font-size:0.7rem;font-weight:700;padding:0.2rem 0.6rem;border-radius:6px;border:1px solid var(--red);background:rgba(239,68,68,0.14);color:var(--red);cursor:pointer">⏹ Stop agent</button>
         <div class="inst-nav-tabs">
           <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
           <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')">Board</button>
@@ -113,7 +114,12 @@
       if (runtimeBadgeTimer) clearInterval(runtimeBadgeTimer);
       runtimeBadgeTimer = setInterval(() => {
         const page = document.getElementById('instance-detail');
-        if (currentInstance && page && !page.classList.contains('hidden')) checkRuntimeStatus();
+        if (currentInstance && page && !page.classList.contains('hidden')) {
+          checkRuntimeStatus();
+          // Keep the header Stop button live on every tab (Chat/Knowledge don't
+          // run the board poll), so the agent can always be stopped from the web.
+          if (currentInstanceTab !== 'board') refreshActiveTasksForHeader();
+        }
       }, 4000);
       if (updateUrl) {
         const detailPath = tab === 'board' && runtimeTaskId
@@ -211,6 +217,39 @@
     let runtimePollTimer = null;
     const ACTIVE_TASK_STATUSES = ['queued', 'waiting', 'running', 'needs_human'];
 
+    // Header Stop control — everything must be operable from the web, since the
+    // runner/CLI can be on a remote machine the user can't reach.
+    function activeRuntimeTasks() {
+      return (currentRuntimeTasks || []).filter(t => ACTIVE_TASK_STATUSES.includes(t.status) || t.status === 'needs_approval');
+    }
+    function updateHeaderStopButton() {
+      const btn = document.getElementById('header-stop-btn');
+      if (!btn) return;
+      btn.style.display = activeRuntimeTasks().length ? '' : 'none';
+    }
+    // Lightweight task refresh for the header Stop button on non-board tabs.
+    async function refreshActiveTasksForHeader() {
+      if (!currentInstance) return;
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/tasks`);
+        currentRuntimeTasks = data.tasks || currentRuntimeTasks;
+        updateHeaderStopButton();
+      } catch {}
+    }
+    async function stopActiveAgentWork() {
+      if (!currentInstance) return;
+      const active = activeRuntimeTasks();
+      if (!active.length) { alert('Nothing is running right now.'); return; }
+      if (!confirm(`Stop the agent? This cancels ${active.length} running task${active.length > 1 ? 's' : ''}.`)) return;
+      const btn = document.getElementById('header-stop-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Stopping…'; }
+      for (const t of active) {
+        await api(`/v1/instances/${currentInstance.id}/tasks/${encodeURIComponent(t.id)}/cancel`, { method: 'POST' }).catch(() => {});
+      }
+      if (btn) { btn.disabled = false; btn.textContent = '⏹ Stop agent'; }
+      await loadInstanceRuntime();
+    }
+
     function boardIsVisible() {
       const panel = document.getElementById('inst-tab-board');
       return !!panel && panel.classList.contains('active') && !document.hidden;
@@ -247,6 +286,7 @@
     }
 
     function renderInstanceTaskBoard(tasks) {
+      updateHeaderStopButton();
       // ALWAYS show every column (a stable board). The Active/All filter only hides
       // finished/old task CARDS — it never removes columns.
       const cols = INSTANCE_RUNTIME_COLUMNS;
