@@ -119,8 +119,13 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			return { outcome: "cancelled", detail: "stopped by the user", url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 		lastUrl = snap.url;
-		// Reset the per-page failure counter whenever we move to a new page.
-		if (snap.url !== pageKey) { pageKey = snap.url; failsOnPage = 0; }
+		// Reset the per-page failure + fixation counters whenever the page ADVANCES.
+		// "Advances" = the URL changed OR the snapshot content changed (catches SPA
+		// route swaps that keep the URL). Critical: clicking the same-named button
+		// across DIFFERENT pages (an "Apply now" → login → form funnel) is real
+		// progress, not fixation — so it must not count toward the stuck guard.
+		const progressKey = `${snap.url}::${snap.snapshot.length}`;
+		if (progressKey !== pageKey) { pageKey = progressKey; failsOnPage = 0; recentKeys.length = 0; }
 
 		// A CAPTCHA can't be solved by the model — hand off to the human, same session.
 		// But don't re-hand-off for the page a human already solved one on (lingering

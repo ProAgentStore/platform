@@ -90,6 +90,29 @@ describe("runApplyLoop", () => {
 		expect(result.steps).toBe(3);
 	});
 
+	it("does NOT flag stuck when the same-named button advances across DIFFERENT pages (Apply-now funnel)", async () => {
+		// careers → job → login → apply → form → done: each "Apply now" click lands
+		// on a NEW page. The page advances every time, so it's progress, not fixation.
+		const urls = [
+			"https://ats.example.com/careers",
+			"https://ats.example.com/job/1",
+			"https://ats.example.com/login",
+			"https://ats.example.com/apply",
+			"https://ats.example.com/form",
+			"https://ats.example.com/done",
+		];
+		let s = 0;
+		const deps: ApplyDeps = {
+			snapshot: async () => ({ url: urls[Math.min(s, urls.length - 1)], title: "x", snapshot: `- button "Apply now" (p${s})`, challenge: null }),
+			act: async () => { s++; return { url: urls[Math.min(s, urls.length - 1)], challenge: null }; },
+			decide: async (p) => p.snapshot.url.endsWith("/done")
+				? { finish: { status: "submitted", detail: "ok" } }
+				: { action: { action: "click", role: "button", name: "Apply now" } },
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 20 });
+		expect(result.outcome).toBe("submitted"); // progressed through the funnel, never falsely "stuck"
+	});
+
 	it("breaks the loop after the same action fails 3× (no infinite retry)", async () => {
 		const acted: BrowserAction[] = [];
 		let decideCalls = 0;
