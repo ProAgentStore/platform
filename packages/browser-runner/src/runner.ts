@@ -510,9 +510,14 @@ export class LocalRunner {
 			headless: this.config.headless,
 			acceptDownloads: true,
 			downloadsPath,
+			// viewport:null + --start-maximized → the page uses the FULL window size
+			// instead of Playwright's cramped 1280x720 default. Without this a
+			// reCAPTCHA challenge popup near the edge overflows and gets cut off the
+			// right in the takeover view, so it can't be solved.
+			viewport: null,
 			// Light anti-detection: drop the most obvious automation tell so fewer
 			// CAPTCHAs trigger in the first place (the human still solves the rest).
-			args: ["--disable-blink-features=AutomationControlled"],
+			args: ["--disable-blink-features=AutomationControlled", "--start-maximized", "--window-size=1512,982"],
 		};
 		// Prefer the real Chrome build (better TLS/fingerprint → fewer CAPTCHAs);
 		// fall back to bundled Chromium if Chrome isn't installed. Disable with
