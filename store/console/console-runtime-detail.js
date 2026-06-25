@@ -54,10 +54,20 @@
       const takeover = task.status === 'needs_human'
         ? `<button type="button" class="btn btn-primary btn-sm" data-detail-task-action="takeover" data-task-id="${esc(task.id)}">🖥 Take over (live screen)</button>`
         : '';
-      actions.innerHTML = `${takeover}${approval}${cancellable}`;
+      const messageBox = task.status === 'needs_human'
+        ? `<div style="width:100%;margin-top:0.7rem;border-top:1px solid var(--line);padding-top:0.7rem">
+            <label style="font-size:0.8rem;font-weight:700;display:block;margin-bottom:0.3rem">💬 Or just tell the agent what to do</label>
+            <div style="font-size:0.74rem;color:var(--muted);margin-bottom:0.35rem">It re-reads the current page and continues with your message as top priority — no need to drive it yourself.</div>
+            <textarea id="agent-hint-input" placeholder="e.g. The page already moved past Apply — you're on the application form now. Fill it in and continue." style="width:100%;min-height:56px"></textarea>
+            <button type="button" data-detail-task-action="send-hint" data-task-id="${esc(task.id)}" class="btn btn-primary btn-sm" style="margin-top:0.4rem">Send to agent &amp; continue</button>
+            <div id="agent-hint-msg" style="font-size:0.78rem;margin-top:0.35rem"></div>
+          </div>`
+        : '';
+      actions.innerHTML = `${takeover}${approval}${cancellable}${messageBox}`;
       actions.querySelectorAll('[data-detail-task-action]').forEach(button => {
         button.addEventListener('click', async () => {
           if (button.dataset.detailTaskAction === 'takeover') { openTakeover(button.dataset.taskId); return; }
+          if (button.dataset.detailTaskAction === 'send-hint') { await sendAgentHint(button.dataset.taskId, button); return; }
           await handleRuntimeTaskAction(button.dataset.taskId, button.dataset.detailTaskAction, button);
           closeRuntimeTaskDetail();
         });
@@ -71,6 +81,27 @@
       renderInstanceRuntimeEvents(runtimeTaskEvents(task).slice().reverse());
       document.getElementById('inst-runtime-events')?.classList.remove('hidden');
       if (scrollIntoView) section.scrollIntoView({ block: 'start' });
+    }
+
+    // Send a free-text message to a stuck agent's brain, then resume it. The
+    // workflow injects the message as top-priority guidance on the next round.
+    async function sendAgentHint(taskId, button) {
+      const input = document.getElementById('agent-hint-input');
+      const msg = document.getElementById('agent-hint-msg');
+      const hint = (input && input.value || '').trim();
+      if (!hint) { if (msg) { msg.textContent = 'Type a message first.'; msg.style.color = 'var(--red)'; } return; }
+      const original = button.textContent;
+      button.disabled = true; button.textContent = 'Sending…';
+      try {
+        await api(`/v1/instances/${currentInstance.id}/tasks/${encodeURIComponent(taskId)}/hint`, { method: 'POST', body: JSON.stringify({ hint }) });
+        await api(`/v1/instances/${currentInstance.id}/takeover/${encodeURIComponent(taskId)}/resume`, { method: 'POST' }).catch(() => {});
+        if (msg) { msg.textContent = '✓ Sent — the agent is re-reading the page and continuing.'; msg.style.color = 'var(--green)'; }
+        if (input) input.value = '';
+        setTimeout(() => { closeRuntimeTaskDetail(); if (typeof loadInstanceRuntime === 'function') loadInstanceRuntime(); }, 1400);
+      } catch (e) {
+        if (msg) { msg.textContent = 'Could not send: ' + e.message; msg.style.color = 'var(--red)'; }
+        button.disabled = false; button.textContent = original;
+      }
     }
 
     // Copy the open task's ENTIRE activity log as JSON (to paste for analysis).

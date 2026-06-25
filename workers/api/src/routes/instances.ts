@@ -407,6 +407,21 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/approve", async (c) => {
 });
 
 /** Cancel a runtime task. */
+/** Send free-text guidance to a paused/stuck agent's brain (read on resume). */
+instanceRoutes.post("/:instanceId/tasks/:taskId/hint", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+	const hint = String(body.hint ?? "").trim().slice(0, 2000);
+	if (!hint) return c.json({ error: "hint required" }, 400);
+	await c.env.DB.prepare("UPDATE instance_runtime_tasks SET user_hint = ?1 WHERE id = ?2 AND user_id = ?3")
+		.bind(hint, taskId, session.uid)
+		.run();
+	return c.json({ ok: true });
+});
+
 /** Clear all finished (failed/done/cancelled) tasks from the board. */
 instanceRoutes.post("/:instanceId/tasks/clear-finished", async (c) => {
 	const session = await requireUser(c);

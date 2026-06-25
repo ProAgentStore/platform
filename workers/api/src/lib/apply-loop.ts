@@ -26,6 +26,8 @@ export interface ApplyJob {
 	providedAnswers?: Record<string, string>;
 	/** The user's own rules for this agent (from KB → Special Instructions). */
 	specialInstructions?: string;
+	/** Live free-text message the user sent while the agent was paused/stuck. */
+	userHint?: string;
 	/** Job-search preferences (location/work-type/relocation) that guide answers. */
 	preferences?: { targetRoles?: string; targetLocations?: string; workType?: string; openToRelocation?: string };
 	/** Notes from a previous successful run on this ATS (the per-ATS cache). */
@@ -259,6 +261,9 @@ export function applySystemPrompt(job: ApplyJob): string {
 	const lines = [
 		"You are a job-application agent operating a real web browser through tools.",
 		"You see each page as an ARIA snapshot (roles + accessible names + values). You act ONLY through the provided tools — there are no CSS selectors. Address elements by their role + accessible name exactly as they appear in the snapshot.",
+		job.userHint
+			? `\n‼️ LIVE MESSAGE FROM THE USER — they are watching you right now and just sent this; it describes the CURRENT screen. TRUST IT over your previous assumption: re-read the snapshot fresh and act on this, do NOT repeat the action you were stuck on. Message: "${job.userHint}"\n`
+			: "",
 		job.specialInstructions
 			? `\n★ USER'S SPECIAL INSTRUCTIONS — follow these strictly; they OVERRIDE any default behavior below:\n${job.specialInstructions}\n`
 			: "",

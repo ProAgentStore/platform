@@ -118,6 +118,15 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// widget/text lingers) so the agent fills the form instead of looping.
 			if (result.outcome === "captcha") solvedChallengeUrl = result.url;
 			await step.do(`resume-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId }));
+			// Pull any free-text message the user sent while paused, feed it to the
+			// brain for the next round (highest priority), then clear it.
+			const hint = await step.do(`hint-${round}`, async () => {
+				const row = await env.DB.prepare("SELECT user_hint FROM instance_runtime_tasks WHERE id = ?1 AND user_id = ?2").bind(taskId, userId).first<{ user_hint?: string }>();
+				const h = row?.user_hint ?? null;
+				if (h) await env.DB.prepare("UPDATE instance_runtime_tasks SET user_hint = NULL WHERE id = ?1 AND user_id = ?2").bind(taskId, userId).run();
+				return h;
+			});
+			if (hint) job.userHint = hint; else delete job.userHint;
 		}
 
 		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
