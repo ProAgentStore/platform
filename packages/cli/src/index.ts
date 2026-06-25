@@ -11,7 +11,7 @@ import { loginCommand, logoutCommand, whoamiCommand } from "./commands/login.js"
 import { mcpCommand } from "./commands/mcp.js";
 import { publishCommand } from "./commands/publish.js";
 import { runnerCommand } from "./commands/runner.js";
-import { upCommand } from "./commands/up.js";
+import { downCommand, upCommand } from "./commands/up.js";
 import { writeError } from "./output.js";
 
 const require = createRequire(import.meta.url);
@@ -30,6 +30,7 @@ program.addCommand(loginCommand);
 program.addCommand(logoutCommand);
 program.addCommand(whoamiCommand);
 program.addCommand(upCommand);
+program.addCommand(downCommand);
 program.addCommand(initCommand);
 program.addCommand(checkCommand);
 program.addCommand(publishCommand);

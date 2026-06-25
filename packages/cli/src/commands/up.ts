@@ -1,9 +1,11 @@
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { requireSession } from "./login.js";
 import { writeLine } from "../output.js";
 import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiState } from "../tui.js";
 
 const API_BASE = "https://api.proagentstore.online";
+const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 export const upCommand = new Command("up")
 	.description("Start the browser runner for all your agent instances")
@@ -22,10 +24,11 @@ export const upCommand = new Command("up")
 			registration: "pending",
 			lastEvent: "Fetching instances...",
 			taskCount: 0,
+			version: CLI_VERSION,
 		};
 
 		clearScreen();
-		printLogo();
+		printLogo(CLI_VERSION);
 		printStep("Signed in as " + session.user.login, "ok");
 
 		// Fetch instances
@@ -82,9 +85,11 @@ export const upCommand = new Command("up")
 				logs.push(trimmed);
 				if (logs.length > 200) logs.shift();
 
-				// Parse tunnel URL
+				// Parse the tunnel URL — but ignore cloudflared's own API host
+				// (api.trycloudflare.com), which appears in its logs on reconnect and
+				// would otherwise be registered as a bogus endpoint → "PAGS failed".
 				const tunnelMatch = trimmed.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-				if (tunnelMatch) {
+				if (tunnelMatch && !/^https:\/\/api\.trycloudflare\.com/i.test(tunnelMatch[0])) {
 					state.tunnel = "online";
 					state.tunnelUrl = tunnelMatch[0];
 					state.lastEvent = "Tunnel created";
@@ -189,4 +194,42 @@ export const upCommand = new Command("up")
 				printStatus(state);
 			}
 		}
+	});
+
+export const downCommand = new Command("down")
+	.description("Stop the browser runner and disconnect (cleans up any stuck processes)")
+	.action(async () => {
+		clearScreen();
+		printLogo(CLI_VERSION);
+		if (process.platform === "win32") {
+			writeLine("  On Windows: switch to the 'pags up' window and press Ctrl+C to disconnect.");
+			writeLine("");
+			return;
+		}
+		const { execSync } = await import("node:child_process");
+		// Stop everything the runner spawns: the watchdog, the local browser server,
+		// and its cloudflared tunnel. Scoped patterns so we don't touch unrelated apps.
+		const patterns = [
+			"dist/browser-runner/index.js",
+			"browser-runner/src/index",
+			"runner connect",
+			"tunnel --url http://127.0.0.1",
+		];
+		let stopped = false;
+		for (const p of patterns) {
+			try {
+				execSync(`pkill -f ${JSON.stringify(p)}`, { stdio: "ignore" });
+				stopped = true;
+			} catch {
+				/* nothing matched this pattern — fine */
+			}
+		}
+		if (stopped) {
+			writeLine("  " + "✓ Runner stopped — you're disconnected.");
+			writeLine("");
+			writeLine("  Your agent won't act on the web until you run 'pags up' again.");
+		} else {
+			writeLine("  No runner was running — nothing to stop.");
+		}
+		writeLine("");
 	});

@@ -19,6 +19,9 @@ import {
 	runnerRequestHeaders,
 } from "./runner.js";
 
+// No saved session in tests, so requestPags's session-token fallback resolves to none.
+vi.mock("./login.js", () => ({ loadSession: () => null }));
+
 describe("runner command helpers", () => {
 	beforeEach(() => {
 		vi.unstubAllGlobals();
@@ -110,6 +113,11 @@ describe("runner command helpers", () => {
 			"https://abc-def.trycloudflare.com",
 		);
 		expect(parseCloudflaredTunnelUrl("no tunnel yet")).toBeNull();
+		// cloudflared's own API host must never be picked as the tunnel URL.
+		expect(parseCloudflaredTunnelUrl("Requesting new quick Tunnel on api.trycloudflare.com...")).toBeNull();
+		expect(
+			parseCloudflaredTunnelUrl("conn to api.trycloudflare.com | tunnel https://wise-owl-9.trycloudflare.com ready"),
+		).toBe("https://wise-owl-9.trycloudflare.com");
 	});
 
 	it("normalizes runner URL", () => {

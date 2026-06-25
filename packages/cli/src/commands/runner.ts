@@ -233,7 +233,14 @@ async function resolveCloudflaredCommand(requested?: string): Promise<string> {
 }
 
 export function parseCloudflaredTunnelUrl(text: string): string | null {
-	return text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i)?.[0] || null;
+	// Return the tunnel subdomain, skipping cloudflared's own API host
+	// (api.trycloudflare.com) which appears in its connection logs — registering
+	// that bogus URL is what made PAGS show the runner offline after a reconnect.
+	const matches = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi) || [];
+	for (const m of matches) {
+		if (!/^https:\/\/api\.trycloudflare\.com/i.test(m)) return m;
+	}
+	return null;
 }
 
 export function buildRuntimeRegistrationBody(opts: RuntimeRegisterOptions, capabilities: string[] = []) {
@@ -500,7 +507,11 @@ export function createRunnerCommand(): Command {
 				const first = await openTunnel();
 				tunnel = first.proc;
 				let tunnelUrl = first.url;
-				await registerRuntime(tunnelUrl);
+				// Don't crash if the first registration fails (e.g. WiFi still flaky at
+				// startup) — the heartbeat loop below re-registers until it sticks.
+				await registerRuntime(tunnelUrl).catch((error) => {
+					writeError(`registration will retry (${error instanceof Error ? error.message : String(error)})`);
+				});
 				writeLine("Runtime registered with PAGS ✓");
 				writeLine("");
 				writeLine("═══════════════════════════════════════════════");
@@ -532,7 +543,13 @@ export function createRunnerCommand(): Command {
 						await new Promise((r) => setTimeout(r, 30_000));
 						if (stopped) break;
 						if (await probeTunnel(tunnelUrl)) {
-							await requestPags("POST", heartbeatPath, opts, {}).catch(() => undefined);
+							// Tunnel is up. Heartbeat — and if PAGS doesn't know us (a
+							// blip dropped our registration but the tunnel survived),
+							// re-register so we recover from "PAGS failed" on our own.
+							const beat = await requestPags("POST", heartbeatPath, opts, {}).then(() => true).catch(() => false);
+							if (!beat) {
+								await registerRuntime(tunnelUrl).then(() => writeLine("✅ Re-registered with PAGS")).catch(() => undefined);
+							}
 							continue;
 						}
 						writeLine("⚠ Tunnel unreachable — reconnecting…");
