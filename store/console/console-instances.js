@@ -98,7 +98,7 @@
       slot.innerHTML = `
         <a href="/console/instances" onclick="showDashboard('instances');return false" style="color:var(--muted);text-decoration:none;font-size:1rem;padding:0 0.25rem">&larr;</a>
         <span style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px">${esc(meta.name || 'Agent')}</span>
-        <span id="runtime-status-badge" style="font-size:0.65rem;padding:0.15rem 0.4rem;border-radius:999px;font-weight:700;background:var(--line);color:var(--muted)">...</span>
+        <span id="runtime-status-badge" onclick="showRunnerGuide()" title="What is this? Click for setup help" style="cursor:pointer;font-size:0.65rem;padding:0.15rem 0.4rem;border-radius:999px;font-weight:700;background:var(--line);color:var(--muted)">...</span>
         <div class="inst-nav-tabs">
           <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
           <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')">Board</button>
@@ -498,21 +498,46 @@
           badge.style.background = 'rgba(34,197,94,0.15)'; badge.style.color = 'var(--green)';
         } else if (status === 'offline') {
           badge.textContent = '○ Runner offline';
-          badge.title = 'The runner isn’t reachable — start it: pags up';
+          badge.title = 'Not reachable — click for setup help';
           badge.style.background = 'rgba(239,68,68,0.12)'; badge.style.color = 'var(--red)';
         } else if (rt?.endpointUrl || rt?.endpoint_url) {
-          badge.textContent = '● Runner registered';
-          badge.title = 'Registered but not probed yet';
+          badge.textContent = '● Runner connecting…';
+          badge.title = 'Registered — waiting for the first health check';
           badge.style.background = 'rgba(234,179,8,0.12)'; badge.style.color = 'var(--yellow)';
         } else {
           badge.textContent = '○ No runner';
-          badge.title = ''; badge.style.background = 'var(--line)'; badge.style.color = 'var(--muted)';
+          badge.title = 'No runner connected — click to set one up';
+          badge.style.background = 'var(--line)'; badge.style.color = 'var(--muted)';
         }
       } catch {
         badge.textContent = '○ Runner offline';
-        badge.title = 'The runner isn’t reachable — start it: pags up';
+        badge.title = 'Not reachable — click for setup help';
         badge.style.background = 'rgba(239,68,68,0.12)'; badge.style.color = 'var(--red)';
       }
+    }
+
+    // Guide a non-developer through connecting the local runner (webapp side of
+    // the "how do I get my agent to act?" question). Opens on badge click.
+    function showRunnerGuide() {
+      const open = document.getElementById('runner-guide-overlay');
+      if (open) { open.remove(); return; }
+      const cmd = (text) => `<div style="display:flex;gap:.5rem;align-items:center;margin:.3rem 0"><code style="flex:1;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.45rem .6rem;font-size:.8rem;overflow-x:auto;white-space:nowrap">${esc(text)}</code><button type="button" class="btn btn-outline btn-sm" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent);this.textContent='Copied ✓'">Copy</button></div>`;
+      const o = document.createElement('div');
+      o.id = 'runner-guide-overlay';
+      o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+      o.innerHTML = `<div style="background:var(--card,#1a1a1a);max-width:560px;width:100%;border-radius:14px;padding:1.5rem 1.6rem;max-height:90vh;overflow:auto;border:1px solid var(--line)">
+        <h2 style="margin:0 0 .5rem;font-size:1.15rem">Connect your runner</h2>
+        <p style="color:var(--muted);line-height:1.55;margin:0 0 1.1rem;font-size:.9rem">Your agent acts on real websites through a <b>runner</b> — a small program on <b>your own computer</b> that opens a browser and fills the forms. It must be running for your agent to apply to jobs, and it only runs while you keep its window open.</p>
+        <div style="line-height:1.5">
+          <div style="margin-bottom:.7rem"><b>1. Install it</b> <span style="color:var(--muted);font-size:.8rem">(once)</span>${cmd('npm i -g @proagentstore/cli')}</div>
+          <div style="margin-bottom:.7rem"><b>2. Sign in</b> <span style="color:var(--muted);font-size:.8rem">(once, opens your browser)</span>${cmd('pags login')}</div>
+          <div><b>3. Start it</b> <span style="color:var(--muted);font-size:.8rem">— then leave that window open</span>${cmd('pags up')}</div>
+        </div>
+        <p style="color:var(--muted);font-size:.82rem;line-height:1.5;margin:1.1rem 0 0">When it connects, this badge turns <b style="color:var(--green)">green</b> (give it a few seconds). To stop later: press <code>q</code> in that window, or run <code>pags down</code>.</p>
+        <div style="display:flex;justify-content:flex-end;margin-top:1.25rem"><button type="button" class="btn btn-primary" onclick="document.getElementById('runner-guide-overlay').remove()">Got it</button></div>
+      </div>`;
+      o.addEventListener('click', (e) => { if (e.target === o) o.remove(); });
+      document.body.appendChild(o);
     }
 
     async function clearInstanceChat() {
