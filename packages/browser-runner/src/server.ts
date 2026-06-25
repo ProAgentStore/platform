@@ -108,7 +108,8 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 
 	// ── Brain-driven browser control (remote LLM acts on the live page) ─────
 	if (req.method === "POST" && path === "/browser/snapshot") {
-		return json(res, 200, await runner.browserSnapshot());
+		const b = await readJson<{ taskId?: string }>(req).catch(() => ({}) as { taskId?: string });
+		return json(res, 200, await runner.browserSnapshot(b.taskId));
 	}
 	if (req.method === "POST" && path === "/browser/act") {
 		const body = await readJson<BrowserAction & { resumePath?: string }>(req);

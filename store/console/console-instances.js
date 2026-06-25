@@ -301,9 +301,11 @@
       const approval = task.status === 'needs_approval'
         ? `<button type="button" class="btn btn-primary btn-sm" data-task-action="approve" data-task-id="${esc(task.id)}">Approve</button>`
         : '';
-      const cancellable = ['queued', 'running', 'needs_approval'].includes(task.status)
-        ? `<button type="button" class="btn btn-outline btn-sm" data-task-action="cancel" data-task-id="${esc(task.id)}">Cancel</button>`
+      // Stop halts the agent at the next step (any in-flight action); shown while running.
+      const stoppable = ['queued', 'waiting', 'running', 'needs_approval', 'needs_human'].includes(task.status)
+        ? `<button type="button" class="btn btn-outline btn-sm" data-task-action="cancel" data-task-id="${esc(task.id)}" title="Stop the agent now">⏹ Stop</button>`
         : '';
+      const del = `<button type="button" class="btn btn-outline btn-sm" data-task-action="delete" data-task-id="${esc(task.id)}" title="Delete this ticket">🗑</button>`;
       const takeover = task.status === 'needs_human'
         ? `<button type="button" class="btn btn-primary btn-sm" data-task-action="takeover" data-task-id="${esc(task.id)}">🖥 Take over</button>`
         : '';
@@ -326,7 +328,7 @@
         ${ticker}
         ${error}
         ${output ? `<div style="font-size:0.72rem;color:var(--muted);line-height:1.45;margin-top:0.45rem;overflow-wrap:anywhere">${esc(output)}${output.length >= 180 ? '...' : ''}</div>` : ''}
-        ${approval || cancellable || takeover ? `<div style="display:flex;gap:0.4rem;margin-top:0.65rem;flex-wrap:wrap">${takeover}${approval}${cancellable}</div>` : ''}`;
+        <div style="display:flex;gap:0.4rem;margin-top:0.65rem;flex-wrap:wrap">${takeover}${approval}${stoppable}${del}</div>`;
       card.querySelectorAll('[data-task-action]').forEach(button => {
         button.addEventListener('click', async (event) => {
           event.stopPropagation();
@@ -566,7 +568,16 @@
 
     async function handleRuntimeTaskAction(taskId, action, sourceButton = null) {
       if (!currentInstance || !taskId || !action) return;
-      if (action === 'cancel' && !confirm('Cancel this runtime task?')) return;
+      if (action === 'cancel' && !confirm('Stop the agent on this task now?')) return;
+      if (action === 'delete') {
+        if (!confirm('Delete this ticket? This stops the agent and removes the task.')) return;
+        try {
+          await api(`/v1/instances/${currentInstance.id}/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+          if (currentRuntimeTaskId === taskId) closeRuntimeTaskDetail();
+          await loadInstanceRuntime();
+        } catch (e) { alert('Delete failed: ' + e.message); }
+        return;
+      }
       const suffix = action === 'approve' ? 'approve' : 'cancel';
       const originalText = sourceButton?.textContent;
       if (sourceButton) {
@@ -660,7 +671,9 @@
       const badge = document.getElementById('runtime-status-badge');
       if (!badge) return;
       try {
-        const data = await api(`/v1/instances/${currentInstance.id}/runtime`);
+        // /runtime/status actively PROBES the runner (health + capabilities) and
+        // flips it online/offline — /runtime alone returns the stale "registered".
+        const data = await api(`/v1/instances/${currentInstance.id}/runtime/status`).catch(() => api(`/v1/instances/${currentInstance.id}/runtime`));
         const rt = data.runtime;
         if (rt?.endpointUrl || rt?.endpoint_url) {
           const online = rt.status === 'online';

@@ -593,7 +593,11 @@ export class LocalRunner {
 	 * + values + states) of the active page — the same representation the brain
 	 * acts on via {@link browserAct}. No raw HTML/screenshots → cheap on tokens.
 	 */
-	async browserSnapshot(): Promise<{ url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean }> {
+	async browserSnapshot(taskId?: string): Promise<{ url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean; cancelled?: boolean }> {
+		// If the user pressed Stop, the task is cancelled — tell the brain to halt.
+		if (taskId && this.store.getTask(taskId)?.status === "cancelled") {
+			return { url: "", title: "", snapshot: "", challenge: null, truncated: false, cancelled: true };
+		}
 		const page = await this.getActivePage();
 		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
 		const full = await page.locator("body").ariaSnapshot().catch(() => "");

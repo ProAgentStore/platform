@@ -406,6 +406,20 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/approve", async (c) => {
 });
 
 /** Cancel a runtime task. */
+/** Delete a ticket: stop the runner task (best-effort) + drop it from the board. */
+instanceRoutes.delete("/:instanceId/tasks/:taskId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await getRuntime(c.env, instanceId, session.uid);
+	if (runtime?.endpoint_url) {
+		await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" }).catch(() => undefined);
+	}
+	await deleteMirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
+	return c.json({ ok: true });
+});
+
 instanceRoutes.post("/:instanceId/tasks/:taskId/cancel", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");

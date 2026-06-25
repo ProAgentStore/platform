@@ -51,9 +51,11 @@ export interface PageSnapshot {
 	title: string;
 	snapshot: string;
 	challenge: string | null;
+	/** True when the user pressed Stop — the loop halts immediately. */
+	cancelled?: boolean;
 }
 
-export type ApplyOutcome = "submitted" | "ready" | "expired" | "blocked" | "captcha" | "stuck" | "needs_input" | "failed" | "max_steps";
+export type ApplyOutcome = "submitted" | "ready" | "expired" | "blocked" | "captcha" | "stuck" | "needs_input" | "failed" | "max_steps" | "cancelled";
 
 export interface ApplyDecision {
 	thought?: string;
@@ -110,6 +112,10 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 
 	for (let step = 0; step < maxSteps; step++) {
 		const snap = await deps.snapshot();
+		if (snap.cancelled) {
+			await deps.onEvent?.("agent.cancelled", "Stopped by the user", {});
+			return { outcome: "cancelled", detail: "stopped by the user", url: snap.url, steps: step, transcript: [...actionLog] };
+		}
 		lastUrl = snap.url;
 		// Reset the per-page failure counter whenever we move to a new page.
 		if (snap.url !== pageKey) { pageKey = snap.url; failsOnPage = 0; }
