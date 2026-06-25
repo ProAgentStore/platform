@@ -135,11 +135,13 @@
         // Clicking the Board tab while viewing a task detail must return to the board.
         if (currentRuntimeTaskId) { currentRuntimeTaskId = null; hideRuntimeTaskDetail(); }
         loadUnifiedBoard();
+        startRuntimePolling();
       }
       if (name === 'knowledge') loadKnowledgeBase();
       if (name !== 'board') {
         currentRuntimeTaskId = null;
         hideRuntimeTaskDetail();
+        stopRuntimePolling();
       }
       if (name === 'runtime' && updateUrl) {
         currentRuntimeTaskId = null;
@@ -192,6 +194,46 @@
         renderInstanceTaskBoard([]);
         renderCurrentRuntimeTaskDetail(false);
       }
+    }
+
+    // ── Real-time activity polling ──────────────────────────────
+    // No websocket needed: poll tasks + events on a short interval and update the
+    // view in place (no loading flash). Drives the live activity line on each card
+    // and the live Activity list in the open task detail.
+    let runtimePollTimer = null;
+    const ACTIVE_TASK_STATUSES = ['queued', 'waiting', 'running', 'needs_human'];
+
+    function boardIsVisible() {
+      const panel = document.getElementById('inst-tab-board');
+      return !!panel && panel.classList.contains('active') && !document.hidden;
+    }
+
+    function startRuntimePolling() {
+      stopRuntimePolling();
+      runtimePollTimer = setInterval(refreshRuntimeSilently, 2500);
+    }
+    function stopRuntimePolling() {
+      if (runtimePollTimer) { clearInterval(runtimePollTimer); runtimePollTimer = null; }
+    }
+
+    async function refreshRuntimeSilently() {
+      if (!currentInstance || !boardIsVisible()) { stopRuntimePolling(); return; }
+      try {
+        const [tasksRes, eventsRes] = await Promise.allSettled([
+          api(`/v1/instances/${currentInstance.id}/tasks`),
+          api(`/v1/instances/${currentInstance.id}/task-events?limit=500`),
+        ]);
+        if (tasksRes.status === 'fulfilled') currentRuntimeTasks = tasksRes.value.tasks || currentRuntimeTasks;
+        if (eventsRes.status === 'fulfilled') currentRuntimeEvents = eventsRes.value.events || currentRuntimeEvents;
+        if (currentRuntimeTaskId) {
+          const task = currentRuntimeTasks.find(t => t.id === currentRuntimeTaskId);
+          if (task) renderInstanceRuntimeEvents(runtimeTaskEvents(task).slice().reverse()); // live Activity tab
+        } else {
+          renderInstanceTaskBoard(currentRuntimeTasks); // live cards + running activity line
+        }
+        // Nothing active → stop (loadUnifiedBoard restarts it on next view).
+        if (!currentRuntimeTasks.some(t => ACTIVE_TASK_STATUSES.includes(t.status))) stopRuntimePolling();
+      } catch (e) { /* keep polling */ }
     }
 
     function renderInstanceTaskBoard(tasks) {
@@ -264,6 +306,14 @@
       const takeover = task.status === 'needs_human'
         ? `<button type="button" class="btn btn-primary btn-sm" data-task-action="takeover" data-task-id="${esc(task.id)}">🖥 Take over</button>`
         : '';
+      // Live "running line": the agent's most recent activity, updated each poll.
+      const taskEvents = runtimeTaskEvents(task);
+      const latest = taskEvents.length ? taskEvents[taskEvents.length - 1] : null;
+      const live = ACTIVE_TASK_STATUSES.includes(task.status);
+      const latestMsg = latest ? String(latest.message || latest.type || '') : '';
+      const ticker = latestMsg
+        ? `<div class="rt-ticker${live ? ' rt-ticker-live' : ''}" title="${escAttr(latestMsg)}">${live ? '<span class="rt-dot"></span>' : ''}<span class="rt-ticker-text">${esc(latestMsg)}</span></div>`
+        : '';
       card.innerHTML = `
         <h3>${esc(runtimeTaskTitle(task))}</h3>
         <p>${esc(task.approval?.prompt || (task.input && task.input.url) || task.id)}</p>
@@ -272,6 +322,7 @@
           <span class="tag tag-${esc(task.status || 'queued')}">${esc(String(task.status || 'queued').replace('_', ' '))}</span>
           ${task.requiresApproval ? '<span class="tag">approval</span>' : ''}
         </div>
+        ${ticker}
         ${error}
         ${output ? `<div style="font-size:0.72rem;color:var(--muted);line-height:1.45;margin-top:0.45rem;overflow-wrap:anywhere">${esc(output)}${output.length >= 180 ? '...' : ''}</div>` : ''}
         ${approval || cancellable || takeover ? `<div style="display:flex;gap:0.4rem;margin-top:0.65rem;flex-wrap:wrap">${takeover}${approval}${cancellable}</div>` : ''}`;
@@ -569,6 +620,7 @@
     async function loadUnifiedBoard() {
       await loadInstanceRuntime();
       await loadInstanceApplications();
+      startRuntimePolling(); // live activity while the board is open
     }
 
     // (KB page + Applications kanban moved to console-instances-apps.js)
