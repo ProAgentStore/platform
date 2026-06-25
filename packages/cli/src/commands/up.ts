@@ -7,6 +7,33 @@ import { clearScreen, printLogo, printStatus, printStep, waitForKey, type TuiSta
 const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
+/**
+ * Kill any stale runner/tunnel processes from previous runs. Critical: without
+ * this, every `pags up` / reconnect stacks another runner + cloudflared, they
+ * fight over ports, and the health check hits the wrong one → 401. The user's
+ * runner may be on a remote machine they can't clean by hand, so we self-clean.
+ */
+async function stopRunnerProcesses(): Promise<boolean> {
+	if (process.platform === "win32") return false;
+	const { execSync } = await import("node:child_process");
+	const patterns = [
+		"dist/browser-runner/index.js",
+		"browser-runner/src/index",
+		"runner connect",
+		"tunnel --url http://127.0.0.1",
+	];
+	let stopped = false;
+	for (const p of patterns) {
+		try {
+			execSync(`pkill -f ${JSON.stringify(p)}`, { stdio: "ignore" });
+			stopped = true;
+		} catch {
+			/* nothing matched — fine */
+		}
+	}
+	return stopped;
+}
+
 export const upCommand = new Command("up")
 	.description("Start the browser runner for all your agent instances")
 	.option("--headless", "Run browser in headless mode")
@@ -62,6 +89,10 @@ export const upCommand = new Command("up")
 		const target = instances[0];
 		state.activeInstance = target.name || target.slug || target.id.slice(0, 8);
 		printStep(`Connecting: ${state.activeInstance}`, "wait");
+
+		// Clean slate: kill any stale runner/tunnel from a previous run so they don't
+		// pile up and cause port fights / 401s (esp. on a remote machine).
+		await stopRunnerProcesses();
 
 		// Spawn runner connect as child process
 		const { spawn } = await import("node:child_process");
@@ -206,24 +237,7 @@ export const downCommand = new Command("down")
 			writeLine("");
 			return;
 		}
-		const { execSync } = await import("node:child_process");
-		// Stop everything the runner spawns: the watchdog, the local browser server,
-		// and its cloudflared tunnel. Scoped patterns so we don't touch unrelated apps.
-		const patterns = [
-			"dist/browser-runner/index.js",
-			"browser-runner/src/index",
-			"runner connect",
-			"tunnel --url http://127.0.0.1",
-		];
-		let stopped = false;
-		for (const p of patterns) {
-			try {
-				execSync(`pkill -f ${JSON.stringify(p)}`, { stdio: "ignore" });
-				stopped = true;
-			} catch {
-				/* nothing matched this pattern — fine */
-			}
-		}
+		const stopped = await stopRunnerProcesses();
 		if (stopped) {
 			writeLine("  " + "✓ Runner stopped — you're disconnected.");
 			writeLine("");
