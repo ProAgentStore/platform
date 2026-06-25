@@ -56,11 +56,15 @@
         const data = await api('/v1/profile');
         candidateProfileFields = data.fields || [];
         const p = data.profile || {};
-        box.innerHTML = candidateProfileFields.map(f => `
-          <div${f.key === 'website' || f.key === 'linkedin' || f.key === 'workAuthorization' ? ' style="grid-column:1/-1"' : ''}>
+        const fieldHtml = f => `
+          <div${f.group === 'preferences' || f.key === 'website' || f.key === 'linkedin' || f.key === 'workAuthorization' ? ' style="grid-column:1/-1"' : ''}>
             <label style="font-size:0.74rem;color:var(--muted);font-weight:600">${esc(f.label)}${f.private ? ' <span style="color:var(--muted-soft)">· private</span>' : ''}</label>
             <input id="cp-${esc(f.key)}" value="${esc(p[f.key] || '')}" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem">
-          </div>`).join('');
+          </div>`;
+        const identity = candidateProfileFields.filter(f => f.group !== 'preferences');
+        const prefs = candidateProfileFields.filter(f => f.group === 'preferences');
+        box.innerHTML = identity.map(fieldHtml).join('')
+          + (prefs.length ? `<div style="grid-column:1/-1;margin-top:0.6rem;font-weight:700;font-size:0.86rem">Job Preferences <span style="font-weight:400;color:var(--muted);font-size:0.76rem">— what you want; guides the agent's answers (location, work type, relocation)</span></div>` + prefs.map(fieldHtml).join('') : '');
       } catch (e) { box.innerHTML = '<p style="font-size:0.8rem;color:var(--muted)">Could not load candidate profile.</p>'; }
     }
 

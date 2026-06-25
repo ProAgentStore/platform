@@ -24,6 +24,8 @@ export interface ApplyJob {
 	providedAnswers?: Record<string, string>;
 	/** The user's own rules for this agent (from KB → Special Instructions). */
 	specialInstructions?: string;
+	/** Job-search preferences (location/work-type/relocation) that guide answers. */
+	preferences?: { targetRoles?: string; targetLocations?: string; workType?: string; openToRelocation?: string };
 	/** Notes from a previous successful run on this ATS (the per-ATS cache). */
 	cacheHint?: string;
 }
@@ -250,6 +252,15 @@ export function applySystemPrompt(job: ApplyJob): string {
 		c.portfolio ? `- Portfolio: ${c.portfolio}` : "",
 		c.workAuthorization ? `- Work authorization: ${c.workAuthorization}` : "",
 		c.salaryExpectation ? `- Salary expectation: ${c.salaryExpectation}` : "",
+		...(job.preferences && (job.preferences.targetLocations || job.preferences.workType || job.preferences.openToRelocation || job.preferences.targetRoles)
+			? [
+				"JOB PREFERENCES (use to answer location / work-type / relocation / willingness questions consistently):",
+				job.preferences.targetRoles ? `  • Target roles: ${job.preferences.targetRoles}` : "",
+				job.preferences.targetLocations ? `  • Target locations: ${job.preferences.targetLocations}` : "",
+				job.preferences.workType ? `  • Work type: ${job.preferences.workType}` : "",
+				job.preferences.openToRelocation ? `  • Open to relocation: ${job.preferences.openToRelocation}` : "",
+			]
+			: []),
 		...(job.providedAnswers && Object.keys(job.providedAnswers).length
 			? ["- Values you asked the user for (use these, don't ask again):", ...Object.entries(job.providedAnswers).map(([k, v]) => `  • ${k}: ${v}`)]
 			: []),

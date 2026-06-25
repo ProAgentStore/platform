@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
-import { getProfile, profileToCandidate } from "../lib/profile.js";
+import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
 import { createNotification } from "./notifications.js";
 import type { Env } from "../types.js";
 import {
@@ -478,7 +478,9 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 	// Candidate identity comes from the structured Profile — the single source of
 	// truth — so the agent fills real values and never invents. Request fields
 	// override only if explicitly provided.
-	const prof = profileToCandidate(await getProfile(c.env, session.uid));
+	const rawProfile = await getProfile(c.env, session.uid);
+	const prof = profileToCandidate(rawProfile);
+	const prefs = profileToPreferences(rawProfile);
 	const instanceCfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	// A saved credential for this site (the vault) is authoritative — its real
 	// password lets the brain sign in to an existing account, and its username is
@@ -511,6 +513,8 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 		dryRun: body.dryRun === true || body.dry_run === true,
 		// The user's own rules for this agent — injected high-priority into the prompt.
 		specialInstructions: optionalStr(instanceCfg.specialInstructions),
+		// Job-search preferences (location/work-type/relocation) — guide the agent's answers.
+		preferences: prefs,
 	};
 
 	// Create the agent-driven task on the runner (the board card + activity +

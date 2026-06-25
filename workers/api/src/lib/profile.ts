@@ -5,32 +5,42 @@ export type Profile = Record<string, string | undefined>;
 
 export interface ProfileFieldDef {
 	key: string; // camelCase API key
-	column: string; // D1 column
+	/** D1 column; omitted for fields stored in the `custom` JSON (no migration). */
+	column?: string;
 	label: string; // human label (console + prompts)
 	/** Private fields are gated behind per-instance consent (Phase 2). */
 	private: boolean;
+	/** Grouping for the UI: "identity" (candidate info) or "preferences" (what they want). */
+	group?: "identity" | "preferences";
 }
 
 /**
- * The standard candidate-profile schema the platform offers to agents. Order
- * matches the INSERT column order in upsertProfile.
+ * The standard candidate-profile schema the platform offers to agents. Column
+ * order matches the INSERT in upsertProfile; column-less fields live in `custom`.
  */
 export const PROFILE_FIELDS: ProfileFieldDef[] = [
-	{ key: "firstName", column: "first_name", label: "First name", private: false },
-	{ key: "lastName", column: "last_name", label: "Last name", private: false },
-	{ key: "email", column: "email", label: "Email", private: false },
-	{ key: "phone", column: "phone", label: "Phone", private: true },
-	{ key: "city", column: "city", label: "City", private: true },
-	{ key: "state", column: "state", label: "State/Region", private: true },
-	{ key: "country", column: "country", label: "Country", private: false },
-	{ key: "postalCode", column: "postal_code", label: "Postal code", private: true },
-	{ key: "linkedin", column: "linkedin", label: "LinkedIn", private: false },
-	{ key: "website", column: "website", label: "Website/Portfolio", private: false },
-	{ key: "workAuthorization", column: "work_authorization", label: "Work authorization", private: false },
-	{ key: "salaryExpectation", column: "salary_expectation", label: "Salary expectation", private: true },
+	{ key: "firstName", column: "first_name", label: "First name", private: false, group: "identity" },
+	{ key: "lastName", column: "last_name", label: "Last name", private: false, group: "identity" },
+	{ key: "email", column: "email", label: "Email", private: false, group: "identity" },
+	{ key: "phone", column: "phone", label: "Phone", private: true, group: "identity" },
+	{ key: "city", column: "city", label: "City", private: true, group: "identity" },
+	{ key: "state", column: "state", label: "State/Region", private: true, group: "identity" },
+	{ key: "country", column: "country", label: "Country", private: false, group: "identity" },
+	{ key: "postalCode", column: "postal_code", label: "Postal code", private: true, group: "identity" },
+	{ key: "linkedin", column: "linkedin", label: "LinkedIn", private: false, group: "identity" },
+	{ key: "website", column: "website", label: "Website/Portfolio", private: false, group: "identity" },
+	{ key: "workAuthorization", column: "work_authorization", label: "Work authorization", private: false, group: "identity" },
+	{ key: "salaryExpectation", column: "salary_expectation", label: "Salary expectation", private: true, group: "identity" },
+	// Job preferences (what you want) — stored in `custom`, no migration. They guide
+	// the agent's answers (location / work-type / relocation) and are the basis for
+	// future job discovery.
+	{ key: "targetRoles", label: "Target roles / titles", private: false, group: "preferences" },
+	{ key: "targetLocations", label: "Target locations", private: false, group: "preferences" },
+	{ key: "workType", label: "Work type (Remote / Hybrid / Onsite)", private: false, group: "preferences" },
+	{ key: "openToRelocation", label: "Open to relocation? (Yes / No)", private: false, group: "preferences" },
 ];
 
-const COL_BY_KEY = new Map(PROFILE_FIELDS.map((f) => [f.key, f.column]));
+const COL_BY_KEY = new Map(PROFILE_FIELDS.filter((f) => f.column).map((f) => [f.key, f.column as string]));
 
 /** The user's structured profile as a flat camelCase map (empty if none yet). */
 export async function getProfile(env: Env, userId: string): Promise<Profile> {
@@ -38,6 +48,7 @@ export async function getProfile(env: Env, userId: string): Promise<Profile> {
 	const p: Profile = {};
 	if (!row) return p;
 	for (const f of PROFILE_FIELDS) {
+		if (!f.column) continue; // column-less fields come from `custom` below
 		const v = row[f.column];
 		if (v != null && String(v) !== "") p[f.key] = String(v);
 	}
@@ -83,6 +94,11 @@ export async function upsertProfile(env: Env, userId: string, fields: Profile): 
 /** Set a single profile field (used by the apply agent's ask-and-hold). */
 export async function setProfileField(env: Env, userId: string, key: string, value: string): Promise<void> {
 	await upsertProfile(env, userId, { [key]: value });
+}
+
+/** The user's job-search preferences (what they want), for the apply prompt. */
+export function profileToPreferences(p: Profile): { targetRoles?: string; targetLocations?: string; workType?: string; openToRelocation?: string } {
+	return { targetRoles: p.targetRoles, targetLocations: p.targetLocations, workType: p.workType, openToRelocation: p.openToRelocation };
 }
 
 /**
