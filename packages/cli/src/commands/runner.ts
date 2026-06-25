@@ -444,61 +444,94 @@ export function createRunnerCommand(): Command {
 				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId });
 				writeLine(`Local FAGS runtime healthy at ${localUrl}`);
 
-				const tunnelUrl = await new Promise<string>((resolveTunnel, reject) => {
-					let output = "";
-					resolveCloudflaredCommand(opts.cloudflared)
-						.then((cloudflared) => {
-							tunnel = spawn(cloudflared, buildCloudflaredArgs(localUrl), {
-								stdio: ["ignore", "pipe", "pipe"],
-								shell: process.platform === "win32",
-							});
-							const onData = (data: Buffer) => {
-								const text = data.toString("utf-8");
-								output += text;
-								process.stderr.write(text);
-								const parsed = parseCloudflaredTunnelUrl(output);
-								if (parsed) resolveTunnel(parsed);
-							};
-							tunnel.stdout?.on("data", onData);
-							tunnel.stderr?.on("data", onData);
-							tunnel.on("error", reject);
-							tunnel.on("exit", (code) => {
-								if (code && code !== 0) reject(new Error(`cloudflared exited with code ${code}`));
-							});
-						})
-						.catch(reject);
-					setTimeout(() => reject(new Error("timed out waiting for cloudflared tunnel URL")), 45_000).unref();
-				});
+				const cloudflaredPath = await resolveCloudflaredCommand(opts.cloudflared);
 
-				writeLine(`Tunnel ready: ${tunnelUrl}`);
+				// Spawn a cloudflared quick tunnel; resolve once its public URL appears.
+				const openTunnel = (): Promise<{ url: string; proc: ReturnType<typeof spawn> }> =>
+					new Promise((resolveTunnel, reject) => {
+						let output = "";
+						const proc = spawn(cloudflaredPath, buildCloudflaredArgs(localUrl), {
+							stdio: ["ignore", "pipe", "pipe"],
+							shell: process.platform === "win32",
+						});
+						const onData = (data: Buffer) => {
+							output += data.toString("utf-8");
+							const parsed = parseCloudflaredTunnelUrl(output);
+							if (parsed) resolveTunnel({ url: parsed, proc });
+						};
+						proc.stdout?.on("data", onData);
+						proc.stderr?.on("data", onData);
+						proc.on("error", reject);
+						setTimeout(() => reject(new Error("timed out waiting for cloudflared tunnel URL")), 45_000).unref();
+					});
 
-				const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", {
-					url: localUrl,
-					token: runnerToken,
-					instanceId,
-				});
-				await requestPags("POST", `/v1/instances/${apiPathSegment(instanceId)}/runtime`, opts, {
-					endpointUrl: tunnelUrl,
-					token: runnerToken,
-					placement: "local",
-					capabilities: Array.isArray(capabilities.capabilities)
-						? capabilities.capabilities.filter((item): item is string => typeof item === "string")
-						: [],
-					runnerVersion: clean(opts.runnerVersion) || "",
-				});
+				// (Re-)register the current tunnel URL with PAGS.
+				const registerRuntime = async (url: string): Promise<void> => {
+					const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId });
+					await requestPags("POST", `/v1/instances/${apiPathSegment(instanceId)}/runtime`, opts, {
+						endpointUrl: url,
+						token: runnerToken,
+						placement: "local",
+						capabilities: Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [],
+						runnerVersion: clean(opts.runnerVersion) || "",
+					});
+				};
+
+				const first = await openTunnel();
+				tunnel = first.proc;
+				let tunnelUrl = first.url;
+				await registerRuntime(tunnelUrl);
 				writeLine("Runtime registered with PAGS ✓");
 				writeLine("");
 				writeLine("═══════════════════════════════════════════════");
 				writeLine("  ✅ CONNECTED — Browser runner is live");
 				writeLine(`  Instance: ${instanceId.slice(0, 8)}...`);
 				writeLine(`  Tunnel:   ${tunnelUrl}`);
-				writeLine("  The agent can now submit applications via browser.");
-				writeLine("  Keep this terminal open. Press Ctrl+C to disconnect.");
+				writeLine("  Auto-reconnect is on — keep this terminal open. Ctrl+C to disconnect.");
 				writeLine("═══════════════════════════════════════════════");
-				await new Promise<void>((resolvePromise) => {
-					runner.on("exit", () => resolvePromise());
-					tunnel?.on("exit", () => resolvePromise());
-				});
+
+				// Watchdog: cloudflared quick tunnels drop SILENTLY (process stays up,
+				// public URL stops routing → PAGS probe fails → offline). Probe the
+				// public URL ourselves; respawn + re-register when it dies, heartbeat
+				// otherwise. This is what keeps the runner reliably online.
+				let stopped = false;
+				const heartbeatPath = `/v1/instances/${apiPathSegment(instanceId)}/runtime/heartbeat`;
+				const probeTunnel = async (url: string): Promise<boolean> => {
+					try {
+						const res = await fetch(`${url.replace(/\/$/, "")}/health`, {
+							headers: { Authorization: `Bearer ${runnerToken}`, "X-PAGS-Instance-Id": instanceId },
+							signal: AbortSignal.timeout(8_000),
+						});
+						return res.ok;
+					} catch {
+						return false;
+					}
+				};
+				void (async () => {
+					while (!stopped) {
+						await new Promise((r) => setTimeout(r, 30_000));
+						if (stopped) break;
+						if (await probeTunnel(tunnelUrl)) {
+							await requestPags("POST", heartbeatPath, opts, {}).catch(() => undefined);
+							continue;
+						}
+						writeLine("⚠ Tunnel unreachable — reconnecting…");
+						try { if (tunnel && !tunnel.killed) tunnel.kill("SIGTERM"); } catch { /* ignore */ }
+						try {
+							const next = await openTunnel();
+							tunnel = next.proc;
+							tunnelUrl = next.url;
+							await registerRuntime(tunnelUrl);
+							writeLine(`✅ Reconnected: ${tunnelUrl}`);
+						} catch (error) {
+							writeError(`reconnect failed (${error instanceof Error ? error.message : String(error)}); retrying in 30s`);
+						}
+					}
+				})();
+
+				// Stay alive until the runner process exits — the tunnel self-heals.
+				await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
+				stopped = true;
 			} catch (error) {
 				shutdown();
 				throw error;
