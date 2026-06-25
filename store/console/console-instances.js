@@ -131,7 +131,11 @@
       // Single scroll: lock body when chat is active
       document.body.classList.toggle('chat-active', name === 'chat');
       currentInstanceTab = name;
-      if (name === 'board') loadUnifiedBoard();
+      if (name === 'board') {
+        // Clicking the Board tab while viewing a task detail must return to the board.
+        if (currentRuntimeTaskId) { currentRuntimeTaskId = null; hideRuntimeTaskDetail(); }
+        loadUnifiedBoard();
+      }
       if (name === 'knowledge') loadKnowledgeBase();
       if (name !== 'board') {
         currentRuntimeTaskId = null;
@@ -440,6 +444,27 @@
       poll();
     }
 
+    // A human-readable task title (the raw type like "job.apply_agent" is useless).
+    // For an apply task, derive "<job slug> · <host>" from the job URL.
+    function runtimeTaskTitle(task) {
+      if (task && task.title) return task.title;
+      const url = task && task.input && (task.input.url || task.input.URL);
+      if (url) {
+        try {
+          const u = new URL(url);
+          const host = u.hostname.replace(/^(www|careers|job-boards|jobs|boards|apply)\./, '');
+          const slug = u.pathname.split('/').filter(Boolean)
+            .find(s => s.length > 8 && /[a-z]{3}/i.test(s) && !/^en[_-]|^\d+$/i.test(s));
+          const nice = slug
+            ? slug.replace(/[-_]+/g, ' ').replace(/\b(en|gb|us|au|vic|nsw|qld|wa|sa|tas|act|nt)\b/gi, '').replace(/\s{2,}/g, ' ').trim().replace(/\b\w/g, c => c.toUpperCase())
+            : '';
+          return nice ? `${nice} · ${host}` : `Job application · ${host}`;
+        } catch (e) { /* fall through */ }
+      }
+      const t = (task && task.type) || 'Runtime task';
+      return t.indexOf('job.apply') === 0 ? 'Job application' : t;
+    }
+
     function runtimeTaskCard(task) {
       const card = document.createElement('article');
       card.className = 'kanban-card';
@@ -458,8 +483,8 @@
         ? `<button type="button" class="btn btn-primary btn-sm" data-task-action="takeover" data-task-id="${esc(task.id)}">🖥 Take over</button>`
         : '';
       card.innerHTML = `
-        <h3>${esc(task.type || 'task')}</h3>
-        <p>${esc(task.approval?.prompt || task.id)}</p>
+        <h3>${esc(runtimeTaskTitle(task))}</h3>
+        <p>${esc(task.approval?.prompt || (task.input && task.input.url) || task.id)}</p>
         <div style="font-size:0.7rem;color:var(--muted-soft);margin-bottom:0.45rem">Updated ${esc(formatTime(task.updatedAt || task.createdAt))}</div>
         <div class="kanban-card-meta">
           <span class="tag tag-${esc(task.status || 'queued')}">${esc(String(task.status || 'queued').replace('_', ' '))}</span>
@@ -599,7 +624,7 @@
       const body = document.getElementById('runtime-task-detail-body');
       const actions = document.getElementById('runtime-task-detail-actions');
       const events = runtimeTaskEvents(task);
-      title.textContent = task.type || 'Runtime task';
+      title.textContent = runtimeTaskTitle(task);
       status.innerHTML = `
         <span class="tag tag-${esc(task.status || 'queued')}">${esc(String(task.status || 'queued').replace('_', ' '))}</span>
         ${task.requiresApproval ? '<span class="tag">approval</span>' : ''}
@@ -682,11 +707,9 @@
       document.getElementById('runtime-task-detail').classList.add('hidden');
       document.getElementById('runtime-task-detail-actions').innerHTML = '';
       document.getElementById('inst-unified-board').classList.remove('hidden');
-      // Back on the board: restore the cross-task "Recent Activity" feed.
-      const heading = document.getElementById('inst-activity-heading');
-      if (heading) heading.textContent = 'Recent Activity';
-      renderInstanceRuntimeEvents((currentRuntimeEvents || []).slice(0, 25));
-      document.getElementById('inst-runtime-events')?.classList.remove('hidden');
+      // Board shows only the kanban — per-task activity lives in each task's
+      // detail (Activity tab), so don't clutter the board with a cross-task feed.
+      document.getElementById('inst-runtime-events')?.classList.add('hidden');
     }
 
     async function handleRuntimeTaskAction(taskId, action, sourceButton = null) {
