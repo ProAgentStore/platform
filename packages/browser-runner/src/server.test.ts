@@ -134,32 +134,6 @@ describe("runner server", () => {
 		});
 	});
 
-	it("returns 400 for job tasks with missing local resume files", async () => {
-		const res = await fetch(`${url}/tasks`, {
-			method: "POST",
-			headers: {
-				Authorization: "Bearer secret",
-				"X-PAGS-Instance-Id": "inst-1",
-				"Content-Type": "application/json",
-			},
-			body: JSON.stringify({
-				type: "job.apply_authenticated",
-				input: {
-					url: "https://example.com/jobs/1",
-					resumePath: "/resumes/test-candidate-resume.pdf",
-					candidate: {
-						fullName: "Test Candidate",
-						email: "candidate@example.com",
-					},
-				},
-			}),
-		});
-		expect(res.status).toBe(400);
-		await expect(res.json()).resolves.toMatchObject({
-			error: "job application requires an existing local resumePath",
-		});
-	});
-
 	it("rejects the wrong PAGS instance id when bound", async () => {
 		const res = await fetch(`${url}/health`, {
 			headers: {

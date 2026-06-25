@@ -9,23 +9,17 @@ import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from 
 import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
 import { performBrowserAction } from "./browser-actions.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
-import {
-	detectAuthRequirement,
-	fillBasicApplicationForm,
-	fillLoginForm,
-	fillRegistrationForm,
-	findLoginUrl,
-	findRegisterUrl,
-	isRecord,
-	normalizeAuthenticatedJobInput,
-	normalizeJobApplicationInput,
-	stringValue,
-	submitApplicationForm,
-	submitForm,
-	type AuthenticatedJobInput,
-	type JobApplicationInput,
-} from "./apply-form.js";
 import { RunnerStore } from "./store.js";
+
+/** True for a plain object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Coerce a value to a trimmed string ("" for non-strings). */
+function stringValue(value: unknown): string {
+	return typeof value === "string" ? value.trim() : "";
+}
 import type {
 	BrowserAction,
 	CreateTaskRequest,
@@ -35,10 +29,7 @@ import type {
 	TakeoverInput,
 } from "./types.js";
 
-// Re-exported for back-compat with existing importers (server.ts + tests).
 export { HumanHandoffError, RunnerInputError } from "./errors.js";
-export { normalizeJobApplicationInput, normalizeAuthenticatedJobInput } from "./apply-form.js";
-export type { JobApplicationInput, AuthenticatedJobInput } from "./apply-form.js";
 
 const CAPABILITIES: RunnerCapability[] = [
 	"browser.playwright",
@@ -52,7 +43,7 @@ const CAPABILITIES: RunnerCapability[] = [
 /** How many times a task may attempt an action before handing off to a human. */
 export const MAX_AUTONOMOUS_ATTEMPTS = 3;
 
-const APPROVAL_REQUIRED_TASKS = new Set(["browser.open", "job.apply_basic", "job.apply_authenticated"]);
+const APPROVAL_REQUIRED_TASKS = new Set(["browser.open"]);
 const require = createRequire(import.meta.url);
 
 
@@ -89,7 +80,7 @@ export class LocalRunner {
 			runtimePlane: "fags",
 			runnerRole: "tool-executor",
 			capabilities: CAPABILITIES,
-			taskTypes: ["echo", "browser.open", "job.apply_basic", "job.apply_authenticated", "job.apply_agent"],
+			taskTypes: ["echo", "browser.open", "job.apply_agent"],
 			approvalRequiredFor: [...APPROVAL_REQUIRED_TASKS],
 		};
 	}
@@ -239,9 +230,8 @@ export class LocalRunner {
 		// Keep this page alive and register a remote-control session so a human
 		// can view the screen and solve the challenge from the PAGS console.
 		this.takeovers.set(task.id, { page });
-		const isApply = task.type === "job.apply_basic" || task.type === "job.apply_authenticated";
 		throw new HumanHandoffError(
-			`Human verification required (${challenge}). A person must take over to solve it${isApply ? " and submit this application" : ""}.`,
+			`Human verification required (${challenge}). A person must take over to solve it.`,
 			{ reason: "challenge", challengeType: challenge, url: page.url(), attempts: 1, screenshotBase64 },
 		);
 	}
@@ -394,36 +384,19 @@ export class LocalRunner {
 			return { submitted: false, reason: `The ${challenge} challenge isn't solved yet — complete it in the live view, then submit again.` };
 		}
 
+		// Only browser.open reaches here now (job.apply_agent returns above) — it just
+		// needs the challenge cleared, no form submit.
 		this.addTaskEvent(task, "job.resumed", "Human cleared the challenge; resuming");
-		const beforeSubmitUrl = page.url();
-		// Application tasks finish by submitting the form; other tasks (e.g.
-		// browser.open / a captcha test) just need the challenge cleared.
-		const submitsForm = task.type === "job.apply_basic" || task.type === "job.apply_authenticated";
-		if (submitsForm) {
-			try {
-				const navigation = page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15_000 }).catch(() => null);
-				this.addTaskEvent(task, "job.form.submit.started", "Submitting application form", { url: beforeSubmitUrl });
-				await submitApplicationForm(page);
-				await navigation;
-				await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
-			} catch (error) {
-				const reason = error instanceof Error ? error.message : String(error);
-				this.addTaskEvent(task, "job.resume.blocked", reason);
-				return { submitted: false, reason };
-			}
-		}
-
 		const output = {
 			taskType: task.type,
-			submitted: submitsForm,
+			submitted: false,
 			challengeCleared: true,
 			resumedAfterHuman: true,
-			beforeSubmitUrl,
 			finalUrl: page.url(),
 			title: await page.title().catch(() => ""),
 			visibleText: (await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")).slice(0, 1_500),
 		};
-		this.addTaskEvent(task, submitsForm ? "job.form.submit.completed" : "task.resumed.completed", submitsForm ? "Application submitted after human takeover" : "Challenge cleared after human takeover", output);
+		this.addTaskEvent(task, "task.resumed.completed", "Challenge cleared after human takeover", output);
 		task.status = "completed";
 		task.output = output;
 		task.error = undefined;
@@ -503,185 +476,7 @@ export class LocalRunner {
 			this.addTaskEvent(task, "browser.goto.completed", "Browser page loaded", output);
 			return output;
 		}
-		if (task.type === "job.apply_basic") {
-			return this.applyToBasicJob(task);
-		}
-		if (task.type === "job.apply_authenticated") {
-			return this.applyToAuthenticatedJob(task);
-		}
 		throw new Error(`Unknown task type: ${task.type}`);
-	}
-
-	private async applyToBasicJob(task: RunnerTask): Promise<unknown> {
-		const job = normalizeJobApplicationInput(task.input);
-		const context = await this.getBrowserContext();
-		const page = context.pages()[0] || (await context.newPage());
-		// Any file chooser (résumé, supporting docs) auto-attaches via Playwright,
-		// including if the flow hands off and a human clicks upload in takeover.
-		this.armFileAutoAttach(page, job.resumePath);
-		this.addTaskEvent(task, "browser.goto.started", "Opening job application page", {
-			url: job.url,
-		});
-		await page.goto(job.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-		this.addTaskEvent(task, "browser.goto.completed", "Job application page loaded", {
-			url: page.url(),
-			title: await page.title(),
-		});
-
-		this.addTaskEvent(task, "job.form.fill.started", "Filling application form", {
-			candidate: {
-				fullName: job.candidate.fullName,
-				email: job.candidate.email,
-			},
-			resumeFile: basename(job.resumePath),
-		});
-		const filledFields = await fillBasicApplicationForm(page, job);
-		this.addTaskEvent(task, "job.form.filled", "Application form fields completed", {
-			fieldsFilled: filledFields,
-			resumeFile: basename(job.resumePath),
-		});
-		await this.guardHumanChallenge(task, page);
-		const beforeSubmitUrl = page.url();
-		const navigation = page.waitForNavigation({
-			waitUntil: "domcontentloaded",
-			timeout: 15_000,
-		}).catch(() => null);
-		this.addTaskEvent(task, "job.form.submit.started", "Submitting application form", {
-			url: beforeSubmitUrl,
-		});
-		await submitApplicationForm(page);
-		await navigation;
-		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
-
-		const output = {
-			taskType: "job.apply_basic",
-			submitted: true,
-			beforeSubmitUrl,
-			finalUrl: page.url(),
-			title: await page.title(),
-			fieldsFilled: filledFields,
-			resumeFile: basename(job.resumePath),
-			visibleText: (await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")).slice(0, 2_000),
-		};
-		this.addTaskEvent(task, "job.form.submit.completed", "Application submission completed", output);
-		return output;
-	}
-
-	/**
-	 * Apply to a job that requires login/registration first.
-	 * Flow: navigate → detect login requirement → register or login → fill form → submit
-	 */
-	private async applyToAuthenticatedJob(task: RunnerTask): Promise<unknown> {
-		const input = normalizeAuthenticatedJobInput(task.input);
-		const context = await this.getBrowserContext();
-		const page = context.pages()[0] || (await context.newPage());
-
-		// Step 1: Navigate to job page
-		this.addTaskEvent(task, "browser.goto.started", "Opening job page", { url: input.url });
-		await page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-		this.addTaskEvent(task, "browser.goto.completed", "Job page loaded", {
-			url: page.url(),
-			title: await page.title(),
-		});
-
-		// Step 2: Check if we need to authenticate
-		const needsAuth = await detectAuthRequirement(page);
-		if (needsAuth) {
-			this.addTaskEvent(task, "job.auth.required", "Authentication required", {
-				loginDetected: true,
-			});
-
-			// Navigate to login page
-			const loginUrl = input.loginUrl || await findLoginUrl(page, input.url);
-			if (!loginUrl) throw new Error("Login required but no login URL found");
-
-			await page.goto(loginUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-
-			if (input.registration && !input.accountExists) {
-				// Register first
-				this.addTaskEvent(task, "job.auth.register.started", "Registering new account");
-				const registerUrl = await findRegisterUrl(page, loginUrl);
-				if (registerUrl && registerUrl !== loginUrl) {
-					await page.goto(registerUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-				}
-				await fillRegistrationForm(page, input.registration);
-				await submitForm(page);
-				await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
-				this.addTaskEvent(task, "job.auth.register.completed", "Registration submitted", {
-					url: page.url(),
-				});
-			} else if (input.credentials) {
-				// Login with existing credentials
-				this.addTaskEvent(task, "job.auth.login.started", "Logging in");
-				await fillLoginForm(page, input.credentials);
-				await submitForm(page);
-				await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
-				this.addTaskEvent(task, "job.auth.login.completed", "Login submitted", {
-					url: page.url(),
-				});
-			} else {
-				throw new Error("Login required but no credentials or registration details provided");
-			}
-
-			// Verify we're logged in (check for common indicators)
-			const stillNeedsAuth = await detectAuthRequirement(page);
-			if (stillNeedsAuth) {
-				// Try navigating back to the apply page — some sites redirect after login
-				const applyUrl = input.url.includes("/apply") ? input.url : `${input.url}`;
-				await page.goto(applyUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-				const thirdCheck = await detectAuthRequirement(page);
-				if (thirdCheck) {
-					throw new Error("Authentication failed — still seeing login/register prompts after login attempt");
-				}
-			}
-
-			// Navigate to apply page (may have been redirected after login)
-			if (!page.url().includes("apply")) {
-				await page.goto(input.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-			}
-		}
-
-		// Step 3: Look for the apply form (might be on current page or linked)
-		const applyLink = await page.locator('a[href*="apply"], a:has-text("Apply")').first();
-		if (await applyLink.count() > 0) {
-			await humanApproach(page, await applyLink.boundingBox().catch(() => null));
-			await applyLink.click();
-			await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
-		}
-
-		// Step 4: Fill the application form
-		this.addTaskEvent(task, "job.form.fill.started", "Filling application form");
-		const filledFields = await fillBasicApplicationForm(page, input);
-		this.addTaskEvent(task, "job.form.filled", "Form fields completed", {
-			fieldsFilled: filledFields,
-			resumeFile: basename(input.resumePath),
-		});
-		await this.guardHumanChallenge(task, page);
-
-		// Step 5: Submit
-		const beforeSubmitUrl = page.url();
-		const navigation = page.waitForNavigation({
-			waitUntil: "domcontentloaded",
-			timeout: 15_000,
-		}).catch(() => null);
-		this.addTaskEvent(task, "job.form.submit.started", "Submitting application");
-		await submitApplicationForm(page);
-		await navigation;
-		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
-
-		const output = {
-			taskType: "job.apply_authenticated",
-			submitted: true,
-			authenticated: needsAuth,
-			beforeSubmitUrl,
-			finalUrl: page.url(),
-			title: await page.title(),
-			fieldsFilled: filledFields,
-			resumeFile: basename(input.resumePath),
-			visibleText: (await page.locator("body").innerText({ timeout: 5_000 }).catch(() => "")).slice(0, 2_000),
-		};
-		this.addTaskEvent(task, "job.form.submit.completed", "Application submitted", output);
-		return output;
 	}
 
 	private requireTask(id: string): RunnerTask {
@@ -987,14 +782,9 @@ function normalizeCreateTaskRequest(request: CreateTaskRequest): Required<Create
 	};
 }
 
-function validateTaskInput(type: string, input: Record<string, unknown>): void {
-	if (type === "job.apply_basic") {
-		normalizeJobApplicationInput(input);
-		return;
-	}
-	if (type === "job.apply_authenticated") {
-		normalizeAuthenticatedJobInput(input);
-	}
+function validateTaskInput(_type: string, _input: Record<string, unknown>): void {
+	// The agent-driven apply (job.apply_agent) validates inputs in the workflow;
+	// no runner-side schema validation needed for the remaining task types.
 }
 
 export function fileUrl(path: string): string {

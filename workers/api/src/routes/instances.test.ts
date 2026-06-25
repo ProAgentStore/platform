@@ -208,18 +208,18 @@ describe("runtime task protocol shape", () => {
 		});
 	});
 
-	it("normalizes job.apply_basic tasks as approval-required at the PAGS boundary", () => {
+	it("normalizes browser.open tasks as approval-required at the PAGS boundary", () => {
 		expect(
 			normalizeRunnerTaskBody({
-				type: "job.apply_basic",
+				type: "browser.open",
 				input: { url: "https://example.com/jobs/1" },
 				requiresApproval: false,
 			}),
 		).toMatchObject({
-			type: "job.apply_basic",
+			type: "browser.open",
 			input: { url: "https://example.com/jobs/1" },
 			requiresApproval: true,
-			approvalPrompt: "Approve task job.apply_basic",
+			approvalPrompt: "Approve task browser.open",
 		});
 	});
 

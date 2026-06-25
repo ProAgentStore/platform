@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LocalRunner, normalizeJobApplicationInput } from "./runner.js";
+import { LocalRunner } from "./runner.js";
 import { RunnerStore } from "./store.js";
 
 describe("LocalRunner", () => {
@@ -33,8 +33,7 @@ describe("LocalRunner", () => {
 			runnerRole: "tool-executor",
 		});
 		expect(runner.capabilities().capabilities).toContain("browser.playwright");
-		expect(runner.capabilities().taskTypes).toContain("job.apply_basic");
-		expect(runner.capabilities().approvalRequiredFor).toContain("job.apply_basic");
+		expect(runner.capabilities().taskTypes).toContain("job.apply_agent");
 	});
 
 	it("runs echo tasks without approval", async () => {
@@ -85,76 +84,6 @@ describe("LocalRunner", () => {
 		});
 		expect(task.status).toBe("needs_approval");
 		expect(task.requiresApproval).toBe(true);
-	});
-
-	it("requires approval for basic job application tasks", () => {
-		const resumePath = join(dir, "resume.txt");
-		writeFileSync(resumePath, "Resume body");
-		const task = runner.createTask({
-			type: "job.apply_basic",
-			input: {
-				url: "https://example.com/jobs/1",
-				resumePath,
-				candidate: {
-					fullName: "Test Candidate",
-					email: "candidate@example.com",
-				},
-			},
-		});
-
-		expect(task.status).toBe("needs_approval");
-		expect(task.requiresApproval).toBe(true);
-	});
-
-	it("rejects job application tasks with missing local resume files before approval", () => {
-		expect(() => runner.createTask({
-			type: "job.apply_authenticated",
-			input: {
-				url: "https://example.com/jobs/1",
-				resumePath: "/resumes/test-candidate-resume.pdf",
-				candidate: {
-					fullName: "Test Candidate",
-					email: "candidate@example.com",
-				},
-			},
-		})).toThrow("existing local resumePath");
-		expect(runner.store.listTasks()).toHaveLength(0);
-	});
-
-	it("validates basic job application input", () => {
-		const resumePath = join(dir, "resume.txt");
-		writeFileSync(resumePath, "Resume body");
-
-		expect(normalizeJobApplicationInput({
-			url: "https://example.com/jobs/1",
-			resumePath,
-			candidate: {
-				fullName: " Test Candidate ",
-				email: " candidate@example.com ",
-				phone: " +1 555 0100 ",
-			},
-			coverNote: " Interested ",
-		})).toMatchObject({
-			url: "https://example.com/jobs/1",
-			resumePath,
-			candidate: {
-				fullName: "Test Candidate",
-				email: "candidate@example.com",
-				phone: "+1 555 0100",
-			},
-			coverNote: "Interested",
-		});
-
-		expect(() => normalizeJobApplicationInput({
-			url: "ftp://example.com/jobs/1",
-			resumePath,
-			candidate: { fullName: "Test", email: "candidate@example.com" },
-		})).toThrow("http");
-		expect(() => normalizeJobApplicationInput({
-			url: "https://example.com/jobs/1",
-			resumePath: join(dir, "missing.txt"),
-			candidate: { fullName: "Test", email: "candidate@example.com" },
-		})).toThrow("resumePath");
 	});
 
 	it("does not share empty store arrays across fresh data directories", () => {

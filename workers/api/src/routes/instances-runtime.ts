@@ -73,7 +73,7 @@ export interface RuntimeTaskEventMirrorRow {
 	payload: string;
 }
 
-const APPROVAL_REQUIRED_RUNNER_TASKS = new Set(["browser.open", "job.apply_basic"]);
+const APPROVAL_REQUIRED_RUNNER_TASKS = new Set(["browser.open"]);
 const CLOUDFLARE_AI_SETUP_TASK_TYPE = "setup.cloudflare_workers_ai";
 const FAGS_RUNTIME_SETUP_TASK_TYPE = "setup.fags_browser_runtime";
 
