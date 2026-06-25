@@ -77,8 +77,10 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// and re-enter the loop until the application reaches a terminal outcome.
 		let result: ApplyResult = { outcome: "failed", detail: "did not start", steps: 0 };
 		const transcript: string[] = [];
+		let ignoreFirstChallenge = false; // set after a captcha resume (see below)
 		for (let round = 0; round < 12; round++) {
-			result = await runApplyLoop(deps, job, { maxSteps: 60 });
+			result = await runApplyLoop(deps, job, { maxSteps: 60, ignoreFirstChallenge });
+			ignoreFirstChallenge = false;
 			transcript.push(...(result.transcript ?? []));
 			if (result.outcome !== "captcha" && result.outcome !== "stuck" && result.outcome !== "needs_input") break;
 
@@ -110,6 +112,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				await step.do(`save-input-${round}`, async () => { await setProfileField(env, userId, guessProfileKey(field), value); return null; });
 				job.providedAnswers = { ...(job.providedAnswers ?? {}), [field]: value };
 			}
+			// After a solved captcha, ignore the lingering "not a robot" text on the
+			// next snapshot so the agent proceeds to fill the form instead of looping.
+			if (result.outcome === "captcha") ignoreFirstChallenge = true;
 			await step.do(`resume-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId }));
 		}
 

@@ -90,8 +90,13 @@ export interface ApplyDeps {
  * forces a human handoff. Pure orchestration over {@link ApplyDeps} so it can be
  * unit-tested without a browser, an LLM, or a deployed Workflow.
  */
-export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number } = {}): Promise<ApplyResult> {
+export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number; ignoreFirstChallenge?: boolean } = {}): Promise<ApplyResult> {
 	const maxSteps = opts.maxSteps ?? 40;
+	// After a human solves a captcha, its "not a robot" text often lingers on the
+	// page, so the very first snapshot would re-detect it and bounce straight back
+	// to a handoff — a ping-pong that never fills anything. Skip the captcha check
+	// on the first snapshot after a resume so the agent can actually proceed.
+	let skipChallenge = opts.ignoreFirstChallenge === true;
 	const actionLog: string[] = [];
 	let lastUrl = "";
 	let lastActionKey = "";
@@ -107,10 +112,11 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		if (snap.url !== pageKey) { pageKey = snap.url; failsOnPage = 0; }
 
 		// A CAPTCHA can't be solved by the model — hand off to the human, same session.
-		if (snap.challenge) {
+		if (snap.challenge && !skipChallenge) {
 			await deps.onEvent?.("agent.captcha", `CAPTCHA detected (${snap.challenge}) — handing off`, { challenge: snap.challenge, url: snap.url });
 			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
+		skipChallenge = false; // only the first post-resume snapshot is exempt
 
 		const decision = await deps.decide({ job, actionLog, snapshot: snap });
 		await deps.onEvent?.(

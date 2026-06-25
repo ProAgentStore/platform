@@ -212,7 +212,10 @@
               <div id="runtime-task-detail-status" class="kanban-card-meta"></div>
               <h3 id="runtime-task-detail-title">Task Details</h3>
             </div>
-            <button type="button" class="btn btn-outline btn-sm" onclick="closeRuntimeTaskDetail()">Back to board</button>
+            <div style="display:flex;gap:0.4rem;flex-shrink:0">
+              <button type="button" class="btn btn-outline btn-sm" onclick="copyTaskActivity(event)" title="Copy this task's full activity log as JSON">&#128203; Copy log</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="closeRuntimeTaskDetail()">Back to board</button>
+            </div>
           </div>
           <div id="runtime-task-detail-body" class="runtime-detail-body"></div>
           <div id="runtime-task-detail-actions" class="runtime-detail-actions"></div>

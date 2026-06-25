@@ -517,6 +517,24 @@
       if (scrollIntoView) section.scrollIntoView({ block: 'start' });
     }
 
+    // Copy the open task's ENTIRE activity log as JSON (to paste for analysis).
+    async function copyTaskActivity(evt) {
+      const btn = evt?.target?.closest('button');
+      if (!currentRuntimeTaskId) return;
+      const task = (currentRuntimeTasks || []).find(t => t.id === currentRuntimeTaskId) || { id: currentRuntimeTaskId };
+      const events = runtimeTaskEvents(task).map(e => ({
+        type: e.type,
+        message: e.message || '',
+        data: e.data || undefined,
+        timestamp: e.createdAt || e.created_at,
+      }));
+      const payload = { taskId: task.id, type: task.type, status: task.status, url: task.input && task.input.url, count: events.length, events };
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+        if (btn) { const o = btn.innerHTML; btn.textContent = `Copied ${events.length} ✓`; setTimeout(() => { btn.innerHTML = o; }, 1800); }
+      } catch (e) { alert('Copy failed: ' + e.message); }
+    }
+
     function openRuntimeTaskDetail(task, updateUrl = true) {
       if (!task?.id || !currentInstance) return;
       currentRuntimeTaskId = task.id;
