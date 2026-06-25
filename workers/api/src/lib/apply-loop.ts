@@ -18,6 +18,8 @@ export interface ApplyJob {
 	coverNote?: string;
 	/** Stable password to use when an ATS requires an account (same every run). */
 	password?: string;
+	/** True if a credential is stored for this host → sign in; false → create account. */
+	hasStoredLogin?: boolean;
 	/** Test mode: fill everything and reach Submit, but DON'T click it. */
 	dryRun?: boolean;
 	/** Values the user supplied mid-run via ask-and-hold (field label → value). */
@@ -269,8 +271,12 @@ export function applySystemPrompt(job: ApplyJob): string {
 		job.password ? `- Account password: ${job.password} — use EXACTLY this in both Password and Confirm password. Never invent a different password.` : "",
 		"",
 		"ACCOUNT:",
-		"- If the site requires an account to apply, create one with the candidate email + the account password above.",
-		"- If the email is ALREADY REGISTERED (you see 'already exists', 'account exists', 'email is taken', or it asks you to sign in), do NOT keep trying to register — choose Sign in / Log in and use the same email + the account password above.",
+		job.hasStoredLogin
+			? "- You HAVE a saved login for this site. If it asks you to sign in or register, choose **Sign in / Log in** and use the candidate email + the account password above."
+			: "- You have NO saved login for this site (this is your first application here). If the page offers BOTH 'Sign in' and 'Create an account' / 'Register', choose **Create an account** and register with the candidate email + the account password above. Do NOT try to Sign in first — the account does not exist yet.",
+		"- After clicking 'Create an account' / 'Register', a registration FORM appears — fill it (name, email, password, confirm password) and submit it. Do NOT click the 'Create an account' link again; act on the new form fields in the snapshot.",
+		"- If you try to register and the email is ALREADY REGISTERED ('already exists', 'email is taken'), switch to Sign in / Log in with the same email + the account password above.",
+		"- Some sites email a verification/confirmation link after registration. If you're blocked waiting on email verification and have no way to read it, call finish(status:\"blocked\", detail:\"email verification required to continue\").",
 		"",
 		"RULES:",
 		"- Do exactly ONE tool call per turn — the next page snapshot follows.",

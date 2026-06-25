@@ -509,6 +509,8 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 		// Saved credential password wins (lets the brain sign into the real existing
 		// account); else the stable derived password for a first-time signup.
 		password: cred?.password ?? optionalStr(body.password) ?? (await deriveJobPassword(c.env, session.uid)),
+		// A stored credential for this host → sign in; otherwise create an account.
+		hasStoredLogin: !!cred,
 		// Test mode: fill everything but stop at the final Submit (no real application sent).
 		dryRun: body.dryRun === true || body.dry_run === true,
 		// The user's own rules for this agent — injected high-priority into the prompt.
