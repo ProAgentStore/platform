@@ -161,7 +161,22 @@ export async function performBrowserAction(page: Page, action: BrowserAction, cl
 		case "wait":
 			await page.waitForTimeout(Math.min(5_000, action.ms ?? 1_000));
 			break;
-		default:
-			throw new RunnerInputError(`Unknown browser action: ${(action as BrowserAction).action}`);
+		default: {
+			const name = String((action as BrowserAction).action || "");
+			// The brain sometimes invents click variants (triple_click / double_click
+			// to select a field's text before retyping). Handle them generically
+			// rather than failing the whole task — clickCount selects the text.
+			if (/click/i.test(name)) {
+				const loc = locate();
+				const clickCount = /triple/i.test(name) ? 3 : /double|dbl/i.test(name) ? 2 : 1;
+				if (!(await loc.click({ clickCount, timeout: 6_000 }).then(() => true).catch(() => false))) {
+					await clickRobustly(page, loc);
+				}
+				break;
+			}
+			throw new RunnerInputError(
+				`Unsupported action "${name}". Use one of: click, type, select, check, upload, navigate, scroll, key, wait. To clear or replace a field, use "type" — it overwrites the existing value.`,
+			);
+		}
 	}
 }
