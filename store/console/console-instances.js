@@ -5,6 +5,7 @@
     let currentRuntimeTasks = [];
     let currentRuntimeEvents = [];
     let currentRuntimeTaskId = null;
+    let runtimeBadgeTimer = null;
     // Board shows only active tasks (waiting/running/needs you) by default so the
     // task that needs your attention isn't buried under old runs.
     let showAllRuntimeTasks = false;
@@ -107,6 +108,12 @@
       switchInstTab(tab, false);
       loadInstanceMessages();
       checkRuntimeStatus();
+      // Keep the runner badge live: re-probe every 8s while this instance is open.
+      if (runtimeBadgeTimer) clearInterval(runtimeBadgeTimer);
+      runtimeBadgeTimer = setInterval(() => {
+        const page = document.getElementById('instance-detail');
+        if (currentInstance && page && !page.classList.contains('hidden')) checkRuntimeStatus();
+      }, 8000);
       if (updateUrl) {
         const detailPath = tab === 'board' && runtimeTaskId
           ? `/instances/${encodeURIComponent(instanceId)}/board/tasks/${encodeURIComponent(runtimeTaskId)}`
@@ -483,23 +490,27 @@
         // flips it online/offline — /runtime alone returns the stale "registered".
         const data = await api(`/v1/instances/${currentInstance.id}/runtime/status`).catch(() => api(`/v1/instances/${currentInstance.id}/runtime`));
         const rt = data.runtime;
-        if (rt?.endpointUrl || rt?.endpoint_url) {
-          const online = rt.status === 'online';
-          badge.textContent = online ? '● Runner online' : '● Runner registered';
-          badge.title = rt.endpointUrl || rt.endpoint_url;
-          badge.style.background = online ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.12)';
-          badge.style.color = online ? 'var(--green)' : 'var(--yellow)';
+        const status = rt ? String(rt.status || 'registered') : 'none';
+        if (status === 'online') {
+          badge.textContent = '● Runner online';
+          badge.title = rt.endpointUrl || rt.endpoint_url || '';
+          badge.style.background = 'rgba(34,197,94,0.15)'; badge.style.color = 'var(--green)';
+        } else if (status === 'offline') {
+          badge.textContent = '○ Runner offline';
+          badge.title = 'The runner isn’t reachable — start it: pags up';
+          badge.style.background = 'rgba(239,68,68,0.12)'; badge.style.color = 'var(--red)';
+        } else if (rt?.endpointUrl || rt?.endpoint_url) {
+          badge.textContent = '● Runner registered';
+          badge.title = 'Registered but not probed yet';
+          badge.style.background = 'rgba(234,179,8,0.12)'; badge.style.color = 'var(--yellow)';
         } else {
           badge.textContent = '○ No runner';
-          badge.title = '';
-          badge.style.background = 'var(--line)';
-          badge.style.color = 'var(--muted)';
+          badge.title = ''; badge.style.background = 'var(--line)'; badge.style.color = 'var(--muted)';
         }
       } catch {
-        badge.textContent = '○ No runner';
-        badge.title = '';
-        badge.style.background = 'var(--line)';
-        badge.style.color = 'var(--muted)';
+        badge.textContent = '○ Runner offline';
+        badge.title = 'The runner isn’t reachable — start it: pags up';
+        badge.style.background = 'rgba(239,68,68,0.12)'; badge.style.color = 'var(--red)';
       }
     }
 
