@@ -821,15 +821,36 @@ export class LocalRunner {
 				if (!action.url || !/^https?:\/\//.test(action.url)) throw new RunnerInputError("navigate requires an http(s) url");
 				await page.goto(action.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
 				break;
-			case "type":
-				await locate().fill(String(action.text ?? ""), { timeout: 10_000 });
+			case "type": {
+				const text = String(action.text ?? "");
+				const loc = locate();
+				// Plain fill, then combobox/label fill (the field may be a combobox or
+				// typeahead, not a bare textbox), then click + keyboard type (typeaheads).
+				if (await loc.fill(text, { timeout: 6_000 }).then(() => true).catch(() => false)) break;
+				if (action.name && (await page.getByRole("combobox", { name: action.name }).fill(text, { timeout: 3_000 }).then(() => true).catch(() => false))) break;
+				if (action.name && (await page.getByLabel(action.name).fill(text, { timeout: 3_000 }).then(() => true).catch(() => false))) break;
+				await this.clickRobustly(page, loc);
+				await page.keyboard.type(text, { delay: 15 }).catch(() => undefined);
 				break;
+			}
 			case "click":
 				if (!(await this.clickRobustly(page, locate()))) throw new RunnerInputError("could not click the target");
 				break;
-			case "select":
-				await locate().selectOption({ label: String(action.text ?? "") }, { timeout: 10_000 }).catch(() => locate().selectOption(String(action.text ?? ""), { timeout: 10_000 }));
+			case "select": {
+				const value = String(action.text ?? "");
+				const loc = locate();
+				// 1. Native <select>.
+				if (await loc.selectOption({ label: value }, { timeout: 4_000 }).then(() => true).catch(() => false)) break;
+				if (await loc.selectOption(value, { timeout: 3_000 }).then(() => true).catch(() => false)) break;
+				// 2. Custom React combobox: open it, then click the matching option /
+				//    suggestion. Covers ATS dropdowns + typeahead selects.
+				await this.clickRobustly(page, loc);
+				await page.waitForTimeout(400).catch(() => undefined);
+				const opt = page.getByRole("option", { name: value, exact: false }).first();
+				if ((await opt.count().catch(() => 0)) > 0) { await this.clickRobustly(page, opt); break; }
+				await page.getByText(value, { exact: false }).first().click({ timeout: 4_000, force: true }).catch(() => undefined);
 				break;
+			}
 			case "check": {
 				const loc = locate();
 				// Custom checkboxes hide the real <input> (opacity:0 / behind a label /
