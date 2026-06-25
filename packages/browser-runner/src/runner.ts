@@ -1041,8 +1041,11 @@ export class LocalRunner {
 		// A stuck handoff resumes only when the human explicitly clicks Resume —
 		// there's nothing to auto-detect.
 		if (session?.reason === "stuck") return { solved: !!session.humanDone, challenge: null };
+		// A challenge resumes when the token/widget clears OR the human clicks Done —
+		// custom captchas (e.g. PageUp's "not a robot") have no detectable token, so
+		// the human's explicit Done is the authority; never strand them.
 		const challenge = await detectHumanChallenge(page);
-		const solved = !challenge || (await challengeSolved(page));
+		const solved = !challenge || (await challengeSolved(page)) || !!session?.humanDone;
 		return { solved, challenge };
 	}
 
