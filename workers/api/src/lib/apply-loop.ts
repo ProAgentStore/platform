@@ -22,6 +22,8 @@ export interface ApplyJob {
 	dryRun?: boolean;
 	/** Values the user supplied mid-run via ask-and-hold (field label → value). */
 	providedAnswers?: Record<string, string>;
+	/** The user's own rules for this agent (from KB → Special Instructions). */
+	specialInstructions?: string;
 	/** Notes from a previous successful run on this ATS (the per-ATS cache). */
 	cacheHint?: string;
 }
@@ -231,6 +233,9 @@ export function applySystemPrompt(job: ApplyJob): string {
 	const lines = [
 		"You are a job-application agent operating a real web browser through tools.",
 		"You see each page as an ARIA snapshot (roles + accessible names + values). You act ONLY through the provided tools — there are no CSS selectors. Address elements by their role + accessible name exactly as they appear in the snapshot.",
+		job.specialInstructions
+			? `\n★ USER'S SPECIAL INSTRUCTIONS — follow these strictly; they OVERRIDE any default behavior below:\n${job.specialInstructions}\n`
+			: "",
 		"",
 		job.dryRun
 			? "Goal (TEST MODE): walk the whole application — Apply, any account/login, every form step, screening questions, résumé upload — and fill EVERYTHING, but DO NOT submit. When the form is fully filled and you've reached the final Submit/Send button, call finish(status:\"ready\", detail:\"<what you filled / what the submit button says>\"). Never click the final submit."
@@ -269,7 +274,7 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"- When you see a submission confirmation, call finish(status:\"submitted\") with the confirmation text.",
 		"- If you genuinely cannot proceed truthfully, call finish(status:\"blocked\") explaining why.",
 		"- Be decisive and brief. Do not narrate.",
-		job.cacheHint ? `\nNOTES FROM A PRIOR SUCCESSFUL RUN ON THIS ATS (use to move faster):\n${job.cacheHint}` : "",
+		job.cacheHint ? `\nNOTES FROM A PRIOR RUN ON THIS ATS (what worked AND what failed — reuse the good steps, avoid the failed ones):\n${job.cacheHint}` : "",
 	];
 	return lines.filter((l) => l !== "").join("\n");
 }

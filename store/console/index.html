@@ -227,6 +227,7 @@
         <button type="button" class="tab" data-kb-tab="memory" onclick="switchKbTab('memory')">Memory</button>
         <button type="button" class="tab" data-kb-tab="files" onclick="switchKbTab('files')">Files</button>
         <button type="button" class="tab" data-kb-tab="credentials" onclick="switchKbTab('credentials')">Credentials</button>
+        <button type="button" class="tab" data-kb-tab="rules" onclick="switchKbTab('rules')">Rules &amp; Tips</button>
         <button type="button" class="tab" data-kb-tab="chat" onclick="switchKbTab('chat')">Chat</button>
       </div>
       <div data-kb-panel="docs">
@@ -304,6 +305,21 @@
         </div>
         <div id="inst-cred-list" class="memory-list"></div>
         <div id="inst-cred-empty" class="empty hidden" style="padding:1rem">No credentials saved yet.</div>
+      </div>
+      <div data-kb-panel="rules" hidden>
+        <h3 style="font-size:1rem;font-weight:700;margin:0 0 0.4rem">📋 Special Instructions</h3>
+        <p style="font-size:0.74rem;color:var(--muted);margin:0 0 0.5rem">Rules this agent must follow when working your tasks — about execution, what data to use or avoid, tone, anything. Injected at the <b>top of the agent's prompt</b> (overrides defaults).</p>
+        <textarea id="inst-special-instructions" placeholder="e.g.
+- Never apply to roles that require relocation or on-site.
+- For salary, use the exact range in my Profile — don't convert currencies.
+- Decline every voluntary demographic question.
+- If unsure about any answer, ask me — don't guess." style="min-height:130px;width:100%;font-family:inherit"></textarea>
+        <div style="margin-top:0.5rem"><button type="button" onclick="saveInstructions()" class="btn btn-primary btn-sm">Save instructions</button> <span id="inst-instr-status" style="font-size:0.78rem;color:var(--muted)"></span></div>
+        <hr style="border:none;border-top:1px solid var(--line);margin:1.1rem 0">
+        <h3 style="font-size:1rem;font-weight:700;margin:0 0 0.4rem">🧠 What the agent learned (per site)</h3>
+        <p style="font-size:0.74rem;color:var(--muted);margin:0 0 0.6rem">Full transparency: the exact steps the agent took on each ATS — <b>what worked and what failed</b> — reused to do better next time.</p>
+        <div id="inst-tips-list" class="memory-list"></div>
+        <div id="inst-tips-empty" class="empty hidden" style="padding:1rem">No site runs yet — tips appear after the agent works a job.</div>
       </div>
       <div data-kb-panel="chat" hidden>
         <div class="create-form" style="padding:0;overflow:hidden;display:flex;flex-direction:column">

@@ -107,9 +107,10 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 
 		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
 
-		// Remember the route that worked, for the next application to this ATS.
-		if (result.outcome === "submitted" && transcript.length) {
-			await step.do("save-cache", async () => { await saveAtsCache(env, userId, host, transcript); return null; });
+		// Remember this run's path (what worked AND what failed) for the next
+		// application to this ATS + the transparency view — not just on submit.
+		if (transcript.length) {
+			await step.do("save-cache", async () => { await saveAtsCache(env, userId, host, transcript, result.outcome); return null; });
 		}
 		return result;
 	}

@@ -9,7 +9,41 @@
       loadKbMemory();
       loadKbFiles();
       loadCredentials();
+      loadInstructionsTips();
       loadKbChatHistory();
+    }
+
+    // ── Special Instructions + learned per-ATS tips (transparency) ──
+    async function loadInstructionsTips() {
+      const ta = document.getElementById('inst-special-instructions');
+      if (ta) { try { const d = await api(`/v1/instances/${currentInstance.id}/instructions`); ta.value = d.instructions || ''; } catch (e) {} }
+      const list = document.getElementById('inst-tips-list');
+      const empty = document.getElementById('inst-tips-empty');
+      if (!list) return;
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/apply-tips`);
+        const tips = d.tips || [];
+        if (empty) empty.classList.toggle('hidden', tips.length > 0);
+        list.innerHTML = tips.map(t => {
+          const n = (t.notes || '').split('\n').length;
+          const failed = (t.notes || '').match(/FAILED/g);
+          return `<div class="memory-item">
+            <div class="key">${esc(t.host)} <span class="type">${esc(t.outcome || '?')}</span> <span class="type">${t.steps || 0} steps</span>${failed ? ` <span class="type" style="color:#c0392b">${failed.length} failed</span>` : ''}</div>
+            <div class="content"><details><summary style="cursor:pointer;color:var(--muted)">show the ${n} steps the agent took</summary><pre style="white-space:pre-wrap;font-size:0.76rem;margin-top:0.4rem;font-family:ui-monospace,monospace">${esc(t.notes || '')}</pre></details></div>
+            <div style="font-size:0.7rem;color:var(--muted-soft);margin-top:0.3rem">updated ${esc(String(t.updatedAt || '').slice(0,16))}</div>
+          </div>`;
+        }).join('');
+      } catch (e) { list.innerHTML = '<div class="empty" style="padding:1rem">Could not load tips.</div>'; }
+    }
+
+    async function saveInstructions() {
+      const ta = document.getElementById('inst-special-instructions');
+      const status = document.getElementById('inst-instr-status');
+      if (!ta) return;
+      try {
+        await api(`/v1/instances/${currentInstance.id}/instructions`, { method: 'PUT', body: JSON.stringify({ instructions: ta.value }) });
+        if (status) { status.textContent = 'Saved ✓'; setTimeout(() => { status.textContent = ''; }, 2500); }
+      } catch (e) { if (status) status.textContent = 'Save failed'; }
     }
 
     // ── Credentials vault ───────────────────────────────────────

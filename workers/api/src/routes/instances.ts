@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { deriveJobPassword } from "../lib/apply-cache.js";
+import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate } from "../lib/profile.js";
 import { createNotification } from "./notifications.js";
@@ -327,6 +327,37 @@ instanceRoutes.post("/:instanceId/takeover/:taskId/resume", async (c) => {
 	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
 });
 
+/** Read the instance's special instructions (rules the agent must follow). */
+instanceRoutes.get("/:instanceId/instructions", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	return c.json({ instructions: typeof cfg.specialInstructions === "string" ? cfg.specialInstructions : "" });
+});
+
+/** Update the instance's special instructions. */
+instanceRoutes.put("/:instanceId/instructions", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { instructions?: unknown };
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	cfg.specialInstructions = String(body.instructions ?? "").slice(0, 4000);
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, session.uid)
+		.run();
+	return c.json({ ok: true });
+});
+
+/** The agent's learned per-ATS tips (what worked + failed) — full transparency. */
+instanceRoutes.get("/:instanceId/apply-tips", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json({ tips: await listAtsCache(c.env, session.uid) });
+});
+
 /** Supply the value the apply agent asked for (ask-and-hold / needs_input handoff). */
 instanceRoutes.post("/:instanceId/input", async (c) => {
 	const session = await requireUser(c);
@@ -448,6 +479,7 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 	// truth — so the agent fills real values and never invents. Request fields
 	// override only if explicitly provided.
 	const prof = profileToCandidate(await getProfile(c.env, session.uid));
+	const instanceCfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	// A saved credential for this site (the vault) is authoritative — its real
 	// password lets the brain sign in to an existing account, and its username is
 	// the login identity. This is what makes repeat applications "just work".
@@ -477,6 +509,8 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 		password: cred?.password ?? optionalStr(body.password) ?? (await deriveJobPassword(c.env, session.uid)),
 		// Test mode: fill everything but stop at the final Submit (no real application sent).
 		dryRun: body.dryRun === true || body.dry_run === true,
+		// The user's own rules for this agent — injected high-priority into the prompt.
+		specialInstructions: optionalStr(instanceCfg.specialInstructions),
 	};
 
 	// Create the agent-driven task on the runner (the board card + activity +
@@ -815,6 +849,16 @@ function optionalStr(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** Read the instance's JSON config (client-side settings incl. specialInstructions). */
+async function readInstanceConfig(env: Env, instanceId: string, userId: string): Promise<Record<string, unknown>> {
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ config: string }>();
+	try {
+		return JSON.parse(row?.config || "{}") as Record<string, unknown>;
+	} catch {
+		return {};
+	}
 }
 
 /**

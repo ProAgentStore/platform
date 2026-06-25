@@ -33,15 +33,23 @@ export async function getAtsCacheHint(env: Env, userId: string, host: string): P
 	return row?.notes || undefined;
 }
 
-/** Record the action path that just succeeded on this ATS, for next time. */
-export async function saveAtsCache(env: Env, userId: string, host: string, transcript: string[]): Promise<void> {
+/** Record the action path (incl. what failed) from a run on this ATS, for next time + transparency. */
+export async function saveAtsCache(env: Env, userId: string, host: string, transcript: string[], outcome = "submitted"): Promise<void> {
 	if (!host || transcript.length === 0) return;
 	const notes = transcript.map((a, i) => `${i + 1}. ${a}`).join("\n");
 	await env.DB.prepare(
-		`INSERT INTO ats_apply_cache (user_id, host, notes, steps, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, datetime('now'))
-		 ON CONFLICT(user_id, host) DO UPDATE SET notes = excluded.notes, steps = excluded.steps, updated_at = excluded.updated_at`,
+		`INSERT INTO ats_apply_cache (user_id, host, notes, steps, outcome, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
+		 ON CONFLICT(user_id, host) DO UPDATE SET notes = excluded.notes, steps = excluded.steps, outcome = excluded.outcome, updated_at = excluded.updated_at`,
 	)
-		.bind(userId, host, notes, transcript.length)
+		.bind(userId, host, notes, transcript.length, outcome)
 		.run();
+}
+
+/** All the user's per-ATS learnings (for the transparency view). */
+export async function listAtsCache(env: Env, userId: string): Promise<Array<{ host: string; outcome?: string; steps?: number; notes: string; updatedAt: string }>> {
+	const res = await env.DB.prepare("SELECT host, outcome, steps, notes, updated_at FROM ats_apply_cache WHERE user_id = ?1 ORDER BY updated_at DESC")
+		.bind(userId)
+		.all<{ host: string; outcome: string | null; steps: number | null; notes: string; updated_at: string }>();
+	return (res.results ?? []).map((r) => ({ host: r.host, outcome: r.outcome ?? undefined, steps: r.steps ?? undefined, notes: r.notes, updatedAt: r.updated_at }));
 }
