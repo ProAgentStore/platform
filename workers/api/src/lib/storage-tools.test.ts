@@ -229,12 +229,14 @@ describe("storage tools", () => {
 		expect(body.input.url).toBe("https://example.com/jobs/1");
 	});
 
-	it("does not create job application task without local resume path", async () => {
+	it("does not create job application task without a résumé on file", async () => {
 		const engine = makeEngine();
 		const runtime = mockRuntimeEnv();
 		const fetchMock = vi.fn();
 		vi.stubGlobal("fetch", fetchMock);
 
+		// No résumé uploaded (mock env has no stored résumé) and no resume_path →
+		// the apply must refuse, not invent a file.
 		const result = await executeStorageTool(
 			{
 				name: "submit_job_application",
@@ -249,7 +251,7 @@ describe("storage tools", () => {
 		);
 
 		expect(result.success).toBe(false);
-		expect(result.content).toContain("resume_path required");
+		expect(result.content).toContain("résumé");
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 });
