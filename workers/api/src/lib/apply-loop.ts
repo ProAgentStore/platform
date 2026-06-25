@@ -96,7 +96,7 @@ export interface ApplyDeps {
  * forces a human handoff. Pure orchestration over {@link ApplyDeps} so it can be
  * unit-tested without a browser, an LLM, or a deployed Workflow.
  */
-export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number; solvedChallengeUrl?: string } = {}): Promise<ApplyResult> {
+export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number; solvedChallengeUrl?: string; tokens?: { input: number; output: number } } = {}): Promise<ApplyResult> {
 	const maxSteps = opts.maxSteps ?? 40;
 	// After a human solves a captcha, its widget/"not a robot" text usually lingers
 	// on the SAME page for the rest of the form, so re-detecting it would ping-pong
@@ -112,8 +112,9 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	let repeatFails = 0;
 	let pageKey = "";
 	let failsOnPage = 0;
-	let tokIn = 0;
-	let tokOut = 0;
+	// Shared so the caller can carry the running total across rounds (each handoff
+	// re-enters runApplyLoop); without this, multi-round tasks would reset to 0.
+	const tokens = opts.tokens ?? { input: 0, output: 0 };
 	let actedLast = false;
 	let lastSnapshot = "";
 	const recentKeys: string[] = [];
@@ -152,11 +153,11 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		}
 
 		const decision = await deps.decide({ job, actionLog, snapshot: snap });
-		if (decision.usage) { tokIn += decision.usage.input; tokOut += decision.usage.output; }
+		if (decision.usage) { tokens.input += decision.usage.input; tokens.output += decision.usage.output; }
 		await deps.onEvent?.(
 			"agent.decision",
 			decision.finish ? `finish: ${decision.finish.status}` : decision.action ? describeAction(decision.action) : "thinking",
-			{ thought: decision.thought, action: decision.action, finish: decision.finish, tokensInput: tokIn, tokensOutput: tokOut },
+			{ thought: decision.thought, action: decision.action, finish: decision.finish, tokensInput: tokens.input, tokensOutput: tokens.output },
 		);
 
 		if (decision.finish) {

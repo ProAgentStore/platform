@@ -113,6 +113,18 @@ describe("runApplyLoop", () => {
 		expect(result.outcome).toBe("submitted"); // progressed through the funnel, never falsely "stuck"
 	});
 
+	it("accumulates token usage into the shared opts.tokens object (so multi-round totals don't reset)", async () => {
+		const tokens = { input: 5, output: 1 }; // pretend a prior round already spent some
+		const deps: ApplyDeps = {
+			snapshot: async () => page("- button \"Submit\""),
+			act: async () => ({ url: "https://jobs.example.com/123", challenge: null }),
+			decide: async () => ({ action: { action: "click", role: "button", name: "Submit" }, usage: { input: 100, output: 10 } }),
+		};
+		await runApplyLoop(deps, JOB, { maxSteps: 3, tokens });
+		expect(tokens.input).toBe(305); // 5 carried in + 3 steps × 100
+		expect(tokens.output).toBe(31);
+	});
+
 	it("STILL hands off stuck on a DYNAMIC page (content changes every poll) when fixating on one URL", async () => {
 		// Same URL, but the snapshot grows each poll (a timer/carousel/ad). A content-
 		// keyed guard would be defeated and thrash to max_steps; the URL-keyed guard

@@ -80,8 +80,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		let result: ApplyResult = { outcome: "failed", detail: "did not start", steps: 0 };
 		const transcript: string[] = [];
 		let solvedChallengeUrl: string | undefined; // page where a captcha was just solved
+		const tokens = { input: 0, output: 0 }; // running total across ALL rounds (handoffs re-enter the loop)
 		for (let round = 0; round < 12; round++) {
-			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl });
+			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens });
 			solvedChallengeUrl = undefined;
 			transcript.push(...(result.transcript ?? []));
 			if (result.outcome !== "captcha" && result.outcome !== "stuck" && result.outcome !== "needs_input") break;
