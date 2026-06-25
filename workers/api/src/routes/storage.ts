@@ -322,6 +322,15 @@ instanceStorageRoutes.post("/:id/files", async (c) => {
 	});
 });
 
+instanceStorageRoutes.delete("/:id/files/:fileId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const fileId = c.req.param("fileId");
+	return proxyDO(c, instance.id, `/files/${encodeURIComponent(fileId)}`, {
+		method: "DELETE",
+	});
+});
+
 instanceStorageRoutes.post("/:id/search", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);

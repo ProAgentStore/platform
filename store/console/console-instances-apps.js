@@ -162,14 +162,24 @@
         if (files.length === 0) { list.innerHTML = ''; empty.classList.remove('hidden'); return; }
         empty.classList.add('hidden');
         list.innerHTML = files.map(f => `
-          <div class="memory-item">
+          <div class="memory-item" style="display:flex;align-items:start;gap:0.5rem">
             <div style="flex:1">
               <div class="key">${esc(f.name)} <span class="type">${esc(f.mimeType)}</span></div>
               <div class="content">${esc(f.size)} bytes${f.tags?.length ? ' &middot; ' + f.tags.map(t => esc(t)).join(', ') : ''} &middot; ${esc(f.createdAt?.split('T')[0] || '')}${fileExtractionLabel(f)}</div>
             </div>
+            <button type="button" class="btn btn-outline btn-sm" title="Delete file" onclick="deleteKbFile('${esc(f.id)}', '${esc((f.name || '').replace(/'/g, ''))}')">Delete</button>
           </div>
         `).join('');
       } catch { list.innerHTML = ''; empty.classList.remove('hidden'); }
+    }
+
+    async function deleteKbFile(fileId, name) {
+      if (!currentInstance || !fileId) return;
+      if (!confirm(`Delete "${name}" from this agent's files? This also removes its indexed text. This can't be undone.`)) return;
+      try {
+        await api(`/v1/instances/${currentInstance.id}/files/${fileId}`, { method: 'DELETE' });
+        loadKbFiles();
+      } catch (e) { alert('Could not delete the file: ' + (e.message || e)); }
     }
 
     function fileExtractionLabel(file) {
