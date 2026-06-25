@@ -90,13 +90,16 @@ export interface ApplyDeps {
  * forces a human handoff. Pure orchestration over {@link ApplyDeps} so it can be
  * unit-tested without a browser, an LLM, or a deployed Workflow.
  */
-export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number; ignoreFirstChallenge?: boolean } = {}): Promise<ApplyResult> {
+export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number; solvedChallengeUrl?: string } = {}): Promise<ApplyResult> {
 	const maxSteps = opts.maxSteps ?? 40;
-	// After a human solves a captcha, its "not a robot" text often lingers on the
-	// page, so the very first snapshot would re-detect it and bounce straight back
-	// to a handoff — a ping-pong that never fills anything. Skip the captcha check
-	// on the first snapshot after a resume so the agent can actually proceed.
-	let skipChallenge = opts.ignoreFirstChallenge === true;
+	// After a human solves a captcha, its widget/"not a robot" text usually lingers
+	// on the SAME page for the rest of the form, so re-detecting it would ping-pong
+	// straight back to a handoff and never fill anything. So: suppress the captcha
+	// handoff while we're still on the page where one was just solved; re-enable it
+	// the moment the page navigates (a genuinely new captcha on a new page still
+	// hands off). Compare without the URL hash. This is ATS-agnostic.
+	const pageOf = (u: string) => (u || "").split("#")[0];
+	const solvedPage = opts.solvedChallengeUrl ? pageOf(opts.solvedChallengeUrl) : "";
 	const actionLog: string[] = [];
 	let lastUrl = "";
 	let lastActionKey = "";
@@ -112,11 +115,12 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		if (snap.url !== pageKey) { pageKey = snap.url; failsOnPage = 0; }
 
 		// A CAPTCHA can't be solved by the model — hand off to the human, same session.
-		if (snap.challenge && !skipChallenge) {
+		// But don't re-hand-off for the page a human already solved one on (lingering
+		// widget/text); only a captcha on a DIFFERENT page is a fresh one.
+		if (snap.challenge && pageOf(snap.url) !== solvedPage) {
 			await deps.onEvent?.("agent.captcha", `CAPTCHA detected (${snap.challenge}) — handing off`, { challenge: snap.challenge, url: snap.url });
 			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
-		skipChallenge = false; // only the first post-resume snapshot is exempt
 
 		const decision = await deps.decide({ job, actionLog, snapshot: snap });
 		await deps.onEvent?.(

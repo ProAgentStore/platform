@@ -24,6 +24,36 @@ function scriptedDeps(snapshots: PageSnapshot[], decisions: ApplyDecision[]): { 
 
 const page = (snapshot: string, challenge: string | null = null): PageSnapshot => ({ url: "https://jobs.example.com/123", title: "Job", snapshot, challenge });
 
+describe("runApplyLoop captcha suppression", () => {
+	const pageAt = (url: string, challenge: string | null): PageSnapshot => ({ url, title: "x", snapshot: '- button "Create account"', challenge });
+
+	it("suppresses a lingering captcha on the page just solved, but hands off on a NEW page", async () => {
+		let s = 0;
+		const snaps = [
+			pageAt("https://ats.example.com/register", "captcha"), // SAME page a human solved → must be ignored
+			pageAt("https://ats.example.com/verify", "captcha"), // a different page → fresh captcha → hand off
+		];
+		const deps: ApplyDeps = {
+			snapshot: async () => snaps[Math.min(s++, snaps.length - 1)],
+			act: async () => ({ url: "https://ats.example.com/verify", challenge: null }),
+			decide: async () => ({ action: { action: "click", role: "button", name: "Create account" } }),
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 10, solvedChallengeUrl: "https://ats.example.com/register" });
+		expect(result.outcome).toBe("captcha");
+		expect(result.url).toBe("https://ats.example.com/verify"); // handed off on the new page, did NOT loop on the solved one
+	});
+
+	it("without a solved page, a captcha hands off immediately", async () => {
+		const deps: ApplyDeps = {
+			snapshot: async () => pageAt("https://ats.example.com/register", "captcha"),
+			act: async () => ({ url: "x", challenge: null }),
+			decide: async () => ({ action: { action: "click", role: "button", name: "x" } }),
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 10 });
+		expect(result.outcome).toBe("captcha");
+	});
+});
+
 describe("runApplyLoop", () => {
 	it("drives type → upload → submit → finish(submitted)", async () => {
 		const { deps, acted } = scriptedDeps(
