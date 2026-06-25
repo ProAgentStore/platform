@@ -120,6 +120,12 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		);
 
 		if (decision.finish) {
+			// If the model gives up because of a CAPTCHA the detector missed, route it
+			// to a human takeover (captcha handoff) instead of failing the whole run.
+			if (decision.finish.status === "blocked" && /captcha|not a robot|are you (a )?human|verify you('?re| are) human|anti-?bot/i.test(decision.finish.detail || "")) {
+				await deps.onEvent?.("agent.captcha", `CAPTCHA the model can't solve — handing off (${decision.finish.detail})`, { challenge: "captcha", url: snap.url });
+				return { outcome: "captcha", challenge: "captcha", detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog] };
+			}
 			return { outcome: decision.finish.status, detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 		if (decision.needsInput) {
