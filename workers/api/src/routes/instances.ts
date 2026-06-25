@@ -319,8 +319,11 @@ instanceRoutes.get("/:instanceId/tasks", async (c) => {
 		const res = await callRuntime(c.env, runtime, "/tasks");
 		const payload = await runtimeJson(res);
 		if (res.ok) {
+			// Sync the runner's tasks into the mirror, then return the MIRROR (not the
+			// raw runner list) so cleared/deleted tasks (hidden=1) stay off the board
+			// even though the runner still holds them and re-sends them each poll.
 			await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
-			return c.json(payload, 200);
+			return c.json({ tasks: await mirroredRuntimeTasks(c.env, instanceId, session.uid) }, 200);
 		}
 		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
 		return c.json({

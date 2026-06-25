@@ -578,7 +578,9 @@
       const msg = document.getElementById('settings-maint-msg');
       try {
         const r = await api(`/v1/instances/${currentInstance.id}/tasks/clear-finished`, { method: 'POST' });
-        if (msg) { msg.textContent = `Cleared ${r.cleared || 0} finished task(s).`; msg.style.color = 'var(--green)'; }
+        if (msg) { msg.textContent = `Cleared ${r.cleared || 0} finished task(s) from the board.`; msg.style.color = 'var(--green)'; }
+        currentRuntimeTasks = (currentRuntimeTasks || []).filter(t => ['queued', 'waiting', 'running', 'needs_human', 'needs_approval'].includes(t.status));
+        if (typeof renderInstanceTaskBoard === 'function') renderInstanceTaskBoard(currentRuntimeTasks);
       } catch (e) { if (msg) { msg.textContent = 'Could not clear: ' + e.message; msg.style.color = 'var(--red)'; } }
     }
     async function clearApplicationHistory() {

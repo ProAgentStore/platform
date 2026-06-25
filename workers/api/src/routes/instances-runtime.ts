@@ -276,7 +276,7 @@ export async function mirroredRuntimeTasks(
 ): Promise<unknown[]> {
 	const { results } = await env.DB.prepare(
 		`SELECT payload FROM instance_runtime_tasks
-     WHERE instance_id = ?1 AND user_id = ?2
+     WHERE instance_id = ?1 AND user_id = ?2 AND hidden = 0
      ORDER BY updated_at DESC
      LIMIT ?3`,
 	)
@@ -306,8 +306,10 @@ export async function deleteMirroredRuntimeTask(
 	userId: string,
 	id: string,
 ): Promise<void> {
+	// Tombstone (not DELETE): the runner re-sends its tasks on the next poll, so a
+	// deleted row reappears. hidden=1 keeps it out of the board permanently.
 	await env.DB.prepare(
-		"DELETE FROM instance_runtime_tasks WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+		"UPDATE instance_runtime_tasks SET hidden = 1 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
 	)
 		.bind(id, instanceId, userId)
 		.run();
@@ -319,8 +321,9 @@ export async function clearFinishedRuntimeTasks(
 	instanceId: string,
 	userId: string,
 ): Promise<number> {
+	// Tombstone (not DELETE) so the runner's re-sent copies stay off the board.
 	const res = await env.DB.prepare(
-		"DELETE FROM instance_runtime_tasks WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('failed','completed','cancelled','blocked','expired')",
+		"UPDATE instance_runtime_tasks SET hidden = 1 WHERE instance_id = ?1 AND user_id = ?2 AND hidden = 0 AND status IN ('failed','completed','cancelled','blocked','expired')",
 	)
 		.bind(instanceId, userId)
 		.run();
