@@ -185,10 +185,10 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "submit_job_application",
-		description: "Start the LLM-driven job application: an agent drives a real browser to fill and submit the form, using the user's saved candidate Profile. Call it ONCE per job. It does not finish instantly — it runs in the background and pauses in the console Board only for a captcha, a stuck widget, or a missing value. Do not call it again for the same job, and do not claim the application is submitted from this tool result. Requires a connected runner (pags up).",
+		description: "Start the LLM-driven job application: an agent drives a real browser to fill and submit the form, using the user's saved candidate Profile. Call it ONCE per job. It does not finish instantly — it runs in the background and pauses in the console Board only for a captcha, a stuck widget, or a missing value. Do not call it again for the same job, and do not claim the application is submitted from this tool result. Requires a connected runner (pags up). HONESTY: only report an application as started if THIS tool returns success with a real task id — if it returns an error, tell the user that exact error and that nothing started. Never invent a task or workflow id.",
 		parameters: {
 			url: { type: "string", description: "Job posting URL", required: true },
-			resume_path: { type: "string", description: "Absolute local path to the resume file on the connected runner machine", required: true },
+			resume_path: { type: "string", description: "Optional. Leave empty — the apply uses the résumé the user uploaded in the console; the runner downloads it." },
 			full_name: { type: "string", description: "Candidate full name (optional — falls back to the saved Profile)" },
 			email: { type: "string", description: "Candidate email (optional — falls back to the saved Profile)" },
 			cover_note: { type: "string", description: "Cover note text for the application form" },
@@ -453,10 +453,10 @@ export async function executeStorageTool(
 				}
 				const url = stringInput(call.input.url);
 				if (!url) return fail(call.name, "url required");
-				const resumePath = stringInput(call.input.resume_path) || stringInput(call.input.resumePath);
-				if (!resumePath) {
-					return fail(call.name, "resume_path required: an absolute local file path on the connected runner machine.");
-				}
+				// resume_path is optional — the apply uses the résumé the user uploaded
+				// in the console (Knowledge → Résumé), which the runner downloads. A local
+				// path is only a legacy fallback for a same-machine runner.
+				const resumePath = stringInput(call.input.resume_path) || stringInput(call.input.resumePath) || "";
 				const candidateInput = isPlainRecord(call.input.candidate) ? call.input.candidate : {};
 				// One apply path: start the LLM-driven JobApplyWorkflow (same as the
 				// console /apply). The brain drives the real browser; no selectors, no

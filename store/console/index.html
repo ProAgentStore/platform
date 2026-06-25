@@ -204,6 +204,17 @@
           <button type="button" onclick="loadUnifiedBoard()" class="btn btn-outline btn-sm">Refresh</button>
         </div>
       </div>
+      <div id="apply-panel" style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:0.85rem 1rem;margin-bottom:1rem">
+        <div style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap">
+          <div style="flex:1;min-width:240px">
+            <label style="font-size:0.78rem;font-weight:700;display:block;margin-bottom:0.25rem">Apply to a job</label>
+            <input id="apply-url" type="url" placeholder="Paste a job posting URL…" style="width:100%" onkeydown="if(event.key==='Enter')startApplyFromPanel()">
+          </div>
+          <button type="button" id="apply-btn" onclick="startApplyFromPanel()" class="btn btn-primary">Apply</button>
+        </div>
+        <div id="apply-checklist" style="display:flex;gap:0.9rem;flex-wrap:wrap;font-size:0.76rem;margin-top:0.6rem;color:var(--muted)">Checking setup…</div>
+        <div id="apply-panel-msg" style="font-size:0.78rem;margin-top:0.5rem"></div>
+      </div>
       <div id="inst-unified-board" class="kanban-board"></div>
       <div id="runtime-task-detail" class="runtime-detail-section hidden" role="region" aria-labelledby="runtime-task-detail-title">
         <section class="runtime-detail-panel">

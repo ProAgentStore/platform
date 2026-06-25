@@ -504,9 +504,60 @@
 
     // ── Unified Board ──────────────────────────────────────────
     async function loadUnifiedBoard() {
+      loadApplyChecklist();
       await loadInstanceRuntime();
       await loadInstanceApplications();
       startRuntimePolling(); // live activity while the board is open
+    }
+
+    // Deterministic apply: setup checklist + a real /apply call that returns the
+    // actual task — no chatbot in the loop that could claim success without one.
+    async function loadApplyChecklist() {
+      const el = document.getElementById('apply-checklist');
+      const btn = document.getElementById('apply-btn');
+      if (!el || !currentInstance) return;
+      const [rt, rz, pf] = await Promise.allSettled([
+        api(`/v1/instances/${currentInstance.id}/runtime/status`).catch(() => api(`/v1/instances/${currentInstance.id}/runtime`)),
+        api(`/v1/instances/${currentInstance.id}/apply-resume/status`),
+        api('/v1/profile').catch(() => null),
+      ]);
+      const runnerOk = rt.status === 'fulfilled' && (rt.value?.runtime?.status === 'online');
+      const resumeOk = rz.status === 'fulfilled' && !!rz.value?.uploaded;
+      const prof = pf.status === 'fulfilled' ? (pf.value?.profile || pf.value) : null;
+      const profileOk = !!(prof && (prof.email || prof.full_name || prof.first_name || prof.fullName));
+      const item = (ok, label, fix) => `<span style="color:${ok ? 'var(--green)' : 'var(--red)'};font-weight:600">${ok ? '✓' : '✗'} ${label}</span>${!ok && fix ? ` <a href="#" onclick="${fix}" style="color:var(--accent,#7c3aed)">set up</a>` : ''}`;
+      el.innerHTML = [
+        item(runnerOk, 'Runner', "showRunnerGuide();return false"),
+        item(resumeOk, 'Résumé', "switchInstTab('knowledge');switchKbTab('docs');return false"),
+        item(profileOk, 'Profile', "showProfile&&showProfile();return false"),
+      ].join('<span style="color:var(--line)">·</span>');
+      // Runner + résumé are hard blockers; profile errors are reported clearly on submit.
+      const ready = runnerOk && resumeOk;
+      if (btn) { btn.disabled = !ready; btn.title = ready ? 'Start an application' : 'Connect the runner and upload a résumé first'; }
+    }
+    async function startApplyFromPanel() {
+      if (!currentInstance) return;
+      const input = document.getElementById('apply-url');
+      const msg = document.getElementById('apply-panel-msg');
+      const btn = document.getElementById('apply-btn');
+      const url = (input?.value || '').trim();
+      if (!/^https?:\/\//.test(url)) { if (msg) { msg.textContent = 'Enter a valid job posting URL (https://…).'; msg.style.color = 'var(--red)'; } return; }
+      if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
+      if (msg) { msg.textContent = ''; }
+      try {
+        const res = await api(`/v1/instances/${currentInstance.id}/apply`, { method: 'POST', body: JSON.stringify({ url }) });
+        if (msg) {
+          msg.innerHTML = `✓ Application started — task <code>${esc(String(res.taskId || '').slice(0, 18))}</code> is on the board below. Watch its activity; take over only for a captcha.`;
+          msg.style.color = 'var(--green)';
+        }
+        if (input) input.value = '';
+        await loadInstanceRuntime();
+      } catch (e) {
+        if (msg) { msg.textContent = 'Could not start: ' + e.message; msg.style.color = 'var(--red)'; }
+      } finally {
+        if (btn) { btn.textContent = 'Apply'; btn.disabled = false; }
+        loadApplyChecklist();
+      }
     }
 
     // (KB page + Applications kanban moved to console-instances-apps.js)
