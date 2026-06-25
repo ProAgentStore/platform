@@ -208,7 +208,7 @@
         <div style="display:flex;gap:0.5rem;align-items:flex-end;flex-wrap:wrap">
           <div style="flex:1;min-width:240px">
             <label style="font-size:0.78rem;font-weight:700;display:block;margin-bottom:0.25rem">Apply to a job</label>
-            <input id="apply-url" type="url" placeholder="Paste a job posting URL…" style="width:100%" onkeydown="if(event.key==='Enter')startApplyFromPanel()">
+            <input id="apply-url" type="url" placeholder="Paste a job posting URL…" style="width:100%" onkeydown="if(event.key==='Enter'&&!document.getElementById('apply-btn').disabled)startApplyFromPanel()">
           </div>
           <button type="button" id="apply-btn" onclick="startApplyFromPanel()" class="btn btn-primary">Apply</button>
         </div>

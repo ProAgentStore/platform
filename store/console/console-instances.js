@@ -119,6 +119,9 @@
           // Keep the header Stop button live on every tab (Chat/Knowledge don't
           // run the board poll), so the agent can always be stopped from the web.
           if (currentInstanceTab !== 'board') refreshActiveTasksForHeader();
+          // Keep the Apply checklist/button live so it enables the moment the
+          // runner comes online — no manual refresh.
+          else loadApplyChecklist();
         }
       }, 4000);
       if (updateUrl) {
@@ -553,7 +556,14 @@
         if (input) input.value = '';
         await loadInstanceRuntime();
       } catch (e) {
-        if (msg) { msg.textContent = 'Could not start: ' + e.message; msg.style.color = 'var(--red)'; }
+        const m = String(e.message || '');
+        const runnerIssue = /runner|runtime|rejected|offline|502|no runner/i.test(m);
+        if (msg) {
+          msg.textContent = runnerIssue
+            ? 'The runner isn’t reachable yet — make sure “✓ Runner” is green above (it can take a few seconds after pags up), then try again.'
+            : 'Could not start: ' + m;
+          msg.style.color = 'var(--red)';
+        }
       } finally {
         if (btn) { btn.textContent = 'Apply'; btn.disabled = false; }
         loadApplyChecklist();
