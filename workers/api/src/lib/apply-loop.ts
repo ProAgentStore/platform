@@ -115,6 +115,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	let tokIn = 0;
 	let tokOut = 0;
 	let actedLast = false;
+	let lastSnapshot = "";
 	const recentKeys: string[] = [];
 
 	for (let step = 0; step < maxSteps; step++) {
@@ -124,22 +125,23 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			return { outcome: "cancelled", detail: "stopped by the user", url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 		lastUrl = snap.url;
-		// Reset the per-page failure + fixation counters whenever the page ADVANCES.
-		// "Advances" = the URL changed OR the snapshot content changed (catches SPA
-		// route swaps that keep the URL). Critical: clicking the same-named button
-		// across DIFFERENT pages (an "Apply now" → login → form funnel) is real
-		// progress, not fixation — so it must not count toward the stuck guard.
-		const progressKey = `${snap.url}::${snap.snapshot.length}`;
-		if (progressKey !== pageKey) {
-			pageKey = progressKey; failsOnPage = 0; recentKeys.length = 0; actedLast = false;
-		} else if (actedLast) {
-			// The previous action produced NO visible change. The brain can't tell that
-			// its "successful" click did nothing, so surface it — this nudges it to vary
-			// its approach (scroll, dismiss a banner, a different control) BEFORE it
-			// fixates into the stuck handoff.
-			actionLog.push("⚠ that action caused NO visible change to the page — the control may be wrong, disabled, or covered by a cookie/consent banner; try a DIFFERENT element or approach, do NOT repeat it");
+		// Fixation-guard reset — keyed on the URL only. A new URL = a new page, so a
+		// same-named button across a funnel (careers → login → form) isn't fixation.
+		// Deliberately NOT keyed on snapshot CONTENT: dynamic page text (timers,
+		// carousels, ads) shifts every snapshot and would defeat the guard entirely,
+		// letting a genuinely stuck agent thrash to max_steps instead of handing off.
+		if (snap.url !== pageKey) { pageKey = snap.url; failsOnPage = 0; recentKeys.length = 0; }
+		// No-change nudge — a SEPARATE, content-based signal: if the last action left
+		// the snapshot byte-identical, the brain can't tell its "successful" click did
+		// nothing, so surface it (so it varies approach before fixating). Safe under
+		// dynamic content — any real change simply means no nudge.
+		if (actedLast) {
+			if (snap.snapshot === lastSnapshot) {
+				actionLog.push("⚠ that action caused NO visible change to the page — the control may be wrong, disabled, or covered by a cookie/consent banner; try a DIFFERENT element or approach, do NOT repeat it");
+			}
 			actedLast = false;
 		}
+		lastSnapshot = snap.snapshot;
 
 		// A CAPTCHA can't be solved by the model — hand off to the human, same session.
 		// But don't re-hand-off for the page a human already solved one on (lingering

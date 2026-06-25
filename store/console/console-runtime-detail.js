@@ -18,7 +18,7 @@
       // Tokens spent: the apply brain reports a running cumulative on each decision
       // event; the latest (max) is the task total.
       let tokIn = 0, tokOut = 0;
-      for (const e of events) { const d = (e && e.data) || {}; if (typeof d.tokensInput === 'number') tokIn = Math.max(tokIn, d.tokensInput); if (typeof d.tokensOutput === 'number') tokOut = Math.max(tokOut, d.tokensOutput); }
+      for (const e of events) { const d = (e && (e.data ?? e.payload ?? e.result)) || {}; if (typeof d.tokensInput === 'number') tokIn = Math.max(tokIn, d.tokensInput); if (typeof d.tokensOutput === 'number') tokOut = Math.max(tokOut, d.tokensOutput); }
       const tokenField = (tokIn || tokOut) ? runtimeDetailField('Tokens used', `${(tokIn + tokOut).toLocaleString()} · ${tokIn.toLocaleString()} in / ${tokOut.toLocaleString()} out`) : '';
       body.innerHTML = `
         <div class="rt-tabs" style="display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:0.85rem;flex-wrap:wrap">

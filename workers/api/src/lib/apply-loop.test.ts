@@ -113,6 +113,20 @@ describe("runApplyLoop", () => {
 		expect(result.outcome).toBe("submitted"); // progressed through the funnel, never falsely "stuck"
 	});
 
+	it("STILL hands off stuck on a DYNAMIC page (content changes every poll) when fixating on one URL", async () => {
+		// Same URL, but the snapshot grows each poll (a timer/carousel/ad). A content-
+		// keyed guard would be defeated and thrash to max_steps; the URL-keyed guard
+		// must still trip on the repeated dead click.
+		let s = 0;
+		const deps: ApplyDeps = {
+			snapshot: async () => ({ url: "https://ats.example.com/job", title: "x", snapshot: `- button "Apply now"\n- text "${"·".repeat(s++)}"`, challenge: null }),
+			act: async () => ({ url: "https://ats.example.com/job", challenge: null }),
+			decide: async () => ({ action: { action: "click", role: "button", name: "Apply now" } }),
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 20 });
+		expect(result.outcome).toBe("stuck");
+	});
+
 	it("breaks the loop after the same action fails 3× (no infinite retry)", async () => {
 		const acted: BrowserAction[] = [];
 		let decideCalls = 0;
