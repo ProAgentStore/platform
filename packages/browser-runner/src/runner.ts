@@ -844,9 +844,23 @@ export class LocalRunner {
 					if ((await opt.count().catch(() => 0)) === 0) return false;
 					return opt.click({ timeout: 2_500 }).then(() => true).catch(() => false);
 				};
-				// 1. Native <select>.
+				// 1. Native <select>: exact label/value, then a fuzzy (case/punctuation
+				//    -insensitive) match so "Decline to self-identify" hits the option
+				//    "Decline To Self Identify".
 				if (await loc.selectOption({ label: value }, { timeout: 4_000 }).then(() => true).catch(() => false)) break;
-				if (await loc.selectOption(value, { timeout: 3_000 }).then(() => true).catch(() => false)) break;
+				if (await loc.selectOption(value, { timeout: 2_500 }).then(() => true).catch(() => false)) break;
+				const fuzzy = await loc.evaluate((el, want) => {
+					if (!(el instanceof HTMLSelectElement)) return false;
+					const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+					const w = norm(want);
+					const opt = Array.from(el.options).find((o) => { const t = norm(o.textContent || ""); return t === w || (w.length > 3 && (t.includes(w) || w.includes(t))); });
+					if (!opt) return false;
+					el.value = opt.value;
+					el.dispatchEvent(new Event("input", { bubbles: true }));
+					el.dispatchEvent(new Event("change", { bubbles: true }));
+					return true;
+				}, value).catch(() => false);
+				if (fuzzy) break;
 				// 2. Custom combobox / typeahead: open it, try a visible matching option.
 				await this.clickRobustly(page, loc);
 				await page.waitForTimeout(350).catch(() => undefined);
