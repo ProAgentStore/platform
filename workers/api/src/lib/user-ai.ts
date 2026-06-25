@@ -67,7 +67,10 @@ async function runAnthropic(
 		max_tokens: 1024,
 		messages: messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
 	};
-	if (systemMsg) anthropicBody.system = systemMsg.content;
+	// Prompt-cache the (large, stable) system prompt so repeated calls within a run
+	// — the apply loop fires one per step — reprocess it from cache instead of
+	// re-paying for it each time. Makes the per-step cost flat instead of growing.
+	if (systemMsg) anthropicBody.system = [{ type: "text", text: systemMsg.content, cache_control: { type: "ephemeral" } }];
 
 	// Convert tools to Anthropic format (deduplicate by name)
 	if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
