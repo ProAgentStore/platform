@@ -183,7 +183,7 @@
         <div class="chat-input">
           <input id="inst-chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendInstanceMessage()">
           <button type="button" onclick="sendInstanceMessage()">Send</button>
-          <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy last 10 messages">&#128203;</button>
+          <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy full conversation as JSON">&#128203;</button>
           <button type="button" class="btn-sm btn-outline" onclick="clearInstanceChat()" title="Clear chat history" style="color:var(--red)">Clear</button>
         </div>
       </div>
@@ -332,7 +332,7 @@
             <div class="chat-input" style="padding:0.65rem 0.85rem">
               <input id="inst-kb-chat-input" placeholder="Ask or change the knowledge base..." onkeydown="if(event.key==='Enter')sendKbChatMessage()">
               <button type="button" onclick="sendKbChatMessage()">Send</button>
-              <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy last 10 messages">&#128203;</button>
+              <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy full conversation as JSON">&#128203;</button>
             </div>
           </div>
         </div>
@@ -379,7 +379,7 @@
             <div class="chat-input" style="padding:0.65rem 0.85rem">
               <input id="app-detail-chat-input" placeholder="Ask about this application..." onkeydown="if(event.key==='Enter')sendAppDetailMessage()">
               <button type="button" onclick="sendAppDetailMessage()">Send</button>
-              <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy last 10 messages">&#128203;</button>
+              <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy full conversation as JSON">&#128203;</button>
             </div>
           </div>
         </div>

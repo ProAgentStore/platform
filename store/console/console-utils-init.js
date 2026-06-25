@@ -1,21 +1,22 @@
 // biome-ignore-all lint/correctness/noUnusedVariables: Console functions are called from inline HTML handlers.
 // ── Helpers ──────────────────────────────────────────────────
 
+    // Copy the ENTIRE conversation as JSON (to paste into another assistant).
     async function copyChatHistory(type, evt) {
       const btn = evt?.target?.closest('button') || evt?.target;
       try {
         const id = (type === 'agent') ? currentAgent?.id : currentInstance?.id;
         if (!id) { alert('No active instance'); return; }
         const base = (type === 'agent') ? `/v1/agents/${id}` : `/v1/instances/${id}`;
-        const data = await api(`${base}/messages?limit=10`);
+        const data = await api(`${base}/messages?limit=2000`);
         const messages = (data.messages || []).map(m => ({
           role: m.role,
           content: (m.content || '').replace(/^\[Context:[\s\S]*?\]\s*\n*/i, ''),
           timestamp: m.createdAt,
         }));
-        const json = JSON.stringify(messages, null, 2);
+        const json = JSON.stringify({ instanceId: id, count: messages.length, messages }, null, 2);
         await navigator.clipboard.writeText(json);
-        if (btn) { btn.textContent = 'Copied!'; setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1500); }
+        if (btn) { btn.textContent = `Copied ${messages.length} ✓`; setTimeout(() => { btn.innerHTML = '&#128203;'; }, 1800); }
       } catch (e) {
         alert('Copy failed: ' + e.message);
       }

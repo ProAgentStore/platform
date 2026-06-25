@@ -407,7 +407,9 @@ export class AgentDO extends DurableObject<Env> {
 	}
 
 	private async handleGetMessages(url: URL): Promise<Response> {
-		const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+		// Cap at 2000 so "copy the full conversation" can export everything; normal
+		// chat loads pass a small limit (50) and are unaffected.
+		const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 2000);
 		const messages = await this.getRecentMessages(limit);
 		return json({ messages });
 	}
