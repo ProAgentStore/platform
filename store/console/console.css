@@ -229,20 +229,35 @@
     .status-blocked{background:rgba(239,68,68,0.15);color:var(--red)}
 
     /* Split layouts */
-    #app-detail-layout,#inst-kb-layout{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
-    #application-detail{max-width:1200px;margin:0 auto;padding:1rem 1.5rem}
+    #inst-kb-layout{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
+    /* Application detail: full-height split — left column scrolls on its own, right
+       (chat) fills the screen height. Mirrors the #instance-detail pattern. */
+    #application-detail{max-width:1200px;margin:0 auto;padding:1rem 1.5rem;display:flex;flex-direction:column;height:calc(100dvh - 49px)}
+    #application-detail.hidden{display:none}
+    #app-detail-layout{display:grid;grid-template-columns:1fr 1fr;gap:1rem;align-items:stretch;flex:1;min-height:0}
+    #app-detail-layout>div{min-height:0;display:flex;flex-direction:column}
+    #app-detail-layout>div:first-child{overflow-y:auto;padding-right:0.25rem}
+    #app-detail-layout>div:last-child>.create-form{flex:1;min-height:0}
 
     .empty{text-align:center;padding:2rem;color:var(--muted-soft);font-size:0.9rem}
     .error{color:var(--red);font-size:0.82rem;margin-top:0.5rem}
     .loading{text-align:center;padding:2rem;color:var(--muted)}
     .hidden{display:none}
     #dashboard-stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:0.75rem;margin-bottom:1.5rem}
-    #inst-kb-chat-container,#app-detail-chat-container{height:calc(100dvh - 320px)}
+    #inst-kb-chat-container{height:calc(100dvh - 320px)}
+    #app-detail-chat-container{flex:1;min-height:0;height:auto}
 
     /* ── Mobile ─────────────────────────────────────────────── */
     @media(max-width:900px){
       #app-detail-layout,#inst-kb-layout{grid-template-columns:1fr}
+      /* Stack + scroll the whole page on mobile (no full-height split). */
+      #application-detail{height:auto;display:block;overflow:visible}
+      #app-detail-layout{display:block}
+      #app-detail-layout>div:first-child{overflow:visible}
+      #app-detail-chat-container{height:calc(100dvh - 220px);min-height:280px}
     }
+    /* On the app-detail page, mobile must scroll (the body is otherwise locked). */
+    @media(max-width:900px){ body.chat-active:has(#application-detail:not(.hidden)){overflow:auto} }
     @media(max-width:640px){
       /* Header */
       header{padding:0.35rem 0.5rem;gap:0.4rem}
