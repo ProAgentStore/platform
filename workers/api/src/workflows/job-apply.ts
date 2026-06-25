@@ -2,6 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { decideAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { callRunner, getRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
+import { guessProfileKey, setProfileField } from "../lib/profile.js";
 import type { Env } from "../types.js";
 
 export interface JobApplyParams {
@@ -73,23 +74,33 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		for (let round = 0; round < 12; round++) {
 			result = await runApplyLoop(deps, job, { maxSteps: 60 });
 			transcript.push(...(result.transcript ?? []));
-			if (result.outcome !== "captcha" && result.outcome !== "stuck") break;
+			if (result.outcome !== "captcha" && result.outcome !== "stuck" && result.outcome !== "needs_input") break;
 
-			// Captcha → auto-resume when solved; stuck step → resume when the human
-			// clicks Resume. Both hand off to the same console takeover, same session.
-			const reason = result.outcome === "captcha" ? "challenge" : "stuck";
-			const label = result.outcome === "captcha" ? result.challenge ?? "captcha" : result.detail ?? "this step";
+			// Three handoff kinds, one console takeover, one pause/resume:
+			//  captcha → auto-resume when solved · stuck → resume on human "Resume"
+			//  needs_input → resume when the user supplies the value (saved to Profile).
+			const reason = result.outcome === "captcha" ? "challenge" : result.outcome === "needs_input" ? "needs_input" : "stuck";
+			const label = result.outcome === "captcha" ? result.challenge ?? "captcha" : result.outcome === "needs_input" ? result.fieldNeeded ?? "a value" : result.detail ?? "this step";
 			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined }));
 
 			let solved = false;
+			let providedValue: string | undefined;
 			for (let poll = 0; poll < CAPTCHA_WAIT_POLLS && !solved; poll++) {
 				await step.sleep(`wait-${round}-${poll}`, "5 seconds");
-				const status = await step.do(`hstatus-${round}-${poll}`, () => callRunner<{ solved: boolean }>(conn, "/browser/handoff-status", { taskId }));
+				const status = await step.do(`hstatus-${round}-${poll}`, () => callRunner<{ solved: boolean; value?: string }>(conn, "/browser/handoff-status", { taskId }));
 				solved = status.solved;
+				if (solved) providedValue = status.value;
 			}
 			if (!solved) {
-				await step.do(`complete-timeout-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "failed", detail: "CAPTCHA not solved in time" }));
-				return { outcome: "failed", detail: "CAPTCHA not solved in time", steps: result.steps };
+				await step.do(`complete-timeout-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "failed", detail: `${reason} not resolved in time` }));
+				return { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps };
+			}
+			// Persist a supplied value to the Profile + feed it into the run so it's never asked again.
+			if (result.outcome === "needs_input" && providedValue && result.fieldNeeded) {
+				const field = result.fieldNeeded;
+				const value = providedValue;
+				await step.do(`save-input-${round}`, async () => { await setProfileField(env, userId, guessProfileKey(field), value); return null; });
+				job.providedAnswers = { ...(job.providedAnswers ?? {}), [field]: value };
 			}
 			await step.do(`resume-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId }));
 		}

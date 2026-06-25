@@ -68,7 +68,7 @@ export class LocalRunner {
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
 		string,
-		{ page: Page; cdp?: CDPSession; latestFrame?: string; width?: number; height?: number; cssW?: number; cssH?: number; screencasting?: boolean; reason?: string; humanDone?: boolean }
+		{ page: Page; cdp?: CDPSession; latestFrame?: string; width?: number; height?: number; cssW?: number; cssH?: number; screencasting?: boolean; reason?: string; humanDone?: boolean; inputValue?: string }
 	>();
 
 	constructor(readonly config: RunnerConfig) {
@@ -969,13 +969,16 @@ export class LocalRunner {
 			task.updatedAt = new Date().toISOString();
 			this.store.putTask(task);
 			const message =
-				reason === "stuck"
-					? `Take over: the agent is stuck on "${label}". Do that one step (e.g. tick the box / click continue) in the live view, then click Resume.`
-					: `Take over to solve the ${label} — the agent will continue once it's solved.`;
+				reason === "needs_input"
+					? `The agent needs a value from you: ${label}. Enter it and the agent continues.`
+					: reason === "stuck"
+						? `Take over: the agent is stuck on "${label}". Do that one step (e.g. tick the box / click continue) in the live view, then click Resume.`
+						: `Take over to solve the ${label} — the agent will continue once it's solved.`;
 			this.addTaskEvent(task, "job.human_handoff_required", message, {
 				reason,
 				challengeType: reason === "challenge" ? label : undefined,
 				stuckOn: reason === "stuck" ? label : undefined,
+				inputField: reason === "needs_input" ? label : undefined,
 				url: page.url(),
 				screenshotBase64,
 			});
@@ -983,17 +986,33 @@ export class LocalRunner {
 		return { ok: true, screenshotBase64 };
 	}
 
-	/** Whether the brain can resume: a solved captcha (auto), or a human "Resume" for a stuck step. */
-	async browserHandoffStatus(taskId: string): Promise<{ solved: boolean; challenge: string | null }> {
+	/** Whether the brain can resume: a solved captcha (auto), a human "Resume" for a stuck step, or a provided value. */
+	async browserHandoffStatus(taskId: string): Promise<{ solved: boolean; challenge: string | null; value?: string }> {
 		const session = this.takeovers.get(taskId);
 		const page = session?.page ?? (await this.getActivePage());
 		if (page.isClosed()) return { solved: true, challenge: null };
+		// A needs_input handoff resumes once the user supplies the value.
+		if (session?.reason === "needs_input") return { solved: !!session.inputValue, challenge: null, value: session.inputValue };
 		// A stuck handoff resumes only when the human explicitly clicks Resume —
 		// there's nothing to auto-detect.
 		if (session?.reason === "stuck") return { solved: !!session.humanDone, challenge: null };
 		const challenge = await detectHumanChallenge(page);
 		const solved = !challenge || (await challengeSolved(page));
 		return { solved, challenge };
+	}
+
+	/** The user supplied the value the agent asked for (ask-and-hold). */
+	browserSubmitInput(taskId: string, value: string): { ok: boolean } {
+		const session = this.takeovers.get(taskId);
+		if (session) session.inputValue = value;
+		const task = this.store.getTask(taskId);
+		if (task) {
+			task.status = "running";
+			task.updatedAt = new Date().toISOString();
+			this.store.putTask(task);
+			this.addTaskEvent(task, "job.input_provided", "You provided the requested value — the agent is continuing");
+		}
+		return { ok: true };
 	}
 
 	/** End the takeover and return the task to running so the brain drives again. */

@@ -116,6 +116,17 @@ describe("runApplyLoop", () => {
 		expect(logsSeen[2].some((l) => /FAILED: click timed out/.test(l))).toBe(true);
 	});
 
+	it("request_user_info → needs_input outcome (ask-and-hold), with the field", async () => {
+		const deps: ApplyDeps = {
+			snapshot: async () => page("- textbox \"Salary\""),
+			act: async () => ({ url: "x", challenge: null }),
+			decide: async () => ({ needsInput: { field: "salary expectation", why: "required field" } }),
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 10 });
+		expect(result.outcome).toBe("needs_input");
+		expect(result.fieldNeeded).toBe("salary expectation");
+	});
+
 	it("reports an event for every decision", async () => {
 		const events: string[] = [];
 		const { deps } = scriptedDeps([page("x"), page("done")], [{ action: { action: "click", name: "Apply" } }, { finish: { status: "submitted", detail: "ok" } }]);

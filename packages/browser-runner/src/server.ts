@@ -130,6 +130,10 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		const b = await readJson<{ taskId: string }>(req);
 		return json(res, 200, await runner.browserResume(b.taskId));
 	}
+	if (req.method === "POST" && path === "/browser/input") {
+		const b = await readJson<{ taskId: string; value: string }>(req);
+		return json(res, 200, runner.browserSubmitInput(b.taskId, String(b.value ?? "")));
+	}
 	if (req.method === "POST" && path === "/browser/complete") {
 		const b = await readJson<{ taskId: string; outcome: string; detail?: string }>(req);
 		return json(res, 200, await runner.browserComplete(b.taskId, b.outcome, b.detail));

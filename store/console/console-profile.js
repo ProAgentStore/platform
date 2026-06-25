@@ -44,6 +44,34 @@
       document.getElementById('profile-dev-link').href = `/developers/${user.login}/`;
 
       loadKeys();
+      loadCandidateProfile();
+    }
+
+    // ── Candidate Profile (structured, reusable info agents fill forms with) ──
+    let candidateProfileFields = [];
+    async function loadCandidateProfile() {
+      const box = document.getElementById('cp-fields');
+      if (!box) return;
+      try {
+        const data = await api('/v1/profile');
+        candidateProfileFields = data.fields || [];
+        const p = data.profile || {};
+        box.innerHTML = candidateProfileFields.map(f => `
+          <div${f.key === 'website' || f.key === 'linkedin' || f.key === 'workAuthorization' ? ' style="grid-column:1/-1"' : ''}>
+            <label style="font-size:0.74rem;color:var(--muted);font-weight:600">${esc(f.label)}${f.private ? ' <span style="color:var(--muted-soft)">· private</span>' : ''}</label>
+            <input id="cp-${esc(f.key)}" value="${esc(p[f.key] || '')}" style="width:100%;background:var(--paper);border:1px solid var(--line);border-radius:0.4rem;padding:0.4rem 0.6rem;color:var(--ink);font-size:0.85rem">
+          </div>`).join('');
+      } catch (e) { box.innerHTML = '<p style="font-size:0.8rem;color:var(--muted)">Could not load candidate profile.</p>'; }
+    }
+
+    async function saveCandidateProfile() {
+      const status = document.getElementById('cp-status');
+      const body = {};
+      for (const f of candidateProfileFields) { const el = document.getElementById('cp-' + f.key); if (el) body[f.key] = el.value.trim(); }
+      try {
+        await api('/v1/profile', { method: 'PUT', body: JSON.stringify(body) });
+        if (status) { status.textContent = 'Saved ✓'; setTimeout(() => { status.textContent = ''; }, 2500); }
+      } catch (e) { if (status) status.textContent = 'Save failed'; }
     }
 
     function copyToken() {

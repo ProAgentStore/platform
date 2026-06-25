@@ -13,12 +13,15 @@ export interface ApplyJob {
 		linkedin?: string;
 		portfolio?: string;
 		workAuthorization?: string;
+		salaryExpectation?: string;
 	};
 	coverNote?: string;
 	/** Stable password to use when an ATS requires an account (same every run). */
 	password?: string;
 	/** Test mode: fill everything and reach Submit, but DON'T click it. */
 	dryRun?: boolean;
+	/** Values the user supplied mid-run via ask-and-hold (field label → value). */
+	providedAnswers?: Record<string, string>;
 	/** Notes from a previous successful run on this ATS (the per-ATS cache). */
 	cacheHint?: string;
 }
@@ -44,18 +47,22 @@ export interface PageSnapshot {
 	challenge: string | null;
 }
 
-export type ApplyOutcome = "submitted" | "ready" | "expired" | "blocked" | "captcha" | "stuck" | "failed" | "max_steps";
+export type ApplyOutcome = "submitted" | "ready" | "expired" | "blocked" | "captcha" | "stuck" | "needs_input" | "failed" | "max_steps";
 
 export interface ApplyDecision {
 	thought?: string;
 	action?: BrowserAction;
 	finish?: { status: "submitted" | "ready" | "expired" | "blocked"; detail: string };
+	/** The agent needs a value from the user (ask-and-hold). */
+	needsInput?: { field: string; why?: string };
 }
 
 export interface ApplyResult {
 	outcome: ApplyOutcome;
 	detail?: string;
 	challenge?: string | null;
+	/** For outcome "needs_input": the field the agent is asking the user for. */
+	fieldNeeded?: string;
 	url?: string;
 	steps: number;
 	/** The actions taken this run — fed back into the per-ATS cache on success. */
@@ -108,6 +115,11 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 
 		if (decision.finish) {
 			return { outcome: decision.finish.status, detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog] };
+		}
+		if (decision.needsInput) {
+			// Ask-and-hold: pause for the user to supply a value (same machinery as captcha).
+			await deps.onEvent?.("agent.needs_input", `Needs your input — ${decision.needsInput.field}${decision.needsInput.why ? ` (${decision.needsInput.why})` : ""}`, decision.needsInput);
+			return { outcome: "needs_input", fieldNeeded: decision.needsInput.field, detail: decision.needsInput.why, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 		if (!decision.action) {
 			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step, transcript: [...actionLog] };
@@ -203,6 +215,10 @@ export const BROWSER_TOOLS = [
 	tool("press_key", "Press a keyboard key like Enter or Tab.", {
 		key: { type: "string", description: "e.g. Enter, Tab, Escape" },
 	}, ["key"]),
+	tool("request_user_info", "Ask the USER for a REQUIRED value you don't have (e.g. phone, salary expectation). Use this INSTEAD of inventing or guessing a value. The application pauses until they answer, then resumes.", {
+		field: { type: "string", description: 'the field you need, e.g. "phone" or "salary expectation"' },
+		why: { type: "string", description: "brief reason / where it's needed on the form" },
+	}, ["field"]),
 	tool("finish", "End the application: status submitted (you saw a confirmation), expired (job closed), or blocked (cannot proceed truthfully).", {
 		status: { type: "string", description: "submitted | expired | blocked" },
 		detail: { type: "string", description: "short explanation / confirmation text" },
@@ -228,6 +244,10 @@ export function applySystemPrompt(job: ApplyJob): string {
 		c.linkedin ? `- LinkedIn: ${c.linkedin}` : "",
 		c.portfolio ? `- Portfolio: ${c.portfolio}` : "",
 		c.workAuthorization ? `- Work authorization: ${c.workAuthorization}` : "",
+		c.salaryExpectation ? `- Salary expectation: ${c.salaryExpectation}` : "",
+		...(job.providedAnswers && Object.keys(job.providedAnswers).length
+			? ["- Values you asked the user for (use these, don't ask again):", ...Object.entries(job.providedAnswers).map(([k, v]) => `  • ${k}: ${v}`)]
+			: []),
 		job.coverNote ? `- Cover note: ${job.coverNote}` : "",
 		"- Résumé: attach via the `upload` tool whenever there is a file upload (the file is supplied automatically — never ask for a path).",
 		job.password ? `- Account password: ${job.password} — use EXACTLY this in both Password and Confirm password. Never invent a different password.` : "",
@@ -240,7 +260,9 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"- Do exactly ONE tool call per turn — the next page snapshot follows.",
 		"- If the action log shows your last action FAILED (e.g. a click timed out), DO NOT repeat it. The page likely already advanced, opened a new tab, or the element moved — re-read the CURRENT snapshot and act on what's there now (a different button, the next field, or scroll to find it).",
 		"- After clicking something like Apply/Next/Continue, expect the page to change; act on the NEW snapshot, not the element you just clicked.",
-		"- Answer screening questions truthfully from the candidate data. If an answer isn't in the data and isn't critical, pick the most reasonable option. NEVER fabricate experience, qualifications, or work authorization.",
+		"- NEVER invent data. Use ONLY the candidate values above. Do not make up a phone number, salary, address, or any value you weren't given. For a REQUIRED field you don't have a value for, call request_user_info(field, why) to ask the user and wait — do NOT guess or fabricate.",
+		"- Demographic / EEO / voluntary self-identification questions (gender, race, ethnicity, veteran status, disability): ALWAYS choose \"Decline to self-identify\" / \"I don't wish to answer\" / \"Prefer not to say\" unless a candidate value above explicitly provides it. Never guess these.",
+		"- You may answer genuine screening questions (years of experience, work authorization) from the candidate data; if a required one isn't answerable from the data, use request_user_info rather than fabricating.",
 		"- If a CAPTCHA / 'verify you are human' appears, do nothing — the system hands off to a human automatically.",
 		"- If the job is closed/expired, call finish(status:\"expired\").",
 		"- When you see a submission confirmation, call finish(status:\"submitted\") with the confirmation text.",
@@ -265,6 +287,7 @@ export function toolCallToDecision(call: { name: string; arguments: Record<strin
 		case "navigate": return { thought, action: { action: "navigate", url: str(a.url) } };
 		case "scroll": return { thought, action: { action: "scroll", dy: num(a.dy) ?? 600 } };
 		case "press_key": return { thought, action: { action: "key", key: str(a.key) || "Enter" } };
+		case "request_user_info": return { thought, needsInput: { field: str(a.field) || "this field", why: str(a.why) } };
 		case "finish": {
 			const status = str(a.status);
 			const valid = status === "submitted" || status === "ready" || status === "expired" || status === "blocked" ? status : "blocked";

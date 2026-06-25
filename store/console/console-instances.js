@@ -224,9 +224,50 @@
 
     // Live Browser: remote view + control of a paused (needs_human) task, so the
     // user can solve a CAPTCHA / human challenge the agent can't.
+    // Ask-and-hold: the agent needs a value (not a browser action) → show an input
+    // box, not the live screen. The value is saved to the profile + the agent resumes.
+    function openNeedsInput(taskId, field) {
+      const inst = currentInstance && currentInstance.id;
+      if (!inst) return;
+      const overlay = document.createElement('div');
+      overlay.id = 'takeover-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center';
+      overlay.innerHTML = `
+        <div class="create-form" style="max-width:440px;width:90%;background:var(--paper);padding:1.25rem;border-radius:0.6rem">
+          <h3 style="margin:0 0 0.4rem;font-size:1rem">The agent needs a value from you</h3>
+          <p style="font-size:0.85rem;color:var(--muted);margin:0 0 0.75rem">${esc(field)}</p>
+          <input id="ni-value" placeholder="Enter ${esc(field)}" style="width:100%">
+          <div style="display:flex;gap:0.5rem;margin-top:0.75rem">
+            <button id="ni-submit" class="btn btn-primary btn-sm">Submit &amp; continue</button>
+            <button id="ni-cancel" class="btn btn-outline btn-sm">Cancel</button>
+          </div>
+          <div id="ni-status" style="font-size:0.78rem;color:var(--muted);margin-top:0.5rem"></div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const input = overlay.querySelector('#ni-value');
+      input.focus();
+      overlay.querySelector('#ni-cancel').addEventListener('click', () => overlay.remove());
+      const submit = async () => {
+        const value = input.value.trim();
+        if (!value) { input.focus(); return; }
+        overlay.querySelector('#ni-status').textContent = 'Saving…';
+        try {
+          await api(`/v1/instances/${inst}/input`, { method: 'POST', body: JSON.stringify({ taskId, value }) });
+          overlay.querySelector('#ni-status').textContent = 'Saved — the agent is continuing ✓';
+          setTimeout(() => { overlay.remove(); loadUnifiedBoard(); }, 800);
+        } catch (e) { overlay.querySelector('#ni-status').textContent = 'Could not submit.'; }
+      };
+      overlay.querySelector('#ni-submit').addEventListener('click', submit);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+    }
+
     function openTakeover(taskId) {
       const inst = currentInstance && currentInstance.id;
       if (!inst) return;
+      // A needs_input handoff wants a typed value, not browser control.
+      const handoff = (currentRuntimeEvents || []).find(e => e.taskId === taskId && e.type === 'job.human_handoff_required');
+      const hdata = (handoff && handoff.data) || {};
+      if (hdata.reason === 'needs_input') { openNeedsInput(taskId, hdata.inputField || 'a value'); return; }
       const overlay = document.createElement('div');
       overlay.id = 'takeover-overlay';
       overlay.style.cssText = 'position:fixed;inset:0;z-index:9999;background:#0b0b0f;display:flex;flex-direction:column';

@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { deriveJobPassword } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
+import { getProfile, profileToCandidate } from "../lib/profile.js";
 import { createNotification } from "./notifications.js";
 import type { Env } from "../types.js";
 import {
@@ -326,6 +327,21 @@ instanceRoutes.post("/:instanceId/takeover/:taskId/resume", async (c) => {
 	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
 });
 
+/** Supply the value the apply agent asked for (ask-and-hold / needs_input handoff). */
+instanceRoutes.post("/:instanceId/input", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { taskId?: string; value?: string };
+	if (!body.taskId) return c.json({ error: "taskId required" }, 400);
+	const res = await callRuntime(c.env, runtime, "/browser/input", {
+		method: "POST",
+		body: JSON.stringify({ taskId: body.taskId, value: String(body.value ?? "") }),
+	});
+	return c.json(await runtimeJson(res) as object, runtimeStatus(res, 200));
+});
+
 /** End a human-takeover session. */
 instanceRoutes.post("/:instanceId/takeover/:taskId/end", async (c) => {
 	const session = await requireUser(c);
@@ -428,19 +444,19 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 	const url = String(body.url ?? "");
 	const resumePath = String(body.resumePath ?? body.resume_path ?? "");
 
-	// Candidate identity comes from the instance KB (the résumé) — the single
-	// source of truth — so the email is always the one the user maintains there,
-	// never a hardcoded/work address. Request fields override only if provided.
-	const kb = await readKbCandidate(c.env, instanceId);
+	// Candidate identity comes from the structured Profile — the single source of
+	// truth — so the agent fills real values and never invents. Request fields
+	// override only if explicitly provided.
+	const prof = profileToCandidate(await getProfile(c.env, session.uid));
 	// A saved credential for this site (the vault) is authoritative — its real
 	// password lets the brain sign in to an existing account, and its username is
 	// the login identity. This is what makes repeat applications "just work".
 	const cred = await findCredentialForHost(c.env, instanceId, session.uid, url);
-	const fullName = String(cand.fullName ?? cand.full_name ?? body.full_name ?? kb.fullName ?? "");
-	const email = String(cand.email ?? body.email ?? cred?.username ?? kb.email ?? "");
+	const fullName = String(cand.fullName ?? cand.full_name ?? body.full_name ?? prof.fullName ?? "");
+	const email = String(cand.email ?? body.email ?? cred?.username ?? prof.email ?? "");
 	if (!/^https?:\/\//.test(url)) return c.json({ error: "url (http/https) required" }, 400);
 	if (!resumePath) return c.json({ error: "resumePath required (absolute path on the runner machine)" }, 400);
-	if (!fullName || !email) return c.json({ error: "no candidate email in the KB — add your résumé (with email) to the instance knowledge, or pass candidate.email" }, 400);
+	if (!fullName || !email) return c.json({ error: "no candidate name/email in your Profile — fill it in the console (KB → Profile) or pass candidate.email" }, 400);
 
 	const job = {
 		url,
@@ -448,11 +464,12 @@ instanceRoutes.post("/:instanceId/apply", async (c) => {
 		candidate: {
 			fullName,
 			email,
-			phone: optionalStr(cand.phone),
-			location: optionalStr(cand.location),
-			linkedin: optionalStr(cand.linkedin),
-			portfolio: optionalStr(cand.portfolio),
-			workAuthorization: optionalStr(cand.workAuthorization ?? cand.work_authorization),
+			phone: optionalStr(cand.phone) ?? prof.phone,
+			location: optionalStr(cand.location) ?? prof.location,
+			linkedin: optionalStr(cand.linkedin) ?? prof.linkedin,
+			portfolio: optionalStr(cand.portfolio) ?? prof.portfolio,
+			workAuthorization: optionalStr(cand.workAuthorization ?? cand.work_authorization) ?? prof.workAuthorization,
+			salaryExpectation: prof.salaryExpectation,
 		},
 		coverNote: optionalStr(body.coverNote ?? body.cover_note),
 		// Saved credential password wins (lets the brain sign into the real existing

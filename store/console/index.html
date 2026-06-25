@@ -738,6 +738,14 @@
       </div>
 
       <div class="profile-section">
+        <h3>Candidate Profile</h3>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem">Structured, reusable info your agents use to fill forms (e.g. job applications) — so they use <b>your real values and never invent them</b>. Used across all your agents. Private fields stay yours; nothing here is shown publicly.</p>
+        <div id="cp-fields" style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem"></div>
+        <button type="button" onclick="saveCandidateProfile()" class="btn btn-primary btn-sm" style="align-self:flex-start;margin-top:0.6rem">Save Candidate Profile</button>
+        <span id="cp-status" style="font-size:0.78rem;color:var(--muted);margin-left:0.6rem"></span>
+      </div>
+
+      <div class="profile-section">
         <h3>API Token</h3>
         <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.75rem">Use this token to authenticate SDK calls and API requests. Keep it secret.</p>
         <div class="token-display">
