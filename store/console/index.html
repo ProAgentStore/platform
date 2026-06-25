@@ -369,6 +369,33 @@
         </div>
       </div>
     </div>
+
+    <div id="inst-tab-settings" class="tab-panel">
+      <div class="create-form" style="margin-bottom:1rem">
+        <h3 style="font-size:1rem;margin-bottom:0.3rem">Board maintenance</h3>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.7rem">Tidy up the board. These only clear your view — they never un-submit a real application.</p>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
+          <button type="button" onclick="clearFinishedTasks()" class="btn btn-outline btn-sm">Clear finished tasks</button>
+          <button type="button" onclick="clearApplicationHistory()" class="btn btn-outline btn-sm">Clear application history</button>
+        </div>
+        <div id="settings-maint-msg" style="font-size:0.8rem;margin-top:0.5rem"></div>
+      </div>
+      <div class="create-form" style="margin-bottom:1rem">
+        <h3 style="font-size:1rem;margin-bottom:0.3rem">Where things live</h3>
+        <ul style="font-size:0.84rem;color:var(--muted);line-height:1.8;padding-left:1.1rem;margin:0">
+          <li><b>Résumé</b> &amp; documents → <a href="#" onclick="switchInstTab('knowledge');switchKbTab('docs');return false">Knowledge → Documents</a></li>
+          <li><b>Candidate profile</b> &amp; job preferences → <a href="#" onclick="if(window.showProfile)showProfile();return false">Profile</a></li>
+          <li><b>Rules / special instructions</b> → <a href="#" onclick="switchInstTab('knowledge');switchKbTab('rules');return false">Knowledge → Rules &amp; Tips</a></li>
+          <li><b>Site logins</b> → <a href="#" onclick="switchInstTab('knowledge');switchKbTab('credentials');return false">Knowledge → Credentials</a></li>
+        </ul>
+      </div>
+      <div class="create-form">
+        <h3 style="font-size:1rem;margin-bottom:0.3rem;color:var(--red)">Danger zone</h3>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.6rem">Stop using this agent. Your data stays unless you clear it above.</p>
+        <button type="button" onclick="unsubscribeInstance()" class="btn btn-outline btn-sm" style="border-color:var(--red);color:var(--red)">Unsubscribe from this agent</button>
+        <div id="settings-danger-msg" style="font-size:0.8rem;margin-top:0.5rem"></div>
+      </div>
+    </div>
     </div><!-- /inst-content-wrapper -->
   </div>
 

@@ -313,6 +313,20 @@ export async function deleteMirroredRuntimeTask(
 		.run();
 }
 
+/** Remove all finished (failed/completed/cancelled) mirrored tasks for an instance. */
+export async function clearFinishedRuntimeTasks(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<number> {
+	const res = await env.DB.prepare(
+		"DELETE FROM instance_runtime_tasks WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('failed','completed','cancelled','blocked','expired')",
+	)
+		.bind(instanceId, userId)
+		.run();
+	return res.meta?.changes ?? 0;
+}
+
 /**
  * When a runner (re)registers, any task that was mid-flight on the PREVIOUS
  * session is orphaned — its browser page / takeover session died with the old

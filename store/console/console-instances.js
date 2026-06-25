@@ -104,6 +104,7 @@
           <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
           <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')">Board</button>
           <button type="button" class="tab${tab==='knowledge'?' active':''}" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')">Knowledge</button>
+          <button type="button" class="tab${tab==='settings'?' active':''}" data-inst-tab="settings" onclick="switchInstTab('settings')">Settings</button>
         </div>
       `;
       switchInstTab(tab, false);
@@ -568,6 +569,42 @@
         if (btn) { btn.textContent = 'Apply'; btn.disabled = false; }
         loadApplyChecklist();
       }
+    }
+
+    // ── Settings tab actions ────────────────────────────────────
+    async function clearFinishedTasks() {
+      if (!currentInstance) return;
+      if (!confirm('Remove all finished tasks (failed / done / cancelled) from the board?')) return;
+      const msg = document.getElementById('settings-maint-msg');
+      try {
+        const r = await api(`/v1/instances/${currentInstance.id}/tasks/clear-finished`, { method: 'POST' });
+        if (msg) { msg.textContent = `Cleared ${r.cleared || 0} finished task(s).`; msg.style.color = 'var(--green)'; }
+      } catch (e) { if (msg) { msg.textContent = 'Could not clear: ' + e.message; msg.style.color = 'var(--red)'; } }
+    }
+    async function clearApplicationHistory() {
+      if (!currentInstance) return;
+      if (!confirm('Delete all application records from the board? This removes the saved rows, not any submitted application.')) return;
+      const msg = document.getElementById('settings-maint-msg');
+      try {
+        const data = await api(`/v1/instances/${currentInstance.id}/collections/applications/records?limit=200`).catch(() => ({ records: [] }));
+        const recs = data.records || [];
+        let n = 0;
+        for (const rec of recs) {
+          const id = rec.id || rec._id || rec.recordId;
+          if (!id) continue;
+          await api(`/v1/instances/${currentInstance.id}/collections/applications/records/${encodeURIComponent(id)}`, { method: 'DELETE' }).then(() => { n++; }).catch(() => {});
+        }
+        if (msg) { msg.textContent = `Cleared ${n} application record(s).`; msg.style.color = 'var(--green)'; }
+      } catch (e) { if (msg) { msg.textContent = 'Could not clear: ' + e.message; msg.style.color = 'var(--red)'; } }
+    }
+    async function unsubscribeInstance() {
+      if (!currentInstance) return;
+      if (!confirm('Unsubscribe from this agent? You can re-subscribe anytime.')) return;
+      const msg = document.getElementById('settings-danger-msg');
+      try {
+        await api(`/v1/instances/${currentInstance.id}/cancel`, { method: 'POST' });
+        showDashboard('instances');
+      } catch (e) { if (msg) { msg.textContent = 'Could not unsubscribe: ' + e.message; msg.style.color = 'var(--red)'; } }
     }
 
     // (KB page + Applications kanban moved to console-instances-apps.js)

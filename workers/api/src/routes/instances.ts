@@ -11,6 +11,7 @@ import {
 	callRuntime,
 	cloudflareAiSetupTask,
 	cloudflareAiSetupTaskId,
+	clearFinishedRuntimeTasks,
 	deleteMirroredRuntimeTask,
 	encodeRuntimeToken,
 	fagsRuntimeSetupTask,
@@ -406,6 +407,15 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/approve", async (c) => {
 });
 
 /** Cancel a runtime task. */
+/** Clear all finished (failed/done/cancelled) tasks from the board. */
+instanceRoutes.post("/:instanceId/tasks/clear-finished", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const cleared = await clearFinishedRuntimeTasks(c.env, instanceId, session.uid);
+	return c.json({ ok: true, cleared });
+});
+
 /** Delete a ticket: stop the runner task (best-effort) + drop it from the board. */
 instanceRoutes.delete("/:instanceId/tasks/:taskId", async (c) => {
 	const session = await requireUser(c);
