@@ -326,7 +326,9 @@
       input,textarea,select{padding:0.42rem 0.55rem;font-size:0.85rem}
       .btn{padding:0.5rem 0.85rem}
       .btn-sm{padding:0.3rem 0.55rem}
-      .create-form{padding:0.55rem 0.55rem}
+      /* The instance-detail content wrapper had 1rem L/R padding — the real "huge
+         margin" inside an instance (it's not a .container). Strip it down. */
+      #inst-detail-body{padding:0 0.35rem 0.5rem}
       #inst-coding-repos-section{padding:0.4rem 0.45rem!important}
       .inst-nav-tabs .tab{padding:0.25rem 0.45rem}
 
@@ -369,7 +371,7 @@
 
       /* Forms */
       .form-row{flex-direction:column;gap:0.5rem}
-      .create-form{padding:0.7rem;margin-bottom:0.75rem}
+      .create-form{padding:0.55rem;margin-bottom:0.6rem}
 
       /* Profile — tighter cards/sections */
       .profile-card{padding:0.7rem;margin-bottom:0.6rem}
