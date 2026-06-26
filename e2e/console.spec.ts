@@ -539,10 +539,11 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.getByRole("button", { name: "My Instances (Client)" }).click();
 		await page.getByText("Job Application Assistant").click();
 
-		await expect(page.locator("#runtime-status-badge")).toHaveText("● Runner online");
+		// Status is a compact dot (no text) with the description in the tooltip.
+		await expect(page.locator("#runtime-status-badge")).toHaveText("●");
 		await expect(page.locator("#runtime-status-badge")).toHaveAttribute(
 			"title",
-			"https://runner.example.com",
+			"Runner online · https://runner.example.com",
 		);
 	});
 
