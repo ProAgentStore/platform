@@ -479,31 +479,22 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 			error: "Runtime not registered",
 		});
 	}
-	try {
-		const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(String(limit))}`);
-		const payload = await runtimeJson(res);
-		if (res.ok) {
-			await mirrorRuntimeEvents(c.env, instanceId, session.uid, payload);
-			return c.json(payload, 200);
+	// Stale-while-revalidate (same as /tasks): serve the D1 mirror immediately so the
+	// activity feed never blanks/lags on a flaky tunnel; refresh from the runner in the
+	// background. Falls back to events synthesised from tasks when there's no history.
+	const revalidate = (async () => {
+		try {
+			const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(String(limit))}`);
+			if (res.ok) await mirrorRuntimeEvents(c.env, instanceId, session.uid, await runtimeJson(res));
+			else await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		} catch {
+			await updateRuntimeStatus(c.env, instanceId, session.uid, "offline").catch(() => undefined);
 		}
-		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
-		const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
-		const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
-		return c.json({
-			events: events.length ? events : syntheticEventsFromTasks(tasks),
-			runtimeUnavailable: true,
-			error: runtimeErrorPayload(payload),
-		});
-	} catch (error) {
-		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
-		const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
-		const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
-		return c.json({
-			events: events.length ? events : syntheticEventsFromTasks(tasks),
-			runtimeUnavailable: true,
-			error: error instanceof Error ? error.message : String(error),
-		});
-	}
+	})();
+	try { c.executionCtx.waitUntil(revalidate); } catch { await revalidate; }
+	const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
+	const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
+	return c.json({ events: events.length ? events : syntheticEventsFromTasks(tasks) }, 200);
 });
 
 /** Chat with my instance of an agent. */
