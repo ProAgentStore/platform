@@ -43,12 +43,13 @@ export function rateLimitDefault() {
 			c.req.header("CF-Connecting-IP") ||
 			c.req.header("X-Forwarded-For") ||
 			"unknown";
-		// Interactive human-takeover (live frame polling + mouse/scroll/keyboard
-		// relay) generates far more requests than ordinary API use, so it gets a
-		// much higher bucket instead of tripping the 60/min general limit.
-		const isTakeover = c.req.path.includes("/takeover");
-		const limit = isTakeover ? 3000 : 60;
-		const key = isTakeover ? `takeover:${ip}` : `default:${ip}`;
+		// Live polling (human-takeover frame relay + the coding terminal `capture`
+		// poll) generates far more requests than ordinary API use — a terminal
+		// polls every ~1.5s. Give it a much higher bucket so it can't starve the
+		// 60/min general budget and 429 a normal action like "Add repo".
+		const isLivePoll = c.req.path.includes("/takeover") || c.req.path.endsWith("/capture");
+		const limit = isLivePoll ? 3000 : 60;
+		const key = isLivePoll ? `live:${ip}` : `default:${ip}`;
 		const { allowed, remaining } = getRateLimit(key, limit);
 		c.header("X-RateLimit-Limit", String(limit));
 		c.header("X-RateLimit-Remaining", String(remaining));
