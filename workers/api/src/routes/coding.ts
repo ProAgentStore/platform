@@ -75,6 +75,29 @@ function asClient(v: unknown): CodingClientType {
 	return CLIENTS.includes(v as CodingClientType) ? (v as CodingClientType) : "claude";
 }
 
+/** Command wrappers to skip when finding the real engine binary in a launch command. */
+const COMMAND_LAUNCHERS = new Set(["npx", "bunx", "pnpm", "yarn", "npm", "bun", "env", "exec", "dlx", "run", "sudo", "time"]);
+
+/**
+ * Derive the engine client type from a launch command's real binary — skipping
+ * `FOO=bar` env prefixes and wrappers like `npx`/`bunx`/`env`. This decides whether
+ * the runner uses the structured Claude engine (claude) or runs the CLI raw (else).
+ * An unknown binary maps to "codex" so it runs RAW, not mis-driven as Claude.
+ */
+export function deriveClientType(command: string): CodingClientType {
+	for (const t of command.trim().split(/\s+/)) {
+		if (!t || t.includes("=") || t.startsWith("-")) continue;
+		const base = (t.split("/").pop() || "").toLowerCase();
+		if (COMMAND_LAUNCHERS.has(base)) continue;
+		if (base === "claude" || base.startsWith("claude")) return "claude";
+		if (base.startsWith("gemini")) return "gemini";
+		if (base.startsWith("grok")) return "grok";
+		if (base.startsWith("codex")) return "codex";
+		return "codex"; // an unknown binary → run it raw (NOT as Claude stream-json)
+	}
+	return "claude";
+}
+
 /** An engine preset = a named CLI launch command the user can pick per session. */
 export interface CodingEngine {
 	id: string;
@@ -105,7 +128,11 @@ async function readEngines(env: Env, instanceId: string, userId: string): Promis
 	} catch {
 		/* fall through to defaults */
 	}
-	const engines = Array.isArray(cfg.codingEngines) && cfg.codingEngines.length ? cfg.codingEngines : DEFAULT_ENGINES;
+	// Only keep well-formed presets (a hand-edited config must not crash resolveEngine).
+	const valid = Array.isArray(cfg.codingEngines)
+		? cfg.codingEngines.filter((e) => e && typeof e.id === "string" && typeof e.label === "string" && typeof e.command === "string")
+		: [];
+	const engines = valid.length ? valid : DEFAULT_ENGINES;
 	const defaultEngineId = cfg.defaultEngineId && engines.some((e) => e.id === cfg.defaultEngineId) ? cfg.defaultEngineId : engines[0].id;
 	return { engines, defaultEngineId };
 }
@@ -114,10 +141,9 @@ async function readEngines(env: Env, instanceId: string, userId: string): Promis
 async function resolveEngine(env: Env, instanceId: string, userId: string, engineId: unknown): Promise<{ command: string; clientType: CodingClientType }> {
 	const { engines, defaultEngineId } = await readEngines(env, instanceId, userId);
 	const eng = engines.find((e) => e.id === engineId) ?? engines.find((e) => e.id === defaultEngineId) ?? engines[0];
-	// Derive the client type from the command's first word (basename), so the
-	// runner knows whether to use the structured Claude engine or run it raw.
-	const bin = (eng.command.trim().split(/\s+/)[0] || "").split("/").pop() || "";
-	return { command: eng.command, clientType: asClient(bin) };
+	// Derive the client type from the command's real binary, so the runner knows
+	// whether to use the structured Claude engine or run the CLI raw.
+	return { command: eng.command, clientType: deriveClientType(eng.command) };
 }
 
 /** "~/dev/stores/pags/platform" → "pags/platform" — a less generic default name. */

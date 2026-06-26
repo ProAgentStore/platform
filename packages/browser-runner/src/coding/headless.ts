@@ -71,18 +71,22 @@ export class HeadlessSession {
 	private readonly cmdBin: string;
 	private readonly cmdArgs: string[];
 	private readonly binName: string;
-	/** Wall-clock of the last stdout byte — drives the raw-mode idle heuristic. */
+	/** Wall-clock of the last stdout/stderr byte — drives the raw-mode idle heuristic. */
 	private lastOutputAt = 0;
+	/** Raw-mode: has any output arrived since the current turn's input? */
+	private sawOutputSinceInput = false;
+	/** Raw-mode: when the current turn started (absolute idle backstop). */
+	private turnStartedAt = 0;
 
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.sessionName = `pags-${config.clientType}-${config.id}`;
 		this.claudeSessionId = readState(config.statePath, config.id);
 		// Claude is the structured engine; everything else is a raw CLI.
 		this.mode = config.clientType === "claude" ? "stream-json" : "raw";
-		const tokens = config.command?.trim() ? config.command.trim().split(/\s+/) : [];
-		// A test/override bin wins; else the command's first word; else `claude`.
-		this.cmdBin = config.bin ?? tokens[0] ?? "claude";
-		this.cmdArgs = config.bin ? [] : tokens.slice(1);
+		const { bin, args } = parseCommand(config.command);
+		// A test/override bin wins for the binary only; the command's args are kept.
+		this.cmdBin = config.bin ?? (bin || "claude");
+		this.cmdArgs = args;
 		this.binName = (this.cmdBin.split("/").pop() || this.cmdBin) || "cli";
 	}
 
@@ -98,10 +102,20 @@ export class HeadlessSession {
 
 	runState(): "idle" | "thinking" | "responding" {
 		if (!this.alive) return "idle";
-		// Raw engines have no "turn over" event, so settle to idle once stdout has
-		// been quiet for a beat after a turn started.
-		if (this.mode === "raw" && this.run === "thinking" && Date.now() - this.lastOutputAt > 1500) {
-			this.run = "idle";
+		// Raw engines have no "turn over" event, so we INFER idle. Three rules, in order:
+		//  1. produced output, then went quiet for 1.5s → settled (the common case).
+		//  2. NEVER produced output but 8s elapsed → a silent turn (just a prompt) is done.
+		//  3. absolute 15-min backstop → never wedge "thinking" forever (e.g. a heartbeat
+		//     that keeps refreshing lastOutputAt). The user can also Restart from diagnostics.
+		// Rule 1 deliberately waits for first output so a slow first token can't flip us
+		// to idle mid-turn (which would make the brain proceed against a half-done turn).
+		if (this.mode === "raw" && this.run === "thinking") {
+			const now = Date.now();
+			const quiet = now - this.lastOutputAt;
+			const elapsed = now - this.turnStartedAt;
+			if (this.sawOutputSinceInput && quiet > 1500) this.run = "idle";
+			else if (!this.sawOutputSinceInput && elapsed > 8000) this.run = "idle";
+			else if (elapsed > 15 * 60 * 1000) this.run = "idle";
 		}
 		return this.run === "thinking" ? "thinking" : "idle";
 	}
@@ -114,19 +128,10 @@ export class HeadlessSession {
 	/** Launch (or resume) the agent process. Idempotent if already alive. */
 	start(): void {
 		if (this.alive) return;
-		let args: string[];
-		if (this.mode === "stream-json") {
-			// Claude: the structured persistent-agent protocol. We own the stream-json
-			// flags; the user's command may add others (e.g. --model, a key via env).
-			args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
-			for (const a of this.cmdArgs) if (!args.includes(a)) args.push(a);
-			if (!args.includes("--dangerously-skip-permissions")) args.push("--dangerously-skip-permissions");
-			// Continue the prior conversation after a runner restart (state in ~/.claude).
-			if (this.claudeSessionId) args.push("--resume", this.claudeSessionId);
-		} else {
-			// Any other engine: run exactly what the user configured; capture stdout.
-			args = [...this.cmdArgs];
-		}
+		// stream-json: we own the structural flags + --resume; merge the user's extras
+		// (e.g. --model) without letting them clobber or orphan-value our flags. raw:
+		// run exactly what the user configured and capture stdout.
+		const args = this.mode === "stream-json" ? buildClaudeArgs(this.cmdArgs, this.claudeSessionId) : [...this.cmdArgs];
 
 		this.proc = spawn(this.cmdBin, args, {
 			cwd: this.config.workDir,
@@ -147,6 +152,7 @@ export class HeadlessSession {
 		this.proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString("utf8")));
 		this.proc.stderr?.on("data", (d: Buffer) => {
 			this.lastOutputAt = Date.now();
+			this.sawOutputSinceInput = true;
 			const text = d.toString("utf8").trim();
 			if (text) this.push(`[${this.binName}] ${stripAnsi(text)}`);
 		});
@@ -167,7 +173,10 @@ export class HeadlessSession {
 		if (!this.alive) this.start();
 		this.push(`\n❯ [${stamp()}] ${text}`); // ❯ — your turn, timestamped
 		this.run = "thinking";
-		this.lastOutputAt = Date.now();
+		const now = Date.now();
+		this.lastOutputAt = now;
+		this.turnStartedAt = now;
+		this.sawOutputSinceInput = false; // arm the raw idle heuristic for THIS turn
 		try {
 			if (this.mode === "stream-json") {
 				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
@@ -211,6 +220,7 @@ export class HeadlessSession {
 
 	private onStdout(chunk: string): void {
 		this.lastOutputAt = Date.now();
+		this.sawOutputSinceInput = true; // a slow first token must NOT count as idle
 		this.buf += chunk;
 		let nl: number;
 		// biome-ignore lint/suspicious/noAssignInExpressions: standard line-buffer drain
@@ -220,6 +230,12 @@ export class HeadlessSession {
 			if (!line) continue;
 			if (this.mode === "stream-json") this.handle(line);
 			else this.pushRaw(line); // raw engine — the line IS the terminal output
+		}
+		// A TUI/raw engine may render without newlines; don't let `buf` grow unbounded
+		// (and surface the partial output so the pane isn't blank). 16KB is generous.
+		if (this.buf.length > 16 * 1024) {
+			if (this.mode === "raw") this.pushRaw(this.buf);
+			this.buf = "";
 		}
 	}
 
@@ -277,6 +293,42 @@ export class HeadlessSession {
 /** Local wall-clock "HH:MM:SS" for transcript timestamps (runner is a Node process). */
 function stamp(): string {
 	return new Date().toTimeString().slice(0, 8);
+}
+
+/** Split a launch command into bin + args, respecting single/double quotes. */
+export function parseCommand(command: string | undefined): { bin: string; args: string[] } {
+	const tokens: string[] = [];
+	const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+	let m: RegExpExecArray | null;
+	// biome-ignore lint/suspicious/noAssignInExpressions: tokenizer drain
+	while ((m = re.exec(command ?? "")) !== null) tokens.push(m[1] ?? m[2] ?? m[3] ?? "");
+	return { bin: tokens[0] ?? "", args: tokens.slice(1) };
+}
+
+/** Structural flags PAGS owns for the Claude stream-json engine — a user command
+ *  must not override or duplicate these (and must not orphan their values). */
+const RESERVED_CLAUDE_FLAGS = new Set(["-p", "--print", "--input-format", "--output-format", "--verbose", "--resume"]);
+
+/**
+ * Build Claude's argv: our structural stream-json flags + the user's extra args
+ * (e.g. `--model`), with reserved flags (and their values) stripped so the user
+ * can't clobber the protocol or leave an orphaned positional. `--resume` is added
+ * last from our persisted session id, never from the user's command.
+ */
+export function buildClaudeArgs(userArgs: string[], resumeId: string | null): string[] {
+	const args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
+	for (let i = 0; i < userArgs.length; i++) {
+		const a = userArgs[i];
+		if (RESERVED_CLAUDE_FLAGS.has(a)) {
+			// drop the flag AND its value (when the next token isn't itself a flag)
+			if (i + 1 < userArgs.length && !userArgs[i + 1].startsWith("-")) i++;
+			continue;
+		}
+		if (!args.includes(a)) args.push(a);
+	}
+	if (!args.includes("--dangerously-skip-permissions")) args.push("--dangerously-skip-permissions");
+	if (resumeId) args.push("--resume", resumeId);
+	return args;
 }
 
 /** Strip ANSI/VT escape sequences so a raw CLI's coloured output reads as plain text. */

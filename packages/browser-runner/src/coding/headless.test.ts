@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { defaultStatePath, HeadlessSession } from "./headless.js";
+import { buildClaudeArgs, defaultStatePath, HeadlessSession, parseCommand } from "./headless.js";
 
 /**
  * A stand-in for `claude -p --input-format stream-json --output-format stream-json`:
@@ -22,6 +22,22 @@ rl.on("line", (line) => {
   process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Done: " + text }] } }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Done: " + text }) + "\\n");
 });
+`;
+
+/** A raw (non-Claude) CLI: echoes coloured (ANSI) lines for each stdin line, with a
+ *  short delay before the second line, then goes quiet. */
+const FAKE_CODEX = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  process.stdout.write("\\x1b[32mthinking about: " + line + "\\x1b[0m\\n");
+  setTimeout(() => process.stdout.write("done: " + line + "\\n"), 150);
+});
+`;
+
+/** A raw CLI whose FIRST output is slow (1.8s) — to prove we don't flip idle early. */
+const FAKE_SLOW = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+rl.on("line", (line) => { setTimeout(() => process.stdout.write("late: " + line + "\\n"), 1800); });
 `;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -88,6 +104,87 @@ describe("HeadlessSession (stream-json engine)", () => {
 		const revived = new HeadlessSession({ id: "sess2", workDir: dir, clientType: "claude", bin, statePath });
 		expect(revived.snapshot()).toBe(""); // no live process yet, but it knows the id
 		// (resume is exercised by start(); we assert the persistence contract here.)
+	});
+});
+
+describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
+	let dir: string;
+	let codexBin: string;
+	let slowBin: string;
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-raw-"));
+		codexBin = join(dir, "fake-codex.js");
+		slowBin = join(dir, "fake-slow.js");
+		writeFileSync(codexBin, FAKE_CODEX);
+		writeFileSync(slowBin, FAKE_SLOW);
+		chmodSync(codexBin, 0o755);
+		chmodSync(slowBin, 0o755);
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("captures raw stdout (ANSI-stripped) into the transcript and settles to idle", async () => {
+		const s = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", bin: codexBin });
+		s.start();
+		expect(s.alive).toBe(true);
+		s.input("hi");
+		expect(s.runState()).toBe("thinking"); // set synchronously on send
+
+		await until(() => s.snapshot().includes("done: hi"));
+		const pane = s.snapshot();
+		expect(pane).toContain("thinking about: hi"); // raw line captured
+		expect(pane).not.toContain("\x1b["); // ANSI escapes stripped
+		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] hi/); // your turn, echoed
+
+		await until(() => s.runState() === "idle", 3000); // quiet for 1.5s → idle
+		expect(s.runState()).toBe("idle");
+		s.stop();
+	});
+
+	it("a slow first token does NOT flip to idle mid-turn", async () => {
+		const s = new HeadlessSession({ id: "raw2", workDir: dir, clientType: "codex", bin: slowBin });
+		s.start();
+		s.input("go");
+		await wait(1000); // 1s in, no output yet — old heuristic would have flipped idle at 1.5s of silence
+		expect(s.runState()).toBe("thinking");
+		await until(() => s.snapshot().includes("late: go"), 3000);
+		s.stop();
+	});
+});
+
+describe("parseCommand", () => {
+	it("splits bin + args, respecting quotes", () => {
+		expect(parseCommand("claude --dangerously-skip-permissions")).toEqual({ bin: "claude", args: ["--dangerously-skip-permissions"] });
+		expect(parseCommand('claude --append-system-prompt "be terse please"')).toEqual({ bin: "claude", args: ["--append-system-prompt", "be terse please"] });
+		expect(parseCommand("")).toEqual({ bin: "", args: [] });
+		expect(parseCommand(undefined)).toEqual({ bin: "", args: [] });
+	});
+});
+
+describe("buildClaudeArgs", () => {
+	it("always includes the structural stream-json flags + skip-permissions", () => {
+		expect(buildClaudeArgs([], null)).toEqual(["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]);
+	});
+	it("merges user extras (e.g. --model) without duplicating our flags", () => {
+		const a = buildClaudeArgs(["--model", "sonnet", "--dangerously-skip-permissions"], null);
+		expect(a).toContain("--model");
+		expect(a).toContain("sonnet");
+		expect(a.filter((x) => x === "--dangerously-skip-permissions").length).toBe(1);
+		expect(a.filter((x) => x === "--verbose").length).toBe(1);
+	});
+	it("strips a reserved flag AND its value — no orphan positional", () => {
+		const a = buildClaudeArgs(["--output-format", "text", "--model", "x"], null);
+		expect(a).not.toContain("text"); // the value didn't leak as a positional/prompt
+		expect(a.filter((x) => x === "--output-format").length).toBe(1);
+		expect(a[a.indexOf("--output-format") + 1]).toBe("stream-json"); // our value survives
+		expect(a).toContain("--model");
+		expect(a).toContain("x");
+	});
+	it("never doubles --resume and uses OUR persisted id", () => {
+		const a = buildClaudeArgs(["--resume", "userId"], "ourId");
+		expect(a.filter((x) => x === "--resume").length).toBe(1);
+		expect(a).toContain("ourId");
+		expect(a).not.toContain("userId");
 	});
 });
 
