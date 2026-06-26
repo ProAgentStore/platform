@@ -291,20 +291,21 @@
         <div id="inst-coding-terminal" class="create-form hidden" style="margin-top:1rem">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;gap:0.5rem;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:0.5rem;min-width:0;flex-shrink:1">
+              <button type="button" class="btn btn-outline btn-sm" onclick="closeCodingTerminal()" title="Back to all repositories" style="flex-shrink:0">&larr;</button>
+              <!-- Repo switcher lives up here (the coding top-nav), so the session below is full-screen. -->
+              <select id="inst-coding-repo-select" onchange="onCodingRepoSelect(this.value)" title="Switch repository" style="font-size:0.76rem;max-width:170px;flex-shrink:1;min-width:0"></select>
               <div class="tabs" style="margin:0;flex-shrink:0">
                 <button type="button" id="inst-coding-view-summary-btn" class="tab active" onclick="switchCodingView('summary')" title="Plain-language summary + chat">Summary</button>
                 <button type="button" id="inst-coding-view-terminal-btn" class="tab" onclick="switchCodingView('terminal')" title="Raw terminal">Terminal</button>
               </div>
               <span id="inst-coding-runstate" style="font-size:0.72rem;flex-shrink:0">idle</span>
-              <span id="inst-coding-term-label" style="font-size:0.7rem;color:var(--muted-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0"></span>
             </div>
             <div style="display:flex;gap:0.35rem;flex-wrap:wrap">
               <button type="button" class="btn btn-primary btn-sm" onclick="runCodingBrain()" title="Hand the session to the autonomous brain">Run with AI</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="resumeCodingBrain()" title="Resume the AI after a takeover / provide a requested value">Resume AI</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="sendCodingKey('Escape')">Esc</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="sendCodingKey('C-c')" title="Interrupt">Ctrl-C</button>
+              <button type="button" class="btn btn-outline btn-sm coding-term-only" onclick="sendCodingKey('Escape')">Esc</button>
+              <button type="button" class="btn btn-outline btn-sm coding-term-only" onclick="sendCodingKey('C-c')" title="Interrupt">Ctrl-C</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="endCodingSession()" style="color:var(--red)">End</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="closeCodingTerminal()">Close</button>
             </div>
           </div>
 
@@ -317,6 +318,7 @@
               <button type="button" id="inst-coding-speak" class="btn btn-outline btn-sm" onclick="toggleCodingVoiceOutput(this)" title="Read replies aloud">🔊</button>
               <button type="button" class="btn btn-primary btn-sm" onclick="askCoding()">Ask</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="refreshCodingSummary()" title="Re-read the terminal &amp; summarize">↻</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="clearCodingSummary()" title="Clear this conversation (keeps the activity log)">🧹</button>
             </div>
           </div>
 

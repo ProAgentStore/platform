@@ -14,6 +14,7 @@
     let codingSummaryBusy = false;
     let codingVoiceOn = false;            // read replies aloud (TTS)
     let codingRecognizer = null;          // active speech-to-text session
+    let codingTapBound = false;           // touch double-tap handler attached once
 
     async function loadCoding() {
       if (!currentInstance) return;
@@ -208,13 +209,10 @@
       codingSummaryHistory = [];
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.remove('hidden');
-      setCodingReposCollapsed(true); // focus the session — collapse the repo list
-      const label = document.getElementById('inst-coding-term-label');
-      if (label) {
-        const s = codingSessions.find(x => x.id === sessionId);
-        const r = s && codingRepos.find(x => x.id === s.repoId);
-        label.textContent = r ? r.name : '';
-      }
+      // Full-screen the session: the repo list moves into the header selector.
+      document.getElementById('inst-coding-repos-section')?.classList.add('hidden');
+      renderCodingRepoSelect();
+      bindCodingSummaryTaps();
       switchCodingView('summary', updateUrl); // default to the condensed co-pilot view
       renderCodingSummary();
       stopCodingPolling();
@@ -253,6 +251,8 @@
       const tb = document.getElementById('inst-coding-view-terminal-btn');
       if (sb) sb.classList.toggle('active', name === 'summary');
       if (tb) tb.classList.toggle('active', name === 'terminal');
+      // Summary is for talking only — hide raw-terminal controls (Esc / Ctrl-C) there.
+      document.querySelectorAll('.coding-term-only').forEach(el => el.classList.toggle('hidden', name !== 'terminal'));
       if (updateUrl) setCodingUrl();
     }
 
@@ -275,8 +275,10 @@
         if (m.role === 'user') {
           return `<div style="margin:0.5rem 0;text-align:right"><span style="display:inline-block;background:var(--accent,#7c3aed);color:#fff;padding:0.3rem 0.6rem;border-radius:10px;max-width:85%;text-align:left">${esc(m.content)}</span></div>`;
         }
-        // Double-tap an assistant message to hear it spoken (direct gesture → iOS-safe).
-        return `<div ondblclick="speakCodingMsg(${i})" title="Double-tap to hear it" style="margin:0.5rem 0;cursor:pointer">${mdLite(m.content)}</div>`;
+        // Double-tap an assistant message to hear it spoken. ondblclick covers mouse;
+        // a touch double-tap detector (bindCodingSummaryTaps) covers iOS, where finger
+        // double-taps don't reliably fire dblclick.
+        return `<div data-msg-idx="${i}" ondblclick="speakCodingMsg(${i})" title="Double-tap to hear it" style="margin:0.5rem 0;cursor:pointer">${mdLite(m.content)}</div>`;
       }).join('') + (codingSummaryBusy ? '<div style="color:var(--muted);font-size:0.8rem">…</div>' : '');
       el.scrollTop = el.scrollHeight;
     }
@@ -351,6 +353,28 @@
       if (m && m.content) speakText(m.content);
     }
 
+    // Reliable touch double-tap on the thread (iOS often won't fire dblclick for a
+    // finger double-tap). Attached once; survives re-renders since the container
+    // element is stable. speakText() cancels first, so a stray double-fire is benign.
+    function bindCodingSummaryTaps() {
+      if (codingTapBound) return;
+      const el = document.getElementById('inst-coding-summary-thread');
+      if (!el) return;
+      codingTapBound = true;
+      let lastTs = 0, lastIdx = -1;
+      el.addEventListener('touchend', (e) => {
+        const div = e.target.closest && e.target.closest('[data-msg-idx]');
+        if (!div) return;
+        const idx = Number(div.dataset.msgIdx);
+        const now = Date.now();
+        if (idx === lastIdx && now - lastTs < 400) {
+          e.preventDefault();
+          speakCodingMsg(idx);
+          lastTs = 0; lastIdx = -1;
+        } else { lastTs = now; lastIdx = idx; }
+      }, { passive: false });
+    }
+
     function toggleCodingVoiceOutput(btn) {
       codingVoiceOn = !codingVoiceOn;
       if (btn) btn.classList.toggle('active', codingVoiceOn);
@@ -378,11 +402,47 @@
       await callExplain(q);
     }
 
+    // Clear the conversation thread (the activity log/timeline of the agent's work is
+    // kept — this only wipes the chat). Persisted so it stays cleared on reload.
+    async function clearCodingSummary() {
+      if (!currentInstance || !currentCodingSession) return;
+      if (!confirm('Clear this conversation? The activity history is kept.')) return;
+      try {
+        await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/timeline`, { method: 'DELETE' });
+      } catch (e) { /* clear locally regardless */ }
+      codingSummaryHistory = [];
+      renderCodingSummary();
+    }
+
+    // The header repo switcher (repos live in the coding top-nav so the session is
+    // full-screen). Lists every repo; the live one is marked.
+    function renderCodingRepoSelect() {
+      const sel = document.getElementById('inst-coding-repo-select');
+      if (!sel) return;
+      const s = codingSessions.find(x => x.id === currentCodingSession);
+      const curRepo = s ? s.repoId : '';
+      sel.innerHTML = codingRepos.map(r => {
+        const active = codingSessions.find(x => x.repoId === r.id && x.status === 'active');
+        return `<option value="${esc(r.id)}"${r.id === curRepo ? ' selected' : ''}>${esc(r.name)}${active ? ' • live' : ''}</option>`;
+      }).join('');
+    }
+
+    // Switch repos from the header dropdown: open its live session, or start one.
+    function onCodingRepoSelect(repoId) {
+      if (!repoId) return;
+      const cur = codingSessions.find(x => x.id === currentCodingSession);
+      if (cur && cur.repoId === repoId) return; // already viewing it
+      const active = codingSessions.find(x => x.repoId === repoId && x.status === 'active');
+      if (active) openCodingTerminal(active.id);
+      else startCodingSession(repoId);
+    }
+
     function closeCodingTerminal() {
       const hadSession = !!currentCodingSession;
       stopCodingPolling();
       if (window.speechSynthesis) speechSynthesis.cancel();
       setCodingReposCollapsed(false); // bring the repo list back
+      document.getElementById('inst-coding-repos-section')?.classList.remove('hidden');
       currentCodingSession = null;
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.add('hidden');

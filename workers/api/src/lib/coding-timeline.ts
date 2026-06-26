@@ -68,6 +68,16 @@ export async function loadChat(env: Env, sessionId: string, limit = 200): Promis
 	return (results ?? []).map(toEntry).reverse();
 }
 
+/** Clear the conversation turns for a session (the console "Clear" button). Keeps
+ * the activity log (terminal/brain/outcome) — only the chat thread is wiped. */
+export async function clearChat(env: Env, sessionId: string): Promise<void> {
+	await env.DB.prepare(
+		"DELETE FROM coding_timeline WHERE session_id = ?1 AND type IN ('chat_user','chat_assistant')",
+	)
+		.bind(sessionId)
+		.run();
+}
+
 /** The most recent stored terminal snapshot (used to dedupe before storing a new one). */
 export async function lastTerminal(env: Env, sessionId: string): Promise<string | null> {
 	const row = await env.DB.prepare(

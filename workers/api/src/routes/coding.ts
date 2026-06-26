@@ -3,7 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
 import { installationTokenForOwner } from "../lib/github-app.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
-import { appendTimeline, contextForCopilot, lastTerminal, loadChat } from "../lib/coding-timeline.js";
+import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat } from "../lib/coding-timeline.js";
 import {
 	createRepo,
 	createSession,
@@ -266,6 +266,15 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/timeline", async (c) =
 	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
 	if (!session) throw new HttpError(404, "Session not found");
 	return c.json({ chat: await loadChat(c.env, session.id) });
+});
+
+/** Clear a session's conversation thread (keeps the activity log). */
+codingRoutes.delete("/:instanceId/coding/sessions/:sessionId/timeline", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
+	if (!session) throw new HttpError(404, "Session not found");
+	await clearChat(c.env, session.id);
+	return c.json({ ok: true });
 });
 
 /** Send a message / keys straight to the CLI (manual drive, no brain). */
