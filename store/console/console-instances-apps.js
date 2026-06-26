@@ -15,8 +15,14 @@
 
     // ── Special Instructions + learned per-ATS tips (transparency) ──
     async function loadInstructionsTips() {
+      // Special Instructions are generic (per-instance, used by every agent incl.
+      // Coder). The learned per-ATS tips are apply-only AND keyed per-user, so they
+      // must not surface in other agents — hide that section + skip the fetch.
       const ta = document.getElementById('inst-special-instructions');
       if (ta) { try { const d = await api(`/v1/instances/${currentInstance.id}/instructions`); ta.value = d.instructions || ''; } catch (e) {} }
+      const tipsSection = document.getElementById('inst-tips-section');
+      if (tipsSection) tipsSection.style.display = isApplyAgent() ? '' : 'none';
+      if (!isApplyAgent()) return;
       const list = document.getElementById('inst-tips-list');
       const empty = document.getElementById('inst-tips-empty');
       if (!list) return;

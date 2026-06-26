@@ -87,6 +87,13 @@
       return (data.instances || []).find(inst => inst.id === instanceId) || { id: instanceId, name: 'Agent' };
     }
 
+    // Job-application-specific UI (résumé upload, the per-ATS learned-tips cache)
+    // must only render for the apply agent — otherwise it leaks into unrelated
+    // agents like Coder (the apply cache is keyed per-user, not per-instance).
+    function isApplyAgent() {
+      return !!currentInstance && currentInstance.slug === 'job-application-assistant';
+    }
+
     async function openInstance(instanceId, meta, tab = 'chat', updateUrl = true, runtimeTaskId = null) {
       if (tab === 'runtime' || tab === 'applications') tab = 'board';
       meta = await resolveInstanceMeta(instanceId, meta);
@@ -523,6 +530,10 @@
     // Deterministic apply: setup checklist + a real /apply call that returns the
     // actual task — no chatbot in the loop that could claim success without one.
     async function loadApplyChecklist() {
+      // The "Apply to a job" panel is job-application-only — hide it everywhere else.
+      const panel = document.getElementById('apply-panel');
+      if (panel) panel.style.display = isApplyAgent() ? '' : 'none';
+      if (!isApplyAgent()) return;
       const el = document.getElementById('apply-checklist');
       const btn = document.getElementById('apply-btn');
       if (!el || !currentInstance) return;
@@ -806,6 +817,11 @@
     // Résumé transfer: store the actual file on the platform so a remote runner
     // can download + attach it during an application.
     async function loadApplyResumeStatus() {
+      // Résumés are only meaningful for the job-application agent. Hide the whole
+      // block for every other agent (Coder, Site Monitor, …).
+      const block = document.getElementById('inst-resume-block');
+      if (block) block.style.display = isApplyAgent() ? '' : 'none';
+      if (!isApplyAgent()) return;
       const el = document.getElementById('apply-resume-status');
       if (!el || !currentInstance) return;
       try {
