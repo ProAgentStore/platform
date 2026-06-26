@@ -276,9 +276,7 @@
       <div id="inst-coding-body">
         <div id="inst-coding-repos-section" class="create-form" style="margin-bottom:0.75rem;padding:0.6rem 0.8rem">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
-            <button type="button" onclick="toggleCodingRepos()" style="background:none;border:none;color:var(--ink);font-weight:700;font-size:0.95rem;cursor:pointer;padding:0">
-              <span id="inst-coding-repos-caret">▾</span> Repositories
-            </button>
+            <span style="color:var(--ink);font-weight:700;font-size:0.95rem">Repositories</span>
             <button type="button" class="btn btn-outline btn-sm" onclick="toggleAddRepo()">+ Add</button>
           </div>
           <div id="inst-coding-collapsible">
@@ -308,6 +306,7 @@
               <button type="button" class="btn btn-outline btn-sm" onclick="deleteCurrentCodingRepo()" title="Delete project" style="flex-shrink:0;padding:0.2rem 0.4rem;color:var(--red)">🗑</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="toggleCodingLinksEditor()" title="Launch links (dev / staging / prod)" style="flex-shrink:0;padding:0.2rem 0.4rem">🔗</button>
               <span id="inst-coding-links" style="display:flex;gap:0.25rem;flex-shrink:0"></span>
+              <span id="inst-coding-deploy" style="display:flex;flex-shrink:0"></span>
               <div class="tabs" style="margin:0;flex-shrink:0">
                 <button type="button" id="inst-coding-view-summary-btn" class="tab active" onclick="switchCodingView('summary')" title="Chat with the agent — it drives Claude for you">Agent</button>
                 <button type="button" id="inst-coding-view-terminal-btn" class="tab" onclick="switchCodingView('terminal')" title="Raw terminal">Terminal</button>

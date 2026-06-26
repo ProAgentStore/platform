@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
-import { installationTokenForOwner } from "../lib/github-app.js";
+import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
@@ -155,6 +155,52 @@ codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 	const ok = await deleteRepo(c.env, instanceId, uid, c.req.param("repoId"));
 	if (!ok) throw new HttpError(404, "Repo not found");
 	return c.json({ ok: true });
+});
+
+/**
+ * Latest GitHub Actions run for a repo — so the console can show build/deploy
+ * status (running / failed / live) independently of the agent. OPTIONAL: returns
+ * { available:false } for local repos, non-GitHub repos, or when the GitHub App
+ * isn't installed — so it never breaks anything.
+ */
+codingRoutes.get("/:instanceId/coding/repos/:repoId/deployment", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	if (!repo) throw new HttpError(404, "Repo not found");
+	const full = repo.githubRepo;
+	if (!full || !full.includes("/") || !githubAppConfigured(c.env)) return c.json({ available: false });
+	const owner = full.split("/")[0];
+	const token = await installationTokenForOwner(c.env, uid, owner).catch(() => null);
+	if (!token) return c.json({ available: false });
+	try {
+		const res = await fetch(`https://api.github.com/repos/${full}/actions/runs?per_page=1`, {
+			headers: {
+				Authorization: `token ${token}`,
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+				"User-Agent": "proagentstore-coding/1.0",
+			},
+		});
+		if (!res.ok) return c.json({ available: false });
+		const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
+		const run = data.workflow_runs?.[0];
+		if (!run) return c.json({ available: true, run: null });
+		return c.json({
+			available: true,
+			run: {
+				status: run.status, // queued | in_progress | completed
+				conclusion: run.conclusion ?? null, // success | failure | cancelled | null
+				name: run.name ?? "",
+				runNumber: run.run_number ?? null,
+				url: run.html_url ?? "",
+				branch: run.head_branch ?? "",
+				sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
+				updatedAt: run.updated_at ?? "",
+			},
+		});
+	} catch {
+		return c.json({ available: false });
+	}
 });
 
 /** Update a repo/project: rename and/or set its launch URLs (dev/staging/prod). */

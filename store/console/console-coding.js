@@ -19,6 +19,8 @@
     let lastCodingPane = '';              // skip re-render when the pane is unchanged (keeps selection)
     let reposStatusTimer = null;          // live per-repo status poll (repos list view)
     let codingReposStatus = {};           // repoId -> 'thinking'|'idle'|'offline'
+    let deployStatusTimer = null;         // GH Actions deploy status poll (optional)
+    let codingDeployStatus = {};          // repoId -> { available, run }
 
     async function loadCoding() {
       if (!currentInstance) return;
@@ -33,6 +35,7 @@
         codingSessions = sessions.sessions || [];
         renderCodingRepos();
         checkGitHubApp();
+        startDeployPolling(); // optional GH Actions deploy status (no-op if none on GitHub)
       } catch (e) {
         console.error(e);
         const list = document.getElementById('inst-coding-repos');
@@ -55,9 +58,10 @@
         const active = codingSessions.find(s => s.repoId === r.id && s.status === 'active');
         const sub = r.workdir || r.githubRepo || '';
         return `<div class="memory-item" style="display:block;padding:0.55rem 0.7rem">
-          <div style="display:flex;align-items:center;gap:0.45rem">
+          <div style="display:flex;align-items:center;gap:0.45rem;flex-wrap:wrap">
             <span class="repo-status" data-repo-status="${r.id}" style="font-size:0.72rem;flex-shrink:0">${repoStatusIcon(r, active)}</span>
             <b style="font-size:0.9rem;overflow-wrap:anywhere">${esc(r.name)}</b>
+            <span data-repo-deploy="${r.id}" style="flex-shrink:0">${repoDeployBadge(codingDeployStatus[r.id])}</span>
           </div>
           ${sub ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:0.15rem;word-break:break-all">${esc(sub)}</div>` : ''}
           <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.5rem;align-items:center">
@@ -113,6 +117,46 @@
         const reply = document.getElementById(`repo-reply-${s.repoId}`);
         if (reply) reply.disabled = (codingReposStatus[s.repoId] === 'thinking' || codingReposStatus[s.repoId] === 'responding');
       }));
+    }
+
+    // ── Deployment status (optional GitHub Actions integration) ──────────────
+    // Independent of the agent: shows the latest build/deploy run so you know when
+    // it's running / failed / live (to check the version). Empty for local or
+    // non-GitHub repos, or when the GitHub App isn't installed.
+    function repoDeployBadge(d) {
+      if (!d || !d.available || !d.run) return '';
+      const run = d.run;
+      let icon, label, color;
+      if (run.status !== 'completed') { icon = '⏳'; label = 'Deploying'; color = 'var(--amber)'; }
+      else if (run.conclusion === 'success') { icon = '✅'; label = 'Live'; color = 'var(--green)'; }
+      else if (run.conclusion === 'failure') { icon = '❌'; label = 'Build failed'; color = 'var(--red)'; }
+      else { icon = '◦'; label = String(run.conclusion || run.status); color = 'var(--muted)'; }
+      const n = run.runNumber != null ? ` #${esc(run.runNumber)}` : '';
+      return `<a href="${esc(run.url || '#')}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" style="padding:0.12rem 0.4rem;font-size:0.72rem;text-decoration:none;color:${color}" title="${esc(label)} — ${esc(run.name || 'workflow')}${n} (${esc(run.branch || '')} ${esc(run.sha || '')})" onclick="event.stopPropagation()">${icon} ${label}${n}</a>`;
+    }
+    function startDeployPolling() {
+      stopDeployPolling();
+      pollReposDeployments();
+      deployStatusTimer = setInterval(pollReposDeployments, 25000);
+    }
+    function stopDeployPolling() {
+      if (deployStatusTimer) { clearInterval(deployStatusTimer); deployStatusTimer = null; }
+    }
+    async function pollReposDeployments() {
+      if (!currentInstance || currentInstanceTab !== 'coding') { stopDeployPolling(); return; }
+      const withGh = codingRepos.filter(r => r.githubRepo);
+      if (!withGh.length) { stopDeployPolling(); return; }
+      await Promise.all(withGh.map(async (r) => {
+        try {
+          const d = await api(`/v1/instances/${currentInstance.id}/coding/repos/${r.id}/deployment`);
+          if (d) codingDeployStatus[r.id] = d;
+        } catch (e) { /* keep prior */ }
+        const span = document.querySelector(`[data-repo-deploy="${r.id}"]`);
+        if (span) span.innerHTML = repoDeployBadge(codingDeployStatus[r.id]);
+      }));
+      const s = codingSessions.find(x => x.id === currentCodingSession);
+      const hdr = document.getElementById('inst-coding-deploy');
+      if (hdr) hdr.innerHTML = s ? repoDeployBadge(codingDeployStatus[s.repoId]) : '';
     }
 
     // Hear the agent's last reply for a repo, right from the list — showing the
@@ -174,28 +218,38 @@
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SR) { alert('Voice input isn\'t supported here. On iPhone use the keyboard mic; on desktop try Chrome.'); return; }
       if (codingRecognizer) { try { codingRecognizer.stop(); } catch (e) {} return; }
+      const el = document.getElementById(`repo-play-${repoId}`);
       const rec = new SR();
-      rec.lang = 'en-US'; rec.interimResults = false; rec.continuous = false;
+      rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = false; // interim → live running text
       codingRecognizer = rec;
       if (btn) btn.classList.add('active');
+      if (el) { el.style.display = ''; el.innerHTML = '<span style="color:var(--muted)">🎤 Listening…</span>'; }
       let finalText = '';
-      rec.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) finalText += e.results[i][0].transcript; };
+      rec.onresult = (e) => {
+        finalText = ''; let interim = '';
+        for (let i = 0; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalText += t; else interim += t;
+        }
+        if (el) el.innerHTML = `<b>You:</b> ${esc((finalText + interim).trim())}`; // running text as you speak
+      };
       rec.onend = async () => {
         codingRecognizer = null;
         if (btn) btn.classList.remove('active');
         const text = finalText.trim();
-        if (!text) return;
+        if (!text) { if (el) el.style.display = 'none'; return; }
+        if (el) el.innerHTML = `<b>You:</b> ${esc(text)} <span style="color:var(--muted)">— sending…</span>`;
         try {
           await api(`/v1/instances/${currentInstance.id}/coding/sessions/${active.id}/message`, { method: 'POST', body: JSON.stringify({ text, chat: true }) });
-          if (btn) { const o = btn.textContent; btn.textContent = 'Sent ✓'; setTimeout(() => { btn.textContent = o; }, 1600); }
+          if (el) el.innerHTML = `<b>You:</b> ${esc(text)} <span style="color:var(--green)">✓ sent</span>`;
           codingReposStatus[repoId] = 'thinking';
           const span = document.querySelector(`[data-repo-status="${repoId}"]`);
           const r = codingRepos.find(x => x.id === repoId);
           if (span && r) span.innerHTML = repoStatusIcon(r, active);
           if (btn) btn.disabled = true; // working — block another reply until idle
-        } catch (e) { alert('Send failed: ' + e.message); }
+        } catch (e) { if (el) el.innerHTML = `<span style="color:var(--red)">Send failed: ${esc(e.message)}</span>`; }
       };
-      rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); };
+      rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); if (el) el.style.display = 'none'; };
       try { rec.start(); } catch (e) { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
     }
 
@@ -208,16 +262,9 @@
       const el = document.getElementById('inst-coding-add');
       if (el) setAddRepoOpen(el.classList.contains('hidden'));
     }
-    function setCodingReposCollapsed(collapsed) {
-      const wrap = document.getElementById('inst-coding-collapsible');
-      const caret = document.getElementById('inst-coding-repos-caret');
-      if (wrap) wrap.classList.toggle('hidden', collapsed);
-      if (caret) caret.textContent = collapsed ? '▸' : '▾';
-    }
-    function toggleCodingRepos() {
-      const wrap = document.getElementById('inst-coding-collapsible');
-      if (wrap) setCodingReposCollapsed(!wrap.classList.contains('hidden'));
-    }
+    // Collapser removed — the repo list is always shown open and full.
+    function setCodingReposCollapsed() { /* no-op */ }
+    function toggleCodingRepos() { /* no-op */ }
 
     async function checkGitHubApp() {
       const btn = document.getElementById('inst-coding-gh-btn');
@@ -651,6 +698,8 @@
       const links = document.getElementById('inst-coding-links');
       const cur = codingRepos.find(r => r.id === curRepo);
       if (links) links.innerHTML = cur ? repoLaunchIcons(cur) : '';
+      const dep = document.getElementById('inst-coding-deploy');
+      if (dep) dep.innerHTML = cur ? repoDeployBadge(codingDeployStatus[cur.id]) : '';
     }
 
     // Open-in-new-tab launch links (dev/staging/prod) — only the ones that are set.
