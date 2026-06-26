@@ -1,8 +1,8 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { CodingSession } from "./session.js";
+import { defaultStatePath, HeadlessSession } from "./headless.js";
 import type { ClientType } from "./handlers.js";
-import { ensureRepo, listSessions as listTmuxSessions, sanitizeSessionName } from "./tmux.js";
+import { ensureRepo, sanitizeSessionName } from "./tmux.js";
 
 /**
  * The coding runtime: the local "hands" that hold live tmux coding sessions, the
@@ -29,6 +29,8 @@ export interface StartCodingInput {
 	/** GitHub App installation token for cloning private repos. */
 	token?: string;
 	env?: Record<string, string>;
+	/** Override the agent binary (tests / a custom `claude` path). */
+	bin?: string;
 }
 
 export type CodingAction =
@@ -48,7 +50,7 @@ export interface CodingSnapshot {
 const MAX_PANE = 64 * 1024;
 
 export class CodingRuntime {
-	private sessions = new Map<string, CodingSession>();
+	private sessions = new Map<string, HeadlessSession>();
 	/**
 	 * Active human handoffs keyed by session id. `resolved` flips when the human
 	 * finishes (console "Resume" / submits a value); the brain workflow polls
@@ -62,7 +64,7 @@ export class CodingRuntime {
 
 	/** Capabilities advertised to PAGS at registration. */
 	static capabilities(): string[] {
-		return ["coding.sessions", "coding.tmux", "human.takeover"];
+		return ["coding.sessions", "coding.stream", "human.takeover"];
 	}
 
 	static taskTypes(): string[] {
@@ -80,11 +82,13 @@ export class CodingRuntime {
 				? resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()))
 				: join(this.reposBaseDir, sanitizeSessionName(input.repoId));
 			ensureRepo(workDir, { cloneUrl: input.cloneUrl, branch: input.branch, token: input.token });
-			session = new CodingSession({
+			session = new HeadlessSession({
 				id: input.sessionId,
 				workDir,
 				clientType: input.clientType,
 				env: input.env,
+				statePath: defaultStatePath(this.reposBaseDir),
+				bin: input.bin,
 			});
 			this.sessions.set(input.sessionId, session);
 		}
@@ -204,13 +208,12 @@ export class CodingRuntime {
 		this.takeovers.clear();
 	}
 
-	/** True if any tmux session this runtime owns is still alive. */
-	hasLiveTmux(): boolean {
-		const live = new Set(listTmuxSessions());
-		return [...this.sessions.values()].some((s) => live.has(s.sessionName));
+	/** True if any session this runtime owns still has a live agent process. */
+	hasLiveSessions(): boolean {
+		return [...this.sessions.values()].some((s) => s.alive);
 	}
 
-	private require(sessionId: string): CodingSession {
+	private require(sessionId: string): HeadlessSession {
 		const session = this.sessions.get(sessionId);
 		if (!session) throw new Error(`No coding session: ${sessionId}`);
 		return session;

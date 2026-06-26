@@ -1,6 +1,6 @@
 {
 	"name": "@proagentstore/browser-runner",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"private": true,
 	"description": "FreeAgentStore browser runtime executor for ProAgentStore browser tasks",
 	"license": "MIT",

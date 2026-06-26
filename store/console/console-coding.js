@@ -521,6 +521,23 @@
       }
     }
 
+    // Run-state shown as an icon, not a word (the word lives in the tooltip):
+    // ⟳ spinner = working · ● green = ready · ○ grey = offline.
+    function setCodingRunState(state) {
+      const badge = document.getElementById('inst-coding-runstate');
+      if (!badge) return;
+      badge.title = state;
+      if (state === 'thinking' || state === 'responding') {
+        badge.innerHTML = '<span class="coding-spin" aria-label="working"></span>';
+      } else if (state === 'idle') {
+        badge.textContent = '●';
+        badge.style.color = 'var(--green)';
+      } else {
+        badge.textContent = '○';
+        badge.style.color = 'var(--muted)';
+      }
+    }
+
     async function pollCodingTerminal() {
       if (!currentInstance || !currentCodingSession) return;
       try {
@@ -531,12 +548,7 @@
           pre.textContent = snap.pane || (snap.runnerConnected ? '(waiting for the CLI…)' : '(no runner connected — run `pags up`)');
           if (atBottom) pre.scrollTop = pre.scrollHeight;
         }
-        const badge = document.getElementById('inst-coding-runstate');
-        if (badge) {
-          const color = { idle: 'var(--green)', thinking: 'var(--amber)', responding: 'var(--amber)' }[snap.runState] || 'var(--muted)';
-          badge.textContent = snap.alive ? snap.runState : 'offline';
-          badge.style.color = color;
-        }
+        setCodingRunState(snap.alive ? snap.runState : 'offline');
       } catch (e) { /* transient — keep polling */ }
     }
 

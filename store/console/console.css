@@ -155,6 +155,9 @@
     .coding-view{min-height:0;flex-direction:column}
     .coding-view:not(.hidden){display:flex;flex:1}
     #inst-coding-summary-thread,#inst-coding-pane{flex:1;min-height:0;height:auto}
+    /* Run-state as an icon, not a word: a spinner while the agent works. */
+    @keyframes coding-spin{to{transform:rotate(360deg)}}
+    .coding-spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);border-top-color:var(--amber,#f59e0b);border-radius:50%;animation:coding-spin 0.7s linear infinite;vertical-align:-1px}
     /* Public-pages nav in the console header — visible on desktop so you can jump
        between the console and the store/about/etc. Hidden on narrow screens (and when
        an instance's nav needs the room) to keep the 48px bar clean. */
