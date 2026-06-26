@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CodingRuntime } from "./runtime.js";
+import { ensureRepo } from "./tmux.js";
+import { existsSync, mkdirSync } from "node:fs";
 
 function tmuxAvailable(): boolean {
 	try {
@@ -25,6 +27,47 @@ describe("CodingRuntime capabilities", () => {
 	it("throws for an unknown session", () => {
 		const rt = new CodingRuntime();
 		expect(() => rt.snapshot("nope")).toThrow(/No coding session/);
+	});
+});
+
+describeTmux("ensureRepo", () => {
+	let base: string;
+	beforeAll(() => { base = mkdtempSync(join(tmpdir(), "pags-ensure-")); });
+	afterAll(() => rmSync(base, { recursive: true, force: true }));
+
+	function makeSrc(): string {
+		const src = mkdtempSync(join(tmpdir(), "pags-ensure-src-"));
+		execFileSync("git", ["init", "-q"], { cwd: src });
+		execFileSync("git", ["config", "user.email", "t@t.t"], { cwd: src });
+		execFileSync("git", ["config", "user.name", "t"], { cwd: src });
+		execFileSync("bash", ["-c", "echo hi > f.txt"], { cwd: src });
+		execFileSync("git", ["add", "-A"], { cwd: src });
+		execFileSync("git", ["commit", "-q", "-m", "x"], { cwd: src });
+		return src;
+	}
+
+	it("clones into a fresh dir, and reuses an existing .git checkout without re-cloning", () => {
+		const src = makeSrc();
+		const dir = join(base, "repo1");
+		ensureRepo(dir, { cloneUrl: src });
+		expect(existsSync(join(dir, "f.txt"))).toBe(true);
+		// Add a local edit, then call again — a real checkout must be reused as-is.
+		execFileSync("bash", ["-c", "echo local > untracked.txt"], { cwd: dir });
+		ensureRepo(dir, { cloneUrl: src });
+		expect(existsSync(join(dir, "untracked.txt"))).toBe(true);
+		rmSync(src, { recursive: true, force: true });
+	});
+
+	it("re-clones when the dir exists but has no .git (stale/empty)", () => {
+		const src = makeSrc();
+		const dir = join(base, "repo2");
+		mkdirSync(dir, { recursive: true });
+		execFileSync("bash", ["-c", "echo junk > junk.txt"], { cwd: dir });
+		ensureRepo(dir, { cloneUrl: src });
+		expect(existsSync(join(dir, ".git"))).toBe(true);
+		expect(existsSync(join(dir, "f.txt"))).toBe(true);
+		expect(existsSync(join(dir, "junk.txt"))).toBe(false); // stale content cleared
+		rmSync(src, { recursive: true, force: true });
 	});
 });
 

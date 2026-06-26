@@ -113,7 +113,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			await step.do(`resume-${round}`, () => callRunner<{ ok?: boolean }>(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/end`, {}));
 		}
 
-		await step.do("end", () => callRunner<{ ok?: boolean }>(conn, "/coding/end", { sessionId }).catch(() => undefined));
+		await step.do("end", async () => {
+			await callRunner<{ ok?: boolean }>(conn, "/coding/end", { sessionId }).catch(() => undefined);
+			// The runner session is now gone — sync the D1 row so it doesn't sit
+			// "active" forever (the row was created active by the /sessions route).
+			const status = result.outcome === "failed" || result.outcome === "max_steps" ? "error" : "ended";
+			await env.DB.prepare(
+				"UPDATE coding_sessions SET status = ?4, ended_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'",
+			).bind(sessionId, instanceId, userId, status).run();
+			return null;
+		});
 		return result;
 	}
 }

@@ -11,6 +11,7 @@ import {
 	getSession,
 	listRepos,
 	listSessions,
+	updateRepoClone,
 } from "../lib/coding-store.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType } from "../lib/coding-types.js";
@@ -110,14 +111,24 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 		// Private repos need an installation token to clone; public ones don't.
 		const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
 		const token = owner ? await installationTokenForOwner(c.env, uid, owner) : null;
-		await callRunner(conn, "/coding/start", {
-			sessionId: session.id,
-			repoId,
-			cloneUrl: repo.cloneUrl,
-			branch: repo.branch || undefined,
-			token: token ?? undefined,
-			clientType,
-		}).catch(() => undefined);
+		try {
+			await callRunner(conn, "/coding/start", {
+				sessionId: session.id,
+				repoId,
+				cloneUrl: repo.cloneUrl,
+				branch: repo.branch || undefined,
+				token: token ?? undefined,
+				clientType,
+			});
+			// The clone happens on the runner during start — reflect the result in D1
+			// so the repo badge stops saying "cloning" (and shows clone failures).
+			await updateRepoClone(c.env, repoId, { cloneStatus: "ready", cloneError: null });
+		} catch (e) {
+			await updateRepoClone(c.env, repoId, {
+				cloneStatus: "error",
+				cloneError: e instanceof Error ? e.message.slice(0, 300) : String(e),
+			});
+		}
 	}
 	return c.json({ session, runnerConnected: Boolean(conn) }, 201);
 });
@@ -144,8 +155,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 			: { kind: "message", text: String(body.text ?? "") };
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	if (!conn) throw new HttpError(409, "No coding runner connected. Start it with: pags up");
-	const snap = await callRunner(conn, "/coding/act", { sessionId, action });
-	return c.json(snap as object);
+	try {
+		const snap = await callRunner(conn, "/coding/act", { sessionId, action });
+		return c.json(snap as object);
+	} catch {
+		// The runner is online but doesn't have this session live (e.g. it restarted).
+		throw new HttpError(409, "This session isn't live on the runner — start it again.");
+	}
 });
 
 /** Hand the session to the autonomous brain (the durable Workflow) with an objective. */

@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * Low-level tmux primitives for the coding runtime.
@@ -108,12 +109,16 @@ export function sanitizeSessionName(label: string): string {
  * can surface it (a session can't start without its repo).
  */
 export function ensureRepo(dir: string, opts: { cloneUrl?: string; branch?: string; token?: string } = {}): string {
-	if (existsSync(dir)) return dir;
+	// A real checkout (has .git) is reused as-is.
+	if (existsSync(join(dir, ".git"))) return dir;
 	if (!opts.cloneUrl) {
 		// No source to clone from — make the directory so tmux can cd into it.
-		mkdirSync(dir, { recursive: true });
+		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 		return dir;
 	}
+	// A stale/empty/half-cloned dir (exists but no .git) would make `git clone`
+	// fail on a non-empty target — clear it first so the clone is clean.
+	if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 	let url = opts.cloneUrl;
 	if (opts.token && /^https:\/\//.test(url)) {
 		url = url.replace(/^https:\/\//, `https://x-access-token:${opts.token}@`);

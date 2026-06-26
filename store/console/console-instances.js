@@ -108,6 +108,9 @@
 
     async function openInstance(instanceId, meta, tab = 'chat', updateUrl = true, runtimeTaskId = null) {
       if (tab === 'runtime' || tab === 'applications') tab = 'board';
+      // Reset any coding terminal/poll from a previously-open instance so its timer
+      // doesn't leak and its session id can't bleed into this one.
+      if (typeof closeCodingTerminal === 'function') closeCodingTerminal();
       meta = await resolveInstanceMeta(instanceId, meta);
       currentInstance = { id: instanceId, ...meta };
       currentRuntimeTaskId = runtimeTaskId;
@@ -177,8 +180,8 @@
         startRuntimePolling();
       }
       if (name === 'knowledge') loadKnowledgeBase();
-      if (name === 'coding') loadCoding();
-      if (name !== 'coding') { if (typeof stopCodingPolling === 'function') stopCodingPolling(); }
+      if (name === 'coding') { loadCoding(); if (typeof resumeCodingPollingIfOpen === 'function') resumeCodingPollingIfOpen(); }
+      else if (typeof stopCodingPolling === 'function') stopCodingPolling();
       if (name !== 'board') {
         currentRuntimeTaskId = null;
         hideRuntimeTaskDetail();

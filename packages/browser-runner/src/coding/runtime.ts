@@ -174,10 +174,15 @@ export class CodingRuntime {
 		return { ok: true };
 	}
 
-	/** Polled by the brain workflow: has the human resolved the handoff? */
+	/**
+	 * Polled by the brain workflow: has the human resolved the handoff? Defaults to
+	 * NOT resolved when there's no live entry — if the runner restarted mid-handoff
+	 * we must NOT auto-resume (the brain would proceed without the value it was told
+	 * to wait for); the workflow's poll loop times out safely instead.
+	 */
 	takeoverStatus(sessionId: string): { resolved: boolean; value?: string } {
 		const t = this.takeovers.get(sessionId);
-		return { resolved: t?.resolved ?? true, value: t?.value };
+		return { resolved: t?.resolved ?? false, value: t?.value };
 	}
 
 	endTakeover(sessionId: string): { ok: true } {

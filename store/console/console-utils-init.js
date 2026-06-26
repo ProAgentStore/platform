@@ -196,7 +196,7 @@
       const parts = routeParts();
       const page = parts[0] || 'agents';
       const validAgentTabs = ['chat', 'knowledge', 'memory', 'tasks', 'settings', 'analytics', 'ops'];
-      const validInstanceTabs = ['chat', 'board', 'knowledge'];
+      const validInstanceTabs = ['chat', 'board', 'coding', 'knowledge', 'settings'];
 
       routeApplying = true;
       try {

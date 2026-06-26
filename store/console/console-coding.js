@@ -169,6 +169,15 @@
       if (codingPollTimer) { clearInterval(codingPollTimer); codingPollTimer = null; }
     }
 
+    // Re-arm the terminal poll when returning to the Coding tab on the same
+    // instance (leaving the tab stops the timer but keeps the panel + session).
+    function resumeCodingPollingIfOpen() {
+      if (currentCodingSession && !codingPollTimer) {
+        pollCodingTerminal();
+        codingPollTimer = setInterval(pollCodingTerminal, 1500);
+      }
+    }
+
     async function pollCodingTerminal() {
       if (!currentInstance || !currentCodingSession) return;
       try {

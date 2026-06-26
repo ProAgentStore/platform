@@ -367,6 +367,7 @@ const API = 'https://api.proagentstore.online';
       showPage('dashboard');
       document.body.classList.remove('chat-active');
       document.getElementById('inst-nav-slot').innerHTML = '';
+      if (typeof closeCodingTerminal === 'function') closeCodingTerminal();
       currentAgent = null;
       currentInstance = null;
       loadAgents();
