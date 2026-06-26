@@ -35,8 +35,9 @@
       lastCodingPane = ''; // force a fresh colourised render for this session
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.remove('hidden');
-      // Full-screen the session: the repo list moves into the header selector.
+      // Full-screen the session: the repo list + Overseer move out of the way.
       document.getElementById('inst-coding-repos-section')?.classList.add('hidden');
+      document.getElementById('inst-coding-overseer')?.classList.add('hidden');
       stopReposStatusPolling();
       renderCodingRepoSelect();
       bindCodingSummaryTaps();
@@ -310,6 +311,7 @@
       if (window.speechSynthesis) speechSynthesis.cancel();
       setCodingReposCollapsed(false); // bring the repo list back
       document.getElementById('inst-coding-repos-section')?.classList.remove('hidden');
+      document.getElementById('inst-coding-overseer')?.classList.remove('hidden');
       startReposStatusPolling(); // resume live status on the list
       currentCodingSession = null;
       const panel = document.getElementById('inst-coding-terminal');

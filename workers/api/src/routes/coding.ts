@@ -350,7 +350,9 @@ async function driveClaude(
 ): Promise<{ delegated: boolean; reply: string }> {
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	if (!conn) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
-	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "command", content: instruction }).catch(() => undefined);
+	// NOTE: don't log a `command` turn here — the chat_assistant "On it — I asked
+	// Claude to: …" already records it; a command entry would show a 3rd duplicate
+	// bubble in the thread (loadChat surfaces commands as your turns).
 	const act = () => callRunner(conn, "/coding/act", { sessionId, action: { kind: "message", text: instruction } }).catch(() => null);
 	let snap = await act();
 	const session = await getSession(c.env, instanceId, uid, sessionId);
@@ -429,6 +431,69 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	const reply = res.response || "(no response)";
 	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply }).catch(() => undefined);
 	return c.json({ delegated: false, reply });
+});
+
+/**
+ * The cross-repo Overseer (#9, Step 2): ONE agent across ALL the user's repos. It
+ * reads each repo's recent activity (global context) and either answers about
+ * everything, or delegates an action to a SPECIFIC repo's Claude via
+ * drive_claude(repoId, instruction). Same tool-loop as /agent, lifted to global
+ * scope. Text-first; the continuous-voice layer comes later.
+ */
+codingRoutes.post("/:instanceId/coding/overseer", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const body = (await c.req.json().catch(() => ({}))) as { message?: string };
+	const raw = String(body.message ?? "").trim();
+	if (!raw) return c.json({ error: "message is required" }, 400);
+
+	// Global context: every repo, whether it has a live session, and its recent activity.
+	const repos = await listRepos(c.env, instanceId, uid);
+	const repoById = new Map(repos.map((r) => [r.id, r] as const));
+	const blocks: string[] = [];
+	for (const r of repos) {
+		const active = await getActiveSessionForRepo(c.env, instanceId, uid, r.id);
+		let recent = "(no live session)";
+		if (active) {
+			const term = await lastTerminal(c.env, active.id).catch(() => null);
+			recent = term ? term.slice(-700) : "(session live, nothing captured yet)";
+		}
+		blocks.push(`### REPO "${r.name}" (id: ${r.id})${active ? " — LIVE" : ""}\n${recent}`);
+	}
+	const context = blocks.join("\n\n").slice(0, 16000) || "(no repos yet)";
+
+	const system =
+		"You are the Overseer — ONE agent across ALL of the user's coding repos. You hold the global picture below (each repo + its recent activity). Decide:\n" +
+		"- If the user ASKS about status / what's happening / what finished / which needs them → answer concisely from the context, comparing across repos when relevant.\n" +
+		"- If the user wants something DONE in a specific repo → call drive_claude with that repo's id + ONE clear instruction. Infer the repo from their words; if genuinely ambiguous, ask which.\n" +
+		"Plain language, tight. You can only drive repos that have a LIVE session.";
+	const userMsg = `User: ${raw}\n\nALL REPOS (recent activity):\n${context}`;
+	const tools = [
+		{
+			type: "function",
+			function: {
+				name: "drive_claude",
+				description: "Delegate an action to a SPECIFIC repo's Claude Code (it edits files, runs commands). Only works for repos with a LIVE session.",
+				parameters: { type: "object", properties: { repoId: { type: "string" }, instruction: { type: "string" } }, required: ["repoId", "instruction"] },
+			},
+		},
+	];
+	const res = (await runUserWorkersAi(c.env, uid, "claude-sonnet-4-6", {
+		messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
+		tools,
+		maxTokens: 800,
+	}).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
+
+	const call = res.tool_calls?.find((t) => t.name === "drive_claude");
+	const repoId = call && typeof call.arguments?.repoId === "string" ? (call.arguments.repoId as string) : "";
+	const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";
+	if (repoId && instruction) {
+		const active = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
+		const repoName = repoById.get(repoId)?.name ?? "that repo";
+		if (!active) return c.json({ delegated: false, reply: `${repoName} has no live session — open it (or tap Start) first, then I can drive it.` });
+		const r = await driveClaude(c, instanceId, uid, active.id, instruction);
+		return c.json({ delegated: true, repoId, reply: `${repoName}: ${r.reply}` });
+	}
+	return c.json({ delegated: false, reply: res.response || "(no response)" });
 });
 
 /** Load a session's persisted conversation (so the console restores it on open). */

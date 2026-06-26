@@ -47,6 +47,26 @@
       }
     }
 
+    // The Overseer (#9): one agent across ALL repos. Ask about everything, or tell a
+    // specific repo to do something (it routes + delegates). Text now; voice later.
+    async function askOverseer() {
+      if (!currentInstance) return;
+      const input = document.getElementById('inst-coding-overseer-input');
+      const reply = document.getElementById('inst-coding-overseer-reply');
+      const msg = (input.value || '').trim();
+      if (!msg) return;
+      input.value = '';
+      if (reply) { reply.style.display = ''; reply.innerHTML = '<span style="color:var(--muted)">Thinking across your repos…</span>'; }
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/overseer`, { method: 'POST', body: JSON.stringify({ message: msg }) });
+        if (reply) reply.innerHTML = `<div style="color:var(--muted-soft);font-size:0.78rem">You: ${esc(msg)}</div><div style="margin-top:0.25rem">${mdLite(d.reply || '(no response)')}</div>`;
+        if (d.delegated) startReposStatusPolling(); // a repo is now working — refresh status
+        if (codingVoiceOn) speakText(d.reply);
+      } catch (e) {
+        if (reply) reply.innerHTML = `<span style="color:var(--red)">${esc(e.message)}</span>`;
+      }
+    }
+
     function renderCodingRepos() {
       const list = document.getElementById('inst-coding-repos');
       if (!list) return;

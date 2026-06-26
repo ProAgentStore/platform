@@ -274,6 +274,15 @@
     <!-- Coding workspace: repos + AI-CLI sessions driven on the local runner -->
     <div id="inst-tab-coding" class="tab-panel">
       <div id="inst-coding-body">
+        <!-- Overseer: one agent across ALL repos — ask about everything, or tell one to do something. -->
+        <div id="inst-coding-overseer" class="create-form" style="margin-bottom:0.6rem;padding:0.55rem 0.7rem">
+          <div style="display:flex;gap:0.35rem;align-items:center">
+            <span title="The Overseer sees all your repos" style="flex-shrink:0">🛰️</span>
+            <input id="inst-coding-overseer-input" placeholder="Ask across all repos, or tell one to do something…" style="flex:1;min-width:120px" onkeydown="if(event.key==='Enter')askOverseer()">
+            <button type="button" class="btn btn-primary btn-sm" onclick="askOverseer()">Ask</button>
+          </div>
+          <div id="inst-coding-overseer-reply" style="display:none;font-size:0.84rem;line-height:1.5;margin-top:0.45rem;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.5rem 0.6rem"></div>
+        </div>
         <div id="inst-coding-repos-section" class="create-form" style="margin-bottom:0.75rem;padding:0.6rem 0.8rem">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
             <span style="color:var(--ink);font-weight:700;font-size:0.95rem">Repositories</span>
