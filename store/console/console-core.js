@@ -78,6 +78,20 @@ const API = 'https://api.proagentstore.online';
       return consolePath().split('/').filter(Boolean).map(decodeURIComponent);
     }
 
+    // Where to return to when closing an overlay page (Profile / Notifications).
+    let consolePrevPath = '/instances';
+    function rememberConsoleReturn() {
+      const cur = (typeof consolePath === 'function') ? consolePath() : '';
+      if (cur && !cur.startsWith('/profile') && !cur.startsWith('/notifications')) consolePrevPath = cur;
+    }
+    // Close an overlay page and go back EXACTLY where you came from (re-renders the
+    // saved route — never strands you on the dashboard, works on mobile/PWA).
+    function goBackConsole() {
+      const p = consolePrevPath || '/instances';
+      setConsoleUrl(p, true);
+      if (typeof restoreConsoleRoute === 'function') restoreConsoleRoute();
+    }
+
     async function signIn(provider = 'github') {
       const res = await fetch(`${API}/v1/auth/config`);
       const config = await res.json();

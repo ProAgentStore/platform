@@ -551,7 +551,7 @@
 
   <!-- Agent detail -->
   <div id="agent-detail" class="container hidden">
-    <a href="/console/agents" onclick="showDashboard('agents');return false" class="back-link">&larr; Back to agents</a>
+    <a href="#" onclick="goBackConsole();return false" class="back-link">&larr; Back</a>
     <div class="agent-header">
       <div id="detail-icon" class="agent-icon" style="background:var(--accent)">&#9889;</div>
       <div>
@@ -866,7 +866,7 @@
   <div id="profile-page" class="container hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.5rem">
       <h1 class="page-title" style="margin-bottom:0">Profile</h1>
-      <button type="button" onclick="showDashboard()" class="btn btn-outline btn-sm">&larr; My Agents</button>
+      <button type="button" onclick="goBackConsole();return false" class="btn btn-outline btn-sm">&larr; Back</button>
     </div>
 
     <div class="profile-card">

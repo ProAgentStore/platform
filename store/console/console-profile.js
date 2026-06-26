@@ -5,6 +5,7 @@
 
     function showProfile(updateUrl = true) {
       if (!user) return;
+      if (updateUrl) rememberConsoleReturn(); // capture where we came from to return to
       showPage('profile-page');
       if (updateUrl) setConsoleUrl('/profile');
 
@@ -110,6 +111,7 @@
     }
 
     async function showNotifications(updateUrl = true) {
+      if (updateUrl) rememberConsoleReturn(); // capture where we came from to return to
       showPage('notifications-page');
       if (updateUrl) setConsoleUrl('/notifications');
       try {
