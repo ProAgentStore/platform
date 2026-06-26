@@ -799,7 +799,10 @@ export class LocalRunner {
 		const task = this.store.getTask(taskId);
 		if (task) {
 			const success = outcome === "submitted" || outcome === "ready" || outcome === "expired";
-			task.status = success ? "completed" : "failed";
+			// 'blocked' = the agent stopped and needs the USER (email verification, can't
+			// proceed truthfully) — it's needs-attention, not a failure, so keep it a
+			// distinct status (the console shows it as an active ticket, not buried).
+			task.status = outcome === "blocked" ? "blocked" : success ? "completed" : "failed";
 			task.output = { outcome, detail };
 			if (!success) task.error = detail || outcome;
 			task.updatedAt = new Date().toISOString();

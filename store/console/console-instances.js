@@ -322,14 +322,18 @@
       // in All with failed/done tasks.
       const activeIds = ['queued', 'waiting', 'running', 'needs_approval', 'needs_human', 'blocked'];
       const allowed = new Set(cols.flatMap(c => c.statuses));
-      const all = (tasks || []).filter(t => allowed.has(t.status));
-      const shown = showAllRuntimeTasks ? all : all.filter(t => activeIds.includes(t.status));
+      // The runner reports a 'blocked' apply outcome as status 'failed' (with
+      // output.outcome === 'blocked'). Treat that as 'blocked' so it shows as active
+      // (needs you) and lands in the Blocked column, not buried as a plain failure.
+      const eff = t => (t && t.status === 'failed' && t.output && t.output.outcome === 'blocked') ? 'blocked' : (t ? t.status : 'queued');
+      const all = (tasks || []).filter(t => allowed.has(eff(t)));
+      const shown = showAllRuntimeTasks ? all : all.filter(t => activeIds.includes(eff(t)));
       renderKanbanBoard({
         boardId: 'inst-unified-board',
         items: shown,
         columns: cols,
         renderCard: runtimeTaskCard,
-        columnForItem: task => cols.find(col => col.statuses.includes(task.status)) || cols[0],
+        columnForItem: task => cols.find(col => col.statuses.includes(eff(task))) || cols[0],
       });
       // Re-append the application columns from cache (renderKanbanBoard cleared the
       // board). Synchronous → the columns never blink/disappear on a poll.
