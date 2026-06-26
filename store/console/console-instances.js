@@ -126,7 +126,6 @@
       if (typeof closeCodingTerminal === 'function') closeCodingTerminal();
       meta = await resolveInstanceMeta(instanceId, meta);
       currentInstance = { id: instanceId, ...meta };
-      currentRuntimeTaskId = runtimeTaskId;
       showPage('instance-detail');
       document.body.classList.add('instance-open');
       // Inject instance nav into the single header bar
@@ -146,6 +145,12 @@
       `;
       gateInstanceUiByAgent();
       switchInstTab(tab, false);
+      // Set the deep-linked task AFTER switchInstTab — its 'board' branch clears
+      // currentRuntimeTaskId (so the Board tab button returns to the board), which
+      // would otherwise wipe a /board/tasks/:id restore before the detail renders.
+      // The async loadInstanceRuntime (kicked off by switchInstTab) reads this.
+      currentRuntimeTaskId = runtimeTaskId;
+      if (runtimeTaskId && typeof renderCurrentRuntimeTaskDetail === 'function') renderCurrentRuntimeTaskDetail(false);
       loadInstanceMessages();
       checkRuntimeStatus();
       // Keep the runner badge live: re-probe every 4s while this instance is open,

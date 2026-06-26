@@ -18,10 +18,10 @@ const contentTypes = {
 
 function resolveStorePath(pathname) {
 	const cleanPath = decodeURIComponent(pathname).replace(/\/+$/, "") || "/";
-	if (
-		cleanPath === "/console.css" ||
-		/^\/console-(core|instances|agent-data|profile|utils-init)\.js$/.test(cleanPath)
-	) {
+	// Any console-*.js (and the stylesheet) lives in store/console/. Keep this a
+	// broad match — a stale per-file allowlist silently 404s newly-added modules,
+	// so their globals go undefined and the console breaks at runtime.
+	if (cleanPath === "/console.css" || /^\/console-[a-z-]+\.js$/.test(cleanPath)) {
 		return join(storeRoot, "console", cleanPath.slice(1));
 	}
 	if (cleanPath === "/" || cleanPath === "/console" || cleanPath.startsWith("/console/")) {
@@ -54,8 +54,7 @@ createServer((req, res) => {
 	}
 
 	const isConsoleAsset =
-		url.pathname === "/console.css" ||
-		/^\/console-(core|instances|agent-data|profile|utils-init)\.js$/.test(url.pathname);
+		url.pathname === "/console.css" || /^\/console-[a-z-]+\.js$/.test(url.pathname);
 	res.writeHead(200, {
 		"Content-Type": contentTypes[extname(file)] || "application/octet-stream",
 		...(isConsoleAsset ? { "Cache-Control": "public, max-age=300" } : {}),

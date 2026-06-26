@@ -490,31 +490,41 @@ test.describe("ProAgentStore Console smoke", () => {
 			"2 runtime tasks",
 		);
 		await expect(
-			page.locator("#inst-unified-board").getByText("WAITING"),
+			page.locator("#inst-unified-board").getByText("Waiting", { exact: true }),
+		).toBeVisible();
+		// Cards show a friendly title for apply tasks ("Job application"), not the raw type.
+		await expect(
+			page.locator("#inst-unified-board").getByText("Job application").first(),
 		).toBeVisible();
 		await expect(
-			page.locator("#inst-unified-board").getByText("job.apply_basic").first(),
+			page.locator("#inst-unified-board").getByText("Waiting for approval before submit"),
 		).toBeVisible();
-		await expect(page.getByText("Waiting for approval before submit")).toBeVisible();
 
+		// Completed tasks are hidden under the default "Active" filter — switch to "All".
+		await page.locator('#board-filter-toggle [data-board-filter="all"]').click();
 		await page
 			.getByRole("button", { name: "Open runtime task task-done" })
 			.click();
 		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/board\/tasks\/task-done$/);
 		const taskDetail = page.locator("#runtime-task-detail");
 		await expect(taskDetail).toBeVisible();
-		await expect(taskDetail.getByRole("heading", { name: "job.apply_basic" })).toBeVisible();
+		// Overview tab (default): title + task id.
+		await expect(taskDetail.getByRole("heading", { name: "Job application" })).toBeVisible();
 		await expect(taskDetail.getByText("task-done")).toBeVisible();
+		// The submit result lives in the Output tab.
+		await taskDetail.locator('[data-rt-tab="output"]').click();
 		await expect(taskDetail.getByText("https://example.com/success")).toBeVisible();
-		await expect(taskDetail.getByText("Task History")).toBeVisible();
+		// The Activity tab lists each event (raw type + message).
+		await taskDetail.locator('[data-rt-tab="activity"]').click();
 		await expect(taskDetail.getByText("browser.goto.completed")).toBeVisible();
 		await expect(taskDetail.getByText("job.form.filled")).toBeVisible();
 		await expect(
 			taskDetail.getByText("Application form fields completed"),
 		).toBeVisible();
 		await page.reload();
+		// The deep link re-opens the task detail after refresh.
 		await expect(taskDetail).toBeVisible();
-		await expect(taskDetail.getByText("job.form.filled")).toBeVisible();
+		await expect(taskDetail.getByRole("heading", { name: "Job application" })).toBeVisible();
 		await page.getByRole("button", { name: "Back to board" }).click();
 		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/board$/);
 		await expect(taskDetail).toBeHidden();
@@ -563,7 +573,8 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page).toHaveURL(/\/console\/instances\/inst-1\/knowledge$/);
 		await page.reload();
 
-		await expect(page.getByRole("heading", { name: "Knowledge Base" })).toBeVisible();
+		// The instance Knowledge panel (Documents/Memory/Files/… sub-tabs) restores.
+		await expect(page.locator("#inst-tab-knowledge")).toBeVisible();
 		await expect(page.locator("#inst-tab-knowledge")).toHaveClass(/active/);
 	});
 
