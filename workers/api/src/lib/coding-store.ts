@@ -187,6 +187,19 @@ export async function listSessions(env: Env, instanceId: string, userId: string)
 	return (results ?? []).map(toSession);
 }
 
+/**
+ * The active session for a repo, if any. There can be at most one — multiple
+ * sessions would share the repo's single working directory and conflict.
+ */
+export async function getActiveSessionForRepo(env: Env, instanceId: string, userId: string, repoId: string): Promise<CodingSessionRecord | null> {
+	const row = await env.DB.prepare(
+		"SELECT * FROM coding_sessions WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active' ORDER BY updated_at DESC LIMIT 1",
+	)
+		.bind(repoId, instanceId, userId)
+		.first<SessionRow>();
+	return row ? toSession(row) : null;
+}
+
 export async function getSession(env: Env, instanceId: string, userId: string, sessionId: string): Promise<CodingSessionRecord | null> {
 	const row = await env.DB.prepare(
 		"SELECT * FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",

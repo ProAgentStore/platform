@@ -8,6 +8,7 @@ import {
 	createSession,
 	deleteRepo,
 	endSession,
+	getActiveSessionForRepo,
 	getRepo,
 	getSession,
 	listRepos,
@@ -157,6 +158,15 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	const repoId = String(body.repoId ?? "");
 	const repo = await getRepo(c.env, instanceId, uid, repoId);
 	if (!repo) throw new HttpError(404, "Repo not found");
+
+	// One active session per repo — a second would share the repo's single working
+	// directory and conflict (concurrent edits, git index races). Reuse the live one.
+	const existing = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
+	if (existing) {
+		const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, existing, repo);
+		return c.json({ session: existing, runnerConnected, reused: true }, 200);
+	}
+
 	const clientType = asClient(body.clientType ?? repo.defaultClient);
 	const session = await createSession(c.env, instanceId, uid, {
 		repoId,

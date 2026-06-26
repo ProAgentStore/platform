@@ -12,6 +12,8 @@
     let currentCodingView = 'summary';   // 'summary' (co-pilot) | 'terminal' (raw)
     let codingSummaryHistory = [];        // [{role:'user'|'assistant', content}]
     let codingSummaryBusy = false;
+    let codingVoiceOn = false;            // read replies aloud (TTS)
+    let codingRecognizer = null;          // active speech-to-text session
 
     async function loadCoding() {
       if (!currentInstance) return;
@@ -37,35 +39,52 @@
       const list = document.getElementById('inst-coding-repos');
       if (!list) return;
       if (!codingRepos.length) {
-        list.innerHTML = '<div class="empty" style="padding:1rem">No repos yet. Add one above, then start a coding session.</div>';
+        list.innerHTML = '<div class="empty" style="padding:0.75rem;font-size:0.82rem">No repos yet — tap <b>+ Add</b>.</div>';
+        setAddRepoOpen(true); // first run → show the add form
         return;
       }
+      // One compact row per repo: status dot · name · live badge · Open/Start · ✕
       list.innerHTML = codingRepos.map(r => {
-        const sessions = codingSessions.filter(s => s.repoId === r.id);
-        const active = sessions.filter(s => s.status === 'active');
-        const statusBadge = { ready: 'var(--green)', cloning: 'var(--amber)', error: 'var(--red)' }[r.cloneStatus] || 'var(--muted)';
-        return `<div class="memory-item" style="display:block">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
-            <div>
-              <b>${esc(r.name)}</b>
-              ${r.githubRepo ? `<span style="color:var(--muted);font-size:0.8rem"> ${esc(r.githubRepo)}</span>` : ''}
-              <span style="color:${statusBadge};font-size:0.72rem;margin-left:0.4rem">● ${esc(r.cloneStatus)}</span>
+        const active = codingSessions.find(s => s.repoId === r.id && s.status === 'active');
+        const dot = { ready: 'var(--green)', cloning: 'var(--amber)', error: 'var(--red)' }[r.cloneStatus] || 'var(--muted)';
+        const sub = r.workdir || r.githubRepo || '';
+        return `<div class="memory-item" style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;padding:0.45rem 0.6rem">
+          <div style="min-width:0">
+            <div style="display:flex;align-items:center;gap:0.4rem">
+              <span title="${esc(r.cloneStatus)}" style="color:${dot};font-size:0.7rem">●</span>
+              <b style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</b>
+              ${active ? '<span style="font-size:0.62rem;color:var(--green);border:1px solid var(--green);border-radius:999px;padding:0 0.35rem">live</span>' : ''}
             </div>
-            <div style="display:flex;gap:0.35rem">
-              <select id="coding-client-${r.id}" class="btn-sm" style="padding:0.2rem">
-                ${['claude','gemini','codex','grok'].map(c => `<option value="${c}"${c===r.defaultClient?' selected':''}>${c}</option>`).join('')}
-              </select>
-              <button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start session</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="deleteCodingRepo('${r.id}')" style="color:var(--red)">Delete</button>
-            </div>
+            ${sub ? `<div style="font-size:0.7rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">${esc(sub)}</div>` : ''}
           </div>
-          ${active.length ? `<div style="margin-top:0.5rem;display:flex;flex-direction:column;gap:0.3rem">${active.map(s => `
-            <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-2);padding:0.35rem 0.5rem;border-radius:6px">
-              <span style="font-size:0.82rem">${esc(s.clientType)} session <span style="color:var(--muted)">${s.id.slice(0,14)}…</span></span>
-              <button type="button" class="btn btn-sm" onclick="openCodingTerminal('${s.id}')">Open terminal</button>
-            </div>`).join('')}</div>` : ''}
+          <div style="display:flex;gap:0.3rem;flex-shrink:0">
+            ${active
+              ? `<button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
+              : `<button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start</button>`}
+            <button type="button" class="btn btn-outline btn-sm" onclick="deleteCodingRepo('${r.id}')" title="Remove repo" style="color:var(--red)">✕</button>
+          </div>
         </div>`;
       }).join('');
+    }
+
+    // ── Coding page space-savers (progressive disclosure) ────────────────────
+    function setAddRepoOpen(open) {
+      const el = document.getElementById('inst-coding-add');
+      if (el) el.classList.toggle('hidden', !open);
+    }
+    function toggleAddRepo() {
+      const el = document.getElementById('inst-coding-add');
+      if (el) setAddRepoOpen(el.classList.contains('hidden'));
+    }
+    function setCodingReposCollapsed(collapsed) {
+      const wrap = document.getElementById('inst-coding-collapsible');
+      const caret = document.getElementById('inst-coding-repos-caret');
+      if (wrap) wrap.classList.toggle('hidden', collapsed);
+      if (caret) caret.textContent = collapsed ? '▸' : '▾';
+    }
+    function toggleCodingRepos() {
+      const wrap = document.getElementById('inst-coding-collapsible');
+      if (wrap) setCodingReposCollapsed(!wrap.classList.contains('hidden'));
     }
 
     async function checkGitHubApp() {
@@ -133,6 +152,7 @@
         await api(`/v1/instances/${currentInstance.id}/coding/repos`, { method: 'POST', body: JSON.stringify(body) });
         input.value = '';
         await loadCoding();
+        setAddRepoOpen(false); // collapse the form once a repo is added
       } catch (e) { alert('Add repo failed: ' + e.message); }
     }
 
@@ -164,6 +184,7 @@
       codingSummaryHistory = [];
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.remove('hidden');
+      setCodingReposCollapsed(true); // focus the session — collapse the repo list
       const label = document.getElementById('inst-coding-term-label');
       if (label) label.textContent = (sessionId || '').slice(0, 16) + '…';
       switchCodingView('summary'); // default to the condensed co-pilot view
@@ -228,6 +249,7 @@
           body: JSON.stringify({ question: question || '', history: codingSummaryHistory.slice(-6) }),
         });
         codingSummaryHistory.push({ role: 'assistant', content: d.reply || '(no response)' });
+        speakCoding(d.reply);
       } catch (e) {
         codingSummaryHistory.push({ role: 'assistant', content: 'Could not summarize: ' + e.message });
       } finally {
@@ -237,6 +259,49 @@
     }
 
     function refreshCodingSummary() { callExplain(''); }
+
+    // ── Voice: talk to the co-pilot, and hear it back ────────────────────────
+    function startCodingDictation(btn) {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { alert('Voice input isn\'t supported in this browser. On iPhone, use the keyboard\'s mic; on desktop, try Chrome.'); return; }
+      if (codingRecognizer) { try { codingRecognizer.stop(); } catch (e) {} return; }
+      const input = document.getElementById('inst-coding-ask');
+      const rec = new SR();
+      rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = false;
+      codingRecognizer = rec;
+      if (btn) btn.classList.add('active');
+      let finalText = '';
+      rec.onresult = (e) => {
+        let interim = '';
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const t = e.results[i][0].transcript;
+          if (e.results[i].isFinal) finalText += t; else interim += t;
+        }
+        if (input) input.value = (finalText + interim).trim();
+      };
+      rec.onend = () => {
+        codingRecognizer = null;
+        if (btn) btn.classList.remove('active');
+        if (input && input.value.trim()) askCoding(); // send what you said
+      };
+      rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); };
+      try { rec.start(); } catch (e) { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
+    }
+
+    function toggleCodingVoiceOutput(btn) {
+      codingVoiceOn = !codingVoiceOn;
+      if (btn) btn.classList.toggle('active', codingVoiceOn);
+      if (!codingVoiceOn && window.speechSynthesis) speechSynthesis.cancel();
+    }
+
+    function speakCoding(text) {
+      if (!codingVoiceOn || !window.speechSynthesis || !text) return;
+      const clean = text.replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').trim();
+      const u = new SpeechSynthesisUtterance(clean.slice(0, 600));
+      u.rate = 1.05;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    }
 
     async function askCoding() {
       const input = document.getElementById('inst-coding-ask');
@@ -250,6 +315,8 @@
 
     function closeCodingTerminal() {
       stopCodingPolling();
+      if (window.speechSynthesis) speechSynthesis.cancel();
+      setCodingReposCollapsed(false); // bring the repo list back
       currentCodingSession = null;
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.add('hidden');
