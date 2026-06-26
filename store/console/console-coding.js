@@ -15,6 +15,7 @@
     let codingVoiceOn = false;            // read replies aloud (TTS)
     let codingRecognizer = null;          // active speech-to-text session
     let codingTapBound = false;           // touch double-tap handler attached once
+    let codingPollTick = 0;               // drives the slower chat poll within the terminal poll
 
     async function loadCoding() {
       if (!currentInstance) return;
@@ -216,7 +217,7 @@
       switchCodingView('summary', updateUrl); // default to the condensed co-pilot view
       renderCodingSummary();
       stopCodingPolling();
-      codingPollTimer = setInterval(pollCodingTerminal, 1500);
+      codingPollTimer = setInterval(codingTick, 1500);
       pollCodingTerminal();
       // Ensure the session is live on the runner — reattaches an orphaned session
       // (created while the runner was offline) or one lost to a runner restart.
@@ -235,10 +236,42 @@
       if (!currentInstance) return;
       try {
         const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${sessionId}/timeline`);
-        codingSummaryHistory = (d.chat || []).map(m => ({ role: m.type === 'chat_user' ? 'user' : 'assistant', content: m.content }));
+        codingSummaryHistory = (d.chat || []).map(codingTurn);
       } catch (e) { codingSummaryHistory = []; }
       // Guard against a race: only render if we're still on this session.
       if (currentCodingSession === sessionId) renderCodingSummary();
+    }
+
+    // A persisted timeline entry → a chat turn. chat_assistant = the agent/co-pilot;
+    // everything else you authored (chat_user, command) shows as your turn.
+    function codingTurn(m) {
+      return { role: m.type === 'chat_assistant' ? 'assistant' : 'user', content: m.content };
+    }
+
+    // Poll the persisted thread so the server-side watcher's "✅ done" summary (and any
+    // other turns) appear here even when it lands minutes after you sent the message —
+    // and even if you were away. Server is the source of truth once it has our echoes.
+    async function pollCodingChat() {
+      if (!currentInstance || !currentCodingSession || codingSummaryBusy) return;
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/timeline`);
+        const chat = (d.chat || []).map(codingTurn);
+        if (chat.length < codingSummaryHistory.length) return; // not caught up to local echoes yet
+        const last = codingSummaryHistory[codingSummaryHistory.length - 1];
+        const slast = chat[chat.length - 1];
+        const changed = chat.length !== codingSummaryHistory.length || (slast && (!last || slast.content !== last.content));
+        if (!changed) return;
+        const grewWithReply = chat.length > codingSummaryHistory.length && slast && slast.role === 'assistant';
+        codingSummaryHistory = chat;
+        renderCodingSummary();
+        if (grewWithReply && codingVoiceOn) speakText(slast.content); // read the agent's update aloud
+      } catch (e) { /* transient */ }
+    }
+
+    // One poll tick: refresh the terminal every 1.5s; check the chat thread every ~4.5s.
+    function codingTick() {
+      pollCodingTerminal();
+      if (++codingPollTick % 3 === 0) pollCodingChat();
     }
 
     function switchCodingView(name, updateUrl = true) {
@@ -403,26 +436,25 @@
       await callExplain(q);
     }
 
-    // Send the Summary input straight to the coding CLI as a real prompt — this DRIVES
-    // the agent (unlike Ask, which only queries the read-only co-pilot). Echoes the
-    // instruction into the thread, then auto-summarizes shortly after so you hear back.
+    // The Agent chat: relay your words to Claude on your behalf — it types your
+    // message into the CLI (drives it). Persisted as a chat turn (chat:true) so it
+    // survives reload; a durable server-side watcher then summarizes + notifies when
+    // Claude finishes (chat polling below shows that reply, even minutes later).
     async function sendCodingInstruction() {
       if (!currentInstance || !currentCodingSession) return;
       const input = document.getElementById('inst-coding-ask');
       const text = (input.value || '').trim();
       if (!text) return;
       input.value = '';
-      codingSummaryHistory.push({ role: 'user', content: '➤ ' + text });
+      codingSummaryHistory.push({ role: 'user', content: text });
       renderCodingSummary();
       try {
         await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/message`, {
-          method: 'POST', body: JSON.stringify({ text }),
+          method: 'POST', body: JSON.stringify({ text, chat: true }),
         });
         setTimeout(pollCodingTerminal, 300);
-        // Give the agent a moment to start, then let the co-pilot report what it's doing.
-        setTimeout(() => { if (currentCodingSession) refreshCodingSummary(); }, 3500);
       } catch (e) {
-        codingSummaryHistory.push({ role: 'assistant', content: 'Could not send to the agent: ' + e.message });
+        codingSummaryHistory.push({ role: 'assistant', content: 'Could not reach the agent: ' + e.message });
         renderCodingSummary();
       }
     }
@@ -485,7 +517,7 @@
     function resumeCodingPollingIfOpen() {
       if (currentCodingSession && !codingPollTimer) {
         pollCodingTerminal();
-        codingPollTimer = setInterval(pollCodingTerminal, 1500);
+        codingPollTimer = setInterval(codingTick, 1500);
       }
     }
 

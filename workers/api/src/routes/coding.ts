@@ -4,6 +4,7 @@ import { callRunner, getRunnerConn } from "../lib/runner-client.js";
 import { installationTokenForOwner } from "../lib/github-app.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat } from "../lib/coding-timeline.js";
+import { copilotSummary } from "../lib/coding-copilot.js";
 import {
 	createRepo,
 	createSession,
@@ -239,23 +240,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	// Continuity: feed the recent persisted timeline (prior chat, what the agent
 	// did, outcomes) so the co-pilot remembers the session, not just this moment.
 	const memory = await contextForCopilot(c.env, sessionId);
-
-	const system =
-		"You are a co-pilot watching the terminal of an AI coding agent working in the user's repo. The user is NOT reading the terminal — they want the GIST, not a report.\n" +
-		"DEFAULT SUMMARY (no specific question): MAXIMUM 2 short sentences (~30 words). First say anything NEEDED FROM THE USER (a decision/answer/approval, or that it's stuck/done); else one line like \"Working on X — nothing needed yet.\" NO bullet lists, NO step-by-step, NO code blocks. Shorter is better.\n" +
-		"PROGRESSIVE DETAIL: only when the user asks a follow-up (\"more\", \"details\", \"why\", \"show me\") give MORE than your previous reply — and even then stay tight, add one layer at a time. NEVER dump the whole terminal.\n" +
-		"Use the session memory below for continuity. Plain language. Never pad or restate the obvious.";
-	const userMsg =
-		(question ? `My question: ${question}\n\n` : "One-line status: what's happening, and what (if anything) do you need from me?\n\n") +
-		(memory ? `SESSION MEMORY (recent, oldest→newest):\n${memory}\n\n` : "") +
-		`TERMINAL (most recent output):\n${pane.slice(-6000) || "(no live terminal — the runner is offline or the session hasn't started)"}`;
-
-	// Hard ceiling: a one-liner for the auto-summary, room to elaborate when asked.
-	const res = (await runUserWorkersAi(c.env, uid, "claude-sonnet-4-6", {
-		messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
-		maxTokens: question ? 600 : 140,
-	})) as { response?: string };
-	const reply = res.response || "(no response)";
+	const reply = (await copilotSummary(c.env, uid, { question, memory, pane })) || "(no response)";
 	// Don't persist a transient "runner offline / session hasn't started" auto-summary
 	// — it's only true at this moment, and once the runner attaches it lingers at the
 	// top of the thread as stale, confusing history. Show it live, but only save real
@@ -293,10 +278,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 		typeof body.keys === "string"
 			? { kind: "keys", keys: body.keys }
 			: { kind: "message", text: String(body.text ?? "") };
+	// `chat:true` = sent from the Agent chat (relay my words to Claude on my behalf),
+	// so persist it as a chat turn (survives reload) — not just the raw command log.
+	const fromChat = body.chat === true;
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	if (!conn) throw new HttpError(409, "No coding runner connected. Start it with: pags up");
 	if (action.kind === "message" && action.text) {
-		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "command", content: action.text }).catch(() => undefined);
+		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: fromChat ? "chat_user" : "command", content: action.text }).catch(() => undefined);
 	}
 	let snap = await callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
 	if (snap === null) {
@@ -309,6 +297,24 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 		snap = await callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
 	}
 	if (snap === null) throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
+
+	// Drove the CLI with a real instruction → spin up a durable watcher that waits
+	// for it to finish, then summarizes + notifies (reaches the user even if they
+	// close the console). One per send; the brief overlap on rapid sends is benign.
+	if (action.kind === "message" && action.text) {
+		const session = await getSession(c.env, instanceId, uid, sessionId);
+		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
+		await c.env.CODING_SESSION.create({
+			params: {
+				instanceId,
+				userId: uid,
+				sessionId,
+				repoId: repo?.id ?? "",
+				mode: "watch",
+				goal: { objective: action.text, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" },
+			},
+		}).catch(() => undefined);
+	}
 	return c.json(snap as object);
 });
 

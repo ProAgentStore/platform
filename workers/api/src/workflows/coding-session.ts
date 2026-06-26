@@ -10,7 +10,8 @@ import {
 	type CodingResult,
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
-import { appendTimeline } from "../lib/coding-timeline.js";
+import { appendTimeline, contextForCopilot } from "../lib/coding-timeline.js";
+import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
@@ -26,6 +27,12 @@ export interface CodingSessionParams {
 	/** GitHub App installation token for cloning a private repo. */
 	token?: string;
 	goal: CodingGoal;
+	/**
+	 * "watch": don't drive the CLI — the user just sent it an instruction manually
+	 * (➤ Agent). Wait for the pane to go idle, then summarize what happened and
+	 * notify the user. Durable, so it reaches them even with the console closed.
+	 */
+	mode?: "watch";
 }
 
 /** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
@@ -41,6 +48,7 @@ const HANDOFF_WAIT_POLLS = 180; // 180 × 5s = 15 min
  */
 export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSessionParams> {
 	async run(event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
+		if (event.payload.mode === "watch") return this.runWatch(event, step);
 		const { instanceId, userId, sessionId, repoId, cloneUrl, branch, token, goal } = event.payload;
 		const env = this.env;
 
@@ -146,6 +154,51 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			return null;
 		});
 		return result;
+	}
+
+	/**
+	 * Watch a manually-driven session: the user typed an instruction into the CLI
+	 * (➤ Agent). Wait for the pane to settle to idle, then summarize what happened,
+	 * persist it to the chat thread, and notify the user — so "the agent comes back
+	 * to you" the same way the autonomous run does, even with the console closed.
+	 */
+	private async runWatch(event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
+		const { instanceId, userId, sessionId, goal } = event.payload;
+		const env = this.env;
+		const conn = await getRunnerConn(env, instanceId, userId);
+		if (!conn) return { outcome: "failed", detail: "No coding runner connected.", steps: 0 };
+
+		// Wait for the just-sent instruction to run to completion (pane goes idle).
+		const finalPane = (await step.do(
+			"watch-idle",
+			{ retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "15 minutes" as const },
+			async () => {
+				await sleep(2500); // let the pane flip to "thinking" before we read it
+				let snap = await callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId });
+				for (let poll = 0; poll < 380 && snap.runState !== "idle" && snap.alive && !snap.cancelled; poll++) {
+					await sleep(2000);
+					snap = await callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId });
+				}
+				return snap;
+			},
+		)) as CodingPaneSnapshot;
+
+		// Summarize what the agent did, post it to the thread, and ping the user.
+		await step.do("watch-summarize", async () => {
+			const memory = await contextForCopilot(env, sessionId);
+			const reply = await copilotSummary(env, userId, { finished: true, memory, pane: finalPane.pane || "" }).catch(() => "");
+			if (reply) await appendTimeline(env, { sessionId, instanceId, userId, type: "chat_assistant", content: reply });
+			await notifyUser(
+				env,
+				userId,
+				"coding",
+				"✅ Coder finished",
+				`${goal.repo}: ${reply ? reply.slice(0, 140) : "done — open to see what it did"}`,
+				`/console/instances/${instanceId}/coding`,
+			).catch(() => undefined);
+			return null;
+		});
+		return { outcome: "done", detail: "watched to idle", steps: 0 };
 	}
 }
 

@@ -58,10 +58,11 @@ export async function loadTimeline(env: Env, sessionId: string, limit = 500): Pr
 	return (results ?? []).map(toEntry).reverse();
 }
 
-/** Just the conversation turns (what the console renders as the chat thread). */
+/** The conversation turns the console renders as the chat thread. Includes `command`
+ * (things you sent the CLI manually) so they show as your turns, not vanish. */
 export async function loadChat(env: Env, sessionId: string, limit = 200): Promise<TimelineEntry[]> {
 	const { results } = await env.DB.prepare(
-		"SELECT seq, type, content, created_at FROM coding_timeline WHERE session_id = ?1 AND type IN ('chat_user','chat_assistant') ORDER BY seq DESC LIMIT ?2",
+		"SELECT seq, type, content, created_at FROM coding_timeline WHERE session_id = ?1 AND type IN ('chat_user','chat_assistant','command') ORDER BY seq DESC LIMIT ?2",
 	)
 		.bind(sessionId, limit)
 		.all<Row>();
@@ -72,7 +73,7 @@ export async function loadChat(env: Env, sessionId: string, limit = 200): Promis
  * the activity log (terminal/brain/outcome) — only the chat thread is wiped. */
 export async function clearChat(env: Env, sessionId: string): Promise<void> {
 	await env.DB.prepare(
-		"DELETE FROM coding_timeline WHERE session_id = ?1 AND type IN ('chat_user','chat_assistant')",
+		"DELETE FROM coding_timeline WHERE session_id = ?1 AND type IN ('chat_user','chat_assistant','command')",
 	)
 		.bind(sessionId)
 		.run();
