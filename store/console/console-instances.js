@@ -103,6 +103,7 @@
         <div class="inst-nav-tabs">
           <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
           <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')">Board</button>
+          ${(meta.category === 'code' || meta.slug === 'coder') ? `<button type="button" class="tab${tab==='coding'?' active':''}" data-inst-tab="coding" onclick="switchInstTab('coding')">Coding</button>` : ''}
           <button type="button" class="tab${tab==='knowledge'?' active':''}" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')">Knowledge</button>
           <button type="button" class="tab${tab==='settings'?' active':''}" data-inst-tab="settings" onclick="switchInstTab('settings')">Settings</button>
         </div>
@@ -156,6 +157,8 @@
         startRuntimePolling();
       }
       if (name === 'knowledge') loadKnowledgeBase();
+      if (name === 'coding') loadCoding();
+      if (name !== 'coding') { if (typeof stopCodingPolling === 'function') stopCodingPolling(); }
       if (name !== 'board') {
         currentRuntimeTaskId = null;
         hideRuntimeTaskDetail();
@@ -294,7 +297,10 @@
       // ALWAYS show every column (a stable board). The Active/All filter only hides
       // finished/old task CARDS — it never removes columns.
       const cols = INSTANCE_RUNTIME_COLUMNS;
-      const activeIds = ['queued', 'waiting', 'running', 'needs_approval', 'needs_human'];
+      // 'blocked' = the agent stopped and needs YOU (email verification, can't proceed
+      // truthfully, etc.) — that's needs-attention, so it belongs in Active, not buried
+      // in All with failed/done tasks.
+      const activeIds = ['queued', 'waiting', 'running', 'needs_approval', 'needs_human', 'blocked'];
       const allowed = new Set(cols.flatMap(c => c.statuses));
       const all = (tasks || []).filter(t => allowed.has(t.status));
       const shown = showAllRuntimeTasks ? all : all.filter(t => activeIds.includes(t.status));
@@ -579,7 +585,7 @@
       try {
         const r = await api(`/v1/instances/${currentInstance.id}/tasks/clear-finished`, { method: 'POST' });
         if (msg) { msg.textContent = `Cleared ${r.cleared || 0} finished task(s) from the board.`; msg.style.color = 'var(--green)'; }
-        currentRuntimeTasks = (currentRuntimeTasks || []).filter(t => ['queued', 'waiting', 'running', 'needs_human', 'needs_approval'].includes(t.status));
+        currentRuntimeTasks = (currentRuntimeTasks || []).filter(t => ['queued', 'waiting', 'running', 'needs_human', 'needs_approval', 'blocked'].includes(t.status));
         if (typeof renderInstanceTaskBoard === 'function') renderInstanceTaskBoard(currentRuntimeTasks);
       } catch (e) { if (msg) { msg.textContent = 'Could not clear: ' + e.message; msg.style.color = 'var(--red)'; } }
     }

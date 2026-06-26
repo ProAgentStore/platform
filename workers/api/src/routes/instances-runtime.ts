@@ -322,8 +322,10 @@ export async function clearFinishedRuntimeTasks(
 	userId: string,
 ): Promise<number> {
 	// Tombstone (not DELETE) so the runner's re-sent copies stay off the board.
+	// 'blocked' is intentionally NOT here — it means the agent needs the user, so it's
+	// treated as active (kept), not finished. Individual blocked tasks can be Deleted.
 	const res = await env.DB.prepare(
-		"UPDATE instance_runtime_tasks SET hidden = 1 WHERE instance_id = ?1 AND user_id = ?2 AND hidden = 0 AND status IN ('failed','completed','cancelled','blocked','expired')",
+		"UPDATE instance_runtime_tasks SET hidden = 1 WHERE instance_id = ?1 AND user_id = ?2 AND hidden = 0 AND status IN ('failed','completed','cancelled','expired')",
 	)
 		.bind(instanceId, userId)
 		.run();
