@@ -91,8 +91,15 @@
     // `capabilities` to each instance) — NOT from branching on agent slug/category.
     // A new agent type shows the right UI by declaring its surfaces, no console edit.
     function instanceHasSurface(name) {
-      return !!currentInstance && Array.isArray(currentInstance.capabilities?.surfaces)
-        && currentInstance.capabilities.surfaces.includes(name);
+      if (!currentInstance) return false;
+      const surfaces = currentInstance.capabilities?.surfaces;
+      if (Array.isArray(surfaces)) return surfaces.includes(name);
+      // Graceful fallback if capabilities are momentarily absent (deploy window
+      // before the API ships them, or the deep-link error-meta path): mirror the
+      // server's slug/category derivation so surfaces still resolve.
+      if (name === 'coding') return currentInstance.category === 'code' || currentInstance.slug === 'coder';
+      if (name === 'apply') return currentInstance.slug === 'job-application-assistant';
+      return false;
     }
     // Job-application-specific UI (résumé, per-ATS tips, apply board) renders only
     // for agents that declare the 'apply' surface.
