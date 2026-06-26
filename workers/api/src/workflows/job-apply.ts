@@ -56,7 +56,12 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				// Hard dry-run guard: in test mode, NEVER let a submit click reach the
 				// page — block it here (the brain can't override the runtime) and tell
 				// the brain to finish(ready). This is what makes dryRun actually safe.
-				if (job.dryRun && a.action === "click" && /submit|send application|apply now/i.test(String(a.name ?? ""))) {
+				// Block only UNAMBIGUOUS final-submit labels here (stateless — this guard
+				// runs inside a journaled step, so it can't carry form-progress state). NOT
+				// "Apply"/"Apply now": those are the ENTRY button on most ATS, and blocking
+				// them stops dry-run before it can fill anything. The pure loop handles the
+				// one-page "Apply = submit" case using typed-field state.
+				if (job.dryRun && a.action === "click" && /\bsubmit\b|send application|submit application/i.test(String(a.name ?? ""))) {
 					return { url: "", challenge: null as string | null, error: "DRY-RUN (test mode): the final submit is BLOCKED — do not submit. Call finish(status:\"ready\") now." };
 				}
 				try {

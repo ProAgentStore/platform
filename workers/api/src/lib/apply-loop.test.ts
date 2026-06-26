@@ -125,6 +125,29 @@ describe("runApplyLoop", () => {
 		expect(tokens.output).toBe(31);
 	});
 
+	it("dry-run ALLOWS the entry 'Apply now' click before any field is filled", async () => {
+		const { deps, acted } = scriptedDeps(
+			[page('- button "Apply now"'), page('- textbox "Name"')],
+			[{ action: { action: "click", role: "button", name: "Apply now" } }, { finish: { status: "ready", detail: "form reached" } }],
+		);
+		const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 5 });
+		expect(acted.map((a) => a.action)).toEqual(["click"]); // entry Apply was clicked, NOT blocked
+		expect(result.outcome).toBe("ready");
+	});
+
+	it("dry-run BLOCKS a final 'Apply' click once fields are filled (one-page submit) — never clicks it", async () => {
+		const { deps, acted } = scriptedDeps(
+			[page('- textbox "Name"'), page('- button "Apply"')],
+			[
+				{ action: { action: "type", role: "textbox", name: "Name", text: "Sergey" } },
+				{ action: { action: "click", role: "button", name: "Apply" } },
+			],
+		);
+		const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 5 });
+		expect(result.outcome).toBe("ready");
+		expect(acted.map((a) => a.action)).toEqual(["type"]); // the Apply submit was NOT acted
+	});
+
 	it("injects a mid-flight pollHint message into the NEXT decision only (one-shot steering)", async () => {
 		let polls = 0;
 		const seen: Array<string | null> = [];

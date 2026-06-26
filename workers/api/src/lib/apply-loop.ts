@@ -120,6 +120,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	const tokens = opts.tokens ?? { input: 0, output: 0 };
 	let actedLast = false;
 	let lastSnapshot = "";
+	let filledSomething = false; // any field typed → the application is in progress (dry-run safety)
 	const recentKeys: string[] = [];
 
 	for (let step = 0; step < maxSteps; step++) {
@@ -190,6 +191,16 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 
+		// Dry-run safety for one-page flows whose FINAL button is "Apply"/"Apply now"
+		// (not "Submit"): once any field has been filled, treat an Apply click as the
+		// submit and STOP without clicking it. (The workflow's act guard already blocks
+		// "Submit"/"Send"; "Apply" can't be blocked there because it's also the ENTRY
+		// button before anything is filled.)
+		if (job.dryRun && decision.action.action === "click" && filledSomething && /\bapply\b/i.test(decision.action.name ?? "")) {
+			await deps.onEvent?.("agent.dryrun", `Reached the final "${decision.action.name}" — stopping without submitting (test mode)`, {});
+			return { outcome: "ready", detail: `reached final submit "${decision.action.name}" — test mode, not submitted`, url: snap.url, steps: step, transcript: [...actionLog] };
+		}
+
 		const key = JSON.stringify(decision.action);
 		// Fixation guard (before acting): the brain keeps poking the SAME control
 		// with no progress — e.g. a login that silently fails, so the click
@@ -222,6 +233,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		} else {
 			repeatFails = 0;
 			lastActionKey = "";
+			if (decision.action.action === "type") filledSomething = true;
 			actionLog.push(describeAction(decision.action));
 			// A click/select/check/type is expected to change the page; if the NEXT
 			// snapshot shows no change, the loop top tells the brain so it adapts.
