@@ -144,10 +144,9 @@
       .inst-nav-tabs .tab{padding:0.4rem 0.6rem}
       #header-stop-btn .tl{display:none}
     }
-    /* Agent-list / dashboard links live in the hamburger dropdown on mobile only
-       (on desktop you have the dashboard tabs). */
-    .nav-signed{display:none}
-    @media(max-width:1024px){ .nav-signed{display:flex} }
+    /* Dashboard tabs (Agents · Instances · Stats) live IN the navbar now — inline on
+       desktop, inside the hamburger dropdown on mobile (#top-nav becomes a dropdown). */
+    .nav-signed{display:flex}
 
     /* Coding session panel fills the viewport: header (tabs+actions) at the top,
        the summary/terminal area flexes to fill, the input row pinned at bottom. */
@@ -167,6 +166,7 @@
     #top-nav{display:flex;align-items:center;gap:0.1rem;flex-shrink:0}
     #top-nav a{font-size:0.82rem;color:var(--muted);padding:0.32rem 0.55rem;border-radius:6px;text-decoration:none;white-space:nowrap;transition:all 0.15s}
     #top-nav a:hover{color:var(--ink);background:var(--line);text-decoration:none}
+    #top-nav a.active{color:var(--ink);background:var(--line);font-weight:700}
     /* Hamburger toggles the same nav as a dropdown on mobile. Sits flush in the
        right-hand group (after the avatar); #inst-nav-slot's flex:1 right-aligns it. */
     #nav-menu-btn{display:none;flex-shrink:0;font-size:1.35rem;line-height:1;color:var(--muted);background:none;border:none;padding:0.25rem 0.45rem;border-radius:6px;cursor:pointer}
@@ -320,13 +320,16 @@
       #inst-nav-slot span{max-width:100px;font-size:0.8rem}
 
       /* Container — tight on mobile to save every pixel */
-      .container{padding:0.6rem 0.5rem}
-      #application-detail{padding:0.6rem 0.5rem}
-      .page-title{font-size:1.2rem;margin-bottom:0.75rem}
+      .container{padding:0.5rem 0.4rem}
+      #application-detail{padding:0.5rem 0.4rem}
+      .page-title{font-size:1.15rem;margin-bottom:0.6rem}
+      input,textarea,select{padding:0.42rem 0.55rem;font-size:0.85rem}
+      .btn{padding:0.5rem 0.9rem}
+      .btn-sm{padding:0.3rem 0.6rem}
 
       /* Agent grid */
-      .agents-grid{grid-template-columns:1fr;gap:0.65rem}
-      .agent-card{padding:0.85rem}
+      .agents-grid{grid-template-columns:1fr;gap:0.55rem}
+      .agent-card{padding:0.7rem}
 
       /* Agent header */
       .agent-header{gap:0.75rem;margin-bottom:0.75rem}
@@ -335,7 +338,7 @@
 
       /* Tabs */
       .tabs{gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
-      .tab{padding:0.5rem 0.75rem;font-size:0.78rem;white-space:nowrap}
+      .tab{padding:0.45rem 0.6rem;font-size:0.78rem;white-space:nowrap}
 
       /* Chat */
       .chat-container{height:calc(100dvh - 180px);min-height:250px}
@@ -347,8 +350,10 @@
       /* Kanban */
       .kanban-board{grid-template-columns:1fr;gap:0.5rem}
       .kanban-column{min-height:auto;min-width:auto}
-      .kanban-items{padding:0.5rem}
-      .kanban-card{padding:0.6rem}
+      .kanban-items{padding:0.4rem}
+      .kanban-card{padding:0.55rem}
+      .kanban-header{padding:0.5rem 0.6rem}
+      .memory-item,.task-item{padding:0.5rem 0.6rem}
 
       /* Board toolbar */
       .agent-board-toolbar{flex-direction:column;gap:0.5rem;align-items:stretch}
@@ -364,9 +369,10 @@
       .create-form{padding:0.7rem;margin-bottom:0.75rem}
 
       /* Profile — tighter cards/sections */
-      .profile-card{padding:0.85rem;margin-bottom:0.75rem}
-      .profile-header{gap:0.85rem;margin-bottom:1rem}
-      .profile-section{margin-bottom:1rem}
+      .profile-card{padding:0.7rem;margin-bottom:0.6rem}
+      .profile-header{gap:0.7rem;margin-bottom:0.8rem}
+      .profile-section{margin-bottom:0.85rem}
+      .profile-row{padding:0.45rem 0}
 
       /* Coding — reclaim vertical space (inline styles need !important here) */
       #inst-coding-repos-section{padding:0.45rem 0.55rem!important;margin-bottom:0.5rem!important}

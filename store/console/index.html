@@ -27,8 +27,9 @@
       <span class="brand-name">PAGS</span>
     </a>
     <nav id="top-nav" aria-label="Site navigation">
-      <a href="/console/instances" onclick="showDashboard('instances');return false" class="nav-signed">⌂ My Agents</a>
-      <a href="/console/agents" onclick="showDashboard('agents');return false" class="nav-signed">Dashboard</a>
+      <a href="/console/agents" id="nav-dash-agents" onclick="showDashboard('agents');return false" class="nav-signed">Agents</a>
+      <a href="/console/instances" id="nav-dash-instances" onclick="showDashboard('instances');return false" class="nav-signed">Instances</a>
+      <a href="/console/dashboard" id="nav-dash-dashboard" onclick="showDashboard('dashboard');return false" class="nav-signed">Stats</a>
       <a href="/">Store</a>
       <a href="/skills/">Skills</a>
       <a href="/about/">About</a>
@@ -39,7 +40,7 @@
       <a href="/console/notifications" onclick="showNotifications();return false" style="position:relative;text-decoration:none;font-size:1.1rem;color:var(--muted)" title="Notifications">
         &#128276;<span id="notif-badge" style="display:none;position:absolute;top:-4px;right:-6px;background:var(--red);color:#fff;font-size:0.6rem;width:16px;height:16px;border-radius:50%;text-align:center;line-height:16px"></span>
       </a>
-      <a href="/console/profile" onclick="showProfile();return false" class="user-info" style="text-decoration:none" aria-label="Open profile">
+      <a href="/console/profile" onclick="toggleProfile();return false" class="user-info" style="text-decoration:none" aria-label="Open profile">
         <img id="user-avatar" class="avatar" alt="User avatar" width="28" height="28" loading="lazy">
         <span id="user-login"></span>
       </a>
@@ -87,8 +88,9 @@
 
   <!-- Dashboard (post-login) -->
   <div id="dashboard" class="container hidden">
-    <!-- Tab switcher: Creator / Client -->
-    <div class="tabs" style="display:flex;gap:0;border-bottom:1px solid var(--line);margin-bottom:1.25rem;overflow-x:auto;-webkit-overflow-scrolling:touch">
+    <!-- Tab switcher moved into the navbar (Agents · Instances · Stats). Kept here
+         hidden so switchDashTab's active-state code keeps working. -->
+    <div class="tabs hidden" style="display:none">
       <button type="button" class="tab active" id="dash-tab-agents" onclick="switchDashTab('agents')">My Agents (Creator)</button>
       <button type="button" class="tab" id="dash-tab-instances" onclick="switchDashTab('instances')">My Instances (Client)</button>
       <button type="button" class="tab" id="dash-tab-dashboard" onclick="switchDashTab('dashboard')">Dashboard</button>
@@ -934,6 +936,14 @@
           </div>
         </div>
         <p style="font-size:0.78rem;color:var(--muted-soft);margin-top:0.4rem">Scales the whole console. Saved on this device.</p>
+        <div class="profile-row" style="border-top:1px solid var(--line);margin-top:0.6rem;padding-top:0.7rem">
+          <span class="profile-label">Push notifications</span>
+          <div class="view-toggle" id="notif-pref-toggle" role="group" aria-label="Push notifications">
+            <button type="button" id="notif-pref-on" onclick="setNotifPref(true)">On</button>
+            <button type="button" id="notif-pref-off" onclick="setNotifPref(false)">Off</button>
+          </div>
+        </div>
+        <p style="font-size:0.78rem;color:var(--muted-soft);margin-top:0.4rem">A buzz when the agent finishes or needs you. This device.</p>
       </div>
 
       <div class="profile-section">

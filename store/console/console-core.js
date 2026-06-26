@@ -536,6 +536,7 @@ const API = 'https://api.proagentstore.online';
       for (const t of ['agents', 'instances', 'dashboard']) {
         document.getElementById('dash-' + t).classList.toggle('hidden', t !== tab);
         document.getElementById('dash-tab-' + t).classList.toggle('active', t === tab);
+        document.getElementById('nav-dash-' + t)?.classList.toggle('active', t === tab); // navbar tab
       }
       if (tab === 'instances') loadInstances();
       if (tab === 'dashboard') loadDashboard();

@@ -482,7 +482,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		});
 		await page.goto("/");
 
-		await page.getByRole("button", { name: "My Instances (Client)" }).click();
+		await page.locator("#nav-dash-instances").click();
 		await page.getByText("Job Application Assistant").click();
 		await page.getByRole("button", { name: "Board" }).click();
 
@@ -546,7 +546,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		});
 		await page.goto("/");
 
-		await page.getByRole("button", { name: "My Instances (Client)" }).click();
+		await page.locator("#nav-dash-instances").click();
 		await page.getByText("Job Application Assistant").click();
 
 		// Status is a compact dot (no text) with the description in the tooltip.

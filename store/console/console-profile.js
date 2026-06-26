@@ -22,12 +22,19 @@
       refreshTextScaleButtons();
     }
 
+    // Clicking the avatar again closes the profile (back to where you were).
+    function toggleProfile() {
+      const open = !document.getElementById('profile-page').classList.contains('hidden');
+      if (open) goBackConsole(); else showProfile();
+    }
+
     function showProfile(updateUrl = true) {
       if (!user) return;
       if (updateUrl) rememberConsoleReturn(); // capture where we came from to return to
       showPage('profile-page');
       if (updateUrl) setConsoleUrl('/profile');
       refreshTextScaleButtons();
+      refreshNotifPref();
 
       document.getElementById('profile-avatar').src = user.avatar || '';
       document.getElementById('profile-name').textContent = user.name || user.login;
@@ -166,6 +173,39 @@
       const ok = await ensurePushSubscription(true);
       if (ok) { try { await api('/v1/push/test', { method: 'POST' }); } catch {} }
       refreshPushButton();
+    }
+
+    // Turn push notifications off on this device: unsubscribe + drop the server row.
+    async function disablePushNotifications() {
+      try {
+        if ('serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.getRegistration();
+          const sub = reg && await reg.pushManager.getSubscription();
+          if (sub) {
+            await api('/v1/push/subscribe', { method: 'DELETE', body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {});
+            await sub.unsubscribe().catch(() => {});
+          }
+        }
+      } catch (e) { /* best-effort */ }
+    }
+
+    // Profile → Notifications On/Off. Reflects whether this device is subscribed.
+    async function setNotifPref(on) {
+      if (on) await ensurePushSubscription(true); else await disablePushNotifications();
+      refreshNotifPref();
+    }
+    async function refreshNotifPref() {
+      let on = false;
+      try {
+        if (pushSupported() && Notification.permission === 'granted' && 'serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.getRegistration();
+          on = !!(reg && await reg.pushManager.getSubscription());
+        }
+      } catch (e) {}
+      const onBtn = document.getElementById('notif-pref-on');
+      const offBtn = document.getElementById('notif-pref-off');
+      if (onBtn) onBtn.classList.toggle('active', on);
+      if (offBtn) offBtn.classList.toggle('active', !on);
     }
 
     // Reflect current permission state on the notifications page button.
