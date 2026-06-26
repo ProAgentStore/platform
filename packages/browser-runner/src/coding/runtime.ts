@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CodingSession } from "./session.js";
 import type { ClientType } from "./handlers.js";
 import { ensureRepo, listSessions as listTmuxSessions, sanitizeSessionName } from "./tmux.js";
@@ -74,8 +74,11 @@ export class CodingRuntime {
 		let session = this.sessions.get(input.sessionId);
 		if (!session) {
 			// Resolve the working dir and ensure the repo is present (clone on first
-			// start). Without this the CLI would launch in a non-existent path.
-			const workDir = input.workDir || join(this.reposBaseDir, sanitizeSessionName(input.repoId));
+			// start). A user-supplied local path may use ~ — expand it; otherwise
+			// clone into a managed dir. Without this the CLI would launch nowhere.
+			const workDir = input.workDir
+				? resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()))
+				: join(this.reposBaseDir, sanitizeSessionName(input.repoId));
 			ensureRepo(workDir, { cloneUrl: input.cloneUrl, branch: input.branch, token: input.token });
 			session = new CodingSession({
 				id: input.sessionId,

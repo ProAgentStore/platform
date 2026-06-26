@@ -61,6 +61,8 @@ export interface NewRepoInput {
 	cloneUrl?: string;
 	branch?: string;
 	defaultClient?: CodingClientType;
+	/** Absolute path to an existing local checkout on the runner machine (no clone). */
+	workdir?: string;
 }
 
 export async function listRepos(env: Env, instanceId: string, userId: string): Promise<CodingRepo[]> {
@@ -83,10 +85,12 @@ export async function getRepo(env: Env, instanceId: string, userId: string, repo
 
 export async function createRepo(env: Env, instanceId: string, userId: string, input: NewRepoInput): Promise<CodingRepo> {
 	const id = `repo_${crypto.randomUUID()}`;
-	const cloneStatus: CloneStatus = input.cloneUrl || input.githubRepo ? "cloning" : "missing_url";
+	// A local checkout is already on disk → "ready". Otherwise it clones on first
+	// session start, or is missing a source entirely.
+	const cloneStatus: CloneStatus = input.workdir ? "ready" : input.cloneUrl || input.githubRepo ? "cloning" : "missing_url";
 	await env.DB.prepare(
-		`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, clone_url, branch, clone_status, default_client)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+		`INSERT INTO coding_repos (id, instance_id, user_id, name, github_repo, clone_url, branch, workdir, clone_status, default_client)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
 	)
 		.bind(
 			id,
@@ -96,6 +100,7 @@ export async function createRepo(env: Env, instanceId: string, userId: string, i
 			input.githubRepo ?? null,
 			input.cloneUrl ?? null,
 			input.branch ?? "",
+			input.workdir ?? null,
 			cloneStatus,
 			input.defaultClient ?? "claude",
 		)

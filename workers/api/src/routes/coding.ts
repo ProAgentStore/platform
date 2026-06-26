@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
 import { installationTokenForOwner } from "../lib/github-app.js";
+import { runUserWorkersAi } from "../lib/user-ai.js";
 import {
 	createRepo,
 	createSession,
@@ -38,6 +39,8 @@ async function startSessionOnRunner(
 		await callRunner(conn, "/coding/start", {
 			sessionId: session.id,
 			repoId: repo.id,
+			// Local checkout → run in that dir (no clone). Else clone to a managed dir.
+			workDir: repo.workdir || undefined,
 			cloneUrl: repo.cloneUrl,
 			branch: repo.branch || undefined,
 			token: token ?? undefined,
@@ -102,6 +105,16 @@ codingRoutes.post("/:instanceId/coding/repos", async (c) => {
 	const name = String(body.name ?? "").trim();
 	let githubRepo = typeof body.githubRepo === "string" ? body.githubRepo : undefined;
 	const cloneUrl = typeof body.cloneUrl === "string" ? body.cloneUrl : undefined;
+	// A local checkout the user already has on the runner machine — run there, no clone.
+	const localPath = typeof body.localPath === "string" ? body.localPath.trim() : "";
+	if (localPath) {
+		const repo = await createRepo(c.env, instanceId, uid, {
+			name: name || localPath.replace(/\/+$/, "").split("/").pop() || "repo",
+			workdir: localPath,
+			defaultClient: asClient(body.defaultClient),
+		});
+		return c.json({ repo }, 201);
+	}
 	// A clone URL alone is enough: derive owner/repo (for private-repo token
 	// resolution) and a display name from it. Accept name OR github repo OR URL.
 	if (!githubRepo && cloneUrl) {
@@ -181,6 +194,47 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	const snap = await callRunner(conn, "/coding/capture", { sessionId }).catch(() => null);
 	if (!snap) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: true });
 	return c.json({ ...(snap as object), runnerConnected: true });
+});
+
+/**
+ * Co-pilot: read the live terminal and give the user a SHORT summary of what's
+ * happening + what's needed from them, or answer a follow-up question. Uses the
+ * user's BYOK Claude. The user reads this instead of the raw terminal.
+ */
+codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const sessionId = c.req.param("sessionId");
+	const body = (await c.req.json().catch(() => ({}))) as {
+		question?: string;
+		history?: Array<{ role: string; content: string }>;
+	};
+	const question = typeof body.question === "string" ? body.question.trim() : "";
+
+	const conn = await getRunnerConn(c.env, instanceId, uid);
+	let pane = "";
+	if (conn) {
+		const snap = (await callRunner(conn, "/coding/capture", { sessionId }).catch(() => null)) as { pane?: string } | null;
+		pane = snap?.pane ?? "";
+	}
+
+	const system =
+		"You are a co-pilot watching the terminal of an AI coding agent (e.g. Claude Code) working in the user's repo. " +
+		"The user is NOT reading the raw terminal — keep them informed with the SHORTEST useful summary: what the agent just did, " +
+		"what's happening now, and — most important — anything it NEEDS FROM THEM (a decision, an answer, an approval, a stuck step). " +
+		"Be condensed and scannable (a couple of lines or tight bullets). Lead with what's needed from the user, if anything. " +
+		"If they ask a question, answer it from the terminal and say exactly what to do next. Never pad. If nothing needs them, say so in one line.";
+	const userMsg =
+		(question ? `My question: ${question}\n\n` : "Give me the current summary — what's happening and what (if anything) do you need from me?\n\n") +
+		`TERMINAL (most recent output):\n${pane.slice(-6000) || "(no live terminal — the runner is offline or the session hasn't started)"}`;
+
+	const history = Array.isArray(body.history)
+		? body.history.filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string").slice(-6)
+		: [];
+
+	const res = (await runUserWorkersAi(c.env, uid, "claude-sonnet-4-6", {
+		messages: [{ role: "system", content: system }, ...history, { role: "user", content: userMsg }],
+	})) as { response?: string };
+	return c.json({ reply: res.response || "(no response)" });
 });
 
 /** Send a message / keys straight to the CLI (manual drive, no brain). */

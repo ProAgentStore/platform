@@ -9,6 +9,9 @@
     let codingSessions = [];
     let currentCodingSession = null;
     let codingPollTimer = null;
+    let currentCodingView = 'summary';   // 'summary' (co-pilot) | 'terminal' (raw)
+    let codingSummaryHistory = [];        // [{role:'user'|'assistant', content}]
+    let codingSummaryBusy = false;
 
     async function loadCoding() {
       if (!currentInstance) return;
@@ -112,9 +115,11 @@
       const input = document.getElementById('inst-coding-repo-input');
       const raw = (input.value || '').trim();
       if (!raw) return;
-      // Accept "owner/repo", a full GitHub URL, or any git clone URL.
+      // Accept a local checkout path (/… or ~/…), "owner/repo", a GitHub URL, or a clone URL.
       const body = {};
-      if (/^https?:\/\//.test(raw) || raw.endsWith('.git')) {
+      if (/^(\/|~\/)/.test(raw)) {
+        body.localPath = raw; // run in your existing checkout on the runner machine — no clone
+      } else if (/^https?:\/\//.test(raw) || raw.endsWith('.git')) {
         body.cloneUrl = raw;
         const m = raw.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i);
         if (m) body.githubRepo = m[1];
@@ -156,10 +161,13 @@
 
     async function openCodingTerminal(sessionId) {
       currentCodingSession = sessionId;
+      codingSummaryHistory = [];
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.remove('hidden');
       const label = document.getElementById('inst-coding-term-label');
-      if (label) label.textContent = sessionId;
+      if (label) label.textContent = (sessionId || '').slice(0, 16) + '…';
+      switchCodingView('summary'); // default to the condensed co-pilot view
+      renderCodingSummary();
       stopCodingPolling();
       codingPollTimer = setInterval(pollCodingTerminal, 1500);
       pollCodingTerminal();
@@ -170,6 +178,74 @@
         await api(`/v1/instances/${currentInstance.id}/coding/sessions/${sessionId}/start`, { method: 'POST', body: '{}' });
         setTimeout(pollCodingTerminal, 400);
       } catch (e) { /* runner offline → pane shows the 'no runner' hint */ }
+      // Kick off the first summary so the user sees plain language immediately.
+      setTimeout(refreshCodingSummary, 1200);
+    }
+
+    function switchCodingView(name) {
+      currentCodingView = name;
+      const sum = document.getElementById('inst-coding-view-summary');
+      const term = document.getElementById('inst-coding-view-terminal');
+      if (sum) sum.classList.toggle('hidden', name !== 'summary');
+      if (term) term.classList.toggle('hidden', name !== 'terminal');
+      const sb = document.getElementById('inst-coding-view-summary-btn');
+      const tb = document.getElementById('inst-coding-view-terminal-btn');
+      if (sb) sb.classList.toggle('active', name === 'summary');
+      if (tb) tb.classList.toggle('active', name === 'terminal');
+    }
+
+    // Light markdown: escape, then bold / inline-code / bullets / line breaks.
+    function mdLite(text) {
+      let h = esc(text || '');
+      h = h.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`([^`]+)`/g, '<code>$1</code>');
+      h = h.replace(/^\s*[-*]\s+(.*)$/gm, '• $1');
+      return h.replace(/\n/g, '<br>');
+    }
+
+    function renderCodingSummary() {
+      const el = document.getElementById('inst-coding-summary-thread');
+      if (!el) return;
+      if (!codingSummaryHistory.length && !codingSummaryBusy) {
+        el.innerHTML = '<div style="color:var(--muted)">Reading the terminal…</div>';
+        return;
+      }
+      el.innerHTML = codingSummaryHistory.map(m => {
+        if (m.role === 'user') {
+          return `<div style="margin:0.5rem 0;text-align:right"><span style="display:inline-block;background:var(--accent,#7c3aed);color:#fff;padding:0.3rem 0.6rem;border-radius:10px;max-width:85%;text-align:left">${esc(m.content)}</span></div>`;
+        }
+        return `<div style="margin:0.5rem 0">${mdLite(m.content)}</div>`;
+      }).join('') + (codingSummaryBusy ? '<div style="color:var(--muted);font-size:0.8rem">…</div>' : '');
+      el.scrollTop = el.scrollHeight;
+    }
+
+    async function callExplain(question) {
+      if (!currentInstance || !currentCodingSession) return;
+      codingSummaryBusy = true;
+      renderCodingSummary();
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/explain`, {
+          method: 'POST',
+          body: JSON.stringify({ question: question || '', history: codingSummaryHistory.slice(-6) }),
+        });
+        codingSummaryHistory.push({ role: 'assistant', content: d.reply || '(no response)' });
+      } catch (e) {
+        codingSummaryHistory.push({ role: 'assistant', content: 'Could not summarize: ' + e.message });
+      } finally {
+        codingSummaryBusy = false;
+        renderCodingSummary();
+      }
+    }
+
+    function refreshCodingSummary() { callExplain(''); }
+
+    async function askCoding() {
+      const input = document.getElementById('inst-coding-ask');
+      const q = (input.value || '').trim();
+      if (!q) return;
+      input.value = '';
+      codingSummaryHistory.push({ role: 'user', content: q });
+      renderCodingSummary();
+      await callExplain(q);
     }
 
     function closeCodingTerminal() {
