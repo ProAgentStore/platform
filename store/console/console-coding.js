@@ -114,9 +114,16 @@
       if (!raw) return;
       // Accept "owner/repo", a full GitHub URL, or any git clone URL.
       const body = {};
-      if (/^https?:\/\//.test(raw) || raw.endsWith('.git')) body.cloneUrl = raw;
-      else if (/^[\w.-]+\/[\w.-]+$/.test(raw)) { body.githubRepo = raw; body.cloneUrl = `https://github.com/${raw}.git`; }
-      else body.name = raw;
+      if (/^https?:\/\//.test(raw) || raw.endsWith('.git')) {
+        body.cloneUrl = raw;
+        const m = raw.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i);
+        if (m) body.githubRepo = m[1];
+      } else if (/^[\w.-]+\/[\w.-]+$/.test(raw)) {
+        body.githubRepo = raw;
+        body.cloneUrl = `https://github.com/${raw}.git`;
+      } else {
+        body.name = raw;
+      }
       try {
         await api(`/v1/instances/${currentInstance.id}/coding/repos`, { method: 'POST', body: JSON.stringify(body) });
         input.value = '';

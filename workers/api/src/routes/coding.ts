@@ -64,11 +64,21 @@ codingRoutes.post("/:instanceId/coding/repos", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const name = String(body.name ?? "").trim();
-	const githubRepo = typeof body.githubRepo === "string" ? body.githubRepo : undefined;
+	let githubRepo = typeof body.githubRepo === "string" ? body.githubRepo : undefined;
 	const cloneUrl = typeof body.cloneUrl === "string" ? body.cloneUrl : undefined;
-	if (!name && !githubRepo) return c.json({ error: "name or githubRepo is required" }, 400);
+	// A clone URL alone is enough: derive owner/repo (for private-repo token
+	// resolution) and a display name from it. Accept name OR github repo OR URL.
+	if (!githubRepo && cloneUrl) {
+		const m = cloneUrl.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i);
+		if (m) githubRepo = m[1];
+	}
+	const derivedName =
+		name ||
+		(githubRepo ? githubRepo.split("/").pop() : "") ||
+		(cloneUrl ? cloneUrl.replace(/\.git$/, "").replace(/\/$/, "").split("/").pop() : "");
+	if (!derivedName && !cloneUrl) return c.json({ error: "a repo name or URL is required" }, 400);
 	const repo = await createRepo(c.env, instanceId, uid, {
-		name: name || String(githubRepo).split("/").pop() || "repo",
+		name: derivedName || "repo",
 		githubRepo,
 		cloneUrl,
 		branch: typeof body.branch === "string" ? body.branch : undefined,
