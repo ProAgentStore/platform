@@ -42,7 +42,7 @@ export async function runUserWorkersAi(
 	// BYOK: try providers in order of what the user has configured
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");
 	if (anthropicKey) {
-		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[] });
+		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[]; maxTokens?: number });
 	}
 
 	const cfCredentials = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
@@ -57,14 +57,14 @@ async function runAnthropic(
 	env: Env,
 	userId: string | undefined,
 	apiKey: string,
-	body: { messages: Array<{ role: string; content: string }>; tools?: unknown[] },
+	body: { messages: Array<{ role: string; content: string }>; tools?: unknown[]; maxTokens?: number },
 ): Promise<unknown> {
 	const messages = (body.messages || []).filter((m) => m.role !== "system");
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
 
 	const anthropicBody: Record<string, unknown> = {
 		model: "claude-sonnet-4-6",
-		max_tokens: 1024,
+		max_tokens: body.maxTokens ?? 1024,
 		messages: messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
 	};
 	// Prompt-cache the (large, stable) system prompt so repeated calls within a run

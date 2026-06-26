@@ -241,19 +241,19 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	const memory = await contextForCopilot(c.env, sessionId);
 
 	const system =
-		"You are a co-pilot watching the terminal of an AI coding agent (e.g. Claude Code) working in the user's repo. " +
-		"The user is NOT reading the raw terminal — keep them informed with the SHORTEST useful summary: what the agent just did, " +
-		"what's happening now, and — most important — anything it NEEDS FROM THEM (a decision, an answer, an approval, a stuck step). " +
-		"You have a persistent memory of this session below — use it for continuity (what was discussed, what was done, outcomes). " +
-		"Be condensed and scannable (a couple of lines or tight bullets). Lead with what's needed from the user, if anything. " +
-		"If they ask a question, answer it from the terminal + history and say exactly what to do next. Never pad.";
+		"You are a co-pilot watching the terminal of an AI coding agent working in the user's repo. The user is NOT reading the terminal — they want the GIST, not a report.\n" +
+		"DEFAULT SUMMARY (no specific question): MAXIMUM 2 short sentences (~30 words). First say anything NEEDED FROM THE USER (a decision/answer/approval, or that it's stuck/done); else one line like \"Working on X — nothing needed yet.\" NO bullet lists, NO step-by-step, NO code blocks. Shorter is better.\n" +
+		"PROGRESSIVE DETAIL: only when the user asks a follow-up (\"more\", \"details\", \"why\", \"show me\") give MORE than your previous reply — and even then stay tight, add one layer at a time. NEVER dump the whole terminal.\n" +
+		"Use the session memory below for continuity. Plain language. Never pad or restate the obvious.";
 	const userMsg =
-		(question ? `My question: ${question}\n\n` : "Give me the current summary — what's happening and what (if anything) do you need from me?\n\n") +
+		(question ? `My question: ${question}\n\n` : "One-line status: what's happening, and what (if anything) do you need from me?\n\n") +
 		(memory ? `SESSION MEMORY (recent, oldest→newest):\n${memory}\n\n` : "") +
 		`TERMINAL (most recent output):\n${pane.slice(-6000) || "(no live terminal — the runner is offline or the session hasn't started)"}`;
 
+	// Hard ceiling: a one-liner for the auto-summary, room to elaborate when asked.
 	const res = (await runUserWorkersAi(c.env, uid, "claude-sonnet-4-6", {
 		messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
+		maxTokens: question ? 600 : 140,
 	})) as { response?: string };
 	const reply = res.response || "(no response)";
 	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply });
