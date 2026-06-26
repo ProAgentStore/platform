@@ -25,6 +25,7 @@
     .avatar{width:26px;height:26px;border-radius:50%;border:2px solid var(--line)}
     .user-info{display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;color:var(--muted);text-decoration:none}
     .user-info:hover{color:var(--ink);text-decoration:none}
+    #user-login{display:none}  /* avatar is enough — username never takes navbar space */
 
     /* Layout */
     .container{max-width:960px;margin:0 auto;padding:1.5rem}
