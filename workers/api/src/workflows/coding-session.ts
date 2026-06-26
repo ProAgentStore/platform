@@ -33,6 +33,8 @@ export interface CodingSessionParams {
 	 * notify the user. Durable, so it reaches them even with the console closed.
 	 */
 	mode?: "watch";
+	/** This watcher's id — only the one currently stamped on the session notifies. */
+	watchId?: string;
 }
 
 /** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
@@ -191,6 +193,17 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				return snap;
 			},
 		)) as CodingPaneSnapshot;
+
+		// Bow out if a later send superseded this watcher — only the latest one
+		// notifies, so one completion can't fire several push notifications.
+		const stillLatest = (await step.do("watch-is-latest", async () => {
+			if (!event.payload.watchId) return true;
+			const row = await env.DB.prepare("SELECT watch_workflow_id FROM coding_sessions WHERE id = ?1")
+				.bind(sessionId)
+				.first<{ watch_workflow_id: string | null }>();
+			return !row?.watch_workflow_id || row.watch_workflow_id === event.payload.watchId;
+		})) as boolean;
+		if (!stillLatest) return { outcome: "done", detail: "superseded by a newer send", steps: 0 };
 
 		// Summarize what the agent did, post it to the thread, and ping the user.
 		await step.do("watch-summarize", async () => {

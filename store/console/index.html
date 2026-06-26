@@ -302,6 +302,7 @@
               <button type="button" class="btn btn-outline btn-sm" onclick="closeCodingTerminal()" title="Back to all repositories" style="flex-shrink:0">&larr;</button>
               <!-- Repo switcher lives up here (the coding top-nav), so the session below is full-screen. -->
               <select id="inst-coding-repo-select" onchange="onCodingRepoSelect(this.value)" title="Switch repository" style="font-size:0.76rem;max-width:170px;flex-shrink:1;min-width:0"></select>
+              <button type="button" class="btn btn-outline btn-sm" onclick="renameCurrentCodingRepo()" title="Rename project" style="flex-shrink:0;padding:0.2rem 0.4rem">✎</button>
               <div class="tabs" style="margin:0;flex-shrink:0">
                 <button type="button" id="inst-coding-view-summary-btn" class="tab active" onclick="switchCodingView('summary')" title="Chat with the agent — it drives Claude for you">Agent</button>
                 <button type="button" id="inst-coding-view-terminal-btn" class="tab" onclick="switchCodingView('terminal')" title="Raw terminal">Terminal</button>

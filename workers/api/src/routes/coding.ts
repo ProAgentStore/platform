@@ -15,6 +15,7 @@ import {
 	getSession,
 	listRepos,
 	listSessions,
+	renameRepo,
 	updateRepoClone,
 } from "../lib/coding-store.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
@@ -71,6 +72,12 @@ function asClient(v: unknown): CodingClientType {
 	return CLIENTS.includes(v as CodingClientType) ? (v as CodingClientType) : "claude";
 }
 
+/** "~/dev/stores/pags/platform" → "pags/platform" — a less generic default name. */
+function lastTwoSegments(path: string): string {
+	const parts = path.replace(/\/+$/, "").split("/").filter(Boolean);
+	return parts.slice(-2).join("/");
+}
+
 /** Confirm the caller owns the instance (the workspace). */
 async function requireOwned(c: Context<{ Bindings: Env }>): Promise<{ uid: string; instanceId: string }> {
 	const session = await requireUser(c);
@@ -112,7 +119,9 @@ codingRoutes.post("/:instanceId/coding/repos", async (c) => {
 	const localPath = typeof body.localPath === "string" ? body.localPath.trim() : "";
 	if (localPath) {
 		const repo = await createRepo(c.env, instanceId, uid, {
-			name: name || localPath.replace(/\/+$/, "").split("/").pop() || "repo",
+			// A bare folder name ("platform") is ambiguous — default to the last two
+			// path segments ("pags/platform"). Editable later either way.
+			name: name || lastTwoSegments(localPath) || "repo",
 			workdir: localPath,
 			defaultClient: asClient(body.defaultClient),
 		});
@@ -124,9 +133,11 @@ codingRoutes.post("/:instanceId/coding/repos", async (c) => {
 		const m = cloneUrl.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i);
 		if (m) githubRepo = m[1];
 	}
+	// Default to the full "owner/repo" — a bare repo name ("platform") is too
+	// generic to tell projects apart. The user can rename it afterwards.
 	const derivedName =
 		name ||
-		(githubRepo ? githubRepo.split("/").pop() : "") ||
+		githubRepo ||
 		(cloneUrl ? cloneUrl.replace(/\.git$/, "").replace(/\/$/, "").split("/").pop() : "");
 	if (!derivedName && !cloneUrl) return c.json({ error: "a repo name or URL is required" }, 400);
 	const repo = await createRepo(c.env, instanceId, uid, {
@@ -144,6 +155,17 @@ codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 	const ok = await deleteRepo(c.env, instanceId, uid, c.req.param("repoId"));
 	if (!ok) throw new HttpError(404, "Repo not found");
 	return c.json({ ok: true });
+});
+
+/** Rename a repo/project (editable display name). */
+codingRoutes.put("/:instanceId/coding/repos/:repoId", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const body = (await c.req.json().catch(() => ({}))) as { name?: string };
+	const name = (body.name ?? "").trim();
+	if (!name) return c.json({ error: "name is required" }, 400);
+	const ok = await renameRepo(c.env, instanceId, uid, c.req.param("repoId"), name);
+	if (!ok) throw new HttpError(404, "Repo not found");
+	return c.json({ ok: true, name });
 });
 
 // ── Sessions ─────────────────────────────────────────────────────────────
@@ -300,17 +322,29 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 
 	// Drove the CLI with a real instruction → spin up a durable watcher that waits
 	// for it to finish, then summarizes + notifies (reaches the user even if they
-	// close the console). One per send; the brief overlap on rapid sends is benign.
+	// close the console). Each send supersedes the prior watcher: we stamp the
+	// session with this watcher's id, and a watcher only notifies if it's still the
+	// stamped one — so several sends can't fire several push notifications for one
+	// completion.
 	if (action.kind === "message" && action.text) {
 		const session = await getSession(c.env, instanceId, uid, sessionId);
 		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
+		const watchId = `cw-${sessionId}-${Date.now()}`;
+		await c.env.DB.prepare(
+			"UPDATE coding_sessions SET watch_workflow_id = ?1 WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4",
+		)
+			.bind(watchId, sessionId, instanceId, uid)
+			.run()
+			.catch(() => undefined);
 		await c.env.CODING_SESSION.create({
+			id: watchId,
 			params: {
 				instanceId,
 				userId: uid,
 				sessionId,
 				repoId: repo?.id ?? "",
 				mode: "watch",
+				watchId,
 				goal: { objective: action.text, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" },
 			},
 		}).catch(() => undefined);

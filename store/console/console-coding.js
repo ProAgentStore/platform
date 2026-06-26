@@ -63,6 +63,7 @@
             ${active
               ? `<button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
               : `<button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start</button>`}
+            <button type="button" class="btn btn-outline btn-sm" onclick="renameCodingRepo('${r.id}')" title="Rename project">✎</button>
             <button type="button" class="btn btn-outline btn-sm" onclick="deleteCodingRepo('${r.id}')" title="Remove repo" style="color:var(--red)">✕</button>
           </div>
         </div>`;
@@ -164,6 +165,26 @@
         await api(`/v1/instances/${currentInstance.id}/coding/repos/${repoId}`, { method: 'DELETE' });
         await loadCoding();
       } catch (e) { alert('Delete failed: ' + e.message); }
+    }
+
+    // Give the project a friendlier, editable name (the repo name alone is generic).
+    async function renameCodingRepo(repoId) {
+      if (!currentInstance) return;
+      const r = codingRepos.find(x => x.id === repoId);
+      const name = prompt('Project name:', r ? r.name : '');
+      if (name == null) return;
+      const trimmed = name.trim();
+      if (!trimmed || (r && trimmed === r.name)) return;
+      try {
+        await api(`/v1/instances/${currentInstance.id}/coding/repos/${repoId}`, { method: 'PUT', body: JSON.stringify({ name: trimmed }) });
+        await loadCoding();
+        renderCodingRepoSelect();
+      } catch (e) { alert('Rename failed: ' + e.message); }
+    }
+    // Rename the project for the currently-open session (from the header).
+    function renameCurrentCodingRepo() {
+      const s = codingSessions.find(x => x.id === currentCodingSession);
+      if (s) renameCodingRepo(s.repoId);
     }
 
     async function startCodingSession(repoId) {

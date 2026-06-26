@@ -128,6 +128,22 @@ export async function updateRepoClone(
 		.run();
 }
 
+/** Rename a repo/project (the editable display name). Scoped to the owner. */
+export async function renameRepo(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	repoId: string,
+	name: string,
+): Promise<boolean> {
+	const res = await env.DB.prepare(
+		"UPDATE coding_repos SET name = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+	)
+		.bind(repoId, instanceId, userId, name.slice(0, 120))
+		.run();
+	return (res.meta.changes ?? 0) > 0;
+}
+
 export async function deleteRepo(env: Env, instanceId: string, userId: string, repoId: string): Promise<boolean> {
 	const res = await env.DB.prepare(
 		"DELETE FROM coding_repos WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
