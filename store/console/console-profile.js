@@ -95,6 +95,73 @@
       document.getElementById('profile-token').textContent = tokenVisible ? token : `${token.slice(0, 12)}...`;
     }
 
+    // ── Web Push ──────────────────────────────────────────────
+    // So an agent can ping your phone when it finishes or needs you, even with
+    // the console closed. The SW (/sw.js) shows the notification; here we just
+    // register it + hand the push subscription to the API.
+
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+      const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const raw = atob(base64);
+      const out = new Uint8Array(raw.length);
+      for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+      return out;
+    }
+
+    function pushSupported() {
+      return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+    }
+
+    // Subscribe this device to web push and register it server-side. `interactive`
+    // prompts for permission (button); otherwise it only proceeds if already granted.
+    async function ensurePushSubscription(interactive = false) {
+      if (!pushSupported() || !token) return false;
+      try {
+        if (Notification.permission === 'denied') return false;
+        if (Notification.permission !== 'granted') {
+          if (!interactive) return false;
+          if ((await Notification.requestPermission()) !== 'granted') return false;
+        }
+        const reg = await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          const { publicKey } = await api('/v1/push/vapid-key', {}, true);
+          if (!publicKey) return false;
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey),
+          });
+        }
+        await api('/v1/push/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+        return true;
+      } catch (e) { console.warn('push subscribe failed', e); return false; }
+    }
+
+    // Wired to the "Enable notifications" button.
+    async function enablePushNotifications() {
+      const btn = document.getElementById('notif-enable-btn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Enabling…'; }
+      const ok = await ensurePushSubscription(true);
+      if (ok) { try { await api('/v1/push/test', { method: 'POST' }); } catch {} }
+      refreshPushButton();
+    }
+
+    // Reflect current permission state on the notifications page button.
+    function refreshPushButton() {
+      const btn = document.getElementById('notif-enable-btn');
+      if (!btn) return;
+      if (!pushSupported() || Notification.permission === 'denied') { btn.classList.add('hidden'); return; }
+      if (Notification.permission === 'granted') {
+        btn.classList.add('hidden');
+      } else {
+        btn.classList.remove('hidden');
+        btn.disabled = false;
+        btn.textContent = '🔔 Enable notifications';
+      }
+    }
+
     // ── Notifications ─────────────────────────────────────────
 
     async function loadNotifBadge() {
@@ -114,6 +181,7 @@
       if (updateUrl) rememberConsoleReturn(); // capture where we came from to return to
       showPage('notifications-page');
       if (updateUrl) setConsoleUrl('/notifications');
+      refreshPushButton();
       try {
         const data = await api('/v1/notifications');
         const list = document.getElementById('notif-list');

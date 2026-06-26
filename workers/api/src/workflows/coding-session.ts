@@ -11,6 +11,7 @@ import {
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
 import { appendTimeline } from "../lib/coding-timeline.js";
+import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
 export interface CodingSessionParams {
@@ -99,6 +100,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			const reason = result.outcome === "needs_input" ? "needs_input" : "stuck";
 			const label = result.outcome === "needs_input" ? result.fieldNeeded ?? "a value" : result.detail ?? "this step";
 			await step.do(`handoff-${round}`, () => callRunner<{ ok?: boolean }>(conn, "/coding/takeover", { sessionId, label, reason }));
+			// Ping the user — the agent is paused waiting on them.
+			await step.do(`notify-handoff-${round}`, async () => {
+				await notifyUser(env, userId, "coding", "🙋 Coder needs you", `${goal.repo}: ${label}`, `/console/instances/${instanceId}/coding`).catch(() => undefined);
+				return null;
+			});
 
 			let resolved = false;
 			let providedValue: string | undefined;
@@ -128,6 +134,15 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				"UPDATE coding_sessions SET status = ?4, ended_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'",
 			).bind(sessionId, instanceId, userId, status).run();
 			await appendTimeline(env, { sessionId, instanceId, userId, type: "outcome", content: `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}` });
+			return null;
+		});
+
+		// Tell the user the run is over so they can check the results + summary.
+		await step.do("notify-end", async () => {
+			const ok = result.outcome !== "failed" && result.outcome !== "max_steps";
+			const title = ok ? "✅ Coder finished" : "⚠️ Coder stopped";
+			const body = `${goal.repo}: ${result.detail || result.outcome}`;
+			await notifyUser(env, userId, "coding", title, body, `/console/instances/${instanceId}/coding`).catch(() => undefined);
 			return null;
 		});
 		return result;

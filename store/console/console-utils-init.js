@@ -251,6 +251,9 @@
       if (authed && user) {
         showUser();
         loadNotifBadge();
+        // Silently refresh the push subscription if already granted (keeps the
+        // server's endpoint current; never prompts here — that's the button).
+        if (typeof ensurePushSubscription === 'function') ensurePushSubscription(false);
         const handledQuery = await handleSubscribeParam();
         if (!handledQuery) await restoreConsoleRoute();
       } else {
