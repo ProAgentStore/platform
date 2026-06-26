@@ -6,6 +6,11 @@
 	"category": "code",
 	"model": "claude-sonnet-4-6",
 	"template": "api",
+	"capabilities": {
+		"surfaces": ["coding"],
+		"runtime": "coding",
+		"workflow": "CODING_SESSION"
+	},
 	"serverConfig": {
 		"runtime": {
 			"kind": "pags-coding-runtime",

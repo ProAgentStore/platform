@@ -87,11 +87,17 @@
       return (data.instances || []).find(inst => inst.id === instanceId) || { id: instanceId, name: 'Agent' };
     }
 
-    // Job-application-specific UI (résumé upload, the per-ATS learned-tips cache)
-    // must only render for the apply agent — otherwise it leaks into unrelated
-    // agents like Coder (the apply cache is keyed per-user, not per-instance).
+    // Agent surfaces come from the declared capability registry (api attaches
+    // `capabilities` to each instance) — NOT from branching on agent slug/category.
+    // A new agent type shows the right UI by declaring its surfaces, no console edit.
+    function instanceHasSurface(name) {
+      return !!currentInstance && Array.isArray(currentInstance.capabilities?.surfaces)
+        && currentInstance.capabilities.surfaces.includes(name);
+    }
+    // Job-application-specific UI (résumé, per-ATS tips, apply board) renders only
+    // for agents that declare the 'apply' surface.
     function isApplyAgent() {
-      return !!currentInstance && currentInstance.slug === 'job-application-assistant';
+      return instanceHasSurface('apply');
     }
 
     // Centralized show/hide of job-application-only surfaces so they never appear
@@ -125,7 +131,7 @@
         <div class="inst-nav-tabs">
           <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
           <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')">Board</button>
-          ${(meta.category === 'code' || meta.slug === 'coder') ? `<button type="button" class="tab${tab==='coding'?' active':''}" data-inst-tab="coding" onclick="switchInstTab('coding')">Coding</button>` : ''}
+          ${instanceHasSurface('coding') ? `<button type="button" class="tab${tab==='coding'?' active':''}" data-inst-tab="coding" onclick="switchInstTab('coding')">Coding</button>` : ''}
           <button type="button" class="tab${tab==='knowledge'?' active':''}" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')">Knowledge</button>
           <button type="button" class="tab${tab==='settings'?' active':''}" data-inst-tab="settings" onclick="switchInstTab('settings')">Settings</button>
         </div>
@@ -707,7 +713,7 @@
       o.innerHTML = `<div style="background:var(--card,#1a1a1a);max-width:560px;width:100%;border-radius:14px;padding:1.5rem 1.6rem;max-height:90vh;overflow:auto;border:1px solid var(--line)">
         <h2 style="margin:0 0 .5rem;font-size:1.15rem">Connect your runner</h2>
         <p style="color:var(--muted);line-height:1.55;margin:0 0 1.1rem;font-size:.9rem">${
-          (currentInstance && (currentInstance.category === 'code' || currentInstance.slug === 'coder'))
+          instanceHasSurface('coding')
             ? `Your agent works on your code through a <b>runner</b> — a small program on <b>your own computer</b> that runs the coding CLI in your repo. It must be running for the agent to act, and it only runs while you keep its window open.`
             : isApplyAgent()
             ? `Your agent acts on real websites through a <b>runner</b> — a small program on <b>your own computer</b> that opens a browser and fills the forms. It must be running for your agent to apply to jobs, and it only runs while you keep its window open.`

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
@@ -175,15 +176,25 @@ instanceRoutes.get("/my/instances", async (c) => {
 	const session = await requireUser(c);
 	const { results } = await c.env.DB.prepare(
 		`SELECT i.id, i.agent_id, i.status, i.created_at,
-            a.name, a.slug, a.description, a.category, a.icon, a.icon_bg
+            a.name, a.slug, a.description, a.category, a.icon, a.icon_bg, a.config
      FROM agent_instances i
      JOIN agents a ON a.id = i.agent_id
      WHERE i.user_id = ?1
      ORDER BY i.updated_at DESC`,
 	)
 		.bind(session.uid)
-		.all();
-	return c.json({ instances: results });
+		.all<Record<string, unknown>>();
+	// Attach the resolved capability descriptor so the console renders surfaces
+	// from a declared registry, not by branching on agent slug/category. `config`
+	// (which may hold secrets/internal settings) is dropped from the response.
+	const instances = (results ?? []).map((r) => {
+		const { config, ...rest } = r;
+		return {
+			...rest,
+			capabilities: agentCapabilities({ slug: r.slug as string, category: r.category as string, config: config as string }),
+		};
+	});
+	return c.json({ instances });
 });
 
 /** Register or update the local/managed runtime for my instance. */
