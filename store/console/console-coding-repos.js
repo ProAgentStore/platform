@@ -98,6 +98,7 @@
             ${active ? `
               <button type="button" class="btn btn-outline btn-sm" onclick="playRepoLastReply('${r.id}', this)" title="Hear the agent's last reply">🔊 Play</button>
               <button type="button" id="repo-reply-${r.id}" class="btn btn-outline btn-sm" onclick="voiceReplyToRepo('${r.id}', this)" title="Reply by voice — sends straight to the agent">🎤 Reply</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="copyCodingConversation('${active.id}', this)" title="Copy this repo's conversation as JSON">⧉ Copy</button>
               <button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
               : `<button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start</button>`}
             ${repoLaunchIcons(r)}
@@ -292,6 +293,32 @@
       };
       rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); if (el) el.style.display = 'none'; };
       try { rec.start(); } catch (e) { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
+    }
+
+    // Copy a repo's whole conversation as JSON — chat + terminal snapshots + the
+    // brain's decisions + outcomes — to paste into another assistant for debugging.
+    async function copyCodingConversation(sessionId, btn) {
+      if (!currentInstance || !sessionId) { return; }
+      const orig = btn ? btn.innerHTML : '';
+      if (btn) btn.textContent = '…';
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${sessionId}/timeline?full=1`);
+        const events = d.timeline || d.chat || [];
+        const sess = codingSessions.find(s => s.id === sessionId);
+        const repo = sess && codingRepos.find(r => r.id === sess.repoId);
+        const json = JSON.stringify({
+          instanceId: currentInstance.id,
+          sessionId,
+          repo: repo ? { id: repo.id, name: repo.name, githubRepo: repo.githubRepo || null, workdir: repo.workdir || null } : null,
+          count: events.length,
+          timeline: events,
+        }, null, 2);
+        await navigator.clipboard.writeText(json);
+        if (btn) { btn.textContent = `Copied ${events.length} ✓`; setTimeout(() => { btn.innerHTML = orig || '⧉'; }, 1800); }
+      } catch (e) {
+        if (btn) { btn.textContent = 'Failed'; setTimeout(() => { btn.innerHTML = orig || '⧉'; }, 1800); }
+        else alert('Copy failed: ' + (e && e.message));
+      }
     }
 
     // ── Hands-off voice mode ─────────────────────────────────────────────────

@@ -336,8 +336,17 @@
       .btn-sm{padding:0.3rem 0.55rem}
       /* The instance-detail content wrapper had 1rem L/R padding — the real "huge
          margin" inside an instance (it's not a .container). Strip it down. */
-      #inst-detail-body{padding:0 0.35rem 0.5rem}
-      #inst-coding-repos-section{padding:0.4rem 0.45rem!important}
+      #inst-detail-body{padding:0 0.25rem 0.5rem}
+      /* The coding surface nests cards 2-3 deep — overseer / repos-section /
+         terminal card, each with its own inline L/R padding, and the rows + chat
+         thread inside add more. They STACK into the "huge margin". Crush every
+         coding container's side padding on mobile. !important is required because
+         these elements carry inline padding (inline beats a normal media rule). */
+      #inst-coding-repos-section{padding:0.4rem 0.4rem!important}
+      #inst-coding-overseer,#inst-coding-terminal{padding-left:0.4rem!important;padding-right:0.4rem!important}
+      #inst-coding-repos .memory-item{padding-left:0.45rem!important;padding-right:0.45rem!important}
+      #inst-coding-summary-thread{padding-left:0.5rem!important;padding-right:0.5rem!important}
+      #inst-coding-overseer-reply,#inst-coding-pane{padding-left:0.4rem!important;padding-right:0.4rem!important}
       .inst-nav-tabs .tab{padding:0.25rem 0.45rem}
 
       /* Agent grid */

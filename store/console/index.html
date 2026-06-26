@@ -386,6 +386,7 @@
               <button type="button" id="inst-coding-speak" class="btn btn-outline btn-sm" onclick="toggleCodingVoiceOutput(this)" title="Read replies aloud">🔊</button>
               <button type="button" id="inst-coding-send" class="btn btn-primary btn-sm" onclick="sendCodingInstruction()" title="Send — it answers from context or drives Claude, whichever fits. Prefix @claude to force delegation.">Send</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="refreshCodingSummary()" title="What's it doing right now? (read-only — doesn't interrupt Claude)">Status</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="copyCodingConversation(currentCodingSession, this)" title="Copy this whole conversation as JSON (to paste for debugging)">⧉ Copy</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="clearCodingSummary()" title="Clear this conversation (keeps the activity log)">🧹</button>
             </div>
           </div>

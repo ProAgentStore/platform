@@ -3,7 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
-import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat } from "../lib/coding-timeline.js";
+import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import {
 	createRepo,
@@ -501,6 +501,11 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/timeline", async (c) =
 	const { uid, instanceId } = await requireOwned(c);
 	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
 	if (!session) throw new HttpError(404, "Session not found");
+	// ?full=1 → include the full typed timeline (chat + terminal snapshots + brain
+	// decisions + commands + outcomes) so the whole session can be copied as JSON.
+	if (c.req.query("full") === "1") {
+		return c.json({ chat: await loadChat(c.env, session.id), timeline: await loadTimeline(c.env, session.id) });
+	}
 	return c.json({ chat: await loadChat(c.env, session.id) });
 });
 
