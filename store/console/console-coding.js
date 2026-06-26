@@ -17,6 +17,8 @@
     let codingTapBound = false;           // touch double-tap handler attached once
     let codingPollTick = 0;               // drives the slower chat poll within the terminal poll
     let lastCodingPane = '';              // skip re-render when the pane is unchanged (keeps selection)
+    let reposStatusTimer = null;          // live per-repo status poll (repos list view)
+    let codingReposStatus = {};           // repoId -> 'thinking'|'idle'|'offline'
 
     async function loadCoding() {
       if (!currentInstance) return;
@@ -46,29 +48,109 @@
         setAddRepoOpen(true); // first run → show the add form
         return;
       }
-      // One compact row per repo: status dot · name · live badge · Open/Start · ✕
+      // Stacked row (full names/URLs wrap, mobile-friendly): live status + name on
+      // top, the full repo/URL below, then actions. Rename/delete live in the open
+      // session's header now, not here. Status updates in real time (pollReposStatus).
       list.innerHTML = codingRepos.map(r => {
         const active = codingSessions.find(s => s.repoId === r.id && s.status === 'active');
-        const dot = { ready: 'var(--green)', cloning: 'var(--amber)', error: 'var(--red)' }[r.cloneStatus] || 'var(--muted)';
         const sub = r.workdir || r.githubRepo || '';
-        return `<div class="memory-item" style="display:flex;align-items:center;justify-content:space-between;gap:0.5rem;padding:0.45rem 0.6rem">
-          <div style="min-width:0">
-            <div style="display:flex;align-items:center;gap:0.4rem">
-              <span title="${esc(r.cloneStatus)}" style="color:${dot};font-size:0.7rem">●</span>
-              <b style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</b>
-              ${active ? '<span style="font-size:0.62rem;color:var(--green);border:1px solid var(--green);border-radius:999px;padding:0 0.35rem">live</span>' : ''}
-            </div>
-            ${sub ? `<div style="font-size:0.7rem;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">${esc(sub)}</div>` : ''}
+        return `<div class="memory-item" style="display:block;padding:0.55rem 0.7rem">
+          <div style="display:flex;align-items:center;gap:0.45rem">
+            <span class="repo-status" data-repo-status="${r.id}" style="font-size:0.72rem;flex-shrink:0">${repoStatusIcon(r, active)}</span>
+            <b style="font-size:0.9rem;overflow-wrap:anywhere">${esc(r.name)}</b>
           </div>
-          <div style="display:flex;gap:0.3rem;flex-shrink:0">
-            ${active
-              ? `<button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
+          ${sub ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:0.15rem;word-break:break-all">${esc(sub)}</div>` : ''}
+          <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.5rem">
+            ${active ? `
+              <button type="button" class="btn btn-outline btn-sm" onclick="playRepoLastReply('${r.id}', this)" title="Hear the agent's last reply">🔊 Play</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="voiceReplyToRepo('${r.id}', this)" title="Reply by voice — sends straight to the agent">🎤 Reply</button>
+              <button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
               : `<button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start</button>`}
-            <button type="button" class="btn btn-outline btn-sm" onclick="renameCodingRepo('${r.id}')" title="Rename project">✎</button>
-            <button type="button" class="btn btn-outline btn-sm" onclick="deleteCodingRepo('${r.id}')" title="Remove repo" style="color:var(--red)">✕</button>
           </div>
         </div>`;
       }).join('');
+      startReposStatusPolling();
+    }
+
+    // Per-repo status icon: spinner = working · green ● = ready for your reply ·
+    // grey ○ = offline. Falls back to the repo's clone status when no live session.
+    function repoStatusIcon(r, active) {
+      if (active) {
+        const st = codingReposStatus[r.id];
+        if (st === 'thinking' || st === 'responding') return '<span class="coding-spin" title="working…"></span>';
+        if (st === 'offline') return '<span title="runner offline" style="color:var(--muted)">○</span>';
+        return '<span title="ready for your reply" style="color:var(--green)">●</span>';
+      }
+      const dot = { ready: 'var(--green)', cloning: 'var(--amber)', error: 'var(--red)' }[r.cloneStatus] || 'var(--muted)';
+      return `<span title="${esc(r.cloneStatus || 'idle')}" style="color:${dot}">●</span>`;
+    }
+
+    // Live status for the repos list: poll each active session's run-state so you can
+    // see at a glance which is working vs ready — without opening any of them.
+    function startReposStatusPolling() {
+      stopReposStatusPolling();
+      pollReposStatus();
+      reposStatusTimer = setInterval(pollReposStatus, 3000);
+    }
+    function stopReposStatusPolling() {
+      if (reposStatusTimer) { clearInterval(reposStatusTimer); reposStatusTimer = null; }
+    }
+    async function pollReposStatus() {
+      const section = document.getElementById('inst-coding-repos-section');
+      if (!currentInstance || currentInstanceTab !== 'coding' || !section || section.classList.contains('hidden')) { stopReposStatusPolling(); return; }
+      const actives = codingSessions.filter(s => s.status === 'active');
+      await Promise.all(actives.map(async (s) => {
+        try {
+          const snap = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${s.id}/capture`);
+          codingReposStatus[s.repoId] = snap.alive ? snap.runState : 'offline';
+        } catch (e) { /* keep prior */ }
+        const span = document.querySelector(`[data-repo-status="${s.repoId}"]`);
+        const r = codingRepos.find(x => x.id === s.repoId);
+        if (span && r) span.innerHTML = repoStatusIcon(r, s);
+      }));
+    }
+
+    // Hear the agent's last reply for a repo, right from the list.
+    async function playRepoLastReply(repoId, btn) {
+      const active = codingSessions.find(s => s.repoId === repoId && s.status === 'active');
+      if (!currentInstance || !active) return;
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${active.id}/timeline`);
+        const last = (d.chat || []).slice().reverse().find(m => m.type === 'chat_assistant');
+        speakText(last ? last.content : 'No reply yet.');
+      } catch (e) { /* ignore */ }
+    }
+
+    // Reply by voice straight from the list — dictate, send to the agent, no need to
+    // open the repo. The watcher notifies + the status icon flips to working.
+    function voiceReplyToRepo(repoId, btn) {
+      const active = codingSessions.find(s => s.repoId === repoId && s.status === 'active');
+      if (!currentInstance || !active) { alert('Start the session first.'); return; }
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { alert('Voice input isn\'t supported here. On iPhone use the keyboard mic; on desktop try Chrome.'); return; }
+      if (codingRecognizer) { try { codingRecognizer.stop(); } catch (e) {} return; }
+      const rec = new SR();
+      rec.lang = 'en-US'; rec.interimResults = false; rec.continuous = false;
+      codingRecognizer = rec;
+      if (btn) btn.classList.add('active');
+      let finalText = '';
+      rec.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) if (e.results[i].isFinal) finalText += e.results[i][0].transcript; };
+      rec.onend = async () => {
+        codingRecognizer = null;
+        if (btn) btn.classList.remove('active');
+        const text = finalText.trim();
+        if (!text) return;
+        try {
+          await api(`/v1/instances/${currentInstance.id}/coding/sessions/${active.id}/message`, { method: 'POST', body: JSON.stringify({ text, chat: true }) });
+          if (btn) { const o = btn.textContent; btn.textContent = 'Sent ✓'; setTimeout(() => { btn.textContent = o; }, 1600); }
+          codingReposStatus[repoId] = 'thinking';
+          const span = document.querySelector(`[data-repo-status="${repoId}"]`);
+          const r = codingRepos.find(x => x.id === repoId);
+          if (span && r) span.innerHTML = repoStatusIcon(r, active);
+        } catch (e) { alert('Send failed: ' + e.message); }
+      };
+      rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); };
+      try { rec.start(); } catch (e) { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
     }
 
     // ── Coding page space-savers (progressive disclosure) ────────────────────
@@ -187,6 +269,17 @@
       const s = codingSessions.find(x => x.id === currentCodingSession);
       if (s) renameCodingRepo(s.repoId);
     }
+    // Delete the open project (rename/delete moved here from the repo list).
+    async function deleteCurrentCodingRepo() {
+      const s = codingSessions.find(x => x.id === currentCodingSession);
+      if (!currentInstance || !s) return;
+      if (!confirm('Delete this project? It removes the repo from the workspace.')) return;
+      try {
+        await api(`/v1/instances/${currentInstance.id}/coding/repos/${s.repoId}`, { method: 'DELETE' });
+        closeCodingTerminal();
+        await loadCoding();
+      } catch (e) { alert('Delete failed: ' + e.message); }
+    }
 
     async function startCodingSession(repoId) {
       if (!currentInstance) return;
@@ -235,6 +328,7 @@
       if (panel) panel.classList.remove('hidden');
       // Full-screen the session: the repo list moves into the header selector.
       document.getElementById('inst-coding-repos-section')?.classList.add('hidden');
+      stopReposStatusPolling();
       renderCodingRepoSelect();
       bindCodingSummaryTaps();
       switchCodingView('summary', updateUrl); // default to the condensed co-pilot view
@@ -523,6 +617,7 @@
       if (window.speechSynthesis) speechSynthesis.cancel();
       setCodingReposCollapsed(false); // bring the repo list back
       document.getElementById('inst-coding-repos-section')?.classList.remove('hidden');
+      startReposStatusPolling(); // resume live status on the list
       currentCodingSession = null;
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.add('hidden');
@@ -571,7 +666,7 @@
         if (/^⚙ /.test(line)) return `<span style="color:#fbbf24">${e}</span>`;
         if (/^\s*↳ /.test(line)) return `<span style="color:#94a3b8">${e}</span>`;
         if (/^\[(error|claude)/.test(line)) return `<span style="color:#f87171">${e}</span>`;
-        return `<span style="color:#86efac">${e}</span>`;
+        return `<span style="color:#86efac">${mdLite(line)}</span>`; // reply: render light markdown
       }).join('\n');
     }
 
