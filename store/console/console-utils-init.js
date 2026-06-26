@@ -214,6 +214,15 @@
           routeApplying = true;
           return;
         }
+        if (page === 'instances' && parts[1] && parts[2] === 'coding' && parts[3] === 'repos' && parts[4]) {
+          // Deep link to a repo's session view: /instances/:id/coding/repos/:repoId/:view
+          // Lands a reload — or a home-screen PWA saved on this exact view — back here.
+          routeApplying = false;
+          await openInstance(parts[1], null, 'coding', false);
+          if (typeof openCodingRepoView === 'function') await openCodingRepoView(parts[4], parts[5] === 'terminal' ? 'terminal' : 'summary');
+          routeApplying = true;
+          return;
+        }
         if (page === 'instances' && parts[1]) {
           const instanceTab = validInstanceTabs.includes(parts[2]) ? parts[2] : 'chat';
           const runtimeTaskId = instanceTab === 'board' && parts[3] === 'tasks' ? parts[4] : null;

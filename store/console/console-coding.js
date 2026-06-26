@@ -179,7 +179,31 @@
       } catch (e) { alert('Start session failed: ' + e.message); }
     }
 
-    async function openCodingTerminal(sessionId) {
+    // Reflect the open repo + view in the URL so a reload (or a home-screen PWA
+    // saved on this exact view) lands right back here. Keyed by REPO (stable
+    // across sessions), with the summary|terminal view as the last segment.
+    function setCodingUrl(replace = false) {
+      if (!currentInstance || !currentCodingSession) return;
+      const s = codingSessions.find(x => x.id === currentCodingSession);
+      const repoId = s && s.repoId;
+      if (!repoId) return;
+      setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/coding/repos/${encodeURIComponent(repoId)}/${currentCodingView}`, replace);
+    }
+
+    // Restore path: open a repo's live session at a given view (used by the router
+    // on reload / PWA launch). Loads coding data first so the session map exists.
+    async function openCodingRepoView(repoId, view) {
+      await loadCoding();
+      const active = codingSessions.find(s => s.repoId === repoId && s.status === 'active');
+      if (active) {
+        await openCodingTerminal(active.id, false);
+        switchCodingView(view === 'terminal' ? 'terminal' : 'summary', false);
+        setCodingUrl(true); // normalize the URL to the canonical form
+      }
+      // No active session for this repo → leave the repo list visible (tap Start).
+    }
+
+    async function openCodingTerminal(sessionId, updateUrl = true) {
       currentCodingSession = sessionId;
       codingSummaryHistory = [];
       const panel = document.getElementById('inst-coding-terminal');
@@ -191,7 +215,7 @@
         const r = s && codingRepos.find(x => x.id === s.repoId);
         label.textContent = r ? r.name : '';
       }
-      switchCodingView('summary'); // default to the condensed co-pilot view
+      switchCodingView('summary', updateUrl); // default to the condensed co-pilot view
       renderCodingSummary();
       stopCodingPolling();
       codingPollTimer = setInterval(pollCodingTerminal, 1500);
@@ -219,7 +243,7 @@
       if (currentCodingSession === sessionId) renderCodingSummary();
     }
 
-    function switchCodingView(name) {
+    function switchCodingView(name, updateUrl = true) {
       currentCodingView = name;
       const sum = document.getElementById('inst-coding-view-summary');
       const term = document.getElementById('inst-coding-view-terminal');
@@ -229,6 +253,7 @@
       const tb = document.getElementById('inst-coding-view-terminal-btn');
       if (sb) sb.classList.toggle('active', name === 'summary');
       if (tb) tb.classList.toggle('active', name === 'terminal');
+      if (updateUrl) setCodingUrl();
     }
 
     // Light markdown: escape, then bold / inline-code / bullets / line breaks.
@@ -354,12 +379,16 @@
     }
 
     function closeCodingTerminal() {
+      const hadSession = !!currentCodingSession;
       stopCodingPolling();
       if (window.speechSynthesis) speechSynthesis.cancel();
       setCodingReposCollapsed(false); // bring the repo list back
       currentCodingSession = null;
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.add('hidden');
+      // Drop back to the repo-list URL only if we were actually viewing a session
+      // (avoids a spurious history entry when openInstance tears down an empty tab).
+      if (hadSession && currentInstance) setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/coding`);
     }
 
     function stopCodingPolling() {
