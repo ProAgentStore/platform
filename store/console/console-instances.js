@@ -94,6 +94,18 @@
       return !!currentInstance && currentInstance.slug === 'job-application-assistant';
     }
 
+    // Centralized show/hide of job-application-only surfaces so they never appear
+    // for other agents (Coder, Site Monitor, …). Called on every instance open so
+    // static elements are gated immediately, regardless of which tab loads first.
+    function gateInstanceUiByAgent() {
+      const show = isApplyAgent();
+      ['inst-resume-block', 'apply-panel', 'inst-tips-section', 'settings-clear-app-history',
+       'settings-link-resume', 'settings-link-profile'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? '' : 'none';
+      });
+    }
+
     async function openInstance(instanceId, meta, tab = 'chat', updateUrl = true, runtimeTaskId = null) {
       if (tab === 'runtime' || tab === 'applications') tab = 'board';
       meta = await resolveInstanceMeta(instanceId, meta);
@@ -115,6 +127,7 @@
           <button type="button" class="tab${tab==='settings'?' active':''}" data-inst-tab="settings" onclick="switchInstTab('settings')">Settings</button>
         </div>
       `;
+      gateInstanceUiByAgent();
       switchInstTab(tab, false);
       loadInstanceMessages();
       checkRuntimeStatus();
@@ -320,7 +333,7 @@
       });
       // Re-append the application columns from cache (renderKanbanBoard cleared the
       // board). Synchronous → the columns never blink/disappear on a poll.
-      renderApplicationColumns();
+      if (isApplyAgent()) renderApplicationColumns();
       // Reflect the count of hidden (history) tasks on the prominent toggle.
       const hidden = all.length - shown.length;
       const allBtn = document.querySelector('#board-filter-toggle [data-board-filter="all"]');
@@ -523,7 +536,9 @@
     async function loadUnifiedBoard() {
       loadApplyChecklist();
       await loadInstanceRuntime();
-      await loadInstanceApplications();
+      // Application records are a job-application concept — don't fetch/show them
+      // for other agents (Coder, Site Monitor, …); their Board is runtime tasks only.
+      if (isApplyAgent()) await loadInstanceApplications();
       startRuntimePolling(); // live activity while the board is open
     }
 
@@ -684,7 +699,13 @@
       o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
       o.innerHTML = `<div style="background:var(--card,#1a1a1a);max-width:560px;width:100%;border-radius:14px;padding:1.5rem 1.6rem;max-height:90vh;overflow:auto;border:1px solid var(--line)">
         <h2 style="margin:0 0 .5rem;font-size:1.15rem">Connect your runner</h2>
-        <p style="color:var(--muted);line-height:1.55;margin:0 0 1.1rem;font-size:.9rem">Your agent acts on real websites through a <b>runner</b> — a small program on <b>your own computer</b> that opens a browser and fills the forms. It must be running for your agent to apply to jobs, and it only runs while you keep its window open.</p>
+        <p style="color:var(--muted);line-height:1.55;margin:0 0 1.1rem;font-size:.9rem">${
+          (currentInstance && (currentInstance.category === 'code' || currentInstance.slug === 'coder'))
+            ? `Your agent works on your code through a <b>runner</b> — a small program on <b>your own computer</b> that runs the coding CLI in your repo. It must be running for the agent to act, and it only runs while you keep its window open.`
+            : isApplyAgent()
+            ? `Your agent acts on real websites through a <b>runner</b> — a small program on <b>your own computer</b> that opens a browser and fills the forms. It must be running for your agent to apply to jobs, and it only runs while you keep its window open.`
+            : `Your agent acts on your machine through a <b>runner</b> — a small program on <b>your own computer</b> that does the real work. It must be running for the agent to act, and it only runs while you keep its window open.`
+        }</p>
         <div style="line-height:1.5">
           <div style="margin-bottom:.7rem"><b>1. Install it</b> <span style="color:var(--muted);font-size:.8rem">(once)</span>${cmd('npm i -g @proagentstore/cli')}</div>
           <div style="margin-bottom:.7rem"><b>2. Sign in</b> <span style="color:var(--muted);font-size:.8rem">(once, opens your browser)</span>${cmd('pags login')}</div>

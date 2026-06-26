@@ -249,7 +249,13 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 	router.get("/:instanceId/apply-tips", async (c) => {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
-		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const inst = await requireOwnedInstance(c.env, instanceId, session.uid);
+		// The ATS cache is per-USER (shared across the user's apply runs). Only the
+		// job-application agent may read it — otherwise it would surface a user's
+		// application history inside unrelated agents (e.g. Coder). Defense-in-depth
+		// behind the console gate.
+		const agent = await c.env.DB.prepare("SELECT slug FROM agents WHERE id = ?1").bind(inst.agent_id).first<{ slug: string }>();
+		if (agent?.slug !== "job-application-assistant") return c.json({ tips: [] });
 		return c.json({ tips: await listAtsCache(c.env, session.uid) });
 	});
 

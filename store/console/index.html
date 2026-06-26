@@ -42,7 +42,22 @@
         <span id="user-login"></span>
       </a>
     </span>
+    <button id="nav-menu-btn" type="button" aria-label="Open menu" aria-expanded="false" onclick="toggleNavMenu(this)">&#9776;</button>
   </header>
+  <script>
+    function toggleNavMenu(btn){
+      var nav=document.getElementById('top-nav');
+      var open=nav.classList.toggle('open');
+      if(btn) btn.setAttribute('aria-expanded', open?'true':'false');
+    }
+    // Close the mobile menu on a link tap or an outside tap.
+    document.addEventListener('click', function(e){
+      var nav=document.getElementById('top-nav'), btn=document.getElementById('nav-menu-btn');
+      if(!nav || !nav.classList.contains('open')) return;
+      if(e.target.closest('#top-nav a')){ nav.classList.remove('open'); if(btn) btn.setAttribute('aria-expanded','false'); return; }
+      if(!nav.contains(e.target) && e.target!==btn && !(btn && btn.contains(e.target))){ nav.classList.remove('open'); if(btn) btn.setAttribute('aria-expanded','false'); }
+    });
+  </script>
 
   <!-- Login page -->
   <div id="login-page" class="login-page">
@@ -360,7 +375,7 @@
           <h3 style="font-size:1rem;font-weight:700;margin:0">🔐 Credentials</h3>
           <button type="button" onclick="showCredForm()" class="btn btn-outline btn-sm">+ Add credential</button>
         </div>
-        <p style="font-size:0.74rem;color:var(--muted);margin:0 0 0.75rem">Site logins the agent signs in with (e.g. an ATS account). Passwords, PINs &amp; recovery codes are <b>encrypted at rest</b> — decrypted only when the agent logs in, never shown unless you reveal them.</p>
+        <p style="font-size:0.74rem;color:var(--muted);margin:0 0 0.75rem">Logins &amp; secrets the agent signs in with (a site account, an API token, a registry login). Passwords, PINs &amp; recovery codes are <b>encrypted at rest</b> — decrypted only when the agent uses them, never shown unless you reveal them.</p>
         <div id="inst-cred-form" class="create-form hidden" style="margin-bottom:0.75rem">
           <input type="hidden" id="cred-id">
           <div class="form-row">
@@ -422,20 +437,20 @@
     <div id="inst-tab-settings" class="tab-panel">
       <div class="create-form" style="margin-bottom:1rem">
         <h3 style="font-size:1rem;margin-bottom:0.3rem">Board maintenance</h3>
-        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.7rem">Tidy up the board. These only clear your view — they never un-submit a real application.</p>
+        <p style="font-size:0.82rem;color:var(--muted);margin-bottom:0.7rem">Tidy up the board. These only clear your view of finished items.</p>
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap">
           <button type="button" onclick="clearFinishedTasks()" class="btn btn-outline btn-sm">Clear finished tasks</button>
-          <button type="button" onclick="clearApplicationHistory()" class="btn btn-outline btn-sm">Clear application history</button>
+          <button type="button" id="settings-clear-app-history" onclick="clearApplicationHistory()" class="btn btn-outline btn-sm">Clear application history</button>
         </div>
         <div id="settings-maint-msg" style="font-size:0.8rem;margin-top:0.5rem"></div>
       </div>
       <div class="create-form" style="margin-bottom:1rem">
         <h3 style="font-size:1rem;margin-bottom:0.3rem">Where things live</h3>
         <ul style="font-size:0.84rem;color:var(--muted);line-height:1.8;padding-left:1.1rem;margin:0">
-          <li><b>Résumé</b> &amp; documents → <a href="#" onclick="switchInstTab('knowledge');switchKbTab('docs');return false">Knowledge → Documents</a></li>
-          <li><b>Candidate profile</b> &amp; job preferences → <a href="#" onclick="if(window.showProfile)showProfile();return false">Profile</a></li>
+          <li id="settings-link-resume"><b>Résumé</b> &amp; documents → <a href="#" onclick="switchInstTab('knowledge');switchKbTab('docs');return false">Knowledge → Documents</a></li>
+          <li id="settings-link-profile"><b>Candidate profile</b> &amp; job preferences → <a href="#" onclick="if(window.showProfile)showProfile();return false">Profile</a></li>
           <li><b>Rules / special instructions</b> → <a href="#" onclick="switchInstTab('knowledge');switchKbTab('rules');return false">Knowledge → Rules &amp; Tips</a></li>
-          <li><b>Site logins</b> → <a href="#" onclick="switchInstTab('knowledge');switchKbTab('credentials');return false">Knowledge → Credentials</a></li>
+          <li><b>Logins &amp; secrets</b> → <a href="#" onclick="switchInstTab('knowledge');switchKbTab('credentials');return false">Knowledge → Credentials</a></li>
         </ul>
       </div>
       <div class="create-form">
