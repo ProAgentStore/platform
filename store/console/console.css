@@ -133,24 +133,30 @@
     .inst-nav-tabs .ti{display:none;font-size:0.95rem;line-height:1}  /* tab icon — mobile only */
     /* Mobile: icon-only tabs, hide the agent name + stop label, reclaim the bar */
     @media(max-width:640px){
+      /* Mobile navbar is stripped to essentials (PWA: an agent is saved to the
+         home screen). No logo, no back button — the hamburger reaches the agent
+         list. Bar = ☰ · instance tabs (icons) · status dot · avatar. */
+      .brand{display:none}
+      .inst-back{display:none}
       .inst-agent-name{display:none}
       .inst-nav-tabs .tl{display:none}
       .inst-nav-tabs .ti{display:inline-block}
       .inst-nav-tabs .tab{padding:0.4rem 0.6rem}
       #header-stop-btn .tl{display:none}
-      .brand-name{display:none}
     }
-    /* Inside an instance the global menu isn't needed (there's a back button) —
-       reclaim that space on mobile so every tab is reachable. */
-    @media(max-width:1024px){ body.instance-open #nav-menu-btn{display:none} }
+    /* Agent-list / dashboard links live in the hamburger dropdown on mobile only
+       (on desktop you have the dashboard tabs). */
+    .nav-signed{display:none}
+    @media(max-width:1024px){ .nav-signed{display:flex} }
     /* Public-pages nav in the console header — visible on desktop so you can jump
        between the console and the store/about/etc. Hidden on narrow screens (and when
        an instance's nav needs the room) to keep the 48px bar clean. */
     #top-nav{display:flex;align-items:center;gap:0.1rem;flex-shrink:0}
     #top-nav a{font-size:0.82rem;color:var(--muted);padding:0.32rem 0.55rem;border-radius:6px;text-decoration:none;white-space:nowrap;transition:all 0.15s}
     #top-nav a:hover{color:var(--ink);background:var(--line);text-decoration:none}
-    /* Hamburger toggles the same nav as a dropdown on mobile. */
-    #nav-menu-btn{display:none;flex-shrink:0;margin-left:auto;font-size:1.25rem;line-height:1;color:var(--muted);background:none;border:none;padding:0.3rem 0.45rem;border-radius:6px}
+    /* Hamburger toggles the same nav as a dropdown on mobile. Sits flush in the
+       right-hand group (after the avatar); #inst-nav-slot's flex:1 right-aligns it. */
+    #nav-menu-btn{display:none;flex-shrink:0;font-size:1.35rem;line-height:1;color:var(--muted);background:none;border:none;padding:0.25rem 0.45rem;border-radius:6px;cursor:pointer}
     #nav-menu-btn:hover{color:var(--ink);background:var(--line)}
     @media(max-width:1024px){
       #nav-menu-btn{display:block}
