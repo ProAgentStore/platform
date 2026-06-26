@@ -315,30 +315,25 @@ instanceRoutes.get("/:instanceId/tasks", async (c) => {
 			error: "Runtime not registered",
 		});
 	}
-	try {
-		const res = await callRuntime(c.env, runtime, "/tasks");
-		const payload = await runtimeJson(res);
-		if (res.ok) {
-			// Sync the runner's tasks into the mirror, then return the MIRROR (not the
-			// raw runner list) so cleared/deleted tasks (hidden=1) stay off the board
-			// even though the runner still holds them and re-sends them each poll.
-			await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
-			return c.json({ tasks: await mirroredRuntimeTasks(c.env, instanceId, session.uid) }, 200);
+	// Stale-while-revalidate (best practice on Workers + D1): serve the durable D1
+	// MIRROR immediately — it's fast, persists across sessions, and survives a flaky
+	// runner tunnel, so the board never blanks on a network blip. Refresh the mirror
+	// from the runner in the BACKGROUND for the next poll; the console polls every few
+	// seconds, so it converges within one tick. (Returning the mirror — not the raw
+	// runner list — also keeps cleared/deleted tasks (hidden=1) off the board even
+	// though the runner still re-sends them.) This replaces blocking the board on a
+	// live runner round-trip, which went blank whenever the tunnel was slow.
+	const revalidate = (async () => {
+		try {
+			const res = await callRuntime(c.env, runtime, "/tasks");
+			if (res.ok) await mirrorRuntimeTasks(c.env, instanceId, session.uid, await runtimeJson(res));
+			else await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+		} catch {
+			await updateRuntimeStatus(c.env, instanceId, session.uid, "offline").catch(() => undefined);
 		}
-		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
-		return c.json({
-			tasks: await mirroredRuntimeTasks(c.env, instanceId, session.uid),
-			runtimeUnavailable: true,
-			error: runtimeErrorPayload(payload),
-		});
-	} catch (error) {
-		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
-		return c.json({
-			tasks: await mirroredRuntimeTasks(c.env, instanceId, session.uid),
-			runtimeUnavailable: true,
-			error: error instanceof Error ? error.message : String(error),
-		});
-	}
+	})();
+	try { c.executionCtx.waitUntil(revalidate); } catch { await revalidate; }
+	return c.json({ tasks: await mirroredRuntimeTasks(c.env, instanceId, session.uid) }, 200);
 });
 
 /** Create a task on my registered runtime. */

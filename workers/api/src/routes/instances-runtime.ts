@@ -343,8 +343,14 @@ export async function expireOrphanedRuntimeTasks(
 	userId: string,
 ): Promise<number> {
 	const { results } = await env.DB.prepare(
+		// Job-application tasks are driven by a DURABLE Cloudflare Workflow, not the
+		// runner process — they survive a runner reconnect (flaky tunnel / WiFi blip),
+		// and the workflow owns their lifecycle + its own handoff timeout. So they are
+		// NOT orphaned by a re-register and must NOT be expired here, or a network blip
+		// would kill a live "needs_human" apply task mid-takeover.
 		`SELECT id, payload FROM instance_runtime_tasks
-     WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('needs_human', 'running')`,
+     WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('needs_human', 'running')
+       AND type != 'job.apply_agent'`,
 	)
 		.bind(instanceId, userId)
 		.all<RuntimeTaskMirrorRow>();
@@ -356,6 +362,8 @@ export async function expireOrphanedRuntimeTasks(
 	for (const row of results) {
 		const task = parsePayload(row.payload);
 		if (!isRecord(task)) continue;
+		// Workflow-driven apply tasks survive a runner reconnect — never expire them.
+		if (task.type === "job.apply_agent") continue;
 		task.status = "failed";
 		task.error = reason;
 		task.updatedAt = now;

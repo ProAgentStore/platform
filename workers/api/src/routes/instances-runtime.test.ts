@@ -47,6 +47,17 @@ describe("expireOrphanedRuntimeTasks", () => {
 		expect(String(writes[0].args[5])).toContain("orphaned");
 	});
 
+	it("does NOT expire workflow-driven job.apply_agent tasks (they survive a runner reconnect)", async () => {
+		const rows = [
+			{ id: "a1", payload: JSON.stringify({ id: "a1", type: "job.apply_agent", status: "needs_human" }) },
+			{ id: "b2", payload: JSON.stringify({ id: "b2", type: "browser.open", status: "running" }) },
+		];
+		const { env, writes } = mockEnv(rows);
+		const n = await expireOrphanedRuntimeTasks(env, "inst1", "user1");
+		expect(n).toBe(1); // only the browser.open task, NOT the apply task
+		expect(writes.map((w) => String(w.args[0]))).toEqual(["b2"]);
+	});
+
 	it("does nothing when there are no in-flight tasks", async () => {
 		const { env, writes } = mockEnv([]);
 		const n = await expireOrphanedRuntimeTasks(env, "inst1", "user1");
