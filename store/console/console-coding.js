@@ -326,7 +326,8 @@
       rec.onend = () => {
         codingRecognizer = null;
         if (btn) btn.classList.remove('active');
-        if (input && input.value.trim()) askCoding(); // send what you said
+        // Don't auto-send — the dictated text could be a co-pilot question OR an
+        // instruction for the agent, so leave it for the user to pick Ask or ➤ Agent.
       };
       rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); };
       try { rec.start(); } catch (e) { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
@@ -400,6 +401,30 @@
       codingSummaryHistory.push({ role: 'user', content: q });
       renderCodingSummary();
       await callExplain(q);
+    }
+
+    // Send the Summary input straight to the coding CLI as a real prompt — this DRIVES
+    // the agent (unlike Ask, which only queries the read-only co-pilot). Echoes the
+    // instruction into the thread, then auto-summarizes shortly after so you hear back.
+    async function sendCodingInstruction() {
+      if (!currentInstance || !currentCodingSession) return;
+      const input = document.getElementById('inst-coding-ask');
+      const text = (input.value || '').trim();
+      if (!text) return;
+      input.value = '';
+      codingSummaryHistory.push({ role: 'user', content: '➤ ' + text });
+      renderCodingSummary();
+      try {
+        await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/message`, {
+          method: 'POST', body: JSON.stringify({ text }),
+        });
+        setTimeout(pollCodingTerminal, 300);
+        // Give the agent a moment to start, then let the co-pilot report what it's doing.
+        setTimeout(() => { if (currentCodingSession) refreshCodingSummary(); }, 3500);
+      } catch (e) {
+        codingSummaryHistory.push({ role: 'assistant', content: 'Could not send to the agent: ' + e.message });
+        renderCodingSummary();
+      }
     }
 
     // Clear the conversation thread (the activity log/timeline of the agent's work is
