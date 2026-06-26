@@ -282,13 +282,18 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 	if (action.kind === "message" && action.text) {
 		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "command", content: action.text }).catch(() => undefined);
 	}
-	try {
-		const snap = await callRunner(conn, "/coding/act", { sessionId, action });
-		return c.json(snap as object);
-	} catch {
-		// The runner is online but doesn't have this session live (e.g. it restarted).
-		throw new HttpError(409, "This session isn't live on the runner — start it again.");
+	let snap = await callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
+	if (snap === null) {
+		// The runner is online but lost the in-memory session (it restarted) — its
+		// tmux pane usually survives, so reattach (CodingSession.start reconnects to
+		// the live tmux, no new CLI) and retry once.
+		const session = await getSession(c.env, instanceId, uid, sessionId);
+		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
+		if (session && repo) await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+		snap = await callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
 	}
+	if (snap === null) throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
+	return c.json(snap as object);
 });
 
 /** Hand the session to the autonomous brain (the durable Workflow) with an objective. */
