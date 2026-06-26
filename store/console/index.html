@@ -286,7 +286,33 @@
         <div id="inst-coding-repos-section" class="create-form" style="margin-bottom:0.75rem;padding:0.6rem 0.8rem">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
             <span style="color:var(--ink);font-weight:700;font-size:0.95rem">Repositories</span>
-            <button type="button" class="btn btn-outline btn-sm" onclick="toggleAddRepo()">+ Add</button>
+            <div style="display:flex;gap:0.35rem">
+              <button type="button" id="inst-handsoff-cog" class="btn btn-outline btn-sm" onclick="toggleHandsOffPanel()" title="Hands-off voice mode" style="padding:0.25rem 0.5rem">🎙️</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="toggleAddRepo()">+ Add</button>
+            </div>
+          </div>
+          <!-- Hands-off voice mode controls -->
+          <div id="inst-handsoff-panel" class="hidden" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.55rem 0.65rem;margin-top:0.55rem">
+            <div style="font-size:0.82rem;font-weight:700;margin-bottom:0.45rem">🎙️ Hands-off mode</div>
+            <div style="display:grid;grid-template-columns:auto 1fr;gap:0.4rem 0.5rem;align-items:center;font-size:0.82rem">
+              <label style="margin:0">Mode</label>
+              <select id="handsoff-mode" style="font-size:0.82rem">
+                <option value="smart">Smart — converse with the Overseer (across repos)</option>
+                <option value="commands">Commands — say "next / play / record"</option>
+              </select>
+              <label style="margin:0">Scope</label>
+              <select id="handsoff-scope" style="font-size:0.82rem">
+                <option value="all">All repos</option>
+                <option value="focused">Just the focused repo</option>
+              </select>
+            </div>
+            <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
+              <button type="button" id="handsoff-start" class="btn btn-primary btn-sm" onclick="startHandsOff()">▶ Start</button>
+              <button type="button" id="handsoff-pause" class="btn btn-outline btn-sm hidden" onclick="toggleHandsOffPause()">⏸ Pause</button>
+              <button type="button" id="handsoff-stop" class="btn btn-outline btn-sm hidden" onclick="stopHandsOff()" style="color:var(--red)">⏹ Stop</button>
+              <span id="handsoff-status" style="font-size:0.78rem;color:var(--muted)"></span>
+            </div>
+            <p style="font-size:0.72rem;color:var(--muted-soft);margin:0.4rem 0 0">When running, toggle any repo in/out below. Say "next" to move between repos, "play" to hear it, "record" to reply. Works on desktop/Android; on iPhone Safari, continuous listening is unreliable — use the row mic.</p>
           </div>
           <div id="inst-coding-collapsible">
             <div id="inst-coding-add" class="hidden" style="margin-top:0.6rem">

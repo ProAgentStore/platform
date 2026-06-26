@@ -25,6 +25,12 @@
     let codingReposStatus = {};           // repoId -> 'thinking'|'idle'|'offline'
     let deployStatusTimer = null;         // GH Actions deploy status poll (optional)
     let codingDeployStatus = {};          // repoId -> { available, run }
+    let handsOffOn = false;               // hands-off voice mode running
+    let handsOffPaused = false;
+    let handsOffFocusIdx = 0;             // which eligible repo is focused
+    let handsOffExcluded = {};            // repoId -> true (opted out of hands-off)
+    let handsOffRec = null;               // continuous recognizer
+    let handsOffLastStatus = {};          // repoId -> last runState (finish narration)
 
     async function loadCoding() {
       if (!currentInstance) return;
@@ -95,6 +101,7 @@
               <button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
               : `<button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start</button>`}
             ${repoLaunchIcons(r)}
+            ${handsOffOn && active ? `<label style="display:flex;align-items:center;gap:0.25rem;font-size:0.72rem;color:var(--muted);margin-left:auto" title="Include this repo in hands-off mode"><input type="checkbox" ${handsOffExcluded[r.id] ? '' : 'checked'} onchange="toggleHandsOffRepo('${r.id}', this.checked)" style="width:auto;margin:0"> hands-off</label>` : ''}
           </div>
           <div id="repo-play-${r.id}" class="repo-play" style="display:none"></div>
         </div>`;
@@ -134,6 +141,16 @@
           const snap = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${s.id}/capture`);
           codingReposStatus[s.repoId] = snap.alive ? snap.runState : 'offline';
         } catch (e) { /* keep prior */ }
+        // Hands-off proactive narration: when a repo finishes working, say so (and
+        // play its last reply) — so you don't have to watch the screen.
+        const now = codingReposStatus[s.repoId];
+        const prev = handsOffLastStatus[s.repoId];
+        if (handsOffOn && !handsOffPaused && !handsOffExcluded[s.repoId] &&
+            (prev === 'thinking' || prev === 'responding') && now === 'idle') {
+          const rr = codingRepos.find(x => x.id === s.repoId);
+          if (rr) { speakText(`${rr.name} finished.`); }
+        }
+        handsOffLastStatus[s.repoId] = now;
         const span = document.querySelector(`[data-repo-status="${s.repoId}"]`);
         const r = codingRepos.find(x => x.id === s.repoId);
         if (span && r) span.innerHTML = repoStatusIcon(r, s);
@@ -275,6 +292,165 @@
       };
       rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); if (el) el.style.display = 'none'; };
       try { rec.start(); } catch (e) { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
+    }
+
+    // ── Hands-off voice mode ─────────────────────────────────────────────────
+    // Two modes, both driven by ONE continuous recognizer over the repos list:
+    //   • commands — say "next/back/play/stop"; any other phrase is sent to the
+    //     focused repo's agent (which routes: answer vs. drive Claude).
+    //   • smart    — every phrase goes to the cross-repo Overseer, which decides
+    //     what to do and where; its reply is spoken back. A nonstop conversation
+    //     on top of all your repos.
+    // Scope is all eligible repos, or just the focused one. Per-repo include/
+    // exclude toggles appear in the list only while hands-off is running.
+    function toggleHandsOffPanel() {
+      const p = document.getElementById('inst-handsoff-panel');
+      if (p) p.classList.toggle('hidden');
+    }
+    function handsOffStatus(t) {
+      const el = document.getElementById('handsoff-status');
+      if (el) el.textContent = t || '';
+    }
+    // Repos that take part in hands-off: a live session + not opted out. Scope
+    // 'focused' narrows to the single focused repo.
+    function handsOffEligibleRepos() {
+      const scope = (document.getElementById('handsoff-scope') || {}).value || 'all';
+      const list = codingRepos.filter(r =>
+        codingSessions.some(s => s.repoId === r.id && s.status === 'active') && !handsOffExcluded[r.id]);
+      if (scope === 'focused' && list.length) {
+        const f = list[((handsOffFocusIdx % list.length) + list.length) % list.length];
+        return f ? [f] : list;
+      }
+      return list;
+    }
+    function handsOffFocusRepo() {
+      const list = handsOffEligibleRepos();
+      if (!list.length) return null;
+      return list[((handsOffFocusIdx % list.length) + list.length) % list.length];
+    }
+    function startHandsOff() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) { alert('Hands-off voice isn\'t supported here. Try Chrome on desktop or Android.'); return; }
+      if (!handsOffEligibleRepos().length) { alert('Start a coding session on at least one repo first.'); return; }
+      handsOffOn = true; handsOffPaused = false; handsOffFocusIdx = 0;
+      document.getElementById('handsoff-start')?.classList.add('hidden');
+      document.getElementById('handsoff-pause')?.classList.remove('hidden');
+      document.getElementById('handsoff-stop')?.classList.remove('hidden');
+      const sel = document.getElementById('handsoff-mode');
+      if (sel) sel.disabled = true;
+      const sc = document.getElementById('handsoff-scope');
+      if (sc) sc.disabled = true;
+      renderCodingRepos(); // re-render to show per-repo include toggles
+      const r = handsOffFocusRepo();
+      speakText(`Hands-off on. Focused on ${r ? r.name : 'your repos'}.`);
+      handsOffStatus('listening…');
+      handsOffListen();
+    }
+    function stopHandsOff() {
+      handsOffOn = false; handsOffPaused = false;
+      if (handsOffRec) { try { handsOffRec.stop(); } catch (e) {} handsOffRec = null; }
+      if (window.speechSynthesis) speechSynthesis.cancel();
+      document.getElementById('handsoff-start')?.classList.remove('hidden');
+      document.getElementById('handsoff-pause')?.classList.add('hidden');
+      document.getElementById('handsoff-stop')?.classList.add('hidden');
+      const pb = document.getElementById('handsoff-pause');
+      if (pb) pb.textContent = '⏸ Pause';
+      const sel = document.getElementById('handsoff-mode'); if (sel) sel.disabled = false;
+      const sc = document.getElementById('handsoff-scope'); if (sc) sc.disabled = false;
+      handsOffStatus('');
+      renderCodingRepos(); // re-render to hide per-repo include toggles
+    }
+    function toggleHandsOffPause() {
+      handsOffPaused = !handsOffPaused;
+      const b = document.getElementById('handsoff-pause');
+      if (b) b.textContent = handsOffPaused ? '▶ Resume' : '⏸ Pause';
+      if (handsOffPaused) {
+        if (handsOffRec) { try { handsOffRec.stop(); } catch (e) {} }
+        if (window.speechSynthesis) speechSynthesis.cancel();
+        handsOffStatus('paused');
+      } else {
+        handsOffStatus('listening…');
+        handsOffListen();
+      }
+    }
+    // The continuous recognizer. It self-restarts on end (Chrome ends a continuous
+    // session periodically) for as long as hands-off is on and not paused.
+    function handsOffListen() {
+      if (!handsOffOn || handsOffPaused) return;
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) return;
+      const rec = new SR();
+      rec.lang = 'en-US'; rec.continuous = true; rec.interimResults = false;
+      handsOffRec = rec;
+      rec.onresult = (e) => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) {
+            const t = (e.results[i][0].transcript || '').trim();
+            if (t) onHandsOffPhrase(t);
+          }
+        }
+      };
+      rec.onend = () => {
+        if (handsOffOn && !handsOffPaused) {
+          try { rec.start(); } catch (e) { setTimeout(() => { if (handsOffOn && !handsOffPaused) handsOffListen(); }, 600); }
+        }
+      };
+      rec.onerror = () => { /* 'no-speech' etc — onend restarts */ };
+      try { rec.start(); } catch (e) { /* already running */ }
+    }
+    async function onHandsOffPhrase(text) {
+      const low = text.toLowerCase().trim();
+      if (/^(stop|pause|hold on)\b/.test(low)) { toggleHandsOffPause(); return; }
+      const mode = (document.getElementById('handsoff-mode') || {}).value || 'smart';
+      if (mode === 'commands') {
+        if (/^(next|skip|go on|forward)\b/.test(low)) return handsOffNext(1);
+        if (/^(previous|back|prev|go back)\b/.test(low)) return handsOffNext(-1);
+        if (/^(play|read|repeat|say again)\b/.test(low)) return handsOffPlayFocused();
+        if (/^(record|reply|note)\b/.test(low)) { speakText('Go ahead.'); handsOffStatus('say your instruction…'); return; }
+        return handsOffSendToFocused(text); // any other phrase → the focused repo's agent
+      }
+      // smart mode → the Overseer across all repos, then speak its reply
+      handsOffStatus('thinking…');
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/overseer`, { method: 'POST', body: JSON.stringify({ message: text }) });
+        speakText(d && d.reply ? d.reply : 'Done.');
+      } catch (e) { speakText('Sorry, I had trouble with that.'); }
+      handsOffStatus('listening…');
+    }
+    function handsOffNext(dir) {
+      const list = handsOffEligibleRepos();
+      if (!list.length) { speakText('No repos in hands-off.'); return; }
+      handsOffFocusIdx = (handsOffFocusIdx + dir + list.length) % list.length;
+      const r = list[handsOffFocusIdx];
+      speakText(`Now on ${r.name}.`);
+      handsOffPlayFocused();
+    }
+    async function handsOffPlayFocused() {
+      const r = handsOffFocusRepo();
+      if (!r) { speakText('No repo focused.'); return; }
+      const active = codingSessions.find(s => s.repoId === r.id && s.status === 'active');
+      if (!active) { speakText(`${r.name} has no live session.`); return; }
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${active.id}/timeline`);
+        const last = (d.chat || []).slice().reverse().find(m => m.type === 'chat_assistant');
+        speakText(`${r.name}: ${last ? last.content : 'no update yet'}`);
+      } catch (e) { speakText(`${r.name}: couldn't read it.`); }
+    }
+    async function handsOffSendToFocused(text) {
+      const r = handsOffFocusRepo();
+      if (!r) { speakText('No repo focused.'); return; }
+      const active = codingSessions.find(s => s.repoId === r.id && s.status === 'active');
+      if (!active) { speakText(`${r.name} has no live session.`); return; }
+      handsOffStatus('sending…');
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${active.id}/agent`, { method: 'POST', body: JSON.stringify({ message: text }) });
+        if (d && d.delegated) { speakText(`On it, ${r.name}.`); codingReposStatus[r.id] = 'thinking'; }
+        else speakText((d && d.reply) ? d.reply : `Sent to ${r.name}.`);
+      } catch (e) { speakText('Send failed.'); }
+      handsOffStatus('listening…');
+    }
+    function toggleHandsOffRepo(repoId, included) {
+      if (included) delete handsOffExcluded[repoId]; else handsOffExcluded[repoId] = true;
     }
 
     // ── Coding page space-savers (progressive disclosure) ────────────────────
