@@ -55,7 +55,7 @@ describe("HeadlessSession (stream-json engine)", () => {
 
 		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: pull latest"));
 		const pane = s.snapshot();
-		expect(pane).toContain("❯ pull latest"); // your turn is echoed
+		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] pull latest/); // your turn, echoed + timestamped
 		expect(pane).toContain("⚙ Bash"); // tool use is surfaced
 		expect(pane).toContain("Already up to date."); // tool result is surfaced
 		expect(pane).toContain("Done: pull latest"); // Claude's REAL reply, not a scrape

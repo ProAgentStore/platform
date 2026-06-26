@@ -16,6 +16,7 @@
     let codingRecognizer = null;          // active speech-to-text session
     let codingTapBound = false;           // touch double-tap handler attached once
     let codingPollTick = 0;               // drives the slower chat poll within the terminal poll
+    let lastCodingPane = '';              // skip re-render when the pane is unchanged (keeps selection)
 
     async function loadCoding() {
       if (!currentInstance) return;
@@ -229,6 +230,7 @@
     async function openCodingTerminal(sessionId, updateUrl = true) {
       currentCodingSession = sessionId;
       codingSummaryHistory = [];
+      lastCodingPane = ''; // force a fresh colourised render for this session
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.remove('hidden');
       // Full-screen the session: the repo list moves into the header selector.
@@ -559,6 +561,20 @@
       }
     }
 
+    // Colour the raw terminal by line type so you can see at a glance who said what:
+    // cyan ❯ = you · green = the agent's reply · amber ⚙ = a tool it ran · slate ↳ =
+    // that tool's result · red = an error. Each ❯/reply line is timestamped [HH:MM:SS].
+    function colorizeCodingPane(text) {
+      return String(text || '').split('\n').map(line => {
+        const e = esc(line);
+        if (/^\s*❯ /.test(line)) return `<span style="color:#7dd3fc;font-weight:600">${e}</span>`;
+        if (/^⚙ /.test(line)) return `<span style="color:#fbbf24">${e}</span>`;
+        if (/^\s*↳ /.test(line)) return `<span style="color:#94a3b8">${e}</span>`;
+        if (/^\[(error|claude)/.test(line)) return `<span style="color:#f87171">${e}</span>`;
+        return `<span style="color:#86efac">${e}</span>`;
+      }).join('\n');
+    }
+
     async function pollCodingTerminal() {
       if (!currentInstance || !currentCodingSession) return;
       try {
@@ -566,7 +582,12 @@
         const pre = document.getElementById('inst-coding-pane');
         if (pre) {
           const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
-          pre.textContent = snap.pane || (snap.runnerConnected ? '(waiting for the CLI…)' : '(no runner connected — run `pags up`)');
+          if (snap.pane) {
+            if (snap.pane !== lastCodingPane) { pre.innerHTML = colorizeCodingPane(snap.pane); lastCodingPane = snap.pane; }
+          } else {
+            pre.textContent = snap.runnerConnected ? '(waiting for the CLI…)' : '(no runner connected — run `pags up`)';
+            lastCodingPane = '';
+          }
           if (atBottom) pre.scrollTop = pre.scrollHeight;
         }
         setCodingRunState(snap.alive ? snap.runState : 'offline');

@@ -133,7 +133,7 @@ export class HeadlessSession {
 	/** Send a user turn to Claude (the agent acts on it). */
 	input(text: string): void {
 		if (!this.alive) this.start();
-		this.push(`\n❯ ${text}`); // ❯ — your turn, mirrors the old prompt marker
+		this.push(`\n❯ [${stamp()}] ${text}`); // ❯ — your turn, timestamped
 		this.run = "thinking";
 		const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
 		try {
@@ -199,7 +199,7 @@ export class HeadlessSession {
 			case "assistant":
 				for (const block of ev.message?.content ?? []) {
 					if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
-						this.push(block.text.trim());
+						this.push(`[${stamp()}] ${block.text.trim()}`); // timestamped agent reply
 					} else if (block.type === "tool_use") {
 						this.push(`⚙ ${String(block.name ?? "tool")} ${shortInput(block.input)}`); // ⚙
 					}
@@ -224,6 +224,11 @@ export class HeadlessSession {
 	private push(line: string): void {
 		this.transcript.push(line);
 	}
+}
+
+/** Local wall-clock "HH:MM:SS" for transcript timestamps (runner is a Node process). */
+function stamp(): string {
+	return new Date().toTimeString().slice(0, 8);
 }
 
 /** Compact a tool_use input object to a single readable line. */
