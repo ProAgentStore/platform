@@ -301,24 +301,30 @@
             <div style="display:flex;align-items:center;gap:0.5rem;min-width:0;flex-shrink:1">
               <button type="button" class="btn btn-outline btn-sm" onclick="closeCodingTerminal()" title="Back to all repositories" style="flex-shrink:0">&larr;</button>
               <!-- Repo switcher lives up here (the coding top-nav), so the session below is full-screen. -->
-              <select id="inst-coding-repo-select" onchange="onCodingRepoSelect(this.value)" title="Switch repository" style="font-size:0.76rem;max-width:170px;flex-shrink:1;min-width:0"></select>
-              <button type="button" class="btn btn-outline btn-sm" onclick="renameCurrentCodingRepo()" title="Rename project" style="flex-shrink:0;padding:0.2rem 0.4rem">✎</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="deleteCurrentCodingRepo()" title="Delete project" style="flex-shrink:0;padding:0.2rem 0.4rem;color:var(--red)">🗑</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="toggleCodingLinksEditor()" title="Launch links (dev / staging / prod)" style="flex-shrink:0;padding:0.2rem 0.4rem">🔗</button>
-              <span id="inst-coding-links" style="display:flex;gap:0.25rem;flex-shrink:0"></span>
-              <span id="inst-coding-deploy" style="display:flex;flex-shrink:0"></span>
+              <select id="inst-coding-repo-select" onchange="onCodingRepoSelect(this.value)" title="Switch repository" style="font-size:0.76rem;max-width:150px;flex-shrink:1;min-width:0"></select>
               <div class="tabs" style="margin:0;flex-shrink:0">
                 <button type="button" id="inst-coding-view-summary-btn" class="tab active" onclick="switchCodingView('summary')" title="Chat with the agent — it drives Claude for you">Agent</button>
                 <button type="button" id="inst-coding-view-terminal-btn" class="tab" onclick="switchCodingView('terminal')" title="Raw terminal">Terminal</button>
               </div>
               <span id="inst-coding-runstate" title="idle" style="font-size:0.72rem;flex-shrink:0;color:var(--muted)">○</span>
+              <span id="inst-coding-links" style="display:flex;gap:0.25rem;flex-shrink:0"></span>
+              <span id="inst-coding-deploy" style="display:flex;flex-shrink:0"></span>
             </div>
-            <div style="display:flex;gap:0.35rem;flex-wrap:wrap">
-              <button type="button" class="btn btn-primary btn-sm" onclick="runCodingBrain()" title="Hand the session to the autonomous brain">Run with AI</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="resumeCodingBrain()" title="Resume the AI after a takeover / provide a requested value">Resume AI</button>
-              <button type="button" class="btn btn-outline btn-sm coding-term-only" onclick="sendCodingKey('Escape')">Esc</button>
-              <button type="button" class="btn btn-outline btn-sm coding-term-only" onclick="sendCodingKey('C-c')" title="Interrupt">Ctrl-C</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="endCodingSession()" style="color:var(--red)">End</button>
+            <!-- All session controls live behind this cog to keep the header clean. -->
+            <div style="position:relative;flex-shrink:0">
+              <button type="button" class="btn btn-outline btn-sm" onclick="toggleCodingMenu(event)" title="Session actions" style="padding:0.25rem 0.5rem">⚙</button>
+              <div id="inst-coding-menu" class="coding-menu hidden">
+                <button type="button" onclick="renameCurrentCodingRepo();closeCodingMenu()">✎ Rename project</button>
+                <button type="button" onclick="toggleCodingLinksEditor();closeCodingMenu()">🔗 Launch links…</button>
+                <div class="coding-menu-sep"></div>
+                <button type="button" onclick="runCodingBrain();closeCodingMenu()">🤖 Run with AI<small>give it a goal — it works autonomously</small></button>
+                <button type="button" onclick="resumeCodingBrain();closeCodingMenu()">▶ Resume AI<small>continue after it paused for you</small></button>
+                <button type="button" class="coding-term-only" onclick="sendCodingKey('Escape');closeCodingMenu()">⎋ Esc<small>send Escape to the CLI</small></button>
+                <button type="button" class="coding-term-only" onclick="sendCodingKey('C-c');closeCodingMenu()">Ctrl-C<small>interrupt the CLI</small></button>
+                <div class="coding-menu-sep"></div>
+                <button type="button" class="coding-menu-danger" onclick="endCodingSession();closeCodingMenu()">⏹ End session<small>stop the CLI on your machine</small></button>
+                <button type="button" class="coding-menu-danger" onclick="deleteCurrentCodingRepo();closeCodingMenu()">🗑 Delete project</button>
+              </div>
             </div>
           </div>
 

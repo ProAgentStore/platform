@@ -318,6 +318,23 @@
       if (codingPollTimer) { clearInterval(codingPollTimer); codingPollTimer = null; }
     }
 
+    // ⚙ session-actions menu (rename / links / Run with AI / Resume AI / Esc / Ctrl-C / End / Delete).
+    function toggleCodingMenu(ev) {
+      if (ev) ev.stopPropagation();
+      const m = document.getElementById('inst-coding-menu');
+      if (m) m.classList.toggle('hidden');
+    }
+    function closeCodingMenu() {
+      const m = document.getElementById('inst-coding-menu');
+      if (m) m.classList.add('hidden');
+    }
+    // Close it on any outside click (the cog's toggle stops propagation, so this
+    // only fires for clicks elsewhere). Attached once at load.
+    document.addEventListener('click', (e) => {
+      const m = document.getElementById('inst-coding-menu');
+      if (m && !m.classList.contains('hidden') && !(e.target.closest && e.target.closest('#inst-coding-menu'))) closeCodingMenu();
+    });
+
     // Re-arm the terminal poll when returning to the Coding tab on the same
     // instance (leaving the tab stops the timer but keeps the panel + session).
     function resumeCodingPollingIfOpen() {
