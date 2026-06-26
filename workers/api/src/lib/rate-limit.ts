@@ -1,13 +1,32 @@
 /**
- * Simple in-memory rate limiter using CF request headers.
- * Uses CF-Connecting-IP for client identification.
- * Resets per-minute — no persistence needed.
+ * Simple in-memory rate limiter. Keyed PER USER when authenticated (fairer than
+ * per-IP — corporate NAT / shared IPs no longer collide), falling back to the
+ * client IP for anonymous requests. Resets per-minute, no persistence.
  */
 import type { Context, Next } from "hono";
+import { verifySession } from "./session.js";
 import type { Env } from "../types.js";
 
 const windowMs = 60_000;
 const buckets = new Map<string, { count: number; resetAt: number }>();
+
+/** Who to rate-limit: the authenticated user if the token is valid, else the IP. */
+async function subject(c: Context<{ Bindings: Env }>): Promise<string> {
+	const header = c.req.header("Authorization");
+	if (header?.startsWith("Bearer ")) {
+		try {
+			const session = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY);
+			if (session?.uid) return `u:${session.uid}`;
+		} catch {
+			/* fall through to IP */
+		}
+	}
+	return `ip:${c.req.header("CF-Connecting-IP") || c.req.header("X-Forwarded-For") || "unknown"}`;
+}
+
+function deny(c: Context<{ Bindings: Env }>) {
+	return c.json({ error: "Rate limit exceeded. Try again in a minute." }, 429);
+}
 
 function getRateLimit(
 	key: string,
@@ -36,49 +55,37 @@ function getRateLimit(
 	};
 }
 
-/** 60 req/min per IP — general API rate limit. */
+/**
+ * General API limit — 240/min per user (an authenticated SPA legitimately makes
+ * many requests: status polls, board, the coding co-pilot). Two carve-outs:
+ *  - live polling (takeover frames + the coding `capture` poll, ~1.5s) → 3000/min
+ *    so it can never starve normal actions;
+ *  - the coding co-pilot `/explain` (a per-request LLM call) → its own 40/min
+ *    bucket so summaries/questions don't eat the general budget (and vice-versa).
+ */
 export function rateLimitDefault() {
 	return async (c: Context<{ Bindings: Env }>, next: Next) => {
-		const ip =
-			c.req.header("CF-Connecting-IP") ||
-			c.req.header("X-Forwarded-For") ||
-			"unknown";
-		// Live polling (human-takeover frame relay + the coding terminal `capture`
-		// poll) generates far more requests than ordinary API use — a terminal
-		// polls every ~1.5s. Give it a much higher bucket so it can't starve the
-		// 60/min general budget and 429 a normal action like "Add repo".
-		const isLivePoll = c.req.path.includes("/takeover") || c.req.path.endsWith("/capture");
-		const limit = isLivePoll ? 3000 : 60;
-		const key = isLivePoll ? `live:${ip}` : `default:${ip}`;
-		const { allowed, remaining } = getRateLimit(key, limit);
+		const who = await subject(c);
+		const path = c.req.path;
+		const isLivePoll = path.includes("/takeover") || path.endsWith("/capture");
+		const isExplain = path.endsWith("/explain");
+		const limit = isLivePoll ? 3000 : isExplain ? 40 : 240;
+		const bucket = isLivePoll ? "live" : isExplain ? "explain" : "default";
+		const { allowed, remaining } = getRateLimit(`${bucket}:${who}`, limit);
 		c.header("X-RateLimit-Limit", String(limit));
 		c.header("X-RateLimit-Remaining", String(remaining));
-		if (!allowed) {
-			return c.json(
-				{ error: "Rate limit exceeded. Try again in a minute." },
-				429,
-			);
-		}
+		if (!allowed) return deny(c);
 		await next();
 	};
 }
 
-/** 10 req/min per IP — expensive endpoints (chat, run). */
+/** 10/min per user — expensive endpoints (chat, run). */
 export function rateLimitStrict() {
 	return async (c: Context<{ Bindings: Env }>, next: Next) => {
-		const ip =
-			c.req.header("CF-Connecting-IP") ||
-			c.req.header("X-Forwarded-For") ||
-			"unknown";
-		const { allowed, remaining } = getRateLimit(`strict:${ip}`, 10);
+		const { allowed, remaining } = getRateLimit(`strict:${await subject(c)}`, 10);
 		c.header("X-RateLimit-Limit", "10");
 		c.header("X-RateLimit-Remaining", String(remaining));
-		if (!allowed) {
-			return c.json(
-				{ error: "Rate limit exceeded. Try again in a minute." },
-				429,
-			);
-		}
+		if (!allowed) return deny(c);
 		await next();
 	};
 }
