@@ -287,10 +287,22 @@
           <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem">
             <span style="color:var(--ink);font-weight:700;font-size:0.95rem">Repositories</span>
             <div style="display:flex;gap:0.35rem">
+              <button type="button" id="inst-diag-cog" class="btn btn-outline btn-sm" onclick="toggleDiagPanel()" title="Diagnostics — all sessions (restart / kill / view)" style="padding:0.25rem 0.5rem">🩺</button>
               <button type="button" id="inst-engines-cog" class="btn btn-outline btn-sm" onclick="toggleEnginesPanel()" title="CLI engines (Claude / Codex / Grok / custom)" style="padding:0.25rem 0.5rem">⚙</button>
               <button type="button" id="inst-handsoff-cog" class="btn btn-outline btn-sm" onclick="toggleHandsOffPanel()" title="Hands-off voice mode" style="padding:0.25rem 0.5rem">🎙️</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="toggleAddRepo()">+ Add</button>
             </div>
+          </div>
+          <!-- Live activity strip: a one-line aggregate of what every repo is doing now -->
+          <div id="inst-coding-activity" style="font-size:0.76rem;margin-top:0.3rem;min-height:1em"></div>
+          <!-- Diagnostics: every session with restart / kill / view, for cleanup -->
+          <div id="inst-coding-diag" class="hidden" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.55rem 0.65rem;margin-top:0.55rem">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.2rem">
+              <div style="font-size:0.82rem;font-weight:700">🩺 Sessions</div>
+              <button type="button" class="btn btn-outline btn-sm" onclick="loadDiag()" title="Refresh" style="padding:0.2rem 0.45rem">↻</button>
+            </div>
+            <p style="font-size:0.72rem;color:var(--muted-soft);margin:0 0 0.4rem">Every coding session on this agent. <b>Restart</b> kills + relaunches the CLI (keeps the session); <b>Kill</b> ends it and stops the CLI on your machine.</p>
+            <div id="inst-coding-diag-body"></div>
           </div>
           <!-- CLI engine presets: which command launches Claude / Codex / Grok / custom -->
           <div id="inst-engines-panel" class="hidden" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.55rem 0.65rem;margin-top:0.55rem">

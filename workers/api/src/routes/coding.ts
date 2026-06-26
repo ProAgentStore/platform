@@ -729,3 +729,22 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 	const ok = await endSession(c.env, instanceId, uid, sessionId);
 	return c.json({ ok });
 });
+
+/**
+ * Diagnostics: restart a session's CLI process on the runner (kill + relaunch
+ * with the SAME session id, keeping the D1 row). For recovering a wedged engine
+ * without losing the session/timeline.
+ */
+codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
+	if (!session) throw new HttpError(404, "Session not found");
+	if (session.status !== "active") return c.json({ ok: false, error: "session has ended" }, 409);
+	const repo = await getRepo(c.env, instanceId, uid, session.repoId);
+	if (!repo) throw new HttpError(404, "Repo not found");
+	const conn = await getRunnerConn(c.env, instanceId, uid);
+	if (!conn) return c.json({ ok: false, runnerConnected: false });
+	await callRunner(conn, "/coding/end", { sessionId: session.id }).catch(() => undefined);
+	const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+	return c.json({ ok: runnerConnected, runnerConnected });
+});

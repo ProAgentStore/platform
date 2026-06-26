@@ -101,7 +101,8 @@
             <b style="font-size:0.9rem;overflow-wrap:anywhere">${esc(r.name)}</b>
             <span data-repo-deploy="${r.id}" style="flex-shrink:0">${repoDeployBadge(codingDeployStatus[r.id])}</span>
           </div>
-          ${sub ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:0.15rem;word-break:break-all">${esc(sub)}</div>` : ''}
+          <div data-repo-live="${r.id}" style="font-size:0.74rem;margin-top:0.15rem">${repoLiveLabel(r, active)}</div>
+          ${sub ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:0.1rem;word-break:break-all">${esc(sub)}</div>` : ''}
           <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.5rem;align-items:center">
             ${active ? `
               <button type="button" class="btn btn-outline btn-sm" onclick="playRepoLastReply('${r.id}', this)" title="Hear the agent's last reply">🔊 Play</button>
@@ -115,6 +116,7 @@
           <div id="repo-play-${r.id}" class="repo-play" style="display:none"></div>
         </div>`;
       }).join('');
+      renderCodingActivity();
       startReposStatusPolling();
     }
 
@@ -129,6 +131,53 @@
       }
       const dot = { ready: 'var(--green)', cloning: 'var(--amber)', error: 'var(--red)' }[r.cloneStatus] || 'var(--muted)';
       return `<span title="${esc(r.cloneStatus || 'idle')}" style="color:${dot}">●</span>`;
+    }
+
+    // Which engine a session is running (Claude / Codex / Grok / …), from its
+    // client type or the first word of its launch command.
+    function engineLabel(active) {
+      const c = (active && (active.clientType || (active.launchCommand || '').trim().split(/\s+/)[0])) || 'claude';
+      return c.charAt(0).toUpperCase() + c.slice(1);
+    }
+    // A human, real-time phrase for what a repo is doing right now — the heart of
+    // "see what's happening". Driven by the live capture run-state + deploy + clone.
+    function repoLiveLabel(r, active) {
+      if (!active) {
+        const m = { ready: 'No session — tap Start', cloning: 'Cloning…', error: 'Clone failed' }[r.cloneStatus] || 'No session';
+        return `<span style="color:var(--muted)">${m}</span>`;
+      }
+      const st = codingReposStatus[r.id];
+      const eng = engineLabel(active);
+      if (st === 'offline') return `<span style="color:var(--muted)">⏸ Runner offline — run <code>pags up</code></span>`;
+      if (st === 'thinking' || st === 'responding') return `<span style="color:var(--accent,#7c3aed)"><span class="coding-spin" style="vertical-align:-1px"></span> ${esc(eng)} is working…</span>`;
+      const d = codingDeployStatus[r.id];
+      if (d && d.available && d.run && d.run.status !== 'completed') return `<span style="color:var(--amber)">⏳ Deploying #${esc(d.run.runNumber)}…</span>`;
+      if (d && d.available && d.run && d.run.conclusion === 'failure') return `<span style="color:var(--red)">❌ Build failed — ${esc(eng)} idle</span>`;
+      return `<span style="color:var(--green)">✓ ${esc(eng)} ready for your reply</span>`;
+    }
+
+    // A one-line aggregate across all repos: how many are working / deploying /
+    // ready / offline. Updated live alongside the per-row labels.
+    function renderCodingActivity() {
+      const el = document.getElementById('inst-coding-activity');
+      if (!el) return;
+      const actives = codingSessions.filter(s => s.status === 'active');
+      if (!actives.length) { el.innerHTML = ''; return; }
+      let working = 0, ready = 0, offline = 0, deploying = 0;
+      actives.forEach(s => {
+        const st = codingReposStatus[s.repoId];
+        if (st === 'thinking' || st === 'responding') working++;
+        else if (st === 'offline') offline++;
+        else ready++;
+        const d = codingDeployStatus[s.repoId];
+        if (d && d.available && d.run && d.run.status !== 'completed') deploying++;
+      });
+      const parts = [];
+      if (working) parts.push(`<span style="color:var(--accent,#7c3aed)"><span class="coding-spin" style="vertical-align:-1px"></span> ${working} working</span>`);
+      if (deploying) parts.push(`<span style="color:var(--amber)">⏳ ${deploying} deploying</span>`);
+      if (ready) parts.push(`<span style="color:var(--green)">✓ ${ready} ready</span>`);
+      if (offline) parts.push(`<span style="color:var(--muted)">⏸ ${offline} offline</span>`);
+      el.innerHTML = parts.join(' &nbsp;·&nbsp; ');
     }
 
     // Live status for the repos list: poll each active session's run-state so you can
@@ -163,10 +212,14 @@
         const span = document.querySelector(`[data-repo-status="${s.repoId}"]`);
         const r = codingRepos.find(x => x.id === s.repoId);
         if (span && r) span.innerHTML = repoStatusIcon(r, s);
+        const live = document.querySelector(`[data-repo-live="${s.repoId}"]`);
+        if (live && r) live.innerHTML = repoLiveLabel(r, s);
         // Don't let you fire another voice reply while this repo is working.
         const reply = document.getElementById(`repo-reply-${s.repoId}`);
         if (reply) reply.disabled = (codingReposStatus[s.repoId] === 'thinking' || codingReposStatus[s.repoId] === 'responding');
       }));
+      renderCodingActivity();
+      if (!document.getElementById('inst-coding-diag')?.classList.contains('hidden')) renderDiag();
     }
 
     // ── Deployment status (optional GitHub Actions integration) ──────────────
@@ -203,7 +256,11 @@
         } catch (e) { /* keep prior */ }
         const span = document.querySelector(`[data-repo-deploy="${r.id}"]`);
         if (span) span.innerHTML = repoDeployBadge(codingDeployStatus[r.id]);
+        const live = document.querySelector(`[data-repo-live="${r.id}"]`);
+        const act = codingSessions.find(x => x.repoId === r.id && x.status === 'active');
+        if (live) live.innerHTML = repoLiveLabel(r, act);
       }));
+      renderCodingActivity();
       const s = codingSessions.find(x => x.id === currentCodingSession);
       const hdr = document.getElementById('inst-coding-deploy');
       if (hdr) hdr.innerHTML = s ? repoDeployBadge(codingDeployStatus[s.repoId]) : '';
@@ -539,6 +596,70 @@
     }
     function toggleHandsOffRepo(repoId, included) {
       if (included) delete handsOffExcluded[repoId]; else handsOffExcluded[repoId] = true;
+    }
+
+    // ── Diagnostics: list every session + restart / kill / view (cleanup) ────
+    function toggleDiagPanel() {
+      const p = document.getElementById('inst-coding-diag');
+      if (!p) return;
+      const opening = p.classList.contains('hidden');
+      p.classList.toggle('hidden');
+      if (opening) loadDiag();
+    }
+    async function loadDiag() {
+      if (!currentInstance) return;
+      try {
+        const s = await api(`/v1/instances/${currentInstance.id}/coding/sessions`);
+        codingSessions = s.sessions || codingSessions;
+      } catch (e) { /* keep prior */ }
+      renderDiag();
+    }
+    function renderDiag() {
+      const el = document.getElementById('inst-coding-diag-body');
+      if (!el) return;
+      const sessions = codingSessions.slice().sort((a, b) => (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1));
+      if (!sessions.length) { el.innerHTML = '<div class="empty" style="padding:0.5rem;font-size:0.8rem">No sessions yet.</div>'; return; }
+      el.innerHTML = sessions.map(s => {
+        const repo = codingRepos.find(r => r.id === s.repoId);
+        const name = repo ? repo.name : s.repoId;
+        const active = s.status === 'active';
+        let state, color;
+        if (!active) { state = s.status || 'ended'; color = 'var(--muted)'; }
+        else {
+          const st = codingReposStatus[s.repoId];
+          if (st === 'thinking' || st === 'responding') { state = 'working'; color = 'var(--accent,#7c3aed)'; }
+          else if (st === 'offline') { state = 'offline'; color = 'var(--muted)'; }
+          else { state = 'idle'; color = 'var(--green)'; }
+        }
+        return `<div style="display:flex;gap:0.4rem;align-items:center;flex-wrap:wrap;padding:0.35rem 0;border-bottom:1px solid var(--line)">
+          <span style="color:${color};font-weight:600;font-size:0.76rem;min-width:4.5rem">● ${esc(state)}</span>
+          <b style="font-size:0.82rem;overflow-wrap:anywhere">${esc(name)}</b>
+          <span style="font-size:0.7rem;color:var(--muted)">${esc(engineLabel(s))} · …${esc((s.id || '').slice(-6))}</span>
+          <span style="display:flex;gap:0.3rem;margin-left:auto">
+            ${active ? `<button type="button" class="btn btn-outline btn-sm" onclick="openCodingTerminal('${s.id}')" title="See the live screen">View</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="restartSession('${s.id}', this)" title="Kill + relaunch the CLI (keeps the session)">Restart</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="killSession('${s.id}', this)" title="End the session + stop the CLI" style="color:var(--red)">Kill</button>` : ''}
+          </span>
+        </div>`;
+      }).join('');
+    }
+    async function restartSession(sessionId, btn) {
+      if (!currentInstance) return;
+      if (btn) { btn.disabled = true; btn.textContent = '…'; }
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${sessionId}/restart`, { method: 'POST', body: '{}' });
+        if (d && d.runnerConnected === false) alert('No runner connected — run `pags up`.');
+      } catch (e) { alert('Restart failed: ' + e.message); }
+      await loadDiag();
+    }
+    async function killSession(sessionId, btn) {
+      if (!currentInstance || !confirm('Kill this session and stop its CLI?')) return;
+      if (btn) { btn.disabled = true; btn.textContent = '…'; }
+      try {
+        await api(`/v1/instances/${currentInstance.id}/coding/sessions/${sessionId}/end`, { method: 'POST', body: '{}' });
+      } catch (e) { alert('Kill failed: ' + e.message); }
+      await loadCoding();
+      renderDiag();
     }
 
     // ── Coding page space-savers (progressive disclosure) ────────────────────
