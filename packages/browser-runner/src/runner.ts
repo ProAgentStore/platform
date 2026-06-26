@@ -10,6 +10,7 @@ import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.
 import { performBrowserAction } from "./browser-actions.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
 import { RunnerStore } from "./store.js";
+import { CodingRuntime } from "./coding/runtime.js";
 
 /** True for a plain object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,6 +60,8 @@ export class LocalRunner {
 	private readonly fileAttachArmed = new WeakSet<Page>();
 	private applyResumePath: string | null = null;
 	readonly store: RunnerStore;
+	/** Local tmux coding sessions (the second runtime — AgentCoder port). */
+	readonly coding: CodingRuntime;
 	/** Live human-takeover sessions, keyed by task id (the page is kept alive). */
 	private takeovers = new Map<
 		string,
@@ -68,6 +71,7 @@ export class LocalRunner {
 	constructor(readonly config: RunnerConfig) {
 		mkdirSync(config.dataDir, { recursive: true });
 		this.store = new RunnerStore(config.dataDir);
+		this.coding = new CodingRuntime(join(config.dataDir, "repos"));
 		// Tasks paused/running on a previous process are orphaned now — their
 		// pages and takeover sessions are gone. Fail them so the board is clean.
 		const expired = this.store.expireInFlightTasks();
@@ -81,8 +85,8 @@ export class LocalRunner {
 			controlPlane: "pags",
 			runtimePlane: "fags",
 			runnerRole: "tool-executor",
-			capabilities: CAPABILITIES,
-			taskTypes: ["echo", "browser.open", "job.apply_agent"],
+			capabilities: [...CAPABILITIES, ...CodingRuntime.capabilities()],
+			taskTypes: ["echo", "browser.open", "job.apply_agent", ...CodingRuntime.taskTypes()],
 			approvalRequiredFor: [...APPROVAL_REQUIRED_TASKS],
 		};
 	}
@@ -163,6 +167,7 @@ export class LocalRunner {
 	}
 
 	async close(): Promise<void> {
+		this.coding.closeAll();
 		await this.browserContext?.close();
 		this.browserContext = null;
 	}

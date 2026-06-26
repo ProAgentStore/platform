@@ -238,6 +238,48 @@
       </div>
     </div>
 
+    <!-- Coding workspace: repos + AI-CLI sessions driven on the local runner -->
+    <div id="inst-tab-coding" class="tab-panel">
+      <div id="inst-coding-body">
+        <div class="create-form" style="margin-bottom:0.75rem">
+          <h3 style="font-size:1rem;margin-bottom:0.4rem">Repositories</h3>
+          <div style="display:flex;gap:0.4rem">
+            <input id="inst-coding-repo-input" placeholder="owner/repo, a GitHub URL, or a git clone URL" style="flex:1"
+              onkeydown="if(event.key==='Enter')addCodingRepo()">
+            <button type="button" class="btn btn-primary btn-sm" onclick="addCodingRepo()">Add repo</button>
+            <button type="button" id="inst-coding-gh-btn" class="btn btn-outline btn-sm hidden" onclick="importFromGitHub()">Import from GitHub</button>
+          </div>
+          <div id="inst-coding-gh-list" style="margin-top:0.5rem;display:flex;flex-wrap:wrap;gap:0.35rem"></div>
+          <p style="font-size:0.75rem;color:var(--muted);margin-top:0.4rem">
+            Sessions run on your machine via <code>pags up</code> — the AI CLI (Claude/Gemini/…) runs in a tmux pane there; this drives it remotely.
+          </p>
+        </div>
+        <div id="inst-coding-repos" class="memory-list"></div>
+
+        <div id="inst-coding-terminal" class="create-form hidden" style="margin-top:1rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem">
+            <h3 style="font-size:0.95rem;margin:0">Terminal
+              <span style="font-size:0.72rem;color:var(--muted)">· <span id="inst-coding-term-label"></span></span>
+              <span id="inst-coding-runstate" style="font-size:0.72rem;margin-left:0.4rem">idle</span>
+            </h3>
+            <div style="display:flex;gap:0.35rem">
+              <button type="button" class="btn btn-primary btn-sm" onclick="runCodingBrain()" title="Hand the session to the autonomous brain">Run with AI</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="resumeCodingBrain()" title="Resume the AI after a takeover / provide a requested value">Resume AI</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="sendCodingKey('Escape')">Esc</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="sendCodingKey('C-c')" title="Interrupt">Ctrl-C</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="endCodingSession()" style="color:var(--red)">End</button>
+              <button type="button" class="btn btn-outline btn-sm" onclick="closeCodingTerminal()">Close</button>
+            </div>
+          </div>
+          <pre id="inst-coding-pane" style="background:#0b0b0f;color:#d6d6e0;font-size:0.78rem;line-height:1.35;padding:0.6rem;border-radius:6px;height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word">(waiting…)</pre>
+          <div style="display:flex;gap:0.4rem;margin-top:0.5rem">
+            <input id="inst-coding-msg" placeholder="Type a message to the CLI and press Enter…" style="flex:1" onkeydown="sendCodingMessage(event)">
+            <button type="button" class="btn btn-primary btn-sm" onclick="sendCodingMessage()">Send</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Knowledge Base: docs + memory + files, browseable + editable + chateable -->
     <div id="inst-tab-knowledge" class="tab-panel">
       <div class="tabs" style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin-bottom:1rem">
@@ -861,6 +903,7 @@ console.log(response)</pre>
   <script src="/console-takeover.js"></script>
   <script src="/console-instances-apps.js"></script>
   <script src="/console-agent-data.js"></script>
+  <script src="/console-coding.js"></script>
   <script src="/console-profile.js"></script>
   <script src="/console-utils-init.js"></script>
   <script>

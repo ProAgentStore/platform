@@ -44,6 +44,8 @@ Endpoints:
   POST /tasks/:id/approve
   POST /tasks/:id/cancel
   GET  /events
+  POST /coding/start | /coding/capture | /coding/act | /coding/end
+  GET  /coding/sessions
 `);
 	process.exit(0);
 }

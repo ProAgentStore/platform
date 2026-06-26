@@ -1,0 +1,23 @@
+{
+	"id": "coder",
+	"name": "Coder",
+	"description": "Your AI coding agent for any GitHub repo. Import a repository, and the agent runs a coding CLI (Claude Code / Gemini / Codex) on your own machine — you drive it from anywhere or hand it an objective and let it work autonomously, with live takeover when it gets stuck.",
+	"storeType": "agent",
+	"category": "code",
+	"model": "claude-sonnet-4-6",
+	"template": "api",
+	"serverConfig": {
+		"runtime": {
+			"kind": "pags-coding-runtime",
+			"taskTypes": ["coding.session"],
+			"brainPlacement": "pags-control-plane",
+			"runtimePlane": "local-cli",
+			"requiresLocalRunner": true
+		},
+		"notes": [
+			"Repo-agnostic: works on ANY GitHub repo the subscriber owns — not the platform itself.",
+			"Hands run locally via `pags up` (tmux + the coding CLI); the brain is the CodingSessionWorkflow.",
+			"Repos + sessions are stored per-instance in D1 (coding_repos / coding_sessions), not DO collections."
+		]
+	}
+}

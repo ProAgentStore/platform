@@ -7,6 +7,7 @@ import type { AddressInfo } from "node:net";
 import { URL } from "node:url";
 import { LocalRunner, RunnerInputError } from "./runner.js";
 import type { BrowserAction, CreateTaskRequest, RunnerConfig, TakeoverInput } from "./types.js";
+import type { CodingAction, StartCodingInput } from "./coding/runtime.js";
 
 export function createRunnerServer(runner: LocalRunner) {
 	return createServer(async (req, res) => {
@@ -162,6 +163,60 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "POST" && endMatch) {
 		await runner.endTakeover(endMatch[1]);
 		return json(res, 200, { ok: true });
+	}
+
+	// ── Brain-driven coding control (remote LLM drives a tmux coding CLI) ────
+	// The tmux analogue of the /browser/* surface: start → capture → act → end.
+	if (req.method === "POST" && path === "/coding/start") {
+		const b = await readJson<StartCodingInput>(req);
+		return json(res, 200, runner.coding.start(b));
+	}
+	if (req.method === "POST" && path === "/coding/capture") {
+		const b = await readJson<{ sessionId: string }>(req);
+		return json(res, 200, runner.coding.snapshot(b.sessionId));
+	}
+	if (req.method === "POST" && path === "/coding/act") {
+		const b = await readJson<{ sessionId: string; action: CodingAction }>(req);
+		return json(res, 200, runner.coding.act(b.sessionId, b.action));
+	}
+	if (req.method === "POST" && path === "/coding/end") {
+		const b = await readJson<{ sessionId: string }>(req);
+		return json(res, 200, runner.coding.end(b.sessionId));
+	}
+	if (req.method === "GET" && path === "/coding/sessions") {
+		return json(res, 200, { sessions: runner.coding.list() });
+	}
+	if (req.method === "POST" && path === "/coding/event") {
+		// Brain progress events — recorded by PAGS, ignored locally. Accept + ack.
+		return json(res, 200, { ok: true });
+	}
+
+	// ── Human takeover of a coding session (text frames + keystrokes) ───────
+	if (req.method === "POST" && path === "/coding/takeover") {
+		const b = await readJson<{ sessionId: string; reason?: string; label?: string }>(req);
+		return json(res, 200, runner.coding.beginTakeover(b.sessionId, { reason: b.reason, label: b.label }));
+	}
+	if (req.method === "POST" && path === "/coding/takeover-status") {
+		const b = await readJson<{ sessionId: string }>(req);
+		return json(res, 200, runner.coding.takeoverStatus(b.sessionId));
+	}
+	const codingFrameMatch = path.match(/^\/coding\/takeover\/([^/]+)\/frame$/);
+	if (req.method === "GET" && codingFrameMatch) {
+		return json(res, 200, runner.coding.takeoverFrame(codingFrameMatch[1]));
+	}
+	const codingInputMatch = path.match(/^\/coding\/takeover\/([^/]+)\/input$/);
+	if (req.method === "POST" && codingInputMatch) {
+		const b = await readJson<{ text?: string; keys?: string }>(req);
+		return json(res, 200, runner.coding.takeoverInput(codingInputMatch[1], b));
+	}
+	const codingResolveMatch = path.match(/^\/coding\/takeover\/([^/]+)\/resolve$/);
+	if (req.method === "POST" && codingResolveMatch) {
+		const b = await readJson<{ value?: string }>(req);
+		return json(res, 200, runner.coding.resolveTakeover(codingResolveMatch[1], b.value));
+	}
+	const codingEndMatch = path.match(/^\/coding\/takeover\/([^/]+)\/end$/);
+	if (req.method === "POST" && codingEndMatch) {
+		return json(res, 200, runner.coding.endTakeover(codingEndMatch[1]));
 	}
 
 	return json(res, 404, { error: "Not found" });

@@ -21,12 +21,16 @@ import { versionRoutes } from "./routes/versions.js";
 import { publicRoutes } from "./routes/public.js";
 import { runRoutes } from "./routes/run.js";
 import { storageRoutes, instanceStorageRoutes } from "./routes/storage.js";
+import { codingRoutes } from "./routes/coding.js";
+import { githubRoutes } from "./routes/github.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
 export { AgentDO } from "./agent-do.js";
 // Re-export the job-application Workflow class for wrangler
 export { JobApplyWorkflow } from "./workflows/job-apply.js";
+// Re-export the coding-orchestrator Workflow class for wrangler (AgentCoder port)
+export { CodingSessionWorkflow } from "./workflows/coding-session.js";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -78,6 +82,8 @@ app.route("/v1/agents", versionRoutes);     // /v1/agents/:id/versions, /:versio
 app.route("/v1/agents", exportRoutes);
 app.route("/v1/agents", storageRoutes); // /v1/agents/:id/collections, /files, /search, /activity, /summaries
 app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collections, /files, /search, /activity
+app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /sessions (AgentCoder port)
+app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google
