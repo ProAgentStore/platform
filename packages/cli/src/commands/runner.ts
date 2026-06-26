@@ -415,8 +415,8 @@ export function createRunnerCommand(): Command {
 	});
 
 	command
-		.command("connect <instanceId>")
-		.description("Start the local FAGS runtime, open a Cloudflare quick tunnel, and register it with PAGS")
+		.command("connect <instanceIds...>")
+		.description("Start ONE local runtime, open a Cloudflare quick tunnel, and register it for every given PAGS instance")
 		.option("--host <host>", "Host to bind", "127.0.0.1")
 		.option("--port <port>", "Port to bind", "49171")
 		.option("--data-dir <path>", "Runner data directory")
@@ -427,19 +427,23 @@ export function createRunnerCommand(): Command {
 		.option("--cloudflared <path>", "cloudflared executable")
 		.option("--runner-version <version>", "Runner version")
 		.option("--skip-probe", "Skip PAGS FAGS-runtime probe after registration")
-		.action(async (instanceId: string, opts: RunnerConnectOptions) => {
+		.action(async (instanceIds: string[], opts: RunnerConnectOptions) => {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
 			// Pick a free port so a stale/orphaned runner on 49171 can't cause an
 			// EADDRINUSE or a 401 (stale token) on the next `pags up`.
 			const port = clean(opts.port) || String(await findFreePort(49171));
 			const localUrl = `http://${host}:${port}`;
+			// One runner serves ALL the given instances (one machine = one runner =
+			// one tunnel). It is NOT bound to a single instance id — auth is by the
+			// shared runner token, and the server accepts any instance the brain
+			// calls with. `primary` is just for health-probe headers + display.
+			const primary = instanceIds[0];
 			const runnerOpts: RunnerStartOptions = {
 				...opts,
 				host,
 				port,
 				token: runnerToken,
-				instanceId,
 			};
 			const spec = runnerSpawnSpec(runnerOpts);
 			const runner = spawn(spec.command, spec.args, {
@@ -468,7 +472,7 @@ export function createRunnerCommand(): Command {
 			});
 
 			try {
-				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId });
+				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId: primary });
 				writeLine(`Local FAGS runtime healthy at ${localUrl}`);
 
 				const cloudflaredPath = await resolveCloudflaredCommand(opts.cloudflared);
@@ -492,16 +496,20 @@ export function createRunnerCommand(): Command {
 						setTimeout(() => reject(new Error("timed out waiting for cloudflared tunnel URL")), 45_000).unref();
 					});
 
-				// (Re-)register the current tunnel URL with PAGS.
+				// (Re-)register the current tunnel URL with PAGS for EVERY instance —
+				// they all point at this one runner + tunnel.
 				const registerRuntime = async (url: string): Promise<void> => {
-					const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId });
-					await requestPags("POST", `/v1/instances/${apiPathSegment(instanceId)}/runtime`, opts, {
-						endpointUrl: url,
-						token: runnerToken,
-						placement: "local",
-						capabilities: Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [],
-						runnerVersion: clean(opts.runnerVersion) || "",
-					});
+					const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: primary });
+					const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
+					for (const id of instanceIds) {
+						await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
+							endpointUrl: url,
+							token: runnerToken,
+							placement: "local",
+							capabilities: caps,
+							runnerVersion: clean(opts.runnerVersion) || "",
+						});
+					}
 				};
 
 				const first = await openTunnel();
@@ -515,8 +523,8 @@ export function createRunnerCommand(): Command {
 				writeLine("Runtime registered with PAGS ✓");
 				writeLine("");
 				writeLine("═══════════════════════════════════════════════");
-				writeLine("  ✅ CONNECTED — Browser runner is live");
-				writeLine(`  Instance: ${instanceId.slice(0, 8)}...`);
+				writeLine("  ✅ CONNECTED — runner is live");
+				writeLine(`  Agents:   ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"} served by this runner`);
 				writeLine(`  Tunnel:   ${tunnelUrl}`);
 				writeLine("  Auto-reconnect is on — keep this terminal open. Ctrl+C to disconnect.");
 				writeLine("═══════════════════════════════════════════════");
@@ -526,11 +534,10 @@ export function createRunnerCommand(): Command {
 				// public URL ourselves; respawn + re-register when it dies, heartbeat
 				// otherwise. This is what keeps the runner reliably online.
 				let stopped = false;
-				const heartbeatPath = `/v1/instances/${apiPathSegment(instanceId)}/runtime/heartbeat`;
 				const probeTunnel = async (url: string): Promise<boolean> => {
 					try {
 						const res = await fetch(`${url.replace(/\/$/, "")}/health`, {
-							headers: { Authorization: `Bearer ${runnerToken}`, "X-PAGS-Instance-Id": instanceId },
+							headers: { Authorization: `Bearer ${runnerToken}`, "X-PAGS-Instance-Id": primary },
 							signal: AbortSignal.timeout(8_000),
 						});
 						return res.ok;
@@ -538,15 +545,26 @@ export function createRunnerCommand(): Command {
 						return false;
 					}
 				};
+				// Heartbeat every instance this runner serves; report whether all stuck.
+				const heartbeatAll = async (): Promise<boolean> => {
+					let allOk = true;
+					for (const id of instanceIds) {
+						const ok = await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {})
+							.then(() => true)
+							.catch(() => false);
+						if (!ok) allOk = false;
+					}
+					return allOk;
+				};
 				void (async () => {
 					while (!stopped) {
 						await new Promise((r) => setTimeout(r, 30_000));
 						if (stopped) break;
 						if (await probeTunnel(tunnelUrl)) {
-							// Tunnel is up. Heartbeat — and if PAGS doesn't know us (a
-							// blip dropped our registration but the tunnel survived),
-							// re-register so we recover from "PAGS failed" on our own.
-							const beat = await requestPags("POST", heartbeatPath, opts, {}).then(() => true).catch(() => false);
+							// Tunnel is up. Heartbeat all — and if PAGS lost any of our
+							// registrations (a blip dropped them but the tunnel survived),
+							// re-register everything so we recover on our own.
+							const beat = await heartbeatAll();
 							if (!beat) {
 								await registerRuntime(tunnelUrl).then(() => writeLine("✅ Re-registered with PAGS")).catch(() => undefined);
 							}

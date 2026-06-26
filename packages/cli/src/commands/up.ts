@@ -86,18 +86,21 @@ export const upCommand = new Command("up")
 			writeLine(`    ${inst.name} (${inst.id.slice(0, 8)}...)`);
 		}
 
-		const target = instances[0];
-		state.activeInstance = target.name || target.slug || target.id.slice(0, 8);
-		printStep(`Connecting: ${state.activeInstance}`, "wait");
+		state.activeInstance =
+			instances.length === 1
+				? instances[0].name || instances[0].slug || instances[0].id.slice(0, 8)
+				: `${instances.length} agents`;
+		printStep(`Connecting ${state.activeInstance}…`, "wait");
 
 		// Clean slate: kill any stale runner/tunnel from a previous run so they don't
 		// pile up and cause port fights / 401s (esp. on a remote machine).
 		await stopRunnerProcesses();
 
-		// Spawn runner connect as child process
+		// Spawn ONE runner connect that serves ALL active instances (one machine =
+		// one runner = one tunnel, serving every agent).
 		const { spawn } = await import("node:child_process");
 		const cliPath = process.argv[1];
-		const args = [cliPath, "runner", "connect", target.id];
+		const args = [cliPath, "runner", "connect", ...instances.map((i) => i.id)];
 		if (opts.headless) args.push("--headless");
 
 		const child = spawn(process.execPath, args, {
