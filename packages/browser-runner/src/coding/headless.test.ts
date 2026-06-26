@@ -65,6 +65,17 @@ describe("HeadlessSession (stream-json engine)", () => {
 		expect(s.alive).toBe(false);
 	});
 
+	it("does not crash when the binary is missing — surfaces the error instead", async () => {
+		const s = new HeadlessSession({ id: "sx", workDir: dir, clientType: "claude", bin: join(dir, "no-such-binary-xyz") });
+		// MUST NOT throw / emit an uncaught 'error' that would kill the runner.
+		expect(() => s.start()).not.toThrow();
+		s.input("hello"); // writing to a dead process must be safe too
+		await until(() => !s.alive && s.snapshot().includes("cannot run"));
+		expect(s.alive).toBe(false);
+		expect(s.snapshot()).toContain("cannot run");
+		expect(s.runState()).toBe("idle");
+	});
+
 	it("persists Claude's session id for --resume across runner restarts", async () => {
 		const statePath = defaultStatePath(dir);
 		const s = new HeadlessSession({ id: "sess2", workDir: dir, clientType: "claude", bin, statePath });

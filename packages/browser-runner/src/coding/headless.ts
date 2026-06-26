@@ -104,6 +104,15 @@ export class HeadlessSession {
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.run = "idle";
+		// MUST handle 'error' — without a listener, a spawn failure (e.g. `claude`
+		// not on PATH) is thrown as an uncaught exception and crashes the runner.
+		this.proc.on("error", (err: Error) => {
+			this.run = "idle";
+			this.push(`[cannot run \`${this.config.bin ?? "claude"}\`: ${err.message} — is Claude Code installed and on your PATH?]`);
+			this.proc = null;
+		});
+		// Swallow EPIPE when writing to a process that just exited (one-shot turn).
+		this.proc.stdin?.on("error", () => {});
 		this.proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString("utf8")));
 		this.proc.stderr?.on("data", (d: Buffer) => {
 			const text = d.toString("utf8").trim();

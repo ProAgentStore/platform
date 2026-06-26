@@ -4,6 +4,17 @@ import { join } from "node:path";
 import { startRunnerServer } from "./server.js";
 import type { RunnerConfig } from "./types.js";
 
+// Resilience: a stray error in any runtime must NOT take the whole runner down —
+// that drops the tunnel and forces the user to restart `pags up` (and lose their
+// session). Log it and keep serving. Per-component handlers catch most things;
+// this is the last-resort backstop.
+process.on("uncaughtException", (err) => {
+	process.stderr.write(`[runner] uncaught: ${err?.stack || String(err)}\n`);
+});
+process.on("unhandledRejection", (reason) => {
+	process.stderr.write(`[runner] unhandled rejection: ${String(reason)}\n`);
+});
+
 function arg(name: string, fallback?: string): string | undefined {
 	const index = process.argv.indexOf(name);
 	if (index === -1) return fallback;
