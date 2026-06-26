@@ -337,6 +337,100 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	return c.json({ reply });
 });
 
+/**
+ * Send an instruction to the repo's Claude (drive the CLI) + spin up the finish
+ * watcher (deduped). Shared by the Agent endpoint's delegate path. Returns an ack.
+ */
+async function driveClaude(
+	c: Context<{ Bindings: Env }>,
+	instanceId: string,
+	uid: string,
+	sessionId: string,
+	instruction: string,
+): Promise<{ delegated: boolean; reply: string }> {
+	const conn = await getRunnerConn(c.env, instanceId, uid);
+	if (!conn) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
+	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "command", content: instruction }).catch(() => undefined);
+	const act = () => callRunner(conn, "/coding/act", { sessionId, action: { kind: "message", text: instruction } }).catch(() => null);
+	let snap = await act();
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
+	if (snap === null && session && repo) {
+		await startSessionOnRunner(c.env, instanceId, uid, session, repo); // reattach a session lost to a runner restart
+		snap = await act();
+	}
+	// Finish watcher (one per send: stamp the session so only the latest notifies).
+	const watchId = `cw-${sessionId}-${Date.now()}`;
+	await c.env.DB.prepare("UPDATE coding_sessions SET watch_workflow_id = ?1 WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4")
+		.bind(watchId, sessionId, instanceId, uid)
+		.run()
+		.catch(() => undefined);
+	await c.env.CODING_SESSION.create({
+		id: watchId,
+		params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", mode: "watch", watchId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
+	}).catch(() => undefined);
+	const reply = `On it — I asked Claude to: ${instruction}`;
+	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply }).catch(() => undefined);
+	return { delegated: true, reply };
+}
+
+/**
+ * The Agent chat (Step 1 of #3): ONE input that either answers from the terminal +
+ * history, or DELEGATES to Claude Code via the `drive_claude` tool — the LLM
+ * decides. `@claude`/`/run` forces delegation. This tool-loop is the reusable core
+ * the cross-repo Overseer (#9) will lift to global scope.
+ */
+codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const sessionId = c.req.param("sessionId");
+	const body = (await c.req.json().catch(() => ({}))) as { message?: string };
+	const raw = String(body.message ?? "").trim();
+	if (!raw) return c.json({ error: "message is required" }, 400);
+	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_user", content: raw }).catch(() => undefined);
+
+	// Explicit force-delegate.
+	if (/^(@claude|\/run)\b/i.test(raw)) {
+		const cleaned = raw.replace(/^(@claude|\/run)\s*/i, "").trim() || raw;
+		return c.json(await driveClaude(c, instanceId, uid, sessionId, cleaned));
+	}
+
+	// Otherwise: one tool-enabled call — answer from context OR call drive_claude.
+	const conn = await getRunnerConn(c.env, instanceId, uid);
+	let pane = "";
+	if (conn) {
+		const snap = (await callRunner(conn, "/coding/capture", { sessionId }).catch(() => null)) as { pane?: string } | null;
+		pane = snap?.pane ?? "";
+	}
+	const memory = await contextForCopilot(c.env, sessionId);
+	const system =
+		"You are the co-pilot for an AI coding agent working in the user's repo. ONE rule decides what you do:\n" +
+		"- If the user is ASKING (status, what happened, why, explain) → answer concisely FROM the terminal + session memory below. Never claim you did work.\n" +
+		"- If the user wants something DONE (change/add/fix/run/build/test) OR you'd need live repo state you don't have → call the `drive_claude` tool with ONE clear instruction for Claude Code to execute. Don't try to do the work yourself.\n" +
+		"Plain language, tight. Default to answering; delegate when it's an action.";
+	const userMsg = `User: ${raw}\n\nSESSION MEMORY (recent):\n${memory || "(none)"}\n\nTERMINAL (recent):\n${pane.slice(-6000) || "(no live terminal)"}`;
+	const tools = [
+		{
+			type: "function",
+			function: {
+				name: "drive_claude",
+				description: "Delegate an action to Claude Code running in the repo (it edits files, runs commands). Use for any request to DO work.",
+				parameters: { type: "object", properties: { instruction: { type: "string", description: "A single clear instruction for Claude Code." } }, required: ["instruction"] },
+			},
+		},
+	];
+	const res = (await runUserWorkersAi(c.env, uid, "claude-sonnet-4-6", {
+		messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
+		tools,
+		maxTokens: 700,
+	}).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
+	const call = res.tool_calls?.find((t) => t.name === "drive_claude");
+	const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";
+	if (instruction) return c.json(await driveClaude(c, instanceId, uid, sessionId, instruction));
+	const reply = res.response || "(no response)";
+	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply }).catch(() => undefined);
+	return c.json({ delegated: false, reply });
+});
+
 /** Load a session's persisted conversation (so the console restores it on open). */
 codingRoutes.get("/:instanceId/coding/sessions/:sessionId/timeline", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);

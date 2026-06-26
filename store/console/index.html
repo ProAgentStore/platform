@@ -346,10 +346,10 @@
           <div id="inst-coding-view-summary" class="coding-view">
             <div id="inst-coding-summary-thread" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.7rem 0.85rem;overflow:auto;font-size:0.86rem;line-height:1.5;touch-action:manipulation"></div>
             <div style="display:flex;gap:0.35rem;margin-top:0.5rem;flex-wrap:wrap">
-              <input id="inst-coding-ask" placeholder="Tell the agent what to do — it types into Claude for you…" style="flex:1;min-width:140px" onkeydown="if(event.key==='Enter')sendCodingInstruction()">
+              <input id="inst-coding-ask" placeholder="Ask about it, or tell it to do something — it routes for you (@claude forces)…" style="flex:1;min-width:140px" onkeydown="if(event.key==='Enter')sendCodingInstruction()">
               <button type="button" id="inst-coding-mic" class="btn btn-outline btn-sm" onclick="startCodingDictation(this)" title="Dictate">🎤</button>
               <button type="button" id="inst-coding-speak" class="btn btn-outline btn-sm" onclick="toggleCodingVoiceOutput(this)" title="Read replies aloud">🔊</button>
-              <button type="button" id="inst-coding-send" class="btn btn-primary btn-sm" onclick="sendCodingInstruction()" title="Send to Claude — the agent types it into the CLI for you, then reports back">Send</button>
+              <button type="button" id="inst-coding-send" class="btn btn-primary btn-sm" onclick="sendCodingInstruction()" title="Send — it answers from context or drives Claude, whichever fits. Prefix @claude to force delegation.">Send</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="refreshCodingSummary()" title="What's it doing right now? (read-only — doesn't interrupt Claude)">Status</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="clearCodingSummary()" title="Clear this conversation (keeps the activity log)">🧹</button>
             </div>

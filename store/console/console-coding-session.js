@@ -263,10 +263,11 @@
       await callExplain(q);
     }
 
-    // The Agent chat: relay your words to Claude on your behalf — it types your
-    // message into the CLI (drives it). Persisted as a chat turn (chat:true) so it
-    // survives reload; a durable server-side watcher then summarizes + notifies when
-    // Claude finishes (chat polling below shows that reply, even minutes later).
+    // The Agent chat (one smart input): the server decides per message — answer from
+    // the terminal + history, OR delegate to Claude Code (it types the instruction
+    // into the CLI for you). Prefix with `@claude` to force delegation. When it
+    // delegates, the durable watcher summarizes + notifies on finish (chat poll shows
+    // that reply later). This calls the tool-loop endpoint that the Overseer reuses.
     async function sendCodingInstruction() {
       if (!currentInstance || !currentCodingSession) return;
       const input = document.getElementById('inst-coding-ask');
@@ -274,15 +275,19 @@
       if (!text) return;
       input.value = '';
       codingSummaryHistory.push({ role: 'user', content: text });
+      codingSummaryBusy = true;
       renderCodingSummary();
-      setCodingRunState('thinking'); // optimistic: disable Send/mic until idle confirms
       try {
-        await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/message`, {
-          method: 'POST', body: JSON.stringify({ text, chat: true }),
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/agent`, {
+          method: 'POST', body: JSON.stringify({ message: text }),
         });
-        setTimeout(pollCodingTerminal, 300);
+        codingSummaryHistory.push({ role: 'assistant', content: d.reply || '(no response)' });
+        speakCoding(d.reply);
+        if (d.delegated) { setCodingRunState('thinking'); setTimeout(pollCodingTerminal, 300); } // Claude is now working
       } catch (e) {
         codingSummaryHistory.push({ role: 'assistant', content: 'Could not reach the agent: ' + e.message });
+      } finally {
+        codingSummaryBusy = false;
         renderCodingSummary();
       }
     }
