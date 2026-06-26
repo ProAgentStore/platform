@@ -33,8 +33,21 @@ interface RepoRow {
 	clone_status: string;
 	clone_error: string | null;
 	default_client: string;
+	urls: string | null;
 	created_at: string;
 	updated_at: string;
+}
+
+function parseRepoUrls(raw: string | null): CodingRepo["urls"] {
+	if (!raw) return undefined;
+	try {
+		const o = JSON.parse(raw) as Record<string, unknown>;
+		const pick = (k: string) => (typeof o[k] === "string" && o[k] ? (o[k] as string) : undefined);
+		const urls = { dev: pick("dev"), staging: pick("staging"), prod: pick("prod") };
+		return urls.dev || urls.staging || urls.prod ? urls : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function toRepo(r: RepoRow): CodingRepo {
@@ -50,6 +63,7 @@ function toRepo(r: RepoRow): CodingRepo {
 		cloneStatus: r.clone_status as CloneStatus,
 		cloneError: r.clone_error ?? undefined,
 		defaultClient: client(r.default_client),
+		urls: parseRepoUrls(r.urls),
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 	};
@@ -128,18 +142,30 @@ export async function updateRepoClone(
 		.run();
 }
 
-/** Rename a repo/project (the editable display name). Scoped to the owner. */
-export async function renameRepo(
+/** Update a repo's editable fields (name and/or launch URLs). Scoped to the owner. */
+export async function updateRepo(
 	env: Env,
 	instanceId: string,
 	userId: string,
 	repoId: string,
-	name: string,
+	patch: { name?: string; urls?: { dev?: string; staging?: string; prod?: string } },
 ): Promise<boolean> {
+	const urlsJson =
+		patch.urls === undefined
+			? null
+			: JSON.stringify({
+					dev: (patch.urls.dev || "").trim() || undefined,
+					staging: (patch.urls.staging || "").trim() || undefined,
+					prod: (patch.urls.prod || "").trim() || undefined,
+				});
 	const res = await env.DB.prepare(
-		"UPDATE coding_repos SET name = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+		`UPDATE coding_repos
+		 SET name = COALESCE(?4, name),
+		     urls = CASE WHEN ?6 = 1 THEN ?5 ELSE urls END,
+		     updated_at = datetime('now')
+		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
 	)
-		.bind(repoId, instanceId, userId, name.slice(0, 120))
+		.bind(repoId, instanceId, userId, patch.name ? patch.name.slice(0, 120) : null, urlsJson, patch.urls === undefined ? 0 : 1)
 		.run();
 	return (res.meta.changes ?? 0) > 0;
 }

@@ -29,6 +29,8 @@ export interface CodingRepo {
 	cloneStatus: CloneStatus;
 	cloneError?: string;
 	defaultClient: CodingClientType;
+	/** Launch links — open-in-new-tab icons on the list + session view. */
+	urls?: { dev?: string; staging?: string; prod?: string };
 	createdAt: string;
 	updatedAt: string;
 }

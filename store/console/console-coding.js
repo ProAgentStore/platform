@@ -60,12 +60,13 @@
             <b style="font-size:0.9rem;overflow-wrap:anywhere">${esc(r.name)}</b>
           </div>
           ${sub ? `<div style="font-size:0.72rem;color:var(--muted);margin-top:0.15rem;word-break:break-all">${esc(sub)}</div>` : ''}
-          <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.5rem">
+          <div style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-top:0.5rem;align-items:center">
             ${active ? `
               <button type="button" class="btn btn-outline btn-sm" onclick="playRepoLastReply('${r.id}', this)" title="Hear the agent's last reply">🔊 Play</button>
-              <button type="button" class="btn btn-outline btn-sm" onclick="voiceReplyToRepo('${r.id}', this)" title="Reply by voice — sends straight to the agent">🎤 Reply</button>
+              <button type="button" id="repo-reply-${r.id}" class="btn btn-outline btn-sm" onclick="voiceReplyToRepo('${r.id}', this)" title="Reply by voice — sends straight to the agent">🎤 Reply</button>
               <button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
               : `<button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start</button>`}
+            ${repoLaunchIcons(r)}
           </div>
           <div id="repo-play-${r.id}" class="repo-play" style="display:none"></div>
         </div>`;
@@ -108,6 +109,9 @@
         const span = document.querySelector(`[data-repo-status="${s.repoId}"]`);
         const r = codingRepos.find(x => x.id === s.repoId);
         if (span && r) span.innerHTML = repoStatusIcon(r, s);
+        // Don't let you fire another voice reply while this repo is working.
+        const reply = document.getElementById(`repo-reply-${s.repoId}`);
+        if (reply) reply.disabled = (codingReposStatus[s.repoId] === 'thinking' || codingReposStatus[s.repoId] === 'responding');
       }));
     }
 
@@ -188,6 +192,7 @@
           const span = document.querySelector(`[data-repo-status="${repoId}"]`);
           const r = codingRepos.find(x => x.id === repoId);
           if (span && r) span.innerHTML = repoStatusIcon(r, active);
+          if (btn) btn.disabled = true; // working — block another reply until idle
         } catch (e) { alert('Send failed: ' + e.message); }
       };
       rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); };
@@ -607,6 +612,7 @@
       input.value = '';
       codingSummaryHistory.push({ role: 'user', content: text });
       renderCodingSummary();
+      setCodingRunState('thinking'); // optimistic: disable Send/mic until idle confirms
       try {
         await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/message`, {
           method: 'POST', body: JSON.stringify({ text, chat: true }),
@@ -641,6 +647,49 @@
         const active = codingSessions.find(x => x.repoId === r.id && x.status === 'active');
         return `<option value="${esc(r.id)}"${r.id === curRepo ? ' selected' : ''}>${esc(r.name)}${active ? ' • live' : ''}</option>`;
       }).join('');
+      // Launch icons for the open repo, in the header.
+      const links = document.getElementById('inst-coding-links');
+      const cur = codingRepos.find(r => r.id === curRepo);
+      if (links) links.innerHTML = cur ? repoLaunchIcons(cur) : '';
+    }
+
+    // Open-in-new-tab launch links (dev/staging/prod) — only the ones that are set.
+    // Rendered on both the repos list and the open session header.
+    function repoLaunchIcons(r) {
+      const u = (r && r.urls) || {};
+      const items = [['Dev', u.dev], ['Stg', u.staging], ['Prod', u.prod]].filter(x => x[1]);
+      if (!items.length) return '';
+      return items.map(([label, url]) =>
+        `<a href="${esc(url)}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" style="padding:0.2rem 0.4rem;text-decoration:none" title="Open ${label}: ${esc(url)}" onclick="event.stopPropagation()">${label} ↗</a>`
+      ).join('');
+    }
+
+    // Toggle the launch-links editor in the session header, prefilled from the repo.
+    function toggleCodingLinksEditor() {
+      const ed = document.getElementById('inst-coding-links-editor');
+      if (!ed) return;
+      const opening = ed.classList.contains('hidden');
+      ed.classList.toggle('hidden');
+      if (opening) {
+        const s = codingSessions.find(x => x.id === currentCodingSession);
+        const r = s && codingRepos.find(x => x.id === s.repoId);
+        const u = (r && r.urls) || {};
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+        set('inst-coding-url-dev', u.dev); set('inst-coding-url-staging', u.staging); set('inst-coding-url-prod', u.prod);
+      }
+    }
+
+    async function saveCodingLinks() {
+      const s = codingSessions.find(x => x.id === currentCodingSession);
+      if (!currentInstance || !s) return;
+      const val = id => (document.getElementById(id) || {}).value || '';
+      const urls = { dev: val('inst-coding-url-dev').trim(), staging: val('inst-coding-url-staging').trim(), prod: val('inst-coding-url-prod').trim() };
+      try {
+        await api(`/v1/instances/${currentInstance.id}/coding/repos/${s.repoId}`, { method: 'PUT', body: JSON.stringify({ urls }) });
+        await loadCoding();          // refresh codingRepos (now with urls)
+        renderCodingRepoSelect();    // re-render header icons
+        toggleCodingLinksEditor();   // close
+      } catch (e) { alert('Save failed: ' + e.message); }
     }
 
     // Switch repos from the header dropdown: open its live session, or start one.
@@ -687,7 +736,8 @@
       const badge = document.getElementById('inst-coding-runstate');
       if (!badge) return;
       badge.title = state;
-      if (state === 'thinking' || state === 'responding') {
+      const busy = state === 'thinking' || state === 'responding';
+      if (busy) {
         badge.innerHTML = '<span class="coding-spin" aria-label="working"></span>';
       } else if (state === 'idle') {
         badge.textContent = '●';
@@ -696,6 +746,12 @@
         badge.textContent = '○';
         badge.style.color = 'var(--muted)';
       }
+      // While the agent is working, don't let you fire another instruction at it —
+      // disable Send + mic (the read-only Status/Play stay usable).
+      ['inst-coding-send', 'inst-coding-mic'].forEach(id => {
+        const b = document.getElementById(id);
+        if (b) b.disabled = busy;
+      });
     }
 
     // Colour the raw terminal by line type so you can see at a glance who said what:

@@ -15,7 +15,7 @@ import {
 	getSession,
 	listRepos,
 	listSessions,
-	renameRepo,
+	updateRepo,
 	updateRepoClone,
 } from "../lib/coding-store.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
@@ -157,15 +157,22 @@ codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 	return c.json({ ok: true });
 });
 
-/** Rename a repo/project (editable display name). */
+/** Update a repo/project: rename and/or set its launch URLs (dev/staging/prod). */
 codingRoutes.put("/:instanceId/coding/repos/:repoId", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
-	const body = (await c.req.json().catch(() => ({}))) as { name?: string };
-	const name = (body.name ?? "").trim();
-	if (!name) return c.json({ error: "name is required" }, 400);
-	const ok = await renameRepo(c.env, instanceId, uid, c.req.param("repoId"), name);
+	const body = (await c.req.json().catch(() => ({}))) as {
+		name?: string;
+		urls?: { dev?: string; staging?: string; prod?: string };
+	};
+	const name = typeof body.name === "string" ? body.name.trim() : undefined;
+	const hasUrls = body.urls !== undefined && typeof body.urls === "object";
+	if (!name && !hasUrls) return c.json({ error: "name or urls is required" }, 400);
+	const ok = await updateRepo(c.env, instanceId, uid, c.req.param("repoId"), {
+		name: name || undefined,
+		urls: hasUrls ? body.urls : undefined,
+	});
 	if (!ok) throw new HttpError(404, "Repo not found");
-	return c.json({ ok: true, name });
+	return c.json({ ok: true });
 });
 
 // ── Sessions ─────────────────────────────────────────────────────────────
