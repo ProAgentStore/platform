@@ -256,7 +256,14 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 		maxTokens: question ? 600 : 140,
 	})) as { response?: string };
 	const reply = res.response || "(no response)";
-	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply });
+	// Don't persist a transient "runner offline / session hasn't started" auto-summary
+	// — it's only true at this moment, and once the runner attaches it lingers at the
+	// top of the thread as stale, confusing history. Show it live, but only save real
+	// replies (an answer to a question, or a summary of an actual live terminal).
+	const offlineAutoSummary = !question && !pane.trim();
+	if (!offlineAutoSummary) {
+		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply });
+	}
 	return c.json({ reply });
 });
 
