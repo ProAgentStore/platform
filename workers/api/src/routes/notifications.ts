@@ -52,11 +52,12 @@ export async function createNotification(
 	title: string,
 	body: string,
 	agentId?: string,
+	url?: string,
 ): Promise<void> {
 	await db.prepare(
-		`INSERT INTO notifications (id, user_id, type, title, body, agent_id, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))`,
-	).bind(crypto.randomUUID(), userId, type, title, body, agentId || null).run();
+		`INSERT INTO notifications (id, user_id, type, title, body, agent_id, url, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))`,
+	).bind(crypto.randomUUID(), userId, type, title, body, agentId || null, url || null).run();
 
 	// Send Slack webhook if configured (fire-and-forget)
 	try {

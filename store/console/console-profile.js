@@ -220,12 +220,19 @@
             </div>
             ${!n.read ? '<span style="width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0;margin-top:0.3rem"></span>' : ''}
           </div>`;
-          if (!n.read) {
+          // Click → mark read, then open exactly where it points (e.g. the repo's
+          // Agent chat) instead of just sitting on the list.
+          if (n.url || !n.read) {
             item.style.cursor = 'pointer';
             item.addEventListener('click', async () => {
-              await api(`/v1/notifications/${n.id}/read`, { method: 'POST' });
-              showNotifications();
+              if (!n.read) await api(`/v1/notifications/${n.id}/read`, { method: 'POST' }).catch(() => {});
               loadNotifBadge();
+              if (n.url) {
+                const path = String(n.url).replace(/^\/console/, '') || '/';
+                setConsoleUrl(path);
+                if (typeof restoreConsoleRoute === 'function') { restoreConsoleRoute(); return; }
+              }
+              showNotifications();
             });
           }
           list.appendChild(item);

@@ -202,6 +202,6 @@ export async function notifyUser(
 	body: string,
 	url?: string,
 ): Promise<void> {
-	await createNotification(env.DB, userId, type, title, body).catch(() => undefined);
+	await createNotification(env.DB, userId, type, title, body, undefined, url).catch(() => undefined);
 	await sendPushToUser(env, userId, { title, body, url, tag: type }).catch(() => undefined);
 }
