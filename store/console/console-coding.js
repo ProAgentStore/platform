@@ -186,7 +186,11 @@
       if (panel) panel.classList.remove('hidden');
       setCodingReposCollapsed(true); // focus the session — collapse the repo list
       const label = document.getElementById('inst-coding-term-label');
-      if (label) label.textContent = (sessionId || '').slice(0, 16) + '…';
+      if (label) {
+        const s = codingSessions.find(x => x.id === sessionId);
+        const r = s && codingRepos.find(x => x.id === s.repoId);
+        label.textContent = r ? r.name : '';
+      }
       switchCodingView('summary'); // default to the condensed co-pilot view
       renderCodingSummary();
       stopCodingPolling();
@@ -242,11 +246,12 @@
         el.innerHTML = '<div style="color:var(--muted)">Reading the terminal…</div>';
         return;
       }
-      el.innerHTML = codingSummaryHistory.map(m => {
+      el.innerHTML = codingSummaryHistory.map((m, i) => {
         if (m.role === 'user') {
           return `<div style="margin:0.5rem 0;text-align:right"><span style="display:inline-block;background:var(--accent,#7c3aed);color:#fff;padding:0.3rem 0.6rem;border-radius:10px;max-width:85%;text-align:left">${esc(m.content)}</span></div>`;
         }
-        return `<div style="margin:0.5rem 0">${mdLite(m.content)}</div>`;
+        // Double-tap an assistant message to hear it spoken (direct gesture → iOS-safe).
+        return `<div ondblclick="speakCodingMsg(${i})" title="Double-tap to hear it" style="margin:0.5rem 0;cursor:pointer">${mdLite(m.content)}</div>`;
       }).join('') + (codingSummaryBusy ? '<div style="color:var(--muted);font-size:0.8rem">…</div>' : '');
       el.scrollTop = el.scrollHeight;
     }
@@ -300,20 +305,43 @@
       try { rec.start(); } catch (e) { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
     }
 
+    // Speak text NOW. Must be reachable from a user gesture (iOS/Chrome block
+    // speech that isn't triggered by a tap/click — which is why auto-speak after
+    // an async summary often stays silent; double-tap a message is the reliable path).
+    function speakText(text) {
+      if (!window.speechSynthesis || !text) return;
+      const clean = String(text).replace(/[*_`#>•]/g, '').replace(/\s+/g, ' ').trim();
+      if (!clean) return;
+      try {
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(clean.slice(0, 1500));
+        u.rate = 1.05;
+        speechSynthesis.speak(u);
+      } catch (e) { /* unsupported */ }
+    }
+
+    // Double-tap / click a summary message to hear it (direct gesture → works on iOS).
+    function speakCodingMsg(i) {
+      const m = codingSummaryHistory[i];
+      if (m && m.content) speakText(m.content);
+    }
+
     function toggleCodingVoiceOutput(btn) {
       codingVoiceOn = !codingVoiceOn;
       if (btn) btn.classList.toggle('active', codingVoiceOn);
-      if (!codingVoiceOn && window.speechSynthesis) speechSynthesis.cancel();
+      if (codingVoiceOn) {
+        // Speak the latest summary right now — this is inside the click gesture, so
+        // it both confirms voice works and "unlocks" the synth for later auto-speak.
+        const last = codingSummaryHistory.slice().reverse().find(m => m.role === 'assistant');
+        speakText(last ? last.content : 'Voice on.');
+      } else if (window.speechSynthesis) {
+        speechSynthesis.cancel();
+      }
     }
 
-    function speakCoding(text) {
-      if (!codingVoiceOn || !window.speechSynthesis || !text) return;
-      const clean = text.replace(/[*_`#>]/g, '').replace(/\s+/g, ' ').trim();
-      const u = new SpeechSynthesisUtterance(clean.slice(0, 600));
-      u.rate = 1.05;
-      speechSynthesis.cancel();
-      speechSynthesis.speak(u);
-    }
+    // Auto-speak after a new reply (only when the toggle is on; may be blocked on
+    // iOS since it's not a gesture — the double-tap is the guaranteed path).
+    function speakCoding(text) { if (codingVoiceOn) speakText(text); }
 
     async function askCoding() {
       const input = document.getElementById('inst-coding-ask');
