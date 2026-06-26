@@ -3,11 +3,31 @@
 
     let tokenVisible = false;
 
+    // ── Text size (Appearance) ───────────────────────────────
+    // Scales the whole console via the root font-size (rem-based styles follow).
+    // Per-device (localStorage); applied pre-paint by an inline head script too.
+    function applyTextScale(scale) {
+      document.documentElement.style.fontSize = (scale === 1 ? '' : (scale * 100) + '%');
+    }
+    function refreshTextScaleButtons() {
+      let s = 1;
+      try { s = parseFloat(localStorage.getItem('pags:textScale')) || 1; } catch (e) {}
+      document.querySelectorAll('#text-scale-toggle [data-scale]').forEach(b => {
+        b.classList.toggle('active', parseFloat(b.dataset.scale) === s);
+      });
+    }
+    function setTextScale(scale) {
+      try { localStorage.setItem('pags:textScale', String(scale)); } catch (e) {}
+      applyTextScale(scale);
+      refreshTextScaleButtons();
+    }
+
     function showProfile(updateUrl = true) {
       if (!user) return;
       if (updateUrl) rememberConsoleReturn(); // capture where we came from to return to
       showPage('profile-page');
       if (updateUrl) setConsoleUrl('/profile');
+      refreshTextScaleButtons();
 
       document.getElementById('profile-avatar').src = user.avatar || '';
       document.getElementById('profile-name').textContent = user.name || user.login;

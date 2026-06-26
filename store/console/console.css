@@ -313,10 +313,10 @@
       .inst-nav-tabs .tab{padding:0.25rem 0.5rem;font-size:0.72rem}
       #inst-nav-slot span{max-width:100px;font-size:0.8rem}
 
-      /* Container */
-      .container{padding:0.75rem}
-      #application-detail{padding:0.75rem}
-      .page-title{font-size:1.2rem;margin-bottom:1rem}
+      /* Container — tight on mobile to save every pixel */
+      .container{padding:0.6rem 0.5rem}
+      #application-detail{padding:0.6rem 0.5rem}
+      .page-title{font-size:1.2rem;margin-bottom:0.75rem}
 
       /* Agent grid */
       .agents-grid{grid-template-columns:1fr;gap:0.65rem}
@@ -355,7 +355,17 @@
 
       /* Forms */
       .form-row{flex-direction:column;gap:0.5rem}
-      .create-form{padding:0.85rem}
+      .create-form{padding:0.7rem;margin-bottom:0.75rem}
+
+      /* Profile — tighter cards/sections */
+      .profile-card{padding:0.85rem;margin-bottom:0.75rem}
+      .profile-header{gap:0.85rem;margin-bottom:1rem}
+      .profile-section{margin-bottom:1rem}
+
+      /* Coding — reclaim vertical space (inline styles need !important here) */
+      #inst-coding-repos-section{padding:0.45rem 0.55rem!important;margin-bottom:0.5rem!important}
+      #inst-coding-terminal:not(.hidden){margin-top:0.4rem;height:calc(100dvh - 104px)}
+      .memory-item{padding:0.5rem 0.6rem}
 
       /* Login */
       .login-page h1{font-size:1.5rem}

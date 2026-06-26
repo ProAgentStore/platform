@@ -47,6 +47,14 @@
     <button id="nav-menu-btn" type="button" aria-label="Open menu" aria-expanded="false" onclick="toggleNavMenu(this)">&#9776;</button>
   </header>
   <script>
+    // Apply the saved text size before paint (no flash). rem-based styles scale
+    // off the root font-size. Default 100%. See Profile → Appearance.
+    (function(){
+      try {
+        var s = parseFloat(localStorage.getItem('pags:textScale'));
+        if (s && s >= 0.8 && s <= 1.5) document.documentElement.style.fontSize = (s * 100) + '%';
+      } catch (e) {}
+    })();
     function toggleNavMenu(btn){
       var nav=document.getElementById('top-nav');
       var open=nav.classList.toggle('open');
@@ -895,6 +903,20 @@
           <span class="profile-label">GitHub</span>
           <span id="profile-gh-link" class="profile-value"></span>
         </div>
+      </div>
+
+      <div class="profile-section">
+        <h3>Appearance</h3>
+        <div class="profile-row">
+          <span class="profile-label">Text size</span>
+          <div class="view-toggle" id="text-scale-toggle" role="group" aria-label="Text size">
+            <button type="button" data-scale="0.9" onclick="setTextScale(0.9)">A−</button>
+            <button type="button" data-scale="1" onclick="setTextScale(1)">A</button>
+            <button type="button" data-scale="1.15" onclick="setTextScale(1.15)">A+</button>
+            <button type="button" data-scale="1.3" onclick="setTextScale(1.3)">A++</button>
+          </div>
+        </div>
+        <p style="font-size:0.78rem;color:var(--muted-soft);margin-top:0.4rem">Scales the whole console. Saved on this device.</p>
       </div>
 
       <div class="profile-section">
