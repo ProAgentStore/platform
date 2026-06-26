@@ -14,8 +14,44 @@ import {
 	updateRepoClone,
 } from "../lib/coding-store.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
-import type { CodingClientType } from "../lib/coding-types.js";
+import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
+
+/**
+ * Ensure a session is live on the user's runner: clone the repo (idempotent on
+ * the runner) and launch the CLI. Returns false if no runner is connected. Used
+ * both when creating a session and when re-attaching an orphaned one (created
+ * while the runner was offline, or after a runner restart).
+ */
+async function startSessionOnRunner(
+	env: Env,
+	instanceId: string,
+	uid: string,
+	session: CodingSessionRecord,
+	repo: CodingRepo,
+): Promise<boolean> {
+	const conn = await getRunnerConn(env, instanceId, uid);
+	if (!conn) return false;
+	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
+	const token = owner ? await installationTokenForOwner(env, uid, owner) : null;
+	try {
+		await callRunner(conn, "/coding/start", {
+			sessionId: session.id,
+			repoId: repo.id,
+			cloneUrl: repo.cloneUrl,
+			branch: repo.branch || undefined,
+			token: token ?? undefined,
+			clientType: session.clientType,
+		});
+		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
+	} catch (e) {
+		await updateRepoClone(env, repo.id, {
+			cloneStatus: "error",
+			cloneError: e instanceof Error ? e.message.slice(0, 300) : String(e),
+		});
+	}
+	return true;
+}
 
 /**
  * The coding-workspace control plane (the AgentCoder port). A workspace IS the
@@ -116,31 +152,24 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 		issueTitle: typeof body.issueTitle === "string" ? body.issueTitle : undefined,
 	});
 
-	const conn = await getRunnerConn(c.env, instanceId, uid);
-	if (conn) {
-		// Private repos need an installation token to clone; public ones don't.
-		const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
-		const token = owner ? await installationTokenForOwner(c.env, uid, owner) : null;
-		try {
-			await callRunner(conn, "/coding/start", {
-				sessionId: session.id,
-				repoId,
-				cloneUrl: repo.cloneUrl,
-				branch: repo.branch || undefined,
-				token: token ?? undefined,
-				clientType,
-			});
-			// The clone happens on the runner during start — reflect the result in D1
-			// so the repo badge stops saying "cloning" (and shows clone failures).
-			await updateRepoClone(c.env, repoId, { cloneStatus: "ready", cloneError: null });
-		} catch (e) {
-			await updateRepoClone(c.env, repoId, {
-				cloneStatus: "error",
-				cloneError: e instanceof Error ? e.message.slice(0, 300) : String(e),
-			});
-		}
-	}
-	return c.json({ session, runnerConnected: Boolean(conn) }, 201);
+	const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+	return c.json({ session, runnerConnected }, 201);
+});
+
+/**
+ * Re-attach an existing session to the runner — fixes an orphaned session
+ * (created while the runner was offline) and lets the terminal reconnect after a
+ * runner restart. Idempotent: the runner's start no-ops if the session is live.
+ */
+codingRoutes.post("/:instanceId/coding/sessions/:sessionId/start", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
+	if (!session) throw new HttpError(404, "Session not found");
+	if (session.status !== "active") return c.json({ ok: false, error: "session has ended" }, 409);
+	const repo = await getRepo(c.env, instanceId, uid, session.repoId);
+	if (!repo) throw new HttpError(404, "Repo not found");
+	const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+	return c.json({ ok: runnerConnected, runnerConnected });
 });
 
 /** The pane the console renders (polling fallback for the live terminal). */

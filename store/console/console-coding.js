@@ -154,15 +154,22 @@
       } catch (e) { alert('Start session failed: ' + e.message); }
     }
 
-    function openCodingTerminal(sessionId) {
+    async function openCodingTerminal(sessionId) {
       currentCodingSession = sessionId;
       const panel = document.getElementById('inst-coding-terminal');
       if (panel) panel.classList.remove('hidden');
       const label = document.getElementById('inst-coding-term-label');
       if (label) label.textContent = sessionId;
-      pollCodingTerminal();
       stopCodingPolling();
       codingPollTimer = setInterval(pollCodingTerminal, 1500);
+      pollCodingTerminal();
+      // Ensure the session is live on the runner — reattaches an orphaned session
+      // (created while the runner was offline) or one lost to a runner restart.
+      // Idempotent: the runner no-ops if it's already running.
+      try {
+        await api(`/v1/instances/${currentInstance.id}/coding/sessions/${sessionId}/start`, { method: 'POST', body: '{}' });
+        setTimeout(pollCodingTerminal, 400);
+      } catch (e) { /* runner offline → pane shows the 'no runner' hint */ }
     }
 
     function closeCodingTerminal() {

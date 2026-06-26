@@ -501,14 +501,21 @@ export function createRunnerCommand(): Command {
 				const registerRuntime = async (url: string): Promise<void> => {
 					const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: primary });
 					const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
+					// Register each instance independently — one failing instance must
+					// not stop the others from registering (the heartbeat loop retries
+					// any that didn't stick).
 					for (const id of instanceIds) {
-						await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
-							endpointUrl: url,
-							token: runnerToken,
-							placement: "local",
-							capabilities: caps,
-							runnerVersion: clean(opts.runnerVersion) || "",
-						});
+						try {
+							await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
+								endpointUrl: url,
+								token: runnerToken,
+								placement: "local",
+								capabilities: caps,
+								runnerVersion: clean(opts.runnerVersion) || "",
+							});
+						} catch (error) {
+							writeError(`register ${id.slice(0, 8)}… failed (${error instanceof Error ? error.message : String(error)}); will retry`);
+						}
 					}
 				};
 
