@@ -73,6 +73,15 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				await callRunner(conn, "/browser/event", { taskId, type, message, data }).catch(() => undefined);
 				return null;
 			}).then(() => undefined),
+			// Mid-flight steering: read + clear any message the user sent to this task so
+			// the brain picks it up on its next decision (works while RUNNING, not only
+			// on a handoff resume). Same user_hint channel as the console message box.
+			pollHint: () => step.do(`s${n++}-hint`, async () => {
+				const row = await env.DB.prepare("SELECT user_hint FROM instance_runtime_tasks WHERE id = ?1 AND user_id = ?2").bind(taskId, userId).first<{ user_hint?: string }>();
+				const h = (row?.user_hint as string) ?? null;
+				if (h) await env.DB.prepare("UPDATE instance_runtime_tasks SET user_hint = NULL WHERE id = ?1 AND user_id = ?2").bind(taskId, userId).run();
+				return h;
+			}) as Promise<string | null>,
 		};
 
 		// Drive; on a CAPTCHA hand off to the human (same session), wait, resume,
@@ -119,15 +128,8 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// widget/text lingers) so the agent fills the form instead of looping.
 			if (result.outcome === "captcha") solvedChallengeUrl = result.url;
 			await step.do(`resume-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId }));
-			// Pull any free-text message the user sent while paused, feed it to the
-			// brain for the next round (highest priority), then clear it.
-			const hint = await step.do(`hint-${round}`, async () => {
-				const row = await env.DB.prepare("SELECT user_hint FROM instance_runtime_tasks WHERE id = ?1 AND user_id = ?2").bind(taskId, userId).first<{ user_hint?: string }>();
-				const h = row?.user_hint ?? null;
-				if (h) await env.DB.prepare("UPDATE instance_runtime_tasks SET user_hint = NULL WHERE id = ?1 AND user_id = ?2").bind(taskId, userId).run();
-				return h;
-			});
-			if (hint) job.userHint = hint; else delete job.userHint;
+			// Any message the user sent while paused is picked up by deps.pollHint on the
+			// next loop step (same channel as mid-flight steering) — no special-casing here.
 		}
 
 		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));

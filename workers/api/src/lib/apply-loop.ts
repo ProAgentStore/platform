@@ -88,6 +88,9 @@ export interface ApplyDeps {
 	act: (action: BrowserAction) => Promise<{ url: string; challenge: string | null; error?: string }>;
 	decide: (params: { job: ApplyJob; actionLog: string[]; snapshot: PageSnapshot }) => Promise<ApplyDecision>;
 	onEvent?: (type: string, message: string, data?: unknown) => Promise<void> | void;
+	/** Read (and clear) any free-text message the user sent to this RUNNING task — so
+	 *  guidance can be injected mid-flight, not only on a handoff resume. */
+	pollHint?: () => Promise<string | null>;
 }
 
 /**
@@ -152,7 +155,16 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 
+		// Mid-flight steering: pick up any message you sent to this RUNNING task and
+		// make it top-priority guidance for THIS decision, then consume it (one-shot).
+		const liveHint = deps.pollHint ? await deps.pollHint().catch(() => null) : null;
+		if (liveHint) {
+			job.userHint = liveHint;
+			await deps.onEvent?.("agent.guidance", `Message from you: "${liveHint}"`, { hint: liveHint });
+		}
+
 		const decision = await deps.decide({ job, actionLog, snapshot: snap });
+		if (liveHint) job.userHint = undefined; // applied to this step only
 		if (decision.usage) { tokens.input += decision.usage.input; tokens.output += decision.usage.output; }
 		await deps.onEvent?.(
 			"agent.decision",

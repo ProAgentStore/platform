@@ -125,6 +125,19 @@ describe("runApplyLoop", () => {
 		expect(tokens.output).toBe(31);
 	});
 
+	it("injects a mid-flight pollHint message into the NEXT decision only (one-shot steering)", async () => {
+		let polls = 0;
+		const seen: Array<string | null> = [];
+		const deps: ApplyDeps = {
+			snapshot: async () => page('- button "Next"'),
+			act: async () => ({ url: "https://jobs.example.com/123", challenge: null }),
+			pollHint: async () => (polls++ === 1 ? "go to the next tab" : null), // your message arrives on step 2
+			decide: async (p) => { seen.push(p.job.userHint ?? null); return { action: { action: "click", role: "button", name: "Next" } }; },
+		};
+		await runApplyLoop(deps, JOB, { maxSteps: 3 });
+		expect(seen).toEqual([null, "go to the next tab", null]); // only the step after you sent it saw the message
+	});
+
 	it("STILL hands off stuck on a DYNAMIC page (content changes every poll) when fixating on one URL", async () => {
 		// Same URL, but the snapshot grows each poll (a timer/carousel/ad). A content-
 		// keyed guard would be defeated and thrash to max_steps; the URL-keyed guard
