@@ -65,8 +65,12 @@ const pages = {
 		path.join(storeDir, "console", "console-agent-data.js"),
 		"utf-8",
 	),
-	consoleCodingJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-coding.js"),
+	consoleCodingReposJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-coding-repos.js"),
+		"utf-8",
+	),
+	consoleCodingSessionJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-coding-session.js"),
 		"utf-8",
 	),
 	consoleProfileJs: fs.readFileSync(

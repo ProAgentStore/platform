@@ -319,13 +319,16 @@
       .inst-nav-tabs .tab{padding:0.25rem 0.5rem;font-size:0.72rem}
       #inst-nav-slot span{max-width:100px;font-size:0.8rem}
 
-      /* Container — tight on mobile to save every pixel */
-      .container{padding:0.5rem 0.4rem}
-      #application-detail{padding:0.5rem 0.4rem}
+      /* Container — minimal L/R margins on mobile so text + controls get the room */
+      .container{padding:0.45rem 0.3rem}
+      #application-detail{padding:0.45rem 0.3rem}
       .page-title{font-size:1.15rem;margin-bottom:0.6rem}
       input,textarea,select{padding:0.42rem 0.55rem;font-size:0.85rem}
-      .btn{padding:0.5rem 0.9rem}
-      .btn-sm{padding:0.3rem 0.6rem}
+      .btn{padding:0.5rem 0.85rem}
+      .btn-sm{padding:0.3rem 0.55rem}
+      .create-form{padding:0.55rem 0.55rem}
+      #inst-coding-repos-section{padding:0.4rem 0.45rem!important}
+      .inst-nav-tabs .tab{padding:0.25rem 0.45rem}
 
       /* Agent grid */
       .agents-grid{grid-template-columns:1fr;gap:0.55rem}

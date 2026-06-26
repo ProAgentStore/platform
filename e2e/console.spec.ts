@@ -315,6 +315,18 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 }
 
 test.describe("ProAgentStore Console smoke", () => {
+	test("all console scripts parse and load without page errors", async ({ page }) => {
+		// Guards the classic-<script> architecture: a duplicate top-level `let` or a
+		// syntax error in any console-*.js throws at parse time → a pageerror here.
+		// (This is the failure mode a botched file-split would cause.)
+		const errors: string[] = [];
+		page.on("pageerror", (e) => errors.push(String(e)));
+		await mockSignedInConsole(page);
+		await page.goto("/");
+		await page.waitForLoadState("networkidle");
+		expect(errors).toEqual([]);
+	});
+
 	test("console root renders the sign-in screen", async ({ page }) => {
 		await page.goto("/");
 
