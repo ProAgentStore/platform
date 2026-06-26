@@ -262,6 +262,14 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const runtime = await requireRuntime(c.env, instanceId, session.uid);
 
+	// A runner heartbeats every 30s (updateRuntimeStatus → "online"). If it was seen
+	// in the last ~90s it's live, so a transient live-probe failure (the tunnel URL
+	// just rotated on a `pags up` restart, a momentary blip) must NOT flip it offline:
+	// getRunnerConn gates work on status != 'offline', so a destructive probe would
+	// knock out coding/apply and flash "not connected" while the runner is actually fine.
+	const lastSeenMs = runtime.last_seen_at ? Date.parse(`${runtime.last_seen_at.replace(" ", "T")}Z`) : 0;
+	const recentlySeen = lastSeenMs > 0 && Date.now() - lastSeenMs < 90_000;
+
 	try {
 		const [healthRes, capabilitiesRes] = await Promise.all([
 			callRuntime(c.env, runtime, "/health"),
@@ -270,17 +278,19 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		const health = await healthRes.json().catch(() => ({}));
 		const capabilities = await capabilitiesRes.json().catch(() => ({}));
 		const online = healthRes.ok && capabilitiesRes.ok;
-		await updateRuntimeStatus(c.env, instanceId, session.uid, online ? "online" : "offline");
+		// Persist offline only when the probe fails AND the heartbeat has gone stale.
+		const effective = online || recentlySeen ? "online" : "offline";
+		await updateRuntimeStatus(c.env, instanceId, session.uid, effective);
 		return c.json({
-			runtime: runtimeResponse({
-				...runtime,
-				status: online ? "online" : "offline",
-				last_seen_at: new Date().toISOString(),
-			}),
+			runtime: runtimeResponse({ ...runtime, status: effective, last_seen_at: new Date().toISOString() }),
 			health,
 			capabilities,
 		});
 	} catch (error) {
+		// Probe threw (network blip). A recently-seen runner stays online — don't clobber it.
+		if (recentlySeen) {
+			return c.json({ runtime: runtimeResponse({ ...runtime, status: "online" }), transient: true });
+		}
 		await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
 		return c.json({
 			runtime: runtimeResponse({ ...runtime, status: "offline" }),
