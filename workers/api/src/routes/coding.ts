@@ -192,12 +192,22 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	}
 
 	const clientType = asClient(body.clientType ?? repo.defaultClient);
-	const session = await createSession(c.env, instanceId, uid, {
-		repoId,
-		clientType,
-		issueNumber: typeof body.issueNumber === "number" ? body.issueNumber : undefined,
-		issueTitle: typeof body.issueTitle === "string" ? body.issueTitle : undefined,
-	});
+	let session: CodingSessionRecord;
+	try {
+		session = await createSession(c.env, instanceId, uid, {
+			repoId,
+			clientType,
+			issueNumber: typeof body.issueNumber === "number" ? body.issueNumber : undefined,
+			issueTitle: typeof body.issueTitle === "string" ? body.issueTitle : undefined,
+		});
+	} catch {
+		// Lost a create race against the one-active-session-per-repo index — reuse
+		// whoever won instead of erroring.
+		const winner = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
+		if (!winner) throw new HttpError(409, "Could not start a session — try again.");
+		const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, winner, repo);
+		return c.json({ session: winner, runnerConnected, reused: true }, 200);
+	}
 
 	const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
 	return c.json({ session, runnerConnected }, 201);

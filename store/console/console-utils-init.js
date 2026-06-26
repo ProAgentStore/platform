@@ -260,6 +260,9 @@
       if (authed && user) {
         showUser();
         loadNotifBadge();
+        // Keep the bell's unread count live so a finished/needs-you notification
+        // is visible even when you're not on that session (and push didn't buzz).
+        setInterval(() => { if (token && user) loadNotifBadge(); }, 30000);
         // Silently refresh the push subscription if already granted (keeps the
         // server's endpoint current; never prompts here — that's the button).
         if (typeof ensurePushSubscription === 'function') ensurePushSubscription(false);
