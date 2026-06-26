@@ -10,7 +10,7 @@ import {
 	type CodingResult,
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
-import { appendTimeline, contextForCopilot } from "../lib/coding-timeline.js";
+import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
@@ -210,6 +210,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			const memory = await contextForCopilot(env, sessionId);
 			const reply = await copilotSummary(env, userId, { finished: true, memory, pane: finalPane.pane || "" }).catch(() => "");
 			if (reply) await appendTimeline(env, { sessionId, instanceId, userId, type: "chat_assistant", content: reply });
+			// Save the actual terminal transcript too (deduped) — the audit trail of what
+			// Claude really did, not just the summary. Otherwise the manual chat flow only
+			// keeps your message + the gist, and the real work isn't recorded anywhere.
+			const pane = (finalPane.pane || "").trim();
+			if (pane) {
+				const prev = await lastTerminal(env, sessionId).catch(() => null);
+				if (pane !== (prev ?? "").trim()) {
+					await appendTimeline(env, { sessionId, instanceId, userId, type: "terminal", content: pane.slice(-12000) }).catch(() => undefined);
+				}
+			}
 			await notifyUser(
 				env,
 				userId,

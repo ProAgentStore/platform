@@ -158,6 +158,9 @@
     /* Run-state as an icon, not a word: a spinner while the agent works. */
     @keyframes coding-spin{to{transform:rotate(360deg)}}
     .coding-spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);border-top-color:var(--amber,#f59e0b);border-radius:50%;animation:coding-spin 0.7s linear infinite;vertical-align:-1px}
+    /* Karaoke playback on the repos list: show the spoken text, highlight each word. */
+    .repo-play{font-size:0.82rem;line-height:1.7;margin-top:0.5rem;color:var(--ink);max-height:160px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.5rem 0.6rem}
+    .repo-play .kw-on{background:var(--accent,#7c3aed);color:#fff;border-radius:3px;padding:0 1px}
     /* Public-pages nav in the console header — visible on desktop so you can jump
        between the console and the store/about/etc. Hidden on narrow screens (and when
        an instance's nav needs the room) to keep the 48px bar clean. */

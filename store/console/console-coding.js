@@ -67,6 +67,7 @@
               <button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
               : `<button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start</button>`}
           </div>
+          <div id="repo-play-${r.id}" class="repo-play" style="display:none"></div>
         </div>`;
       }).join('');
       startReposStatusPolling();
@@ -110,20 +111,60 @@
       }));
     }
 
-    // Hear the agent's last reply for a repo, right from the list.
+    // Hear the agent's last reply for a repo, right from the list — showing the
+    // running text and highlighting each word as it's spoken (karaoke).
     async function playRepoLastReply(repoId, btn) {
       const active = codingSessions.find(s => s.repoId === repoId && s.status === 'active');
       if (!currentInstance || !active) return;
+      const el = document.getElementById(`repo-play-${repoId}`);
       try {
         const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${active.id}/timeline`);
         const last = (d.chat || []).slice().reverse().find(m => m.type === 'chat_assistant');
-        speakText(last ? last.content : 'No reply yet.');
+        const text = last ? last.content : 'No reply yet.';
+        if (el) speakTextKaraoke(text, el); else speakText(text);
       } catch (e) { /* ignore */ }
+    }
+
+    // Speak text while showing it and highlighting each word in real time. Uses the
+    // utterance 'boundary' event (where supported — desktop Chrome; iOS may not fire
+    // it, in which case the text still shows, just without per-word highlight).
+    function speakTextKaraoke(text, el) {
+      if (!window.speechSynthesis || !el) return;
+      const clean = String(text || '').replace(/[*_`#>•]/g, '').replace(/\s+/g, ' ').trim();
+      if (!clean) { el.style.display = 'none'; return; }
+      // Build word spans with their char offsets so a boundary charIndex maps to a word.
+      const words = [];
+      let html = '';
+      const re = /(\S+)(\s*)/g; let m;
+      while ((m = re.exec(clean)) !== null) {
+        words.push({ start: m.index, end: m.index + m[1].length });
+        html += `<span data-kw="${words.length - 1}">${esc(m[1])}</span>${esc(m[2])}`;
+      }
+      el.innerHTML = html;
+      el.style.display = '';
+      try {
+        speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(clean.slice(0, 3000));
+        u.rate = 1.0;
+        let lastSpan = null;
+        u.onboundary = (e) => {
+          if (e.name && e.name !== 'word') return;
+          let wi = words.findIndex(w => e.charIndex >= w.start && e.charIndex < w.end);
+          if (wi < 0) wi = words.findIndex(w => w.start >= e.charIndex);
+          if (wi < 0) return;
+          if (lastSpan) lastSpan.classList.remove('kw-on');
+          const span = el.querySelector(`[data-kw="${wi}"]`);
+          if (span) { span.classList.add('kw-on'); span.scrollIntoView({ block: 'nearest' }); lastSpan = span; }
+        };
+        u.onend = () => { if (lastSpan) lastSpan.classList.remove('kw-on'); };
+        speechSynthesis.speak(u);
+      } catch (e) { /* unsupported */ }
     }
 
     // Reply by voice straight from the list — dictate, send to the agent, no need to
     // open the repo. The watcher notifies + the status icon flips to working.
     function voiceReplyToRepo(repoId, btn) {
+      if (window.speechSynthesis) speechSynthesis.cancel(); // recording stops any playback
       const active = codingSessions.find(s => s.repoId === repoId && s.status === 'active');
       if (!currentInstance || !active) { alert('Start the session first.'); return; }
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -456,6 +497,7 @@
 
     // ── Voice: talk to the co-pilot, and hear it back ────────────────────────
     function startCodingDictation(btn) {
+      if (window.speechSynthesis) speechSynthesis.cancel(); // recording stops any playback
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (!SR) { alert('Voice input isn\'t supported in this browser. On iPhone, use the keyboard\'s mic; on desktop, try Chrome.'); return; }
       if (codingRecognizer) { try { codingRecognizer.stop(); } catch (e) {} return; }
