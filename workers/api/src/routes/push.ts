@@ -137,18 +137,42 @@ export interface PushMessage {
 	tag?: string;
 }
 
-/** Send a Web Push to every device a user has registered. Prunes dead subs. */
+/** Send a Web Push to every device a user has registered. Prunes dead/duplicate subs. */
 export async function sendPushToUser(env: Env, userId: string, msg: PushMessage): Promise<number> {
 	const vapid = vapidConfig(env);
 	if (!vapid) return 0;
 	const { results } = await env.DB.prepare(
-		"SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?1",
+		"SELECT id, endpoint, p256dh, auth, user_agent FROM push_subscriptions WHERE user_id = ?1 ORDER BY created_at DESC",
 	)
 		.bind(userId)
-		.all<{ id: string; endpoint: string; p256dh: string; auth: string }>();
+		.all<{ id: string; endpoint: string; p256dh: string; auth: string; user_agent: string | null }>();
+
+	// ONE subscription per device. The browser rotates its push endpoint and
+	// re-enabling notifications inserts a new row, so a user accumulates stale
+	// dupes and gets N pushes for one event. Keep the newest per device (user
+	// agent); delete + skip the older ones so it self-heals.
+	const seen = new Set<string>();
+	const fresh: typeof results = [];
+	const staleIds: string[] = [];
+	for (const row of results) {
+		const device = row.user_agent || row.endpoint;
+		if (seen.has(device)) {
+			staleIds.push(row.id);
+			continue;
+		}
+		seen.add(device);
+		fresh.push(row);
+	}
+	if (staleIds.length) {
+		await env.DB.prepare(`DELETE FROM push_subscriptions WHERE id IN (${staleIds.map(() => "?").join(",")})`)
+			.bind(...staleIds)
+			.run()
+			.catch(() => {});
+	}
+
 	let sent = 0;
 	await Promise.all(
-		results.map(async (row) => {
+		fresh.map(async (row) => {
 			if (!isSafePushEndpoint(row.endpoint)) {
 				await env.DB.prepare("DELETE FROM push_subscriptions WHERE id = ?1").bind(row.id).run();
 				return;
