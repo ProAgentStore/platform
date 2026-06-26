@@ -148,6 +148,13 @@
        (on desktop you have the dashboard tabs). */
     .nav-signed{display:none}
     @media(max-width:1024px){ .nav-signed{display:flex} }
+
+    /* Coding session panel fills the viewport: header (tabs+actions) at the top,
+       the summary/terminal area flexes to fill, the input row pinned at bottom. */
+    #inst-coding-terminal:not(.hidden){display:flex;flex-direction:column;height:calc(100dvh - 120px);min-height:340px;margin-top:0.75rem}
+    .coding-view{min-height:0;flex-direction:column}
+    .coding-view:not(.hidden){display:flex;flex:1}
+    #inst-coding-summary-thread,#inst-coding-pane{flex:1;min-height:0;height:auto}
     /* Public-pages nav in the console header — visible on desktop so you can jump
        between the console and the store/about/etc. Hidden on narrow screens (and when
        an instance's nav needs the room) to keep the 48px bar clean. */

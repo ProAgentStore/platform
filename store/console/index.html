@@ -309,8 +309,8 @@
           </div>
 
           <!-- Summary / co-pilot view: condensed plain-language of what's happening + chat -->
-          <div id="inst-coding-view-summary">
-            <div id="inst-coding-summary-thread" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.7rem 0.85rem;height:300px;overflow:auto;font-size:0.86rem;line-height:1.5;touch-action:manipulation"></div>
+          <div id="inst-coding-view-summary" class="coding-view">
+            <div id="inst-coding-summary-thread" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.7rem 0.85rem;overflow:auto;font-size:0.86rem;line-height:1.5;touch-action:manipulation"></div>
             <div style="display:flex;gap:0.35rem;margin-top:0.5rem;flex-wrap:wrap">
               <input id="inst-coding-ask" placeholder="Ask, or tap 🎤 to talk…" style="flex:1;min-width:140px" onkeydown="if(event.key==='Enter')askCoding()">
               <button type="button" id="inst-coding-mic" class="btn btn-outline btn-sm" onclick="startCodingDictation(this)" title="Talk to the co-pilot">🎤</button>
@@ -321,8 +321,8 @@
           </div>
 
           <!-- Raw terminal view -->
-          <div id="inst-coding-view-terminal" class="hidden">
-            <pre id="inst-coding-pane" style="background:#0b0b0f;color:#d6d6e0;font-size:0.78rem;line-height:1.35;padding:0.6rem;border-radius:6px;height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word">(waiting…)</pre>
+          <div id="inst-coding-view-terminal" class="coding-view hidden">
+            <pre id="inst-coding-pane" style="background:#0b0b0f;color:#d6d6e0;font-size:0.78rem;line-height:1.35;padding:0.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0">(waiting…)</pre>
             <div style="display:flex;gap:0.4rem;margin-top:0.5rem">
               <input id="inst-coding-msg" placeholder="Type a message to the CLI and press Enter…" style="flex:1" onkeydown="sendCodingMessage(event)">
               <button type="button" class="btn btn-primary btn-sm" onclick="sendCodingMessage()">Send</button>
