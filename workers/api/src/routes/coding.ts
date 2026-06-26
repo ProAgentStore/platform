@@ -49,6 +49,9 @@ async function startSessionOnRunner(
 			branch: repo.branch || undefined,
 			token: token ?? undefined,
 			clientType: session.clientType,
+			// The exact CLI command for this session's engine (Claude default, or a
+			// user-configured Codex/Grok/custom). The runner spawns it.
+			command: session.launchCommand || undefined,
 		});
 		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
 	} catch (e) {
@@ -70,6 +73,51 @@ export const codingRoutes = new Hono<{ Bindings: Env }>();
 const CLIENTS: CodingClientType[] = ["claude", "gemini", "codex", "grok"];
 function asClient(v: unknown): CodingClientType {
 	return CLIENTS.includes(v as CodingClientType) ? (v as CodingClientType) : "claude";
+}
+
+/** An engine preset = a named CLI launch command the user can pick per session. */
+export interface CodingEngine {
+	id: string;
+	label: string;
+	command: string;
+}
+
+/**
+ * The default engine presets, seeded when an instance has none. Claude is the
+ * first-class engine (structured stream-json); the others run as a real CLI the
+ * user configures. Users edit these (add flags, keys, models, more engines) and
+ * the per-session choice picks one.
+ */
+const DEFAULT_ENGINES: CodingEngine[] = [
+	{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions" },
+	{ id: "codex", label: "Codex", command: "codex" },
+	{ id: "grok", label: "Grok", command: "grok" },
+];
+
+/** Read the instance's engine presets (seeded defaults when unset). */
+async function readEngines(env: Env, instanceId: string, userId: string): Promise<{ engines: CodingEngine[]; defaultEngineId: string }> {
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+		.bind(instanceId, userId)
+		.first<{ config: string }>();
+	let cfg: { codingEngines?: CodingEngine[]; defaultEngineId?: string } = {};
+	try {
+		cfg = JSON.parse(row?.config || "{}");
+	} catch {
+		/* fall through to defaults */
+	}
+	const engines = Array.isArray(cfg.codingEngines) && cfg.codingEngines.length ? cfg.codingEngines : DEFAULT_ENGINES;
+	const defaultEngineId = cfg.defaultEngineId && engines.some((e) => e.id === cfg.defaultEngineId) ? cfg.defaultEngineId : engines[0].id;
+	return { engines, defaultEngineId };
+}
+
+/** The launch command + derived client type for an engine id (falls back to the default engine). */
+async function resolveEngine(env: Env, instanceId: string, userId: string, engineId: unknown): Promise<{ command: string; clientType: CodingClientType }> {
+	const { engines, defaultEngineId } = await readEngines(env, instanceId, userId);
+	const eng = engines.find((e) => e.id === engineId) ?? engines.find((e) => e.id === defaultEngineId) ?? engines[0];
+	// Derive the client type from the command's first word (basename), so the
+	// runner knows whether to use the structured Claude engine or run it raw.
+	const bin = (eng.command.trim().split(/\s+/)[0] || "").split("/").pop() || "";
+	return { command: eng.command, clientType: asClient(bin) };
 }
 
 /** "~/dev/stores/pags/platform" → "pags/platform" — a less generic default name. */
@@ -228,6 +276,47 @@ codingRoutes.get("/:instanceId/coding/sessions", async (c) => {
 	return c.json({ sessions: await listSessions(c.env, instanceId, uid) });
 });
 
+/** The engine presets (CLI launch commands) the user can start sessions with. */
+codingRoutes.get("/:instanceId/coding/engines", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	return c.json(await readEngines(c.env, instanceId, uid));
+});
+
+/** Save the engine presets + default. Each = { id, label, command }. */
+codingRoutes.put("/:instanceId/coding/engines", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const body = (await c.req.json().catch(() => ({}))) as { engines?: unknown; defaultEngineId?: unknown };
+	const raw = Array.isArray(body.engines) ? body.engines : [];
+	// Sanitize: id (slug), label, command are all required; cap the count + lengths.
+	const seen = new Set<string>();
+	const engines: CodingEngine[] = [];
+	for (const e of raw.slice(0, 12) as Array<Record<string, unknown>>) {
+		const label = String(e.label ?? "").trim().slice(0, 60);
+		const command = String(e.command ?? "").trim().slice(0, 400);
+		if (!label || !command) continue;
+		let id = String(e.id ?? "").trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+		if (!id) id = label.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "engine";
+		while (seen.has(id)) id = `${id}-2`;
+		seen.add(id);
+		engines.push({ id, label, command });
+	}
+	if (!engines.length) throw new HttpError(400, "At least one engine with a label and command is required.");
+	const defaultEngineId = engines.some((e) => e.id === body.defaultEngineId) ? String(body.defaultEngineId) : engines[0].id;
+	const row = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, uid).first<{ config: string }>();
+	let cfg: Record<string, unknown> = {};
+	try {
+		cfg = JSON.parse(row?.config || "{}");
+	} catch {
+		/* overwrite a corrupt config */
+	}
+	cfg.codingEngines = engines;
+	cfg.defaultEngineId = defaultEngineId;
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, uid)
+		.run();
+	return c.json({ engines, defaultEngineId });
+});
+
 /** Create a coding session against a repo and start it on the runner (best-effort). */
 codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
@@ -244,12 +333,15 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 		return c.json({ session: existing, runnerConnected, reused: true }, 200);
 	}
 
-	const clientType = asClient(body.clientType ?? repo.defaultClient);
+	// Resolve which engine to launch: the chosen preset (engineId), else the repo's
+	// remembered default, else the instance default engine.
+	const { command, clientType } = await resolveEngine(c.env, instanceId, uid, body.engineId ?? body.clientType ?? repo.defaultClient);
 	let session: CodingSessionRecord;
 	try {
 		session = await createSession(c.env, instanceId, uid, {
 			repoId,
 			clientType,
+			launchCommand: command,
 			issueNumber: typeof body.issueNumber === "number" ? body.issueNumber : undefined,
 			issueTitle: typeof body.issueTitle === "string" ? body.issueTitle : undefined,
 		});

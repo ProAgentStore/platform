@@ -31,6 +31,8 @@ export interface StartCodingInput {
 	env?: Record<string, string>;
 	/** Override the agent binary (tests / a custom `claude` path). */
 	bin?: string;
+	/** The exact CLI launch command for this session's engine (e.g. `claude --dangerously-skip-permissions`, `codex`). */
+	command?: string;
 }
 
 export type CodingAction =
@@ -86,6 +88,7 @@ export class CodingRuntime {
 				id: input.sessionId,
 				workDir,
 				clientType: input.clientType,
+				command: input.command,
 				env: input.env,
 				statePath: defaultStatePath(this.reposBaseDir),
 				bin: input.bin,

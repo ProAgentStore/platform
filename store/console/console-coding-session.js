@@ -56,7 +56,11 @@
       // Restore the persisted conversation from last time, then only auto-summarize
       // if this session has no history yet (avoids an unsolicited LLM call on reopen).
       await loadCodingHistory(sessionId);
-      if (!codingSummaryHistory.length) setTimeout(refreshCodingSummary, 1200);
+      // Only auto-summarize once we have a live runner + terminal — otherwise the
+      // co-pilot answers from an empty terminal ("I don't have any context…"),
+      // which is the confusing experience we're fixing. The offline banner guides
+      // the user to `pags up` instead.
+      if (!codingSummaryHistory.length) setTimeout(() => { if (codingRunnerOnline !== false) refreshCodingSummary(); }, 1400);
     }
 
     async function loadCodingHistory(sessionId) {
@@ -384,7 +388,7 @@
         if (/^\s*❯ /.test(line)) return `<span style="color:#7dd3fc;font-weight:600">${e}</span>`;
         if (/^⚙ /.test(line)) return `<span style="color:#fbbf24">${e}</span>`;
         if (/^\s*↳ /.test(line)) return `<span style="color:#94a3b8">${e}</span>`;
-        if (/^\[(error|claude)/.test(line)) return `<span style="color:#f87171">${e}</span>`;
+        if (/^\[(error|cannot)/i.test(line) || /exited with code/.test(line) || /^\[[\w.-]+\]\s/.test(line)) return `<span style="color:#f87171">${e}</span>`;
         return `<span style="color:#86efac">${mdLite(line)}</span>`; // reply: render light markdown
       }).join('\n');
     }
@@ -393,6 +397,9 @@
       if (!currentInstance || !currentCodingSession) return;
       try {
         const snap = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/capture`);
+        codingRunnerOnline = snap.runnerConnected !== false;
+        const off = document.getElementById('inst-coding-offline');
+        if (off) off.classList.toggle('hidden', codingRunnerOnline);
         const pre = document.getElementById('inst-coding-pane');
         if (pre) {
           const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;

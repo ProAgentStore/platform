@@ -44,6 +44,8 @@ export interface CodingSessionRecord {
 	clientType: CodingClientType;
 	status: CodingSessionStatus;
 	tmuxSession?: string;
+	/** The exact command this session's engine was launched with (e.g. `claude --dangerously-skip-permissions`, `codex`). */
+	launchCommand?: string;
 	issueNumber?: number;
 	issueTitle?: string;
 	startedAt: string;

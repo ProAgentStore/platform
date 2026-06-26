@@ -189,6 +189,7 @@ interface SessionRow {
 	client_type: string;
 	status: string;
 	tmux_session: string | null;
+	launch_command: string | null;
 	issue_number: number | null;
 	issue_title: string | null;
 	started_at: string;
@@ -205,6 +206,7 @@ function toSession(r: SessionRow): CodingSessionRecord {
 		clientType: client(r.client_type),
 		status: r.status as CodingSessionStatus,
 		tmuxSession: r.tmux_session ?? undefined,
+		launchCommand: r.launch_command ?? undefined,
 		issueNumber: r.issue_number ?? undefined,
 		issueTitle: r.issue_title ?? undefined,
 		startedAt: r.started_at,
@@ -216,6 +218,8 @@ function toSession(r: SessionRow): CodingSessionRecord {
 export interface NewSessionInput {
 	repoId: string;
 	clientType?: CodingClientType;
+	/** Exact launch command for the chosen engine (from the instance's engine presets). */
+	launchCommand?: string;
 	issueNumber?: number;
 	issueTitle?: string;
 }
@@ -254,8 +258,8 @@ export async function getSession(env: Env, instanceId: string, userId: string, s
 export async function createSession(env: Env, instanceId: string, userId: string, input: NewSessionInput): Promise<CodingSessionRecord> {
 	const id = `csess_${crypto.randomUUID()}`;
 	await env.DB.prepare(
-		`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status, tmux_session, issue_number, issue_title)
-		 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8)`,
+		`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status, tmux_session, launch_command, issue_number, issue_title)
+		 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9)`,
 	)
 		.bind(
 			id,
@@ -264,6 +268,7 @@ export async function createSession(env: Env, instanceId: string, userId: string
 			userId,
 			input.clientType ?? "claude",
 			`pags-${input.clientType ?? "claude"}-${id}`,
+			input.launchCommand ?? null,
 			input.issueNumber ?? null,
 			input.issueTitle ?? null,
 		)

@@ -31,18 +31,26 @@
     let handsOffExcluded = {};            // repoId -> true (opted out of hands-off)
     let handsOffRec = null;               // continuous recognizer
     let handsOffLastStatus = {};          // repoId -> last runState (finish narration)
+    let codingEngines = [];               // [{id,label,command}] — CLI launch presets
+    let codingDefaultEngineId = 'claude'; // which preset is the default
+    let codingRunnerOnline = null;        // last capture's runnerConnected (null=unknown)
 
     async function loadCoding() {
       if (!currentInstance) return;
       const host = document.getElementById('inst-coding-body');
       if (host) host.classList.remove('hidden');
       try {
-        const [repos, sessions] = await Promise.all([
+        const [repos, sessions, engines] = await Promise.all([
           api(`/v1/instances/${currentInstance.id}/coding/repos`),
           api(`/v1/instances/${currentInstance.id}/coding/sessions`),
+          api(`/v1/instances/${currentInstance.id}/coding/engines`).catch(() => null),
         ]);
         codingRepos = repos.repos || [];
         codingSessions = sessions.sessions || [];
+        if (engines && Array.isArray(engines.engines) && engines.engines.length) {
+          codingEngines = engines.engines;
+          codingDefaultEngineId = engines.defaultEngineId || codingEngines[0].id;
+        }
         renderCodingRepos();
         checkGitHubApp();
         startDeployPolling(); // optional GH Actions deploy status (no-op if none on GitHub)
@@ -100,7 +108,7 @@
               <button type="button" id="repo-reply-${r.id}" class="btn btn-outline btn-sm" onclick="voiceReplyToRepo('${r.id}', this)" title="Reply by voice — sends straight to the agent">🎤 Reply</button>
               <button type="button" class="btn btn-outline btn-sm" onclick="copyCodingConversation('${active.id}', this)" title="Copy this repo's conversation as JSON">⧉ Copy</button>
               <button type="button" class="btn btn-primary btn-sm" onclick="openCodingTerminal('${active.id}')">Open</button>`
-              : `<button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${r.id}')">Start</button>`}
+              : `<button type="button" class="btn btn-primary btn-sm" onclick="chooseEngineThenStart('${r.id}')">Start</button>`}
             ${repoLaunchIcons(r)}
             ${handsOffOn && active ? `<label style="display:flex;align-items:center;gap:0.25rem;font-size:0.72rem;color:var(--muted);margin-left:auto" title="Include this repo in hands-off mode"><input type="checkbox" ${handsOffExcluded[r.id] ? '' : 'checked'} onchange="toggleHandsOffRepo('${r.id}', this.checked)" style="width:auto;margin:0"> hands-off</label>` : ''}
           </div>
@@ -319,6 +327,59 @@
         if (btn) { btn.textContent = 'Failed'; setTimeout(() => { btn.innerHTML = orig || '⧉'; }, 1800); }
         else alert('Copy failed: ' + (e && e.message));
       }
+    }
+
+    // ── CLI engine presets (which command launches each engine) ──────────────
+    function toggleEnginesPanel() {
+      const p = document.getElementById('inst-engines-panel');
+      if (!p) return;
+      const opening = p.classList.contains('hidden');
+      p.classList.toggle('hidden');
+      if (opening) renderEnginesEditor();
+    }
+    function renderEnginesEditor() {
+      const rows = document.getElementById('inst-engines-rows');
+      if (!rows) return;
+      const list = (codingEngines && codingEngines.length) ? codingEngines : [{ id: 'claude', label: 'Claude Code', command: 'claude --dangerously-skip-permissions' }];
+      rows.innerHTML = list.map((e, i) => engineRowHtml(e, i)).join('');
+    }
+    function engineRowHtml(e, i) {
+      const isDefault = (e.id || '') === codingDefaultEngineId || (i === 0 && !codingEngines.some(x => x.id === codingDefaultEngineId));
+      return `<div class="engine-row" data-engine-id="${esc(e.id || '')}" style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap">
+        <input class="engine-label" placeholder="Label (e.g. Claude)" value="${esc(e.label || '')}" style="font-size:0.82rem;width:9rem;flex-shrink:0">
+        <input class="engine-command" placeholder="claude --dangerously-skip-permissions" value="${esc(e.command || '')}" style="font-size:0.82rem;flex:1;min-width:140px;font-family:'SF Mono',monospace">
+        <label style="display:flex;align-items:center;gap:0.25rem;font-size:0.72rem;color:var(--muted)" title="Default engine"><input type="radio" name="engine-default" ${isDefault ? 'checked' : ''} style="width:auto;margin:0"> default</label>
+        <button type="button" class="btn btn-outline btn-sm" onclick="this.closest('.engine-row').remove()" title="Remove" style="padding:0.2rem 0.45rem">✕</button>
+      </div>`;
+    }
+    function addEngineRow() {
+      const rows = document.getElementById('inst-engines-rows');
+      if (!rows) return;
+      rows.insertAdjacentHTML('beforeend', engineRowHtml({ id: '', label: '', command: '' }, rows.children.length));
+    }
+    async function saveEngines() {
+      if (!currentInstance) return;
+      const status = document.getElementById('inst-engines-status');
+      const rowEls = [...document.querySelectorAll('#inst-engines-rows .engine-row')];
+      const engines = [];
+      let defaultEngineId = '';
+      rowEls.forEach(row => {
+        const label = (row.querySelector('.engine-label').value || '').trim();
+        const command = (row.querySelector('.engine-command').value || '').trim();
+        if (!label || !command) return;
+        const id = (row.getAttribute('data-engine-id') || label.toLowerCase().replace(/[^a-z0-9-]+/g, '-')).replace(/^-+|-+$/g, '') || 'engine';
+        engines.push({ id, label, command });
+        if (row.querySelector('input[name="engine-default"]').checked) defaultEngineId = id;
+      });
+      if (!engines.length) { if (status) status.textContent = 'Add at least one engine.'; return; }
+      if (status) status.textContent = 'Saving…';
+      try {
+        const res = await api(`/v1/instances/${currentInstance.id}/coding/engines`, { method: 'PUT', body: JSON.stringify({ engines, defaultEngineId: defaultEngineId || engines[0].id }) });
+        codingEngines = res.engines || engines;
+        codingDefaultEngineId = res.defaultEngineId || codingEngines[0].id;
+        if (status) status.textContent = 'Saved ✓';
+        setTimeout(() => { if (status) status.textContent = ''; }, 1600);
+      } catch (e) { if (status) status.textContent = 'Save failed: ' + e.message; }
     }
 
     // ── Hands-off voice mode ─────────────────────────────────────────────────
@@ -555,10 +616,14 @@
         body.name = raw;
       }
       try {
-        await api(`/v1/instances/${currentInstance.id}/coding/repos`, { method: 'POST', body: JSON.stringify(body) });
+        const res = await api(`/v1/instances/${currentInstance.id}/coding/repos`, { method: 'POST', body: JSON.stringify(body) });
         input.value = '';
         await loadCoding();
         setAddRepoOpen(false); // collapse the form once a repo is added
+        // Onboarding: adding a repo immediately offers to start a session — pick the
+        // engine and go, instead of leaving a dead repo with no session.
+        const newId = res && res.repo && res.repo.id;
+        if (newId) chooseEngineThenStart(newId);
       } catch (e) { alert('Add repo failed: ' + e.message); }
     }
 
@@ -601,18 +666,30 @@
       } catch (e) { alert('Delete failed: ' + e.message); }
     }
 
-    async function startCodingSession(repoId) {
+    // Ask which engine (Claude / Codex / Grok / custom) to launch, then start. With
+    // one preset it just starts; the chooser renders inline in the repo's row.
+    function chooseEngineThenStart(repoId) {
+      if (!Array.isArray(codingEngines) || codingEngines.length <= 1) { startCodingSession(repoId); return; }
+      const el = document.getElementById(`repo-play-${repoId}`);
+      if (!el) { startCodingSession(repoId); return; }
+      const opts = codingEngines.map(e => `<option value="${esc(e.id)}"${e.id === codingDefaultEngineId ? ' selected' : ''}>${esc(e.label)}</option>`).join('');
+      el.style.display = '';
+      el.innerHTML = `<div style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap;padding:0.3rem 0">
+        <span style="font-size:0.78rem;color:var(--muted)">Start with</span>
+        <select id="engine-pick-${repoId}" style="font-size:0.82rem;min-width:130px">${opts}</select>
+        <button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${repoId}', document.getElementById('engine-pick-${repoId}').value)">▶ Start</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="this.closest('.repo-play').style.display='none'">Cancel</button>
+      </div>`;
+    }
+
+    async function startCodingSession(repoId, engineId) {
       if (!currentInstance) return;
-      const clientType = (document.getElementById(`coding-client-${repoId}`) || {}).value || 'claude';
       try {
         const res = await api(`/v1/instances/${currentInstance.id}/coding/sessions`, {
-          method: 'POST', body: JSON.stringify({ repoId, clientType }),
+          method: 'POST', body: JSON.stringify({ repoId, engineId: engineId || codingDefaultEngineId }),
         });
-        if (!res.runnerConnected) {
-          alert('Session created, but no runner is connected. Start it on your machine with:  pags up');
-        }
         await loadCoding();
-        openCodingTerminal(res.session.id);
+        openCodingTerminal(res.session.id); // the session view shows the "run pags up" CTA if no runner
       } catch (e) { alert('Start session failed: ' + e.message); }
     }
 

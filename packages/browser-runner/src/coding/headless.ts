@@ -30,6 +30,14 @@ export interface HeadlessSessionConfig {
 	/** Working directory the CLI runs in (the repo). */
 	workDir: string;
 	clientType: ClientType;
+	/**
+	 * The exact CLI launch command for this engine, e.g.
+	 * `claude --dangerously-skip-permissions` or `codex`. Claude is driven via the
+	 * structured stream-json protocol (we add the stream-json flags); any other
+	 * engine is spawned as-is and its stdout is captured as the raw transcript.
+	 * Defaults to the Claude command.
+	 */
+	command?: string;
 	/** Extra env (the BYOK key) injected into the process. */
 	env?: Record<string, string>;
 	/** Path to persist the Claude session id (for --resume across runner restarts). */
@@ -58,10 +66,24 @@ export class HeadlessSession {
 	private run: Run = "idle";
 	/** Claude Code's own session id (from the init event) — used to --resume. */
 	private claudeSessionId: string | null = null;
+	/** "stream-json" for Claude (structured) · "raw" for any other CLI (stdout capture). */
+	private readonly mode: "stream-json" | "raw";
+	private readonly cmdBin: string;
+	private readonly cmdArgs: string[];
+	private readonly binName: string;
+	/** Wall-clock of the last stdout byte — drives the raw-mode idle heuristic. */
+	private lastOutputAt = 0;
 
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.sessionName = `pags-${config.clientType}-${config.id}`;
 		this.claudeSessionId = readState(config.statePath, config.id);
+		// Claude is the structured engine; everything else is a raw CLI.
+		this.mode = config.clientType === "claude" ? "stream-json" : "raw";
+		const tokens = config.command?.trim() ? config.command.trim().split(/\s+/) : [];
+		// A test/override bin wins; else the command's first word; else `claude`.
+		this.cmdBin = config.bin ?? tokens[0] ?? "claude";
+		this.cmdArgs = config.bin ? [] : tokens.slice(1);
+		this.binName = (this.cmdBin.split("/").pop() || this.cmdBin) || "cli";
 	}
 
 	/** True while the agent process is running. */
@@ -71,11 +93,17 @@ export class HeadlessSession {
 
 	/** Idle = ready for the next instruction. */
 	get ready(): boolean {
-		return this.alive && this.run === "idle";
+		return this.alive && this.runState() === "idle";
 	}
 
 	runState(): "idle" | "thinking" | "responding" {
-		return this.alive ? (this.run === "thinking" ? "thinking" : "idle") : "idle";
+		if (!this.alive) return "idle";
+		// Raw engines have no "turn over" event, so settle to idle once stdout has
+		// been quiet for a beat after a turn started.
+		if (this.mode === "raw" && this.run === "thinking" && Date.now() - this.lastOutputAt > 1500) {
+			this.run = "idle";
+		}
+		return this.run === "thinking" ? "thinking" : "idle";
 	}
 
 	/** The rendered conversation the brain/console reads (Claude's real output). */
@@ -86,41 +114,45 @@ export class HeadlessSession {
 	/** Launch (or resume) the agent process. Idempotent if already alive. */
 	start(): void {
 		if (this.alive) return;
-		const args = [
-			"-p",
-			"--input-format",
-			"stream-json",
-			"--output-format",
-			"stream-json",
-			"--verbose",
-			"--dangerously-skip-permissions",
-		];
-		// Continue the prior conversation after a runner restart (state in ~/.claude).
-		if (this.claudeSessionId) args.push("--resume", this.claudeSessionId);
+		let args: string[];
+		if (this.mode === "stream-json") {
+			// Claude: the structured persistent-agent protocol. We own the stream-json
+			// flags; the user's command may add others (e.g. --model, a key via env).
+			args = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"];
+			for (const a of this.cmdArgs) if (!args.includes(a)) args.push(a);
+			if (!args.includes("--dangerously-skip-permissions")) args.push("--dangerously-skip-permissions");
+			// Continue the prior conversation after a runner restart (state in ~/.claude).
+			if (this.claudeSessionId) args.push("--resume", this.claudeSessionId);
+		} else {
+			// Any other engine: run exactly what the user configured; capture stdout.
+			args = [...this.cmdArgs];
+		}
 
-		this.proc = spawn(this.config.bin ?? "claude", args, {
+		this.proc = spawn(this.cmdBin, args, {
 			cwd: this.config.workDir,
 			env: { ...process.env, ...this.config.env },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.run = "idle";
-		// MUST handle 'error' — without a listener, a spawn failure (e.g. `claude`
+		this.lastOutputAt = Date.now();
+		// MUST handle 'error' — without a listener, a spawn failure (e.g. the binary
 		// not on PATH) is thrown as an uncaught exception and crashes the runner.
 		this.proc.on("error", (err: Error) => {
 			this.run = "idle";
-			this.push(`[cannot run \`${this.config.bin ?? "claude"}\`: ${err.message} — is Claude Code installed and on your PATH?]`);
+			this.push(`[cannot run \`${this.cmdBin}\`: ${err.message} — is ${this.binName} installed and on your PATH?]`);
 			this.proc = null;
 		});
 		// Swallow EPIPE when writing to a process that just exited (one-shot turn).
 		this.proc.stdin?.on("error", () => {});
 		this.proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString("utf8")));
 		this.proc.stderr?.on("data", (d: Buffer) => {
+			this.lastOutputAt = Date.now();
 			const text = d.toString("utf8").trim();
-			if (text) this.push(`[claude] ${text}`);
+			if (text) this.push(`[${this.binName}] ${stripAnsi(text)}`);
 		});
 		this.proc.on("exit", (code) => {
 			this.run = "idle";
-			if (code && code !== 0) this.push(`[claude exited with code ${code}]`);
+			if (code && code !== 0) this.push(`[${this.binName} exited with code ${code}]`);
 			// A bad --resume can kill the process instantly; drop it so the next
 			// start is a clean session rather than looping on a dead id.
 			if (code && code !== 0 && this.claudeSessionId) {
@@ -130,14 +162,20 @@ export class HeadlessSession {
 		});
 	}
 
-	/** Send a user turn to Claude (the agent acts on it). */
+	/** Send a user turn to the agent (it acts on it). */
 	input(text: string): void {
 		if (!this.alive) this.start();
 		this.push(`\n❯ [${stamp()}] ${text}`); // ❯ — your turn, timestamped
 		this.run = "thinking";
-		const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
+		this.lastOutputAt = Date.now();
 		try {
-			this.proc?.stdin?.write(`${msg}\n`);
+			if (this.mode === "stream-json") {
+				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
+				this.proc?.stdin?.write(`${msg}\n`);
+			} else {
+				// Raw CLI: write the line to stdin as if typed.
+				this.proc?.stdin?.write(`${text}\n`);
+			}
 		} catch {
 			/* process may have died; the next snapshot reports not-alive */
 		}
@@ -172,14 +210,24 @@ export class HeadlessSession {
 	// ── internals ────────────────────────────────────────────────────────────
 
 	private onStdout(chunk: string): void {
+		this.lastOutputAt = Date.now();
 		this.buf += chunk;
 		let nl: number;
 		// biome-ignore lint/suspicious/noAssignInExpressions: standard line-buffer drain
 		while ((nl = this.buf.indexOf("\n")) >= 0) {
 			const line = this.buf.slice(0, nl).trim();
 			this.buf = this.buf.slice(nl + 1);
-			if (line) this.handle(line);
+			if (!line) continue;
+			if (this.mode === "stream-json") this.handle(line);
+			else this.pushRaw(line); // raw engine — the line IS the terminal output
 		}
+	}
+
+	/** Raw-engine stdout: strip ANSI control codes and append to the transcript. */
+	private pushRaw(line: string): void {
+		const clean = stripAnsi(line);
+		if (clean.trim()) this.push(clean);
+		if (this.transcript.length > 4000) this.transcript = this.transcript.slice(-3000);
 	}
 
 	private handle(line: string): void {
@@ -229,6 +277,12 @@ export class HeadlessSession {
 /** Local wall-clock "HH:MM:SS" for transcript timestamps (runner is a Node process). */
 function stamp(): string {
 	return new Date().toTimeString().slice(0, 8);
+}
+
+/** Strip ANSI/VT escape sequences so a raw CLI's coloured output reads as plain text. */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escape codes
+function stripAnsi(s: string): string {
+	return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b[()][AB0-2]/g, "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
 }
 
 /** Compact a tool_use input object to a single readable line. */
