@@ -173,11 +173,20 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			"watch-idle",
 			{ retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "15 minutes" as const },
 			async () => {
-				await sleep(2500); // let the pane flip to "thinking" before we read it
-				let snap = await callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId });
-				for (let poll = 0; poll < 380 && snap.runState !== "idle" && snap.alive && !snap.cancelled; poll++) {
+				const capture = () => callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId });
+				await sleep(2500); // let the CLI receive the input
+				let snap = await capture();
+				// Phase 1: wait for Claude to actually START on it (go non-idle), up to ~24s.
+				// A quick/no-op message may never go busy — fall through and summarize anyway,
+				// rather than reading a premature idle and reporting "nothing happened".
+				for (let i = 0; i < 12 && snap.runState === "idle" && snap.alive && !snap.cancelled; i++) {
 					await sleep(2000);
-					snap = await callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId });
+					snap = await capture();
+				}
+				// Phase 2: wait for it to FINISH (return to idle).
+				for (let poll = 0; poll < 360 && snap.runState !== "idle" && snap.alive && !snap.cancelled; poll++) {
+					await sleep(2000);
+					snap = await capture();
 				}
 				return snap;
 			},
