@@ -10,6 +10,7 @@ import {
 	type CodingResult,
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
+import { appendTimeline } from "../lib/coding-timeline.js";
 import type { Env } from "../types.js";
 
 export interface CodingSessionParams {
@@ -52,6 +53,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		await step.do("start", { retries: { limit: 1, delay: "3 seconds" as const, backoff: "constant" as const }, timeout: "5 minutes" as const }, () =>
 			callRunner<{ sessionId?: string }>(conn, "/coding/start", { sessionId, repoId, cloneUrl, branch, token, clientType: goal.clientType }),
 		);
+		// Record the run in the session history (idempotent across replays).
+		await step.do("tl-start", async () => {
+			await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${goal.objective}` });
+			return null;
+		});
 
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "3 minutes" as const };
 		// waitIdle polls internally for minutes, so it needs a longer step budget than `retry`.
@@ -121,6 +127,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			await env.DB.prepare(
 				"UPDATE coding_sessions SET status = ?4, ended_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'",
 			).bind(sessionId, instanceId, userId, status).run();
+			await appendTimeline(env, { sessionId, instanceId, userId, type: "outcome", content: `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}` });
 			return null;
 		});
 		return result;

@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
 import { installationTokenForOwner } from "../lib/github-app.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
+import { appendTimeline, contextForCopilot, lastTerminal, loadChat } from "../lib/coding-timeline.js";
 import {
 	createRepo,
 	createSession,
@@ -214,12 +215,10 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
-	const body = (await c.req.json().catch(() => ({}))) as {
-		question?: string;
-		history?: Array<{ role: string; content: string }>;
-	};
+	const body = (await c.req.json().catch(() => ({}))) as { question?: string };
 	const question = typeof body.question === "string" ? body.question.trim() : "";
 
+	// Capture the current terminal.
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	let pane = "";
 	if (conn) {
@@ -227,24 +226,46 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 		pane = snap?.pane ?? "";
 	}
 
+	// Persist the user's question and a terminal snapshot (if it changed) so the
+	// session has a durable, continuous history.
+	if (question) await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_user", content: question });
+	if (pane.trim()) {
+		const last = await lastTerminal(c.env, sessionId);
+		if (pane.trim() !== (last ?? "").trim()) {
+			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "terminal", content: pane.slice(-8000) });
+		}
+	}
+
+	// Continuity: feed the recent persisted timeline (prior chat, what the agent
+	// did, outcomes) so the co-pilot remembers the session, not just this moment.
+	const memory = await contextForCopilot(c.env, sessionId);
+
 	const system =
 		"You are a co-pilot watching the terminal of an AI coding agent (e.g. Claude Code) working in the user's repo. " +
 		"The user is NOT reading the raw terminal — keep them informed with the SHORTEST useful summary: what the agent just did, " +
 		"what's happening now, and — most important — anything it NEEDS FROM THEM (a decision, an answer, an approval, a stuck step). " +
+		"You have a persistent memory of this session below — use it for continuity (what was discussed, what was done, outcomes). " +
 		"Be condensed and scannable (a couple of lines or tight bullets). Lead with what's needed from the user, if anything. " +
-		"If they ask a question, answer it from the terminal and say exactly what to do next. Never pad. If nothing needs them, say so in one line.";
+		"If they ask a question, answer it from the terminal + history and say exactly what to do next. Never pad.";
 	const userMsg =
 		(question ? `My question: ${question}\n\n` : "Give me the current summary — what's happening and what (if anything) do you need from me?\n\n") +
+		(memory ? `SESSION MEMORY (recent, oldest→newest):\n${memory}\n\n` : "") +
 		`TERMINAL (most recent output):\n${pane.slice(-6000) || "(no live terminal — the runner is offline or the session hasn't started)"}`;
 
-	const history = Array.isArray(body.history)
-		? body.history.filter((m) => (m.role === "user" || m.role === "assistant") && typeof m.content === "string").slice(-6)
-		: [];
-
 	const res = (await runUserWorkersAi(c.env, uid, "claude-sonnet-4-6", {
-		messages: [{ role: "system", content: system }, ...history, { role: "user", content: userMsg }],
+		messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
 	})) as { response?: string };
-	return c.json({ reply: res.response || "(no response)" });
+	const reply = res.response || "(no response)";
+	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply });
+	return c.json({ reply });
+});
+
+/** Load a session's persisted conversation (so the console restores it on open). */
+codingRoutes.get("/:instanceId/coding/sessions/:sessionId/timeline", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
+	if (!session) throw new HttpError(404, "Session not found");
+	return c.json({ chat: await loadChat(c.env, session.id) });
 });
 
 /** Send a message / keys straight to the CLI (manual drive, no brain). */
@@ -258,6 +279,9 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 			: { kind: "message", text: String(body.text ?? "") };
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	if (!conn) throw new HttpError(409, "No coding runner connected. Start it with: pags up");
+	if (action.kind === "message" && action.text) {
+		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "command", content: action.text }).catch(() => undefined);
+	}
 	try {
 		const snap = await callRunner(conn, "/coding/act", { sessionId, action });
 		return c.json(snap as object);

@@ -199,8 +199,20 @@
         await api(`/v1/instances/${currentInstance.id}/coding/sessions/${sessionId}/start`, { method: 'POST', body: '{}' });
         setTimeout(pollCodingTerminal, 400);
       } catch (e) { /* runner offline → pane shows the 'no runner' hint */ }
-      // Kick off the first summary so the user sees plain language immediately.
-      setTimeout(refreshCodingSummary, 1200);
+      // Restore the persisted conversation from last time, then only auto-summarize
+      // if this session has no history yet (avoids an unsolicited LLM call on reopen).
+      await loadCodingHistory(sessionId);
+      if (!codingSummaryHistory.length) setTimeout(refreshCodingSummary, 1200);
+    }
+
+    async function loadCodingHistory(sessionId) {
+      if (!currentInstance) return;
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${sessionId}/timeline`);
+        codingSummaryHistory = (d.chat || []).map(m => ({ role: m.type === 'chat_user' ? 'user' : 'assistant', content: m.content }));
+      } catch (e) { codingSummaryHistory = []; }
+      // Guard against a race: only render if we're still on this session.
+      if (currentCodingSession === sessionId) renderCodingSummary();
     }
 
     function switchCodingView(name) {
@@ -246,7 +258,7 @@
       try {
         const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/explain`, {
           method: 'POST',
-          body: JSON.stringify({ question: question || '', history: codingSummaryHistory.slice(-6) }),
+          body: JSON.stringify({ question: question || '' }),
         });
         codingSummaryHistory.push({ role: 'assistant', content: d.reply || '(no response)' });
         speakCoding(d.reply);
