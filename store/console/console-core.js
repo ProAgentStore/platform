@@ -99,6 +99,8 @@ const API = 'https://api.proagentstore.online';
         document.getElementById(p).classList.toggle('hidden', p !== id);
       }
       document.body.classList.toggle('chat-active', id === 'application-detail');
+      // Reclaim the global nav space (hamburger) only while inside an instance.
+      document.body.classList.toggle('instance-open', id === 'instance-detail');
     }
 
     async function handleOAuthCallback() {
@@ -367,6 +369,7 @@ const API = 'https://api.proagentstore.online';
       showPage('dashboard');
       document.body.classList.remove('chat-active');
       document.getElementById('inst-nav-slot').innerHTML = '';
+      document.body.classList.remove('instance-open');
       if (typeof closeCodingTerminal === 'function') closeCodingTerminal();
       currentAgent = null;
       currentInstance = null;

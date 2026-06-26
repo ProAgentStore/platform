@@ -128,19 +128,20 @@
       currentInstance = { id: instanceId, ...meta };
       currentRuntimeTaskId = runtimeTaskId;
       showPage('instance-detail');
+      document.body.classList.add('instance-open');
       // Inject instance nav into the single header bar
       const slot = document.getElementById('inst-nav-slot');
       slot.innerHTML = `
-        <a href="/console/instances" onclick="showDashboard('instances');return false" style="color:var(--muted);text-decoration:none;font-size:1rem;padding:0 0.25rem">&larr;</a>
-        <span style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px">${esc(meta.name || 'Agent')}</span>
-        <span id="runtime-status-badge" onclick="showRunnerGuide()" title="What is this? Click for setup help" style="cursor:pointer;font-size:0.65rem;padding:0.15rem 0.4rem;border-radius:999px;font-weight:700;background:var(--line);color:var(--muted)">...</span>
-        <button id="header-stop-btn" type="button" onclick="stopActiveAgentWork()" title="Stop the agent now" style="display:none;font-size:0.7rem;font-weight:700;padding:0.2rem 0.6rem;border-radius:6px;border:1px solid var(--red);background:rgba(239,68,68,0.14);color:var(--red);cursor:pointer">⏹ Stop agent</button>
+        <a href="/console/instances" onclick="showDashboard('instances');return false" class="inst-back" title="Back to instances" style="color:var(--muted);text-decoration:none;font-size:1.1rem;padding:0 0.2rem;flex-shrink:0">&larr;</a>
+        <span class="inst-agent-name" style="font-weight:700;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;flex-shrink:1">${esc(meta.name || 'Agent')}</span>
+        <span id="runtime-status-badge" onclick="showRunnerGuide()" title="Runner status — click for setup help" style="cursor:pointer;font-size:0.8rem;line-height:1;padding:0.15rem 0.3rem;border-radius:999px;font-weight:700;background:var(--line);color:var(--muted);flex-shrink:0">○</span>
+        <button id="header-stop-btn" type="button" onclick="stopActiveAgentWork()" title="Stop the agent now" style="display:none;font-size:0.7rem;font-weight:700;padding:0.2rem 0.5rem;border-radius:6px;border:1px solid var(--red);background:rgba(239,68,68,0.14);color:var(--red);cursor:pointer;flex-shrink:0">⏹<span class="tl"> Stop</span></button>
         <div class="inst-nav-tabs">
-          <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')">Chat</button>
-          <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')">Board</button>
-          ${instanceHasSurface('coding') ? `<button type="button" class="tab${tab==='coding'?' active':''}" data-inst-tab="coding" onclick="switchInstTab('coding')">Coding</button>` : ''}
-          <button type="button" class="tab${tab==='knowledge'?' active':''}" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')">Knowledge</button>
-          <button type="button" class="tab${tab==='settings'?' active':''}" data-inst-tab="settings" onclick="switchInstTab('settings')">Settings</button>
+          <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')" title="Chat"><span class="ti">💬</span><span class="tl">Chat</span></button>
+          <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')" title="Board"><span class="ti">📋</span><span class="tl">Board</span></button>
+          ${instanceHasSurface('coding') ? `<button type="button" class="tab${tab==='coding'?' active':''}" data-inst-tab="coding" onclick="switchInstTab('coding')" title="Coding"><span class="ti">💻</span><span class="tl">Coding</span></button>` : ''}
+          <button type="button" class="tab${tab==='knowledge'?' active':''}" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')" title="Knowledge"><span class="ti">📚</span><span class="tl">Knowledge</span></button>
+          <button type="button" class="tab${tab==='settings'?' active':''}" data-inst-tab="settings" onclick="switchInstTab('settings')" title="Settings"><span class="ti">⚙️</span><span class="tl">Settings</span></button>
         </div>
       `;
       gateInstanceUiByAgent();
@@ -685,25 +686,25 @@
         const rt = data.runtime;
         const status = rt ? String(rt.status || 'registered') : 'none';
         if (status === 'online') {
-          badge.textContent = '● Runner online';
-          badge.title = rt.endpointUrl || rt.endpoint_url || '';
+          badge.textContent = '●';
+          badge.title = 'Runner online' + (rt.endpointUrl || rt.endpoint_url ? ' · ' + (rt.endpointUrl || rt.endpoint_url) : '');
           badge.style.background = 'rgba(34,197,94,0.15)'; badge.style.color = 'var(--green)';
         } else if (status === 'offline') {
-          badge.textContent = '○ Runner offline';
-          badge.title = 'Not reachable — click for setup help';
+          badge.textContent = '○';
+          badge.title = 'Runner offline — not reachable. Click for setup help';
           badge.style.background = 'rgba(239,68,68,0.12)'; badge.style.color = 'var(--red)';
         } else if (rt?.endpointUrl || rt?.endpoint_url) {
-          badge.textContent = '● Runner connecting…';
-          badge.title = 'Registered — waiting for the first health check';
+          badge.textContent = '◐';
+          badge.title = 'Runner connecting — waiting for the first health check';
           badge.style.background = 'rgba(234,179,8,0.12)'; badge.style.color = 'var(--yellow)';
         } else {
-          badge.textContent = '○ No runner';
+          badge.textContent = '○';
           badge.title = 'No runner connected — click to set one up';
           badge.style.background = 'var(--line)'; badge.style.color = 'var(--muted)';
         }
       } catch {
-        badge.textContent = '○ Runner offline';
-        badge.title = 'Not reachable — click for setup help';
+        badge.textContent = '○';
+        badge.title = 'Runner offline — not reachable. Click for setup help';
         badge.style.background = 'rgba(239,68,68,0.12)'; badge.style.color = 'var(--red)';
       }
     }

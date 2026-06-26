@@ -124,10 +124,24 @@
     #instance-detail.hidden{display:none}
 
     /* Instance nav tabs (in header) */
-    .inst-nav-tabs{display:flex;gap:0;border:1px solid var(--line);border-radius:0.5rem;overflow:hidden}
-    .inst-nav-tabs .tab{padding:0.3rem 0.7rem;font-size:0.78rem;border-bottom:none;border-radius:0;margin:0;text-transform:none;letter-spacing:0}
+    .inst-nav-tabs{display:flex;gap:0;border:1px solid var(--line);border-radius:0.5rem;overflow-x:auto;overflow-y:hidden;flex-shrink:1;min-width:0;scrollbar-width:none}
+    .inst-nav-tabs::-webkit-scrollbar{display:none}
+    .inst-nav-tabs .tab{padding:0.3rem 0.7rem;font-size:0.78rem;border-bottom:none;border-radius:0;margin:0;text-transform:none;letter-spacing:0;white-space:nowrap;flex-shrink:0}
     .inst-nav-tabs .tab.active{background:var(--accent-soft);color:var(--accent)}
     .inst-nav-tabs .tab:not(.active):hover{background:var(--panel-hover)}
+    .inst-nav-tabs .ti{display:none;font-size:0.95rem;line-height:1}  /* tab icon — mobile only */
+    /* Mobile: icon-only tabs, hide the agent name + stop label, reclaim the bar */
+    @media(max-width:640px){
+      .inst-agent-name{display:none}
+      .inst-nav-tabs .tl{display:none}
+      .inst-nav-tabs .ti{display:inline-block}
+      .inst-nav-tabs .tab{padding:0.4rem 0.6rem}
+      #header-stop-btn .tl{display:none}
+      .brand-name{display:none}
+    }
+    /* Inside an instance the global menu isn't needed (there's a back button) —
+       reclaim that space on mobile so every tab is reachable. */
+    @media(max-width:1024px){ body.instance-open #nav-menu-btn{display:none} }
     /* Public-pages nav in the console header — visible on desktop so you can jump
        between the console and the store/about/etc. Hidden on narrow screens (and when
        an instance's nav needs the room) to keep the 48px bar clean. */
