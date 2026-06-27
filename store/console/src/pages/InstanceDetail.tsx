@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
@@ -11,10 +11,16 @@ import SettingsTab from "../tabs/SettingsTab";
 type Tab = "chat" | "board" | "coding" | "knowledge" | "settings";
 
 export default function InstanceDetail() {
-	const { id } = useParams<{ id: string }>();
+	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
 	const navigate = useNavigate();
+	const location = useLocation();
 	const [instance, setInstance] = useState<Instance | null>(null);
-	const [tab, setTab] = useState<Tab>("chat");
+
+	// Parse initial tab from URL path (e.g. /instances/:id/knowledge → "knowledge")
+	const urlTab = (splat?.split("/")[0] || "") as Tab;
+	const validTabs: Tab[] = ["chat", "board", "coding", "knowledge", "settings"];
+	const initialTab = validTabs.includes(urlTab) ? urlTab : "chat";
+	const [tab, setTab] = useState<Tab>(initialTab);
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [input, setInput] = useState("");
 	const [thinking, setThinking] = useState(false);

@@ -313,13 +313,13 @@ test.describe("ProAgentStore Console smoke", () => {
 		const errors: string[] = [];
 		page.on("pageerror", (e) => errors.push(String(e)));
 		await mockSignedInConsole(page);
-		await page.goto("/");
+		await page.goto("/console/");
 		await page.waitForLoadState("networkidle");
 		expect(errors).toEqual([]);
 	});
 
 	test("console root renders the sign-in screen", async ({ page }) => {
-		await page.goto("/");
+		await page.goto("/console/");
 
 		await expect(page).toHaveTitle(/Creator Console/);
 		await expect(
@@ -382,7 +382,7 @@ test.describe("ProAgentStore Console smoke", () => {
 			],
 		});
 
-		await page.goto("/");
+		await page.goto("/console/");
 
 		await expect(page.getByText("Agents you've built")).toBeVisible();
 		await expect(page.getByText("Draft Agent")).toBeVisible();
@@ -393,7 +393,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		page,
 	}) => {
 		const mock = await mockSignedInConsole(page);
-		await page.goto("/");
+		await page.goto("/console/");
 
 		// Navigate to instances
 		await page.getByRole("link", { name: "Instances" }).click();
@@ -417,8 +417,8 @@ test.describe("ProAgentStore Console smoke", () => {
 		// Navigate directly to an instance's knowledge tab
 		await page.goto("/console/instances/inst-1/knowledge");
 
-		// The knowledge tab should load
-		await expect(page.getByText("Documents")).toBeVisible();
+		// The knowledge tab should load — sub-tabs and heading are visible
+		await expect(page.getByRole("heading", { name: "Documents" })).toBeVisible();
 	});
 
 	test("profile and notifications have refreshable routes", async ({ page }) => {
@@ -622,7 +622,7 @@ test.describe("ProAgentStore authenticated Console", () => {
 		page,
 	}) => {
 		await mockSignedInConsole(page);
-		await page.goto("/");
+		await page.goto("/console/");
 
 		await expect(page.getByText("Agents you've built")).toBeVisible();
 		await page.getByText("Ops Agent").click();
@@ -636,7 +636,7 @@ test.describe("ProAgentStore authenticated Console", () => {
 		page,
 	}) => {
 		await mockSignedInConsole(page);
-		await page.goto("/");
+		await page.goto("/console/");
 
 		await page.getByText("Ops Agent").click();
 		await page.getByRole("button", { name: "Settings", exact: true }).click();
