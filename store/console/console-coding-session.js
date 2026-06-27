@@ -329,22 +329,34 @@
       if (codingPollTimer) { clearInterval(codingPollTimer); codingPollTimer = null; }
     }
 
-    // ⚙ session-actions menu (rename / links / Run with AI / Resume AI / Esc / Ctrl-C / End / Delete).
+    // ⚙ session-actions dialog (bottom-sheet on mobile, centred on desktop).
     function toggleCodingMenu(ev) {
       if (ev) ev.stopPropagation();
-      const m = document.getElementById('inst-coding-menu');
-      if (m) m.classList.toggle('hidden');
+      let bg = document.getElementById('coding-menu-dialog');
+      if (bg) { bg.remove(); return; }
+      bg = document.createElement('div');
+      bg.id = 'coding-menu-dialog';
+      bg.className = 'coding-dialog-backdrop';
+      bg.innerHTML = `<div class="coding-dialog">
+        <div class="coding-dialog-title">Session<button onclick="closeCodingMenu()" aria-label="Close">&times;</button></div>
+        <button class="coding-action" onclick="renameCurrentCodingRepo();closeCodingMenu()">✎ Rename project</button>
+        <button class="coding-action" onclick="toggleCodingLinksEditor();closeCodingMenu()">🔗 Launch links…</button>
+        <div class="coding-dialog-sep"></div>
+        <button class="coding-action" onclick="runCodingBrain();closeCodingMenu()">🤖 Run with AI<small>give it a goal — it works autonomously</small></button>
+        <button class="coding-action" onclick="resumeCodingBrain();closeCodingMenu()">▶ Resume AI<small>continue after it paused for you</small></button>
+        <button class="coding-action coding-term-only" onclick="sendCodingKey('Escape');closeCodingMenu()">⎋ Esc<small>send Escape to the CLI</small></button>
+        <button class="coding-action coding-term-only" onclick="sendCodingKey('C-c');closeCodingMenu()">Ctrl-C<small>interrupt the CLI</small></button>
+        <div class="coding-dialog-sep"></div>
+        <button class="coding-action coding-action-danger" onclick="endCodingSession();closeCodingMenu()">⏹ End session<small>stop the CLI on your machine</small></button>
+        <button class="coding-action coding-action-danger" onclick="deleteCurrentCodingRepo();closeCodingMenu()">🗑 Delete project</button>
+      </div>`;
+      bg.addEventListener('click', (e) => { if (e.target === bg) closeCodingMenu(); });
+      document.body.appendChild(bg);
     }
     function closeCodingMenu() {
-      const m = document.getElementById('inst-coding-menu');
-      if (m) m.classList.add('hidden');
+      const bg = document.getElementById('coding-menu-dialog');
+      if (bg) bg.remove();
     }
-    // Close it on any outside click (the cog's toggle stops propagation, so this
-    // only fires for clicks elsewhere). Attached once at load.
-    document.addEventListener('click', (e) => {
-      const m = document.getElementById('inst-coding-menu');
-      if (m && !m.classList.contains('hidden') && !(e.target.closest && e.target.closest('#inst-coding-menu'))) closeCodingMenu();
-    });
 
     // Re-arm the terminal poll when returning to the Coding tab on the same
     // instance (leaving the tab stops the timer but keeps the panel + session).

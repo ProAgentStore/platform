@@ -295,49 +295,7 @@
           </div>
           <!-- Live activity strip: a one-line aggregate of what every repo is doing now -->
           <div id="inst-coding-activity" style="font-size:0.76rem;margin-top:0.3rem;min-height:1em"></div>
-          <!-- Diagnostics: every session with restart / kill / view, for cleanup -->
-          <div id="inst-coding-diag" class="hidden" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.55rem 0.65rem;margin-top:0.55rem">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.2rem">
-              <div style="font-size:0.82rem;font-weight:700">🩺 Sessions</div>
-              <button type="button" class="btn btn-outline btn-sm" onclick="loadDiag()" title="Refresh" style="padding:0.2rem 0.45rem">↻</button>
-            </div>
-            <p style="font-size:0.72rem;color:var(--muted-soft);margin:0 0 0.4rem">Every coding session on this agent. <b>Restart</b> kills + relaunches the CLI (keeps the session); <b>Kill</b> ends it and stops the CLI on your machine.</p>
-            <div id="inst-coding-diag-body"></div>
-          </div>
-          <!-- CLI engine presets: which command launches Claude / Codex / Grok / custom -->
-          <div id="inst-engines-panel" class="hidden" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.55rem 0.65rem;margin-top:0.55rem">
-            <div style="font-size:0.82rem;font-weight:700;margin-bottom:0.2rem">⚙ CLI engines</div>
-            <p style="font-size:0.72rem;color:var(--muted-soft);margin:0 0 0.5rem">The exact command each engine launches — add your own flags, model, or API-key env. When you start a session you pick one. Claude runs in structured mode; other engines run as a raw terminal.</p>
-            <div id="inst-engines-rows" style="display:flex;flex-direction:column;gap:0.4rem"></div>
-            <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
-              <button type="button" class="btn btn-outline btn-sm" onclick="addEngineRow()">+ Engine</button>
-              <button type="button" class="btn btn-primary btn-sm" onclick="saveEngines()">Save</button>
-              <span id="inst-engines-status" style="font-size:0.78rem;color:var(--muted)"></span>
-            </div>
-          </div>
-          <!-- Hands-off voice mode controls -->
-          <div id="inst-handsoff-panel" class="hidden" style="background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.55rem 0.65rem;margin-top:0.55rem">
-            <div style="font-size:0.82rem;font-weight:700;margin-bottom:0.45rem">🎙️ Hands-off mode</div>
-            <div style="display:grid;grid-template-columns:auto 1fr;gap:0.4rem 0.5rem;align-items:center;font-size:0.82rem">
-              <label style="margin:0">Mode</label>
-              <select id="handsoff-mode" style="font-size:0.82rem">
-                <option value="smart">Smart — converse with the Overseer (across repos)</option>
-                <option value="commands">Commands — say "next / play / record"</option>
-              </select>
-              <label style="margin:0">Scope</label>
-              <select id="handsoff-scope" style="font-size:0.82rem">
-                <option value="all">All repos</option>
-                <option value="focused">Just the focused repo</option>
-              </select>
-            </div>
-            <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
-              <button type="button" id="handsoff-start" class="btn btn-primary btn-sm" onclick="startHandsOff()">▶ Start</button>
-              <button type="button" id="handsoff-pause" class="btn btn-outline btn-sm hidden" onclick="toggleHandsOffPause()">⏸ Pause</button>
-              <button type="button" id="handsoff-stop" class="btn btn-outline btn-sm hidden" onclick="stopHandsOff()" style="color:var(--red)">⏹ Stop</button>
-              <span id="handsoff-status" style="font-size:0.78rem;color:var(--muted)"></span>
-            </div>
-            <p style="font-size:0.72rem;color:var(--muted-soft);margin:0.4rem 0 0">When running, toggle any repo in/out below. Say "next" to move between repos, "play" to hear it, "record" to reply. Works on desktop/Android; on iPhone Safari, continuous listening is unreliable — use the row mic.</p>
-          </div>
+          <!-- Diagnostics, Engines, and Hands-off panels are now dialogs (created dynamically by JS). -->
           <div id="inst-coding-collapsible">
             <div id="inst-coding-add" class="hidden" style="margin-top:0.6rem">
               <div style="display:flex;gap:0.4rem;flex-wrap:wrap">
@@ -369,22 +327,8 @@
               <span id="inst-coding-links" style="display:flex;gap:0.25rem;flex-shrink:0"></span>
               <span id="inst-coding-deploy" style="display:flex;flex-shrink:0"></span>
             </div>
-            <!-- All session controls live behind this cog to keep the header clean. -->
-            <div style="position:relative;flex-shrink:0">
-              <button type="button" class="btn btn-outline btn-sm" onclick="toggleCodingMenu(event)" title="Session actions" style="padding:0.25rem 0.5rem">⚙</button>
-              <div id="inst-coding-menu" class="coding-menu hidden">
-                <button type="button" onclick="renameCurrentCodingRepo();closeCodingMenu()">✎ Rename project</button>
-                <button type="button" onclick="toggleCodingLinksEditor();closeCodingMenu()">🔗 Launch links…</button>
-                <div class="coding-menu-sep"></div>
-                <button type="button" onclick="runCodingBrain();closeCodingMenu()">🤖 Run with AI<small>give it a goal — it works autonomously</small></button>
-                <button type="button" onclick="resumeCodingBrain();closeCodingMenu()">▶ Resume AI<small>continue after it paused for you</small></button>
-                <button type="button" class="coding-term-only" onclick="sendCodingKey('Escape');closeCodingMenu()">⎋ Esc<small>send Escape to the CLI</small></button>
-                <button type="button" class="coding-term-only" onclick="sendCodingKey('C-c');closeCodingMenu()">Ctrl-C<small>interrupt the CLI</small></button>
-                <div class="coding-menu-sep"></div>
-                <button type="button" class="coding-menu-danger" onclick="endCodingSession();closeCodingMenu()">⏹ End session<small>stop the CLI on your machine</small></button>
-                <button type="button" class="coding-menu-danger" onclick="deleteCurrentCodingRepo();closeCodingMenu()">🗑 Delete project</button>
-              </div>
-            </div>
+            <!-- Session settings — opens as a bottom-sheet dialog (mobile-first). -->
+            <button type="button" class="btn btn-outline btn-sm" onclick="toggleCodingMenu(event)" title="Session actions" style="padding:0.25rem 0.5rem;flex-shrink:0">⚙</button>
           </div>
 
           <!-- Runner-offline call-to-action: this agent runs the CLI on YOUR machine,

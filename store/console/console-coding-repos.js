@@ -219,7 +219,7 @@
         if (reply) reply.disabled = (codingReposStatus[s.repoId] === 'thinking' || codingReposStatus[s.repoId] === 'responding');
       }));
       renderCodingActivity();
-      if (!document.getElementById('inst-coding-diag')?.classList.contains('hidden')) renderDiag();
+      if (document.getElementById('diag-dialog')) renderDiag();
     }
 
     // ── Deployment status (optional GitHub Actions integration) ──────────────
@@ -388,11 +388,26 @@
 
     // ── CLI engine presets (which command launches each engine) ──────────────
     function toggleEnginesPanel() {
-      const p = document.getElementById('inst-engines-panel');
-      if (!p) return;
-      const opening = p.classList.contains('hidden');
-      p.classList.toggle('hidden');
-      if (opening) renderEnginesEditor();
+      let bg = document.getElementById('engines-dialog');
+      if (bg) { bg.remove(); return; }
+      bg = document.createElement('div');
+      bg.id = 'engines-dialog';
+      bg.className = 'coding-dialog-backdrop';
+      bg.innerHTML = `<div class="coding-dialog" style="max-width:520px">
+        <div class="coding-dialog-title">CLI engines<button onclick="document.getElementById('engines-dialog').remove()" aria-label="Close">&times;</button></div>
+        <div style="padding:0 0.55rem">
+          <p style="font-size:0.72rem;color:var(--muted-soft);margin:0 0 0.5rem">The exact command each engine launches. When you start a session you pick one.</p>
+          <div id="inst-engines-rows" style="display:flex;flex-direction:column;gap:0.4rem"></div>
+          <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
+            <button type="button" class="btn btn-outline btn-sm" onclick="addEngineRow()">+ Engine</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveEngines()">Save</button>
+            <span id="inst-engines-status" style="font-size:0.78rem;color:var(--muted)"></span>
+          </div>
+        </div>
+      </div>`;
+      bg.addEventListener('click', (e) => { if (e.target === bg) bg.remove(); });
+      document.body.appendChild(bg);
+      renderEnginesEditor();
     }
     function renderEnginesEditor() {
       const rows = document.getElementById('inst-engines-rows');
@@ -449,8 +464,37 @@
     // Scope is all eligible repos, or just the focused one. Per-repo include/
     // exclude toggles appear in the list only while hands-off is running.
     function toggleHandsOffPanel() {
-      const p = document.getElementById('inst-handsoff-panel');
-      if (p) p.classList.toggle('hidden');
+      let bg = document.getElementById('handsoff-dialog');
+      if (bg) { bg.remove(); return; }
+      bg = document.createElement('div');
+      bg.id = 'handsoff-dialog';
+      bg.className = 'coding-dialog-backdrop';
+      bg.innerHTML = `<div class="coding-dialog" style="max-width:420px">
+        <div class="coding-dialog-title">Hands-off mode<button onclick="document.getElementById('handsoff-dialog').remove()" aria-label="Close">&times;</button></div>
+        <div style="padding:0 0.55rem">
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:0.4rem 0.5rem;align-items:center;font-size:0.82rem">
+            <label style="margin:0">Mode</label>
+            <select id="handsoff-mode" style="font-size:0.82rem">
+              <option value="smart">Smart — converse with the Overseer</option>
+              <option value="commands">Commands — say "next / play / record"</option>
+            </select>
+            <label style="margin:0">Scope</label>
+            <select id="handsoff-scope" style="font-size:0.82rem">
+              <option value="all">All repos</option>
+              <option value="focused">Just the focused repo</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
+            <button type="button" id="handsoff-start" class="btn btn-primary btn-sm" onclick="startHandsOff()">Start</button>
+            <button type="button" id="handsoff-pause" class="btn btn-outline btn-sm hidden" onclick="toggleHandsOffPause()">Pause</button>
+            <button type="button" id="handsoff-stop" class="btn btn-outline btn-sm hidden" onclick="stopHandsOff()" style="color:var(--red)">Stop</button>
+            <span id="handsoff-status" style="font-size:0.78rem;color:var(--muted)"></span>
+          </div>
+          <p style="font-size:0.72rem;color:var(--muted-soft);margin:0.4rem 0 0">Say "next" to move between repos, "play" to hear, "record" to reply. Toggle repos in/out from the list below.</p>
+        </div>
+      </div>`;
+      bg.addEventListener('click', (e) => { if (e.target === bg) bg.remove(); });
+      document.body.appendChild(bg);
     }
     function handsOffStatus(t) {
       const el = document.getElementById('handsoff-status');
@@ -600,11 +644,21 @@
 
     // ── Diagnostics: list every session + restart / kill / view (cleanup) ────
     function toggleDiagPanel() {
-      const p = document.getElementById('inst-coding-diag');
-      if (!p) return;
-      const opening = p.classList.contains('hidden');
-      p.classList.toggle('hidden');
-      if (opening) loadDiag();
+      let bg = document.getElementById('diag-dialog');
+      if (bg) { bg.remove(); return; }
+      bg = document.createElement('div');
+      bg.id = 'diag-dialog';
+      bg.className = 'coding-dialog-backdrop';
+      bg.innerHTML = `<div class="coding-dialog" style="max-width:520px">
+        <div class="coding-dialog-title">Sessions<button onclick="document.getElementById('diag-dialog').remove()" aria-label="Close">&times;</button></div>
+        <div style="padding:0 0.55rem">
+          <p style="font-size:0.72rem;color:var(--muted-soft);margin:0 0 0.4rem">Every coding session on this agent. <b>Restart</b> kills + relaunches the CLI; <b>Kill</b> ends the session.</p>
+          <div id="inst-coding-diag-body"></div>
+        </div>
+      </div>`;
+      bg.addEventListener('click', (e) => { if (e.target === bg) bg.remove(); });
+      document.body.appendChild(bg);
+      loadDiag();
     }
     async function loadDiag() {
       if (!currentInstance) return;
@@ -787,20 +841,26 @@
       } catch (e) { alert('Delete failed: ' + e.message); }
     }
 
-    // Ask which engine (Claude / Codex / Grok / custom) to launch, then start. With
-    // one preset it just starts; the chooser renders inline in the repo's row.
+    // Ask which engine (Claude / Codex / Grok / custom) to launch, then start.
+    // With one preset it just starts; multiple opens a dialog.
     function chooseEngineThenStart(repoId) {
       if (!Array.isArray(codingEngines) || codingEngines.length <= 1) { startCodingSession(repoId); return; }
-      const el = document.getElementById(`repo-play-${repoId}`);
-      if (!el) { startCodingSession(repoId); return; }
-      const opts = codingEngines.map(e => `<option value="${esc(e.id)}"${e.id === codingDefaultEngineId ? ' selected' : ''}>${esc(e.label)}</option>`).join('');
-      el.style.display = '';
-      el.innerHTML = `<div style="display:flex;gap:0.35rem;align-items:center;flex-wrap:wrap;padding:0.3rem 0">
-        <span style="font-size:0.78rem;color:var(--muted)">Start with</span>
-        <select id="engine-pick-${repoId}" style="font-size:0.82rem;min-width:130px">${opts}</select>
-        <button type="button" class="btn btn-primary btn-sm" onclick="startCodingSession('${repoId}', document.getElementById('engine-pick-${repoId}').value)">▶ Start</button>
-        <button type="button" class="btn btn-outline btn-sm" onclick="this.closest('.repo-play').style.display='none'">Cancel</button>
+      let bg = document.getElementById('engine-pick-dialog');
+      if (bg) bg.remove();
+      bg = document.createElement('div');
+      bg.id = 'engine-pick-dialog';
+      bg.className = 'coding-dialog-backdrop';
+      const buttons = codingEngines.map(e =>
+        `<button class="coding-action" onclick="document.getElementById('engine-pick-dialog').remove();startCodingSession('${repoId}','${esc(e.id)}')">
+          ${esc(e.label)}${e.id === codingDefaultEngineId ? ' <small>default</small>' : ''}
+          <small>${esc(e.command)}</small>
+        </button>`).join('');
+      bg.innerHTML = `<div class="coding-dialog">
+        <div class="coding-dialog-title">Start with<button onclick="document.getElementById('engine-pick-dialog').remove()" aria-label="Close">&times;</button></div>
+        ${buttons}
       </div>`;
+      bg.addEventListener('click', (e) => { if (e.target === bg) bg.remove(); });
+      document.body.appendChild(bg);
     }
 
     async function startCodingSession(repoId, engineId) {

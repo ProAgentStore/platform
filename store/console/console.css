@@ -160,14 +160,20 @@
     /* Karaoke playback on the repos list: show the spoken text, highlight each word. */
     .repo-play{font-size:0.82rem;line-height:1.7;margin-top:0.5rem;color:var(--ink);max-height:160px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:0.5rem 0.6rem}
     .repo-play .kw-on{background:var(--accent,#7c3aed);color:#fff;border-radius:3px;padding:0 1px}
-    /* Session actions tucked behind the ⚙ cog (keeps the header clean). */
-    .coding-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:90;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.35);padding:0.3rem;min-width:215px;display:flex;flex-direction:column;gap:1px}
-    .coding-menu.hidden{display:none}
-    .coding-menu button{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;background:none;border:none;color:var(--ink);padding:0.45rem 0.6rem;border-radius:7px;font-size:0.85rem;font-weight:600;cursor:pointer;width:100%}
-    .coding-menu button:hover{background:var(--line)}
-    .coding-menu button small{color:var(--muted-soft);font-size:0.7rem;font-weight:400}
-    .coding-menu .coding-menu-danger{color:var(--red)}
-    .coding-menu-sep{height:1px;background:var(--line);margin:0.2rem 0.2rem}
+    /* Session settings dialog — full-screen overlay on mobile, centred sheet on desktop. */
+    .coding-dialog-backdrop{position:fixed;inset:0;z-index:200;background:rgba(0,0,0,0.55);display:flex;align-items:flex-end;justify-content:center;animation:fadeIn .12s ease}
+    .coding-dialog-backdrop.hidden{display:none}
+    .coding-dialog{background:var(--panel);border-radius:14px 14px 0 0;padding:0.6rem 0.5rem calc(env(safe-area-inset-bottom,0px) + 0.6rem);width:100%;max-height:85vh;overflow-y:auto;display:flex;flex-direction:column;gap:1px;animation:slideUp .18s ease}
+    @media(min-width:480px){.coding-dialog{max-width:380px;border-radius:14px;margin-bottom:5vh;align-self:center}}
+    .coding-dialog .coding-dialog-title{font-size:0.88rem;font-weight:700;padding:0.3rem 0.55rem 0.45rem;color:var(--ink);display:flex;justify-content:space-between;align-items:center}
+    .coding-dialog .coding-dialog-title button{background:none;border:none;color:var(--muted);font-size:1.1rem;cursor:pointer;padding:0 0.3rem;line-height:1}
+    .coding-dialog button.coding-action{display:flex;flex-direction:column;align-items:flex-start;gap:1px;text-align:left;background:none;border:none;color:var(--ink);padding:0.55rem 0.6rem;border-radius:8px;font-size:0.88rem;font-weight:600;cursor:pointer;width:100%}
+    .coding-dialog button.coding-action:hover{background:var(--line)}
+    .coding-dialog button.coding-action small{color:var(--muted-soft);font-size:0.72rem;font-weight:400}
+    .coding-dialog .coding-action-danger{color:var(--red)}
+    .coding-dialog-sep{height:1px;background:var(--line);margin:0.25rem 0.3rem}
+    @keyframes slideUp{from{transform:translateY(40px);opacity:.6}to{transform:translateY(0);opacity:1}}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
     /* Public-pages nav in the console header — visible on desktop so you can jump
        between the console and the store/about/etc. Hidden on narrow screens (and when
        an instance's nav needs the room) to keep the 48px bar clean. */
