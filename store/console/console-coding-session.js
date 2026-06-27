@@ -445,14 +445,17 @@
           if (atBottom) pre.scrollTop = pre.scrollHeight;
         }
         setCodingRunState(!snap.runnerConnected ? 'offline' : snap.alive ? snap.runState : 'stopped');
-        // Disable inputs when runner is unreachable, re-enable when it comes back
-        const offline = !snap.runnerConnected;
+        // Disable inputs when runner is unreachable or session is dead
+        const canSend = snap.runnerConnected && snap.alive !== false;
+        const reason = !snap.runnerConnected ? 'Runner offline — run pags up' : 'Session stopped — restart it first';
         const msgEl = document.getElementById('inst-coding-msg');
-        if (msgEl) { msgEl.disabled = offline; msgEl.placeholder = offline ? 'Runner offline — run pags up' : 'Type a message to the CLI and press Enter…'; }
+        if (msgEl) { msgEl.disabled = !canSend; msgEl.placeholder = canSend ? 'Type a message to the CLI and press Enter…' : reason; }
+        const msgSendEl = document.getElementById('inst-coding-msg-send');
+        if (msgSendEl) msgSendEl.disabled = !canSend;
         const askEl = document.getElementById('inst-coding-ask');
-        if (askEl) { askEl.disabled = offline; askEl.placeholder = offline ? 'Runner offline — run pags up' : 'Ask about it, or tell it to do something — it routes for you (@claude forces)…'; }
+        if (askEl) { askEl.disabled = !canSend; askEl.placeholder = canSend ? 'Ask about it, or tell it to do something — it routes for you (@claude forces)…' : reason; }
         const sendEl = document.getElementById('inst-coding-send');
-        if (sendEl) sendEl.disabled = offline;
+        if (sendEl) sendEl.disabled = !canSend;
       } catch (e) { /* transient — keep polling */ }
     }
 
