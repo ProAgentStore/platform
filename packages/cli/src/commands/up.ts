@@ -38,7 +38,8 @@ export const upCommand = new Command("up")
 	.description("Start the browser runner for all your agent instances")
 	.option("--headless", "Run browser in headless mode")
 	.option("--instance <id>", "Connect to a specific instance only")
-	.action(async (opts: { headless?: boolean; instance?: string }) => {
+	.option("--tunnel <mode>", "Tunnel mode: 'named' (production, stable) or 'quick' (default, trycloudflare.com)", "quick")
+	.action(async (opts: { headless?: boolean; instance?: string; tunnel?: string }) => {
 		const session = requireSession();
 
 		const state: TuiState = {
@@ -102,6 +103,7 @@ export const upCommand = new Command("up")
 		const cliPath = process.argv[1];
 		const args = [cliPath, "runner", "connect", ...instances.map((i) => i.id)];
 		if (opts.headless) args.push("--headless");
+		if (opts.tunnel === "named") args.push("--tunnel", "named");
 
 		const child = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],

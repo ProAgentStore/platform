@@ -427,7 +427,8 @@ export function createRunnerCommand(): Command {
 		.option("--cloudflared <path>", "cloudflared executable")
 		.option("--runner-version <version>", "Runner version")
 		.option("--skip-probe", "Skip PAGS FAGS-runtime probe after registration")
-		.action(async (instanceIds: string[], opts: RunnerConnectOptions) => {
+		.option("--tunnel <mode>", "Tunnel mode: 'named' (production) or 'quick' (default)", "quick")
+		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { tunnel?: string }) => {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
 			// Pick a free port so a stale/orphaned runner on 49171 can't cause an
@@ -475,6 +476,76 @@ export function createRunnerCommand(): Command {
 				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId: primary });
 				writeLine(`Local FAGS runtime healthy at ${localUrl}`);
 
+				// ── Named tunnel mode: stable hostname, no rate limits ──────────
+				if (opts.tunnel === "named") {
+					writeLine("Provisioning named tunnel…");
+					const provRes = await requestPags("POST", "/v1/tunnel/provision", opts, {});
+					const prov = provRes as { connectorToken?: string; hostname?: string; endpointUrl?: string; error?: string };
+					if (!prov.connectorToken) {
+						writeError(`Named tunnel provisioning failed: ${prov.error || "no token returned"}. Falling back to quick tunnel.`);
+					} else {
+						const tunnelUrl = prov.endpointUrl || `https://${prov.hostname}`;
+						writeLine(`Named tunnel: ${tunnelUrl}`);
+						const cloudflaredPath = await resolveCloudflaredCommand(opts.cloudflared);
+						const tunnelProc = spawn(cloudflaredPath, ["tunnel", "run", "--token", prov.connectorToken], {
+							stdio: ["ignore", "pipe", "pipe"],
+							shell: process.platform === "win32",
+						});
+						tunnel = tunnelProc;
+						tunnelProc.stdout?.on("data", (d: Buffer) => {
+							const t = d.toString("utf-8");
+							if (/registered/.test(t) || /CONNECTED/.test(t)) writeLine("Named tunnel connected ✓");
+						});
+						tunnelProc.stderr?.on("data", (d: Buffer) => {
+							const t = d.toString("utf-8");
+							if (/registered/.test(t) || /CONNECTED/.test(t)) writeLine("Named tunnel connected ✓");
+						});
+						// Give cloudflared a moment to connect before registering.
+						await new Promise((r) => setTimeout(r, 4000));
+						// Register all instances with the stable endpoint URL.
+						const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: primary });
+						const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
+						for (const id of instanceIds) {
+							try {
+								await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
+									endpointUrl: tunnelUrl,
+									token: runnerToken,
+									placement: "local",
+									capabilities: caps,
+									runnerVersion: clean(opts.runnerVersion) || "",
+								});
+							} catch (error) {
+								writeError(`register ${id.slice(0, 8)}… failed (${error instanceof Error ? error.message : String(error)})`);
+							}
+						}
+						writeLine("Runtime registered with PAGS ✓");
+						writeLine("");
+						writeLine("═══════════════════════════════════════════════");
+						writeLine("  ✅ CONNECTED — named tunnel (production)");
+						writeLine(`  Agents:   ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"}`);
+						writeLine(`  Endpoint: ${tunnelUrl}`);
+						writeLine("  Stable URL — no reconnect churn. Ctrl+C to disconnect.");
+						writeLine("═══════════════════════════════════════════════");
+
+						// Simple heartbeat — no watchdog respawn needed (named tunnels
+						// reconnect automatically via cloudflared's built-in retry).
+						let stopped = false;
+						void (async () => {
+							while (!stopped) {
+								await new Promise((r) => setTimeout(r, 30_000));
+								if (stopped) break;
+								for (const id of instanceIds) {
+									await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {}).catch(() => undefined);
+								}
+							}
+						})();
+						await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
+						stopped = true;
+						return;
+					}
+				}
+
+				// ── Quick tunnel mode (default): ephemeral trycloudflare.com ────
 				const cloudflaredPath = await resolveCloudflaredCommand(opts.cloudflared);
 
 				// Spawn a cloudflared quick tunnel; resolve once its public URL appears.
