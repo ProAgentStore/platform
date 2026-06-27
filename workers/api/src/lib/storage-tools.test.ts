@@ -38,7 +38,25 @@ function mockRuntimeEnv() {
 	const prepare = vi.fn(() => ({ bind }));
 	const create = vi.fn(async () => ({ id: "wf_123" }));
 	return {
-		env: { DB: { prepare } as unknown as D1Database, JOB_APPLY: { create }, SESSION_SIGNING_KEY: "test-secret" } as unknown as { DB: D1Database },
+		env: {
+			DB: { prepare } as unknown as D1Database,
+			JOB_APPLY: { create },
+			SESSION_SIGNING_KEY: "test-secret",
+			RELAY: {
+				idFromName: () => ({ name: "test" }),
+				get: () => ({
+					fetch: async (req: Request) => {
+						// Relay stub: forward to the global fetch mock
+						const body = await req.json() as { path: string; body: unknown };
+						return globalThis.fetch(`https://runner.example.test${body.path}`, {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify(body.body ?? {}),
+						});
+					},
+				}),
+			},
+		} as unknown as { DB: D1Database },
 		prepare,
 		bind,
 		first,
