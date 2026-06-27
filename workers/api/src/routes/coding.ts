@@ -112,6 +112,7 @@ export interface CodingEngine {
  */
 const DEFAULT_ENGINES: CodingEngine[] = [
 	{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions" },
+	{ id: "gemini", label: "Gemini CLI", command: "gemini" },
 	{ id: "codex", label: "Codex", command: "codex" },
 	{ id: "grok", label: "Grok", command: "grok" },
 ];

@@ -169,50 +169,47 @@
     function refreshCodingSummary() { callExplain(''); }
 
     // ── Voice: talk to the co-pilot, and hear it back ────────────────────────
-    function startCodingDictation(btn) {
-      if (window.speechSynthesis) speechSynthesis.cancel(); // recording stops any playback
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) { alert('Voice input isn\'t supported in this browser. On iPhone, use the keyboard\'s mic; on desktop, try Chrome.'); return; }
-      if (codingRecognizer) { try { codingRecognizer.stop(); } catch (e) {} return; }
-      const input = document.getElementById('inst-coding-ask');
-      const rec = new SR();
-      rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = false;
-      codingRecognizer = rec;
+    async function startCodingDictation(btn) {
+      if (codingRecognizer) { codingRecognizer.stop(); codingRecognizer = null; if (btn) btn.classList.remove('active'); return; }
+      if (window.speechSynthesis) speechSynthesis.cancel();
+      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
+      const isApi = (vs.provider || '').includes('openai');
+      let apiKey = '';
+      if (isApi) { try { apiKey = (await api('/v1/keys/openai/reveal')).key || ''; } catch {} }
+      codingRecognizer = new VoiceStt(isApi && apiKey ? 'openai' : 'browser', {
+        apiKey,
+        language: vs.language || 'en-US',
+        onResult: (text, isFinal) => {
+          const input = document.getElementById('inst-coding-ask');
+          if (input) input.value = text;
+        },
+        onError: () => {},
+        onEnd: () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); },
+      });
       if (btn) btn.classList.add('active');
-      let finalText = '';
-      rec.onresult = (e) => {
-        let interim = '';
-        for (let i = e.resultIndex; i < e.results.length; i++) {
-          const t = e.results[i][0].transcript;
-          if (e.results[i].isFinal) finalText += t; else interim += t;
-        }
-        if (input) input.value = (finalText + interim).trim();
-      };
-      rec.onend = () => {
-        codingRecognizer = null;
-        if (btn) btn.classList.remove('active');
-        // Don't auto-send — the dictated text could be a co-pilot question OR an
-        // instruction for the agent, so leave it for the user to pick Ask or ➤ Agent.
-      };
-      rec.onerror = () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); };
-      try { rec.start(); } catch (e) { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
+      try { await codingRecognizer.start(); } catch { codingRecognizer = null; if (btn) btn.classList.remove('active'); }
     }
 
     // Speak text NOW. Must be reachable from a user gesture (iOS/Chrome block
     // speech that isn't triggered by a tap/click — which is why auto-speak after
     // an async summary often stays silent; double-tap a message is the reliable path).
+    // Shared TTS instance for the coding surface — initialized lazily.
+    let codingTts = null;
+    async function ensureCodingTts() {
+      if (codingTts) return codingTts;
+      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
+      const isApi = (vs.provider || '').includes('openai');
+      let apiKey = '';
+      if (isApi) { try { apiKey = (await api('/v1/keys/openai/reveal')).key || ''; } catch {} }
+      codingTts = new VoiceTts(isApi && apiKey ? 'openai' : 'browser', {
+        apiKey, voice: vs.openai?.voice || 'alloy', speed: vs.speed || 100,
+      });
+      return codingTts;
+    }
+
     function speakText(text) {
-      if (!window.speechSynthesis || !text) return;
-      const clean = String(text).replace(/[*_`#>•]/g, '').replace(/\s+/g, ' ').trim();
-      if (!clean) return;
-      try {
-        speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(clean.slice(0, 1500));
-        // Speed from voice settings (50-200%, default 100% = rate 1.0)
-        const speedPct = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings?.speed) || 100;
-        u.rate = Math.max(0.5, Math.min(3, speedPct / 100));
-        speechSynthesis.speak(u);
-      } catch (e) { /* unsupported */ }
+      if (!text) return;
+      ensureCodingTts().then(tts => tts.speak(text));
     }
 
     // Double-tap / click a summary message to hear it (direct gesture → works on iOS).
@@ -247,17 +244,14 @@
       codingVoiceOn = !codingVoiceOn;
       if (btn) btn.classList.toggle('active', codingVoiceOn);
       if (codingVoiceOn) {
-        // Speak the latest summary right now — this is inside the click gesture, so
-        // it both confirms voice works and "unlocks" the synth for later auto-speak.
         const last = codingSummaryHistory.slice().reverse().find(m => m.role === 'assistant');
         speakText(last ? last.content : 'Voice on.');
-      } else if (window.speechSynthesis) {
-        speechSynthesis.cancel();
+      } else {
+        if (codingTts) codingTts.cancel();
+        if (window.speechSynthesis) speechSynthesis.cancel();
       }
     }
 
-    // Auto-speak after a new reply (only when the toggle is on; may be blocked on
-    // iOS since it's not a gesture — the double-tap is the guaranteed path).
     function speakCoding(text) { if (codingVoiceOn) speakText(text); }
 
     async function askCoding() {
