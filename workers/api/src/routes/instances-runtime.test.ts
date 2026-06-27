@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { expireOrphanedRuntimeTasks } from "./instances-runtime.js";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { callRuntime, expireOrphanedRuntimeTasks, type RuntimeRow } from "./instances-runtime.js";
 import type { Env } from "../types.js";
 
 interface Write {
@@ -33,6 +33,36 @@ function mockEnv(rows: Array<{ id: string; payload: string }>): { env: Env; writ
 	return { env: { DB } as unknown as Env, writes };
 }
 
+/** Minimal RuntimeRow for callRuntime tests. */
+function mockRow(overrides: Partial<RuntimeRow> = {}): RuntimeRow {
+	return {
+		instance_id: "inst-1",
+		user_id: "user-1",
+		placement: "local",
+		endpoint_url: "https://tunnel.example.com",
+		token_ciphertext: null,
+		token_dek_wrapped: null,
+		token_iv: null,
+		token_plaintext: "tok",
+		capabilities: "[]",
+		runner_version: "",
+		runner_node: "",
+		status: "online",
+		last_seen_at: null,
+		created_at: "",
+		updated_at: "",
+		...overrides,
+	};
+}
+
+/** Build a mock RELAY DO namespace. */
+function mockRelay(handler: (req: Request) => Promise<Response>) {
+	return {
+		idFromName: (name: string) => ({ name }),
+		get: (_id: unknown) => ({ fetch: handler }),
+	};
+}
+
 describe("expireOrphanedRuntimeTasks", () => {
 	it("marks needs_human / running tasks failed with an orphan reason", async () => {
 		const rows = [
@@ -63,5 +93,72 @@ describe("expireOrphanedRuntimeTasks", () => {
 		const n = await expireOrphanedRuntimeTasks(env, "inst1", "user1");
 		expect(n).toBe(0);
 		expect(writes.length).toBe(0);
+	});
+});
+
+describe("callRuntime relay-first logic", () => {
+	const originalFetch = globalThis.fetch;
+
+	afterEach(() => {
+		globalThis.fetch = originalFetch;
+		vi.restoreAllMocks();
+	});
+
+	it("uses relay for GET requests with correct method", async () => {
+		let relayPayload: { method: string; path: string; body: unknown } | null = null;
+		const relay = mockRelay(async (req) => {
+			relayPayload = await req.json() as typeof relayPayload;
+			return Response.json({ ok: true });
+		});
+		const env = { RELAY: relay } as unknown as Env;
+		const row = mockRow();
+
+		const res = await callRuntime(env, row, "/health");
+		expect(res.status).toBe(200);
+		expect(relayPayload!.method).toBe("GET");
+		expect(relayPayload!.path).toBe("/health");
+		expect(relayPayload!.body).toBeUndefined();
+	});
+
+	it("uses relay for POST requests and forwards body", async () => {
+		let relayPayload: { method: string; path: string; body: unknown } | null = null;
+		const relay = mockRelay(async (req) => {
+			relayPayload = await req.json() as typeof relayPayload;
+			return Response.json({ task: "created" });
+		});
+		const env = { RELAY: relay } as unknown as Env;
+		const row = mockRow();
+
+		const body = JSON.stringify({ type: "echo", input: {} });
+		const res = await callRuntime(env, row, "/tasks", { method: "POST", body });
+		expect(res.status).toBe(200);
+		expect(relayPayload!.method).toBe("POST");
+		expect(relayPayload!.path).toBe("/tasks");
+		expect(relayPayload!.body).toEqual({ type: "echo", input: {} });
+	});
+
+	it("falls back to tunnel when relay returns 503", async () => {
+		const relay = mockRelay(async () => Response.json({ error: "No runner" }, { status: 503 }));
+		const env = { RELAY: relay } as unknown as Env;
+		const row = mockRow();
+
+		globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ from: "tunnel" }));
+
+		const res = await callRuntime(env, row, "/health");
+		const data = await res.json();
+		expect(data).toEqual({ from: "tunnel" });
+		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it("falls back to tunnel when RELAY binding is absent", async () => {
+		const env = {} as unknown as Env;
+		const row = mockRow();
+
+		globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ from: "tunnel" }));
+
+		const res = await callRuntime(env, row, "/capabilities");
+		const data = await res.json();
+		expect(data).toEqual({ from: "tunnel" });
+		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
 	});
 });
