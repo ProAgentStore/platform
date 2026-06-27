@@ -153,27 +153,24 @@
     async function startHandsOff() {
       if (!handsOffEligibleRepos().length) { alert('Start a coding session on at least one repo first.'); return; }
 
-      // For realtime providers, fetch the API key first
-      if (handsOffVoiceProvider !== 'browser') {
-        const keyProvider = handsOffVoiceProvider === 'openai-realtime' ? 'openai' : 'google';
-        const providerLabel = keyProvider === 'openai' ? 'OpenAI' : 'Google AI';
+      // ── Unified voice: STT → Overseer API → TTS ──
+      // All providers use the same flow: capture speech, send text to the
+      // Overseer (which has repo context + tool routing), speak the reply.
+      const isApi = (handsOffVoiceProvider || '').includes('openai');
+      let apiKey = '';
+      if (isApi) {
         try {
-          const keyRes = await api(`/v1/keys/${keyProvider}/reveal`);
-          if (!keyRes.key) { alert(`No ${providerLabel} API key found. Add one in Profile → API Keys.`); return; }
-          handsOffApiKey = keyRes.key;
+          const keyRes = await api('/v1/keys/openai/reveal');
+          if (!keyRes.key) { alert('No OpenAI API key found. Add one in Profile → API Keys.'); return; }
+          apiKey = keyRes.key;
         } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          if (msg.includes('404')) {
-            alert(`No ${providerLabel} API key stored. Add one in Profile → API Keys first.`);
-          } else {
-            alert(`Could not retrieve ${providerLabel} key: ${msg}`);
-          }
+          alert('Add your OpenAI API key in Profile → API Keys first.');
           return;
         }
       }
-
+      const sttProvider = isApi && apiKey ? 'openai' : 'browser';
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (handsOffVoiceProvider === 'browser' && !SR) { alert('Browser speech isn\'t supported here. Try Chrome, or switch to OpenAI/Gemini voice.'); return; }
+      if (sttProvider === 'browser' && !SR) { alert('Browser speech not supported. Try Chrome, or set OpenAI voice.'); return; }
 
       handsOffOn = true; handsOffPaused = false; handsOffFocusIdx = 0;
       document.getElementById('handsoff-start')?.classList.add('hidden');
@@ -182,66 +179,66 @@
       const sel = document.getElementById('handsoff-mode'); if (sel) sel.disabled = true;
       const sc = document.getElementById('handsoff-scope'); if (sc) sc.disabled = true;
       const pv = document.getElementById('handsoff-provider'); if (pv) pv.disabled = true;
-      renderCodingRepos();
+      if (typeof renderCodingRepos === 'function') renderCodingRepos();
       const r = handsOffFocusRepo();
 
-      if (handsOffVoiceProvider === 'openai-realtime') {
-        const opts = handsOffVoiceSettings.openai || {};
-        const systemPrompt = buildHandsOffSystemPrompt();
-        handsOffRealtimeEngine = new OpenAIRealtimeVoice(handsOffApiKey, {
-          model: opts.model || 'gpt-realtime',
-          voice: opts.voice || 'alloy',
-          systemPrompt,
-          onTranscript: (text, role) => {
-            if (role === 'user') onHandsOffRealtimePhrase(text);
-          },
-          onStatusChange: (status) => handsOffStatus(status),
+      // TTS engine for speaking responses
+      handsOffTts = new VoiceTts(isApi && apiKey ? 'openai' : 'browser', {
+        apiKey,
+        voice: handsOffVoiceSettings?.openai?.voice || 'alloy',
+        speed: handsOffVoiceSettings?.speed || 100,
+      });
+
+      // STT engine — continuous listening, routes each phrase to the Overseer
+      handsOffStt = new VoiceStt(sttProvider, {
+        apiKey,
+        language: handsOffVoiceSettings?.language || 'en-US',
+        onResult: async (text, isFinal) => {
+          if (!isFinal) { handsOffStatus(`hearing: ${text}`); return; }
+          await onHandsOffPhrase(text);
+          // For API-based STT (Whisper), restart recording for next utterance
+          if (sttProvider !== 'browser' && handsOffOn && !handsOffPaused) {
+            handsOffStt?.stop();
+            setTimeout(() => { if (handsOffOn && !handsOffPaused) handsOffStt?.start(); }, 300);
+          }
+        },
+        onError: (err) => handsOffStatus('mic error: ' + err),
+        onEnd: () => {},
+      });
+
+      handsOffStatus('listening…');
+      handsOffSpeak(`Hands-off on. Focused on ${r ? r.name : 'your repos'}.`);
+      await handsOffStt.start();
+    }
+
+    let handsOffStt = null;
+    let handsOffTts = null;
+
+    // Route a voice phrase through the Overseer API (same backend as typed Overseer input)
+    async function onHandsOffVoiceToOverseer(text) {
+      if (!currentInstance) return;
+      handsOffStatus('thinking…');
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/overseer`, {
+          method: 'POST', body: JSON.stringify({ message: text }),
         });
-        await handsOffRealtimeEngine.connect();
-      } else if (handsOffVoiceProvider === 'gemini-live') {
-        const opts = handsOffVoiceSettings.gemini || {};
-        const systemPrompt = buildHandsOffSystemPrompt();
-        handsOffRealtimeEngine = new GeminiLiveVoice(handsOffApiKey, {
-          model: opts.model || 'gemini-2.0-flash-exp',
-          systemPrompt,
-          onTranscript: (text, role) => {
-            if (role === 'user') onHandsOffRealtimePhrase(text);
-          },
-          onStatusChange: (status) => handsOffStatus(status),
-        });
-        await handsOffRealtimeEngine.connect();
-      } else {
-        speakText(`Hands-off on. Focused on ${r ? r.name : 'your repos'}.`);
+        const reply = d.reply || '(no response)';
+        handsOffStatus('speaking…');
+        if (handsOffTts) await handsOffTts.speak(reply);
         handsOffStatus('listening…');
-        handsOffListen();
+      } catch (e) {
+        handsOffStatus('error');
+        handsOffSpeak('Sorry, something went wrong.');
       }
-    }
-
-    let handsOffApiKey = '';
-
-    function buildHandsOffSystemPrompt() {
-      const repos = handsOffEligibleRepos();
-      const repoList = repos.map(r => r.name).join(', ');
-      const speed = handsOffVoiceSettings?.speed || 100;
-      const speedNote = speed !== 100 ? ` Speak at ${speed}% speed — ${speed > 100 ? 'faster than normal' : 'slower than normal'}.` : '';
-      return `You are the Overseer for a multi-repo coding workspace. The user is in hands-off voice mode — they speak, you respond. Active repos: ${repoList}. Keep responses short and actionable.${speedNote}`;
-    }
-
-    // For realtime providers: the LLM IS the voice — phrases from the user
-    // are already handled by the realtime model. But we still route commands.
-    function onHandsOffRealtimePhrase(text) {
-      const lower = text.toLowerCase().trim();
-      if (lower === 'stop' || lower === 'stop mode') { stopHandsOff(); return; }
-      if (lower === 'next') { handsOffFocusIdx++; const r = handsOffFocusRepo(); if (r && handsOffRealtimeEngine) handsOffRealtimeEngine.sendText(`Now focusing on repo: ${r.name}`); return; }
-      if (lower === 'back') { handsOffFocusIdx--; const r = handsOffFocusRepo(); if (r && handsOffRealtimeEngine) handsOffRealtimeEngine.sendText(`Now focusing on repo: ${r.name}`); return; }
-      // For smart mode, the realtime LLM already responds — no additional routing needed
     }
 
     function stopHandsOff() {
       handsOffOn = false; handsOffPaused = false;
-      // Stop realtime engine if active
+      // Stop unified STT/TTS engines
+      if (handsOffStt) { handsOffStt.stop(); handsOffStt = null; }
+      if (handsOffTts) { handsOffTts.cancel(); handsOffTts = null; }
+      // Stop legacy engines if still referenced
       if (handsOffRealtimeEngine) { handsOffRealtimeEngine.disconnect(); handsOffRealtimeEngine = null; }
-      // Stop browser speech
       if (handsOffRec) { try { handsOffRec.stop(); } catch (e) {} handsOffRec = null; }
       if (window.speechSynthesis) speechSynthesis.cancel();
       document.getElementById('handsoff-start')?.classList.remove('hidden');
@@ -253,19 +250,21 @@
       const sc = document.getElementById('handsoff-scope'); if (sc) sc.disabled = false;
       const pv = document.getElementById('handsoff-provider'); if (pv) pv.disabled = false;
       handsOffStatus('');
-      renderCodingRepos();
+      if (typeof renderCodingRepos === 'function') renderCodingRepos();
     }
     function toggleHandsOffPause() {
       handsOffPaused = !handsOffPaused;
       const b = document.getElementById('handsoff-pause');
       if (b) b.textContent = handsOffPaused ? '▶ Resume' : '⏸ Pause';
       if (handsOffPaused) {
+        if (handsOffStt) handsOffStt.stop();
+        if (handsOffTts) handsOffTts.cancel();
         if (handsOffRec) { try { handsOffRec.stop(); } catch (e) {} }
         if (window.speechSynthesis) speechSynthesis.cancel();
         handsOffStatus('paused');
       } else {
         handsOffStatus('listening…');
-        handsOffListen();
+        if (handsOffStt) handsOffStt.start(); else handsOffListen();
       }
     }
     // The continuous recognizer. It self-restarts on end (Chrome ends a continuous
@@ -293,6 +292,11 @@
       rec.onerror = () => { /* 'no-speech' etc — onend restarts */ };
       try { rec.start(); } catch (e) { /* already running */ }
     }
+    // Speak via hands-off TTS if available, otherwise fall back to speakText
+    function handsOffSpeak(text) {
+      if (handsOffTts) handsOffTts.speak(text); else handsOffSpeak(text);
+    }
+
     async function onHandsOffPhrase(text) {
       const low = text.toLowerCase().trim();
       if (/^(stop|pause|hold on)\b/.test(low)) { toggleHandsOffPause(); return; }
@@ -301,47 +305,49 @@
         if (/^(next|skip|go on|forward)\b/.test(low)) return handsOffNext(1);
         if (/^(previous|back|prev|go back)\b/.test(low)) return handsOffNext(-1);
         if (/^(play|read|repeat|say again)\b/.test(low)) return handsOffPlayFocused();
-        if (/^(record|reply|note)\b/.test(low)) { speakText('Go ahead.'); handsOffStatus('say your instruction…'); return; }
-        return handsOffSendToFocused(text); // any other phrase → the focused repo's agent
+        if (/^(record|reply|note)\b/.test(low)) { handsOffSpeak('Go ahead.'); handsOffStatus('say your instruction…'); return; }
+        return handsOffSendToFocused(text);
       }
       // smart mode → the Overseer across all repos, then speak its reply
       handsOffStatus('thinking…');
       try {
         const d = await api(`/v1/instances/${currentInstance.id}/coding/overseer`, { method: 'POST', body: JSON.stringify({ message: text }) });
-        speakText(d && d.reply ? d.reply : 'Done.');
-      } catch (e) { speakText('Sorry, I had trouble with that.'); }
+        const reply = d && d.reply ? d.reply : 'Done.';
+        handsOffStatus('speaking…');
+        await handsOffSpeak(reply);
+      } catch (e) { handsOffSpeak('Sorry, I had trouble with that.'); }
       handsOffStatus('listening…');
     }
     function handsOffNext(dir) {
       const list = handsOffEligibleRepos();
-      if (!list.length) { speakText('No repos in hands-off.'); return; }
+      if (!list.length) { handsOffSpeak('No repos in hands-off.'); return; }
       handsOffFocusIdx = (handsOffFocusIdx + dir + list.length) % list.length;
       const r = list[handsOffFocusIdx];
-      speakText(`Now on ${r.name}.`);
+      handsOffSpeak(`Now on ${r.name}.`);
       handsOffPlayFocused();
     }
     async function handsOffPlayFocused() {
       const r = handsOffFocusRepo();
-      if (!r) { speakText('No repo focused.'); return; }
+      if (!r) { handsOffSpeak('No repo focused.'); return; }
       const active = codingSessions.find(s => s.repoId === r.id && s.status === 'active');
-      if (!active) { speakText(`${r.name} has no live session.`); return; }
+      if (!active) { handsOffSpeak(`${r.name} has no live session.`); return; }
       try {
         const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${active.id}/timeline`);
         const last = (d.chat || []).slice().reverse().find(m => m.type === 'chat_assistant');
-        speakText(`${r.name}: ${last ? last.content : 'no update yet'}`);
-      } catch (e) { speakText(`${r.name}: couldn't read it.`); }
+        handsOffSpeak(`${r.name}: ${last ? last.content : 'no update yet'}`);
+      } catch (e) { handsOffSpeak(`${r.name}: couldn't read it.`); }
     }
     async function handsOffSendToFocused(text) {
       const r = handsOffFocusRepo();
-      if (!r) { speakText('No repo focused.'); return; }
+      if (!r) { handsOffSpeak('No repo focused.'); return; }
       const active = codingSessions.find(s => s.repoId === r.id && s.status === 'active');
-      if (!active) { speakText(`${r.name} has no live session.`); return; }
+      if (!active) { handsOffSpeak(`${r.name} has no live session.`); return; }
       handsOffStatus('sending…');
       try {
         const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${active.id}/agent`, { method: 'POST', body: JSON.stringify({ message: text }) });
-        if (d && d.delegated) { speakText(`On it, ${r.name}.`); codingReposStatus[r.id] = 'thinking'; }
-        else speakText((d && d.reply) ? d.reply : `Sent to ${r.name}.`);
-      } catch (e) { speakText('Send failed.'); }
+        if (d && d.delegated) { handsOffSpeak(`On it, ${r.name}.`); codingReposStatus[r.id] = 'thinking'; }
+        else handsOffSpeak((d && d.reply) ? d.reply : `Sent to ${r.name}.`);
+      } catch (e) { handsOffSpeak('Send failed.'); }
       handsOffStatus('listening…');
     }
     function toggleHandsOffRepo(repoId, included) {
