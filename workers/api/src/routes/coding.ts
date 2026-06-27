@@ -237,6 +237,27 @@ codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 	return c.json({ ok: true });
 });
 
+/** Get/set per-repo instructions (injected into the co-pilot + Overseer prompts). */
+codingRoutes.get("/:instanceId/coding/repos/:repoId/instructions", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	if (!repo) throw new HttpError(404, "Repo not found");
+	return c.json({ instructions: repo.instructions || "" });
+});
+
+codingRoutes.put("/:instanceId/coding/repos/:repoId/instructions", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repoId = c.req.param("repoId");
+	const body = await c.req.json<{ instructions?: string }>();
+	const instructions = String(body.instructions || "").slice(0, 5000);
+	await c.env.DB.prepare(
+		"UPDATE coding_repos SET instructions = ?1, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4",
+	)
+		.bind(instructions, repoId, instanceId, uid)
+		.run();
+	return c.json({ instructions });
+});
+
 /**
  * Latest GitHub Actions run for a repo — so the console can show build/deploy
  * status (running / failed / live) independently of the agent. OPTIONAL: returns
@@ -449,7 +470,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	// Continuity: feed the recent persisted timeline (prior chat, what the agent
 	// did, outcomes) so the co-pilot remembers the session, not just this moment.
 	const memory = await contextForCopilot(c.env, sessionId);
-	const reply = (await copilotSummary(c.env, uid, { question, memory, pane })) || "(no response)";
+	// Inject instance + repo instructions into the co-pilot prompt.
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
+	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
+	const repoInstructions = repo?.instructions;
+	const combined = [instanceInstructions, repoInstructions].filter(Boolean).join("\n\n") || undefined;
+	const reply = (await copilotSummary(c.env, uid, { question, memory, pane, specialInstructions: combined })) || "(no response)";
 	// Don't persist a transient "runner offline / session hasn't started" auto-summary
 	// — it's only true at this moment, and once the runner attaches it lingers at the
 	// top of the thread as stale, confusing history. Show it live, but only save real
@@ -581,15 +608,19 @@ codingRoutes.post("/:instanceId/coding/overseer", async (c) => {
 			const term = await lastTerminal(c.env, active.id).catch(() => null);
 			recent = term ? term.slice(-700) : "(session live, nothing captured yet)";
 		}
-		blocks.push(`### REPO "${r.name}" (id: ${r.id})${active ? " — LIVE" : ""}\n${recent}`);
+		const repoRules = r.instructions ? `\nRepo instructions: ${r.instructions}` : "";
+		blocks.push(`### REPO "${r.name}" (id: ${r.id})${active ? " — LIVE" : ""}${repoRules}\n${recent}`);
 	}
 	const context = blocks.join("\n\n").slice(0, 16000) || "(no repos yet)";
 
+	// Inject the user's Special Instructions (if any) into the Overseer prompt
+	const userInstructions = await readSpecialInstructions(c.env, instanceId, uid);
 	const system =
 		"You are the Overseer — ONE agent across ALL of the user's coding repos. You hold the global picture below (each repo + its recent activity). Decide:\n" +
 		"- If the user ASKS about status / what's happening / what finished / which needs them → answer concisely from the context, comparing across repos when relevant.\n" +
 		"- If the user wants something DONE in a specific repo → call drive_claude with that repo's id + ONE clear instruction. Infer the repo from their words; if genuinely ambiguous, ask which.\n" +
-		"Plain language, tight. You can only drive repos that have a LIVE session.";
+		"Plain language, tight. You can only drive repos that have a LIVE session." +
+		(userInstructions ? `\n\nUSER SPECIAL INSTRUCTIONS (follow these):\n${userInstructions}` : "");
 	const userMsg = `User: ${raw}\n\nALL REPOS (recent activity):\n${context}`;
 	const tools = [
 		{
@@ -715,11 +746,14 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 	const objective = String(body.objective ?? "").trim();
 	if (!objective) return c.json({ error: "objective is required" }, 400);
 
+	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
+	const repoInstructions = repo.instructions;
+	const combined = [instanceInstructions, repoInstructions].filter(Boolean).join("\n\n");
 	const goal: CodingGoal = {
 		objective,
 		repo: repo.name,
 		clientType: session.clientType,
-		specialInstructions: await readSpecialInstructions(c.env, instanceId, uid),
+		specialInstructions: combined || undefined,
 		dryRun: body.dryRun === true,
 	};
 	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";

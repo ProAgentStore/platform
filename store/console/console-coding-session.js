@@ -345,6 +345,7 @@
         ${!online ? '<div style="color:var(--red);font-size:0.8rem;padding:0.4rem 0.6rem;background:rgba(239,68,68,0.08);border-radius:6px;margin-bottom:0.4rem">Runner offline — run <code>pags up</code> to reconnect</div>' : ''}
         <button class="coding-action" onclick="renameCurrentCodingRepo();closeCodingMenu()">✎ Rename project</button>
         <button class="coding-action" onclick="toggleCodingLinksEditor();closeCodingMenu()">🔗 Launch links…</button>
+        <button class="coding-action" onclick="editRepoInstructions();closeCodingMenu()">📝 Repo instructions<small>custom rules for this repo's AI</small></button>
         <div class="coding-dialog-sep"></div>
         <button class="coding-action${online ? '' : ' disabled'}" ${online ? '' : 'disabled'} onclick="runCodingBrain();closeCodingMenu()">🤖 Run with AI<small>give it a goal — it works autonomously</small></button>
         <button class="coding-action${online ? '' : ' disabled'}" ${online ? '' : 'disabled'} onclick="resumeCodingBrain();closeCodingMenu()">▶ Resume AI<small>continue after it paused for you</small></button>
@@ -507,6 +508,50 @@
           method: 'POST', body: JSON.stringify(value ? { value } : {}),
         });
       } catch (e) { alert('Resume failed: ' + e.message); }
+    }
+
+    async function editRepoInstructions() {
+      const s = codingSessions.find(x => x.id === currentCodingSession);
+      if (!currentInstance || !s) return;
+      let current = '';
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/repos/${s.repoId}/instructions`);
+        current = d.instructions || '';
+      } catch {}
+      const bg = document.createElement('div');
+      bg.id = 'repo-instructions-dialog';
+      bg.className = 'coding-dialog-backdrop';
+      bg.innerHTML = `<div class="coding-dialog" style="max-width:480px">
+        <div class="coding-dialog-title">Repo instructions<button onclick="document.getElementById('repo-instructions-dialog').remove()" aria-label="Close">&times;</button></div>
+        <div style="padding:0 0.55rem 0.5rem">
+          <p style="font-size:0.76rem;color:var(--muted);margin-bottom:0.4rem">Custom rules for this repo — injected into the co-pilot and Overseer prompts. E.g. "always use bun, not npm" or "this is a React Native project".</p>
+          <textarea id="repo-instructions-input" style="width:100%;min-height:100px;font-size:0.84rem" placeholder="e.g. Always run tests before committing. Use TypeScript strict mode.">${esc(current)}</textarea>
+          <div style="display:flex;gap:0.35rem;margin-top:0.4rem">
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveRepoInstructions()">Save</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('repo-instructions-dialog').remove()">Cancel</button>
+          </div>
+          <div id="repo-instructions-msg" style="font-size:0.78rem;margin-top:0.3rem"></div>
+        </div>
+      </div>`;
+      bg.addEventListener('click', (e) => { if (e.target === bg) bg.remove(); });
+      document.body.appendChild(bg);
+    }
+
+    async function saveRepoInstructions() {
+      const s = codingSessions.find(x => x.id === currentCodingSession);
+      if (!currentInstance || !s) return;
+      const input = document.getElementById('repo-instructions-input');
+      const msg = document.getElementById('repo-instructions-msg');
+      const text = (input?.value || '').trim();
+      try {
+        await api(`/v1/instances/${currentInstance.id}/coding/repos/${s.repoId}/instructions`, {
+          method: 'PUT', body: JSON.stringify({ instructions: text }),
+        });
+        if (msg) { msg.textContent = 'Saved ✓'; msg.style.color = 'var(--green)'; }
+        setTimeout(() => document.getElementById('repo-instructions-dialog')?.remove(), 800);
+      } catch (e) {
+        if (msg) { msg.textContent = 'Save failed: ' + e.message; msg.style.color = 'var(--red)'; }
+      }
     }
 
     async function restartCodingSession() {

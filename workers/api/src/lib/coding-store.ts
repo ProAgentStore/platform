@@ -34,6 +34,7 @@ interface RepoRow {
 	clone_error: string | null;
 	default_client: string;
 	urls: string | null;
+	instructions: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -64,6 +65,7 @@ function toRepo(r: RepoRow): CodingRepo {
 		cloneError: r.clone_error ?? undefined,
 		defaultClient: client(r.default_client),
 		urls: parseRepoUrls(r.urls),
+		instructions: r.instructions || undefined,
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 	};

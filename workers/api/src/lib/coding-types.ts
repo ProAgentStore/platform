@@ -31,6 +31,8 @@ export interface CodingRepo {
 	defaultClient: CodingClientType;
 	/** Launch links — open-in-new-tab icons on the list + session view. */
 	urls?: { dev?: string; staging?: string; prod?: string };
+	/** Per-repo special instructions (injected into co-pilot + Overseer prompts). */
+	instructions?: string;
 	createdAt: string;
 	updatedAt: string;
 }

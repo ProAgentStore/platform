@@ -21,6 +21,8 @@ export interface CopilotArgs {
 	pane?: string;
 	/** Reframe as an after-the-fact summary of a just-completed instruction. */
 	finished?: boolean;
+	/** Combined instance + repo special instructions. */
+	specialInstructions?: string;
 }
 
 /** Generate a co-pilot reply. Returns "" if the model gave nothing. */
@@ -34,6 +36,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 			: "One-line status: what's happening, and what (if anything) do you need from me?\n\n";
 	const userMsg =
 		lead +
+		(args.specialInstructions ? `USER INSTRUCTIONS (follow these):\n${args.specialInstructions}\n\n` : "") +
 		(args.memory ? `SESSION MEMORY (recent, oldest→newest):\n${args.memory}\n\n` : "") +
 		`TERMINAL (most recent output):\n${pane.slice(-6000) || "(no live terminal — the runner is offline or the session hasn't started)"}`;
 
