@@ -775,6 +775,26 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 	return c.json({ ok: runnerConnected, runnerConnected });
 });
 
+/** Kill tmux sessions on the runner (orphaned, specific, or all pags-*). */
+codingRoutes.post("/:instanceId/coding/kill-tmux", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const conn = await getRunnerConn(c.env, instanceId, uid);
+	if (!conn) return c.json({ error: "Runner not connected", runnerConnected: false }, 502);
+	const body = await c.req.json<{ sessions?: string[]; orphansOnly?: boolean }>();
+	const result = await callRunner(conn, "/coding/kill-tmux", body);
+	return c.json(result);
+});
+
+/** List directories on the runner (for remote browsing). */
+codingRoutes.get("/:instanceId/coding/browse", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const conn = await getRunnerConn(c.env, instanceId, uid);
+	if (!conn) return c.json({ error: "Runner not connected" }, 502);
+	const dir = c.req.query("dir") || "~";
+	const result = await callRunner(conn, "/coding/browse", { dir });
+	return c.json(result);
+});
+
 /**
  * Full diagnostics: runner, tmux, sessions, repos, GitHub, detected issues.
  * The console's transparency view — everything the user needs to self-diagnose.
@@ -785,11 +805,11 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 
 	// 1. Runner connection (D1 row)
 	const runtimeRow = await env.DB.prepare(
-		"SELECT endpoint_url, capabilities, runner_version, status, last_seen_at, placement, created_at, updated_at FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2",
+		"SELECT endpoint_url, capabilities, runner_version, runner_node, status, last_seen_at, placement, created_at, updated_at FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2",
 	).bind(instanceId, uid).first<{
 		endpoint_url: string | null; capabilities: string | null; runner_version: string | null;
-		status: string | null; last_seen_at: string | null; placement: string | null;
-		created_at: string | null; updated_at: string | null;
+		runner_node: string | null; status: string | null; last_seen_at: string | null;
+		placement: string | null; created_at: string | null; updated_at: string | null;
 	}>();
 
 	const runner: Record<string, unknown> = {
@@ -799,6 +819,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 		placement: runtimeRow?.placement ?? null,
 		capabilities: runtimeRow?.capabilities ? JSON.parse(runtimeRow.capabilities) : [],
 		runnerVersion: runtimeRow?.runner_version ?? null,
+		runnerNode: runtimeRow?.runner_node ?? null,
 		lastSeenAt: runtimeRow?.last_seen_at ?? null,
 		registeredAt: runtimeRow?.created_at ?? null,
 	};

@@ -61,6 +61,7 @@
       html += `<details open style="margin-bottom:0.5rem"><summary style="font-size:0.82rem;font-weight:700;cursor:pointer;margin-bottom:0.3rem">Runner</summary>
         <div class="diag-grid">
           <span>Status</span><span style="color:${r.reachable ? 'var(--green)' : 'var(--red)'};font-weight:600">${esc(String(r.status))}${r.reachable ? ' (reachable)' : ' (unreachable)'}</span>
+          <span>Node</span><span style="font-weight:600">${r.runnerNode ? esc(r.runnerNode) : '<span style="color:var(--muted)">unknown</span>'}</span>
           <span>Endpoint</span><span style="word-break:break-all">${r.endpointUrl ? esc(r.endpointUrl) : '<span style="color:var(--muted)">none</span>'}</span>
           <span>Placement</span><span>${esc(r.placement || 'unregistered')}</span>
           <span>Version</span><span>${esc(r.runnerVersion || '—')}</span>
@@ -72,11 +73,15 @@
       // ── Tmux ──
       if (d.tmux) {
         const t = d.tmux;
-        html += `<details open style="margin-bottom:0.5rem"><summary style="font-size:0.82rem;font-weight:700;cursor:pointer;margin-bottom:0.3rem">tmux</summary>
+        html += `<details open style="margin-bottom:0.5rem"><summary style="font-size:0.82rem;font-weight:700;cursor:pointer;margin-bottom:0.3rem">tmux on ${r.runnerNode ? esc(r.runnerNode) : 'runner'}</summary>
           <div class="diag-grid">
             <span>Total sessions</span><span>${t.tmuxTotal} (${t.pagsTmuxTotal} pags-*)</span>
             <span>Tracked by runner</span><span>${t.trackedSessions}</span>
             <span>Orphaned</span><span style="color:${t.orphanedSessions.length ? 'var(--amber,#f59e0b)' : 'var(--green)'}">${t.orphanedSessions.length ? t.orphanedSessions.join(', ') : 'none'}</span>
+          </div>
+          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;margin-top:0.4rem">
+            ${t.orphanedSessions.length ? `<button type="button" class="btn btn-outline btn-sm" onclick="killOrphanedTmux(this)" style="color:var(--amber,#f59e0b)">Kill ${t.orphanedSessions.length} orphaned</button>` : ''}
+            ${t.pagsTmuxTotal > 0 ? `<button type="button" class="btn btn-outline btn-sm" onclick="killAllPagsTmux(this)" style="color:var(--red)">Kill all pags tmux</button>` : ''}
           </div>
         </details>`;
       }
@@ -142,6 +147,16 @@
       });
       html += `</details>`;
 
+      // ── Browse files ──
+      if (r.reachable) {
+        html += `<details style="margin-bottom:0.5rem"><summary style="font-size:0.82rem;font-weight:700;cursor:pointer;margin-bottom:0.3rem">Browse files on ${r.runnerNode ? esc(r.runnerNode) : 'runner'}</summary>
+          <div id="diag-browse-body" style="font-size:0.78rem;max-height:250px;overflow-y:auto;border:1px solid var(--line);border-radius:6px;padding:0.4rem 0.5rem">
+            <div style="color:var(--muted)">Click to browse…</div>
+          </div>
+          <div style="margin-top:0.3rem"><button type="button" class="btn btn-outline btn-sm" onclick="browseDiagDir('~')">Browse home</button></div>
+        </details>`;
+      }
+
       // ── GitHub App ──
       html += `<details style="margin-bottom:0.3rem"><summary style="font-size:0.82rem;font-weight:700;cursor:pointer;margin-bottom:0.3rem">GitHub App</summary>
         <div class="diag-grid">
@@ -173,4 +188,51 @@
       } catch (e) { alert('Kill failed: ' + e.message); }
       await loadCoding();
       loadFullDiag();
+    }
+
+    async function killOrphanedTmux(btn) {
+      if (!currentInstance || !confirm('Kill all orphaned pags-* tmux sessions on the runner machine?')) return;
+      if (btn) { btn.disabled = true; btn.textContent = '…'; }
+      try {
+        const r = await api(`/v1/instances/${currentInstance.id}/coding/kill-tmux`, { method: 'POST', body: JSON.stringify({ orphansOnly: true }) });
+        alert(`Killed ${r.killed || 0} orphaned tmux session(s).`);
+      } catch (e) { alert('Kill failed: ' + e.message); }
+      loadFullDiag();
+    }
+
+    async function killAllPagsTmux(btn) {
+      if (!currentInstance || !confirm('Kill ALL pags-* tmux sessions on the runner machine? This stops every coding session.')) return;
+      if (btn) { btn.disabled = true; btn.textContent = '…'; }
+      try {
+        const r = await api(`/v1/instances/${currentInstance.id}/coding/kill-tmux`, { method: 'POST', body: JSON.stringify({}) });
+        alert(`Killed ${r.killed || 0} tmux session(s).`);
+      } catch (e) { alert('Kill failed: ' + e.message); }
+      await loadCoding();
+      loadFullDiag();
+    }
+
+    async function browseDiagDir(dir) {
+      if (!currentInstance) return;
+      const el = document.getElementById('diag-browse-body');
+      if (!el) return;
+      el.innerHTML = '<div style="color:var(--muted);font-size:0.78rem;padding:0.3rem 0">Loading…</div>';
+      try {
+        const r = await api(`/v1/instances/${currentInstance.id}/coding/browse?dir=${encodeURIComponent(dir || '~')}`);
+        let html = `<div style="font-family:monospace;font-size:0.72rem;color:var(--muted);margin-bottom:0.3rem;word-break:break-all">${esc(r.dir)}</div>`;
+        if (r.dir !== '/') {
+          const parent = r.dir.replace(/\/[^/]+$/, '') || '/';
+          html += `<div style="cursor:pointer;padding:0.15rem 0" onclick="browseDiagDir('${esc(parent)}')">&larr; ..</div>`;
+        }
+        for (const e of (r.entries || [])) {
+          if (e.type === 'dir') {
+            html += `<div style="cursor:pointer;padding:0.15rem 0" onclick="browseDiagDir('${esc(r.dir + '/' + e.name)}')">📁 ${esc(e.name)}/</div>`;
+          } else {
+            const size = typeof e.size === 'number' ? ` <span style="color:var(--muted)">(${(e.size / 1024).toFixed(1)}K)</span>` : '';
+            html += `<div style="padding:0.15rem 0">📄 ${esc(e.name)}${size}</div>`;
+          }
+        }
+        el.innerHTML = html;
+      } catch (e) {
+        el.innerHTML = `<div style="color:var(--red);font-size:0.78rem">${esc(e.message)}</div>`;
+      }
     }

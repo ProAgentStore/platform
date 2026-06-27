@@ -200,6 +200,47 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			pagsTmuxTotal: pagsTmux.length,
 		});
 	}
+	if (req.method === "POST" && path === "/coding/browse") {
+		const { readdirSync, statSync } = await import("node:fs");
+		const { resolve, basename } = await import("node:path");
+		const { homedir } = await import("node:os");
+		const b = await readJson<{ dir?: string }>(req);
+		const raw = (b.dir || "~").replace(/^~(?=$|\/)/, homedir());
+		const dir = resolve(raw);
+		try {
+			const entries = readdirSync(dir, { withFileTypes: true })
+				.filter((e) => !e.name.startsWith("."))
+				.slice(0, 200)
+				.map((e) => ({
+					name: e.name,
+					type: e.isDirectory() ? "dir" : "file",
+					size: e.isFile() ? statSync(resolve(dir, e.name)).size : undefined,
+				}));
+			return json(res, 200, { dir, entries });
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e), dir });
+		}
+	}
+	if (req.method === "POST" && path === "/coding/kill-tmux") {
+		const { killSession: tmuxKill, listSessions: tmuxList } = await import("./coding/tmux.js");
+		const b = await readJson<{ sessions?: string[]; orphansOnly?: boolean }>(req);
+		let targets: string[] = [];
+		if (b.orphansOnly) {
+			const allTmux = tmuxList();
+			const pagsTmux = allTmux.filter((n: string) => n.startsWith("pags-"));
+			const tracked = new Set(runner.coding.diagnostics().map((s) => s.tmuxSession));
+			targets = pagsTmux.filter((n: string) => !tracked.has(n));
+		} else if (b.sessions?.length) {
+			targets = b.sessions.filter((n) => typeof n === "string" && n.startsWith("pags-"));
+		} else {
+			// Kill all pags-* tmux sessions
+			targets = tmuxList().filter((n: string) => n.startsWith("pags-"));
+			runner.coding.closeAll();
+		}
+		let killed = 0;
+		for (const name of targets) { if (tmuxKill(name)) killed++; }
+		return json(res, 200, { killed, sessions: targets });
+	}
 	if (req.method === "POST" && path === "/coding/event") {
 		// Brain progress events — recorded by PAGS, ignored locally. Accept + ack.
 		return json(res, 200, { ok: true });
