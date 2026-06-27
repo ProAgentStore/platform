@@ -509,9 +509,24 @@
 
     async function restartCodingSession() {
       if (!currentInstance || !currentCodingSession) return;
+      // Show immediate feedback
+      const pre = document.getElementById('inst-coding-pane');
+      if (pre) pre.textContent = '(restarting session…)';
+      const paneActions = document.getElementById('inst-coding-pane-actions');
+      if (paneActions) { paneActions.classList.add('hidden'); paneActions.innerHTML = ''; }
       try {
         const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/restart`, { method: 'POST', body: '{}' });
-        if (d && d.runnerConnected === false) alert('No runner connected — run `pags up`.');
+        if (d && d.runnerConnected === false) {
+          alert('No runner connected — run `pags up`.');
+          return;
+        }
+        if (d && d.ok === false && d.error) {
+          alert('Restart failed: ' + d.error);
+          return;
+        }
+        // Force an immediate poll so the terminal picks up the new pane
+        setTimeout(pollCodingTerminal, 500);
+        setTimeout(pollCodingTerminal, 1500);
       } catch (e) { alert('Restart failed: ' + e.message); }
     }
 

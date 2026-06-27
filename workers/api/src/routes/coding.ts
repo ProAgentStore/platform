@@ -54,13 +54,12 @@ async function startSessionOnRunner(
 			command: session.launchCommand || undefined,
 		});
 		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
+		return true;
 	} catch (e) {
-		await updateRepoClone(env, repo.id, {
-			cloneStatus: "error",
-			cloneError: e instanceof Error ? e.message.slice(0, 300) : String(e),
-		});
+		const msg = e instanceof Error ? e.message.slice(0, 300) : String(e);
+		await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
+		return false;
 	}
-	return true;
 }
 
 /**
@@ -778,8 +777,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	if (!conn) return c.json({ ok: false, runnerConnected: false });
 	await callRunner(conn, "/coding/end", { sessionId: session.id }).catch(() => undefined);
-	const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
-	return c.json({ ok: runnerConnected, runnerConnected });
+	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+	if (!started) {
+		// Re-read the repo to get the clone error
+		const freshRepo = await getRepo(c.env, instanceId, uid, session.repoId);
+		return c.json({ ok: false, runnerConnected: true, error: freshRepo?.cloneError || "Failed to start session on runner" });
+	}
+	return c.json({ ok: true, runnerConnected: true });
 });
 
 /** Kill tmux sessions on the runner (orphaned, specific, or all pags-*). */
