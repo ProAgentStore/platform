@@ -129,6 +129,36 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		}
 	};
 
+	const uploadKbFile = async (file: File) => {
+		try {
+			const text = await file.text();
+			await api(`/v1/instances/${instanceId}/knowledge`, {
+				method: "POST",
+				body: JSON.stringify({ title: file.name, content: text, source: "upload" }),
+			});
+			loadDocs();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const uploadFile = async (file: File) => {
+		try {
+			const reader = new FileReader();
+			const base64 = await new Promise<string>((resolve) => {
+				reader.onload = () => resolve((reader.result as string).split(",")[1]);
+				reader.readAsDataURL(file);
+			});
+			await api(`/v1/instances/${instanceId}/files`, {
+				method: "POST",
+				body: JSON.stringify({ name: file.name, data: base64, contentType: file.type }),
+			});
+			loadFiles();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	const subTabs: { id: KbSubTab; label: string }[] = [
 		{ id: "docs", label: "Documents" },
 		{ id: "memory", label: "Memory" },
@@ -163,9 +193,13 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 				<div>
 					<div className="flex justify-between items-center gap-2 mb-3 flex-wrap">
 						<h3 className="text-base font-bold">Documents</h3>
-						<div className="flex gap-1.5">
+						<div className="flex gap-1.5 flex-wrap">
 							<button type="button" onClick={() => { setShowPaste(true); setShowUrl(false); }} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ Text</button>
 							<button type="button" onClick={() => { setShowUrl(true); setShowPaste(false); }} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ URL</button>
+							<label className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold cursor-pointer">
+								+ File
+								<input type="file" accept=".txt,.md,.csv,.json,.html" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKbFile(f); e.target.value = ""; }} />
+							</label>
 						</div>
 					</div>
 
@@ -236,7 +270,13 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 			{/* Files */}
 			{subTab === "files" && (
 				<div>
-					<h3 className="text-base font-bold mb-3">Files</h3>
+					<div className="flex justify-between items-center gap-2 mb-3">
+						<h3 className="text-base font-bold">Files</h3>
+						<label className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold cursor-pointer">
+							Upload File
+							<input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFile(f); e.target.value = ""; }} />
+						</label>
+					</div>
 					{files.length === 0 ? (
 						<p className="text-center py-4 text-muted-soft text-sm">No files uploaded yet.</p>
 					) : (

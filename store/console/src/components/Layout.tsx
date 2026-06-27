@@ -1,11 +1,14 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/AuthContext";
+import { api } from "../lib/api";
+import { usePolling } from "../hooks/usePolling";
 
 export default function Layout() {
-	const { user, signOut } = useAuth();
+	const { user } = useAuth();
 	const navigate = useNavigate();
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [unreadCount, setUnreadCount] = useState(0);
 	const navRef = useRef<HTMLElement>(null);
 
 	// Close menu on outside click
@@ -19,6 +22,18 @@ export default function Layout() {
 		document.addEventListener("click", handler, true);
 		return () => document.removeEventListener("click", handler, true);
 	}, [menuOpen]);
+
+	// Poll notification badge
+	const loadBadge = useCallback(async () => {
+		if (!user) return;
+		try {
+			const d = await api<{ unreadCount?: number }>("/v1/notifications?unread=true&limit=1");
+			setUnreadCount(d.unreadCount || 0);
+		} catch {}
+	}, [user]);
+
+	useEffect(() => { loadBadge(); }, [loadBadge]);
+	usePolling(loadBadge, 30000, !!user);
 
 	return (
 		<>
@@ -85,6 +100,11 @@ export default function Layout() {
 							title="Notifications"
 						>
 							&#128276;
+							{unreadCount > 0 && (
+								<span className="absolute -top-1 -right-1.5 bg-red text-white text-[0.55rem] w-4 h-4 rounded-full flex items-center justify-center font-bold leading-none">
+									{unreadCount > 9 ? "9+" : unreadCount}
+								</span>
+							)}
 						</NavLink>
 						<NavLink
 							to="/profile"

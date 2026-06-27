@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
+import { usePolling } from "../hooks/usePolling";
 import BoardTab from "../tabs/BoardTab";
 import CodingTab from "../tabs/CodingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
@@ -16,7 +17,7 @@ export default function InstanceDetail() {
 	const location = useLocation();
 	const [instance, setInstance] = useState<Instance | null>(null);
 
-	// Parse initial tab from URL path (e.g. /instances/:id/knowledge → "knowledge")
+	// Parse initial tab from URL path
 	const urlTab = (splat?.split("/")[0] || "") as Tab;
 	const validTabs: Tab[] = ["chat", "board", "coding", "knowledge", "settings"];
 	const initialTab = validTabs.includes(urlTab) ? urlTab : "chat";
@@ -26,19 +27,18 @@ export default function InstanceDetail() {
 	const [thinking, setThinking] = useState(false);
 	const chatRef = useRef<HTMLDivElement>(null);
 
+	// Runtime status
+	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
+	const [runnerNode, setRunnerNode] = useState("");
+
 	useEffect(() => {
 		if (!id) return;
 		(async () => {
 			try {
-				const data = await api<{ instances: Instance[] }>(
-					"/v1/instances/my/instances",
-				);
-				const inst = (data.instances || []).find(
-					(i) => i.id === id || i.slug === id,
-				);
+				const data = await api<{ instances: Instance[] }>("/v1/instances/my/instances");
+				const inst = (data.instances || []).find((i) => i.id === id || i.slug === id);
 				if (inst) {
 					setInstance(inst);
-					// Default to coding tab for coding agents
 					const surfaces = inst.capabilities?.surfaces || [];
 					if (surfaces.includes("coding") && tab === "chat") setTab("coding");
 				}
@@ -48,19 +48,30 @@ export default function InstanceDetail() {
 		})();
 	}, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+	// Poll runtime status
+	const checkRuntime = useCallback(async () => {
+		if (!id) return;
+		try {
+			const d = await api<{ connected?: boolean; node?: string; runtime?: Record<string, unknown> }>(`/v1/instances/${id}/runtime/status`);
+			setRunnerOnline(d.connected ?? !!(d.runtime as Record<string, unknown>));
+			setRunnerNode(d.node || (d.runtime as Record<string, unknown>)?.runner_node as string || "");
+		} catch {
+			setRunnerOnline(false);
+		}
+	}, [id]);
+
+	useEffect(() => { checkRuntime(); }, [checkRuntime]);
+	usePolling(checkRuntime, 4000);
+
 	const loadMessages = useCallback(async () => {
 		if (!id) return;
 		try {
-			const data = await api<{ messages: Message[] }>(
-				`/v1/instances/${id}/messages`,
-			);
+			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages`);
 			setMessages(data.messages || []);
 		} catch {}
 	}, [id]);
 
-	useEffect(() => {
-		loadMessages();
-	}, [loadMessages]);
+	useEffect(() => { loadMessages(); }, [loadMessages]);
 
 	useEffect(() => {
 		if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
@@ -87,6 +98,33 @@ export default function InstanceDetail() {
 		setThinking(false);
 	};
 
+	const clearChat = async () => {
+		if (!id || !confirm("Clear all messages?")) return;
+		try {
+			await api(`/v1/instances/${id}/messages`, { method: "DELETE" });
+			setMessages([]);
+		} catch {}
+	};
+
+	const copyChat = async () => {
+		if (!id) return;
+		try {
+			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages?limit=2000`);
+			const msgs = (data.messages || []).map((m) => ({
+				role: m.role,
+				content: (m.content || "").replace(/^\[Context:[\s\S]*?\]\s*\n*/i, ""),
+				timestamp: m.createdAt,
+			}));
+			await navigator.clipboard.writeText(JSON.stringify({ instanceId: id, count: msgs.length, messages: msgs }, null, 2));
+		} catch (e) {
+			alert("Copy failed: " + (e instanceof Error ? e.message : String(e)));
+		}
+	};
+
+	const copyMsgText = async (raw: string) => {
+		await navigator.clipboard.writeText(raw);
+	};
+
 	const surfaces = instance?.capabilities?.surfaces || [];
 	const isApply = surfaces.includes("apply");
 	const tabs: { id: Tab; label: string; icon: string }[] = [
@@ -105,6 +143,14 @@ export default function InstanceDetail() {
 				{instance && (
 					<span className="text-sm font-semibold truncate max-w-40 hidden sm:inline">{instance.name}</span>
 				)}
+				{/* Runtime status badge */}
+				<span
+					className="text-xs font-bold px-1.5 py-0.5 rounded-full shrink-0 cursor-pointer"
+					style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-green)" : "var(--color-muted)" }}
+					title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
+				>
+					{runnerOnline ? "●" : "○"}
+				</span>
 				<div className="flex border border-line rounded-lg overflow-x-auto overflow-y-hidden shrink min-w-0 scrollbar-none">
 					{tabs.map((t) => (
 						<button
@@ -128,7 +174,7 @@ export default function InstanceDetail() {
 							{messages.map((m, i) => (
 								<div
 									key={i}
-									className={`max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
+									className={`group relative max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
 										m.role === "user"
 											? "bg-accent text-white self-end rounded-br-sm shadow-sm"
 											: m.role === "system"
@@ -136,6 +182,15 @@ export default function InstanceDetail() {
 												: "bg-panel border border-line self-start rounded-bl-sm shadow-sm"
 									}`}
 								>
+									{/* Copy button on each message */}
+									<button
+										type="button"
+										onClick={() => copyMsgText(m.content)}
+										className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity"
+										title="Copy"
+									>
+										&#128203;
+									</button>
 									{m.role === "assistant" ? (
 										<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 									) : (
@@ -150,16 +205,24 @@ export default function InstanceDetail() {
 								</div>
 							)}
 						</div>
-						<div className="flex gap-1.5 pt-3 border-t border-line shrink-0 items-center">
+						{/* Chat input bar with all buttons */}
+						<div className="flex gap-1.5 pt-3 border-t border-line shrink-0 items-center flex-wrap">
 							<input
 								value={input}
 								onChange={(e) => setInput(e.target.value)}
 								onKeyDown={(e) => { if (e.key === "Enter") sendMessage(); }}
 								placeholder="Send a message..."
-								className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-sm"
+								className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-sm min-w-0"
 							/>
 							<button type="button" onClick={sendMessage} className="px-4 py-2.5 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent-hover transition-colors whitespace-nowrap">
-								Send
+								<span className="hidden sm:inline">Send</span>
+								<span className="sm:hidden">&#10148;</span>
+							</button>
+							<button type="button" onClick={copyChat} title="Copy chat as JSON" className="px-2 py-2 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors">
+								&#x29C9;
+							</button>
+							<button type="button" onClick={clearChat} title="Clear chat" className="px-2 py-2 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
+								&#128465;
 							</button>
 						</div>
 					</div>
