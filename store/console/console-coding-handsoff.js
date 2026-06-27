@@ -214,24 +214,6 @@
     let handsOffStt = null;
     let handsOffTts = null;
 
-    // Route a voice phrase through the Overseer API (same backend as typed Overseer input)
-    async function onHandsOffVoiceToOverseer(text) {
-      if (!currentInstance) return;
-      handsOffStatus('thinking…');
-      try {
-        const d = await api(`/v1/instances/${currentInstance.id}/coding/overseer`, {
-          method: 'POST', body: JSON.stringify({ message: text }),
-        });
-        const reply = d.reply || '(no response)';
-        handsOffStatus('speaking…');
-        if (handsOffTts) await handsOffTts.speak(reply);
-        handsOffStatus('listening…');
-      } catch (e) {
-        handsOffStatus('error');
-        handsOffSpeak('Sorry, something went wrong.');
-      }
-    }
-
     function stopHandsOff() {
       handsOffOn = false; handsOffPaused = false;
       // Stop unified STT/TTS engines
@@ -293,8 +275,9 @@
       try { rec.start(); } catch (e) { /* already running */ }
     }
     // Speak via hands-off TTS if available, otherwise fall back to speakText
-    function handsOffSpeak(text) {
-      if (handsOffTts) handsOffTts.speak(text); else handsOffSpeak(text);
+    async function handsOffSpeak(text) {
+      if (handsOffTts) return handsOffTts.speak(text);
+      if (typeof speakText === 'function') speakText(text);
     }
 
     async function onHandsOffPhrase(text) {

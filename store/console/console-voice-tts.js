@@ -71,8 +71,11 @@
             return this._speakBrowser(text);
           }
           const arrayBuf = await res.arrayBuffer();
+          if (!arrayBuf.byteLength) return this._speakBrowser(text);
           if (!this._audioCtx) this._audioCtx = new AudioContext();
-          const audioBuf = await this._audioCtx.decodeAudioData(arrayBuf);
+          // Resume context if suspended (browsers suspend after inactivity)
+          if (this._audioCtx.state === 'suspended') await this._audioCtx.resume();
+          const audioBuf = await this._audioCtx.decodeAudioData(arrayBuf.slice(0));
           const source = this._audioCtx.createBufferSource();
           source.buffer = audioBuf;
           source.connect(this._audioCtx.destination);
