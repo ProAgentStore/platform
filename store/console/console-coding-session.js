@@ -337,17 +337,19 @@
       bg = document.createElement('div');
       bg.id = 'coding-menu-dialog';
       bg.className = 'coding-dialog-backdrop';
+      const online = codingRunnerOnline !== false;
       bg.innerHTML = `<div class="coding-dialog">
         <div class="coding-dialog-title">Session<button onclick="closeCodingMenu()" aria-label="Close">&times;</button></div>
+        ${!online ? '<div style="color:var(--red);font-size:0.8rem;padding:0.4rem 0.6rem;background:rgba(239,68,68,0.08);border-radius:6px;margin-bottom:0.4rem">Runner offline — run <code>pags up</code> to reconnect</div>' : ''}
         <button class="coding-action" onclick="renameCurrentCodingRepo();closeCodingMenu()">✎ Rename project</button>
         <button class="coding-action" onclick="toggleCodingLinksEditor();closeCodingMenu()">🔗 Launch links…</button>
         <div class="coding-dialog-sep"></div>
-        <button class="coding-action" onclick="runCodingBrain();closeCodingMenu()">🤖 Run with AI<small>give it a goal — it works autonomously</small></button>
-        <button class="coding-action" onclick="resumeCodingBrain();closeCodingMenu()">▶ Resume AI<small>continue after it paused for you</small></button>
-        <button class="coding-action coding-term-only" onclick="sendCodingKey('Escape');closeCodingMenu()">⎋ Esc<small>send Escape to the CLI</small></button>
-        <button class="coding-action coding-term-only" onclick="sendCodingKey('C-c');closeCodingMenu()">Ctrl-C<small>interrupt the CLI</small></button>
+        <button class="coding-action${online ? '' : ' disabled'}" ${online ? '' : 'disabled'} onclick="runCodingBrain();closeCodingMenu()">🤖 Run with AI<small>give it a goal — it works autonomously</small></button>
+        <button class="coding-action${online ? '' : ' disabled'}" ${online ? '' : 'disabled'} onclick="resumeCodingBrain();closeCodingMenu()">▶ Resume AI<small>continue after it paused for you</small></button>
+        <button class="coding-action coding-term-only${online ? '' : ' disabled'}" ${online ? '' : 'disabled'} onclick="sendCodingKey('Escape');closeCodingMenu()">⎋ Esc<small>send Escape to the CLI</small></button>
+        <button class="coding-action coding-term-only${online ? '' : ' disabled'}" ${online ? '' : 'disabled'} onclick="sendCodingKey('C-c');closeCodingMenu()">Ctrl-C<small>interrupt the CLI</small></button>
         <div class="coding-dialog-sep"></div>
-        <button class="coding-action" onclick="restartCodingSession();closeCodingMenu()">🔄 Restart session<small>kill + relaunch the CLI (same repo)</small></button>
+        <button class="coding-action${online ? '' : ' disabled'}" ${online ? '' : 'disabled'} onclick="restartCodingSession();closeCodingMenu()">🔄 Restart session<small>${online ? 'kill + relaunch the CLI (same repo)' : 'runner offline'}</small></button>
         <button class="coding-action coding-action-danger" onclick="endCodingSession();closeCodingMenu()">⏹ End session<small>stop the CLI on your machine</small></button>
         <button class="coding-action coding-action-danger" onclick="deleteCurrentCodingRepo();closeCodingMenu()">🗑 Delete project</button>
       </div>`;
@@ -422,16 +424,27 @@
           if (snap.pane) {
             if (snap.pane !== lastCodingPane) { pre.innerHTML = colorizeCodingPane(snap.pane); lastCodingPane = snap.pane; }
           } else {
-            if (snap.alive === false) {
+            if (!snap.runnerConnected) {
+              const node = currentRuntimeInfo?.runtime?.runnerNode;
+              pre.innerHTML = `<span style="color:var(--muted)">(runner offline${node ? ' — was on <b>' + esc(node) + '</b>' : ''}. Run <code>pags up</code> to connect.)</span>`;
+            } else if (snap.alive === false) {
               pre.innerHTML = '(session stopped — the CLI is not running.) <button onclick="restartCodingSession()" style="background:var(--accent);color:#fff;border:none;padding:0.3rem 0.7rem;border-radius:6px;cursor:pointer;font-size:0.82rem;margin-left:0.5rem">Restart</button>';
             } else {
-              pre.textContent = !snap.runnerConnected ? '(no runner connected — run `pags up`)' : '(waiting for the CLI…)';
+              pre.textContent = '(waiting for the CLI…)';
             }
             lastCodingPane = '';
           }
           if (atBottom) pre.scrollTop = pre.scrollHeight;
         }
         setCodingRunState(!snap.runnerConnected ? 'offline' : snap.alive ? snap.runState : 'stopped');
+        // Disable inputs when runner is unreachable, re-enable when it comes back
+        const offline = !snap.runnerConnected;
+        const msgEl = document.getElementById('inst-coding-msg');
+        if (msgEl) { msgEl.disabled = offline; msgEl.placeholder = offline ? 'Runner offline — run pags up' : 'Type a message to the CLI and press Enter…'; }
+        const askEl = document.getElementById('inst-coding-ask');
+        if (askEl) { askEl.disabled = offline; askEl.placeholder = offline ? 'Runner offline — run pags up' : 'Ask about it, or tell it to do something — it routes for you (@claude forces)…'; }
+        const sendEl = document.getElementById('inst-coding-send');
+        if (sendEl) sendEl.disabled = offline;
       } catch (e) { /* transient — keep polling */ }
     }
 

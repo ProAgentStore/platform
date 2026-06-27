@@ -149,8 +149,8 @@
       const st = codingReposStatus[r.id];
       const eng = engineLabel(active);
       const node = currentRuntimeInfo?.runtime?.runnerNode;
-      if (st === 'offline') return `<span style="color:var(--muted)">⏸ Runner offline${node ? ' · was on ' + esc(node) : ''} — run <code>pags up</code></span>`;
-      if (st === 'stopped') return `<span style="color:var(--amber,#f59e0b)">⏸ Session stopped${node ? ' · ' + esc(node) : ''} — tap <b>Open</b> to reconnect</span>`;
+      if (st === 'offline') return `<span style="color:var(--muted)">⏸ Runner offline${node ? ' · was on ' + esc(node) : ''} — run <code>pags up</code> to reconnect</span>`;
+      if (st === 'stopped') return `<span style="color:var(--amber,#f59e0b)">⏸ Session stopped${node ? ' · ' + esc(node) : ''} — tap <b>Open</b> to restart</span>`;
       if (st === 'thinking' || st === 'responding') return `<span style="color:var(--accent,#7c3aed)"><span class="coding-spin" style="vertical-align:-1px"></span> ${esc(eng)} is working…</span>`;
       const d = codingDeployStatus[r.id];
       if (d && d.available && d.run && d.run.status !== 'completed') return `<span style="color:var(--amber)">⏳ Deploying #${esc(d.run.runNumber)}…</span>`;
@@ -218,9 +218,11 @@
         if (span && r) span.innerHTML = repoStatusIcon(r, s);
         const live = document.querySelector(`[data-repo-live="${s.repoId}"]`);
         if (live && r) live.innerHTML = repoLiveLabel(r, s);
-        // Don't let you fire another voice reply while this repo is working.
+        // Disable actions when runner is offline or repo is working
+        const isOffline = codingReposStatus[s.repoId] === 'offline';
+        const isWorking = codingReposStatus[s.repoId] === 'thinking' || codingReposStatus[s.repoId] === 'responding';
         const reply = document.getElementById(`repo-reply-${s.repoId}`);
-        if (reply) reply.disabled = (codingReposStatus[s.repoId] === 'thinking' || codingReposStatus[s.repoId] === 'responding');
+        if (reply) reply.disabled = isWorking || isOffline;
       }));
       renderCodingActivity();
       if (document.getElementById('diag-dialog')) loadFullDiag();
