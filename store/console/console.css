@@ -367,7 +367,9 @@
       #inst-nav-slot span{max-width:100px;font-size:0.8rem}
 
       /* ── Tab panels fill viewport, each manages own scroll ── */
-      .tab-panel.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
+      /* Tab panels: coding tab uses flex for viewport fill; chat/board/etc use block */
+      #inst-tab-coding.tab-panel.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
+      #inst-tab-chat.tab-panel.active,#inst-tab-board.tab-panel.active,#inst-tab-knowledge.tab-panel.active,#inst-tab-settings.tab-panel.active{display:block;overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;min-height:0}
 
       /* ── Coding tab: strip all card chrome, edge-to-edge ── */
       #inst-tab-coding .create-form{background:none;border:none;border-radius:0}
