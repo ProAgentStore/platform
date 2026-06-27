@@ -14,10 +14,15 @@ export const relayRoutes = new Hono<{ Bindings: Env }>();
  */
 relayRoutes.get("/:instanceId/connect", async (c) => {
 	const token = c.req.query("token");
-	if (!token) return c.json({ error: "Missing token query param" }, 401);
+	if (!token) {
+		// WS upgrade can't return JSON errors in all clients — return plain HTTP 401
+		return new Response("Missing token", { status: 401 });
+	}
 
 	const session = await verifySession(token, c.env.SESSION_SIGNING_KEY);
-	if (!session) return c.json({ error: "Invalid or expired token" }, 401);
+	if (!session) {
+		return new Response("Invalid or expired token", { status: 401 });
+	}
 
 	const instanceId = c.req.param("instanceId");
 
@@ -27,7 +32,7 @@ relayRoutes.get("/:instanceId/connect", async (c) => {
 	)
 		.bind(instanceId, session.uid)
 		.first<{ id: string }>();
-	if (!instance) return c.json({ error: "Instance not found" }, 404);
+	if (!instance) return new Response("Instance not found", { status: 404 });
 
 	// Forward to RelayDO (one per instance)
 	const stub = c.env.RELAY.get(c.env.RELAY.idFromName(instanceId));

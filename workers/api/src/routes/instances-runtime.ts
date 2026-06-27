@@ -640,9 +640,14 @@ export async function callRuntime(
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ method, path, body: relayBody }),
 			}));
-			if (res.status !== 503) return res; // 503 = no runner on relay, fall through
-		} catch {
-			// relay unavailable -- fall through to tunnel
+			// 503 = no runner connected to relay → fall through to tunnel.
+			// Any other status (200, 404, 500, 504) means the relay handled it.
+			if (res.status !== 503) return res;
+		} catch (err) {
+			// Only fall through for relay infrastructure errors (DO unreachable).
+			// A body parse error is a bug — don't mask it.
+			if (err instanceof SyntaxError) throw err;
+			// relay DO unreachable -- fall through to tunnel
 		}
 	}
 

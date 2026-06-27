@@ -107,7 +107,19 @@ export class RelayDO extends DurableObject<Env> {
 
 	private handleStatus(): Response {
 		const sockets = this.ctx.getWebSockets("runner");
-		const connected = sockets.length > 0;
+		// A socket in the list may be half-closed (server kept the reference but
+		// the client went away between heartbeats). Try a cheap send to detect it.
+		let connected = false;
+		for (const ws of sockets) {
+			try {
+				ws.send("ping");
+				connected = true;
+				break;
+			} catch {
+				// Dead socket — clean up
+				try { ws.close(1000, "stale"); } catch { /* already closed */ }
+			}
+		}
 		return Response.json({ connected });
 	}
 

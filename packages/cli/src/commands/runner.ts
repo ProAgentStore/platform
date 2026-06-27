@@ -438,19 +438,18 @@ async function connectViaRelay(
 	writeLine("  No cloudflared needed. Ctrl+C to disconnect.");
 	writeLine("═══════════════════════════════════════════════");
 
-	// Heartbeat loop
-	let stopped = false;
-	const heartbeatLoop = async () => {
-		while (!stopped) {
-			await new Promise((r) => setTimeout(r, 30_000));
-			if (stopped) break;
+	// Heartbeat loop — keeps the runtime status "online" in D1.
+	// Uses unref'd timers so the loop doesn't prevent process exit.
+	const heartbeat = () => {
+		const timer = setTimeout(async () => {
 			for (const id of instanceIds) {
 				await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {}).catch(() => undefined);
 			}
-		}
+			heartbeat();
+		}, 30_000);
+		timer.unref(); // don't keep the process alive just for heartbeats
 	};
-	void heartbeatLoop();
-	process.once("beforeExit", () => { stopped = true; });
+	heartbeat();
 }
 
 function openRelaySocket(
@@ -474,6 +473,8 @@ function openRelaySocket(
 
 		ws.onmessage = async (event) => {
 			const text = typeof event.data === "string" ? event.data : String(event.data);
+			// Server pings to verify liveness — respond with pong
+			if (text === "ping") { try { ws.send("pong"); } catch { /* closed */ } return; }
 			let cmd: { id: string; method?: string; path: string; body?: unknown };
 			try {
 				cmd = JSON.parse(text) as { id: string; method?: string; path: string; body?: unknown };
@@ -495,17 +496,21 @@ function openRelaySocket(
 					headers,
 					body: hasBody ? JSON.stringify(cmd.body) : undefined,
 				});
-				const result = await res.json().catch(() => ({}));
-				ws.send(JSON.stringify({ id: cmd.id, status: res.status, result }));
+				const text = await res.text().catch(() => "");
+				let result: unknown;
+				try { result = text ? JSON.parse(text) : {}; } catch { result = { raw: text.slice(0, 500) }; }
+				try { ws.send(JSON.stringify({ id: cmd.id, status: res.status, result })); } catch { /* WS closed mid-flight */ }
 			} catch (err) {
-				ws.send(JSON.stringify({ id: cmd.id, status: 500, error: err instanceof Error ? err.message : String(err) }));
+				try { ws.send(JSON.stringify({ id: cmd.id, status: 500, error: err instanceof Error ? err.message : String(err) })); } catch { /* WS closed */ }
 			}
 		};
 
-		ws.onclose = () => {
+		ws.onclose = (ev) => {
 			if (reconnecting) return;
 			reconnecting = true;
-			writeLine(`Relay disconnected: ${instanceId.slice(0, 8)}… — reconnecting in ${Math.round(backoffMs / 1000)}s`);
+			// 401 on reconnect = token expired → tell the user clearly
+			const reason = ev.code === 4401 || ev.code === 1008 ? ' (token expired — run `pags login` then `pags up`)' : '';
+			writeLine(`Relay disconnected: ${instanceId.slice(0, 8)}…${reason} — reconnecting in ${Math.round(backoffMs / 1000)}s`);
 			setTimeout(() => {
 				reconnecting = false;
 				connect();

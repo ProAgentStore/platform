@@ -70,9 +70,12 @@ async function callViaRelay<T>(conn: RunnerConn, path: string, body?: unknown): 
 		}
 		return { ok: true, value: (await res.json()) as T };
 	} catch (err) {
-		// If the relay itself errors (not 503), throw so the caller sees the real error
+		// Relay returned a non-503 error → propagate, don't mask it
 		if (err instanceof Error && err.message.startsWith("Relay ")) throw err;
-		return { ok: false }; // relay unavailable -- fall through
+		// SyntaxError from JSON.parse → bug, don't mask
+		if (err instanceof SyntaxError) throw err;
+		// DO infrastructure error (unreachable, exceeded limits) → fall through to tunnel
+		return { ok: false };
 	}
 }
 
