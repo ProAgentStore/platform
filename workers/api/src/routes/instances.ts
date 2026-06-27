@@ -344,13 +344,25 @@ instanceRoutes.get("/:instanceId/tasks", async (c) => {
 	// runner list — also keeps cleared/deleted tasks (hidden=1) off the board even
 	// though the runner still re-sends them.) This replaces blocking the board on a
 	// live runner round-trip, which went blank whenever the tunnel was slow.
+	// Same recentlySeen guard as the /runtime/status probe: a heartbeat within
+	// 90s means the runner is alive, so a transient /tasks failure must NOT flip
+	// it offline — that would knock out getRunnerConn for coding/apply and flash
+	// "not connected" while the runner is actually fine.
+	const lastSeenMs = runtime.last_seen_at ? Date.parse(`${runtime.last_seen_at.replace(" ", "T")}Z`) : 0;
+	const recentlySeen = lastSeenMs > 0 && Date.now() - lastSeenMs < 90_000;
 	const revalidate = (async () => {
 		try {
 			const res = await callRuntime(c.env, runtime, "/tasks");
-			if (res.ok) await mirrorRuntimeTasks(c.env, instanceId, session.uid, await runtimeJson(res));
-			else await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+			if (res.ok) {
+				await mirrorRuntimeTasks(c.env, instanceId, session.uid, await runtimeJson(res));
+				await updateRuntimeStatus(c.env, instanceId, session.uid, "online");
+			} else if (!recentlySeen) {
+				await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+			}
 		} catch {
-			await updateRuntimeStatus(c.env, instanceId, session.uid, "offline").catch(() => undefined);
+			if (!recentlySeen) {
+				await updateRuntimeStatus(c.env, instanceId, session.uid, "offline").catch(() => undefined);
+			}
 		}
 	})();
 	try { c.executionCtx.waitUntil(revalidate); } catch { await revalidate; }
@@ -503,13 +515,17 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 	// Stale-while-revalidate (same as /tasks): serve the D1 mirror immediately so the
 	// activity feed never blanks/lags on a flaky tunnel; refresh from the runner in the
 	// background. Falls back to events synthesised from tasks when there's no history.
+	const lastSeenMs2 = runtime.last_seen_at ? Date.parse(`${runtime.last_seen_at.replace(" ", "T")}Z`) : 0;
+	const recentlySeen2 = lastSeenMs2 > 0 && Date.now() - lastSeenMs2 < 90_000;
 	const revalidate = (async () => {
 		try {
 			const res = await callRuntime(c.env, runtime, `/events?limit=${encodeURIComponent(String(limit))}`);
 			if (res.ok) await mirrorRuntimeEvents(c.env, instanceId, session.uid, await runtimeJson(res));
-			else await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
+			else if (!recentlySeen2) await updateRuntimeStatus(c.env, instanceId, session.uid, "offline");
 		} catch {
-			await updateRuntimeStatus(c.env, instanceId, session.uid, "offline").catch(() => undefined);
+			if (!recentlySeen2) {
+				await updateRuntimeStatus(c.env, instanceId, session.uid, "offline").catch(() => undefined);
+			}
 		}
 	})();
 	try { c.executionCtx.waitUntil(revalidate); } catch { await revalidate; }

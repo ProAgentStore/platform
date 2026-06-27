@@ -197,7 +197,7 @@
       await Promise.all(actives.map(async (s) => {
         try {
           const snap = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${s.id}/capture`);
-          codingReposStatus[s.repoId] = snap.alive ? snap.runState : 'offline';
+          codingReposStatus[s.repoId] = snap.runnerConnected === false ? 'offline' : (snap.alive ? snap.runState : 'idle');
         } catch (e) { /* keep prior */ }
         // Hands-off proactive narration: when a repo finishes working, say so (and
         // play its last reply) — so you don't have to watch the screen.
