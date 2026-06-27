@@ -598,7 +598,8 @@
 
   <div id="notifications-page" class="container hidden">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">
-      <h1 class="page-title" style="margin-bottom:0">Notifications</h1>
+      <a href="#" onclick="goBackConsole();return false" class="back-link" style="margin-right:0.5rem">&larr;</a>
+      <h1 class="page-title" style="margin-bottom:0;flex:1">Notifications</h1>
       <div style="display:flex;gap:0.5rem">
         <button type="button" id="notif-enable-btn" onclick="enablePushNotifications()" class="btn btn-primary btn-sm hidden">🔔 Enable notifications</button>
         <button type="button" onclick="markAllRead()" class="btn btn-outline btn-sm">Mark all read</button>
