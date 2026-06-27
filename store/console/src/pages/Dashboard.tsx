@@ -97,8 +97,8 @@ export default function Dashboard() {
 							{instances.map((inst) => (
 								<div key={inst.id} onClick={() => navigate(`/instances/${inst.id}`)} onKeyDown={(e) => { if (e.key === "Enter") navigate(`/instances/${inst.id}`); }} role="button" tabIndex={0}
 									className="bg-panel border border-line rounded-xl p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
-									<h3 className="text-[0.95rem] font-bold mb-1">{inst.agent_name}</h3>
-									<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-2">{inst.agent_description || "No description"}</p>
+									<h3 className="text-[0.95rem] font-bold mb-1">{inst.name}</h3>
+									<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-2">{inst.description || "No description"}</p>
 									<div className="flex gap-2 text-xs">
 										<span className="px-1.5 py-0.5 rounded font-medium bg-green/15 text-green">subscribed</span>
 									</div>

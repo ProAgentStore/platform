@@ -34,7 +34,7 @@ export default function InstanceDetail() {
 					"/v1/instances/my/instances",
 				);
 				const inst = (data.instances || []).find(
-					(i) => i.id === id || i.agent_slug === id,
+					(i) => i.id === id || i.slug === id,
 				);
 				if (inst) {
 					setInstance(inst);
@@ -103,7 +103,7 @@ export default function InstanceDetail() {
 			<div className="flex items-center gap-2 px-3 py-1.5 border-b border-line bg-panel">
 				<button type="button" onClick={() => navigate("/instances")} className="text-sm text-muted hover:text-ink px-1">&larr;</button>
 				{instance && (
-					<span className="text-sm font-semibold truncate max-w-40 hidden sm:inline">{instance.agent_name}</span>
+					<span className="text-sm font-semibold truncate max-w-40 hidden sm:inline">{instance.name}</span>
 				)}
 				<div className="flex border border-line rounded-lg overflow-x-auto overflow-y-hidden shrink min-w-0 scrollbar-none">
 					{tabs.map((t) => (

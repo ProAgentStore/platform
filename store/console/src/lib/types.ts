@@ -19,11 +19,12 @@ export interface Agent {
 export interface Instance {
 	id: string;
 	agent_id: string;
-	agent_slug: string;
-	agent_name: string;
-	agent_description?: string;
-	agent_icon?: string;
-	agent_icon_bg?: string;
+	slug: string;
+	name: string;
+	description?: string;
+	icon?: string;
+	icon_bg?: string;
+	category?: string;
 	status: string;
 	created_at: string;
 	capabilities?: {

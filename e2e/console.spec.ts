@@ -181,9 +181,9 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				instances: options.instances ?? [
 					{
 						id: "inst-1",
-						agent_name: "Job Application Assistant",
-						agent_description: "Apply to jobs through a local browser runtime",
-						agent_slug: "job-application-assistant",
+						name: "Job Application Assistant",
+						description: "Apply to jobs through a local browser runtime",
+						slug: "job-application-assistant",
 						category: "productivity",
 						icon_bg: "#7c3aed",
 						capabilities: { surfaces: ["apply"], runtime: "browser", workflow: "apply" },
