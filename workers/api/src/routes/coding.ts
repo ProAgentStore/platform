@@ -774,3 +774,169 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 	const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
 	return c.json({ ok: runnerConnected, runnerConnected });
 });
+
+/**
+ * Full diagnostics: runner, tmux, sessions, repos, GitHub, detected issues.
+ * The console's transparency view — everything the user needs to self-diagnose.
+ */
+codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const env = c.env;
+
+	// 1. Runner connection (D1 row)
+	const runtimeRow = await env.DB.prepare(
+		"SELECT endpoint_url, capabilities, runner_version, status, last_seen_at, placement, created_at, updated_at FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2",
+	).bind(instanceId, uid).first<{
+		endpoint_url: string | null; capabilities: string | null; runner_version: string | null;
+		status: string | null; last_seen_at: string | null; placement: string | null;
+		created_at: string | null; updated_at: string | null;
+	}>();
+
+	const runner: Record<string, unknown> = {
+		registered: !!runtimeRow,
+		status: runtimeRow?.status ?? "unregistered",
+		endpointUrl: runtimeRow?.endpoint_url ?? null,
+		placement: runtimeRow?.placement ?? null,
+		capabilities: runtimeRow?.capabilities ? JSON.parse(runtimeRow.capabilities) : [],
+		runnerVersion: runtimeRow?.runner_version ?? null,
+		lastSeenAt: runtimeRow?.last_seen_at ?? null,
+		registeredAt: runtimeRow?.created_at ?? null,
+	};
+
+	// 2. Live runner probe
+	const conn = await getRunnerConn(env, instanceId, uid);
+	let runnerHealth: unknown = null;
+	let runnerDiag: unknown = null;
+	let runnerReachable = false;
+	if (conn) {
+		try {
+			runnerHealth = await callRunner<unknown>(conn, "/health", undefined);
+			runnerReachable = true;
+		} catch (e) {
+			runnerHealth = { error: e instanceof Error ? e.message : String(e) };
+		}
+		try {
+			runnerDiag = await callRunner<unknown>(conn, "/coding/diagnostics", undefined);
+		} catch (e) {
+			runnerDiag = { error: e instanceof Error ? e.message : String(e) };
+		}
+	}
+	(runner as Record<string, unknown>).reachable = runnerReachable;
+	(runner as Record<string, unknown>).health = runnerHealth;
+
+	// 3. D1 sessions + repos
+	const [dbSessions, dbRepos] = await Promise.all([
+		listSessions(env, instanceId, uid),
+		listRepos(env, instanceId, uid),
+	]);
+
+	// 4. Cross-reference D1 active sessions vs runner's tracked sessions
+	const trackedIds = new Set<string>();
+	const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; tmuxSession: string; takeover: boolean }>; orphanedTmux?: string[]; tmuxTotal?: number; pagsTmuxTotal?: number } | null;
+	if (diagData?.tracked) {
+		for (const t of diagData.tracked) trackedIds.add(t.sessionId);
+	}
+
+	const sessions = dbSessions.map((s) => {
+		const tracked = diagData?.tracked?.find((t) => t.sessionId === s.id);
+		const repo = dbRepos.find((r) => r.id === s.repoId);
+		return {
+			id: s.id,
+			repoId: s.repoId,
+			repoName: repo?.name ?? s.repoId,
+			status: s.status,
+			clientType: s.clientType,
+			launchCommand: s.launchCommand ?? null,
+			tmuxSession: s.tmuxSession ?? null,
+			startedAt: s.startedAt,
+			endedAt: s.endedAt ?? null,
+			// Live state from the runner (null if runner is offline or session not tracked)
+			live: tracked ? {
+				alive: tracked.alive,
+				runState: tracked.runState,
+				paneLines: tracked.paneLines,
+				workDir: tracked.workDir,
+				underTakeover: tracked.takeover,
+			} : null,
+			// Issue detection
+			issue: s.status === "active" && !tracked
+				? (runnerReachable ? "orphaned: D1 says active but runner has no tmux for it" : "unknown: runner offline")
+				: s.status === "active" && tracked && !tracked.alive
+					? "dead: tracked but CLI process exited"
+					: null,
+		};
+	});
+
+	const repos = dbRepos.map((r) => {
+		const activeSessions = sessions.filter((s) => s.repoId === r.id && s.status === "active");
+		return {
+			id: r.id,
+			name: r.name,
+			githubRepo: r.githubRepo ?? null,
+			cloneUrl: r.cloneUrl ?? null,
+			branch: r.branch,
+			workdir: r.workdir ?? null,
+			cloneStatus: r.cloneStatus,
+			cloneError: r.cloneError ?? null,
+			defaultClient: r.defaultClient,
+			urls: r.urls ?? null,
+			activeSessions: activeSessions.length,
+			issue: r.cloneStatus === "error" ? `clone failed: ${r.cloneError || "unknown error"}`
+				: r.cloneStatus === "missing_url" ? "no clone URL and no local path"
+				: null,
+		};
+	});
+
+	// 5. GitHub App status
+	const githubApp = {
+		configured: githubAppConfigured(env),
+	};
+
+	// 6. Auto-detected issues
+	const issues: Array<{ severity: "error" | "warn" | "info"; message: string; fix?: string }> = [];
+
+	if (!runtimeRow) {
+		issues.push({ severity: "error", message: "No runner registered for this instance", fix: "Run `pags up` to connect your machine" });
+	} else if (runtimeRow.status === "offline") {
+		issues.push({ severity: "error", message: "Runner status is offline", fix: "Restart `pags up` — the tunnel may have dropped" });
+	} else if (!runnerReachable) {
+		issues.push({ severity: "error", message: "Runner registered but not reachable (tunnel down?)", fix: "Restart `pags up` to re-establish the tunnel" });
+	}
+
+	for (const s of sessions) {
+		if (s.issue) issues.push({ severity: "warn", message: `Session ${s.id.slice(-8)} (${s.repoName}): ${s.issue}`, fix: s.issue.startsWith("orphaned") ? "Kill the session and start a new one" : "Restart the session from ⚙" });
+	}
+	for (const r of repos) {
+		if (r.issue) issues.push({ severity: "warn", message: `Repo "${r.name}": ${r.issue}`, fix: r.cloneStatus === "error" ? "Delete and re-add the repo, or fix the clone URL" : undefined });
+	}
+
+	if (diagData?.orphanedTmux?.length) {
+		issues.push({ severity: "info", message: `${diagData.orphanedTmux.length} orphaned tmux session(s): ${diagData.orphanedTmux.join(", ")}`, fix: "These pags-* tmux sessions have no matching D1 record — kill them manually with tmux kill-session" });
+	}
+
+	const activeSessions = sessions.filter((s) => s.status === "active");
+	const healthySessions = activeSessions.filter((s) => s.live?.alive);
+
+	return c.json({
+		summary: {
+			runnerOnline: runnerReachable,
+			runnerStatus: runner.status,
+			totalRepos: repos.length,
+			totalSessions: sessions.length,
+			activeSessions: activeSessions.length,
+			healthySessions: healthySessions.length,
+			issueCount: issues.filter((i) => i.severity === "error" || i.severity === "warn").length,
+		},
+		runner,
+		tmux: diagData ? {
+			trackedSessions: diagData.tracked?.length ?? 0,
+			orphanedSessions: diagData.orphanedTmux ?? [],
+			tmuxTotal: diagData.tmuxTotal ?? 0,
+			pagsTmuxTotal: diagData.pagsTmuxTotal ?? 0,
+		} : null,
+		sessions,
+		repos,
+		githubApp,
+		issues,
+	});
+});

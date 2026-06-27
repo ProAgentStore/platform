@@ -186,6 +186,20 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "GET" && path === "/coding/sessions") {
 		return json(res, 200, { sessions: runner.coding.list() });
 	}
+	if (req.method === "GET" && path === "/coding/diagnostics") {
+		const { listSessions: tmuxList } = await import("./coding/tmux.js");
+		const allTmux = tmuxList();
+		const pagsTmux = allTmux.filter((n: string) => n.startsWith("pags-"));
+		const tracked = runner.coding.diagnostics();
+		const trackedNames = new Set(tracked.map((s) => s.tmuxSession));
+		const orphanedTmux = pagsTmux.filter((n: string) => !trackedNames.has(n));
+		return json(res, 200, {
+			tracked,
+			orphanedTmux,
+			tmuxTotal: allTmux.length,
+			pagsTmuxTotal: pagsTmux.length,
+		});
+	}
 	if (req.method === "POST" && path === "/coding/event") {
 		// Brain progress events — recorded by PAGS, ignored locally. Accept + ack.
 		return json(res, 200, { ok: true });

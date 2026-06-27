@@ -151,6 +151,31 @@ export class CodingRuntime {
 		}));
 	}
 
+	/** Rich diagnostics for every tracked session — the console's transparency view. */
+	diagnostics(): Array<{
+		sessionId: string;
+		tmuxSession: string;
+		alive: boolean;
+		runState: "idle" | "thinking" | "responding";
+		ready: boolean;
+		paneLines: number;
+		clientType: string;
+		workDir: string;
+		takeover: boolean;
+	}> {
+		return [...this.sessions.entries()].map(([sessionId, s]) => ({
+			sessionId,
+			tmuxSession: s.sessionName,
+			alive: s.alive,
+			runState: s.alive ? s.runState() : "idle",
+			ready: s.alive ? s.ready : false,
+			paneLines: s.alive ? (s.snapshot().split("\n").length) : 0,
+			clientType: s.config.clientType,
+			workDir: s.config.workDir,
+			takeover: this.takeovers.has(sessionId),
+		}));
+	}
+
 	// ── Human takeover (the "stuck" handoff) ────────────────────────────────
 	// A text-frame equivalent of the browser takeover: the console shows the live
 	// pane and forwards the human's keystrokes until they Resume.
