@@ -148,9 +148,14 @@
        desktop, inside the hamburger dropdown on mobile (#top-nav becomes a dropdown). */
     .nav-signed{display:flex}
 
+    /* Coding sections — desktop defaults (mobile overrides in @media below) */
+    .coding-section{padding:0.6rem 0.8rem;margin-bottom:0.6rem}
+    #inst-coding-terminal.coding-section{margin-top:0.75rem;margin-bottom:0}
+    .coding-chat-thread{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:0.7rem 0.85rem;overflow:auto;font-size:0.86rem;line-height:1.5;touch-action:manipulation}
+
     /* Coding session panel fills the viewport: header at top, summary/terminal
        flexes to fill, input row pinned at bottom. Single scroll inside the pane. */
-    #inst-coding-terminal:not(.hidden){display:flex;flex-direction:column;height:calc(100dvh - 120px);min-height:340px;margin-top:0.75rem}
+    #inst-coding-terminal:not(.hidden){display:flex;flex-direction:column;height:calc(100dvh - 120px);min-height:340px}
     #inst-coding-terminal .coding-view > div:last-child{flex-shrink:0}  /* input bar never shrinks */
     .coding-view{min-height:0;flex-direction:column}
     .coding-view:not(.hidden){display:flex;flex:1}
@@ -363,48 +368,40 @@
       /* ── Tab panels fill viewport, each manages own scroll ── */
       .tab-panel.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
 
-      /* ── Cards: strip chrome inside instance tabs ── */
-      #instance-detail .create-form{
-        background:none!important;border:none!important;border-radius:0!important;
-        padding:0.3rem 0.5rem!important;margin-bottom:0.2rem!important;
-      }
-      /* Settings + Knowledge tabs: keep subtle card look */
+      /* ── Coding tab: strip all card chrome, edge-to-edge ── */
+      #inst-tab-coding .create-form{background:none;border:none;border-radius:0}
+      .coding-section{padding:0.2rem 0.25rem;margin-bottom:0.1rem}
+      #inst-coding-terminal.coding-section{margin-top:0;margin-bottom:0}
+      /* Settings + Knowledge: keep card look (no nesting issue) */
       #inst-tab-settings .create-form,#inst-tab-knowledge .create-form{
-        background:var(--panel)!important;border:1px solid var(--line)!important;
-        border-radius:8px!important;padding:0.6rem!important;margin:0.3rem 0.4rem 0.5rem!important;
+        background:var(--panel);border:1px solid var(--line);
+        border-radius:8px;padding:0.6rem;margin:0.3rem 0.4rem 0.5rem;
       }
 
-      /* ── Repo list: compact, touchable rows ── */
-      #inst-coding-repos .memory-item{
-        padding:0.5rem!important;border-radius:8px!important;
-        margin-bottom:2px!important;min-height:44px;
-      }
-      .memory-item,.task-item{padding:0.5rem;min-height:44px}
+      /* ── Repo list: tight touchable rows ── */
+      #inst-coding-repos .memory-item{padding:0.4rem 0.25rem;border-radius:6px;margin-bottom:2px;min-height:44px}
+      .memory-item,.task-item{padding:0.45rem 0.3rem;min-height:44px}
 
-      /* ── Coding terminal: full viewport session ── */
+      /* ── Coding terminal: full viewport ── */
       #inst-coding-terminal:not(.hidden){
-        margin:0!important;padding:0!important;border:none!important;
-        background:none!important;border-radius:0!important;
-        height:calc(100dvh - 90px)!important;
+        margin:0;padding:0;border:none;background:none;border-radius:0;
+        height:calc(100dvh - 90px);
       }
       #inst-coding-terminal > div:first-child{
-        padding:0.2rem 0.35rem!important;gap:0.25rem!important;flex-wrap:nowrap!important;
+        padding:0.2rem 0.3rem;gap:0.25rem;flex-wrap:nowrap;
         border-bottom:1px solid var(--line);flex-shrink:0;
       }
-      /* Chat thread + terminal pane: flush, fills space */
-      #inst-coding-summary-thread{
-        padding:0.4rem!important;border:none!important;border-radius:0!important;
-        background:var(--paper)!important;
-      }
-      #inst-coding-pane{padding:0.4rem!important;border-radius:0!important}
-      /* Input bars: fixed at bottom, safe-area-aware */
+      /* Chat thread + terminal: flush, zero borders */
+      .coding-chat-thread{padding:0.3rem;border:none;border-radius:0;background:var(--paper)}
+      #inst-coding-pane{padding:0.3rem;border-radius:0}
+      /* Input bars: bottom-pinned, safe-area */
       #inst-coding-view-summary > div:last-child,
       #inst-coding-view-terminal > div:last-child{
-        padding:0.35rem 0.4rem calc(env(safe-area-inset-bottom,0px) + 0.35rem)!important;
-        margin-top:0!important;gap:0.25rem!important;flex-shrink:0;
+        padding:0.3rem 0.25rem calc(env(safe-area-inset-bottom,0px) + 0.3rem);
+        margin-top:0;gap:0.2rem;flex-shrink:0;
         border-top:1px solid var(--line);background:var(--panel);
       }
-      #inst-coding-overseer-reply{padding:0.35rem 0.4rem!important}
+      #inst-coding-overseer-reply{padding:0.3rem}
 
       /* ── Touch targets: minimum 44px ── */
       .btn{padding:0.55rem 0.9rem;min-height:44px;display:inline-flex;align-items:center}

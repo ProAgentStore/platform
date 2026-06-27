@@ -128,13 +128,12 @@
       meta = await resolveInstanceMeta(instanceId, meta);
       currentInstance = { id: instanceId, ...meta };
       // A coding agent's real interface is the Coding tab (it drives Claude Code with
-      // full tools). The generic Chat (no repo/file tools) and the apply Board are
-      // noise for it — hide them and default to Coding.
       const isCoding = instanceHasSurface('coding');
-      if (isCoding && (tab === 'chat' || tab === 'board')) tab = 'coding';
+      const isApply = instanceHasSurface('apply');
+      // Default to the primary surface
+      if (isCoding && tab === 'board') tab = 'coding';
       showPage('instance-detail');
       document.body.classList.add('instance-open');
-      // Inject instance nav into the single header bar
       const slot = document.getElementById('inst-nav-slot');
       slot.innerHTML = `
         <a href="/console/instances" onclick="showDashboard('instances');return false" class="inst-back" title="Back to instances" style="color:var(--muted);text-decoration:none;font-size:1.1rem;padding:0 0.2rem;flex-shrink:0">&larr;</a>
@@ -142,8 +141,8 @@
         <span id="runtime-status-badge" onclick="showRunnerGuide()" title="Runner status — click for setup help" style="cursor:pointer;font-size:0.8rem;line-height:1;padding:0.15rem 0.3rem;border-radius:999px;font-weight:700;background:var(--line);color:var(--muted);flex-shrink:0">○</span>
         <button id="header-stop-btn" type="button" onclick="stopActiveAgentWork()" title="Stop the agent now" style="display:none;font-size:0.7rem;font-weight:700;padding:0.2rem 0.5rem;border-radius:6px;border:1px solid var(--red);background:rgba(239,68,68,0.14);color:var(--red);cursor:pointer;flex-shrink:0">⏹<span class="tl"> Stop</span></button>
         <div class="inst-nav-tabs">
-          ${isCoding ? '' : `<button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')" title="Chat"><span class="ti">💬</span><span class="tl">Chat</span></button>
-          <button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')" title="Board"><span class="ti">📋</span><span class="tl">Board</span></button>`}
+          <button type="button" class="tab${tab==='chat'?' active':''}" data-inst-tab="chat" onclick="switchInstTab('chat')" title="Chat"><span class="ti">💬</span><span class="tl">Chat</span></button>
+          ${isApply ? `<button type="button" class="tab${tab==='board'?' active':''}" data-inst-tab="board" onclick="switchInstTab('board')" title="Board"><span class="ti">📋</span><span class="tl">Board</span></button>` : ''}
           ${isCoding ? `<button type="button" class="tab${tab==='coding'?' active':''}" data-inst-tab="coding" onclick="switchInstTab('coding')" title="Coding"><span class="ti">💻</span><span class="tl">Coding</span></button>` : ''}
           <button type="button" class="tab${tab==='knowledge'?' active':''}" data-inst-tab="knowledge" onclick="switchInstTab('knowledge')" title="Knowledge"><span class="ti">📚</span><span class="tl">Knowledge</span></button>
           <button type="button" class="tab${tab==='settings'?' active':''}" data-inst-tab="settings" onclick="switchInstTab('settings')" title="Settings"><span class="ti">⚙️</span><span class="tl">Settings</span></button>
