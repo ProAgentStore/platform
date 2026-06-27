@@ -5,7 +5,7 @@ import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
-import { suspendActiveSessions } from "../lib/coding-store.js";
+import { suspendActiveSessions, resumeSuspendedSessions } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import type { Env } from "../types.js";
@@ -228,13 +228,18 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		}
 	}
 
-	// If a different machine is taking over, suspend its active coding sessions
-	// so they show as "from another machine" instead of zombie "active" entries.
+	// Machine-switch session lifecycle:
+	// - Different machine → suspend active sessions (they belong to the old machine)
+	// - Same machine reconnecting → resume suspended sessions (they're back home)
 	const prevRuntime = await getRuntime(c.env, instanceId, session.uid);
-	const machineChanged = prevRuntime && prevRuntime.runner_node && runnerNode && prevRuntime.runner_node !== runnerNode;
-	if (machineChanged) {
-		const suspended = await suspendActiveSessions(c.env, instanceId, session.uid).catch(() => 0);
-		if (suspended) console.log(`Suspended ${suspended} session(s) from ${prevRuntime.runner_node} → ${runnerNode}`);
+	if (prevRuntime && prevRuntime.runner_node && runnerNode) {
+		if (prevRuntime.runner_node !== runnerNode) {
+			const suspended = await suspendActiveSessions(c.env, instanceId, session.uid).catch(() => 0);
+			if (suspended) console.log(`Suspended ${suspended} session(s) from ${prevRuntime.runner_node} → ${runnerNode}`);
+		} else {
+			const resumed = await resumeSuspendedSessions(c.env, instanceId, session.uid).catch(() => 0);
+			if (resumed) console.log(`Resumed ${resumed} suspended session(s) on ${runnerNode}`);
+		}
 	}
 
 	await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)

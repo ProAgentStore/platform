@@ -7,7 +7,10 @@ import { arch, homedir, hostname, platform } from "node:os";
 import { resolve } from "node:path";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { loadSession } from "./login.js";
+
+const CLI_VERSION: string = (() => { try { return (createRequire(import.meta.url)("../package.json") as { version: string }).version; } catch { return ""; } })();
 
 /** First free TCP port at/after `start` on 127.0.0.1 — avoids EADDRINUSE collisions. */
 async function findFreePort(start: number): Promise<number> {
@@ -423,7 +426,7 @@ async function connectViaRelay(
 				token: runnerToken,
 				placement: "local",
 				capabilities: caps,
-				runnerVersion: "",
+				runnerVersion: CLI_VERSION,
 				runnerNode: hostname(),
 				force,
 			});
@@ -573,7 +576,7 @@ export function createRunnerCommand(): Command {
 		.option("--cloudflared <path>", "cloudflared executable")
 		.option("--runner-version <version>", "Runner version")
 		.option("--skip-probe", "Skip PAGS FAGS-runtime probe after registration")
-		.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay), 'named' (production), or 'quick' (default)", "quick")
+		.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay, default), 'named' (stable hostname), or 'quick' (cloudflared)", "ws")
 		.option("--force", "Take over from another connected machine")
 		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { tunnel?: string; force?: boolean }) => {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;

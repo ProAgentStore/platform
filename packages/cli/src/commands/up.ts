@@ -38,7 +38,7 @@ export const upCommand = new Command("up")
 	.description("Start the browser runner for all your agent instances")
 	.option("--headless", "Run browser in headless mode")
 	.option("--instance <id>", "Connect to a specific instance only")
-	.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay, recommended), 'named' (production, stable), or 'quick' (default, trycloudflare.com)", "quick")
+	.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay, default), 'named' (stable hostname), or 'quick' (cloudflared)", "ws")
 	.option("--force", "Take over from another connected machine")
 	.action(async (opts: { headless?: boolean; instance?: string; tunnel?: string; force?: boolean }) => {
 		const session = requireSession();

@@ -308,6 +308,21 @@ export async function suspendActiveSessions(env: Env, instanceId: string, userId
 	return res.meta.changes ?? 0;
 }
 
+/**
+ * Reactivate suspended sessions — called when the original machine reconnects.
+ * The runner will reattach to the tmux sessions on the next /start call.
+ */
+export async function resumeSuspendedSessions(env: Env, instanceId: string, userId: string): Promise<number> {
+	const res = await env.DB.prepare(
+		`UPDATE coding_sessions
+		 SET status = 'active', ended_at = NULL, updated_at = datetime('now')
+		 WHERE instance_id = ?1 AND user_id = ?2 AND status = 'suspended'`,
+	)
+		.bind(instanceId, userId)
+		.run();
+	return res.meta.changes ?? 0;
+}
+
 export async function endSession(env: Env, instanceId: string, userId: string, sessionId: string, status: CodingSessionStatus = "ended"): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions
