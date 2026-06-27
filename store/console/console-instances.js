@@ -870,7 +870,78 @@
       if (!chatAutoSpeak || !chatTts) return;
       const msgs = document.querySelectorAll('#inst-chat-messages .chat-msg.assistant');
       const last = msgs[msgs.length - 1];
-      if (last) await chatTts.speak(last.textContent);
+      if (last) {
+        await chatTts.speak(last.textContent);
+        // In conversation mode, restart listening after the agent finishes speaking
+        if (chatConvoMode && chatConvoStt && !chatConvoStt.listening) {
+          try { await chatConvoStt.start(); } catch {}
+        }
+      }
+    }
+
+    // ── Conversation mode: continuous voice chat ────────────────────────────
+    // 🎙️ = one toggle that turns on: continuous STT + auto-send + auto-speak.
+    // You speak, the agent responds aloud, you speak again. No buttons to press.
+    let chatConvoMode = false;
+    let chatConvoStt = null;
+
+    async function toggleConversationMode(btn) {
+      if (chatConvoMode) {
+        // Stop conversation
+        chatConvoMode = false;
+        chatAutoSpeak = false;
+        if (chatConvoStt) { chatConvoStt.stop(); chatConvoStt = null; }
+        if (btn) btn.classList.remove('active');
+        const speakBtn = document.getElementById('inst-chat-speak');
+        if (speakBtn) speakBtn.classList.remove('active');
+        const input = document.getElementById('inst-chat-input');
+        if (input) input.placeholder = 'Send a message...';
+        return;
+      }
+
+      // Start conversation
+      const { sttProvider, apiKey } = await initChatVoice();
+      chatConvoMode = true;
+      chatAutoSpeak = true; // auto-speak responses
+      if (btn) btn.classList.add('active');
+      const speakBtn = document.getElementById('inst-chat-speak');
+      if (speakBtn) speakBtn.classList.add('active');
+      const input = document.getElementById('inst-chat-input');
+      if (input) input.placeholder = 'Listening — speak to your agent...';
+
+      chatConvoStt = new VoiceStt(sttProvider, {
+        apiKey,
+        language: ((typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {}).language || 'en-US',
+        onResult: (text, isFinal) => {
+          if (input) input.value = text;
+          if (isFinal) {
+            // Auto-send the transcript
+            sendInstanceMessage();
+            // For API-based STT (Whisper), restart after a pause
+            // (browser continuous mode restarts automatically)
+            if (sttProvider !== 'browser' && chatConvoMode) {
+              chatConvoStt?.stop();
+              // Don't restart immediately — wait for the agent to respond + TTS to finish
+              // speakLastAssistantMessage() will restart STT after speaking
+            }
+          }
+        },
+        onError: (err) => {
+          if (input) input.placeholder = 'Voice error: ' + err;
+        },
+        onEnd: () => {},
+      });
+
+      try {
+        await chatConvoStt.start();
+      } catch (e) {
+        chatConvoMode = false;
+        chatAutoSpeak = false;
+        if (chatConvoStt) { chatConvoStt.stop(); chatConvoStt = null; }
+        if (btn) btn.classList.remove('active');
+        if (input) input.placeholder = 'Send a message...';
+        alert('Could not start voice: ' + (e instanceof Error ? e.message : String(e)));
+      }
     }
 
     async function clearInstanceChat() {

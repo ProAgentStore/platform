@@ -215,8 +215,9 @@
         <div id="inst-chat-thinking" class="thinking hidden">Agent is thinking...</div>
         <div class="chat-input">
           <input id="inst-chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendInstanceMessage()">
-          <button type="button" id="inst-chat-mic" class="btn-sm btn-outline" onclick="toggleChatVoice(this)" title="Voice input">🎤</button>
-          <button type="button" id="inst-chat-speak" class="btn-sm btn-outline" onclick="toggleChatAutoSpeak(this)" title="Auto-speak">🔊</button>
+          <button type="button" id="inst-chat-mic" class="btn-sm btn-outline" onclick="toggleChatVoice(this)" title="Push to talk — fills input">🎤</button>
+          <button type="button" id="inst-chat-speak" class="btn-sm btn-outline" onclick="toggleChatAutoSpeak(this)" title="Auto-speak responses">🔊</button>
+          <button type="button" id="inst-chat-convo" class="btn-sm btn-outline" onclick="toggleConversationMode(this)" title="Conversation mode — continuous voice chat">🎙️</button>
           <button type="button" class="btn-sm btn-primary" onclick="sendInstanceMessage()"><span class="ti">➤</span><span class="tl">Send</span></button>
           <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy chat">⧉</button>
           <button type="button" class="btn-sm btn-outline" onclick="clearInstanceChat()" title="Clear" style="color:var(--red)">🗑</button>
