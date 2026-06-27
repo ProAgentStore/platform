@@ -1,20 +1,18 @@
 import { decryptKey } from "./crypto.js";
 import type { Env } from "../types.js";
 
-/** A resolved connection to a user's local browser runner (over the tunnel). */
+/** A resolved connection to a user's local browser runner (via WebSocket relay). */
 export interface RunnerConn {
 	endpointUrl: string;
 	token: string;
 	instanceId: string;
-	/** Carried so callRunner can re-resolve the URL if the runner reconnects. */
 	userId: string;
 	env: Env;
 }
 
 /**
  * Resolve the connected runner for an instance and decrypt its bearer token.
- * Returns null when no runner is online. Shared by the apply workflow and the
- * agent tools so there's one place that knows how to reach the runner.
+ * Returns null when no runner is online.
  */
 export async function getRunnerConn(env: Env, instanceId: string, userId: string): Promise<RunnerConn | null> {
 	const row = await env.DB.prepare(
@@ -46,73 +44,19 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
 	return { endpointUrl: row.endpoint_url.replace(/\/$/, ""), token, instanceId, userId, env };
 }
 
-/** Wrapper to distinguish "relay returned a value" (even null/undefined) from "relay unavailable". */
-type RelayResult<T> = { ok: true; value: T } | { ok: false };
-
-/**
- * Try sending a command through the WebSocket relay DO first; fall back to the
- * tunnel if no runner is connected via relay (503) or the RELAY binding doesn't
- * exist (old CLIs / local dev without the DO).
- */
-async function callViaRelay<T>(conn: RunnerConn, path: string, body?: unknown): Promise<RelayResult<T>> {
-	if (!conn.env.RELAY) return { ok: false };
-	try {
-		const stub = conn.env.RELAY.get(conn.env.RELAY.idFromName(conn.instanceId));
-		const res = await stub.fetch(new Request("https://relay/command", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ method: "POST", path, body }),
-		}));
-		if (res.status === 503) return { ok: false }; // no runner on relay -- fall through to tunnel
-		if (!res.ok) {
-			const detail = await res.text().catch(() => "");
-			throw new Error(`Relay ${path} → ${res.status}: ${detail.slice(0, 200)}`);
-		}
-		return { ok: true, value: (await res.json()) as T };
-	} catch (err) {
-		// Relay returned a non-503 error → propagate, don't mask it
-		if (err instanceof Error && err.message.startsWith("Relay ")) throw err;
-		// SyntaxError from JSON.parse → bug, don't mask
-		if (err instanceof SyntaxError) throw err;
-		// DO infrastructure error (unreachable, exceeded limits) → fall through to tunnel
-		return { ok: false };
-	}
-}
-
-/** POST a JSON request to a runner endpoint with the instance auth headers. */
+/** Send a command to the runner via the WebSocket relay DO. */
 export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown): Promise<T> {
-	// Try relay first (WebSocket path -- no tunnel needed)
-	const relayResult = await callViaRelay<T>(conn, path, body);
-	if (relayResult.ok) return relayResult.value;
-
-	// Fall back to direct tunnel fetch
-	const attempt = async (): Promise<T> => {
-		const headers: Record<string, string> = { "Content-Type": "application/json", "X-PAGS-Instance-Id": conn.instanceId };
-		if (conn.token) headers.Authorization = `Bearer ${conn.token}`;
-		const res = await fetch(`${conn.endpointUrl}${path}`, {
-			method: "POST",
-			headers,
-			body: body === undefined ? undefined : JSON.stringify(body),
-		});
-		if (!res.ok) {
-			const detail = await res.text().catch(() => "");
-			throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
-		}
-		return (await res.json()) as T;
-	};
-	try {
-		return await attempt();
-	} catch (err) {
-		// The runner's tunnel can drop and respawn with a NEW url (the watchdog
-		// re-registers it WITHOUT killing the browser). Re-resolve the current url
-		// from the DB and retry once — so an in-progress application continues on the
-		// SAME live page instead of dying on a stale tunnel.
-		const fresh = await getRunnerConn(conn.env, conn.instanceId, conn.userId).catch(() => null);
-		if (fresh && fresh.endpointUrl !== conn.endpointUrl) {
-			conn.endpointUrl = fresh.endpointUrl;
-			conn.token = fresh.token;
-			return await attempt();
-		}
-		throw err;
+	if (!conn.env.RELAY) throw new Error("RELAY binding not configured");
+	const stub = conn.env.RELAY.get(conn.env.RELAY.idFromName(conn.instanceId));
+	const res = await stub.fetch(new Request("https://relay/command", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ method: "POST", path, body }),
+	}));
+	if (res.status === 503) throw new Error("No runner connected — run `pags up`");
+	if (!res.ok) {
+		const detail = await res.text().catch(() => "");
+		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
 	}
+	return (await res.json()) as T;
 }

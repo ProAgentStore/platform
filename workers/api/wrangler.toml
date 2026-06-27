@@ -70,5 +70,3 @@ new_classes = ["RelayDO"]
 # GITHUB_APP_ID          (coding workspace — GitHub App for repo access; optional)
 # GITHUB_APP_PRIVATE_KEY (coding workspace — App private key PEM; optional)
 # GITHUB_APP_SLUG        (coding workspace — App slug for install URLs; optional)
-# CLOUDFLARE_ACCOUNT_ID  (named tunnels — PAGS CF account; optional until prod)
-# CLOUDFLARE_TUNNEL_TOKEN (named tunnels — API token with Tunnel:Edit + DNS:Edit; optional)

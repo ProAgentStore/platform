@@ -1,9 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
-import { gunzipSync } from "node:zlib";
-import { arch, homedir, hostname, platform } from "node:os";
+import { homedir, hostname } from "node:os";
 import { resolve } from "node:path";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -58,9 +56,7 @@ interface RuntimeRegisterOptions extends PagsRequestOptions, RunnerRequestOption
 }
 
 interface RunnerConnectOptions extends RunnerStartOptions, PagsRequestOptions {
-	cloudflared?: string;
 	runnerVersion?: string;
-	skipProbe?: boolean;
 }
 
 export const runnerCommand = createRunnerCommand();
@@ -108,143 +104,6 @@ export function buildRunnerArgs(opts: RunnerStartOptions): string[] {
 	return args;
 }
 
-export function buildCloudflaredArgs(localUrl: string): string[] {
-	return ["tunnel", "--url", localUrl];
-}
-
-interface CloudflaredAsset {
-	asset: string;
-	executableName: string;
-	archive: boolean;
-}
-
-export function cloudflaredAssetForPlatform(
-	os = platform(),
-	cpu = arch(),
-): CloudflaredAsset {
-	if (os === "darwin") {
-		if (cpu === "arm64") {
-			return {
-				asset: "cloudflared-darwin-arm64.tgz",
-				executableName: "cloudflared",
-				archive: true,
-			};
-		}
-		if (cpu === "x64") {
-			return {
-				asset: "cloudflared-darwin-amd64.tgz",
-				executableName: "cloudflared",
-				archive: true,
-			};
-		}
-	}
-	if (os === "linux") {
-		if (cpu === "x64") {
-			return {
-				asset: "cloudflared-linux-amd64",
-				executableName: "cloudflared",
-				archive: false,
-			};
-		}
-		if (cpu === "arm64") {
-			return {
-				asset: "cloudflared-linux-arm64",
-				executableName: "cloudflared",
-				archive: false,
-			};
-		}
-	}
-	if (os === "win32" && cpu === "x64") {
-		return {
-			asset: "cloudflared-windows-amd64.exe",
-			executableName: "cloudflared.exe",
-			archive: false,
-		};
-	}
-	throw new Error(
-		`Automatic cloudflared download is not supported on ${os}/${cpu}. Install cloudflared and pass --cloudflared <path>.`,
-	);
-}
-
-export function cloudflaredDownloadUrl(asset: string): string {
-	return `https://github.com/cloudflare/cloudflared/releases/latest/download/${asset}`;
-}
-
-export function extractCloudflaredBinary(asset: CloudflaredAsset, bytes: Uint8Array): Buffer {
-	const buffer = Buffer.from(bytes);
-	if (!asset.archive) return buffer;
-	const tar = gunzipSync(buffer);
-	for (let offset = 0; offset + 512 <= tar.length;) {
-		const header = tar.subarray(offset, offset + 512);
-		if (header.every((byte) => byte === 0)) break;
-		const rawName = header.subarray(0, 100).toString("utf8");
-		const name = rawName.slice(0, rawName.indexOf("\0") === -1 ? undefined : rawName.indexOf("\0"));
-		const rawSize = header.subarray(124, 136).toString("utf8").replace(/\0.*$/, "").trim();
-		const size = Number.parseInt(rawSize || "0", 8);
-		const contentStart = offset + 512;
-		const contentEnd = contentStart + size;
-		if (name.split("/").pop() === asset.executableName) {
-			return tar.subarray(contentStart, contentEnd);
-		}
-		offset = contentStart + Math.ceil(size / 512) * 512;
-	}
-	throw new Error(`Downloaded ${asset.asset} did not contain ${asset.executableName}`);
-}
-
-function cloudflaredCacheDir(): string {
-	return resolve(homedir(), ".config", "proagentstore", "bin");
-}
-
-function cachedCloudflaredPath(asset: CloudflaredAsset): string {
-	const suffix = asset.asset.replace(/[^a-zA-Z0-9._-]/g, "-");
-	return resolve(cloudflaredCacheDir(), `${asset.executableName}-${suffix}`);
-}
-
-async function commandAvailable(command: string): Promise<boolean> {
-	return new Promise((resolvePromise) => {
-		const child = spawn(command, ["--version"], {
-			stdio: "ignore",
-			shell: process.platform === "win32",
-		});
-		child.on("error", () => resolvePromise(false));
-		child.on("exit", (code) => resolvePromise(code === 0));
-	});
-}
-
-async function downloadCloudflared(asset: CloudflaredAsset): Promise<string> {
-	const target = cachedCloudflaredPath(asset);
-	if (existsSync(target)) return target;
-	await mkdir(cloudflaredCacheDir(), { recursive: true });
-	const url = cloudflaredDownloadUrl(asset.asset);
-	writeLine(`cloudflared not found; downloading ${asset.asset}...`);
-	const res = await fetch(url);
-	if (!res.ok) {
-		throw new Error(`cloudflared download failed: ${res.status} ${res.statusText}`);
-	}
-	const binary = extractCloudflaredBinary(asset, new Uint8Array(await res.arrayBuffer()));
-	await writeFile(target, binary);
-	if (process.platform !== "win32") await chmod(target, 0o755);
-	writeLine(`cloudflared cached at ${target}`);
-	return target;
-}
-
-async function resolveCloudflaredCommand(requested?: string): Promise<string> {
-	const explicit = clean(requested);
-	if (explicit && explicit !== "cloudflared") return explicit;
-	if (await commandAvailable("cloudflared")) return "cloudflared";
-	return downloadCloudflared(cloudflaredAssetForPlatform());
-}
-
-export function parseCloudflaredTunnelUrl(text: string): string | null {
-	// Return the tunnel subdomain, skipping cloudflared's own API host
-	// (api.trycloudflare.com) which appears in its connection logs — registering
-	// that bogus URL is what made PAGS show the runner offline after a reconnect.
-	const matches = text.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/gi) || [];
-	for (const m of matches) {
-		if (!/^https:\/\/api\.trycloudflare\.com/i.test(m)) return m;
-	}
-	return null;
-}
 
 export function buildRuntimeRegistrationBody(opts: RuntimeRegisterOptions, capabilities: string[] = []) {
 	return {
@@ -565,7 +424,7 @@ export function createRunnerCommand(): Command {
 
 	command
 		.command("connect <instanceIds...>")
-		.description("Start ONE local runtime, open a Cloudflare quick tunnel, and register it for every given PAGS instance")
+		.description("Start ONE local runtime, connect via WebSocket relay, and register it for every given PAGS instance")
 		.option("--host <host>", "Host to bind", "127.0.0.1")
 		.option("--port <port>", "Port to bind", "49171")
 		.option("--data-dir <path>", "Runner data directory")
@@ -573,29 +432,15 @@ export function createRunnerCommand(): Command {
 		.option("--headless", "Run Playwright headless")
 		.option("--api-base <url>", "PAGS API base URL")
 		.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
-		.option("--cloudflared <path>", "cloudflared executable")
 		.option("--runner-version <version>", "Runner version")
-		.option("--skip-probe", "Skip PAGS FAGS-runtime probe after registration")
-		.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay, default), 'named' (stable hostname), or 'quick' (cloudflared)", "ws")
 		.option("--force", "Take over from another connected machine")
-		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { tunnel?: string; force?: boolean }) => {
+		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { force?: boolean }) => {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
-			// Pick a free port so a stale/orphaned runner on 49171 can't cause an
-			// EADDRINUSE or a 401 (stale token) on the next `pags up`.
 			const port = clean(opts.port) || String(await findFreePort(49171));
 			const localUrl = `http://${host}:${port}`;
-			// One runner serves ALL the given instances (one machine = one runner =
-			// one tunnel). It is NOT bound to a single instance id — auth is by the
-			// shared runner token, and the server accepts any instance the brain
-			// calls with. `primary` is just for health-probe headers + display.
 			const primary = instanceIds[0];
-			const runnerOpts: RunnerStartOptions = {
-				...opts,
-				host,
-				port,
-				token: runnerToken,
-			};
+			const runnerOpts: RunnerStartOptions = { ...opts, host, port, token: runnerToken };
 			const spec = runnerSpawnSpec(runnerOpts);
 			const runner = spawn(spec.command, spec.args, {
 				cwd: spec.cwd,
@@ -608,242 +453,15 @@ export function createRunnerCommand(): Command {
 				if (code && code !== 0) writeError(`runner exited with code ${code}`);
 			});
 
-			let tunnel: ReturnType<typeof spawn> | null = null;
-			const shutdown = () => {
-				if (tunnel && !tunnel.killed) tunnel.kill("SIGTERM");
-				if (!runner.killed) runner.kill("SIGTERM");
-			};
-			process.once("SIGINT", () => {
-				shutdown();
-				process.exit(0);
-			});
-			process.once("SIGTERM", () => {
-				shutdown();
-				process.exit(0);
-			});
+			const shutdown = () => { if (!runner.killed) runner.kill("SIGTERM"); };
+			process.once("SIGINT", () => { shutdown(); process.exit(0); });
+			process.once("SIGTERM", () => { shutdown(); process.exit(0); });
 
 			try {
 				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId: primary });
 				writeLine(`Local FAGS runtime healthy at ${localUrl}`);
-
-				// ── WebSocket relay mode: no tunnel, no cloudflared ──────────
-				if (opts.tunnel === "ws") {
-					await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean((opts as { force?: boolean }).force));
-					// Stay alive until the runner exits
-					await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
-					return;
-				}
-
-				// ── Named tunnel mode: stable hostname, no rate limits ──────────
-				if (opts.tunnel === "named") {
-					writeLine("Provisioning named tunnel…");
-					const provRes = await requestPags("POST", "/v1/tunnel/provision", opts, {});
-					const prov = provRes as { connectorToken?: string; hostname?: string; endpointUrl?: string; error?: string };
-					if (!prov.connectorToken) {
-						writeError(`Named tunnel provisioning failed: ${prov.error || "no token returned"}. Falling back to quick tunnel.`);
-					} else {
-						const tunnelUrl = prov.endpointUrl || `https://${prov.hostname}`;
-						writeLine(`Named tunnel: ${tunnelUrl}`);
-						const cloudflaredPath = await resolveCloudflaredCommand(opts.cloudflared);
-						const tunnelProc = spawn(cloudflaredPath, ["tunnel", "run", "--token", prov.connectorToken], {
-							stdio: ["ignore", "pipe", "pipe"],
-							shell: process.platform === "win32",
-						});
-						tunnel = tunnelProc;
-						tunnelProc.stdout?.on("data", (d: Buffer) => {
-							const t = d.toString("utf-8");
-							if (/registered/.test(t) || /CONNECTED/.test(t)) writeLine("Named tunnel connected ✓");
-						});
-						tunnelProc.stderr?.on("data", (d: Buffer) => {
-							const t = d.toString("utf-8");
-							if (/registered/.test(t) || /CONNECTED/.test(t)) writeLine("Named tunnel connected ✓");
-						});
-						// Give cloudflared a moment to connect before registering.
-						await new Promise((r) => setTimeout(r, 4000));
-						// Register all instances with the stable endpoint URL.
-						const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: primary });
-						const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
-						for (const id of instanceIds) {
-							try {
-								await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
-									endpointUrl: tunnelUrl,
-									token: runnerToken,
-									placement: "local",
-									capabilities: caps,
-									runnerVersion: clean(opts.runnerVersion) || "",
-									runnerNode: hostname(),
-								});
-							} catch (error) {
-								writeError(`register ${id.slice(0, 8)}… failed (${error instanceof Error ? error.message : String(error)})`);
-							}
-						}
-						writeLine("Runtime registered with PAGS ✓");
-						writeLine("");
-						writeLine("═══════════════════════════════════════════════");
-						writeLine("  ✅ CONNECTED — named tunnel (production)");
-						writeLine(`  Agents:   ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"}`);
-						writeLine(`  Endpoint: ${tunnelUrl}`);
-						writeLine("  Stable URL — no reconnect churn. Ctrl+C to disconnect.");
-						writeLine("═══════════════════════════════════════════════");
-
-						// Simple heartbeat — no watchdog respawn needed (named tunnels
-						// reconnect automatically via cloudflared's built-in retry).
-						let stopped = false;
-						void (async () => {
-							while (!stopped) {
-								await new Promise((r) => setTimeout(r, 30_000));
-								if (stopped) break;
-								for (const id of instanceIds) {
-									await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {}).catch(() => undefined);
-								}
-							}
-						})();
-						await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
-						stopped = true;
-						return;
-					}
-				}
-
-				// ── Quick tunnel mode (default): ephemeral trycloudflare.com ────
-				const cloudflaredPath = await resolveCloudflaredCommand(opts.cloudflared);
-
-				// Spawn a cloudflared quick tunnel; resolve once its public URL appears.
-				const openTunnel = (): Promise<{ url: string; proc: ReturnType<typeof spawn> }> =>
-					new Promise((resolveTunnel, reject) => {
-						let output = "";
-						const proc = spawn(cloudflaredPath, buildCloudflaredArgs(localUrl), {
-							stdio: ["ignore", "pipe", "pipe"],
-							shell: process.platform === "win32",
-						});
-						const onData = (data: Buffer) => {
-							output += data.toString("utf-8");
-							const parsed = parseCloudflaredTunnelUrl(output);
-							if (parsed) resolveTunnel({ url: parsed, proc });
-						};
-						proc.stdout?.on("data", onData);
-						proc.stderr?.on("data", onData);
-						proc.on("error", reject);
-						setTimeout(() => reject(new Error("timed out waiting for cloudflared tunnel URL")), 45_000).unref();
-					});
-
-				// (Re-)register the current tunnel URL with PAGS for EVERY instance —
-				// they all point at this one runner + tunnel.
-				const registerRuntime = async (url: string): Promise<void> => {
-					const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: primary });
-					const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
-					// Register each instance independently — one failing instance must
-					// not stop the others from registering (the heartbeat loop retries
-					// any that didn't stick).
-					for (const id of instanceIds) {
-						try {
-							await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
-								endpointUrl: url,
-								token: runnerToken,
-								placement: "local",
-								capabilities: caps,
-								runnerVersion: clean(opts.runnerVersion) || "",
-								runnerNode: hostname(),
-							});
-						} catch (error) {
-							writeError(`register ${id.slice(0, 8)}… failed (${error instanceof Error ? error.message : String(error)}); will retry`);
-						}
-					}
-				};
-
-				const first = await openTunnel();
-				tunnel = first.proc;
-				let tunnelUrl = first.url;
-				// Don't crash if the first registration fails (e.g. WiFi still flaky at
-				// startup) — the heartbeat loop below re-registers until it sticks.
-				await registerRuntime(tunnelUrl).catch((error) => {
-					writeError(`registration will retry (${error instanceof Error ? error.message : String(error)})`);
-				});
-				writeLine("Runtime registered with PAGS ✓");
-				writeLine("");
-				writeLine("═══════════════════════════════════════════════");
-				writeLine("  ✅ CONNECTED — runner is live");
-				writeLine(`  Agents:   ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"} served by this runner`);
-				writeLine(`  Tunnel:   ${tunnelUrl}`);
-				writeLine("  Auto-reconnect is on — keep this terminal open. Ctrl+C to disconnect.");
-				writeLine("═══════════════════════════════════════════════");
-
-				// Watchdog: cloudflared quick tunnels drop SILENTLY (process stays up,
-				// public URL stops routing → PAGS probe fails → offline). Probe the
-				// public URL ourselves; respawn + re-register when it dies, heartbeat
-				// otherwise. This is what keeps the runner reliably online.
-				//
-				// Rate-limit guard: require 3 consecutive probe failures before
-				// respawning (a single slow response shouldn't trigger a new tunnel).
-				// Exponential backoff on respawn failures (30s → 60s → 120s → cap 5min)
-				// so we don't hammer Cloudflare's quick-tunnel API into a 429.
-				let stopped = false;
-				let consecutiveFailures = 0;
-				let respawnBackoffMs = 30_000;
-				const PROBE_FAIL_THRESHOLD = 3;
-				const MAX_BACKOFF_MS = 5 * 60_000;
-
-				const probeTunnel = async (url: string): Promise<boolean> => {
-					try {
-						const res = await fetch(`${url.replace(/\/$/, "")}/health`, {
-							headers: { Authorization: `Bearer ${runnerToken}`, "X-PAGS-Instance-Id": primary },
-							signal: AbortSignal.timeout(10_000),
-						});
-						return res.ok;
-					} catch {
-						return false;
-					}
-				};
-				// Heartbeat every instance this runner serves; report whether all stuck.
-				const heartbeatAll = async (): Promise<boolean> => {
-					let allOk = true;
-					for (const id of instanceIds) {
-						const ok = await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {})
-							.then(() => true)
-							.catch(() => false);
-						if (!ok) allOk = false;
-					}
-					return allOk;
-				};
-				void (async () => {
-					while (!stopped) {
-						await new Promise((r) => setTimeout(r, 30_000));
-						if (stopped) break;
-						if (await probeTunnel(tunnelUrl)) {
-							consecutiveFailures = 0;
-							respawnBackoffMs = 30_000; // reset backoff on success
-							const beat = await heartbeatAll();
-							if (!beat) {
-								await registerRuntime(tunnelUrl).then(() => writeLine("✅ Re-registered with PAGS")).catch(() => undefined);
-							}
-							continue;
-						}
-						consecutiveFailures++;
-						if (consecutiveFailures < PROBE_FAIL_THRESHOLD) {
-							writeLine(`⚠ Tunnel probe failed (${consecutiveFailures}/${PROBE_FAIL_THRESHOLD}) — will retry`);
-							continue;
-						}
-						writeLine("⚠ Tunnel unreachable — reconnecting…");
-						consecutiveFailures = 0;
-						try { if (tunnel && !tunnel.killed) tunnel.kill("SIGTERM"); } catch { /* ignore */ }
-						try {
-							const next = await openTunnel();
-							tunnel = next.proc;
-							tunnelUrl = next.url;
-							await registerRuntime(tunnelUrl);
-							respawnBackoffMs = 30_000; // reset on success
-							writeLine(`✅ Reconnected: ${tunnelUrl}`);
-						} catch (error) {
-							writeError(`reconnect failed (${error instanceof Error ? error.message : String(error)}); retrying in ${Math.round(respawnBackoffMs / 1000)}s`);
-							// Wait the backoff before the next loop iteration (on top of the 30s sleep).
-							await new Promise((r) => setTimeout(r, respawnBackoffMs));
-							respawnBackoffMs = Math.min(respawnBackoffMs * 2, MAX_BACKOFF_MS);
-						}
-					}
-				})();
-
-				// Stay alive until the runner process exits — the tunnel self-heals.
+				await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean(opts.force));
 				await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
-				stopped = true;
 			} catch (error) {
 				shutdown();
 				throw error;

@@ -8,10 +8,9 @@ const API_BASE = "https://api.proagentstore.online";
 const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 /**
- * Kill any stale runner/tunnel processes from previous runs. Critical: without
- * this, every `pags up` / reconnect stacks another runner + cloudflared, they
- * fight over ports, and the health check hits the wrong one → 401. The user's
- * runner may be on a remote machine they can't clean by hand, so we self-clean.
+ * Kill any stale runner processes from previous runs. Critical: without
+ * this, every `pags up` stacks another runner, they fight over ports,
+ * and the health check hits the wrong one → 401.
  */
 async function stopRunnerProcesses(): Promise<boolean> {
 	if (process.platform === "win32") return false;
@@ -20,7 +19,6 @@ async function stopRunnerProcesses(): Promise<boolean> {
 		"dist/browser-runner/index.js",
 		"browser-runner/src/index",
 		"runner connect",
-		"tunnel --url http://127.0.0.1",
 	];
 	let stopped = false;
 	for (const p of patterns) {
@@ -38,9 +36,8 @@ export const upCommand = new Command("up")
 	.description("Start the browser runner for all your agent instances")
 	.option("--headless", "Run browser in headless mode")
 	.option("--instance <id>", "Connect to a specific instance only")
-	.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay, default), 'named' (stable hostname), or 'quick' (cloudflared)", "ws")
 	.option("--force", "Take over from another connected machine")
-	.action(async (opts: { headless?: boolean; instance?: string; tunnel?: string; force?: boolean }) => {
+	.action(async (opts: { headless?: boolean; instance?: string; force?: boolean }) => {
 		const session = requireSession();
 
 		const state: TuiState = {
@@ -94,18 +91,14 @@ export const upCommand = new Command("up")
 				: `${instances.length} agents`;
 		printStep(`Connecting ${state.activeInstance}…`, "wait");
 
-		// Clean slate: kill any stale runner/tunnel from a previous run so they don't
-		// pile up and cause port fights / 401s (esp. on a remote machine).
+		// Clean slate: kill any stale runner from a previous run.
 		await stopRunnerProcesses();
 
-		// Spawn ONE runner connect that serves ALL active instances (one machine =
-		// one runner = one tunnel, serving every agent).
+		// Spawn ONE runner connect that serves ALL active instances.
 		const { spawn } = await import("node:child_process");
 		const cliPath = process.argv[1];
 		const args = [cliPath, "runner", "connect", ...instances.map((i) => i.id)];
 		if (opts.headless) args.push("--headless");
-		if (opts.tunnel === "named") args.push("--tunnel", "named");
-		if (opts.tunnel === "ws") args.push("--tunnel", "ws");
 		if (opts.force) args.push("--force");
 
 		const child = spawn(process.execPath, args, {
@@ -124,18 +117,6 @@ export const upCommand = new Command("up")
 				logs.push(trimmed);
 				if (logs.length > 200) logs.shift();
 
-				// Parse the tunnel URL — but ignore cloudflared's own API host
-				// (api.trycloudflare.com), which appears in its logs on reconnect and
-				// would otherwise be registered as a bogus endpoint → "PAGS failed".
-				const tunnelMatch = trimmed.match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/i);
-				if (tunnelMatch && !/^https:\/\/api\.trycloudflare\.com/i.test(tunnelMatch[0])) {
-					state.tunnel = "online";
-					state.tunnelUrl = tunnelMatch[0];
-					state.lastEvent = "Tunnel created";
-					printStatus(state);
-					continue;
-				}
-
 				if (trimmed.includes("Relay connected:")) {
 					state.tunnel = "online";
 					state.tunnelUrl = "WebSocket relay";
@@ -143,7 +124,7 @@ export const upCommand = new Command("up")
 					printStatus(state);
 					continue;
 				}
-				if (trimmed.includes("WebSocket relay (no tunnel)")) {
+				if (trimmed.includes("WebSocket relay")) {
 					state.tunnel = "online";
 					state.tunnelUrl = "WebSocket relay";
 					state.registration = "registered";
@@ -164,15 +145,18 @@ export const upCommand = new Command("up")
 					printStatus(state);
 					continue;
 				}
-				if (trimmed.includes("fetch failed")) {
+				if (trimmed.includes("Another machine")) {
 					state.registration = "failed";
-					state.lastEvent = "PAGS registration failed (will retry on next task)";
+					state.lastEvent = trimmed.slice(0, 80);
 					printStatus(state);
 					continue;
 				}
-
-				// Skip cloudflared noise
-				if (trimmed.includes("INF ")) continue;
+				if (trimmed.includes("fetch failed")) {
+					state.registration = "failed";
+					state.lastEvent = "PAGS registration failed";
+					printStatus(state);
+					continue;
+				}
 
 				// Show errors
 				if (/error|Error|EADDRINUSE|ECONNREFUSED|failed/i.test(trimmed)) {
@@ -191,8 +175,7 @@ export const upCommand = new Command("up")
 			if (code && code !== 0) {
 				state.runner = "error";
 				state.lastEvent = `Runner exited (code ${code})`;
-				// Show last few log lines as error context
-				const recent = logs.slice(-5).filter(l => !l.includes("INF "));
+				const recent = logs.slice(-5);
 				if (recent.length) state.lastEvent += ": " + recent[recent.length - 1].slice(0, 60);
 				printStatus(state);
 			}
@@ -229,17 +212,10 @@ export const upCommand = new Command("up")
 			}
 			if (key === "r") {
 				if (childDead) {
-					// Restart
 					writeLine("  Restarting runner...");
-					state.runner = "starting";
-					state.tunnel = "offline";
-					state.tunnelUrl = "";
-					state.registration = "pending";
-					state.lastEvent = "Restarting...";
-					// Re-exec pags up
 					const { execSync } = await import("node:child_process");
 					try {
-						execSync(`${process.execPath} ${process.argv[1]} up${opts.headless ? " --headless" : ""}`, {
+						execSync(`${process.execPath} ${process.argv[1]} up${opts.headless ? " --headless" : ""}${opts.force ? " --force" : ""}`, {
 							stdio: "inherit",
 							env: process.env,
 						});
@@ -252,7 +228,7 @@ export const upCommand = new Command("up")
 	});
 
 export const downCommand = new Command("down")
-	.description("Stop the browser runner and disconnect (cleans up any stuck processes)")
+	.description("Stop the browser runner and disconnect")
 	.action(async () => {
 		clearScreen();
 		printLogo(CLI_VERSION);

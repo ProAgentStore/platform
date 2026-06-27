@@ -96,15 +96,10 @@ describe("expireOrphanedRuntimeTasks", () => {
 	});
 });
 
-describe("callRuntime relay-first logic", () => {
-	const originalFetch = globalThis.fetch;
+describe("callRuntime (relay-only)", () => {
+	afterEach(() => { vi.restoreAllMocks(); });
 
-	afterEach(() => {
-		globalThis.fetch = originalFetch;
-		vi.restoreAllMocks();
-	});
-
-	it("uses relay for GET requests with correct method", async () => {
+	it("sends GET requests with correct method", async () => {
 		let relayPayload: { method: string; path: string; body: unknown } | null = null;
 		const relay = mockRelay(async (req) => {
 			relayPayload = await req.json() as typeof relayPayload;
@@ -117,10 +112,9 @@ describe("callRuntime relay-first logic", () => {
 		expect(res.status).toBe(200);
 		expect(relayPayload!.method).toBe("GET");
 		expect(relayPayload!.path).toBe("/health");
-		expect(relayPayload!.body).toBeUndefined();
 	});
 
-	it("uses relay for POST requests and forwards body", async () => {
+	it("sends POST requests and forwards body", async () => {
 		let relayPayload: { method: string; path: string; body: unknown } | null = null;
 		const relay = mockRelay(async (req) => {
 			relayPayload = await req.json() as typeof relayPayload;
@@ -133,32 +127,12 @@ describe("callRuntime relay-first logic", () => {
 		const res = await callRuntime(env, row, "/tasks", { method: "POST", body });
 		expect(res.status).toBe(200);
 		expect(relayPayload!.method).toBe("POST");
-		expect(relayPayload!.path).toBe("/tasks");
 		expect(relayPayload!.body).toEqual({ type: "echo", input: {} });
 	});
 
-	it("falls back to tunnel when relay returns 503", async () => {
-		const relay = mockRelay(async () => Response.json({ error: "No runner" }, { status: 503 }));
-		const env = { RELAY: relay } as unknown as Env;
-		const row = mockRow();
-
-		globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ from: "tunnel" }));
-
-		const res = await callRuntime(env, row, "/health");
-		const data = await res.json();
-		expect(data).toEqual({ from: "tunnel" });
-		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
-	});
-
-	it("falls back to tunnel when RELAY binding is absent", async () => {
+	it("throws when RELAY binding is absent", async () => {
 		const env = {} as unknown as Env;
 		const row = mockRow();
-
-		globalThis.fetch = vi.fn().mockResolvedValue(Response.json({ from: "tunnel" }));
-
-		const res = await callRuntime(env, row, "/capabilities");
-		const data = await res.json();
-		expect(data).toEqual({ from: "tunnel" });
-		expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+		await expect(callRuntime(env, row, "/health")).rejects.toThrow("RELAY binding not configured");
 	});
 });

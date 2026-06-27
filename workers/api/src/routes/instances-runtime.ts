@@ -627,43 +627,17 @@ export async function callRuntime(
 	path: string,
 	init: RequestInit = {},
 ): Promise<Response> {
-	// Try the WebSocket relay first (runner connected via `--tunnel ws`)
-	if (env.RELAY) {
-		try {
-			const stub = env.RELAY.get(env.RELAY.idFromName(row.instance_id));
-			const relayBody = init.body
-				? typeof init.body === "string" ? JSON.parse(init.body) : init.body
-				: undefined;
-			const method = (typeof init.method === "string" ? init.method : "GET").toUpperCase();
-			const res = await stub.fetch(new Request("https://relay/command", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ method, path, body: relayBody }),
-			}));
-			// 503 = no runner connected to relay → fall through to tunnel.
-			// Any other status (200, 404, 500, 504) means the relay handled it.
-			if (res.status !== 503) return res;
-		} catch (err) {
-			// Only fall through for relay infrastructure errors (DO unreachable).
-			// A body parse error is a bug — don't mask it.
-			if (err instanceof SyntaxError) throw err;
-			// relay DO unreachable -- fall through to tunnel
-		}
-	}
-
-	const token = await decodeRuntimeToken(env, row);
-	const url = new URL(path, `${row.endpoint_url}/`);
-	const headers = new Headers(init.headers);
-	if (token) headers.set("Authorization", `Bearer ${token}`);
-	headers.set("X-PAGS-Instance-Id", row.instance_id);
-	headers.set("X-PAGS-Runtime-Placement", row.placement);
-	if (init.body && !headers.has("Content-Type")) {
-		headers.set("Content-Type", "application/json");
-	}
-	return fetch(url.toString(), {
-		...init,
-		headers,
-	});
+	if (!env.RELAY) throw new Error("RELAY binding not configured");
+	const stub = env.RELAY.get(env.RELAY.idFromName(row.instance_id));
+	const relayBody = init.body
+		? typeof init.body === "string" ? JSON.parse(init.body) : init.body
+		: undefined;
+	const method = (typeof init.method === "string" ? init.method : "GET").toUpperCase();
+	return stub.fetch(new Request("https://relay/command", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ method, path, body: relayBody }),
+	}));
 }
 
 export async function runtimeJson(res: Response): Promise<unknown> {
