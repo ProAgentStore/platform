@@ -164,10 +164,15 @@
         </div>
       </details>`;
 
-      // ── Refresh ──
-      html += `<div style="text-align:right;margin-top:0.3rem"><button type="button" class="btn btn-outline btn-sm" onclick="loadFullDiag()">↻ Refresh</button></div>`;
+      // ── Refresh + Copy ──
+      html += `<div style="display:flex;justify-content:flex-end;gap:0.4rem;margin-top:0.3rem">
+        <button type="button" class="btn btn-outline btn-sm" id="diag-copy-btn" onclick="copyDiagJson(this)">Copy JSON</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="loadFullDiag()">↻ Refresh</button>
+      </div>`;
 
       el.innerHTML = html;
+      // Stash the raw JSON so Copy can grab it
+      el.dataset.diagJson = JSON.stringify(d, null, 2);
     }
 
     async function restartSession(sessionId, btn) {
@@ -209,6 +214,16 @@
       } catch (e) { alert('Kill failed: ' + e.message); }
       await loadCoding();
       loadFullDiag();
+    }
+
+    async function copyDiagJson(btn) {
+      const el = document.getElementById('diag-body');
+      const json = el?.dataset?.diagJson;
+      if (!json) { alert('No diagnostics data — refresh first.'); return; }
+      try {
+        await navigator.clipboard.writeText(json);
+        if (btn) { const o = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(() => { btn.textContent = o; }, 1500); }
+      } catch (e) { alert('Copy failed: ' + e.message); }
     }
 
     async function browseDiagDir(dir) {

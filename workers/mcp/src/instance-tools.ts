@@ -549,4 +549,26 @@ export function registerInstanceTools(
 			return text(data.success ? "Canceled" : `Error: ${data.error}`);
 		},
 	);
+
+	server.tool(
+		"system_status",
+		"Full diagnostics for a coding instance: runner connectivity, node name, tmux sessions, repos, issues. Use this to understand why sessions are offline or to check the runner's machine.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID or slug"),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const inst = await findInstanceForAgent(env, sessionToken, instance_id);
+			const id = inst?.id || instance_id;
+			const data = await authedCall(
+				`/v1/instances/${id}/coding/diagnostics`,
+				sessionToken,
+				{},
+				env,
+			);
+			return jsonText(data);
+		},
+	);
 }

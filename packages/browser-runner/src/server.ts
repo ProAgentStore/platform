@@ -53,7 +53,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	const url = new URL(req.url || "/", `http://${req.headers.host || "127.0.0.1"}`);
 	const path = url.pathname.replace(/\/$/, "") || "/";
 
-	if (req.method === "GET" && path === "/health") {
+	if ((req.method === "GET" || req.method === "POST") && path === "/health") {
 		return json(res, 200, {
 			ok: true,
 			service: "freeagentstore-browser-runtime",
@@ -64,7 +64,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		});
 	}
 
-	if (req.method === "GET" && path === "/capabilities") {
+	if ((req.method === "GET" || req.method === "POST") && path === "/capabilities") {
 		return json(res, 200, runner.capabilities());
 	}
 
