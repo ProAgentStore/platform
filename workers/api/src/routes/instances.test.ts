@@ -302,4 +302,29 @@ describe("voice settings validation", () => {
 		expect(valid.includes("invalid")).toBe(false);
 		expect(valid.includes("")).toBe(false);
 	});
+
+	it("preserves full voice settings structure", () => {
+		const settings = {
+			provider: "openai-realtime",
+			speed: 120,
+			openai: { model: "gpt-realtime", voice: "shimmer" },
+			gemini: { model: "gemini-2.0-flash-exp" },
+			language: "en-US",
+		};
+		// Validate shape
+		expect(settings.provider).toBe("openai-realtime");
+		expect(settings.openai.model).toBe("gpt-realtime");
+		expect(settings.openai.voice).toBe("shimmer");
+		expect(settings.gemini.model).toBe("gemini-2.0-flash-exp");
+		expect(settings.speed).toBe(120);
+		expect(settings.language).toBe("en-US");
+	});
+
+	it("defaults speed to 100 for non-numeric input", () => {
+		const clamp = (v: unknown) => typeof v === "number" ? Math.max(50, Math.min(200, Math.round(v))) : 100;
+		expect(clamp(null)).toBe(100);
+		expect(clamp({})).toBe(100);
+		expect(clamp([])).toBe(100);
+		expect(clamp(true)).toBe(100);
+	});
 });

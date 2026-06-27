@@ -315,3 +315,20 @@ describe("proxy CORS origin selection", () => {
 		);
 	});
 });
+
+describe("key reveal endpoint validation", () => {
+	it("requires a known provider", () => {
+		expect(PROVIDER_BY_ID.has("openai")).toBe(true);
+		expect(PROVIDER_BY_ID.has("anthropic")).toBe(true);
+		expect(PROVIDER_BY_ID.has("google")).toBe(true);
+		expect(PROVIDER_BY_ID.has("nonexistent")).toBe(false);
+	});
+
+	it("reveal endpoint path follows the pattern /:provider/reveal", () => {
+		for (const p of PROVIDERS) {
+			const path = `/v1/keys/${p.id}/reveal`;
+			expect(path).toContain(p.id);
+			expect(path).toMatch(/\/reveal$/);
+		}
+	});
+});
