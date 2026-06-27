@@ -209,6 +209,7 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	const capabilities = JSON.stringify(safeCapabilities(body.capabilities));
 	const placement = body.placement === "managed" ? "managed" : "local";
 	const runnerVersion = String(body.runnerVersion || "").slice(0, 80);
+	const runnerNode = String(body.runnerNode || "").slice(0, 120);
 
 	await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)
 		.bind(
@@ -222,6 +223,7 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 			tokenParts.plaintext,
 			capabilities,
 			runnerVersion,
+			runnerNode,
 		)
 		.run();
 

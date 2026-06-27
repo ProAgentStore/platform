@@ -24,6 +24,7 @@ export interface RuntimeRow {
 	token_plaintext: string | null;
 	capabilities: string;
 	runner_version: string;
+	runner_node: string;
 	status: string;
 	last_seen_at: string | null;
 	created_at: string;
@@ -36,14 +37,15 @@ export interface RuntimeRegistrationBody {
 	placement?: "local" | "managed";
 	capabilities?: unknown[];
 	runnerVersion?: string;
+	runnerNode?: string;
 }
 
 export const UPSERT_INSTANCE_RUNTIME_SQL = `INSERT INTO instance_runtimes (
        instance_id, user_id, placement, endpoint_url,
        token_ciphertext, token_dek_wrapped, token_iv, token_plaintext,
-       capabilities, runner_version, status, last_seen_at, created_at, updated_at
+       capabilities, runner_version, runner_node, status, last_seen_at, created_at, updated_at
      )
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'registered', datetime('now'), datetime('now'), datetime('now'))
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'registered', datetime('now'), datetime('now'), datetime('now'))
      ON CONFLICT(instance_id) DO UPDATE SET
        user_id = excluded.user_id,
        placement = excluded.placement,
@@ -54,6 +56,7 @@ export const UPSERT_INSTANCE_RUNTIME_SQL = `INSERT INTO instance_runtimes (
        token_plaintext = excluded.token_plaintext,
        capabilities = excluded.capabilities,
        runner_version = excluded.runner_version,
+       runner_node = excluded.runner_node,
        status = 'registered',
        last_seen_at = datetime('now'),
        updated_at = datetime('now')`;
@@ -112,6 +115,7 @@ export function runtimeResponse(row: RuntimeRow) {
 		endpointUrl: row.endpoint_url,
 		capabilities: safeParseArray(row.capabilities),
 		runnerVersion: row.runner_version,
+		runnerNode: row.runner_node || "",
 		status: row.status,
 		lastSeenAt: row.last_seen_at,
 		createdAt: row.created_at,

@@ -5,6 +5,7 @@
     let currentRuntimeTasks = [];
     let currentRuntimeEvents = [];
     let currentRuntimeTaskId = null;
+    let currentRuntimeInfo = null; // last runtime status response (.runtime, .relay)
     let runtimeBadgeTimer = null;
     // Board shows only active tasks (waiting/running/needs you) by default so the
     // task that needs your attention isn't buried under old runs.
@@ -216,6 +217,7 @@
         hideRuntimeTaskDetail();
       }
       if (name === 'runtime') loadInstanceRuntime();
+      if (name === 'settings') renderSettingsRunnerInfo();
       if (updateUrl && currentInstance) setConsoleUrl(`/instances/${encodeURIComponent(currentInstance.id)}/${name}`);
     }
 
@@ -635,6 +637,24 @@
     }
 
     // ── Settings tab actions ────────────────────────────────────
+    function renderSettingsRunnerInfo() {
+      const el = document.getElementById('settings-runner-detail');
+      if (!el) return;
+      const rt = currentRuntimeInfo?.runtime;
+      if (!rt) { el.innerHTML = '<span>No runner data yet — waiting for first status check.</span>'; return; }
+      const status = rt.status || 'unknown';
+      const node = rt.runnerNode || '—';
+      const version = rt.runnerVersion || '—';
+      const lastSeen = rt.lastSeenAt || rt.last_seen_at;
+      const relay = currentRuntimeInfo?.relay;
+      const relayStr = relay ? (relay.connected ? 'connected' : 'not connected') : '—';
+      el.innerHTML = `
+        <div><b>Status:</b> ${esc(status)}</div>
+        <div><b>Node:</b> ${esc(node)}</div>
+        <div><b>CLI version:</b> ${esc(version)}</div>
+        <div><b>Relay (WebSocket):</b> ${esc(relayStr)}</div>
+        <div><b>Last seen:</b> ${lastSeen ? esc(formatTime(lastSeen)) : '—'}</div>`;
+    }
     async function clearFinishedTasks() {
       if (!currentInstance) return;
       if (!confirm('Remove all finished tasks (failed / done / cancelled) from the board?')) return;
@@ -693,15 +713,16 @@
         // /runtime/status actively PROBES the runner (health + capabilities) and
         // flips it online/offline — /runtime alone returns the stale "registered".
         const data = await api(`/v1/instances/${currentInstance.id}/runtime/status`).catch(() => api(`/v1/instances/${currentInstance.id}/runtime`));
+        currentRuntimeInfo = data;
         const rt = data.runtime;
         const status = rt ? String(rt.status || 'registered') : 'none';
         if (status === 'online') {
           badge.textContent = '●';
-          badge.title = 'Runner online' + (rt.endpointUrl || rt.endpoint_url ? ' · ' + (rt.endpointUrl || rt.endpoint_url) : '');
+          badge.title = 'Runner online' + (rt.runnerNode ? ' · ' + rt.runnerNode : '') + (rt.endpointUrl || rt.endpoint_url ? ' · ' + (rt.endpointUrl || rt.endpoint_url) : '');
           badge.style.background = 'rgba(34,197,94,0.15)'; badge.style.color = 'var(--green)';
         } else if (status === 'offline') {
           badge.textContent = '○';
-          badge.title = 'Runner offline — not reachable. Click for setup help';
+          badge.title = 'Runner offline' + (rt.runnerNode ? ' · last on ' + rt.runnerNode : '') + ' — not reachable. Click for setup help';
           badge.style.background = 'rgba(239,68,68,0.12)'; badge.style.color = 'var(--red)';
         } else if (rt?.endpointUrl || rt?.endpoint_url) {
           badge.textContent = '◐';

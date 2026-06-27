@@ -164,6 +164,7 @@ describe("runner command helpers", () => {
 			placement: "managed",
 			capabilities: ["browser.playwright"],
 			runnerVersion: "0.1.0",
+			runnerNode: expect.any(String),
 		});
 	});
 

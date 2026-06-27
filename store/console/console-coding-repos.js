@@ -148,8 +148,9 @@
       }
       const st = codingReposStatus[r.id];
       const eng = engineLabel(active);
-      if (st === 'offline') return `<span style="color:var(--muted)">⏸ Runner offline — run <code>pags up</code></span>`;
-      if (st === 'stopped') return `<span style="color:var(--amber,#f59e0b)">⏸ Session stopped — tap <b>Open</b> to reconnect</span>`;
+      const node = currentRuntimeInfo?.runtime?.runnerNode;
+      if (st === 'offline') return `<span style="color:var(--muted)">⏸ Runner offline${node ? ' · was on ' + esc(node) : ''} — run <code>pags up</code></span>`;
+      if (st === 'stopped') return `<span style="color:var(--amber,#f59e0b)">⏸ Session stopped${node ? ' · ' + esc(node) : ''} — tap <b>Open</b> to reconnect</span>`;
       if (st === 'thinking' || st === 'responding') return `<span style="color:var(--accent,#7c3aed)"><span class="coding-spin" style="vertical-align:-1px"></span> ${esc(eng)} is working…</span>`;
       const d = codingDeployStatus[r.id];
       if (d && d.available && d.run && d.run.status !== 'completed') return `<span style="color:var(--amber)">⏳ Deploying #${esc(d.run.runNumber)}…</span>`;

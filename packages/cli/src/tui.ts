@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { hostname } from "node:os";
 import readline from "node:readline";
 
 const ACCENT = "#7c3aed";
@@ -63,7 +64,7 @@ export function printStatus(state: TuiState): void {
 
 	const connected = state.runner === "online" && state.tunnel === "online" && state.registration === "registered";
 
-	console.log(pad + d("Signed in as ") + w(state.user) + d("  ·  agent: ") + w(state.activeInstance));
+	console.log(pad + d("Signed in as ") + w(state.user) + d("  ·  agent: ") + w(state.activeInstance) + d("  ·  node: ") + w(hostname()));
 	console.log("");
 
 	const row = (kind: "runner" | "tunnel" | "pags", s: string) => {

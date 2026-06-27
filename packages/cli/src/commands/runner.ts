@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
-import { arch, homedir, platform } from "node:os";
+import { arch, homedir, hostname, platform } from "node:os";
 import { resolve } from "node:path";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -250,6 +250,7 @@ export function buildRuntimeRegistrationBody(opts: RuntimeRegisterOptions, capab
 		placement: opts.placement === "managed" ? "managed" : "local",
 		capabilities,
 		runnerVersion: clean(opts.runnerVersion) || "",
+		runnerNode: hostname(),
 	};
 }
 
@@ -421,6 +422,7 @@ async function connectViaRelay(
 			placement: "local",
 			capabilities: caps,
 			runnerVersion: "",
+			runnerNode: hostname(),
 		}).catch((e) => writeError(`register ${id.slice(0, 8)}… failed: ${e instanceof Error ? e.message : String(e)}`));
 	}
 
@@ -644,6 +646,7 @@ export function createRunnerCommand(): Command {
 									placement: "local",
 									capabilities: caps,
 									runnerVersion: clean(opts.runnerVersion) || "",
+									runnerNode: hostname(),
 								});
 							} catch (error) {
 								writeError(`register ${id.slice(0, 8)}… failed (${error instanceof Error ? error.message : String(error)})`);
@@ -714,6 +717,7 @@ export function createRunnerCommand(): Command {
 								placement: "local",
 								capabilities: caps,
 								runnerVersion: clean(opts.runnerVersion) || "",
+								runnerNode: hostname(),
 							});
 						} catch (error) {
 							writeError(`register ${id.slice(0, 8)}… failed (${error instanceof Error ? error.message : String(error)}); will retry`);
