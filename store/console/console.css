@@ -332,125 +332,137 @@
     /* On the app-detail page, mobile must scroll (the body is otherwise locked). */
     @media(max-width:900px){ body.chat-active:has(#application-detail:not(.hidden)){overflow:auto} }
     @media(max-width:640px){
-      /* Header */
-      header{padding:0.35rem 0.5rem;gap:0.4rem}
+      /* ══════════════════════════════════════════════════════════════
+         MOBILE APP LAYOUT — behaves like an installed app, not a site.
+         Fixed header, fixed bottom bar, single scroll area between.
+         No visible card frames. Full-bleed content. Touch-sized targets.
+         ══════════════════════════════════════════════════════════════ */
+
+      /* ── Global app shell ── */
+      html{overscroll-behavior:none}  /* no rubber-band bounce */
+      /* Instance detail owns its scroll; dashboard pages use body scroll */
+      body.instance-open{overflow:hidden}
+      body:not(.instance-open){overflow:auto;-webkit-overflow-scrolling:touch}
+      header{padding:0.3rem 0.5rem;gap:0.35rem;height:44px}
       .brand-name{display:none}
-      .inst-nav-tabs .tab{padding:0.25rem 0.5rem;font-size:0.72rem}
+
+      /* ── Containers: zero margin, edge-to-edge ── */
+      .container{padding:0.35rem 0;margin:0;max-width:none}
+      #application-detail{padding:0.35rem 0}
+      .page-title{font-size:1.1rem;margin:0 0.5rem 0.5rem;font-family:var(--font-body)}
+
+      /* ── Instance detail: full viewport, flex column ── */
+      #instance-detail{height:calc(100dvh - 45px)}
+      #inst-detail-body{padding:0;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
+      .inst-nav-tabs .tab{padding:0.3rem 0.5rem;font-size:0.72rem}
       #inst-nav-slot span{max-width:100px;font-size:0.8rem}
 
-      /* Container — minimal L/R margins on mobile so text + controls get the room */
-      .container{padding:0.45rem 0.3rem}
-      #application-detail{padding:0.45rem 0.3rem}
-      .page-title{font-size:1.15rem;margin-bottom:0.6rem}
-      input,textarea,select{padding:0.42rem 0.55rem;font-size:0.85rem}
-      .btn{padding:0.5rem 0.85rem}
-      .btn-sm{padding:0.3rem 0.55rem}
-      /* ── Mobile app layout: strip ALL card chrome, edge-to-edge content ── */
-      /* The instance body is flush — no padding between content and screen edge */
-      #inst-detail-body{padding:0}
-      /* Coding tab fills viewport: repos list scrolls, header stays */
-      #inst-tab-coding{overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:env(safe-area-inset-bottom,0)}
-      /* Kill all .create-form card styling inside the coding tab — no border,
-         no background, no padding, no margin. Content flows directly. */
-      #inst-tab-coding .create-form{
+      /* ── Tab panels fill viewport, each manages own scroll ── */
+      .tab-panel.active{display:flex;flex-direction:column;flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch}
+
+      /* ── Cards: strip chrome inside instance tabs ── */
+      #instance-detail .create-form{
         background:none!important;border:none!important;border-radius:0!important;
-        padding:0.3rem 0.4rem!important;margin-bottom:0.25rem!important;
+        padding:0.3rem 0.5rem!important;margin-bottom:0.2rem!important;
       }
-      /* Repo items: minimal chrome, tight */
+      /* Settings + Knowledge tabs: keep subtle card look */
+      #inst-tab-settings .create-form,#inst-tab-knowledge .create-form{
+        background:var(--panel)!important;border:1px solid var(--line)!important;
+        border-radius:8px!important;padding:0.6rem!important;margin:0.3rem 0.4rem 0.5rem!important;
+      }
+
+      /* ── Repo list: compact, touchable rows ── */
       #inst-coding-repos .memory-item{
-        padding:0.45rem 0.4rem!important;border-radius:6px!important;
-        margin-bottom:0.15rem!important;
+        padding:0.5rem!important;border-radius:8px!important;
+        margin-bottom:2px!important;min-height:44px;
       }
-      /* Overseer bar: compact on mobile */
-      #inst-coding-overseer{margin-bottom:0.15rem!important}
-      /* Summary thread + terminal: flush, no card chrome, edge-to-edge */
+      .memory-item,.task-item{padding:0.5rem;min-height:44px}
+
+      /* ── Coding terminal: full viewport session ── */
+      #inst-coding-terminal:not(.hidden){
+        margin:0!important;padding:0!important;border:none!important;
+        background:none!important;border-radius:0!important;
+        height:calc(100dvh - 90px)!important;
+      }
+      #inst-coding-terminal > div:first-child{
+        padding:0.2rem 0.35rem!important;gap:0.25rem!important;flex-wrap:nowrap!important;
+        border-bottom:1px solid var(--line);flex-shrink:0;
+      }
+      /* Chat thread + terminal pane: flush, fills space */
       #inst-coding-summary-thread{
-        padding:0.35rem!important;border:none!important;border-radius:0!important;
+        padding:0.4rem!important;border:none!important;border-radius:0!important;
         background:var(--paper)!important;
       }
-      #inst-coding-pane{
-        padding:0.35rem!important;border-radius:0!important;
-      }
-      #inst-coding-overseer-reply{padding:0.35rem 0.4rem!important}
-      /* Input bars: compact, safe-area aware */
+      #inst-coding-pane{padding:0.4rem!important;border-radius:0!important}
+      /* Input bars: fixed at bottom, safe-area-aware */
       #inst-coding-view-summary > div:last-child,
       #inst-coding-view-terminal > div:last-child{
-        padding:0.35rem 0.3rem calc(env(safe-area-inset-bottom,0px) + 0.35rem)!important;
-        margin-top:0!important;gap:0.25rem!important;
+        padding:0.35rem 0.4rem calc(env(safe-area-inset-bottom,0px) + 0.35rem)!important;
+        margin-top:0!important;gap:0.25rem!important;flex-shrink:0;
+        border-top:1px solid var(--line);background:var(--panel);
       }
-      .inst-nav-tabs .tab{padding:0.25rem 0.45rem}
+      #inst-coding-overseer-reply{padding:0.35rem 0.4rem!important}
 
-      /* Agent grid */
-      .agents-grid{grid-template-columns:1fr;gap:0.55rem}
-      .agent-card{padding:0.7rem}
+      /* ── Touch targets: minimum 44px ── */
+      .btn{padding:0.55rem 0.9rem;min-height:44px;display:inline-flex;align-items:center}
+      .btn-sm{padding:0.35rem 0.65rem;min-height:36px}
+      input,textarea,select{padding:0.5rem 0.6rem;font-size:16px;min-height:44px}
+      /* 16px font prevents iOS zoom on focus */
 
-      /* Agent header */
-      .agent-header{gap:0.75rem;margin-bottom:0.75rem}
-      .agent-icon{width:42px;height:42px;font-size:1.1rem;border-radius:10px}
-      .agent-header h2{font-size:1rem}
+      /* ── Chat ── */
+      .chat-container{height:calc(100dvh - 160px);min-height:250px}
+      .chat-msg{max-width:92%;padding:0.55rem 0.7rem;font-size:0.84rem}
+      .chat-input{padding:0.4rem 0.4rem calc(env(safe-area-inset-bottom,0px) + 0.4rem);border-top:1px solid var(--line);background:var(--panel);flex-shrink:0}
+      .chat-input input{padding:0.5rem 0.75rem;font-size:16px;min-height:44px}
+      .chat-input button{padding:0.5rem 0.85rem;min-height:44px}
 
-      /* Tabs */
-      .tabs{gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
-      .tab{padding:0.45rem 0.6rem;font-size:0.78rem;white-space:nowrap}
-
-      /* Chat */
-      .chat-container{height:calc(100dvh - 180px);min-height:250px}
-      .chat-msg{max-width:92%;padding:0.6rem 0.75rem;font-size:0.84rem}
-      .chat-input{padding:0.5rem 0 0}
-      .chat-input input{padding:0.5rem 0.75rem;font-size:0.84rem}
-      .chat-input button{padding:0.5rem 0.85rem;font-size:0.8rem}
-
-      /* Kanban */
-      .kanban-board{grid-template-columns:1fr;gap:0.5rem}
+      /* ── Kanban: compact ── */
+      .kanban-board{grid-template-columns:1fr;gap:0.4rem}
       .kanban-column{min-height:auto;min-width:auto}
-      .kanban-items{padding:0.4rem}
+      .kanban-items{padding:0.35rem}
       .kanban-card{padding:0.55rem}
-      .kanban-header{padding:0.5rem 0.6rem}
-      .memory-item,.task-item{padding:0.5rem 0.6rem}
+      .kanban-header{padding:0.45rem 0.55rem}
 
-      /* Board toolbar */
-      .agent-board-toolbar{flex-direction:column;gap:0.5rem;align-items:stretch}
+      /* ── Board toolbar ── */
+      .agent-board-toolbar{flex-direction:column;gap:0.4rem;align-items:stretch;padding:0 0.4rem}
       .agent-board-actions{justify-content:flex-end}
 
-      /* Detail fields */
+      /* ── Agent grid ── */
+      .agents-grid{grid-template-columns:1fr;gap:0.4rem;padding:0 0.4rem}
+      .agent-card{padding:0.65rem;border-radius:8px}
+      .agent-header{gap:0.6rem;margin-bottom:0.5rem;padding:0 0.4rem}
+      .agent-icon{width:38px;height:38px;font-size:1rem;border-radius:8px}
+      .agent-header h2{font-size:0.95rem}
+
+      /* ── Tabs ── */
+      .tabs{gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch}
+      .tab{padding:0.4rem 0.55rem;font-size:0.78rem;white-space:nowrap;min-height:36px}
+
+      /* ── Detail fields ── */
       .runtime-detail-grid{grid-template-columns:1fr}
-      .runtime-detail-head{flex-direction:column;gap:0.5rem;padding:0.75rem}
-      .runtime-detail-body{padding:0.75rem}
+      .runtime-detail-head{flex-direction:column;gap:0.4rem;padding:0.55rem}
+      .runtime-detail-body{padding:0.55rem}
+      .form-row{flex-direction:column;gap:0.4rem}
 
-      /* Forms */
-      .form-row{flex-direction:column;gap:0.5rem}
-      .create-form{padding:0.55rem;margin-bottom:0.6rem}
+      /* ── Profile ── */
+      .profile-card{padding:0.6rem 0.5rem;margin:0.3rem 0.4rem 0.5rem;border-radius:8px}
+      .profile-header{gap:0.6rem;margin-bottom:0.7rem}
+      .profile-section{margin-bottom:0.7rem}
+      .profile-row{padding:0.5rem 0;min-height:44px;display:flex;align-items:center}
 
-      /* Profile — tighter cards/sections */
-      .profile-card{padding:0.7rem;margin-bottom:0.6rem}
-      .profile-header{gap:0.7rem;margin-bottom:0.8rem}
-      .profile-section{margin-bottom:0.85rem}
-      .profile-row{padding:0.45rem 0}
+      /* ── Dashboard ── */
+      #dashboard-stats{grid-template-columns:repeat(2,1fr);padding:0 0.4rem}
+      .login-page h1{font-size:1.4rem}
 
-      /* Coding terminal: full viewport, no card frame, fixed bottom bar */
-      #inst-coding-terminal:not(.hidden){
-        margin-top:0!important;padding:0!important;
-        height:calc(100dvh - 96px)!important;
-        background:none!important;border:none!important;border-radius:0!important;
-      }
-      /* Session header: compact, no wrapping */
-      #inst-coding-terminal > div:first-child{
-        padding:0.25rem 0.35rem!important;gap:0.3rem!important;flex-wrap:nowrap!important;
-      }
-      .memory-item{padding:0.45rem 0.5rem}
-
-      /* Login */
-      .login-page h1{font-size:1.5rem}
-
-      /* Status buttons row */
-      #app-detail-actions{flex-wrap:wrap;gap:0.25rem}
-      #app-detail-actions .btn-sm{padding:0.25rem 0.5rem;font-size:0.72rem}
-
-      /* Dashboard stats */
-      #dashboard-stats{grid-template-columns:repeat(2,1fr)}
-
-      /* KB split on mobile: stack and limit chat height */
+      /* ── KB ── */
       #inst-kb-layout .chat-container{height:300px}
+
+      /* ── Application detail ── */
+      #app-detail-actions{flex-wrap:wrap;gap:0.25rem}
+      #app-detail-actions .btn-sm{padding:0.3rem 0.5rem;font-size:0.72rem;min-height:36px}
+
+      /* ── Notifications + Settings: scrollable content ── */
+      #notifications-page,#profile-page{overflow-y:auto;-webkit-overflow-scrolling:touch;padding:0.4rem;max-height:calc(100dvh - 45px)}
     }
 
     /* Touch improvements */
