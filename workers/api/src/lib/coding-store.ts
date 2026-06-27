@@ -292,6 +292,22 @@ export async function createSession(env: Env, instanceId: string, userId: string
 	return session;
 }
 
+/**
+ * Suspend all active sessions for an instance — called when a different machine
+ * takes over. The sessions aren't deleted (timeline/history preserved), just
+ * marked suspended so the UI shows them as belonging to the old machine.
+ */
+export async function suspendActiveSessions(env: Env, instanceId: string, userId: string): Promise<number> {
+	const res = await env.DB.prepare(
+		`UPDATE coding_sessions
+		 SET status = 'suspended', updated_at = datetime('now')
+		 WHERE instance_id = ?1 AND user_id = ?2 AND status = 'active'`,
+	)
+		.bind(instanceId, userId)
+		.run();
+	return res.meta.changes ?? 0;
+}
+
 export async function endSession(env: Env, instanceId: string, userId: string, sessionId: string, status: CodingSessionStatus = "ended"): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions

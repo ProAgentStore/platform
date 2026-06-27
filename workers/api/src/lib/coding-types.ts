@@ -11,7 +11,7 @@ export type CodingClientType = "claude" | "gemini" | "codex" | "grok";
 
 export type CloneStatus = "unknown" | "cloning" | "ready" | "missing_url" | "error";
 
-export type CodingSessionStatus = "active" | "ended" | "error";
+export type CodingSessionStatus = "active" | "ended" | "error" | "suspended";
 
 /** Live status of the CLI as inferred from the pane (mirrors runner handler state). */
 export type CliRunState = "idle" | "thinking" | "responding";

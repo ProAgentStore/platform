@@ -143,6 +143,10 @@
     // "see what's happening". Driven by the live capture run-state + deploy + clone.
     function repoLiveLabel(r, active) {
       if (!active) {
+        const suspended = codingSessions.find(s => s.repoId === r.id && s.status === 'suspended');
+        if (suspended) {
+          return `<span style="color:var(--muted)">⏸ Session from another machine — tap <b>Start</b> for this one</span>`;
+        }
         const m = { ready: 'No session — tap Start', cloning: 'Cloning…', error: 'Clone failed' }[r.cloneStatus] || 'No session';
         return `<span style="color:var(--muted)">${m}</span>`;
       }

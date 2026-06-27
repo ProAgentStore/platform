@@ -96,7 +96,8 @@
           const active = sess.status === 'active';
           const live = sess.live;
           let stColor = 'var(--muted)', stLabel = sess.status;
-          if (active && live?.alive) { stColor = live.runState === 'idle' ? 'var(--green)' : 'var(--accent,#7c3aed)'; stLabel = live.runState; }
+          if (sess.status === 'suspended') { stColor = 'var(--muted)'; stLabel = 'suspended (other machine)'; }
+          else if (active && live?.alive) { stColor = live.runState === 'idle' ? 'var(--green)' : 'var(--accent,#7c3aed)'; stLabel = live.runState; }
           else if (active && live && !live.alive) { stColor = 'var(--red)'; stLabel = 'dead'; }
           else if (active && !live) { stColor = 'var(--amber,#f59e0b)'; stLabel = 'orphaned'; }
           html += `<div style="border:1px solid var(--line);border-radius:6px;padding:0.4rem 0.5rem;margin-bottom:0.3rem;font-size:0.78rem">
