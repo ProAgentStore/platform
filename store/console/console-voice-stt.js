@@ -50,10 +50,15 @@
           else if (interim) this.onResult(interim.trim(), false);
         };
         rec.onerror = (e) => { if (e.error !== 'no-speech') this.onError(e.error); };
+        let restartFails = 0;
         rec.onend = () => {
           // Chrome ends continuous sessions periodically — restart if still listening
-          if (this.listening) { try { rec.start(); } catch {} }
-          else this.onEnd();
+          if (this.listening) {
+            try { rec.start(); restartFails = 0; } catch {
+              restartFails++;
+              if (restartFails > 3) { this.listening = false; this.onError('mic restart failed'); this.onEnd(); }
+            }
+          } else this.onEnd();
         };
         this._rec = rec;
         try { rec.start(); } catch (e) { this.onError(e.message); this.listening = false; }
@@ -65,13 +70,14 @@
         try {
           this._stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           const chunks = [];
-          const mediaRec = new MediaRecorder(this._stream, { mimeType: 'audio/webm;codecs=opus' });
+          const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+          const mediaRec = new MediaRecorder(this._stream, mimeType ? { mimeType } : undefined);
           mediaRec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
           mediaRec.onstop = async () => {
             this._stream?.getTracks().forEach(t => t.stop());
             this._stream = null;
             if (!chunks.length) { this.onEnd(); return; }
-            const blob = new Blob(chunks, { type: 'audio/webm' });
+            const blob = new Blob(chunks, { type: mimeType || 'audio/webm' });
             await this._transcribe(blob);
             this.onEnd();
           };

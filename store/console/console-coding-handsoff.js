@@ -107,7 +107,7 @@
           <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 0.5rem;align-items:center;font-size:0.78rem;margin:0.3rem 0;padding:0.4rem;background:var(--paper);border-radius:6px;border:1px solid var(--line)">
             <label style="margin:0">Model</label>
             <select style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),model:this.value};saveVoiceSettings()">
-              <option value="gpt-realtime"${model === 'gpt-realtime' || model === 'gpt-realtime' ? ' selected' : ''}>GPT Realtime</option>
+              <option value="gpt-realtime"${model === 'gpt-realtime' || model === 'gpt-4o-realtime-preview' ? ' selected' : ''}>GPT Realtime</option>
               <option value="gpt-realtime-mini"${model === 'gpt-realtime-mini' || model === 'gpt-4o-mini-realtime-preview' ? ' selected' : ''}>GPT Realtime Mini (faster)</option>
             </select>
             <label style="margin:0">Voice</label>

@@ -810,23 +810,21 @@
     let chatVoiceOn = false;
 
     async function initChatVoice() {
-      const provider = handsOffVoiceSettings?.provider || 'browser';
-      const isApi = provider === 'openai-realtime' || provider === 'openai';
+      // Read voice settings — handsOffVoiceSettings may not exist if coding tab was never opened
+      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
+      const provider = vs.provider || 'browser';
+      const isApi = provider.includes('openai');
       let apiKey = '';
       if (isApi) {
-        try {
-          const d = await api('/v1/keys/openai/reveal');
-          apiKey = d.key || '';
-        } catch {}
+        try { apiKey = (await api('/v1/keys/openai/reveal')).key || ''; } catch {}
       }
-      const sttProvider = isApi && apiKey ? 'openai' : 'browser';
-      const ttsProvider = isApi && apiKey ? 'openai' : 'browser';
-      chatTts = new VoiceTts(ttsProvider, {
+      const useApi = isApi && apiKey;
+      chatTts = new VoiceTts(useApi ? 'openai' : 'browser', {
         apiKey,
-        voice: handsOffVoiceSettings?.openai?.voice || 'alloy',
-        speed: handsOffVoiceSettings?.speed || 100,
+        voice: vs.openai?.voice || 'alloy',
+        speed: vs.speed || 100,
       });
-      return { sttProvider, apiKey };
+      return { sttProvider: useApi ? 'openai' : 'browser', apiKey };
     }
 
     async function toggleChatVoice(btn) {
@@ -837,26 +835,29 @@
         return;
       }
       const { sttProvider, apiKey } = await initChatVoice();
+      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
       chatStt = new VoiceStt(sttProvider, {
         apiKey,
-        language: handsOffVoiceSettings?.language || 'en-US',
+        language: vs.language || 'en-US',
         onResult: (text, isFinal) => {
           const input = document.getElementById('inst-chat-input');
           if (input) input.value = text;
-          if (isFinal && sttProvider !== 'browser') {
-            // API-based STT: auto-send on final result
-            sendInstanceMessage();
-          }
+          if (isFinal && sttProvider !== 'browser') sendInstanceMessage();
         },
         onError: (err) => { if (btn) btn.title = 'Error: ' + err; },
         onEnd: () => {
-          // API-based: single recording done
           if (sttProvider !== 'browser') { chatVoiceOn = false; if (btn) btn.classList.remove('active'); }
         },
       });
       chatVoiceOn = true;
       if (btn) btn.classList.add('active');
-      await chatStt.start();
+      try {
+        await chatStt.start();
+      } catch (e) {
+        chatVoiceOn = false;
+        if (chatStt) { chatStt.stop(); chatStt = null; }
+        if (btn) btn.classList.remove('active');
+      }
     }
 
     function toggleChatAutoSpeak(btn) {
@@ -864,9 +865,6 @@
       if (btn) btn.classList.toggle('active', chatAutoSpeak);
       if (chatAutoSpeak && !chatTts) initChatVoice();
     }
-
-    // Hook: after any assistant message is added to the Chat tab, speak it
-    const _origSendInstanceMessage = typeof sendInstanceMessage === 'function' ? sendInstanceMessage : null;
 
     async function speakLastAssistantMessage() {
       if (!chatAutoSpeak || !chatTts) return;

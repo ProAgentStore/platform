@@ -63,7 +63,7 @@
               input: text,
               voice: this.voice,
               speed: Math.max(0.25, Math.min(4, this.speed / 100)),
-              response_format: 'mp3',
+              response_format: 'wav',
             }),
           });
           if (!res.ok) {
@@ -78,6 +78,7 @@
           source.connect(this._audioCtx.destination);
           await new Promise((resolve) => {
             source.onended = resolve;
+            source.onerror = resolve;
             source.start();
           });
         } catch {
