@@ -407,33 +407,48 @@ async function connectViaRelay(
 	localUrl: string,
 	runnerToken: string,
 	opts: PagsRequestOptions,
+	force = false,
 ): Promise<void> {
 	const apiBase = pagsApiBase(opts.apiBase).replace(/^http/, "ws"); // https → wss
 	const pagsToken = clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
 	if (!pagsToken) throw new Error("PAGS token required for WebSocket relay");
 
-	// Also register the runtime (needed for the status badge / getRunnerConn)
+	// Register the runtime (needed for the status badge / getRunnerConn)
 	const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] });
 	const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
 	for (const id of instanceIds) {
-		await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
-			endpointUrl: localUrl,
-			token: runnerToken,
-			placement: "local",
-			capabilities: caps,
-			runnerVersion: "",
-			runnerNode: hostname(),
-		}).catch((e) => writeError(`register ${id.slice(0, 8)}… failed: ${e instanceof Error ? e.message : String(e)}`));
+		try {
+			await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
+				endpointUrl: localUrl,
+				token: runnerToken,
+				placement: "local",
+				capabilities: caps,
+				runnerVersion: "",
+				runnerNode: hostname(),
+				force,
+			});
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			// 409 = another machine is connected
+			if (msg.includes("409") && msg.includes("Another machine")) {
+				writeError(msg);
+				writeLine("");
+				writeLine("  To take over, run:  pags up --tunnel ws --force");
+				writeLine("");
+				throw new Error("Another machine is already connected");
+			}
+			writeError(`register ${id.slice(0, 8)}… failed: ${msg}`);
+		}
 	}
 
 	for (const id of instanceIds) {
-		openRelaySocket(id, apiBase, pagsToken, localUrl, runnerToken);
+		openRelaySocket(id, apiBase, pagsToken, localUrl, runnerToken, force);
 	}
 
 	writeLine("Runtime registered with PAGS ✓");
 	writeLine("");
 	writeLine("═══════════════════════════════════════════════");
-	writeLine("  ✅ CONNECTED — WebSocket relay (no tunnel)");
+	writeLine(`  ✅ CONNECTED — WebSocket relay · ${hostname()}`);
 	writeLine(`  Agents:   ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"}`);
 	writeLine("  No cloudflared needed. Ctrl+C to disconnect.");
 	writeLine("═══════════════════════════════════════════════");
@@ -458,12 +473,13 @@ function openRelaySocket(
 	pagsToken: string,
 	localUrl: string,
 	runnerToken: string,
+	force = false,
 ): void {
 	let backoffMs = 1000;
 	let reconnecting = false;
 
 	const connect = () => {
-		const url = `${wsBase}/v1/relay/${encodeURIComponent(instanceId)}/connect?token=${encodeURIComponent(pagsToken)}`;
+		const url = `${wsBase}/v1/relay/${encodeURIComponent(instanceId)}/connect?token=${encodeURIComponent(pagsToken)}${force ? "&force=1" : ""}`;
 		const ws = new WebSocket(url);
 
 		ws.onopen = () => {
@@ -558,7 +574,8 @@ export function createRunnerCommand(): Command {
 		.option("--runner-version <version>", "Runner version")
 		.option("--skip-probe", "Skip PAGS FAGS-runtime probe after registration")
 		.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay), 'named' (production), or 'quick' (default)", "quick")
-		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { tunnel?: string }) => {
+		.option("--force", "Take over from another connected machine")
+		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { tunnel?: string; force?: boolean }) => {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
 			// Pick a free port so a stale/orphaned runner on 49171 can't cause an
@@ -608,7 +625,7 @@ export function createRunnerCommand(): Command {
 
 				// ── WebSocket relay mode: no tunnel, no cloudflared ──────────
 				if (opts.tunnel === "ws") {
-					await connectViaRelay(instanceIds, localUrl, runnerToken, opts);
+					await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean((opts as { force?: boolean }).force));
 					// Stay alive until the runner exits
 					await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
 					return;

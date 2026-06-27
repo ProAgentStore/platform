@@ -53,13 +53,27 @@ export class RelayDO extends DurableObject<Env> {
 	// ── WebSocket lifecycle (hibernation API) ────────────────────────────
 
 	private handleConnect(request: Request): Response {
-		const pair = new WebSocketPair();
-		const [client, server] = [pair[0], pair[1]];
+		const url = new URL(request.url);
+		const force = url.searchParams.get("force") === "1";
 
-		// Close any existing runner connection (only one allowed).
-		// Reject pending requests first — server-side close may not trigger
-		// webSocketClose, so in-flight commands would hang until timeout.
 		const existing = this.ctx.getWebSockets("runner");
+
+		// If another runner is connected, reject unless forced
+		if (existing.length > 0 && !force) {
+			// Verify the existing socket is actually alive
+			let alive = false;
+			for (const ws of existing) {
+				try { ws.send("ping"); alive = true; break; } catch { /* dead */ }
+			}
+			if (alive) {
+				return Response.json(
+					{ error: "Another runner is already connected. Use --force to take over." },
+					{ status: 409 },
+				);
+			}
+		}
+
+		// Close any existing runner connection (forced takeover or dead socket)
 		if (existing.length > 0) {
 			this.rejectAll("Runner replaced by new connection");
 			for (const ws of existing) {
@@ -67,8 +81,9 @@ export class RelayDO extends DurableObject<Env> {
 			}
 		}
 
+		const pair = new WebSocketPair();
+		const [client, server] = [pair[0], pair[1]];
 		this.ctx.acceptWebSocket(server, ["runner"]);
-
 		return new Response(null, { status: 101, webSocket: client });
 	}
 

@@ -39,7 +39,8 @@ export const upCommand = new Command("up")
 	.option("--headless", "Run browser in headless mode")
 	.option("--instance <id>", "Connect to a specific instance only")
 	.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay, recommended), 'named' (production, stable), or 'quick' (default, trycloudflare.com)", "quick")
-	.action(async (opts: { headless?: boolean; instance?: string; tunnel?: string }) => {
+	.option("--force", "Take over from another connected machine")
+	.action(async (opts: { headless?: boolean; instance?: string; tunnel?: string; force?: boolean }) => {
 		const session = requireSession();
 
 		const state: TuiState = {
@@ -105,6 +106,7 @@ export const upCommand = new Command("up")
 		if (opts.headless) args.push("--headless");
 		if (opts.tunnel === "named") args.push("--tunnel", "named");
 		if (opts.tunnel === "ws") args.push("--tunnel", "ws");
+		if (opts.force) args.push("--force");
 
 		const child = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],

@@ -1,8 +1,8 @@
 {
 	"mcpServers": {
 		"proagentstore": {
-			"type": "streamable-http",
-			"url": "https://mcp.proagentstore.online/mcp"
+			"command": "npx",
+			"args": ["mcp-remote", "https://mcp.proagentstore.online/mcp"]
 		}
 	}
 }

@@ -34,9 +34,11 @@ relayRoutes.get("/:instanceId/connect", async (c) => {
 		.first<{ id: string }>();
 	if (!instance) return new Response("Instance not found", { status: 404 });
 
-	// Forward to RelayDO (one per instance)
+	// Forward to RelayDO (one per instance), preserving ?force=1 if present
+	const doUrl = new URL("/connect", c.req.url);
+	if (c.req.query("force") === "1") doUrl.searchParams.set("force", "1");
 	const stub = c.env.RELAY.get(c.env.RELAY.idFromName(instanceId));
-	return stub.fetch(new Request(new URL("/connect", c.req.url), {
+	return stub.fetch(new Request(doUrl, {
 		headers: c.req.raw.headers,
 	}));
 });

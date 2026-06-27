@@ -203,13 +203,29 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 
-	const body = await c.req.json<RuntimeRegistrationBody>();
+	const body = await c.req.json<RuntimeRegistrationBody & { force?: boolean }>();
 	const endpointUrl = validateRuntimeEndpointUrl(body.endpointUrl);
 	const tokenParts = await encodeRuntimeToken(c.env, body.token);
 	const capabilities = JSON.stringify(safeCapabilities(body.capabilities));
 	const placement = body.placement === "managed" ? "managed" : "local";
 	const runnerVersion = String(body.runnerVersion || "").slice(0, 80);
 	const runnerNode = String(body.runnerNode || "").slice(0, 120);
+
+	// Reject if a different machine is already connected (unless --force)
+	if (!body.force && runnerNode) {
+		const existing = await getRuntime(c.env, instanceId, session.uid);
+		if (existing && existing.runner_node && existing.runner_node !== runnerNode && existing.status !== "offline") {
+			const lastSeen = existing.last_seen_at ? Date.parse(`${existing.last_seen_at.replace(" ", "T")}Z`) : 0;
+			const stale = lastSeen > 0 && Date.now() - lastSeen > 120_000; // 2 min without heartbeat = stale
+			if (!stale) {
+				return c.json({
+					error: `Another machine is connected: ${existing.runner_node}. Disconnect it first, or use --force to take over.`,
+					connectedNode: existing.runner_node,
+					lastSeenAt: existing.last_seen_at,
+				}, 409);
+			}
+		}
+	}
 
 	await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)
 		.bind(
