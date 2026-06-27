@@ -30,9 +30,9 @@
             </select>
           </div>
           <div style="display:flex;gap:0.35rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
-            <button type="button" id="handsoff-start" class="btn btn-primary btn-sm" onclick="startHandsOff()">Start</button>
-            <button type="button" id="handsoff-pause" class="btn btn-outline btn-sm hidden" onclick="toggleHandsOffPause()">Pause</button>
-            <button type="button" id="handsoff-stop" class="btn btn-outline btn-sm hidden" onclick="stopHandsOff()" style="color:var(--red)">Stop</button>
+            <button type="button" id="handsoff-start" class="btn btn-primary btn-sm${handsOffOn ? ' hidden' : ''}" onclick="startHandsOff()">Start</button>
+            <button type="button" id="handsoff-pause" class="btn btn-outline btn-sm${handsOffOn ? '' : ' hidden'}" onclick="toggleHandsOffPause()">${handsOffPaused ? '▶ Resume' : '⏸ Pause'}</button>
+            <button type="button" id="handsoff-stop" class="btn btn-outline btn-sm${handsOffOn ? '' : ' hidden'}" onclick="stopHandsOff()" style="color:var(--red)">Stop</button>
             <span id="handsoff-status" style="font-size:0.78rem;color:var(--muted)"></span>
           </div>
           <p style="font-size:0.72rem;color:var(--muted-soft);margin:0.4rem 0 0">Say "next" to move between repos, "play" to hear, "record" to reply. Toggle repos in/out from the list below.</p>
