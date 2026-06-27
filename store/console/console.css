@@ -148,9 +148,10 @@
        desktop, inside the hamburger dropdown on mobile (#top-nav becomes a dropdown). */
     .nav-signed{display:flex}
 
-    /* Coding session panel fills the viewport: header (tabs+actions) at the top,
-       the summary/terminal area flexes to fill, the input row pinned at bottom. */
+    /* Coding session panel fills the viewport: header at top, summary/terminal
+       flexes to fill, input row pinned at bottom. Single scroll inside the pane. */
     #inst-coding-terminal:not(.hidden){display:flex;flex-direction:column;height:calc(100dvh - 120px);min-height:340px;margin-top:0.75rem}
+    #inst-coding-terminal .coding-view > div:last-child{flex-shrink:0}  /* input bar never shrinks */
     .coding-view{min-height:0;flex-direction:column}
     .coding-view:not(.hidden){display:flex;flex:1}
     #inst-coding-summary-thread,#inst-coding-pane{flex:1;min-height:0;height:auto}
@@ -344,19 +345,39 @@
       input,textarea,select{padding:0.42rem 0.55rem;font-size:0.85rem}
       .btn{padding:0.5rem 0.85rem}
       .btn-sm{padding:0.3rem 0.55rem}
-      /* The instance-detail content wrapper had 1rem L/R padding — the real "huge
-         margin" inside an instance (it's not a .container). Strip it down. */
-      #inst-detail-body{padding:0 0.25rem 0.5rem}
-      /* The coding surface nests cards 2-3 deep — overseer / repos-section /
-         terminal card, each with its own inline L/R padding, and the rows + chat
-         thread inside add more. They STACK into the "huge margin". Crush every
-         coding container's side padding on mobile. !important is required because
-         these elements carry inline padding (inline beats a normal media rule). */
-      #inst-coding-repos-section{padding:0.4rem 0.4rem!important}
-      #inst-coding-overseer,#inst-coding-terminal{padding-left:0.4rem!important;padding-right:0.4rem!important}
-      #inst-coding-repos .memory-item{padding-left:0.45rem!important;padding-right:0.45rem!important}
-      #inst-coding-summary-thread{padding-left:0.5rem!important;padding-right:0.5rem!important}
-      #inst-coding-overseer-reply,#inst-coding-pane{padding-left:0.4rem!important;padding-right:0.4rem!important}
+      /* ── Mobile app layout: strip ALL card chrome, edge-to-edge content ── */
+      /* The instance body is flush — no padding between content and screen edge */
+      #inst-detail-body{padding:0}
+      /* Coding tab fills viewport: repos list scrolls, header stays */
+      #inst-tab-coding{overflow-y:auto;-webkit-overflow-scrolling:touch;padding-bottom:env(safe-area-inset-bottom,0)}
+      /* Kill all .create-form card styling inside the coding tab — no border,
+         no background, no padding, no margin. Content flows directly. */
+      #inst-tab-coding .create-form{
+        background:none!important;border:none!important;border-radius:0!important;
+        padding:0.3rem 0.4rem!important;margin-bottom:0.25rem!important;
+      }
+      /* Repo items: minimal chrome, tight */
+      #inst-coding-repos .memory-item{
+        padding:0.45rem 0.4rem!important;border-radius:6px!important;
+        margin-bottom:0.15rem!important;
+      }
+      /* Overseer bar: compact on mobile */
+      #inst-coding-overseer{margin-bottom:0.15rem!important}
+      /* Summary thread + terminal: flush, no card chrome, edge-to-edge */
+      #inst-coding-summary-thread{
+        padding:0.35rem!important;border:none!important;border-radius:0!important;
+        background:var(--paper)!important;
+      }
+      #inst-coding-pane{
+        padding:0.35rem!important;border-radius:0!important;
+      }
+      #inst-coding-overseer-reply{padding:0.35rem 0.4rem!important}
+      /* Input bars: compact, safe-area aware */
+      #inst-coding-view-summary > div:last-child,
+      #inst-coding-view-terminal > div:last-child{
+        padding:0.35rem 0.3rem calc(env(safe-area-inset-bottom,0px) + 0.35rem)!important;
+        margin-top:0!important;gap:0.25rem!important;
+      }
       .inst-nav-tabs .tab{padding:0.25rem 0.45rem}
 
       /* Agent grid */
@@ -406,10 +427,17 @@
       .profile-section{margin-bottom:0.85rem}
       .profile-row{padding:0.45rem 0}
 
-      /* Coding — reclaim vertical space (inline styles need !important here) */
-      #inst-coding-repos-section{padding:0.45rem 0.55rem!important;margin-bottom:0.5rem!important}
-      #inst-coding-terminal:not(.hidden){margin-top:0.4rem;height:calc(100dvh - 104px)}
-      .memory-item{padding:0.5rem 0.6rem}
+      /* Coding terminal: full viewport, no card frame, fixed bottom bar */
+      #inst-coding-terminal:not(.hidden){
+        margin-top:0!important;padding:0!important;
+        height:calc(100dvh - 96px)!important;
+        background:none!important;border:none!important;border-radius:0!important;
+      }
+      /* Session header: compact, no wrapping */
+      #inst-coding-terminal > div:first-child{
+        padding:0.25rem 0.35rem!important;gap:0.3rem!important;flex-wrap:nowrap!important;
+      }
+      .memory-item{padding:0.45rem 0.5rem}
 
       /* Login */
       .login-page h1{font-size:1.5rem}
