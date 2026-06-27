@@ -101,7 +101,16 @@
       const instId = (typeof currentInstance !== 'undefined' && currentInstance?.id) || null;
       if (_voiceConfigCache && _voiceConfigInstanceId === instId) return _voiceConfigCache;
 
-      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
+      // Load voice settings from server if not loaded yet
+      let vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
+      if (!vs.provider && instId && typeof api === 'function') {
+        try {
+          const d = await api(`/v1/instances/${instId}/voice-settings`);
+          vs = d.voiceSettings || {};
+          if (typeof handsOffVoiceSettings !== 'undefined') Object.assign(handsOffVoiceSettings, vs);
+          if (typeof handsOffVoiceProvider !== 'undefined') handsOffVoiceProvider = vs.provider || 'browser';
+        } catch {}
+      }
       const isApi = (vs.provider || '').includes('openai');
       let apiKey = '';
       if (isApi) {

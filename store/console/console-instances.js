@@ -854,9 +854,12 @@
       const msgs = document.querySelectorAll('#inst-chat-messages .chat-msg.assistant');
       const last = msgs[msgs.length - 1];
       if (!last) return;
+      // Use the raw text (data-raw), not rendered HTML textContent
+      const text = last.dataset?.raw || last.textContent || '';
+      if (!text.trim()) return;
       // Pause mic while speaking (avoid picking up the agent's own voice / noise)
       if (chatConvoMode && chatConvoStt) chatConvoStt.stop();
-      await chatTts.speak(last.textContent);
+      await chatTts.speak(text);
       // Resume listening after TTS finishes
       if (chatConvoMode && chatConvoStt) {
         const input = document.getElementById('inst-chat-input');
@@ -899,7 +902,15 @@
         if (micBtn) micBtn.classList.remove('active');
       }
 
-      // Start conversation
+      // Start conversation — unlock audio APIs from this user gesture
+      if (window.speechSynthesis) {
+        const unlock = new SpeechSynthesisUtterance('');
+        unlock.volume = 0;
+        speechSynthesis.speak(unlock);
+      }
+      // Also unlock AudioContext (for OpenAI TTS)
+      try { const ctx = new AudioContext(); await ctx.resume(); ctx.close(); } catch {}
+
       const cfg = await initChatVoice();
       chatConvoMode = true;
       chatAutoSpeak = true;
