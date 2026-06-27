@@ -46,8 +46,43 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
 	return { endpointUrl: row.endpoint_url.replace(/\/$/, ""), token, instanceId, userId, env };
 }
 
+/** Wrapper to distinguish "relay returned a value" (even null/undefined) from "relay unavailable". */
+type RelayResult<T> = { ok: true; value: T } | { ok: false };
+
+/**
+ * Try sending a command through the WebSocket relay DO first; fall back to the
+ * tunnel if no runner is connected via relay (503) or the RELAY binding doesn't
+ * exist (old CLIs / local dev without the DO).
+ */
+async function callViaRelay<T>(conn: RunnerConn, path: string, body?: unknown): Promise<RelayResult<T>> {
+	if (!conn.env.RELAY) return { ok: false };
+	try {
+		const stub = conn.env.RELAY.get(conn.env.RELAY.idFromName(conn.instanceId));
+		const res = await stub.fetch(new Request("https://relay/command", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ method: "POST", path, body }),
+		}));
+		if (res.status === 503) return { ok: false }; // no runner on relay -- fall through to tunnel
+		if (!res.ok) {
+			const detail = await res.text().catch(() => "");
+			throw new Error(`Relay ${path} → ${res.status}: ${detail.slice(0, 200)}`);
+		}
+		return { ok: true, value: (await res.json()) as T };
+	} catch (err) {
+		// If the relay itself errors (not 503), throw so the caller sees the real error
+		if (err instanceof Error && err.message.startsWith("Relay ")) throw err;
+		return { ok: false }; // relay unavailable -- fall through
+	}
+}
+
 /** POST a JSON request to a runner endpoint with the instance auth headers. */
 export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown): Promise<T> {
+	// Try relay first (WebSocket path -- no tunnel needed)
+	const relayResult = await callViaRelay<T>(conn, path, body);
+	if (relayResult.ok) return relayResult.value;
+
+	// Fall back to direct tunnel fetch
 	const attempt = async (): Promise<T> => {
 		const headers: Record<string, string> = { "Content-Type": "application/json", "X-PAGS-Instance-Id": conn.instanceId };
 		if (conn.token) headers.Authorization = `Bearer ${conn.token}`;

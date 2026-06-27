@@ -8,6 +8,8 @@ export interface Env {
 	JOB_APPLY: Workflow;
 	/** Remote LLM brain that drives a local coding CLI toward an objective (AgentCoder port). */
 	CODING_SESSION: Workflow;
+	/** WebSocket relay DO — one per instance, bridges cloud→runner without tunnels. */
+	RELAY: DurableObjectNamespace;
 	GITHUB_CLIENT_ID: string;
 	GITHUB_CLIENT_SECRET: string;
 	GITHUB_ORG?: string;

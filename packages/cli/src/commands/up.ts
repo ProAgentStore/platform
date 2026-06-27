@@ -38,7 +38,7 @@ export const upCommand = new Command("up")
 	.description("Start the browser runner for all your agent instances")
 	.option("--headless", "Run browser in headless mode")
 	.option("--instance <id>", "Connect to a specific instance only")
-	.option("--tunnel <mode>", "Tunnel mode: 'named' (production, stable) or 'quick' (default, trycloudflare.com)", "quick")
+	.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay, recommended), 'named' (production, stable), or 'quick' (default, trycloudflare.com)", "quick")
 	.action(async (opts: { headless?: boolean; instance?: string; tunnel?: string }) => {
 		const session = requireSession();
 
@@ -104,6 +104,7 @@ export const upCommand = new Command("up")
 		const args = [cliPath, "runner", "connect", ...instances.map((i) => i.id)];
 		if (opts.headless) args.push("--headless");
 		if (opts.tunnel === "named") args.push("--tunnel", "named");
+		if (opts.tunnel === "ws") args.push("--tunnel", "ws");
 
 		const child = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],
@@ -129,6 +130,22 @@ export const upCommand = new Command("up")
 					state.tunnel = "online";
 					state.tunnelUrl = tunnelMatch[0];
 					state.lastEvent = "Tunnel created";
+					printStatus(state);
+					continue;
+				}
+
+				if (trimmed.includes("Relay connected:")) {
+					state.tunnel = "online";
+					state.tunnelUrl = "WebSocket relay";
+					state.lastEvent = "Relay connected";
+					printStatus(state);
+					continue;
+				}
+				if (trimmed.includes("WebSocket relay (no tunnel)")) {
+					state.tunnel = "online";
+					state.tunnelUrl = "WebSocket relay";
+					state.registration = "registered";
+					state.lastEvent = "Connected via WebSocket relay";
 					printStatus(state);
 					continue;
 				}

@@ -281,10 +281,21 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		// Persist offline only when the probe fails AND the heartbeat has gone stale.
 		const effective = online || recentlySeen ? "online" : "offline";
 		await updateRuntimeStatus(c.env, instanceId, session.uid, effective);
+		// Check relay status (is runner connected via WebSocket?)
+		let relayConnected = false;
+		if (c.env.RELAY) {
+			try {
+				const stub = c.env.RELAY.get(c.env.RELAY.idFromName(instanceId));
+				const relayRes = await stub.fetch(new Request("https://relay/status"));
+				const relayData = await relayRes.json().catch(() => ({})) as { connected?: boolean };
+				relayConnected = relayData.connected === true;
+			} catch { /* relay probe failed */ }
+		}
 		return c.json({
 			runtime: runtimeResponse({ ...runtime, status: effective, last_seen_at: new Date().toISOString() }),
 			health,
 			capabilities,
+			relay: { connected: relayConnected },
 		});
 	} catch (error) {
 		// Probe threw (network blip). A recently-seen runner stays online — don't clobber it.

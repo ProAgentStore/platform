@@ -24,6 +24,7 @@ import { storageRoutes, instanceStorageRoutes } from "./routes/storage.js";
 import { codingRoutes } from "./routes/coding.js";
 import { githubRoutes } from "./routes/github.js";
 import { tunnelRoutes } from "./routes/tunnel.js";
+import { relayRoutes } from "./routes/relay.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
@@ -32,6 +33,8 @@ export { AgentDO } from "./agent-do.js";
 export { JobApplyWorkflow } from "./workflows/job-apply.js";
 // Re-export the coding-orchestrator Workflow class for wrangler (AgentCoder port)
 export { CodingSessionWorkflow } from "./workflows/coding-session.js";
+// Re-export the WebSocket relay DO for wrangler
+export { RelayDO } from "./relay-do.js";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -86,6 +89,7 @@ app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collecti
 app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /sessions (AgentCoder port)
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
 app.route("/v1/tunnel", tunnelRoutes); // Named tunnel: /provision, /info, DELETE /
+app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google

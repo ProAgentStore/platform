@@ -396,6 +396,129 @@ function collectCapability(value: string, previous: string[] = []): string[] {
 	return [...previous, value];
 }
 
+/**
+ * Connect to PAGS via WebSocket relay — no tunnel, no cloudflared.
+ * Opens one WS per instance to the RelayDO and dispatches incoming commands
+ * to the local runner HTTP server.
+ */
+async function connectViaRelay(
+	instanceIds: string[],
+	localUrl: string,
+	runnerToken: string,
+	opts: PagsRequestOptions,
+): Promise<void> {
+	const apiBase = pagsApiBase(opts.apiBase).replace(/^http/, "ws"); // https → wss
+	const pagsToken = clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
+	if (!pagsToken) throw new Error("PAGS token required for WebSocket relay");
+
+	// Also register the runtime (needed for the status badge / getRunnerConn)
+	const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] });
+	const caps = Array.isArray(capabilities.capabilities) ? capabilities.capabilities.filter((item): item is string => typeof item === "string") : [];
+	for (const id of instanceIds) {
+		await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime`, opts, {
+			endpointUrl: localUrl,
+			token: runnerToken,
+			placement: "local",
+			capabilities: caps,
+			runnerVersion: "",
+		}).catch((e) => writeError(`register ${id.slice(0, 8)}… failed: ${e instanceof Error ? e.message : String(e)}`));
+	}
+
+	for (const id of instanceIds) {
+		openRelaySocket(id, apiBase, pagsToken, localUrl, runnerToken);
+	}
+
+	writeLine("Runtime registered with PAGS ✓");
+	writeLine("");
+	writeLine("═══════════════════════════════════════════════");
+	writeLine("  ✅ CONNECTED — WebSocket relay (no tunnel)");
+	writeLine(`  Agents:   ${instanceIds.length} instance${instanceIds.length === 1 ? "" : "s"}`);
+	writeLine("  No cloudflared needed. Ctrl+C to disconnect.");
+	writeLine("═══════════════════════════════════════════════");
+
+	// Heartbeat loop
+	let stopped = false;
+	const heartbeatLoop = async () => {
+		while (!stopped) {
+			await new Promise((r) => setTimeout(r, 30_000));
+			if (stopped) break;
+			for (const id of instanceIds) {
+				await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {}).catch(() => undefined);
+			}
+		}
+	};
+	void heartbeatLoop();
+	process.once("beforeExit", () => { stopped = true; });
+}
+
+function openRelaySocket(
+	instanceId: string,
+	wsBase: string,
+	pagsToken: string,
+	localUrl: string,
+	runnerToken: string,
+): void {
+	let backoffMs = 1000;
+	let reconnecting = false;
+
+	const connect = () => {
+		const url = `${wsBase}/v1/relay/${encodeURIComponent(instanceId)}/connect?token=${encodeURIComponent(pagsToken)}`;
+		const ws = new WebSocket(url);
+
+		ws.onopen = () => {
+			backoffMs = 1000;
+			writeLine(`Relay connected: ${instanceId.slice(0, 8)}…`);
+		};
+
+		ws.onmessage = async (event) => {
+			const text = typeof event.data === "string" ? event.data : String(event.data);
+			let cmd: { id: string; method?: string; path: string; body?: unknown };
+			try {
+				cmd = JSON.parse(text) as { id: string; method?: string; path: string; body?: unknown };
+			} catch {
+				return;
+			}
+			if (!cmd.id || !cmd.path) return;
+
+			// Dispatch to local runner HTTP server
+			const method = (cmd.method || "POST").toUpperCase();
+			const hasBody = method !== "GET" && method !== "HEAD" && cmd.body !== undefined;
+			try {
+				const headers: Record<string, string> = {};
+				if (hasBody) headers["Content-Type"] = "application/json";
+				if (runnerToken) headers.Authorization = `Bearer ${runnerToken}`;
+				headers["X-PAGS-Instance-Id"] = instanceId;
+				const res = await fetch(`${localUrl}${cmd.path}`, {
+					method,
+					headers,
+					body: hasBody ? JSON.stringify(cmd.body) : undefined,
+				});
+				const result = await res.json().catch(() => ({}));
+				ws.send(JSON.stringify({ id: cmd.id, status: res.status, result }));
+			} catch (err) {
+				ws.send(JSON.stringify({ id: cmd.id, status: 500, error: err instanceof Error ? err.message : String(err) }));
+			}
+		};
+
+		ws.onclose = () => {
+			if (reconnecting) return;
+			reconnecting = true;
+			writeLine(`Relay disconnected: ${instanceId.slice(0, 8)}… — reconnecting in ${Math.round(backoffMs / 1000)}s`);
+			setTimeout(() => {
+				reconnecting = false;
+				connect();
+			}, backoffMs);
+			backoffMs = Math.min(backoffMs * 2, 30_000);
+		};
+
+		ws.onerror = () => {
+			// onclose will fire after onerror -- reconnect handled there
+		};
+	};
+
+	connect();
+}
+
 export function createRunnerCommand(): Command {
 	const command = new Command("runner").description(
 		"Manage the local FAGS browser runtime for ProAgentStore agents",
@@ -427,7 +550,7 @@ export function createRunnerCommand(): Command {
 		.option("--cloudflared <path>", "cloudflared executable")
 		.option("--runner-version <version>", "Runner version")
 		.option("--skip-probe", "Skip PAGS FAGS-runtime probe after registration")
-		.option("--tunnel <mode>", "Tunnel mode: 'named' (production) or 'quick' (default)", "quick")
+		.option("--tunnel <mode>", "Tunnel mode: 'ws' (WebSocket relay), 'named' (production), or 'quick' (default)", "quick")
 		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { tunnel?: string }) => {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
@@ -475,6 +598,14 @@ export function createRunnerCommand(): Command {
 			try {
 				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId: primary });
 				writeLine(`Local FAGS runtime healthy at ${localUrl}`);
+
+				// ── WebSocket relay mode: no tunnel, no cloudflared ──────────
+				if (opts.tunnel === "ws") {
+					await connectViaRelay(instanceIds, localUrl, runnerToken, opts);
+					// Stay alive until the runner exits
+					await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
+					return;
+				}
 
 				// ── Named tunnel mode: stable hostname, no rate limits ──────────
 				if (opts.tunnel === "named") {

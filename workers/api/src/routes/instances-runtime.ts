@@ -623,6 +623,25 @@ export async function callRuntime(
 	path: string,
 	init: RequestInit = {},
 ): Promise<Response> {
+	// Try the WebSocket relay first (runner connected via `--tunnel ws`)
+	if (env.RELAY) {
+		try {
+			const stub = env.RELAY.get(env.RELAY.idFromName(row.instance_id));
+			const relayBody = init.body
+				? typeof init.body === "string" ? JSON.parse(init.body) : init.body
+				: undefined;
+			const method = (typeof init.method === "string" ? init.method : "GET").toUpperCase();
+			const res = await stub.fetch(new Request("https://relay/command", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ method, path, body: relayBody }),
+			}));
+			if (res.status !== 503) return res; // 503 = no runner on relay, fall through
+		} catch {
+			// relay unavailable -- fall through to tunnel
+		}
+	}
+
 	const token = await decodeRuntimeToken(env, row);
 	const url = new URL(path, `${row.endpoint_url}/`);
 	const headers = new Headers(init.headers);
