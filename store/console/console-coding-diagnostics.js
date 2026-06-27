@@ -37,6 +37,7 @@
       // ── Summary bar ──
       let html = `<div style="display:flex;flex-wrap:wrap;gap:0.35rem;margin-bottom:0.6rem">
         ${pill(s.runnerOnline, 'Runner ' + (s.runnerStatus || 'unknown'))}
+        ${s.relayConnected !== undefined ? pill(s.relayConnected, 'Relay ' + (s.relayConnected ? 'connected' : 'off')) : ''}
         ${pill(s.healthySessions > 0, s.healthySessions + '/' + s.activeSessions + ' sessions live')}
         ${pill(s.issueCount === 0, s.issueCount + ' issue' + (s.issueCount === 1 ? '' : 's'))}
       </div>`;

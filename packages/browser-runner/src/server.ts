@@ -186,7 +186,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	if (req.method === "GET" && path === "/coding/sessions") {
 		return json(res, 200, { sessions: runner.coding.list() });
 	}
-	if (req.method === "GET" && path === "/coding/diagnostics") {
+	if ((req.method === "GET" || req.method === "POST") && path === "/coding/diagnostics") {
 		const { listSessions: tmuxList } = await import("./coding/tmux.js");
 		const allTmux = tmuxList();
 		const pagsTmux = allTmux.filter((n: string) => n.startsWith("pags-"));

@@ -842,7 +842,20 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 			runnerDiag = { error: e instanceof Error ? e.message : String(e) };
 		}
 	}
-	(runner as Record<string, unknown>).reachable = runnerReachable;
+	// Check relay status
+	let relayConnected = false;
+	if (env.RELAY) {
+		try {
+			const stub = env.RELAY.get(env.RELAY.idFromName(instanceId));
+			const relayRes = await stub.fetch(new Request("https://relay/status"));
+			const relayData = await relayRes.json().catch(() => ({})) as { connected?: boolean };
+			relayConnected = relayData.connected === true;
+		} catch { /* relay probe failed */ }
+	}
+	// Runner is effectively reachable if either the direct probe worked OR the relay is connected
+	const effectivelyReachable = runnerReachable || relayConnected;
+
+	(runner as Record<string, unknown>).reachable = effectivelyReachable;
 	(runner as Record<string, unknown>).health = runnerHealth;
 
 	// 3. D1 sessions + repos
@@ -881,7 +894,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 			} : null,
 			// Issue detection
 			issue: s.status === "active" && !tracked
-				? (runnerReachable ? "orphaned: D1 says active but runner has no tmux for it" : "unknown: runner offline")
+				? (effectivelyReachable ? "orphaned: D1 says active but runner has no tmux for it" : "unknown: runner offline")
 				: s.status === "active" && tracked && !tracked.alive
 					? "dead: tracked but CLI process exited"
 					: null,
@@ -918,10 +931,10 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 
 	if (!runtimeRow) {
 		issues.push({ severity: "error", message: "No runner registered for this instance", fix: "Run `pags up` to connect your machine" });
-	} else if (runtimeRow.status === "offline") {
-		issues.push({ severity: "error", message: "Runner status is offline", fix: "Restart `pags up` — the tunnel may have dropped" });
-	} else if (!runnerReachable) {
-		issues.push({ severity: "error", message: "Runner registered but not reachable (tunnel down?)", fix: "Restart `pags up` to re-establish the tunnel" });
+	} else if (runtimeRow.status === "offline" && !relayConnected) {
+		issues.push({ severity: "error", message: "Runner status is offline", fix: "Restart `pags up` to reconnect" });
+	} else if (!effectivelyReachable) {
+		issues.push({ severity: "error", message: "Runner registered but not reachable", fix: "Restart `pags up` to reconnect" });
 	}
 
 	for (const s of sessions) {
@@ -932,7 +945,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 	}
 
 	if (diagData?.orphanedTmux?.length) {
-		issues.push({ severity: "info", message: `${diagData.orphanedTmux.length} orphaned tmux session(s): ${diagData.orphanedTmux.join(", ")}`, fix: "These pags-* tmux sessions have no matching D1 record — kill them manually with tmux kill-session" });
+		issues.push({ severity: "info", message: `${diagData.orphanedTmux.length} orphaned tmux session(s): ${diagData.orphanedTmux.join(", ")}`, fix: "Use the 'Kill orphaned' button in the tmux section above" });
 	}
 
 	const activeSessions = sessions.filter((s) => s.status === "active");
@@ -940,8 +953,9 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 
 	return c.json({
 		summary: {
-			runnerOnline: runnerReachable,
+			runnerOnline: effectivelyReachable,
 			runnerStatus: runner.status,
+			relayConnected,
 			totalRepos: repos.length,
 			totalSessions: sessions.length,
 			activeSessions: activeSessions.length,
@@ -949,6 +963,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 			issueCount: issues.filter((i) => i.severity === "error" || i.severity === "warn").length,
 		},
 		runner,
+		relay: { connected: relayConnected },
 		tmux: diagData ? {
 			trackedSessions: diagData.tracked?.length ?? 0,
 			orphanedSessions: diagData.orphanedTmux ?? [],
