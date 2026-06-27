@@ -347,6 +347,7 @@
         <button class="coding-action coding-term-only" onclick="sendCodingKey('Escape');closeCodingMenu()">⎋ Esc<small>send Escape to the CLI</small></button>
         <button class="coding-action coding-term-only" onclick="sendCodingKey('C-c');closeCodingMenu()">Ctrl-C<small>interrupt the CLI</small></button>
         <div class="coding-dialog-sep"></div>
+        <button class="coding-action" onclick="restartCodingSession();closeCodingMenu()">🔄 Restart session<small>kill + relaunch the CLI (same repo)</small></button>
         <button class="coding-action coding-action-danger" onclick="endCodingSession();closeCodingMenu()">⏹ End session<small>stop the CLI on your machine</small></button>
         <button class="coding-action coding-action-danger" onclick="deleteCurrentCodingRepo();closeCodingMenu()">🗑 Delete project</button>
       </div>`;
@@ -421,9 +422,11 @@
           if (snap.pane) {
             if (snap.pane !== lastCodingPane) { pre.innerHTML = colorizeCodingPane(snap.pane); lastCodingPane = snap.pane; }
           } else {
-            pre.textContent = !snap.runnerConnected ? '(no runner connected — run `pags up`)'
-              : snap.alive === false ? '(session stopped — the CLI is not running. Restart from ⚙ or start a new session.)'
-              : '(waiting for the CLI…)';
+            if (snap.alive === false) {
+              pre.innerHTML = '(session stopped — the CLI is not running.) <button onclick="restartCodingSession()" style="background:var(--accent);color:#fff;border:none;padding:0.3rem 0.7rem;border-radius:6px;cursor:pointer;font-size:0.82rem;margin-left:0.5rem">Restart</button>';
+            } else {
+              pre.textContent = !snap.runnerConnected ? '(no runner connected — run `pags up`)' : '(waiting for the CLI…)';
+            }
             lastCodingPane = '';
           }
           if (atBottom) pre.scrollTop = pre.scrollHeight;
@@ -478,6 +481,14 @@
           method: 'POST', body: JSON.stringify(value ? { value } : {}),
         });
       } catch (e) { alert('Resume failed: ' + e.message); }
+    }
+
+    async function restartCodingSession() {
+      if (!currentInstance || !currentCodingSession) return;
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${currentCodingSession}/restart`, { method: 'POST', body: '{}' });
+        if (d && d.runnerConnected === false) alert('No runner connected — run `pags up`.');
+      } catch (e) { alert('Restart failed: ' + e.message); }
     }
 
     async function endCodingSession() {
