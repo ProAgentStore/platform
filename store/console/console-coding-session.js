@@ -379,6 +379,9 @@
       } else if (state === 'idle') {
         badge.textContent = '●';
         badge.style.color = 'var(--green)';
+      } else if (state === 'stopped') {
+        badge.textContent = '●';
+        badge.style.color = 'var(--amber,#f59e0b)';
       } else {
         badge.textContent = '○';
         badge.style.color = 'var(--muted)';
@@ -418,12 +421,14 @@
           if (snap.pane) {
             if (snap.pane !== lastCodingPane) { pre.innerHTML = colorizeCodingPane(snap.pane); lastCodingPane = snap.pane; }
           } else {
-            pre.textContent = snap.runnerConnected ? '(waiting for the CLI…)' : '(no runner connected — run `pags up`)';
+            pre.textContent = !snap.runnerConnected ? '(no runner connected — run `pags up`)'
+              : snap.alive === false ? '(session stopped — the CLI is not running. Restart from ⚙ or start a new session.)'
+              : '(waiting for the CLI…)';
             lastCodingPane = '';
           }
           if (atBottom) pre.scrollTop = pre.scrollHeight;
         }
-        setCodingRunState(snap.alive ? snap.runState : 'offline');
+        setCodingRunState(!snap.runnerConnected ? 'offline' : snap.alive ? snap.runState : 'stopped');
       } catch (e) { /* transient — keep polling */ }
     }
 

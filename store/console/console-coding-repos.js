@@ -120,13 +120,13 @@
       startReposStatusPolling();
     }
 
-    // Per-repo status icon: spinner = working · green ● = ready for your reply ·
-    // grey ○ = offline. Falls back to the repo's clone status when no live session.
+    // Per-repo status icon: spinner = working · green ● = ready · amber ● = stopped · grey ○ = offline.
     function repoStatusIcon(r, active) {
       if (active) {
         const st = codingReposStatus[r.id];
         if (st === 'thinking' || st === 'responding') return '<span class="coding-spin" title="working…"></span>';
         if (st === 'offline') return '<span title="runner offline" style="color:var(--muted)">○</span>';
+        if (st === 'stopped') return '<span title="session stopped" style="color:var(--amber,#f59e0b)">●</span>';
         return '<span title="ready for your reply" style="color:var(--green)">●</span>';
       }
       const dot = { ready: 'var(--green)', cloning: 'var(--amber)', error: 'var(--red)' }[r.cloneStatus] || 'var(--muted)';
@@ -149,6 +149,7 @@
       const st = codingReposStatus[r.id];
       const eng = engineLabel(active);
       if (st === 'offline') return `<span style="color:var(--muted)">⏸ Runner offline — run <code>pags up</code></span>`;
+      if (st === 'stopped') return `<span style="color:var(--amber,#f59e0b)">⏸ Session stopped — tap <b>Open</b> to reconnect</span>`;
       if (st === 'thinking' || st === 'responding') return `<span style="color:var(--accent,#7c3aed)"><span class="coding-spin" style="vertical-align:-1px"></span> ${esc(eng)} is working…</span>`;
       const d = codingDeployStatus[r.id];
       if (d && d.available && d.run && d.run.status !== 'completed') return `<span style="color:var(--amber)">⏳ Deploying #${esc(d.run.runNumber)}…</span>`;
@@ -163,10 +164,11 @@
       if (!el) return;
       const actives = codingSessions.filter(s => s.status === 'active');
       if (!actives.length) { el.innerHTML = ''; return; }
-      let working = 0, ready = 0, offline = 0, deploying = 0;
+      let working = 0, ready = 0, stopped = 0, offline = 0, deploying = 0;
       actives.forEach(s => {
         const st = codingReposStatus[s.repoId];
         if (st === 'thinking' || st === 'responding') working++;
+        else if (st === 'stopped') stopped++;
         else if (st === 'offline') offline++;
         else ready++;
         const d = codingDeployStatus[s.repoId];
@@ -176,6 +178,7 @@
       if (working) parts.push(`<span style="color:var(--accent,#7c3aed)"><span class="coding-spin" style="vertical-align:-1px"></span> ${working} working</span>`);
       if (deploying) parts.push(`<span style="color:var(--amber)">⏳ ${deploying} deploying</span>`);
       if (ready) parts.push(`<span style="color:var(--green)">✓ ${ready} ready</span>`);
+      if (stopped) parts.push(`<span style="color:var(--amber,#f59e0b)">⏸ ${stopped} stopped</span>`);
       if (offline) parts.push(`<span style="color:var(--muted)">⏸ ${offline} offline</span>`);
       el.innerHTML = parts.join(' &nbsp;·&nbsp; ');
     }
@@ -197,7 +200,7 @@
       await Promise.all(actives.map(async (s) => {
         try {
           const snap = await api(`/v1/instances/${currentInstance.id}/coding/sessions/${s.id}/capture`);
-          codingReposStatus[s.repoId] = snap.runnerConnected === false ? 'offline' : (snap.alive ? snap.runState : 'idle');
+          codingReposStatus[s.repoId] = snap.runnerConnected === false ? 'offline' : (snap.alive ? snap.runState : 'stopped');
         } catch (e) { /* keep prior */ }
         // Hands-off proactive narration: when a repo finishes working, say so (and
         // play its last reply) — so you don't have to watch the screen.
