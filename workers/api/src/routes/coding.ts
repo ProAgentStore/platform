@@ -226,7 +226,14 @@ codingRoutes.post("/:instanceId/coding/repos", async (c) => {
 
 codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
-	const ok = await deleteRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	const repoId = c.req.param("repoId");
+	// End any active sessions on the runner before deleting from DB
+	const sessions = await listSessions(c.env, instanceId, uid);
+	const conn = await getRunnerConn(c.env, instanceId, uid);
+	for (const s of sessions.filter((s) => s.repoId === repoId && s.status === "active")) {
+		if (conn) await callRunner(conn, "/coding/end", { sessionId: s.id }).catch(() => undefined);
+	}
+	const ok = await deleteRepo(c.env, instanceId, uid, repoId);
 	if (!ok) throw new HttpError(404, "Repo not found");
 	return c.json({ ok: true });
 });
