@@ -70,6 +70,7 @@
       if (!currentInstance) return;
       const settings = {
         provider: handsOffVoiceProvider,
+        speed: handsOffVoiceSettings.speed || 100,
         openai: handsOffVoiceSettings.openai || { model: 'gpt-4o-realtime-preview', voice: 'alloy' },
         gemini: handsOffVoiceSettings.gemini || { model: 'gemini-2.0-flash-exp' },
         language: handsOffVoiceSettings.language || 'en-US',
@@ -89,18 +90,28 @@
       const el = document.getElementById('handsoff-provider-opts');
       if (!el) return;
       const s = handsOffVoiceSettings;
+      const speed = s.speed || 100;
+      // Speed slider — common to all providers
+      const speedHtml = `
+        <div style="display:flex;align-items:center;gap:0.4rem;font-size:0.78rem;margin-top:0.3rem">
+          <label style="margin:0;white-space:nowrap">Speed</label>
+          <input type="range" min="50" max="200" step="10" value="${speed}" style="flex:1;accent-color:var(--accent)" oninput="handsOffVoiceSettings.speed=Number(this.value);document.getElementById('handsoff-speed-val').textContent=this.value+'%';saveVoiceSettings()">
+          <span id="handsoff-speed-val" style="min-width:2.5rem;text-align:right">${speed}%</span>
+        </div>`;
+
+      let providerHtml = '';
       if (handsOffVoiceProvider === 'openai-realtime') {
         const voice = s.openai?.voice || 'alloy';
         const model = s.openai?.model || 'gpt-4o-realtime-preview';
-        el.innerHTML = `
+        providerHtml = `
           <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 0.5rem;align-items:center;font-size:0.78rem;margin:0.3rem 0;padding:0.4rem;background:var(--paper);border-radius:6px;border:1px solid var(--line)">
             <label style="margin:0">Model</label>
-            <select id="handsoff-openai-model" style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),model:this.value};saveVoiceSettings()">
+            <select style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),model:this.value};saveVoiceSettings()">
               <option value="gpt-4o-realtime-preview"${model === 'gpt-4o-realtime-preview' ? ' selected' : ''}>GPT-4o Realtime</option>
               <option value="gpt-4o-mini-realtime-preview"${model === 'gpt-4o-mini-realtime-preview' ? ' selected' : ''}>GPT-4o Mini Realtime (faster)</option>
             </select>
             <label style="margin:0">Voice</label>
-            <select id="handsoff-openai-voice" style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),voice:this.value};saveVoiceSettings()">
+            <select style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),voice:this.value};saveVoiceSettings()">
               ${['alloy','ash','ballad','coral','echo','sage','shimmer','verse'].map(v =>
                 `<option value="${v}"${v === voice ? ' selected' : ''}>${v}</option>`
               ).join('')}
@@ -109,17 +120,18 @@
           <div style="font-size:0.7rem;color:var(--muted-soft)">Requires OpenAI API key in <a href="#" onclick="if(window.showProfile)showProfile();return false" style="color:var(--accent)">Profile → API Keys</a></div>`;
       } else if (handsOffVoiceProvider === 'gemini-live') {
         const model = s.gemini?.model || 'gemini-2.0-flash-exp';
-        el.innerHTML = `
+        providerHtml = `
           <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 0.5rem;align-items:center;font-size:0.78rem;margin:0.3rem 0;padding:0.4rem;background:var(--paper);border-radius:6px;border:1px solid var(--line)">
             <label style="margin:0">Model</label>
-            <select id="handsoff-gemini-model" style="font-size:0.78rem" onchange="handsOffVoiceSettings.gemini={...(handsOffVoiceSettings.gemini||{}),model:this.value};saveVoiceSettings()">
+            <select style="font-size:0.78rem" onchange="handsOffVoiceSettings.gemini={...(handsOffVoiceSettings.gemini||{}),model:this.value};saveVoiceSettings()">
               <option value="gemini-2.0-flash-exp"${model === 'gemini-2.0-flash-exp' ? ' selected' : ''}>Gemini 2.0 Flash</option>
             </select>
           </div>
           <div style="font-size:0.7rem;color:var(--muted-soft)">Requires Google AI API key in <a href="#" onclick="if(window.showProfile)showProfile();return false" style="color:var(--accent)">Profile → API Keys</a></div>`;
       } else {
-        el.innerHTML = `<div style="font-size:0.7rem;color:var(--muted-soft);margin:0.2rem 0">Free browser speech — no API key needed. Quality varies by browser.</div>`;
+        providerHtml = `<div style="font-size:0.7rem;color:var(--muted-soft);margin:0.2rem 0">Free browser speech — no API key needed. Quality varies by browser.</div>`;
       }
+      el.innerHTML = providerHtml + speedHtml;
     }
     // Repos that take part in hands-off: a live session + not opted out. Scope
     // 'focused' narrows to the single focused repo.
@@ -200,7 +212,9 @@
     function buildHandsOffSystemPrompt() {
       const repos = handsOffEligibleRepos();
       const repoList = repos.map(r => r.name).join(', ');
-      return `You are the Overseer for a multi-repo coding workspace. The user is in hands-off voice mode — they speak, you respond. Active repos: ${repoList}. Keep responses short and actionable. When the user asks about a specific repo, focus on that one. You can see what each repo's coding CLI is doing.`;
+      const speed = handsOffVoiceSettings?.speed || 100;
+      const speedNote = speed !== 100 ? ` Speak at ${speed}% speed — ${speed > 100 ? 'faster than normal' : 'slower than normal'}.` : '';
+      return `You are the Overseer for a multi-repo coding workspace. The user is in hands-off voice mode — they speak, you respond. Active repos: ${repoList}. Keep responses short and actionable.${speedNote}`;
     }
 
     // For realtime providers: the LLM IS the voice — phrases from the user

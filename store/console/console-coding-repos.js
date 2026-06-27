@@ -313,7 +313,8 @@
       try {
         speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(clean.slice(0, 3000));
-        u.rate = 1.0;
+        const speedPct = handsOffVoiceSettings?.speed || 100;
+        u.rate = Math.max(0.5, Math.min(3, speedPct / 100));
         let lastSpan = null;
         u.onboundary = (e) => {
           if (e.name && e.name !== 'word') return;

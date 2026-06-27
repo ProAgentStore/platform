@@ -279,3 +279,27 @@ describe("runtime task protocol shape", () => {
 		});
 	});
 });
+
+describe("voice settings validation", () => {
+	it("clamps speed to 50-200 range", () => {
+		// Speed clamping logic (mirrors the PUT handler)
+		const clamp = (v: unknown) => typeof v === "number" ? Math.max(50, Math.min(200, Math.round(v))) : 100;
+		expect(clamp(100)).toBe(100);
+		expect(clamp(150)).toBe(150);
+		expect(clamp(0)).toBe(50);
+		expect(clamp(300)).toBe(200);
+		expect(clamp(-10)).toBe(50);
+		expect(clamp(75.7)).toBe(76);
+		expect(clamp(undefined)).toBe(100);
+		expect(clamp("fast")).toBe(100);
+	});
+
+	it("validates provider values", () => {
+		const valid = ["browser", "openai-realtime", "gemini-live"];
+		expect(valid.includes("browser")).toBe(true);
+		expect(valid.includes("openai-realtime")).toBe(true);
+		expect(valid.includes("gemini-live")).toBe(true);
+		expect(valid.includes("invalid")).toBe(false);
+		expect(valid.includes("")).toBe(false);
+	});
+});

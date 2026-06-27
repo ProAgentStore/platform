@@ -307,8 +307,10 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 	if (!["browser", "openai-realtime", "gemini-live"].includes(provider)) {
 		throw new HttpError(400, "provider must be browser, openai-realtime, or gemini-live");
 	}
+	const speed = typeof body.speed === "number" ? Math.max(50, Math.min(200, Math.round(body.speed))) : 100;
 	const settings = {
 		provider,
+		speed,
 		openai: body.openai && typeof body.openai === "object" ? body.openai : undefined,
 		gemini: body.gemini && typeof body.gemini === "object" ? body.gemini : undefined,
 		language: typeof body.language === "string" ? body.language.slice(0, 10) : "en-US",

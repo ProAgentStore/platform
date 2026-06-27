@@ -208,7 +208,9 @@
       try {
         speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(clean.slice(0, 1500));
-        u.rate = 1.05;
+        // Speed from voice settings (50-200%, default 100% = rate 1.0)
+        const speedPct = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings?.speed) || 100;
+        u.rate = Math.max(0.5, Math.min(3, speedPct / 100));
         speechSynthesis.speak(u);
       } catch (e) { /* unsupported */ }
     }
