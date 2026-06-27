@@ -71,7 +71,7 @@
       const settings = {
         provider: handsOffVoiceProvider,
         speed: handsOffVoiceSettings.speed || 100,
-        openai: handsOffVoiceSettings.openai || { model: 'gpt-4o-realtime-preview', voice: 'alloy' },
+        openai: handsOffVoiceSettings.openai || { model: 'gpt-realtime', voice: 'alloy' },
         gemini: handsOffVoiceSettings.gemini || { model: 'gemini-2.0-flash-exp' },
         language: handsOffVoiceSettings.language || 'en-US',
       };
@@ -102,13 +102,13 @@
       let providerHtml = '';
       if (handsOffVoiceProvider === 'openai-realtime') {
         const voice = s.openai?.voice || 'alloy';
-        const model = s.openai?.model || 'gpt-4o-realtime-preview';
+        const model = s.openai?.model || 'gpt-realtime';
         providerHtml = `
           <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 0.5rem;align-items:center;font-size:0.78rem;margin:0.3rem 0;padding:0.4rem;background:var(--paper);border-radius:6px;border:1px solid var(--line)">
             <label style="margin:0">Model</label>
             <select style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),model:this.value};saveVoiceSettings()">
-              <option value="gpt-4o-realtime-preview"${model === 'gpt-4o-realtime-preview' ? ' selected' : ''}>GPT-4o Realtime</option>
-              <option value="gpt-4o-mini-realtime-preview"${model === 'gpt-4o-mini-realtime-preview' ? ' selected' : ''}>GPT-4o Mini Realtime (faster)</option>
+              <option value="gpt-realtime"${model === 'gpt-realtime' || model === 'gpt-realtime' ? ' selected' : ''}>GPT Realtime</option>
+              <option value="gpt-realtime-mini"${model === 'gpt-realtime-mini' || model === 'gpt-4o-mini-realtime-preview' ? ' selected' : ''}>GPT Realtime Mini (faster)</option>
             </select>
             <label style="margin:0">Voice</label>
             <select style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),voice:this.value};saveVoiceSettings()">
@@ -189,7 +189,7 @@
         const opts = handsOffVoiceSettings.openai || {};
         const systemPrompt = buildHandsOffSystemPrompt();
         handsOffRealtimeEngine = new OpenAIRealtimeVoice(handsOffApiKey, {
-          model: opts.model || 'gpt-4o-realtime-preview',
+          model: opts.model || 'gpt-realtime',
           voice: opts.voice || 'alloy',
           systemPrompt,
           onTranscript: (text, role) => { if (role === 'user') onHandsOffRealtimePhrase(text); },

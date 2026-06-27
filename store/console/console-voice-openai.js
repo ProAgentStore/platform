@@ -6,7 +6,7 @@
     class OpenAIRealtimeVoice {
       constructor(apiKey, opts = {}) {
         this.apiKey = apiKey;
-        this.model = opts.model || 'gpt-4o-realtime-preview';
+        this.model = opts.model || 'gpt-realtime';
         this.voice = opts.voice || 'alloy';
         this.systemPrompt = opts.systemPrompt || '';
         this.onTranscript = opts.onTranscript || (() => {});  // (text, role) => {}
