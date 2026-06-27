@@ -540,12 +540,22 @@ export function createRunnerCommand(): Command {
 				// public URL stops routing → PAGS probe fails → offline). Probe the
 				// public URL ourselves; respawn + re-register when it dies, heartbeat
 				// otherwise. This is what keeps the runner reliably online.
+				//
+				// Rate-limit guard: require 3 consecutive probe failures before
+				// respawning (a single slow response shouldn't trigger a new tunnel).
+				// Exponential backoff on respawn failures (30s → 60s → 120s → cap 5min)
+				// so we don't hammer Cloudflare's quick-tunnel API into a 429.
 				let stopped = false;
+				let consecutiveFailures = 0;
+				let respawnBackoffMs = 30_000;
+				const PROBE_FAIL_THRESHOLD = 3;
+				const MAX_BACKOFF_MS = 5 * 60_000;
+
 				const probeTunnel = async (url: string): Promise<boolean> => {
 					try {
 						const res = await fetch(`${url.replace(/\/$/, "")}/health`, {
 							headers: { Authorization: `Bearer ${runnerToken}`, "X-PAGS-Instance-Id": primary },
-							signal: AbortSignal.timeout(8_000),
+							signal: AbortSignal.timeout(10_000),
 						});
 						return res.ok;
 					} catch {
@@ -568,25 +578,34 @@ export function createRunnerCommand(): Command {
 						await new Promise((r) => setTimeout(r, 30_000));
 						if (stopped) break;
 						if (await probeTunnel(tunnelUrl)) {
-							// Tunnel is up. Heartbeat all — and if PAGS lost any of our
-							// registrations (a blip dropped them but the tunnel survived),
-							// re-register everything so we recover on our own.
+							consecutiveFailures = 0;
+							respawnBackoffMs = 30_000; // reset backoff on success
 							const beat = await heartbeatAll();
 							if (!beat) {
 								await registerRuntime(tunnelUrl).then(() => writeLine("✅ Re-registered with PAGS")).catch(() => undefined);
 							}
 							continue;
 						}
+						consecutiveFailures++;
+						if (consecutiveFailures < PROBE_FAIL_THRESHOLD) {
+							writeLine(`⚠ Tunnel probe failed (${consecutiveFailures}/${PROBE_FAIL_THRESHOLD}) — will retry`);
+							continue;
+						}
 						writeLine("⚠ Tunnel unreachable — reconnecting…");
+						consecutiveFailures = 0;
 						try { if (tunnel && !tunnel.killed) tunnel.kill("SIGTERM"); } catch { /* ignore */ }
 						try {
 							const next = await openTunnel();
 							tunnel = next.proc;
 							tunnelUrl = next.url;
 							await registerRuntime(tunnelUrl);
+							respawnBackoffMs = 30_000; // reset on success
 							writeLine(`✅ Reconnected: ${tunnelUrl}`);
 						} catch (error) {
-							writeError(`reconnect failed (${error instanceof Error ? error.message : String(error)}); retrying in 30s`);
+							writeError(`reconnect failed (${error instanceof Error ? error.message : String(error)}); retrying in ${Math.round(respawnBackoffMs / 1000)}s`);
+							// Wait the backoff before the next loop iteration (on top of the 30s sleep).
+							await new Promise((r) => setTimeout(r, respawnBackoffMs));
+							respawnBackoffMs = Math.min(respawnBackoffMs * 2, MAX_BACKOFF_MS);
 						}
 					}
 				})();
