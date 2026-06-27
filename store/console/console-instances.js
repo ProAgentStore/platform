@@ -870,60 +870,76 @@
       if (!chatAutoSpeak || !chatTts) return;
       const msgs = document.querySelectorAll('#inst-chat-messages .chat-msg.assistant');
       const last = msgs[msgs.length - 1];
-      if (last) {
-        await chatTts.speak(last.textContent);
-        // In conversation mode, restart listening after the agent finishes speaking
-        if (chatConvoMode && chatConvoStt && !chatConvoStt.listening) {
-          try { await chatConvoStt.start(); } catch {}
-        }
+      if (!last) return;
+      // Pause mic while speaking (avoid picking up the agent's own voice / noise)
+      if (chatConvoMode && chatConvoStt) chatConvoStt.stop();
+      await chatTts.speak(last.textContent);
+      // Resume listening after TTS finishes
+      if (chatConvoMode && chatConvoStt) {
+        const input = document.getElementById('inst-chat-input');
+        if (input) { input.value = ''; input.placeholder = 'Listening — speak to your agent...'; }
+        try { await chatConvoStt.start(); } catch {}
       }
     }
 
     // ── Conversation mode: continuous voice chat ────────────────────────────
-    // 🎙️ = one toggle that turns on: continuous STT + auto-send + auto-speak.
-    // You speak, the agent responds aloud, you speak again. No buttons to press.
+    // 🎙️ = one toggle: continuous STT + auto-send + auto-speak + re-listen.
+    // You speak → agent responds aloud → mic reopens → you speak again.
     let chatConvoMode = false;
     let chatConvoStt = null;
+    let chatConvoSending = false; // guard: don't double-send while agent is thinking
 
     async function toggleConversationMode(btn) {
       if (chatConvoMode) {
         // Stop conversation
         chatConvoMode = false;
         chatAutoSpeak = false;
+        chatConvoSending = false;
         if (chatConvoStt) { chatConvoStt.stop(); chatConvoStt = null; }
+        // Also stop push-to-talk if active
+        if (chatStt) { chatStt.stop(); chatStt = null; chatVoiceOn = false; }
         if (btn) btn.classList.remove('active');
+        const micBtn = document.getElementById('inst-chat-mic');
+        if (micBtn) micBtn.classList.remove('active');
         const speakBtn = document.getElementById('inst-chat-speak');
         if (speakBtn) speakBtn.classList.remove('active');
         const input = document.getElementById('inst-chat-input');
-        if (input) input.placeholder = 'Send a message...';
+        if (input) { input.placeholder = 'Send a message...'; input.value = ''; }
         return;
+      }
+
+      // Stop push-to-talk if active (can't have both)
+      if (chatVoiceOn) {
+        chatVoiceOn = false;
+        if (chatStt) { chatStt.stop(); chatStt = null; }
+        const micBtn = document.getElementById('inst-chat-mic');
+        if (micBtn) micBtn.classList.remove('active');
       }
 
       // Start conversation
       const { sttProvider, apiKey } = await initChatVoice();
       chatConvoMode = true;
-      chatAutoSpeak = true; // auto-speak responses
+      chatAutoSpeak = true;
+      chatConvoSending = false;
       if (btn) btn.classList.add('active');
       const speakBtn = document.getElementById('inst-chat-speak');
       if (speakBtn) speakBtn.classList.add('active');
       const input = document.getElementById('inst-chat-input');
-      if (input) input.placeholder = 'Listening — speak to your agent...';
+      if (input) { input.value = ''; input.placeholder = 'Listening — speak to your agent...'; }
 
       chatConvoStt = new VoiceStt(sttProvider, {
         apiKey,
         language: ((typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {}).language || 'en-US',
         onResult: (text, isFinal) => {
+          if (!chatConvoMode || chatConvoSending) return; // ignore while agent is responding
           if (input) input.value = text;
-          if (isFinal) {
-            // Auto-send the transcript
+          if (isFinal && text.trim()) {
+            chatConvoSending = true; // guard: one message at a time
+            if (input) input.placeholder = 'Agent is thinking...';
+            // Pause mic while agent thinks + responds
+            if (chatConvoStt) chatConvoStt.stop();
             sendInstanceMessage();
-            // For API-based STT (Whisper), restart after a pause
-            // (browser continuous mode restarts automatically)
-            if (sttProvider !== 'browser' && chatConvoMode) {
-              chatConvoStt?.stop();
-              // Don't restart immediately — wait for the agent to respond + TTS to finish
-              // speakLastAssistantMessage() will restart STT after speaking
-            }
+            // speakLastAssistantMessage() handles TTS → resume mic
           }
         },
         onError: (err) => {
@@ -966,7 +982,14 @@
     async function sendInstanceMessage() {
       const input = document.getElementById('inst-chat-input');
       const message = input.value.trim();
-      if (!message) return;
+      if (!message) {
+        // Empty send in conversation mode — reset guard, resume listening
+        if (chatConvoMode) {
+          chatConvoSending = false;
+          if (chatConvoStt) try { chatConvoStt.start(); } catch {}
+        }
+        return;
+      }
       input.value = '';
 
       const container = document.getElementById('inst-chat-messages');
@@ -990,7 +1013,8 @@
       }
       document.getElementById('inst-chat-thinking').classList.add('hidden');
       container.scrollTop = container.scrollHeight;
-      // Auto-speak the response if voice output is on
+      chatConvoSending = false; // allow next voice input
+      // Auto-speak the response (and resume mic in convo mode after TTS)
       speakLastAssistantMessage();
     }
 

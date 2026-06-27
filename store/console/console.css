@@ -412,8 +412,8 @@
 
       /* ── Chat ── */
       .chat-container{height:calc(100dvh - 160px);min-height:250px}
-      .chat-msg{max-width:92%;padding:0.55rem 0.7rem;font-size:0.84rem;overflow-wrap:anywhere;overflow-x:hidden}
-      .chat-msg.assistant pre{max-width:100%;overflow-x:auto}
+      .chat-msg{max-width:92%;padding:0.55rem 0.7rem;font-size:0.84rem;overflow-wrap:anywhere;word-break:break-word}
+      .chat-msg.assistant pre{max-width:100%;overflow-x:auto;white-space:pre-wrap}
       .chat-msg.assistant table{display:block;overflow-x:auto;max-width:calc(100vw - 2rem)}
       .chat-messages{overflow-x:hidden}
       .chat-input{padding:0.3rem 0.3rem calc(env(safe-area-inset-bottom,0px) + 0.3rem);border-top:1px solid var(--line);background:var(--panel);flex-shrink:0;gap:0.2rem}
