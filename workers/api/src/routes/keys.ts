@@ -224,6 +224,31 @@ keysRoutes.post("/:provider/verify", async (c) => {
 	}
 });
 
+/** Reveal a decrypted key (for browser-direct connections like OpenAI Realtime WS). */
+keysRoutes.get("/:provider/reveal", async (c) => {
+	const session = await requireUser(c);
+	const providerId = c.req.param("provider");
+	if (!PROVIDER_BY_ID.has(providerId)) throw new HttpError(400, `Unknown provider: ${providerId}`);
+	if (!c.env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
+	const row = await c.env.DB.prepare(
+		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
+	)
+		.bind(session.uid, providerId)
+		.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+	if (!row) throw new HttpError(404, "No key stored for this provider");
+	const key = await decryptKey(
+		new Uint8Array(row.key_ciphertext),
+		new Uint8Array(row.dek_wrapped),
+		new Uint8Array(row.iv),
+		c.env.KEY_ENCRYPTION_KEY,
+	);
+	// Mark as used
+	await c.env.DB.prepare("UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = ?2")
+		.bind(session.uid, providerId)
+		.run();
+	return c.json({ key });
+});
+
 /** Delete a key. */
 keysRoutes.delete("/:provider", async (c) => {
 	const session = await requireUser(c);

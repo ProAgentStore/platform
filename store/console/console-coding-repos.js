@@ -31,6 +31,9 @@
     let handsOffExcluded = {};            // repoId -> true (opted out of hands-off)
     let handsOffRec = null;               // continuous recognizer
     let handsOffLastStatus = {};          // repoId -> last runState (finish narration)
+    let handsOffVoiceProvider = 'browser'; // 'browser' | 'openai-realtime' | 'gemini-live'
+    let handsOffVoiceSettings = {};       // provider-specific settings (model, voice, etc.)
+    let handsOffRealtimeEngine = null;    // active OpenAI/Gemini engine instance
     let codingEngines = [];               // [{id,label,command}] — CLI launch presets
     let codingDefaultEngineId = 'claude'; // which preset is the default
     let codingRunnerOnline = null;        // last capture's runnerConnected (null=unknown)

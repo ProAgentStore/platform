@@ -18,6 +18,13 @@
         <div class="coding-dialog-title">Hands-off mode<button onclick="document.getElementById('handsoff-dialog').remove()" aria-label="Close">&times;</button></div>
         <div style="padding:0 0.55rem">
           <div style="display:grid;grid-template-columns:auto 1fr;gap:0.4rem 0.5rem;align-items:center;font-size:0.82rem">
+            <label style="margin:0">Voice</label>
+            <select id="handsoff-provider" style="font-size:0.82rem" onchange="onVoiceProviderChange(this.value)">
+              <option value="browser"${handsOffVoiceProvider === 'browser' ? ' selected' : ''}>Browser (free, robotic)</option>
+              <option value="openai-realtime"${handsOffVoiceProvider === 'openai-realtime' ? ' selected' : ''}>OpenAI Realtime (natural, fast)</option>
+              <option value="gemini-live"${handsOffVoiceProvider === 'gemini-live' ? ' selected' : ''}>Gemini Live (natural, cheaper)</option>
+            </select>
+            <div id="handsoff-provider-opts" style="grid-column:1/-1"></div>
             <label style="margin:0">Mode</label>
             <select id="handsoff-mode" style="font-size:0.82rem">
               <option value="smart">Smart — converse with the Overseer</option>
@@ -40,10 +47,79 @@
       </div>`;
       bg.addEventListener('click', (e) => { if (e.target === bg) bg.remove(); });
       document.body.appendChild(bg);
+      loadVoiceSettings();
     }
     function handsOffStatus(t) {
       const el = document.getElementById('handsoff-status');
       if (el) el.textContent = t || '';
+    }
+
+    // Load voice settings from server on first open
+    async function loadVoiceSettings() {
+      if (!currentInstance) return;
+      try {
+        const d = await api(`/v1/instances/${currentInstance.id}/voice-settings`);
+        const s = d.voiceSettings || {};
+        handsOffVoiceProvider = s.provider || 'browser';
+        handsOffVoiceSettings = s;
+      } catch { /* keep defaults */ }
+      renderVoiceProviderOpts();
+    }
+
+    async function saveVoiceSettings() {
+      if (!currentInstance) return;
+      const settings = {
+        provider: handsOffVoiceProvider,
+        openai: handsOffVoiceSettings.openai || { model: 'gpt-4o-realtime-preview', voice: 'alloy' },
+        gemini: handsOffVoiceSettings.gemini || { model: 'gemini-2.0-flash-exp' },
+        language: handsOffVoiceSettings.language || 'en-US',
+      };
+      await api(`/v1/instances/${currentInstance.id}/voice-settings`, {
+        method: 'PUT', body: JSON.stringify(settings),
+      }).catch(() => {});
+    }
+
+    function onVoiceProviderChange(value) {
+      handsOffVoiceProvider = value;
+      renderVoiceProviderOpts();
+      saveVoiceSettings();
+    }
+
+    function renderVoiceProviderOpts() {
+      const el = document.getElementById('handsoff-provider-opts');
+      if (!el) return;
+      const s = handsOffVoiceSettings;
+      if (handsOffVoiceProvider === 'openai-realtime') {
+        const voice = s.openai?.voice || 'alloy';
+        const model = s.openai?.model || 'gpt-4o-realtime-preview';
+        el.innerHTML = `
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 0.5rem;align-items:center;font-size:0.78rem;margin:0.3rem 0;padding:0.4rem;background:var(--paper);border-radius:6px;border:1px solid var(--line)">
+            <label style="margin:0">Model</label>
+            <select id="handsoff-openai-model" style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),model:this.value};saveVoiceSettings()">
+              <option value="gpt-4o-realtime-preview"${model === 'gpt-4o-realtime-preview' ? ' selected' : ''}>GPT-4o Realtime</option>
+              <option value="gpt-4o-mini-realtime-preview"${model === 'gpt-4o-mini-realtime-preview' ? ' selected' : ''}>GPT-4o Mini Realtime (faster)</option>
+            </select>
+            <label style="margin:0">Voice</label>
+            <select id="handsoff-openai-voice" style="font-size:0.78rem" onchange="handsOffVoiceSettings.openai={...(handsOffVoiceSettings.openai||{}),voice:this.value};saveVoiceSettings()">
+              ${['alloy','ash','ballad','coral','echo','sage','shimmer','verse'].map(v =>
+                `<option value="${v}"${v === voice ? ' selected' : ''}>${v}</option>`
+              ).join('')}
+            </select>
+          </div>
+          <div style="font-size:0.7rem;color:var(--muted-soft)">Requires OpenAI API key in <a href="#" onclick="if(window.showProfile)showProfile();return false" style="color:var(--accent)">Profile → API Keys</a></div>`;
+      } else if (handsOffVoiceProvider === 'gemini-live') {
+        const model = s.gemini?.model || 'gemini-2.0-flash-exp';
+        el.innerHTML = `
+          <div style="display:grid;grid-template-columns:auto 1fr;gap:0.3rem 0.5rem;align-items:center;font-size:0.78rem;margin:0.3rem 0;padding:0.4rem;background:var(--paper);border-radius:6px;border:1px solid var(--line)">
+            <label style="margin:0">Model</label>
+            <select id="handsoff-gemini-model" style="font-size:0.78rem" onchange="handsOffVoiceSettings.gemini={...(handsOffVoiceSettings.gemini||{}),model:this.value};saveVoiceSettings()">
+              <option value="gemini-2.0-flash-exp"${model === 'gemini-2.0-flash-exp' ? ' selected' : ''}>Gemini 2.0 Flash</option>
+            </select>
+          </div>
+          <div style="font-size:0.7rem;color:var(--muted-soft)">Requires Google AI API key in <a href="#" onclick="if(window.showProfile)showProfile();return false" style="color:var(--accent)">Profile → API Keys</a></div>`;
+      } else {
+        el.innerHTML = `<div style="font-size:0.7rem;color:var(--muted-soft);margin:0.2rem 0">Free browser speech — no API key needed. Quality varies by browser.</div>`;
+      }
     }
     // Repos that take part in hands-off: a live session + not opted out. Scope
     // 'focused' narrows to the single focused repo.
@@ -62,26 +138,86 @@
       if (!list.length) return null;
       return list[((handsOffFocusIdx % list.length) + list.length) % list.length];
     }
-    function startHandsOff() {
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) { alert('Hands-off voice isn\'t supported here. Try Chrome on desktop or Android.'); return; }
+    async function startHandsOff() {
       if (!handsOffEligibleRepos().length) { alert('Start a coding session on at least one repo first.'); return; }
+
+      // For realtime providers, fetch the API key first
+      if (handsOffVoiceProvider !== 'browser') {
+        const keyProvider = handsOffVoiceProvider === 'openai-realtime' ? 'openai' : 'google';
+        try {
+          const keyRes = await api(`/v1/keys/${keyProvider}`);
+          if (!keyRes.key) { alert(`No ${keyProvider === 'openai' ? 'OpenAI' : 'Google AI'} API key found. Add one in Profile → API Keys.`); return; }
+          handsOffApiKey = keyRes.key;
+        } catch {
+          alert(`Add your ${keyProvider === 'openai' ? 'OpenAI' : 'Google AI'} API key in Profile → API Keys first.`);
+          return;
+        }
+      }
+
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (handsOffVoiceProvider === 'browser' && !SR) { alert('Browser speech isn\'t supported here. Try Chrome, or switch to OpenAI/Gemini voice.'); return; }
+
       handsOffOn = true; handsOffPaused = false; handsOffFocusIdx = 0;
       document.getElementById('handsoff-start')?.classList.add('hidden');
       document.getElementById('handsoff-pause')?.classList.remove('hidden');
       document.getElementById('handsoff-stop')?.classList.remove('hidden');
-      const sel = document.getElementById('handsoff-mode');
-      if (sel) sel.disabled = true;
-      const sc = document.getElementById('handsoff-scope');
-      if (sc) sc.disabled = true;
-      renderCodingRepos(); // re-render to show per-repo include toggles
+      const sel = document.getElementById('handsoff-mode'); if (sel) sel.disabled = true;
+      const sc = document.getElementById('handsoff-scope'); if (sc) sc.disabled = true;
+      const pv = document.getElementById('handsoff-provider'); if (pv) pv.disabled = true;
+      renderCodingRepos();
       const r = handsOffFocusRepo();
-      speakText(`Hands-off on. Focused on ${r ? r.name : 'your repos'}.`);
-      handsOffStatus('listening…');
-      handsOffListen();
+
+      if (handsOffVoiceProvider === 'openai-realtime') {
+        const opts = handsOffVoiceSettings.openai || {};
+        const systemPrompt = buildHandsOffSystemPrompt();
+        handsOffRealtimeEngine = new OpenAIRealtimeVoice(handsOffApiKey, {
+          model: opts.model || 'gpt-4o-realtime-preview',
+          voice: opts.voice || 'alloy',
+          systemPrompt,
+          onTranscript: (text, role) => { if (role === 'user') onHandsOffRealtimePhrase(text); },
+          onStatusChange: (status) => handsOffStatus(status),
+        });
+        await handsOffRealtimeEngine.connect();
+      } else if (handsOffVoiceProvider === 'gemini-live') {
+        const opts = handsOffVoiceSettings.gemini || {};
+        const systemPrompt = buildHandsOffSystemPrompt();
+        handsOffRealtimeEngine = new GeminiLiveVoice(handsOffApiKey, {
+          model: opts.model || 'gemini-2.0-flash-exp',
+          systemPrompt,
+          onTranscript: (text, role) => { if (role === 'user') onHandsOffRealtimePhrase(text); },
+          onStatusChange: (status) => handsOffStatus(status),
+        });
+        await handsOffRealtimeEngine.connect();
+      } else {
+        speakText(`Hands-off on. Focused on ${r ? r.name : 'your repos'}.`);
+        handsOffStatus('listening…');
+        handsOffListen();
+      }
     }
+
+    let handsOffApiKey = '';
+
+    function buildHandsOffSystemPrompt() {
+      const repos = handsOffEligibleRepos();
+      const repoList = repos.map(r => r.name).join(', ');
+      return `You are the Overseer for a multi-repo coding workspace. The user is in hands-off voice mode — they speak, you respond. Active repos: ${repoList}. Keep responses short and actionable. When the user asks about a specific repo, focus on that one. You can see what each repo's coding CLI is doing.`;
+    }
+
+    // For realtime providers: the LLM IS the voice — phrases from the user
+    // are already handled by the realtime model. But we still route commands.
+    function onHandsOffRealtimePhrase(text) {
+      const lower = text.toLowerCase().trim();
+      if (lower === 'stop' || lower === 'stop mode') { stopHandsOff(); return; }
+      if (lower === 'next') { handsOffFocusIdx++; const r = handsOffFocusRepo(); if (r && handsOffRealtimeEngine) handsOffRealtimeEngine.sendText(`Now focusing on repo: ${r.name}`); return; }
+      if (lower === 'back') { handsOffFocusIdx--; const r = handsOffFocusRepo(); if (r && handsOffRealtimeEngine) handsOffRealtimeEngine.sendText(`Now focusing on repo: ${r.name}`); return; }
+      // For smart mode, the realtime LLM already responds — no additional routing needed
+    }
+
     function stopHandsOff() {
       handsOffOn = false; handsOffPaused = false;
+      // Stop realtime engine if active
+      if (handsOffRealtimeEngine) { handsOffRealtimeEngine.disconnect(); handsOffRealtimeEngine = null; }
+      // Stop browser speech
       if (handsOffRec) { try { handsOffRec.stop(); } catch (e) {} handsOffRec = null; }
       if (window.speechSynthesis) speechSynthesis.cancel();
       document.getElementById('handsoff-start')?.classList.remove('hidden');
@@ -91,8 +227,9 @@
       if (pb) pb.textContent = '⏸ Pause';
       const sel = document.getElementById('handsoff-mode'); if (sel) sel.disabled = false;
       const sc = document.getElementById('handsoff-scope'); if (sc) sc.disabled = false;
+      const pv = document.getElementById('handsoff-provider'); if (pv) pv.disabled = false;
       handsOffStatus('');
-      renderCodingRepos(); // re-render to hide per-repo include toggles
+      renderCodingRepos();
     }
     function toggleHandsOffPause() {
       handsOffPaused = !handsOffPaused;

@@ -288,6 +288,39 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	return c.json({ success: true, status: "online" });
 });
 
+/** Read voice settings for hands-off mode. */
+instanceRoutes.get("/:instanceId/voice-settings", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	return c.json({ voiceSettings: cfg.voiceSettings || { provider: "browser" } });
+});
+
+/** Update voice settings for hands-off mode. */
+instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = await c.req.json<Record<string, unknown>>();
+	const provider = String(body.provider || "browser");
+	if (!["browser", "openai-realtime", "gemini-live"].includes(provider)) {
+		throw new HttpError(400, "provider must be browser, openai-realtime, or gemini-live");
+	}
+	const settings = {
+		provider,
+		openai: body.openai && typeof body.openai === "object" ? body.openai : undefined,
+		gemini: body.gemini && typeof body.gemini === "object" ? body.gemini : undefined,
+		language: typeof body.language === "string" ? body.language.slice(0, 10) : "en-US",
+	};
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	cfg.voiceSettings = settings;
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, session.uid)
+		.run();
+	return c.json({ voiceSettings: settings });
+});
+
 /** Probe a registered runtime's health and capabilities through PAGS. */
 instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 	const session = await requireUser(c);
