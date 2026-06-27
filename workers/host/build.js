@@ -69,6 +69,22 @@ const pages = {
 		path.join(storeDir, "console", "console-coding-repos.js"),
 		"utf-8",
 	),
+	consoleCodingEnginesJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-coding-engines.js"),
+		"utf-8",
+	),
+	consoleCodingDiagnosticsJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-coding-diagnostics.js"),
+		"utf-8",
+	),
+	consoleCodingGithubJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-coding-github.js"),
+		"utf-8",
+	),
+	consoleCodingHandsoffJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-coding-handsoff.js"),
+		"utf-8",
+	),
 	consoleCodingSessionJs: fs.readFileSync(
 		path.join(storeDir, "console", "console-coding-session.js"),
 		"utf-8",
