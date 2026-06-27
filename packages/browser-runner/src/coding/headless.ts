@@ -203,6 +203,7 @@ export class HeadlessSession {
 			/* ignore */
 		}
 		this.run = "idle";
+		this.lastOutputAt = Date.now();
 	}
 
 	/** Tear the process down. */

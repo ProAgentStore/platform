@@ -700,17 +700,17 @@
         const repos = repoSets.flat();
         if (!repos.length) { list.innerHTML = '<span style="color:var(--muted);font-size:0.8rem">No repos accessible.</span>'; return; }
         list.innerHTML = repos.slice(0, 60).map(r =>
-          `<button type="button" class="btn btn-outline btn-sm" onclick='importGitHubRepo(${JSON.stringify(JSON.stringify({ fullName: r.fullName, cloneUrl: r.cloneUrl, branch: r.defaultBranch }))})'>
+          `<button type="button" class="btn btn-outline btn-sm" onclick='importGitHubRepo(${esc(JSON.stringify({ fullName: r.fullName, cloneUrl: r.cloneUrl, branch: r.defaultBranch }))})'>
             ${esc(r.fullName)}${r.private ? ' 🔒' : ''}
           </button>`).join('');
       } catch (e) { list.innerHTML = `<span style="color:var(--red);font-size:0.8rem">${esc(e.message)}</span>`; }
     }
 
     async function importGitHubRepo(json) {
-      const r = JSON.parse(json);
+      const r = typeof json === 'string' ? JSON.parse(json) : json;
       try {
         await api(`/v1/instances/${currentInstance.id}/coding/repos`, {
-          method: 'POST', body: JSON.stringify({ name: r.fullName.split('/').pop(), githubRepo: r.fullName, cloneUrl: r.cloneUrl, branch: r.branch }),
+          method: 'POST', body: JSON.stringify({ name: r.fullName.split('/').pop(), githubRepo: r.fullName, cloneUrl: r.cloneUrl, branch: r.branch || r.defaultBranch }),
         });
         document.getElementById('inst-coding-gh-list').innerHTML = '';
         await loadCoding();
