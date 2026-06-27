@@ -374,6 +374,7 @@
           <!-- Raw terminal view -->
           <div id="inst-coding-view-terminal" class="coding-view hidden">
             <pre id="inst-coding-pane" style="background:#0b0b0f;color:#d6d6e0;font-size:0.78rem;line-height:1.35;padding:0.6rem;border-radius:6px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0">(waiting…)</pre>
+            <div id="inst-coding-pane-actions" class="hidden" style="margin-top:0.5rem"></div>
             <div style="display:flex;gap:0.4rem;margin-top:0.5rem">
               <input id="inst-coding-msg" placeholder="Type a message to the CLI and press Enter…" style="flex:1" onkeydown="sendCodingMessage(event)">
               <button type="button" class="btn btn-primary btn-sm" onclick="sendCodingMessage()">Send</button>

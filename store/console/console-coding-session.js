@@ -419,18 +419,26 @@
         const off = document.getElementById('inst-coding-offline');
         if (off) off.classList.toggle('hidden', codingRunnerOnline);
         const pre = document.getElementById('inst-coding-pane');
+        const paneActions = document.getElementById('inst-coding-pane-actions');
         if (pre) {
           const atBottom = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;
           if (snap.pane) {
             if (snap.pane !== lastCodingPane) { pre.innerHTML = colorizeCodingPane(snap.pane); lastCodingPane = snap.pane; }
+            if (paneActions) { paneActions.classList.add('hidden'); paneActions.innerHTML = ''; }
           } else {
             if (!snap.runnerConnected) {
               const node = currentRuntimeInfo?.runtime?.runnerNode;
-              pre.innerHTML = `<span style="color:var(--muted)">(runner offline${node ? ' — was on <b>' + esc(node) + '</b>' : ''}. Run <code>pags up</code> to connect.)</span>`;
+              pre.textContent = `(runner offline${node ? ' — was on ' + node : ''}. Run pags up to connect.)`;
+              if (paneActions) { paneActions.classList.add('hidden'); paneActions.innerHTML = ''; }
             } else if (snap.alive === false) {
-              pre.innerHTML = '(session stopped — the CLI is not running.) <button onclick="restartCodingSession()" style="background:var(--accent);color:#fff;border:none;padding:0.3rem 0.7rem;border-radius:6px;cursor:pointer;font-size:0.82rem;margin-left:0.5rem">Restart</button>';
+              pre.textContent = '(session stopped — the CLI is not running.)';
+              if (paneActions) {
+                paneActions.classList.remove('hidden');
+                paneActions.innerHTML = '<button type="button" class="btn btn-primary btn-sm" onclick="restartCodingSession()">Restart session</button>';
+              }
             } else {
               pre.textContent = '(waiting for the CLI…)';
+              if (paneActions) { paneActions.classList.add('hidden'); paneActions.innerHTML = ''; }
             }
             lastCodingPane = '';
           }
