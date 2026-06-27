@@ -802,6 +802,79 @@
       document.body.appendChild(o);
     }
 
+    // ── Voice I/O on Chat tab ──────────────────────────────────────────────
+    // 🎤 = STT → fills input (or auto-sends). 🔊 = auto-speak responses.
+    let chatStt = null;
+    let chatTts = null;
+    let chatAutoSpeak = false;
+    let chatVoiceOn = false;
+
+    async function initChatVoice() {
+      const provider = handsOffVoiceSettings?.provider || 'browser';
+      const isApi = provider === 'openai-realtime' || provider === 'openai';
+      let apiKey = '';
+      if (isApi) {
+        try {
+          const d = await api('/v1/keys/openai/reveal');
+          apiKey = d.key || '';
+        } catch {}
+      }
+      const sttProvider = isApi && apiKey ? 'openai' : 'browser';
+      const ttsProvider = isApi && apiKey ? 'openai' : 'browser';
+      chatTts = new VoiceTts(ttsProvider, {
+        apiKey,
+        voice: handsOffVoiceSettings?.openai?.voice || 'alloy',
+        speed: handsOffVoiceSettings?.speed || 100,
+      });
+      return { sttProvider, apiKey };
+    }
+
+    async function toggleChatVoice(btn) {
+      if (chatVoiceOn) {
+        chatVoiceOn = false;
+        if (chatStt) { chatStt.stop(); chatStt = null; }
+        if (btn) btn.classList.remove('active');
+        return;
+      }
+      const { sttProvider, apiKey } = await initChatVoice();
+      chatStt = new VoiceStt(sttProvider, {
+        apiKey,
+        language: handsOffVoiceSettings?.language || 'en-US',
+        onResult: (text, isFinal) => {
+          const input = document.getElementById('inst-chat-input');
+          if (input) input.value = text;
+          if (isFinal && sttProvider !== 'browser') {
+            // API-based STT: auto-send on final result
+            sendInstanceMessage();
+          }
+        },
+        onError: (err) => { if (btn) btn.title = 'Error: ' + err; },
+        onEnd: () => {
+          // API-based: single recording done
+          if (sttProvider !== 'browser') { chatVoiceOn = false; if (btn) btn.classList.remove('active'); }
+        },
+      });
+      chatVoiceOn = true;
+      if (btn) btn.classList.add('active');
+      await chatStt.start();
+    }
+
+    function toggleChatAutoSpeak(btn) {
+      chatAutoSpeak = !chatAutoSpeak;
+      if (btn) btn.classList.toggle('active', chatAutoSpeak);
+      if (chatAutoSpeak && !chatTts) initChatVoice();
+    }
+
+    // Hook: after any assistant message is added to the Chat tab, speak it
+    const _origSendInstanceMessage = typeof sendInstanceMessage === 'function' ? sendInstanceMessage : null;
+
+    async function speakLastAssistantMessage() {
+      if (!chatAutoSpeak || !chatTts) return;
+      const msgs = document.querySelectorAll('#inst-chat-messages .chat-msg.assistant');
+      const last = msgs[msgs.length - 1];
+      if (last) await chatTts.speak(last.textContent);
+    }
+
     async function clearInstanceChat() {
       if (!currentInstance) return;
       if (!confirm('Clear all chat history? This cannot be undone.')) return;
@@ -848,6 +921,8 @@
       }
       document.getElementById('inst-chat-thinking').classList.add('hidden');
       container.scrollTop = container.scrollHeight;
+      // Auto-speak the response if voice output is on
+      speakLastAssistantMessage();
     }
 
     // Instance knowledge

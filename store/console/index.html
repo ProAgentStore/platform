@@ -215,6 +215,8 @@
         <div id="inst-chat-thinking" class="thinking hidden">Agent is thinking...</div>
         <div class="chat-input">
           <input id="inst-chat-input" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendInstanceMessage()">
+          <button type="button" id="inst-chat-mic" class="btn-sm btn-outline" onclick="toggleChatVoice(this)" title="Voice input — tap to speak">🎤</button>
+          <button type="button" id="inst-chat-speak" class="btn-sm btn-outline" onclick="toggleChatAutoSpeak(this)" title="Auto-speak responses">🔊</button>
           <button type="button" onclick="sendInstanceMessage()">Send</button>
           <button type="button" class="btn-sm btn-outline" onclick="copyChatHistory('instance',event)" title="Copy full conversation as JSON">&#128203;</button>
           <button type="button" class="btn-sm btn-outline" onclick="clearInstanceChat()" title="Clear chat history" style="color:var(--red)">Clear</button>
@@ -1045,6 +1047,8 @@ console.log(response)</pre>
   <script src="/console-coding-engines.js"></script>
   <script src="/console-coding-diagnostics.js"></script>
   <script src="/console-coding-github.js"></script>
+  <script src="/console-voice-stt.js"></script>
+  <script src="/console-voice-tts.js"></script>
   <script src="/console-voice-openai.js"></script>
   <script src="/console-voice-gemini.js"></script>
   <script src="/console-coding-handsoff.js"></script>
