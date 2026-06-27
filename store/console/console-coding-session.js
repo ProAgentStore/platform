@@ -172,17 +172,8 @@
     async function startCodingDictation(btn) {
       if (codingRecognizer) { codingRecognizer.stop(); codingRecognizer = null; if (btn) btn.classList.remove('active'); return; }
       if (window.speechSynthesis) speechSynthesis.cancel();
-      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
-      const isApi = (vs.provider || '').includes('openai');
-      let apiKey = '';
-      if (isApi) { try { apiKey = (await api('/v1/keys/openai/reveal')).key || ''; } catch {} }
-      codingRecognizer = new VoiceStt(isApi && apiKey ? 'openai' : 'browser', {
-        apiKey,
-        language: vs.language || 'en-US',
-        onResult: (text, isFinal) => {
-          const input = document.getElementById('inst-coding-ask');
-          if (input) input.value = text;
-        },
+      codingRecognizer = await createStt({
+        onResult: (text) => { const input = document.getElementById('inst-coding-ask'); if (input) input.value = text; },
         onError: () => {},
         onEnd: () => { codingRecognizer = null; if (btn) btn.classList.remove('active'); },
       });
@@ -197,13 +188,7 @@
     let codingTts = null;
     async function ensureCodingTts() {
       if (codingTts) return codingTts;
-      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
-      const isApi = (vs.provider || '').includes('openai');
-      let apiKey = '';
-      if (isApi) { try { apiKey = (await api('/v1/keys/openai/reveal')).key || ''; } catch {} }
-      codingTts = new VoiceTts(isApi && apiKey ? 'openai' : 'browser', {
-        apiKey, voice: vs.openai?.voice || 'alloy', speed: vs.speed || 100,
-      });
+      codingTts = await createTts();
       return codingTts;
     }
 

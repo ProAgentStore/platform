@@ -90,3 +90,44 @@
         }
       }
     }
+
+    // ── Shared voice config — one place to read settings + fetch key ────────
+    // All voice surfaces (Chat, per-repo Agent, hands-off) call this instead
+    // of independently reading handsOffVoiceSettings + fetching the API key.
+    let _voiceConfigCache = null;
+    let _voiceConfigInstanceId = null;
+
+    async function getVoiceConfig() {
+      const instId = (typeof currentInstance !== 'undefined' && currentInstance?.id) || null;
+      if (_voiceConfigCache && _voiceConfigInstanceId === instId) return _voiceConfigCache;
+
+      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
+      const isApi = (vs.provider || '').includes('openai');
+      let apiKey = '';
+      if (isApi) {
+        try { apiKey = (await api('/v1/keys/openai/reveal')).key || ''; } catch {}
+      }
+      const useApi = isApi && !!apiKey;
+      _voiceConfigCache = {
+        sttProvider: useApi ? 'openai' : 'browser',
+        ttsProvider: useApi ? 'openai' : 'browser',
+        apiKey,
+        voice: vs.openai?.voice || 'alloy',
+        speed: vs.speed || 100,
+        language: vs.language || 'en-US',
+      };
+      _voiceConfigInstanceId = instId;
+      return _voiceConfigCache;
+    }
+
+    function invalidateVoiceConfig() { _voiceConfigCache = null; }
+
+    async function createTts() {
+      const cfg = await getVoiceConfig();
+      return new VoiceTts(cfg.ttsProvider, { apiKey: cfg.apiKey, voice: cfg.voice, speed: cfg.speed });
+    }
+
+    async function createStt(opts = {}) {
+      const cfg = await getVoiceConfig();
+      return new VoiceStt(cfg.sttProvider, { apiKey: cfg.apiKey, language: cfg.language, ...opts });
+    }

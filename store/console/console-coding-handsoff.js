@@ -78,6 +78,7 @@
       await api(`/v1/instances/${currentInstance.id}/voice-settings`, {
         method: 'PUT', body: JSON.stringify(settings),
       }).catch(() => {});
+      invalidateVoiceConfig(); // clear cached config so next voice action picks up new settings
     }
 
     function onVoiceProviderChange(value) {
@@ -154,23 +155,9 @@
       if (!handsOffEligibleRepos().length) { alert('Start a coding session on at least one repo first.'); return; }
 
       // ── Unified voice: STT → Overseer API → TTS ──
-      // All providers use the same flow: capture speech, send text to the
-      // Overseer (which has repo context + tool routing), speak the reply.
-      const isApi = (handsOffVoiceProvider || '').includes('openai');
-      let apiKey = '';
-      if (isApi) {
-        try {
-          const keyRes = await api('/v1/keys/openai/reveal');
-          if (!keyRes.key) { alert('No OpenAI API key found. Add one in Profile → API Keys.'); return; }
-          apiKey = keyRes.key;
-        } catch (e) {
-          alert('Add your OpenAI API key in Profile → API Keys first.');
-          return;
-        }
-      }
-      const sttProvider = isApi && apiKey ? 'openai' : 'browser';
+      const cfg = await getVoiceConfig();
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (sttProvider === 'browser' && !SR) { alert('Browser speech not supported. Try Chrome, or set OpenAI voice.'); return; }
+      if (cfg.sttProvider === 'browser' && !SR) { alert('Browser speech not supported. Try Chrome, or set OpenAI voice.'); return; }
 
       handsOffOn = true; handsOffPaused = false; handsOffFocusIdx = 0;
       document.getElementById('handsoff-start')?.classList.add('hidden');
@@ -182,22 +169,12 @@
       if (typeof renderCodingRepos === 'function') renderCodingRepos();
       const r = handsOffFocusRepo();
 
-      // TTS engine for speaking responses
-      handsOffTts = new VoiceTts(isApi && apiKey ? 'openai' : 'browser', {
-        apiKey,
-        voice: handsOffVoiceSettings?.openai?.voice || 'alloy',
-        speed: handsOffVoiceSettings?.speed || 100,
-      });
-
-      // STT engine — continuous listening, routes each phrase to the Overseer
-      handsOffStt = new VoiceStt(sttProvider, {
-        apiKey,
-        language: handsOffVoiceSettings?.language || 'en-US',
+      handsOffTts = await createTts();
+      handsOffStt = await createStt({
         onResult: async (text, isFinal) => {
           if (!isFinal) { handsOffStatus(`hearing: ${text}`); return; }
           await onHandsOffPhrase(text);
-          // For API-based STT (Whisper), restart recording for next utterance
-          if (sttProvider !== 'browser' && handsOffOn && !handsOffPaused) {
+          if (cfg.sttProvider !== 'browser' && handsOffOn && !handsOffPaused) {
             handsOffStt?.stop();
             setTimeout(() => { if (handsOffOn && !handsOffPaused) handsOffStt?.start(); }, 300);
           }

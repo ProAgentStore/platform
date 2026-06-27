@@ -810,21 +810,9 @@
     let chatVoiceOn = false;
 
     async function initChatVoice() {
-      // Read voice settings — handsOffVoiceSettings may not exist if coding tab was never opened
-      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
-      const provider = vs.provider || 'browser';
-      const isApi = provider.includes('openai');
-      let apiKey = '';
-      if (isApi) {
-        try { apiKey = (await api('/v1/keys/openai/reveal')).key || ''; } catch {}
-      }
-      const useApi = isApi && apiKey;
-      chatTts = new VoiceTts(useApi ? 'openai' : 'browser', {
-        apiKey,
-        voice: vs.openai?.voice || 'alloy',
-        speed: vs.speed || 100,
-      });
-      return { sttProvider: useApi ? 'openai' : 'browser', apiKey };
+      const cfg = await getVoiceConfig();
+      chatTts = await createTts();
+      return cfg;
     }
 
     async function toggleChatVoice(btn) {
@@ -834,26 +822,21 @@
         if (btn) btn.classList.remove('active');
         return;
       }
-      const { sttProvider, apiKey } = await initChatVoice();
-      const vs = (typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {};
-      chatStt = new VoiceStt(sttProvider, {
-        apiKey,
-        language: vs.language || 'en-US',
+      const cfg = await initChatVoice();
+      chatStt = await createStt({
         onResult: (text, isFinal) => {
           const input = document.getElementById('inst-chat-input');
           if (input) input.value = text;
-          if (isFinal && sttProvider !== 'browser') sendInstanceMessage();
+          if (isFinal && cfg.sttProvider !== 'browser') sendInstanceMessage();
         },
         onError: (err) => { if (btn) btn.title = 'Error: ' + err; },
         onEnd: () => {
-          if (sttProvider !== 'browser') { chatVoiceOn = false; if (btn) btn.classList.remove('active'); }
+          if (cfg.sttProvider !== 'browser') { chatVoiceOn = false; if (btn) btn.classList.remove('active'); }
         },
       });
       chatVoiceOn = true;
       if (btn) btn.classList.add('active');
-      try {
-        await chatStt.start();
-      } catch (e) {
+      try { await chatStt.start(); } catch {
         chatVoiceOn = false;
         if (chatStt) { chatStt.stop(); chatStt = null; }
         if (btn) btn.classList.remove('active');
@@ -917,7 +900,7 @@
       }
 
       // Start conversation
-      const { sttProvider, apiKey } = await initChatVoice();
+      const cfg = await initChatVoice();
       chatConvoMode = true;
       chatAutoSpeak = true;
       chatConvoSending = false;
@@ -927,9 +910,7 @@
       const input = document.getElementById('inst-chat-input');
       if (input) { input.value = ''; input.placeholder = 'Listening — speak to your agent...'; }
 
-      chatConvoStt = new VoiceStt(sttProvider, {
-        apiKey,
-        language: ((typeof handsOffVoiceSettings !== 'undefined' && handsOffVoiceSettings) || {}).language || 'en-US',
+      chatConvoStt = await createStt({
         onResult: (text, isFinal) => {
           if (!chatConvoMode || chatConvoSending) return; // ignore while agent is responding
           if (input) input.value = text;
