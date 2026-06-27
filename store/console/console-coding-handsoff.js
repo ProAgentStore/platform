@@ -156,12 +156,18 @@
       // For realtime providers, fetch the API key first
       if (handsOffVoiceProvider !== 'browser') {
         const keyProvider = handsOffVoiceProvider === 'openai-realtime' ? 'openai' : 'google';
+        const providerLabel = keyProvider === 'openai' ? 'OpenAI' : 'Google AI';
         try {
-          const keyRes = await api(`/v1/keys/${keyProvider}`);
-          if (!keyRes.key) { alert(`No ${keyProvider === 'openai' ? 'OpenAI' : 'Google AI'} API key found. Add one in Profile → API Keys.`); return; }
+          const keyRes = await api(`/v1/keys/${keyProvider}/reveal`);
+          if (!keyRes.key) { alert(`No ${providerLabel} API key found. Add one in Profile → API Keys.`); return; }
           handsOffApiKey = keyRes.key;
-        } catch {
-          alert(`Add your ${keyProvider === 'openai' ? 'OpenAI' : 'Google AI'} API key in Profile → API Keys first.`);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          if (msg.includes('404')) {
+            alert(`No ${providerLabel} API key stored. Add one in Profile → API Keys first.`);
+          } else {
+            alert(`Could not retrieve ${providerLabel} key: ${msg}`);
+          }
           return;
         }
       }

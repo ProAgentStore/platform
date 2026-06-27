@@ -184,6 +184,8 @@
        an instance's nav needs the room) to keep the 48px bar clean. */
     #top-nav{display:flex;align-items:center;gap:0.1rem;flex-shrink:0}
     #top-nav a{font-size:0.82rem;color:var(--muted);padding:0.32rem 0.55rem;border-radius:6px;text-decoration:none;white-space:nowrap;transition:all 0.15s}
+    /* Website nav (Store, Skills, About, Get Started) — always in hamburger, never inline */
+    #top-nav a.nav-site{display:none}
     #top-nav a:hover{color:var(--ink);background:var(--line);text-decoration:none}
     #top-nav a.active{color:var(--ink);background:var(--line);font-weight:700}
     /* Hamburger toggles the same nav as a dropdown on mobile. Sits flush in the
@@ -200,6 +202,7 @@
       }
       #top-nav.open{display:flex}
       #top-nav a{font-size:0.95rem;padding:0.65rem 0.8rem}
+      #top-nav.open a.nav-site{display:block}  /* show website links in dropdown */
     }
     #inst-nav-slot{display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0}
     #user-nav{display:flex;align-items:center;gap:0.65rem;margin-left:auto}

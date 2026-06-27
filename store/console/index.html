@@ -30,10 +30,10 @@
       <a href="/console/agents" id="nav-dash-agents" onclick="showDashboard('agents');return false" class="nav-signed">Agents</a>
       <a href="/console/instances" id="nav-dash-instances" onclick="showDashboard('instances');return false" class="nav-signed">Instances</a>
       <a href="/console/dashboard" id="nav-dash-dashboard" onclick="showDashboard('dashboard');return false" class="nav-signed">Stats</a>
-      <a href="/">Store</a>
-      <a href="/skills/">Skills</a>
-      <a href="/about/">About</a>
-      <a href="/get-started/">Get Started</a>
+      <a href="/" class="nav-site">Store</a>
+      <a href="/skills/" class="nav-site">Skills</a>
+      <a href="/about/" class="nav-site">About</a>
+      <a href="/get-started/" class="nav-site">Get Started</a>
     </nav>
     <div id="inst-nav-slot"></div>
     <span id="user-nav" class="hidden">
@@ -943,7 +943,10 @@
         <h3>Account</h3>
         <div class="profile-row">
           <span class="profile-label">User ID</span>
-          <span id="profile-uid" class="profile-value" style="font-family:'SF Mono',monospace;font-size:0.82rem"></span>
+          <span class="profile-value" style="display:flex;align-items:center;gap:0.35rem;min-width:0">
+            <span id="profile-uid" style="font-family:'SF Mono',monospace;font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0"></span>
+            <button type="button" class="copy-btn" onclick="navigator.clipboard.writeText(document.getElementById('profile-uid').textContent);this.textContent='✓';setTimeout(()=>this.textContent='⧉',1000)" title="Copy UID" style="flex-shrink:0">⧉</button>
+          </span>
         </div>
         <div class="profile-row">
           <span class="profile-label">GitHub</span>

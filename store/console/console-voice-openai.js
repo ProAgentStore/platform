@@ -53,14 +53,15 @@
           this.handleMessage(msg);
         };
 
-        this.ws.onclose = () => {
+        this.ws.onclose = (ev) => {
           this.connected = false;
-          this.onStatusChange('disconnected');
+          const reason = ev.code === 1008 ? 'invalid API key' : ev.code === 1006 ? 'connection failed' : ev.reason || '';
+          this.onStatusChange(reason ? `disconnected: ${reason}` : 'disconnected');
           this.stopMic();
         };
 
-        this.ws.onerror = () => {
-          this.onStatusChange('error');
+        this.ws.onerror = (ev) => {
+          this.onStatusChange('connection error — check your API key');
         };
       }
 
