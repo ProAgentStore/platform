@@ -192,7 +192,9 @@
           model: opts.model || 'gpt-realtime',
           voice: opts.voice || 'alloy',
           systemPrompt,
-          onTranscript: (text, role) => { if (role === 'user') onHandsOffRealtimePhrase(text); },
+          onTranscript: (text, role) => {
+            if (role === 'user') onHandsOffRealtimePhrase(text);
+          },
           onStatusChange: (status) => handsOffStatus(status),
         });
         await handsOffRealtimeEngine.connect();
@@ -202,7 +204,9 @@
         handsOffRealtimeEngine = new GeminiLiveVoice(handsOffApiKey, {
           model: opts.model || 'gemini-2.0-flash-exp',
           systemPrompt,
-          onTranscript: (text, role) => { if (role === 'user') onHandsOffRealtimePhrase(text); },
+          onTranscript: (text, role) => {
+            if (role === 'user') onHandsOffRealtimePhrase(text);
+          },
           onStatusChange: (status) => handsOffStatus(status),
         });
         await handsOffRealtimeEngine.connect();

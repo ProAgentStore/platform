@@ -114,7 +114,9 @@
               pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
             }
             const bytes = new Uint8Array(pcm16.buffer);
-            const base64 = btoa(String.fromCharCode(...bytes));
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            const base64 = btoa(binary);
             // Send as realtime input
             this.ws?.send(JSON.stringify({
               realtimeInput: {

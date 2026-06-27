@@ -141,8 +141,12 @@
             for (let i = 0; i < float32.length; i++) {
               pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(float32[i] * 32767)));
             }
+            // Chunk the base64 encoding — btoa(String.fromCharCode(...spread))
+            // hits max call stack on large arrays (8192+ elements).
             const bytes = new Uint8Array(pcm16.buffer);
-            const base64 = btoa(String.fromCharCode(...bytes));
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+            const base64 = btoa(binary);
             this.send('input_audio_buffer.append', { audio: base64 });
           };
 
