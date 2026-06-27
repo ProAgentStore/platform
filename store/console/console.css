@@ -130,7 +130,7 @@
     .inst-nav-tabs .tab{padding:0.3rem 0.7rem;font-size:0.78rem;border-bottom:none;border-radius:0;margin:0;text-transform:none;letter-spacing:0;white-space:nowrap;flex-shrink:0}
     .inst-nav-tabs .tab.active{background:var(--accent-soft);color:var(--accent)}
     .inst-nav-tabs .tab:not(.active):hover{background:var(--panel-hover)}
-    .inst-nav-tabs .ti{display:none;font-size:0.95rem;line-height:1}  /* tab icon — mobile only */
+    .inst-nav-tabs .ti, #inst-coding-terminal .tabs .ti{display:none;font-size:0.95rem;line-height:1}  /* tab icon — mobile only */
     /* Mobile: icon-only tabs, hide the agent name + stop label, reclaim the bar */
     @media(max-width:640px){
       /* Mobile navbar is stripped to essentials (PWA: an agent is saved to the
@@ -139,8 +139,8 @@
       .brand{display:none}
       .inst-back{display:none}
       .inst-agent-name{display:none}
-      .inst-nav-tabs .tl{display:none}
-      .inst-nav-tabs .ti{display:inline-block}
+      .inst-nav-tabs .tl, #inst-coding-terminal .tabs .tl, #runtime-status-badge .tl{display:none}
+      .inst-nav-tabs .ti, #inst-coding-terminal .tabs .ti{display:inline-block}
       .inst-nav-tabs .tab{padding:0.4rem 0.6rem}
       #header-stop-btn .tl{display:none}
     }

@@ -716,20 +716,23 @@
         currentRuntimeInfo = data;
         const rt = data.runtime;
         const status = rt ? String(rt.status || 'registered') : 'none';
+        const node = rt.runnerNode || '';
+        const shortNode = node.length > 16 ? node.slice(0, 14) + '…' : node;
+        const relay = data.relay?.connected ? ' · relay' : '';
         if (status === 'online') {
-          badge.textContent = '●';
-          badge.title = 'Runner online' + (rt.runnerNode ? ' · ' + rt.runnerNode : '') + (rt.endpointUrl || rt.endpoint_url ? ' · ' + (rt.endpointUrl || rt.endpoint_url) : '');
+          badge.innerHTML = `● ${shortNode ? '<span class="tl" style="font-weight:600">' + esc(shortNode) + '</span>' : ''}`;
+          badge.title = 'Runner online' + (node ? ' · ' + node : '') + relay + (rt.endpointUrl || rt.endpoint_url ? ' · ' + (rt.endpointUrl || rt.endpoint_url) : '');
           badge.style.background = 'rgba(34,197,94,0.15)'; badge.style.color = 'var(--green)';
         } else if (status === 'offline') {
-          badge.textContent = '○';
-          badge.title = 'Runner offline' + (rt.runnerNode ? ' · last on ' + rt.runnerNode : '') + ' — not reachable. Click for setup help';
+          badge.innerHTML = `○ ${shortNode ? '<span class="tl" style="font-weight:600">' + esc(shortNode) + '</span>' : ''}`;
+          badge.title = 'Runner offline' + (node ? ' · last on ' + node : '') + ' — not reachable';
           badge.style.background = 'rgba(239,68,68,0.12)'; badge.style.color = 'var(--red)';
         } else if (rt?.endpointUrl || rt?.endpoint_url) {
-          badge.textContent = '◐';
+          badge.innerHTML = '◐';
           badge.title = 'Runner connecting — waiting for the first health check';
           badge.style.background = 'rgba(234,179,8,0.12)'; badge.style.color = 'var(--yellow)';
         } else {
-          badge.textContent = '○';
+          badge.innerHTML = '○';
           badge.title = 'No runner connected — click to set one up';
           badge.style.background = 'var(--line)'; badge.style.color = 'var(--muted)';
         }
@@ -742,9 +745,13 @@
 
     // Guide a non-developer through connecting the local runner (webapp side of
     // the "how do I get my agent to act?" question). Opens on badge click.
+    // When the runner IS connected, shows a quick-info popover instead.
     function showRunnerGuide() {
       const open = document.getElementById('runner-guide-overlay');
       if (open) { open.remove(); return; }
+      // If runner is online, show info popover instead of setup guide
+      const rt = currentRuntimeInfo?.runtime;
+      if (rt && rt.status === 'online') { showRunnerInfoPopover(rt); return; }
       const cmd = (text) => `<div style="display:flex;gap:.5rem;align-items:center;margin:.3rem 0"><code style="flex:1;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.45rem .6rem;font-size:.8rem;overflow-x:auto;white-space:nowrap">${esc(text)}</code><button type="button" class="btn btn-outline btn-sm" onclick="navigator.clipboard.writeText(this.previousElementSibling.textContent);this.textContent='Copied ✓'">Copy</button></div>`;
       const o = document.createElement('div');
       o.id = 'runner-guide-overlay';
@@ -765,6 +772,32 @@
         </div>
         <p style="color:var(--muted);font-size:.82rem;line-height:1.5;margin:1.1rem 0 0">When it connects, this badge turns <b style="color:var(--green)">green</b> (give it a few seconds). To stop later: press <code>q</code> in that window, or run <code>pags down</code>.</p>
         <div style="display:flex;justify-content:flex-end;margin-top:1.25rem"><button type="button" class="btn btn-primary" onclick="document.getElementById('runner-guide-overlay').remove()">Got it</button></div>
+      </div>`;
+      o.addEventListener('click', (e) => { if (e.target === o) o.remove(); });
+      document.body.appendChild(o);
+    }
+
+    function showRunnerInfoPopover(rt) {
+      const o = document.createElement('div');
+      o.id = 'runner-guide-overlay';
+      o.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem';
+      const relay = currentRuntimeInfo?.relay;
+      const relayStr = relay ? (relay.connected ? 'WebSocket (connected)' : 'not connected') : 'n/a';
+      const lastSeen = rt.lastSeenAt || rt.last_seen_at;
+      o.innerHTML = `<div style="background:var(--card,#1a1a1a);max-width:420px;width:100%;border-radius:14px;padding:1.2rem 1.4rem;max-height:90vh;overflow:auto;border:1px solid var(--line)">
+        <h2 style="margin:0 0 .6rem;font-size:1.05rem;display:flex;align-items:center;gap:.4rem"><span style="color:var(--green)">●</span> Runner connected</h2>
+        <div class="diag-grid" style="font-size:0.82rem">
+          <span>Node</span><span style="font-weight:600">${esc(rt.runnerNode || '—')}</span>
+          <span>Status</span><span style="color:var(--green)">${esc(rt.status)}</span>
+          <span>CLI version</span><span>${esc(rt.runnerVersion || '—')}</span>
+          <span>Relay</span><span>${esc(relayStr)}</span>
+          <span>Last seen</span><span>${lastSeen ? esc(formatTime(lastSeen)) : '—'}</span>
+          <span>Endpoint</span><span style="font-size:0.72rem;word-break:break-all">${esc(rt.endpointUrl || rt.endpoint_url || '—')}</span>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:.4rem;margin-top:1rem">
+          <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('runner-guide-overlay').remove();toggleDiagPanel()">Diagnostics</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('runner-guide-overlay').remove()">Close</button>
+        </div>
       </div>`;
       o.addEventListener('click', (e) => { if (e.target === o) o.remove(); });
       document.body.appendChild(o);
