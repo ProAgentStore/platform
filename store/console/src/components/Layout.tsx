@@ -22,7 +22,7 @@ export default function Layout() {
 
 	return (
 		<>
-			<header className="border-b border-line bg-panel sticky top-0 z-60 flex items-center gap-2.5 px-3 h-12">
+			<header className="border-b border-line-strong bg-panel sticky top-0 z-60 flex items-center gap-2.5 px-3 h-12" style={{ boxShadow: "0 1px 6px rgba(0,0,0,0.4)" }}>
 				<a
 					href="/console/"
 					onClick={(e) => {

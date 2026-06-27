@@ -12,7 +12,7 @@
 	--color-accent: #7c3aed;
 	--color-accent-hover: #6d28d9;
 	--color-accent-soft: rgba(124, 58, 237, 0.15);
-	--color-line: #262626;
+	--color-line: #303030;
 	--color-line-strong: #404040;
 	--color-green: #22c55e;
 	--color-red: #ef4444;
@@ -45,11 +45,11 @@ body {
 	color: #fff;
 }
 
-a {
+/* Links: only underline in content areas, not in the app chrome */
+a:not([class]) {
 	color: var(--color-accent);
-	text-decoration: none;
 }
-a:hover {
+a:not([class]):hover {
 	text-decoration: underline;
 }
 
