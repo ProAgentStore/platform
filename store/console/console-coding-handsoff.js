@@ -219,8 +219,6 @@
       // Stop unified STT/TTS engines
       if (handsOffStt) { handsOffStt.stop(); handsOffStt = null; }
       if (handsOffTts) { handsOffTts.cancel(); handsOffTts = null; }
-      // Stop legacy engines if still referenced
-      if (handsOffRealtimeEngine) { handsOffRealtimeEngine.disconnect(); handsOffRealtimeEngine = null; }
       if (handsOffRec) { try { handsOffRec.stop(); } catch (e) {} handsOffRec = null; }
       if (window.speechSynthesis) speechSynthesis.cancel();
       document.getElementById('handsoff-start')?.classList.remove('hidden');
