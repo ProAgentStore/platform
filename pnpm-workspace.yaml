@@ -2,3 +2,4 @@ packages:
   - 'packages/*'
   - 'workers/*'
   - 'agents/job-application-assistant'
+  - 'store/console'

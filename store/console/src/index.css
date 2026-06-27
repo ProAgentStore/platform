@@ -1,0 +1,200 @@
+@import "tailwindcss";
+
+/* ── Design tokens ── */
+@theme {
+	--color-paper: #0a0a0a;
+	--color-panel: #141414;
+	--color-panel-hover: #1a1a1a;
+	--color-ink: #fafafa;
+	--color-ink-strong: #fff;
+	--color-muted: #a3a3a3;
+	--color-muted-soft: #737373;
+	--color-accent: #7c3aed;
+	--color-accent-hover: #6d28d9;
+	--color-accent-soft: rgba(124, 58, 237, 0.15);
+	--color-line: #262626;
+	--color-line-strong: #404040;
+	--color-green: #22c55e;
+	--color-red: #ef4444;
+	--color-yellow: #eab308;
+	--color-blue: #3b82f6;
+	--font-body: "Manrope", system-ui, sans-serif;
+	--font-display: "Fraunces", Georgia, serif;
+	--font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+}
+
+/* ── Base ── */
+*,
+*::before,
+*::after {
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+}
+
+body {
+	font-family: var(--font-body);
+	background: var(--color-paper);
+	color: var(--color-ink);
+	-webkit-font-smoothing: antialiased;
+	min-height: 100dvh;
+}
+
+::selection {
+	background: var(--color-accent);
+	color: #fff;
+}
+
+a {
+	color: var(--color-accent);
+	text-decoration: none;
+}
+a:hover {
+	text-decoration: underline;
+}
+
+button {
+	font-family: var(--font-body);
+	cursor: pointer;
+	border: none;
+	background: none;
+	color: inherit;
+}
+
+/* Disable double-tap zoom on interactive elements */
+button,
+input,
+select,
+textarea,
+a {
+	touch-action: manipulation;
+}
+
+input,
+textarea,
+select {
+	width: 100%;
+	background: var(--color-paper);
+	border: 1px solid var(--color-line);
+	border-radius: 0.5rem;
+	padding: 0.5rem 0.75rem;
+	color: var(--color-ink);
+	font-family: var(--font-body);
+	font-size: 0.88rem;
+	transition: border-color 0.15s;
+}
+input:focus,
+textarea:focus,
+select:focus {
+	outline: none;
+	border-color: var(--color-accent);
+	box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+textarea {
+	resize: vertical;
+	min-height: 60px;
+}
+
+/* ── Scrollbar ── */
+.chat-scroll::-webkit-scrollbar {
+	width: 6px;
+}
+.chat-scroll::-webkit-scrollbar-track {
+	background: transparent;
+}
+.chat-scroll::-webkit-scrollbar-thumb {
+	background: var(--color-line);
+	border-radius: 3px;
+}
+
+/* ── Markdown in assistant messages ── */
+.msg-md p {
+	margin: 0 0 0.5rem;
+}
+.msg-md p:last-child {
+	margin-bottom: 0;
+}
+.msg-md ul,
+.msg-md ol {
+	margin: 0.3rem 0 0.5rem 1.2rem;
+	padding: 0;
+}
+.msg-md li {
+	margin-bottom: 0.25rem;
+}
+.msg-md code {
+	background: rgba(255, 255, 255, 0.07);
+	padding: 0.12rem 0.4rem;
+	border-radius: 0.3rem;
+	font-family: var(--font-mono);
+	font-size: 0.82em;
+	border: 1px solid rgba(255, 255, 255, 0.05);
+}
+.msg-md pre {
+	background: #080808;
+	border: 1px solid var(--color-line);
+	border-radius: 0.5rem;
+	padding: 0.75rem;
+	margin: 0.5rem 0;
+	overflow-x: auto;
+	font-size: 0.8em;
+	line-height: 1.6;
+}
+.msg-md pre code {
+	background: none;
+	padding: 0;
+	font-size: inherit;
+	border: none;
+}
+.msg-md strong {
+	font-weight: 700;
+	color: var(--color-ink-strong);
+}
+.msg-md a {
+	color: var(--color-accent);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+.msg-md h3,
+.msg-md h4 {
+	font-size: 0.9rem;
+	font-weight: 700;
+	margin: 0.6rem 0 0.3rem;
+	color: var(--color-ink-strong);
+}
+.msg-md blockquote {
+	border-left: 3px solid var(--color-accent);
+	padding-left: 0.75rem;
+	margin: 0.4rem 0;
+	color: var(--color-muted);
+	font-style: italic;
+}
+
+/* ── Animations ── */
+@keyframes pulse {
+	0%,
+	100% {
+		opacity: 0.3;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+@keyframes spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+/* ── Mobile ── */
+@media (max-width: 640px) {
+	html {
+		overscroll-behavior: none;
+	}
+	input,
+	textarea,
+	select {
+		font-size: 16px;
+		min-height: 44px;
+	}
+}

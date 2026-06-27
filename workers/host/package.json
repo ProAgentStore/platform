@@ -4,9 +4,9 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "node build.js",
-		"dev": "node build.js && wrangler dev",
-		"deploy": "node build.js && wrangler deploy"
+		"build": "cd ../../store/console && npx vite build && cd ../../workers/host && node build.js",
+		"dev": "cd ../../store/console && npx vite build && cd ../../workers/host && node build.js && wrangler dev",
+		"deploy": "cd ../../store/console && npx vite build && cd ../../workers/host && node build.js && wrangler deploy"
 	},
 	"devDependencies": {
 		"wrangler": "^4.76.0"

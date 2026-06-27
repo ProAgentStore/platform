@@ -29,6 +29,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      - name: Build console React app
+        working-directory: store/console
+        run: npx vite build
+
       - name: Build host pages
         working-directory: workers/host
         run: node build.js

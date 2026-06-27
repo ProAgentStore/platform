@@ -7,6 +7,44 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const storeDir = path.join(__dirname, "..", "..", "store");
 
+// ── Console: React app built by Vite ────────────────────────────
+// The Vite build outputs: dist/assets/bundle.js + dist/assets/index.css
+// We generate a minimal HTML shell that loads them inline.
+const consoleDir = path.join(storeDir, "console");
+const consoleBundleJs = fs.readFileSync(
+	path.join(consoleDir, "dist", "assets", "bundle.js"),
+	"utf-8",
+);
+const consoleBundleCss = fs.readFileSync(
+	path.join(consoleDir, "dist", "assets", "index.css"),
+	"utf-8",
+);
+
+// Read the old index.html for the <head> metadata, then replace its body
+// with the React mount point + inline bundle.
+const consoleHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Creator Console — ProAgentStore</title>
+  <meta name="description" content="Manage your server-powered AI agents on ProAgentStore.">
+  <meta name="theme-color" content="#7c3aed">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>${consoleBundleCss}</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module">${consoleBundleJs}</script>
+</body>
+</html>`;
+
+// ── Other pages ─────────────────────────────────────────────────
 const pages = {
 	homepage: fs.readFileSync(path.join(storeDir, "index.html"), "utf-8"),
 	aboutPage: fs.readFileSync(
@@ -33,78 +71,7 @@ const pages = {
 		path.join(storeDir, "docs", "mcp", "index.html"),
 		"utf-8",
 	),
-	consolePage: fs.readFileSync(
-		path.join(storeDir, "console", "index.html"),
-		"utf-8",
-	),
-	consoleCss: fs.readFileSync(
-		path.join(storeDir, "console", "console.css"),
-		"utf-8",
-	),
-	consoleCoreJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-core.js"),
-		"utf-8",
-	),
-	consoleInstancesJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-instances.js"),
-		"utf-8",
-	),
-	consoleTakeoverJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-takeover.js"),
-		"utf-8",
-	),
-	consoleRuntimeDetailJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-runtime-detail.js"),
-		"utf-8",
-	),
-	consoleInstancesAppsJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-instances-apps.js"),
-		"utf-8",
-	),
-	consoleAgentDataJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-agent-data.js"),
-		"utf-8",
-	),
-	consoleCodingReposJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-coding-repos.js"),
-		"utf-8",
-	),
-	consoleCodingEnginesJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-coding-engines.js"),
-		"utf-8",
-	),
-	consoleCodingDiagnosticsJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-coding-diagnostics.js"),
-		"utf-8",
-	),
-	consoleCodingGithubJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-coding-github.js"),
-		"utf-8",
-	),
-	consoleVoiceSttJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-voice-stt.js"),
-		"utf-8",
-	),
-	consoleVoiceTtsJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-voice-tts.js"),
-		"utf-8",
-	),
-	consoleCodingHandsoffJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-coding-handsoff.js"),
-		"utf-8",
-	),
-	consoleCodingSessionJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-coding-session.js"),
-		"utf-8",
-	),
-	consoleProfileJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-profile.js"),
-		"utf-8",
-	),
-	consoleUtilsInitJs: fs.readFileSync(
-		path.join(storeDir, "console", "console-utils-init.js"),
-		"utf-8",
-	),
+	consolePage: consoleHtml,
 	agentDetailPage: fs.readFileSync(
 		path.join(storeDir, "agents", "detail.html"),
 		"utf-8",

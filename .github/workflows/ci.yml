@@ -29,3 +29,7 @@ jobs:
         run: cd packages/sdk && npx tsc --noEmit
       - name: Typecheck API worker
         run: cd workers/api && npx tsc --noEmit
+      - name: Typecheck Console
+        run: cd store/console && npx tsc --noEmit
+      - name: Build Console
+        run: cd store/console && npx vite build

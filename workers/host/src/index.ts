@@ -3,7 +3,7 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, consoleCss, consoleCoreJs, consoleInstancesJs, consoleTakeoverJs, consoleRuntimeDetailJs, consoleInstancesAppsJs, consoleAgentDataJs, consoleCodingReposJs, consoleCodingEnginesJs, consoleCodingDiagnosticsJs, consoleCodingGithubJs, consoleVoiceSttJs, consoleVoiceTtsJs, consoleCodingHandsoffJs, consoleCodingSessionJs, consoleProfileJs, consoleUtilsInitJs, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, agentDetailPage,
 	widgetJs, authWidgetJs, swJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
 	faviconSvg, manifestJson,
@@ -45,17 +45,6 @@ const JS_HEADERS: Record<string, string> = {
 	"Cache-Control": "public, max-age=3600",
 	"X-Content-Type-Options": "nosniff",
 	"Access-Control-Allow-Origin": "*",
-};
-
-const CONSOLE_JS_HEADERS: Record<string, string> = {
-	...JS_HEADERS,
-	"Cache-Control": "public, max-age=300",
-};
-
-const CSS_HEADERS: Record<string, string> = {
-	"Content-Type": "text/css; charset=utf-8",
-	"Cache-Control": "public, max-age=300",
-	"X-Content-Type-Options": "nosniff",
 };
 
 function b64ToBytes(b64: string): Uint8Array {
@@ -109,23 +98,6 @@ export default {
 				},
 			});
 		}
-		if (path === "/console-core.js") return new Response(consoleCoreJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-instances.js") return new Response(consoleInstancesJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-takeover.js") return new Response(consoleTakeoverJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-runtime-detail.js") return new Response(consoleRuntimeDetailJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-instances-apps.js") return new Response(consoleInstancesAppsJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-agent-data.js") return new Response(consoleAgentDataJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-coding-repos.js") return new Response(consoleCodingReposJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-coding-engines.js") return new Response(consoleCodingEnginesJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-coding-diagnostics.js") return new Response(consoleCodingDiagnosticsJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-coding-github.js") return new Response(consoleCodingGithubJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-voice-stt.js") return new Response(consoleVoiceSttJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-voice-tts.js") return new Response(consoleVoiceTtsJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-coding-handsoff.js") return new Response(consoleCodingHandsoffJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-coding-session.js") return new Response(consoleCodingSessionJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-profile.js") return new Response(consoleProfileJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console-utils-init.js") return new Response(consoleUtilsInitJs, { headers: CONSOLE_JS_HEADERS });
-		if (path === "/console.css") return new Response(consoleCss, { headers: CSS_HEADERS });
 
 		// Favicon
 		if (path === "/favicon.svg" || path === "/favicon.ico") {
