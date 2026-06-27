@@ -81,6 +81,14 @@ const pages = {
 		path.join(storeDir, "console", "console-coding-github.js"),
 		"utf-8",
 	),
+	consoleVoiceSttJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-voice-stt.js"),
+		"utf-8",
+	),
+	consoleVoiceTtsJs: fs.readFileSync(
+		path.join(storeDir, "console", "console-voice-tts.js"),
+		"utf-8",
+	),
 	consoleCodingHandsoffJs: fs.readFileSync(
 		path.join(storeDir, "console", "console-coding-handsoff.js"),
 		"utf-8",

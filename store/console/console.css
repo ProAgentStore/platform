@@ -11,6 +11,8 @@
       --radius:0.75rem;
     }
     body{font-family:var(--font-body);background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased;min-height:100dvh;overflow:auto}
+    /* Disable double-tap zoom on all interactive elements */
+    button,input,select,textarea,a,.tab,.btn,.chat-input,.memory-item,.kanban-card{touch-action:manipulation}
     body.chat-active{overflow:hidden}
     a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
     button{font-family:var(--font-body);cursor:pointer;border:none;background:none;color:inherit;transition:all 0.15s}

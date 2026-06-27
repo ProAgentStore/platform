@@ -3,7 +3,7 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, consoleCss, consoleCoreJs, consoleInstancesJs, consoleTakeoverJs, consoleRuntimeDetailJs, consoleInstancesAppsJs, consoleAgentDataJs, consoleCodingReposJs, consoleCodingEnginesJs, consoleCodingDiagnosticsJs, consoleCodingGithubJs, consoleCodingHandsoffJs, consoleCodingSessionJs, consoleProfileJs, consoleUtilsInitJs, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, consoleCss, consoleCoreJs, consoleInstancesJs, consoleTakeoverJs, consoleRuntimeDetailJs, consoleInstancesAppsJs, consoleAgentDataJs, consoleCodingReposJs, consoleCodingEnginesJs, consoleCodingDiagnosticsJs, consoleCodingGithubJs, consoleVoiceSttJs, consoleVoiceTtsJs, consoleCodingHandsoffJs, consoleCodingSessionJs, consoleProfileJs, consoleUtilsInitJs, agentDetailPage,
 	widgetJs, authWidgetJs, swJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
 	faviconSvg, manifestJson,
@@ -119,6 +119,8 @@ export default {
 		if (path === "/console-coding-engines.js") return new Response(consoleCodingEnginesJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-coding-diagnostics.js") return new Response(consoleCodingDiagnosticsJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-coding-github.js") return new Response(consoleCodingGithubJs, { headers: CONSOLE_JS_HEADERS });
+		if (path === "/console-voice-stt.js") return new Response(consoleVoiceSttJs, { headers: CONSOLE_JS_HEADERS });
+		if (path === "/console-voice-tts.js") return new Response(consoleVoiceTtsJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-coding-handsoff.js") return new Response(consoleCodingHandsoffJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-coding-session.js") return new Response(consoleCodingSessionJs, { headers: CONSOLE_JS_HEADERS });
 		if (path === "/console-profile.js") return new Response(consoleProfileJs, { headers: CONSOLE_JS_HEADERS });
