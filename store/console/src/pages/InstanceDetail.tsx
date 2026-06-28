@@ -281,16 +281,17 @@ export default function InstanceDetail() {
 						{/* Chat input bar with voice + action buttons */}
 						<div className="flex gap-1.5 pt-3 border-t border-line shrink-0 items-center">
 							<input
-								value={input}
-								onChange={(e) => setInput(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") sendMessage(); }}
-								placeholder="Send a message..."
-								className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-sm min-w-0"
+								value={voice.interim || input}
+								onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
+								onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
+								placeholder={voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : "Send a message..."}
+								readOnly={!!voice.interim}
+								className={`flex-1 bg-panel border rounded-xl px-4 py-2.5 text-sm min-w-0 transition-colors ${voice.interim ? "border-accent text-accent italic" : "border-line"}`}
 							/>
 							<button
 								type="button"
 								onClick={voice.toggleMic}
-								title="Push to talk — fills input"
+								title="Push to talk: click, speak, auto-submits when you stop"
 								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
 							>
 								<Mic size={16} />
@@ -298,7 +299,7 @@ export default function InstanceDetail() {
 							<button
 								type="button"
 								onClick={voice.toggleSpeak}
-								title="Auto-speak responses"
+								title="Auto-speak: read every agent response aloud"
 								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
 							>
 								<Volume2 size={16} />
@@ -306,19 +307,25 @@ export default function InstanceDetail() {
 							<button
 								type="button"
 								onClick={voice.toggleConvo}
-								title="Conversation mode — continuous voice chat"
+								title="Conversation mode: hands-free continuous voice — just talk, auto-submits and speaks the reply"
 								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}
 							>
 								<AudioLines size={16} />
 							</button>
-							<button type="button" onClick={sendMessage} className="px-4 py-2.5 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent-hover transition-colors whitespace-nowrap">
+							<button
+								type="button"
+								onClick={sendMessage}
+								disabled={!!voice.interim}
+								title="Send message (Enter)"
+								className="px-4 py-2.5 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent-hover transition-colors whitespace-nowrap disabled:opacity-40"
+							>
 								<span className="hidden sm:inline">Send</span>
 								<Send size={16} className="sm:hidden" />
 							</button>
-							<button type="button" onClick={copyChat} title="Copy chat as JSON" className="px-2 py-2 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors">
+							<button type="button" onClick={copyChat} title="Copy entire conversation as JSON to clipboard" className="px-2 py-2 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors">
 								<Copy size={14} />
 							</button>
-							<button type="button" onClick={clearChat} title="Clear chat" className="px-2 py-2 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
+							<button type="button" onClick={clearChat} title="Clear all messages" className="px-2 py-2 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
 								<Trash2 size={14} />
 							</button>
 						</div>

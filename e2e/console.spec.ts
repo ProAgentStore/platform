@@ -400,7 +400,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.getByText("Job Application Assistant").click();
 
 		// Board tab should be available for apply agents
-		await page.getByRole("button", { name: "Board" }).click();
+		await page.getByRole("button", { name: "Board", exact: true }).click();
 
 		// Should show task count
 		await expect(page.getByText(/2 task/)).toBeVisible();
@@ -444,7 +444,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		// Find the chat input and send a message
 		const input = page.getByPlaceholder("Send a message...");
 		await input.fill("hello");
-		await page.getByRole("button", { name: "Send" }).click();
+		await page.getByRole("button", { name: "Send", exact: true }).click();
 
 		// Should show the user message and the mock response
 		await expect(page.getByText("hello")).toBeVisible();
@@ -465,7 +465,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.goto("/console/instances/inst-1");
 		const input = page.getByPlaceholder("Send a message...");
 		await input.fill("hello");
-		await page.getByRole("button", { name: "Send" }).click();
+		await page.getByRole("button", { name: "Send", exact: true }).click();
 
 		await expect(
 			page.getByText(
