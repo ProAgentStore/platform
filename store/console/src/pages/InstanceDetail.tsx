@@ -87,18 +87,19 @@ export default function InstanceDetail() {
 		} catch {}
 	}, [id]);
 
-	// Load older messages (prepend)
+	// Load older messages (prepend). Use ref for messages to avoid dep cycle.
+	const messagesRef = useRef(messages);
+	messagesRef.current = messages;
 	const loadMore = useCallback(async () => {
 		if (!id || loadingMore || !hasMore) return;
 		setLoadingMore(true);
 		try {
-			const oldest = messages[0];
+			const oldest = messagesRef.current[0];
 			const before = oldest?.id || oldest?.createdAt || "";
 			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages?limit=${PAGE}&before=${encodeURIComponent(before)}`);
 			const older = data.messages || [];
 			setHasMore(older.length >= PAGE);
 			if (older.length > 0) {
-				// Preserve scroll position: measure height before, prepend, restore
 				const el = chatRef.current;
 				const prevHeight = el?.scrollHeight || 0;
 				setMessages((prev) => [...older, ...prev]);
@@ -108,7 +109,7 @@ export default function InstanceDetail() {
 			}
 		} catch {}
 		setLoadingMore(false);
-	}, [id, loadingMore, hasMore, messages]);
+	}, [id, loadingMore, hasMore]);
 
 	useEffect(() => { loadMessages(); }, [loadMessages]);
 
@@ -128,6 +129,8 @@ export default function InstanceDetail() {
 	speakRef.current = voice.maybeSpeakResponse;
 
 	const isCoding = instance?.capabilities?.surfaces?.includes("coding") ?? false;
+	const isCodingRef = useRef(isCoding);
+	isCodingRef.current = isCoding;
 
 	const doSend = useCallback(async (msg: string) => {
 		if (!msg.trim() || !id) return;
@@ -135,7 +138,7 @@ export default function InstanceDetail() {
 		setThinking(true);
 		try {
 			let reply: string | undefined;
-			if (isCoding) {
+			if (isCodingRef.current) {
 				// Coding agents: route through the Overseer which has full repo context
 				const data = await api<{ reply?: string; response?: string }>(
 					`/v1/instances/${id}/coding/overseer`,
@@ -161,7 +164,7 @@ export default function InstanceDetail() {
 			]);
 		}
 		setThinking(false);
-	}, [id, isCoding]);
+	}, [id]);
 
 	// Wire the voice hook's auto-send to doSend
 	doSendRef.current = doSend;

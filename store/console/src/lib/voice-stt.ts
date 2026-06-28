@@ -51,7 +51,9 @@ export class VoiceStt {
 			try {
 				this._rec.stop();
 			} catch {}
-			this._rec = null;
+			// Don't null _rec — keep the reference so start() can reuse it
+			// via _startBrowser's internal restart logic, and so the onend
+			// handler in the closure still points at the right object.
 		}
 		if (this._mediaRec) {
 			try {
@@ -65,6 +67,16 @@ export class VoiceStt {
 	}
 
 	private _startBrowser() {
+		// Reuse existing recognizer if we have one (restart after stop)
+		if (this._rec) {
+			try {
+				this._rec.start();
+			} catch (e) {
+				this.onError(e instanceof Error ? e.message : String(e));
+				this.listening = false;
+			}
+			return;
+		}
 		const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 		if (!SR) {
 			this.onError("Speech recognition not supported");
