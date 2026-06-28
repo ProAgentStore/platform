@@ -50,8 +50,6 @@ export default function InstanceDetail() {
 				const inst = (data.instances || []).find((i) => i.id === id || i.slug === id);
 				if (inst) {
 					setInstance(inst);
-					const surfaces = inst.capabilities?.surfaces || [];
-					if (surfaces.includes("coding") && tab === "chat") setTab("coding");
 				}
 			} catch (e) {
 				console.error(e);
@@ -129,18 +127,32 @@ export default function InstanceDetail() {
 	const speakRef = useRef(voice.maybeSpeakResponse);
 	speakRef.current = voice.maybeSpeakResponse;
 
+	const isCoding = instance?.capabilities?.surfaces?.includes("coding") ?? false;
+
 	const doSend = useCallback(async (msg: string) => {
 		if (!msg.trim() || !id) return;
 		setMessages((prev) => [...prev, { role: "user", content: msg }]);
 		setThinking(true);
 		try {
-			const data = await api<{ message?: Message }>(
-				`/v1/instances/${id}/chat`,
-				{ method: "POST", body: JSON.stringify({ message: msg }) },
-			);
-			if (data.message) {
-				setMessages((prev) => [...prev, data.message!]);
-				speakRef.current(data.message.content);
+			let reply: string | undefined;
+			if (isCoding) {
+				// Coding agents: route through the Overseer which has full repo context
+				const data = await api<{ reply?: string; response?: string }>(
+					`/v1/instances/${id}/coding/overseer`,
+					{ method: "POST", body: JSON.stringify({ message: msg }) },
+				);
+				reply = data.reply || data.response;
+			} else {
+				// All other agents: standard AgentDO chat
+				const data = await api<{ message?: Message }>(
+					`/v1/instances/${id}/chat`,
+					{ method: "POST", body: JSON.stringify({ message: msg }) },
+				);
+				reply = data.message?.content;
+			}
+			if (reply) {
+				setMessages((prev) => [...prev, { role: "assistant", content: reply! }]);
+				speakRef.current(reply);
 			}
 		} catch (e) {
 			setMessages((prev) => [
@@ -149,7 +161,7 @@ export default function InstanceDetail() {
 			]);
 		}
 		setThinking(false);
-	}, [id]);
+	}, [id, isCoding]);
 
 	// Wire the voice hook's auto-send to doSend
 	doSendRef.current = doSend;
@@ -284,7 +296,7 @@ export default function InstanceDetail() {
 								value={voice.interim || input}
 								onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
 								onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
-								placeholder={voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : "Send a message..."}
+								placeholder={voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : isCoding ? "Ask about your repos, or tell it to do something..." : "Send a message..."}
 								readOnly={!!voice.interim}
 								className={`flex-1 bg-panel border rounded-xl px-4 py-2.5 text-sm min-w-0 transition-colors ${voice.interim ? "border-accent text-accent italic" : "border-line"}`}
 							/>
