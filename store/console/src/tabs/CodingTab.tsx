@@ -204,7 +204,7 @@ export default function CodingTab({ instanceId }: Props) {
 		try {
 			await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/message`, {
 				method: "POST",
-				body: JSON.stringify({ message: msg }),
+				body: JSON.stringify({ text: msg }),
 			});
 		} catch (e) {
 			console.error("[terminal] send failed:", e);

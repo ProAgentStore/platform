@@ -784,7 +784,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const sessions = r.sessions || [];
 				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 				if (!sid) return text("No active coding session found.");
-				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/message`, sessionToken, { method: "POST", body: JSON.stringify({ message }) }, this.env);
+				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/message`, sessionToken, { method: "POST", body: JSON.stringify({ text: message }) }, this.env);
 				return text(`Sent to session ${sid}: "${message}"`);
 			},
 		);
