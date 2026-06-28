@@ -617,6 +617,18 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				{/* Terminal view */}
 				{view === "terminal" && (
 					<div className="flex flex-col flex-1 min-h-0 relative">
+						<div className="flex gap-1 px-2 py-2 shrink-0 items-center border-b border-line">
+							<input
+								value={termInput}
+								onChange={(e) => setTermInput(e.target.value)}
+								onKeyDown={(e) => { if (e.key === "Enter") sendTerminalMessage(); }}
+								placeholder="Send a message to the Engine..."
+								className="flex-1 min-w-0 bg-panel border border-line rounded-xl px-3 py-2.5 text-sm"
+							/>
+							<button type="button" onClick={sendTerminalMessage} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm">
+								<Send size={14} />
+							</button>
+						</div>
 						<pre
 							ref={termRef}
 							className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-[#0b0b0f] text-xs leading-snug p-3 m-0 select-text"
@@ -636,21 +648,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
 									setTermAutoScroll(true);
 								}}
-								className="absolute bottom-14 right-4 bg-accent text-white text-xs px-3 py-1.5 rounded-full shadow-lg font-bold animate-bounce"
+								className="absolute bottom-4 right-4 bg-accent text-white text-xs px-3 py-1.5 rounded-full shadow-lg font-bold animate-bounce"
 							>
 								New output below
 							</button>
 						)}
-						<div className="flex gap-1.5 mt-2 shrink-0">
-							<input
-								value={termInput}
-								onChange={(e) => setTermInput(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") sendTerminalMessage(); }}
-								placeholder="Type a message to the CLI..."
-								className="flex-1 min-w-0"
-							/>
-							<button type="button" onClick={sendTerminalMessage} className="px-3 py-2 bg-accent text-white rounded-xl font-bold text-sm">Send</button>
-						</div>
 					</div>
 				)}
 			</div>
