@@ -442,9 +442,9 @@ test.describe("ProAgentStore Console smoke", () => {
 
 		await page.goto("/console/instances/inst-1");
 		// Find the chat input and send a message
-		const input = page.getByPlaceholder("Send a message...");
+		const input = page.getByPlaceholder(/Send a message|Ask about your repos/);
 		await input.fill("hello");
-		await page.getByRole("button", { name: "Send", exact: true }).click();
+		await page.getByRole("button", { name: /Send/ }).first().click();
 
 		// Should show the user message and the mock response
 		await expect(page.getByText("hello")).toBeVisible();
@@ -458,10 +458,10 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.goto("/console/instances/inst-1");
 
 		// All three voice buttons should be present with descriptive tooltips
-		const mic = page.getByTitle("Push to talk: click, speak, auto-submits when you stop");
-		const speak = page.getByTitle("Auto-speak: read every agent response aloud");
-		const convo = page.getByTitle(/Conversation mode/);
-		const copy = page.getByTitle("Copy entire conversation as JSON to clipboard");
+		const mic = page.getByTitle("Push to talk");
+		const speak = page.getByTitle("Auto-speak");
+		const convo = page.getByTitle(/Hands-free voice/);
+		const copy = page.getByTitle("Copy JSON");
 		const clear = page.getByTitle("Clear all messages");
 
 		await expect(mic).toBeVisible();
@@ -509,9 +509,9 @@ test.describe("ProAgentStore Console smoke", () => {
 			return route.continue();
 		});
 		await page.goto("/console/instances/inst-1");
-		const input = page.getByPlaceholder("Send a message...");
+		const input = page.getByPlaceholder(/Send a message|Ask about your repos/);
 		await input.fill("test payload");
-		await page.getByRole("button", { name: "Send", exact: true }).click();
+		await page.getByRole("button", { name: /Send/ }).first().click();
 		await expect(page.getByText("ok")).toBeVisible();
 		expect(capturedBody).toMatchObject({ message: "test payload" });
 	});
@@ -599,9 +599,9 @@ test.describe("ProAgentStore Console smoke", () => {
 		});
 
 		await page.goto("/console/instances/inst-1");
-		const input = page.getByPlaceholder("Send a message...");
+		const input = page.getByPlaceholder(/Send a message|Ask about your repos/);
 		await input.fill("hello");
-		await page.getByRole("button", { name: "Send", exact: true }).click();
+		await page.getByRole("button", { name: /Send/ }).first().click();
 
 		await expect(
 			page.getByText(
