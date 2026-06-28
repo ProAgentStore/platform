@@ -154,8 +154,8 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 	const pollSummary = useCallback(async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`);
-			const entries = (d.timeline || [])
+			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`);
+			const entries = (d.chat || d.timeline || [])
 				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "system" || e.type === "command")
 				.map((e) => ({
 					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
@@ -192,8 +192,8 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		} catch {}
 		// Load history (chat + system + command messages)
 		try {
-			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
-			const entries = (d.timeline || [])
+			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
+			const entries = (d.chat || d.timeline || [])
 				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "system" || e.type === "command")
 				.map((e) => ({
 					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
@@ -404,8 +404,8 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 	const copySummaryJson = async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline?full=1`);
-			const entries = (d.timeline || []).map((e) => ({
+			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline?full=1`);
+			const entries = (d.chat || d.timeline || []).map((e) => ({
 				type: e.type,
 				role: e.role,
 				content: e.content || e.text || "",
