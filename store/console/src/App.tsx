@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
+import { HeaderProvider } from "./lib/HeaderContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
@@ -49,11 +50,13 @@ function consoleBasename() {
 export default function App() {
 	return (
 		<AuthProvider>
-			<BrowserRouter basename={consoleBasename()}>
-				<Routes>
-					<Route path="/*" element={<AuthGate />} />
-				</Routes>
-			</BrowserRouter>
+			<HeaderProvider>
+				<BrowserRouter basename={consoleBasename()}>
+					<Routes>
+						<Route path="/*" element={<AuthGate />} />
+					</Routes>
+				</BrowserRouter>
+			</HeaderProvider>
 		</AuthProvider>
 	);
 }

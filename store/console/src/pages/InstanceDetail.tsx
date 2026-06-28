@@ -6,6 +6,7 @@ import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { useVoice } from "../hooks/useVoice";
 import { Copy, Trash2, Mic, Volume2, AudioLines, Send, ArrowLeft } from "lucide-react";
+import { useHeaderSlot } from "../lib/HeaderContext";
 import BoardTab from "../tabs/BoardTab";
 import CodingTab from "../tabs/CodingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
@@ -195,46 +196,49 @@ export default function InstanceDetail() {
 
 	const surfaces = instance?.capabilities?.surfaces || [];
 	const isApply = surfaces.includes("apply");
-	const tabs: { id: Tab; label: string; icon: string }[] = [
+	const tabDefs: { id: Tab; label: string; icon: string }[] = [
 		{ id: "chat", label: "Chat", icon: "💬" },
 	];
-	if (isApply || !surfaces.includes("coding")) tabs.push({ id: "board", label: "Board", icon: "📋" });
-	if (surfaces.includes("coding")) tabs.push({ id: "coding", label: "Coding", icon: "💻" });
-	tabs.push({ id: "knowledge", label: "Knowledge", icon: "📚" });
-	tabs.push({ id: "settings", label: "Settings", icon: "⚙" });
+	if (isApply || !surfaces.includes("coding")) tabDefs.push({ id: "board", label: "Board", icon: "📋" });
+	if (surfaces.includes("coding")) tabDefs.push({ id: "coding", label: "Coding", icon: "💻" });
+	tabDefs.push({ id: "knowledge", label: "Knowledge", icon: "📚" });
+	tabDefs.push({ id: "settings", label: "Settings", icon: "⚙" });
 
-	return (
-		<div className="flex flex-col h-[calc(100dvh-49px)]">
-			{/* Tab bar */}
-			<div className="flex items-center gap-2 px-3 py-1.5 border-b border-line bg-panel">
-				<button type="button" onClick={() => navigate("/instances")} className="text-sm text-muted hover:text-ink px-1"><ArrowLeft size={16} /></button>
-				{instance && (
-					<span className="text-sm font-semibold truncate max-w-40 hidden sm:inline">{instance.name}</span>
-				)}
-				{/* Runtime status badge */}
+	// Push instance controls into the shared Layout header
+	const header = useHeaderSlot();
+	useEffect(() => {
+		header.set(
+			<>
+				<button type="button" onClick={() => navigate("/instances")} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
+				{instance && <span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>}
 				<span
-					className="text-xs font-bold px-1.5 py-0.5 rounded-full shrink-0 cursor-pointer"
+					className="text-[0.7rem] font-bold px-1.5 py-0.5 rounded-full shrink-0"
 					style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-green)" : "var(--color-muted)" }}
 					title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
 				>
 					{runnerOnline ? "●" : "○"}
 				</span>
 				<div className="flex border border-line rounded-lg overflow-x-auto overflow-y-hidden shrink min-w-0 scrollbar-none">
-					{tabs.map((t) => (
+					{tabDefs.map((t) => (
 						<button
 							key={t.id}
 							type="button"
 							onClick={() => setTab(t.id)}
-							className={`px-2.5 py-1 text-xs font-bold whitespace-nowrap shrink-0 transition-all ${tab === t.id ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}
+							className={`px-2 py-1 text-xs font-bold whitespace-nowrap shrink-0 transition-all ${tab === t.id ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}
 						>
 							<span className="sm:hidden">{t.icon}</span>
 							<span className="hidden sm:inline">{t.label}</span>
 						</button>
 					))}
 				</div>
-			</div>
+			</>
+		);
+		return () => header.set(null);
+	}); // runs every render to keep tab/badge state current
 
-			{/* Tab content */}
+	return (
+		<div className="flex flex-col h-[calc(100dvh-49px)]">
+			{/* Tab content — header is in the Layout now */}
 			<div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3 flex flex-col min-h-0">
 				{tab === "chat" && (
 					<div className="flex flex-col flex-1 min-h-0">
