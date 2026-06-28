@@ -457,8 +457,9 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/system-message", asyn
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
-	const body = (await c.req.json().catch(() => ({}))) as { question?: string };
+	const body = (await c.req.json().catch(() => ({}))) as { question?: string; finished?: boolean };
 	const question = typeof body.question === "string" ? body.question.trim() : "";
+	const finished = body.finished === true;
 
 	// Capture the current terminal.
 	const conn = await getRunnerConn(c.env, instanceId, uid);
@@ -487,7 +488,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
 	const repoInstructions = repo?.instructions;
 	const combined = [instanceInstructions, repoInstructions].filter(Boolean).join("\n\n") || undefined;
-	const reply = (await copilotSummary(c.env, uid, { question, memory, pane, specialInstructions: combined })) || "(no response)";
+	const reply = (await copilotSummary(c.env, uid, { question, memory, pane, finished, specialInstructions: combined })) || "(no response)";
 	// Don't persist a transient "runner offline / session hasn't started" auto-summary
 	// — it's only true at this moment, and once the runner attaches it lingers at the
 	// top of the thread as stale, confusing history. Show it live, but only save real

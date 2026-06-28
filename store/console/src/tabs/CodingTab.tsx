@@ -200,31 +200,40 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 
 	// Watch the Engine after delegation — poll until idle, then auto-summarize
 	const watcherRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const voiceRef = useRef(voice);
+	voiceRef.current = voice;
 	const watchForFinish = useCallback((sid: string) => {
 		if (watcherRef.current) clearTimeout(watcherRef.current);
+		let attempts = 0;
+		const MAX_ATTEMPTS = 60; // ~3 min max watch time
 		const poll = async () => {
+			attempts++;
+			if (attempts > MAX_ATTEMPTS) {
+				setSummaryHistory((prev) => [...prev, { role: "system", content: "Stopped watching — Engine is taking too long. Check the Terminal view." }]);
+				return;
+			}
 			try {
 				const d = await api<{ pane?: string; runState?: string }>(`/v1/instances/${instanceId}/coding/sessions/${sid}/capture`);
 				const state = d.runState || "idle";
 				if (state === "thinking" || state === "working") {
-					// Still working — check again
 					watcherRef.current = setTimeout(poll, 3000);
 					return;
 				}
-				// Engine finished — auto-summarize
+				// Engine finished — get a completion summary
 				const summary = await api<{ reply?: string }>(`/v1/instances/${instanceId}/coding/sessions/${sid}/explain`, {
 					method: "POST",
-					body: JSON.stringify({}),
+					body: JSON.stringify({ finished: true }),
 				});
 				if (summary.reply) {
 					setSummaryHistory((prev) => [...prev, { role: "assistant", content: summary.reply! }]);
-					voice.maybeSpeakResponse(summary.reply);
+					voiceRef.current.maybeSpeakResponse(summary.reply);
 				}
-			} catch {}
+			} catch {
+				setSummaryHistory((prev) => [...prev, { role: "system", content: "Lost connection to the Engine — check your runner." }]);
+			}
 		};
-		// Start watching after a delay (give the Engine time to start)
 		watcherRef.current = setTimeout(poll, 4000);
-	}, [instanceId, voice]);
+	}, [instanceId]);
 
 	// Cleanup watcher on unmount
 	useEffect(() => () => { if (watcherRef.current) clearTimeout(watcherRef.current); }, []);
