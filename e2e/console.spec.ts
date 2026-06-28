@@ -451,6 +451,49 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("Mock assistant reply")).toBeVisible();
 	});
 
+	test("instance chat has voice controls with correct tooltips", async ({
+		page,
+	}) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1");
+
+		// All three voice buttons should be present with descriptive tooltips
+		const mic = page.getByTitle("Push to talk: click, speak, auto-submits when you stop");
+		const speak = page.getByTitle("Auto-speak: read every agent response aloud");
+		const convo = page.getByTitle(/Conversation mode/);
+		const copy = page.getByTitle("Copy entire conversation as JSON to clipboard");
+		const clear = page.getByTitle("Clear all messages");
+
+		await expect(mic).toBeVisible();
+		await expect(speak).toBeVisible();
+		await expect(convo).toBeVisible();
+		await expect(copy).toBeVisible();
+		await expect(clear).toBeVisible();
+	});
+
+	test("instance chat load more button appears with many messages", async ({
+		page,
+	}) => {
+		// Mock 20 messages (the page size) so "Load earlier" button appears
+		const messages = Array.from({ length: 20 }, (_, i) => ({
+			id: `msg-${i}`,
+			role: i % 2 === 0 ? "user" : "assistant",
+			content: `Message ${i}`,
+			createdAt: new Date(Date.now() - (20 - i) * 60000).toISOString(),
+		}));
+		await mockSignedInConsole(page);
+		await page.route("**/v1/instances/inst-1/messages*", (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({ messages }),
+			}),
+		);
+		await page.goto("/console/instances/inst-1");
+
+		await expect(page.getByRole("button", { name: "Load earlier messages" })).toBeVisible();
+	});
+
 	test("instance chat shows error message on API failure", async ({
 		page,
 	}) => {

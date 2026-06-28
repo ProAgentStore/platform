@@ -296,7 +296,7 @@ export default function InstanceDetail() {
 								value={voice.interim || input}
 								onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
 								onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
-								placeholder={voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : isCoding ? "Ask about your repos, or tell it to do something..." : "Send a message..."}
+								placeholder={thinking && voice.convoOn ? "Agent is thinking..." : voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : isCoding ? "Ask about your repos, or tell it to do something..." : "Send a message..."}
 								readOnly={!!voice.interim}
 								className={`flex-1 bg-panel border rounded-xl px-4 py-2.5 text-sm min-w-0 transition-colors ${voice.interim ? "border-accent text-accent italic" : "border-line"}`}
 							/>
