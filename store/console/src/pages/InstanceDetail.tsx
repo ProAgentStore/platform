@@ -285,14 +285,25 @@ export default function InstanceDetail() {
 						</div>
 						{/* Chat input bar with voice + action buttons */}
 						<div className="flex gap-1 sm:gap-1.5 pt-2 sm:pt-3 border-t border-line shrink-0 items-center">
-							<input
-								value={voice.interim || input}
-								onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
-								onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
-								placeholder={thinking && voice.convoOn ? "Agent is thinking..." : voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : isCoding ? "Ask about your repos, or tell it to do something..." : "Send a message..."}
-								readOnly={!!voice.interim}
-								className={`flex-1 bg-panel border rounded-xl px-4 py-2.5 text-sm min-w-0 transition-colors ${voice.interim ? "border-accent text-accent italic" : "border-line"}`}
-							/>
+							<div className="flex-1 min-w-0 relative">
+								<input
+									value={voice.interim || input}
+									onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
+									onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
+									placeholder={thinking && voice.convoOn ? "Agent is thinking..." : voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : isCoding ? "Ask about your repos, or tell it to do something..." : "Send a message..."}
+									readOnly={!!voice.interim}
+									className={`w-full bg-panel border rounded-xl px-4 py-2.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
+								/>
+								{/* Audio level visualizer — shows when mic is active */}
+								{voice.micOn && (
+									<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
+										<div
+											className="h-full bg-green rounded-full transition-all"
+											style={{ width: `${Math.round(voice.audioLevel * 100)}%`, transitionDuration: "50ms" }}
+										/>
+									</div>
+								)}
+							</div>
 							<button
 								type="button"
 								onClick={voice.toggleMic}

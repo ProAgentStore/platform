@@ -54,11 +54,46 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [speakOn, setSpeakOn] = useState(false);
 	const [convoOn, setConvoOn] = useState(false);
 	const [interim, setInterim] = useState("");
+	/** 0-1 audio level from mic — drives the waveform visualizer */
+	const [audioLevel, setAudioLevel] = useState(0);
 	const sttRef = useRef<VoiceStt | null>(null);
 	const ttsRef = useRef<VoiceTts | null>(null);
+	const analyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; source: MediaStreamAudioSourceNode; raf: number } | null>(null);
 
 	// Flag: true while the agent is processing (mic should stay off)
 	const pausedForThinkingRef = useRef(false);
+
+	// Start audio level monitoring from mic stream
+	const startAudioMonitor = useCallback(async () => {
+		try {
+			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			const ctx = new AudioContext();
+			const source = ctx.createMediaStreamSource(stream);
+			const analyser = ctx.createAnalyser();
+			analyser.fftSize = 256;
+			source.connect(analyser);
+			const data = new Uint8Array(analyser.frequencyBinCount);
+			const tick = () => {
+				analyser.getByteFrequencyData(data);
+				// RMS level normalized to 0-1
+				let sum = 0;
+				for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+				setAudioLevel(Math.min(1, Math.sqrt(sum / data.length) / 128));
+				analyserRef.current!.raf = requestAnimationFrame(tick);
+			};
+			analyserRef.current = { ctx, analyser, source, raf: requestAnimationFrame(tick) };
+		} catch {}
+	}, []);
+
+	const stopAudioMonitor = useCallback(() => {
+		if (analyserRef.current) {
+			cancelAnimationFrame(analyserRef.current.raf);
+			analyserRef.current.source.disconnect();
+			analyserRef.current.ctx.close().catch(() => {});
+			analyserRef.current = null;
+		}
+		setAudioLevel(0);
+	}, []);
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
@@ -77,10 +112,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (!sttRef.current || pausedForThinkingRef.current) return;
 		try {
 			await sttRef.current.start();
+			startAudioMonitor();
 			setMicOn(true);
 			if (convoOnRef.current) playListeningChime();
 		} catch {}
-	}, []);
+	}, [startAudioMonitor]);
 
 	// Speak response, then re-open mic
 	const speakAndResume = useCallback(async (text: string) => {
@@ -109,6 +145,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
 		if (isFinal) {
 			setInterim("");
+			stopAudioMonitor();
 			if (convoOnRef.current) {
 				pausedForThinkingRef.current = true;
 				if (sttRef.current?.listening) sttRef.current.stop();
@@ -149,6 +186,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		console.log("[voice] toggleMic, currently:", micOn);
 		if (micOn) {
 			sttRef.current?.stop();
+			stopAudioMonitor();
 			setMicOn(false);
 			setInterim("");
 			return;
@@ -157,9 +195,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 			pausedForThinkingRef.current = false;
 			sttRef.current = await makeStt();
 			await sttRef.current.start();
+			startAudioMonitor();
 			setMicOn(true);
 		} catch { setMicOn(false); }
-	}, [micOn, makeStt]);
+	}, [micOn, makeStt, startAudioMonitor, stopAudioMonitor]);
 
 	const toggleSpeak = useCallback(() => setSpeakOn((v) => !v), []);
 
@@ -169,6 +208,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			pausedForThinkingRef.current = false;
 			sttRef.current?.stop();
 			ttsRef.current?.cancel();
+			stopAudioMonitor();
 			setConvoOn(false);
 			setMicOn(false);
 			setInterim("");
@@ -179,15 +219,18 @@ export function useVoice(instanceId: string | undefined, opts: {
 			pausedForThinkingRef.current = false;
 			sttRef.current = await makeStt();
 			await sttRef.current.start();
+			startAudioMonitor();
 			setConvoOn(true);
 			setSpeakOn(true);
 			setMicOn(true);
 			playListeningChime();
 		} catch { setConvoOn(false); }
-	}, [convoOn, makeStt]);
+	}, [convoOn, makeStt, startAudioMonitor, stopAudioMonitor]);
 
 	return {
 		micOn, speakOn, convoOn, interim,
+		/** 0-1 audio level from mic — use to render waveform */
+		audioLevel,
 		toggleMic, toggleSpeak, toggleConvo,
 		maybeSpeakResponse,
 	};
