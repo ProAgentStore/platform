@@ -462,7 +462,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		const speak = page.getByTitle("Auto-speak");
 		const convo = page.getByTitle(/Hands-free voice/);
 		const copy = page.getByTitle("Copy JSON");
-		const clear = page.getByTitle("Clear all messages");
+		const clear = page.getByTitle("Clear");
 
 		await expect(mic).toBeVisible();
 		await expect(speak).toBeVisible();

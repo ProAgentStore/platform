@@ -378,7 +378,7 @@ export default function InstanceDetail() {
 									</div>
 								)}
 							</div>
-							<button type="button" onClick={sendMessage} disabled={!!voice.interim} className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
+							<button type="button" onClick={sendMessage} disabled={!!voice.interim} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
 								<Send size={14} />
 							</button>
 						</div>
