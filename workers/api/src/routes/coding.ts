@@ -568,10 +568,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	}
 	const memory = await contextForCopilot(c.env, sessionId);
 	const system =
-		"You are the co-pilot for an AI coding agent working in the user's repo. ONE rule decides what you do:\n" +
-		"- If the user is ASKING (status, what happened, why, explain) → answer concisely FROM the terminal + session memory below. Never claim you did work.\n" +
-		"- If the user wants something DONE (change/add/fix/run/build/test) OR you'd need live repo state you don't have → call the `drive_claude` tool with ONE clear instruction for Claude Code to execute. Don't try to do the work yourself.\n" +
-		"Plain language, tight. Default to answering; delegate when it's an action.";
+		"You are the co-pilot for an AI coding agent working in the user's repo. TWO rules:\n" +
+		"1. If the user wants something DONE → call the `drive_claude` tool with ONE clear instruction. Don't do the work yourself.\n" +
+		"2. If the user is ASKING (status, what happened, is it done) → answer FROM the terminal + session memory below.\n\n" +
+		"STYLE: Talk to a NON-TECHNICAL user by default. Say WHAT was done and WHETHER it worked — never list filenames, commands, or code unless the user explicitly asks for details. " +
+		"Wrong: 'Fixed overflow in PuzzleSets.tsx line 99'. Right: 'Fixed the horizontal scroll on the puzzle page.' " +
+		"Only get technical when the user asks to elaborate, show code, or be more detailed.\n" +
+		"Keep it to 1-2 sentences. Never pad. After delegating, say 'On it' + what you asked the agent to do in plain English.";
 	const userMsg = `User: ${raw}\n\nSESSION MEMORY (recent):\n${memory || "(none)"}\n\nTERMINAL (recent):\n${pane.slice(-6000) || "(no live terminal)"}`;
 	const tools = [
 		{

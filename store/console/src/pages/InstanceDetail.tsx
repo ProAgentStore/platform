@@ -373,6 +373,7 @@ export default function InstanceDetail() {
 								<div
 									key={i}
 									onClick={() => voice.cancelSpeak()}
+									onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
 									className={`group relative max-w-[92%] sm:max-w-[82%] px-3 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-sm leading-relaxed ${
 										m.role === "user"
 											? "bg-accent text-white self-end rounded-br-sm shadow-sm"

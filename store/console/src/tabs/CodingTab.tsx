@@ -563,11 +563,16 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						{/* Messages */}
 						<div ref={threadRef} className="flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll">
 							{summaryHistory.map((m, i) => (
-								<div key={i} className={`max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed ${
-									m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
-										: m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15"
-										: "bg-paper border border-line self-start rounded-bl-sm"
-								}`}>
+								<div
+									key={i}
+									onClick={() => voice.cancelSpeak()}
+									onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
+									className={`max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
+										m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
+											: m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15"
+											: "bg-paper border border-line self-start rounded-bl-sm"
+									}`}
+								>
 									{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}
 									{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold">Co-pilot</div>}
 									{m.role === "assistant" ? (
