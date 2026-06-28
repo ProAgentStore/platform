@@ -283,6 +283,17 @@ export default function CodingTab({ instanceId }: Props) {
 		loadCoding();
 	};
 
+	const restartSession = async () => {
+		if (!openSession) return;
+		try {
+			await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/restart`, { method: "POST" });
+			setTerminalText("(restarting CLI...)");
+			setSummaryHistory([]);
+		} catch (e) {
+			alert("Restart failed: " + (e instanceof Error ? e.message : String(e)));
+		}
+	};
+
 	const getActiveSession = (repoId: string) => sessions.find((s) => s.repoId === repoId && s.status === "active");
 
 	const repoLabel = (r: CodingRepo) => {
@@ -309,7 +320,8 @@ export default function CodingTab({ instanceId }: Props) {
 						<button type="button" onClick={() => setView("terminal")} className={`px-2.5 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}>Terminal</button>
 					</div>
 					<div className="ml-auto flex gap-1.5">
-						<button type="button" onClick={endSession} className="text-xs px-2 py-1 rounded-md border border-red text-red font-semibold">End</button>
+						<button type="button" onClick={restartSession} title="Restart the CLI (kills and relaunches — fixes stuck sessions)" className="text-xs px-2 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Restart</button>
+						<button type="button" onClick={endSession} title="End the session completely" className="text-xs px-2 py-1 rounded-md border border-red text-red font-semibold">End</button>
 					</div>
 				</div>
 
