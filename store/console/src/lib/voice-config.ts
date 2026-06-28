@@ -40,7 +40,9 @@ export async function getVoiceConfig(
 	const useApi = isApi && !!apiKey;
 
 	_cache = {
-		sttProvider: useApi ? "openai" : "browser",
+		// STT is ALWAYS browser — Web Speech API gives real-time interim results.
+		// OpenAI Whisper is batch (record → stop → upload → wait) — no streaming.
+		sttProvider: "browser",
 		ttsProvider: useApi ? "openai" : "browser",
 		apiKey,
 		voice: (vs.openai as Record<string, unknown>)?.voice as string || "alloy",
