@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../lib/api";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
-import { mdLite, formatTime } from "../lib/markdown";
+import { mdLite } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
-import { ArrowLeft, Trash2, Satellite, Plus } from "lucide-react";
+import { ArrowLeft, Trash2, Satellite } from "lucide-react";
 
 interface Props {
 	instanceId: string;
@@ -58,9 +58,13 @@ export default function CodingTab({ instanceId }: Props) {
 		loadCoding();
 	}, [loadCoding]);
 
-	// Repo status polling (3s)
+	// Repo status polling (3s) — use ref for sessions to avoid interval restarts
+	const sessionsRef = useRef(sessions);
+	sessionsRef.current = sessions;
+	const hasActiveSessions = sessions.some((s) => s.status === "active");
+
 	const pollStatuses = useCallback(async () => {
-		const activeSessions = sessions.filter((s) => s.status === "active");
+		const activeSessions = sessionsRef.current.filter((s) => s.status === "active");
 		if (!activeSessions.length) return;
 		const results = await Promise.allSettled(
 			activeSessions.map((s) =>
@@ -70,20 +74,19 @@ export default function CodingTab({ instanceId }: Props) {
 			),
 		);
 		const statuses: Record<string, string> = {};
-		for (const r of results) {
+		for (let i = 0; i < results.length; i++) {
+			const r = results[i];
 			if (r.status === "fulfilled") {
 				statuses[r.value.repoId] = r.value.state;
 				if (r.value.connected !== undefined) setRunnerOnline(r.value.connected);
 			} else {
-				// Find the session for this rejected promise by index
-				const idx = results.indexOf(r);
-				statuses[activeSessions[idx].repoId] = "offline";
+				statuses[activeSessions[i].repoId] = "offline";
 			}
 		}
 		setRepoStatuses(statuses);
-	}, [instanceId, sessions]);
+	}, [instanceId]);
 
-	usePolling(pollStatuses, 3000, sessions.some((s) => s.status === "active") && !openSession);
+	usePolling(pollStatuses, 3000, hasActiveSessions && !openSession);
 
 	// Terminal polling (1.5s when a session is open)
 	const pollTerminal = useCallback(async () => {

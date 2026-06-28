@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../lib/api";
 
 interface UseApiResult<T> {
@@ -15,24 +15,26 @@ export function useApi<T>(
 	const [data, setData] = useState<T | null>(null);
 	const [loading, setLoading] = useState(!!path);
 	const [error, setError] = useState<string | null>(null);
+	const optsRef = useRef(opts);
+	optsRef.current = opts;
 
 	const refetch = useCallback(async () => {
 		if (!path) return;
 		setLoading(true);
 		setError(null);
 		try {
-			const result = await api<T>(path, opts);
+			const result = await api<T>(path, optsRef.current);
 			setData(result);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
 			setLoading(false);
 		}
-	}, [path, opts]);
+	}, [path]);
 
 	useEffect(() => {
 		if (path) refetch();
-	}, [path]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [path, refetch]);
 
 	return { data, loading, error, refetch };
 }

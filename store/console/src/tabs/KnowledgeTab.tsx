@@ -64,13 +64,14 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		} catch {}
 	}, [instanceId]);
 
+	// Lazy-load: only fetch data for the active sub-tab
 	useEffect(() => {
-		loadDocs();
-		loadMemory();
-		loadFiles();
-		loadCredentials();
-		loadInstructions();
-	}, [loadDocs, loadMemory, loadFiles, loadCredentials, loadInstructions]);
+		if (subTab === "docs") loadDocs();
+		else if (subTab === "memory") loadMemory();
+		else if (subTab === "files") loadFiles();
+		else if (subTab === "credentials") loadCredentials();
+		else if (subTab === "rules") loadInstructions();
+	}, [subTab, loadDocs, loadMemory, loadFiles, loadCredentials, loadInstructions]);
 
 	const addPaste = async () => {
 		if (!pasteTitle.trim() || !pasteContent.trim()) return;

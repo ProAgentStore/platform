@@ -22,8 +22,11 @@ export async function api<T = Record<string, unknown>>(
 	};
 	if (!noAuth && token) headers.Authorization = `Bearer ${token}`;
 	const res = await fetch(`${API}${path}`, { ...opts, headers });
-	const data = await res.json();
-	if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+	// Handle empty/non-JSON responses (e.g. 204 No Content, DELETE)
+	const text = await res.text();
+	let data: unknown;
+	try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
+	if (!res.ok) throw new Error((data as Record<string, string>)?.error || `HTTP ${res.status}`);
 	return data as T;
 }
 
