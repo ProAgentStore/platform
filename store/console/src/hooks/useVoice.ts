@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { createStt, createTts } from "../lib/voice-config";
 import type { VoiceStt } from "../lib/voice-stt";
 import type { VoiceTts } from "../lib/voice-tts";
@@ -144,22 +145,28 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
 		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
 		if (isFinal) {
-			setInterim("");
-			stopAudioMonitor();
-			if (convoOnRef.current) {
-				pausedForThinkingRef.current = true;
-				if (sttRef.current?.listening) sttRef.current.stop();
-				setMicOn(false);
-				playThinkingChime();
-			} else {
-				setMicOn(false);
-			}
+			// flushSync forces React to render immediately — the user sees
+			// interim text clear and the message appear without waiting
+			flushSync(() => {
+				setInterim("");
+				stopAudioMonitor();
+				if (convoOnRef.current) {
+					pausedForThinkingRef.current = true;
+					if (sttRef.current?.listening) sttRef.current.stop();
+					setMicOn(false);
+					playThinkingChime();
+				} else {
+					setMicOn(false);
+				}
+			});
 			console.log("[voice] sending to agent...");
 			onSendRef.current(text);
 		} else {
-			setInterim(text);
+			// flushSync so interim text appears in the input IMMEDIATELY,
+			// not batched with other state updates
+			flushSync(() => setInterim(text));
 		}
-	}, []);
+	}, [stopAudioMonitor]);
 
 	const makeStt = useCallback(async () => {
 		console.log("[voice] creating STT, provider will be resolved...");
