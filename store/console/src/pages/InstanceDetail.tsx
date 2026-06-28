@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
+import { useVoice } from "../hooks/useVoice";
 import BoardTab from "../tabs/BoardTab";
 import CodingTab from "../tabs/CodingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
@@ -30,6 +31,13 @@ export default function InstanceDetail() {
 	// Runtime status
 	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
 	const [runnerNode, setRunnerNode] = useState("");
+
+	// Voice: auto-send callback needs sendMessage reference, use ref
+	const sendRef = useRef<(text: string) => void>(() => {});
+	const voice = useVoice(id, {
+		onTranscript: (text) => setInput((prev) => (prev ? prev + " " : "") + text),
+		onAutoSend: (text) => sendRef.current(text),
+	});
 
 	useEffect(() => {
 		if (!id) return;
@@ -77,10 +85,8 @@ export default function InstanceDetail() {
 		if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
 	}, [messages]);
 
-	const sendMessage = async () => {
-		if (!input.trim() || !id) return;
-		const msg = input.trim();
-		setInput("");
+	const doSend = useCallback(async (msg: string) => {
+		if (!msg.trim() || !id) return;
 		setMessages((prev) => [...prev, { role: "user", content: msg }]);
 		setThinking(true);
 		try {
@@ -88,7 +94,11 @@ export default function InstanceDetail() {
 				`/v1/instances/${id}/chat`,
 				{ method: "POST", body: JSON.stringify({ message: msg }) },
 			);
-			if (data.message) setMessages((prev) => [...prev, data.message!]);
+			if (data.message) {
+				setMessages((prev) => [...prev, data.message!]);
+				// Speak response if auto-speak or conversation mode is on
+				voice.maybeSpeakResponse(data.message.content);
+			}
 		} catch (e) {
 			setMessages((prev) => [
 				...prev,
@@ -96,6 +106,16 @@ export default function InstanceDetail() {
 			]);
 		}
 		setThinking(false);
+	}, [id, voice]);
+
+	// Wire sendRef for conversation mode auto-send
+	sendRef.current = doSend;
+
+	const sendMessage = () => {
+		if (!input.trim()) return;
+		const msg = input.trim();
+		setInput("");
+		doSend(msg);
 	};
 
 	const clearChat = async () => {
@@ -205,8 +225,8 @@ export default function InstanceDetail() {
 								</div>
 							)}
 						</div>
-						{/* Chat input bar with all buttons */}
-						<div className="flex gap-1.5 pt-3 border-t border-line shrink-0 items-center flex-wrap">
+						{/* Chat input bar with voice + action buttons */}
+						<div className="flex gap-1.5 pt-3 border-t border-line shrink-0 items-center">
 							<input
 								value={input}
 								onChange={(e) => setInput(e.target.value)}
@@ -214,6 +234,30 @@ export default function InstanceDetail() {
 								placeholder="Send a message..."
 								className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-sm min-w-0"
 							/>
+							<button
+								type="button"
+								onClick={voice.toggleMic}
+								title="Push to talk — fills input"
+								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
+							>
+								&#127908;
+							</button>
+							<button
+								type="button"
+								onClick={voice.toggleSpeak}
+								title="Auto-speak responses"
+								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
+							>
+								&#128264;
+							</button>
+							<button
+								type="button"
+								onClick={voice.toggleConvo}
+								title="Conversation mode — continuous voice chat"
+								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}
+							>
+								&#127897;&#65039;
+							</button>
 							<button type="button" onClick={sendMessage} className="px-4 py-2.5 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent-hover transition-colors whitespace-nowrap">
 								<span className="hidden sm:inline">Send</span>
 								<span className="sm:hidden">&#10148;</span>
