@@ -155,8 +155,11 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		try {
 			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`);
 			const entries = (d.timeline || [])
-				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant")
-				.map((e) => ({ role: e.type === "chat_user" ? "user" : "assistant", content: e.content || e.text || "" }));
+				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system")
+				.map((e) => ({
+					role: e.type === "chat_user" ? "user" : e.type === "chat_system" ? "system" : "assistant",
+					content: e.content || e.text || "",
+				}));
 			if (entries.length > 0) setSummaryHistory(entries);
 		} catch {}
 	}, [instanceId, openSession]);
@@ -177,12 +180,15 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		try {
 			await api(`/v1/instances/${instanceId}/coding/sessions/${session.id}/start`, { method: "POST" });
 		} catch {}
-		// Load history
+		// Load history (chat + system messages)
 		try {
 			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
 			const entries = (d.timeline || [])
-				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant")
-				.map((e) => ({ role: e.type === "chat_user" ? "user" : "assistant", content: e.content || e.text || "" }));
+				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system")
+				.map((e) => ({
+					role: e.type === "chat_user" ? "user" : e.type === "chat_system" ? "system" : "assistant",
+					content: e.content || e.text || "",
+				}));
 			if (entries.length > 0) setSummaryHistory(entries);
 		} catch {}
 	};

@@ -24,7 +24,11 @@ export default function InstanceDetail() {
 	const urlTab = (splat?.split("/")[0] || "") as Tab;
 	const validTabs: Tab[] = ["chat", "board", "coding", "knowledge", "settings"];
 	const initialTab = validTabs.includes(urlTab) ? urlTab : "chat";
-	const [tab, setTab] = useState<Tab>(initialTab);
+	const [tab, setTabState] = useState<Tab>(initialTab);
+	const setTab = (t: Tab) => {
+		setTabState(t);
+		navigate(`/instances/${id}/${t}`, { replace: true });
+	};
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [hasMore, setHasMore] = useState(false);
 	const [loadingMore, setLoadingMore] = useState(false);
@@ -97,7 +101,7 @@ export default function InstanceDetail() {
 			requestAnimationFrame(() => {
 				if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
 			});
-		} catch {}
+		} catch (e) { console.error("[chat] loadMessages failed:", e); }
 	}, [id]);
 
 	// Load older messages (prepend). Use ref for messages to avoid dep cycle.
