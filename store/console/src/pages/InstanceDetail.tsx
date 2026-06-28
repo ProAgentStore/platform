@@ -357,15 +357,59 @@ export default function InstanceDetail() {
 			{/* Tab content */}
 			<div className="flex-1 overflow-hidden flex flex-col min-h-0">
 				{tab === "chat" && (
-					<div className="flex flex-col flex-1 min-h-0 px-2 py-2 sm:px-4 sm:py-3">
-						<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
+					<div className="flex flex-col flex-1 min-h-0">
+						{/* Input bar — top */}
+						<div className="flex gap-1 sm:gap-1.5 px-2 py-2 shrink-0 items-center border-b border-line">
+							<div className="flex-1 min-w-0 relative">
+								<input
+									value={voice.interim || input}
+									onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
+									onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
+									placeholder={voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : isCoding ? "Ask about your repos..." : "Send a message..."}
+									readOnly={!!voice.interim}
+									className={`w-full bg-panel border rounded-xl px-4 py-2.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
+								/>
+								{voice.micOn && (
+									<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
+										<div className="h-full bg-green rounded-full transition-all" style={{ width: `${Math.round(voice.audioLevel * 100)}%`, transitionDuration: "50ms" }} />
+									</div>
+								)}
+							</div>
+							<button type="button" onClick={sendMessage} disabled={!!voice.interim} className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
+								<Send size={14} />
+							</button>
+						</div>
+						{/* Controls bar */}
+						<div className="flex gap-1 px-2 py-1 shrink-0 items-center">
+							<button type="button" onClick={voice.toggleMic} title="Push to talk" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Mic size={13} /></button>
+							<button type="button" onClick={voice.toggleSpeak} title="Auto-speak" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Volume2 size={13} /></button>
+							<button type="button" onClick={voice.toggleConvo} title="Hands-free voice" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}><AudioLines size={13} /></button>
+							{voice.convoOn && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute" : "Mute"} className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red/15 text-red" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={13} /></button>}
+							{loopOn ? (
+								<button type="button" onClick={stopLoop} title={`Loop ${loopIteration}/${loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative"><Square size={13} /><span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span></button>
+							) : (
+								<button type="button" onClick={() => setShowLoopForm(!showLoopForm)} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
+							)}
+							<button type="button" onClick={copyChat} title="Copy JSON" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors"><Copy size={13} /></button>
+							<button type="button" onClick={clearChat} title="Clear" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors"><Trash2 size={13} /></button>
+						</div>
+						{/* Loop form */}
+						{showLoopForm && !loopOn && (
+							<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
+								<input value={loopObjective} onChange={(e) => setLoopObjective(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") startLoop(); }} placeholder="Objective: fix all bugs, refactor auth..." className="w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" autoFocus />
+								<div className="flex items-center gap-2 justify-between">
+									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))} className="w-14 bg-paper border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
+									<div className="flex gap-1.5">
+										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+										<button type="button" onClick={startLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start</button>
+									</div>
+								</div>
+							</div>
+						)}
+						{/* Messages */}
+						<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll">
 							{hasMore && (
-								<button
-									type="button"
-									onClick={loadMore}
-									disabled={loadingMore}
-									className="self-center text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-colors mb-2"
-								>
+								<button type="button" onClick={loadMore} disabled={loadingMore} className="self-center text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-colors mb-2">
 									{loadingMore ? "Loading..." : "Load earlier messages"}
 								</button>
 							)}
@@ -374,23 +418,15 @@ export default function InstanceDetail() {
 									key={i}
 									onClick={() => voice.cancelSpeak()}
 									onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
-									className={`group relative max-w-[92%] sm:max-w-[82%] px-3 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-sm leading-relaxed ${
-										m.role === "user"
-											? "bg-accent text-white self-end rounded-br-sm shadow-sm"
-											: m.role === "system"
-												? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15"
-												: "bg-panel border border-line self-start rounded-bl-sm shadow-sm"
+									className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
+										m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
+											: m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15"
+											: "bg-panel border border-line self-start rounded-bl-sm"
 									}`}
 								>
-									{/* Copy button on each message */}
-									<button
-										type="button"
-										onClick={() => copyMsgText(m.content)}
-										className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity"
-										title="Copy"
-									>
-										<Copy size={12} />
-									</button>
+									<button type="button" onClick={(e) => { e.stopPropagation(); copyMsgText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
+									{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}
+									{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold">Chat</div>}
 									{m.role === "assistant" ? (
 										<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 									) : (
@@ -401,132 +437,9 @@ export default function InstanceDetail() {
 							{thinking && (
 								<div className="text-muted text-sm flex items-center gap-2">
 									<span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-									Agent is thinking...
+									Thinking...
 								</div>
 							)}
-						</div>
-						{/* Loop form — shown inline above the input bar */}
-						{showLoopForm && !loopOn && (
-							<div className="bg-panel border border-line rounded-xl p-3 mb-2 flex flex-col gap-2">
-								<input
-									value={loopObjective}
-									onChange={(e) => setLoopObjective(e.target.value)}
-									onKeyDown={(e) => { if (e.key === "Enter") startLoop(); }}
-									placeholder="Objective: e.g. fix all bugs, refactor the auth module..."
-									className="w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm"
-									autoFocus
-								/>
-								<div className="flex items-center gap-2 justify-between">
-									<label className="text-xs text-muted flex items-center gap-1.5">
-										Max iterations:
-										<input
-											type="number"
-											value={loopMax}
-											onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))}
-											className="w-14 bg-paper border border-line rounded px-2 py-1 text-xs"
-											min={1}
-											max={50}
-										/>
-									</label>
-									<div className="flex gap-1.5">
-										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-										<button type="button" onClick={startLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
-									</div>
-								</div>
-							</div>
-						)}
-						{/* Chat input bar with voice + action buttons */}
-						<div className="flex gap-1 sm:gap-1.5 pt-2 sm:pt-3 border-t border-line shrink-0 items-center">
-							<div className="flex-1 min-w-0 relative">
-								<input
-									value={voice.interim || input}
-									onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
-									onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
-									placeholder={thinking && voice.convoOn ? "Agent is thinking..." : voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : isCoding ? "Ask about your repos, or tell it to do something..." : "Send a message..."}
-									readOnly={!!voice.interim}
-									className={`w-full bg-panel border rounded-xl px-4 py-2.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
-								/>
-								{/* Audio level visualizer — shows when mic is active */}
-								{voice.micOn && (
-									<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
-										<div
-											className="h-full bg-green rounded-full transition-all"
-											style={{ width: `${Math.round(voice.audioLevel * 100)}%`, transitionDuration: "50ms" }}
-										/>
-									</div>
-								)}
-							</div>
-							<button
-								type="button"
-								onClick={voice.toggleMic}
-								title="Push to talk: click, speak, auto-submits when you stop"
-								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
-							>
-								<Mic size={16} />
-							</button>
-							<button
-								type="button"
-								onClick={voice.toggleSpeak}
-								title="Auto-speak: read every agent response aloud"
-								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
-							>
-								<Volume2 size={16} />
-							</button>
-							<button
-								type="button"
-								onClick={voice.toggleConvo}
-								title="Conversation mode: hands-free continuous voice — just talk, auto-submits and speaks the reply"
-								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}
-							>
-								<AudioLines size={16} />
-							</button>
-							{voice.convoOn && (
-								<button
-									type="button"
-									onClick={voice.toggleMute}
-									title={voice.muted ? "Unmute — resume listening" : "Mute — pause mic without ending conversation"}
-									className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red/15 text-red" : "border-line text-muted hover:border-accent hover:text-accent"}`}
-								>
-									<MicOff size={16} />
-								</button>
-							)}
-							{/* Loop button */}
-							{loopOn ? (
-								<button
-									type="button"
-									onClick={stopLoop}
-									title={`Loop running: ${loopIteration}/${loopMax} — click to stop`}
-									className="px-2 py-2 text-sm border border-green bg-green/15 text-green rounded-lg transition-colors relative"
-								>
-									<Square size={16} />
-									<span className="absolute -top-1.5 -right-1.5 text-[0.6rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span>
-								</button>
-							) : (
-								<button
-									type="button"
-									onClick={() => setShowLoopForm(!showLoopForm)}
-									title="Agent loop: set an objective and let the agent work autonomously"
-									className={`px-2 py-2 text-sm border rounded-lg transition-colors ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
-								>
-									<Repeat size={16} />
-								</button>
-							)}
-							<button
-								type="button"
-								onClick={sendMessage}
-								disabled={!!voice.interim}
-								title="Send message (Enter)"
-								className="px-4 py-2.5 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent-hover transition-colors whitespace-nowrap disabled:opacity-40"
-							>
-								<span className="hidden sm:inline">Send</span>
-								<Send size={16} className="sm:hidden" />
-							</button>
-							<button type="button" onClick={copyChat} title="Copy entire conversation as JSON to clipboard" className="px-2 py-2 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors">
-								<Copy size={14} />
-							</button>
-							<button type="button" onClick={clearChat} title="Clear all messages" className="px-2 py-2 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
-								<Trash2 size={14} />
-							</button>
 						</div>
 					</div>
 				)}

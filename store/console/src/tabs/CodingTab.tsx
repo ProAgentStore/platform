@@ -6,7 +6,7 @@ import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { useVoice } from "../hooks/useVoice";
 import { useCodingLoop } from "../hooks/useCodingLoop";
-import { ArrowLeft, Trash2, Satellite, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send } from "lucide-react";
+import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send } from "lucide-react";
 
 /** Render terminal output: colorize lines + format inline code/bold/JSON */
 function renderTerminal(text: string): string {
@@ -89,8 +89,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [summaryBusy, setSummaryBusy] = useState(false);
 	const [chatInput, setChatInput] = useState("");
 	const [termInput, setTermInput] = useState("");
-	const [overseerInput, setOverseerInput] = useState("");
-	const [overseerReply, setOverseerReply] = useState("");
 	const [addRepoInput, setAddRepoInput] = useState("");
 	const [showAddRepo, setShowAddRepo] = useState(false);
 	const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
@@ -344,21 +342,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	};
 
-	const askOverseer = async () => {
-		if (!overseerInput.trim()) return;
-		const msg = overseerInput.trim();
-		setOverseerInput("");
-		setOverseerReply("Thinking...");
-		try {
-			const d = await api<{ reply?: string }>(`/v1/instances/${instanceId}/coding/overseer`, {
-				method: "POST",
-				body: JSON.stringify({ message: msg }),
-			});
-			setOverseerReply(d.reply || "No response");
-		} catch (e) {
-			setOverseerReply(`Error: ${e instanceof Error ? e.message : String(e)}`);
-		}
-	};
 
 	const addRepo = async () => {
 		const val = addRepoInput.trim();
@@ -653,25 +636,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	// ── Repos list view ──
 	return (
-		<div>
-			{/* Overseer */}
-			<div className="bg-panel border border-line rounded-xl p-3 mb-3">
-				<div className="flex gap-1.5 items-center">
-					<span title="The Overseer sees all your repos" className="shrink-0"><Satellite size={16} className="text-muted" /></span>
-					<input
-						value={overseerInput}
-						onChange={(e) => setOverseerInput(e.target.value)}
-						onKeyDown={(e) => { if (e.key === "Enter") askOverseer(); }}
-						placeholder="Ask across all repos, or tell one to do something..."
-						className="flex-1 min-w-[120px]"
-					/>
-					<button type="button" onClick={askOverseer} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Ask</button>
-				</div>
-				{overseerReply && (
-					<div className="text-sm leading-relaxed mt-2 bg-paper border border-line rounded-lg p-2.5" dangerouslySetInnerHTML={{ __html: renderMd(overseerReply) }} />
-				)}
-			</div>
-
+		<div className="px-2 py-2 sm:px-4 sm:py-3 overflow-auto flex-1">
 			{/* Repos section */}
 			<div className="bg-panel border border-line rounded-xl p-3">
 				<div className="flex justify-between items-center gap-2">
