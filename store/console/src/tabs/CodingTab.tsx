@@ -5,6 +5,25 @@ import { mdLite } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { ArrowLeft, Trash2, Satellite } from "lucide-react";
 
+/** Colorize terminal output by line prefix pattern (matches old console). */
+function colorizeTerminal(text: string): string {
+	return text.split("\n").map((line) => {
+		const e = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+		// Prompt lines (cyan)
+		if (/^\s*❯/.test(line)) return `<span style="color:#67e8f9">${e}</span>`;
+		// Error lines (red)
+		if (/^\s*\[error\]|^Error:|^✗|^FAIL/i.test(line)) return `<span style="color:#f87171">${e}</span>`;
+		// Tool/system lines (amber)
+		if (/^\s*⚙|^\s*\[info\]|^\s*\[warn\]|^\[/.test(line)) return `<span style="color:#fbbf24">${e}</span>`;
+		// Continuation lines (dim)
+		if (/^\s*↳|^\s*│|^\s*└|^\s*├/.test(line)) return `<span style="color:#94a3b8">${e}</span>`;
+		// Success lines (green)
+		if (/^\s*✓|^\s*✔|^PASS|^Done/i.test(line)) return `<span style="color:#4ade80">${e}</span>`;
+		// Default (light grey)
+		return `<span style="color:#d6d6e0">${e}</span>`;
+	}).join("\n");
+}
+
 interface Props {
 	instanceId: string;
 }
@@ -305,9 +324,9 @@ export default function CodingTab({ instanceId }: Props) {
 				{/* Terminal view */}
 				{view === "terminal" && (
 					<div className="flex flex-col flex-1 min-h-0">
-						<pre ref={termRef} className="flex-1 min-h-0 overflow-auto bg-[#0b0b0f] text-[#d6d6e0] text-xs leading-snug p-2.5 rounded-lg whitespace-pre-wrap break-words m-0">
-							{terminalText}
-						</pre>
+						<pre ref={termRef} className="flex-1 min-h-0 overflow-auto bg-[#0b0b0f] text-xs leading-snug p-2.5 rounded-lg whitespace-pre-wrap break-words m-0"
+							dangerouslySetInnerHTML={{ __html: colorizeTerminal(terminalText) }}
+						/>
 						<div className="flex gap-1.5 mt-2 shrink-0">
 							<input
 								value={termInput}
