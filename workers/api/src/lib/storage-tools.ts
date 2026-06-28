@@ -233,6 +233,8 @@ export interface StorageToolContext {
 	env?: Env;
 	agentId?: string;
 	userId?: string;
+	/** Runtime permission: email access granted on the agent state. */
+	emailPermitted?: boolean;
 }
 
 /** Execute a storage tool call. */
@@ -512,6 +514,10 @@ export async function executeStorageTool(
 			case "find_confirmation_link": {
 				if (!ctx?.env || !ctx.userId) {
 					return fail(call.name, "Email access requires an authenticated user context.");
+				}
+				// Runtime enforcement: reject even if the model hallucinated this tool call
+				if (!ctx.emailPermitted) {
+					return fail(call.name, "Email access is not enabled for this agent.");
 				}
 				if (!ctx.env.KEY_ENCRYPTION_KEY) {
 					return fail(call.name, "Key encryption is not configured on this deployment.");

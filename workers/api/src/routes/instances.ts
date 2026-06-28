@@ -706,8 +706,10 @@ instanceRoutes.post("/:instanceId/loop-decide", async (c) => {
 	if (typeof objective !== "string" || objective.length > 2000) throw new HttpError(400, "objective too long");
 	if (!Array.isArray(messages)) throw new HttpError(400, "messages must be an array");
 	if (messages.length > 20) throw new HttpError(400, "too many messages");
+	const safeIteration = Math.max(0, Math.min(50, Number(iteration) || 0));
+	const safeMaxIterations = Math.max(1, Math.min(50, Number(maxIterations) || 10));
 
-	const systemPrompt = `You are a loop orchestrator. You are on iteration ${iteration ?? 0}/${maxIterations ?? 10}.
+	const systemPrompt = `You are a loop orchestrator. You are on iteration ${safeIteration}/${safeMaxIterations}.
 
 Read the user's objective and the conversation so far, then decide ONE of:
 - CONTINUE: the objective is not yet met. Write the next instruction to give the agent.

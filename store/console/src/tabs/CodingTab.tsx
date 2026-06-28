@@ -4,6 +4,7 @@ import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
 import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { useVoice } from "../hooks/useVoice";
+import { useCodingLoop } from "../hooks/useCodingLoop";
 import { ArrowLeft, Trash2, Satellite, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send } from "lucide-react";
 
 /** Colorize terminal output by line prefix pattern (matches old console). */
@@ -45,28 +46,19 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 	const [defaultEngine, setDefaultEngine] = useState("claude");
 	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
 
-	// Loop state
-	const [loopOn, setLoopOn] = useState(false);
-	const [loopObjective, setLoopObjective] = useState("");
-	const [loopIteration, setLoopIteration] = useState(0);
-	const [loopMax, setLoopMax] = useState(10);
-	const [showLoopForm, setShowLoopForm] = useState(false);
-	const loopOnRef = useRef(false);
-	const loopObjectiveRef = useRef("");
-	const loopIterationRef = useRef(0);
-	const loopMaxRef = useRef(10);
-	loopOnRef.current = loopOn;
-	loopObjectiveRef.current = loopObjective;
-	loopIterationRef.current = loopIteration;
-	loopMaxRef.current = loopMax;
-
 	// Session view state
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
 	const [view, setView] = useState<"summary" | "terminal">("summary");
 	const [terminalText, setTerminalText] = useState("(waiting...)");
 	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string }[]>([]);
-	const summaryHistoryRef = useRef(summaryHistory);
-	summaryHistoryRef.current = summaryHistory;
+
+	// Loop (extracted hook)
+	const loop = useCodingLoop({
+		instanceId,
+		sessionId: openSession?.id ?? null,
+		onMessage: (msg) => setSummaryHistory((prev) => [...prev, msg]),
+	});
+	loop.syncHistory(summaryHistory);
 	const [summaryBusy, setSummaryBusy] = useState(false);
 	const [chatInput, setChatInput] = useState("");
 	const [termInput, setTermInput] = useState("");
@@ -364,86 +356,6 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		}
 	};
 
-	// ── Loop engine: reads terminal, asks loop-decide, sends next instruction to CLI ──
-	const runLoopStepRef = useRef<() => Promise<void>>(async () => {});
-	runLoopStepRef.current = async () => {
-		if (!loopOnRef.current || !openSession) return;
-		try {
-			const capture = await api<{ pane?: string; runState?: string }>(
-				`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`,
-			);
-			const termSnap = capture.pane || "(empty terminal)";
-			const runState = capture.runState || "idle";
-
-			// Wait for the CLI to finish if it's still working
-			if (runState === "thinking" || runState === "working") {
-				setTimeout(() => runLoopStepRef.current?.(), 3000);
-				return;
-			}
-
-			// Build messages from the co-pilot history + terminal snapshot
-			const recent = [
-				...summaryHistoryRef.current.slice(-4).map((m) => ({ role: m.role, content: m.content })),
-				{ role: "assistant", content: `[Terminal output]\n${termSnap.slice(-2000)}` },
-			];
-
-			const decision = await api<{ decision: string; nextInstruction?: string; reason?: string }>(
-				`/v1/instances/${instanceId}/loop-decide`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						objective: loopObjectiveRef.current,
-						messages: recent,
-						iteration: loopIterationRef.current,
-						maxIterations: loopMaxRef.current,
-					}),
-				},
-			);
-
-			if (!loopOnRef.current) return;
-
-			if (decision.decision === "continue" && decision.nextInstruction) {
-				setLoopIteration((i) => i + 1);
-				setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}` }]);
-
-				await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/message`, {
-					method: "POST",
-					body: JSON.stringify({ text: decision.nextInstruction }),
-				});
-
-				setTimeout(() => runLoopStepRef.current?.(), 5000);
-			} else if (decision.decision === "done") {
-				setLoopOn(false);
-				setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop complete: ${decision.reason || "Objective met."}` }]);
-			} else {
-				setLoopOn(false);
-				setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop ${decision.decision}: ${decision.reason || "Needs your input."}` }]);
-			}
-		} catch (e) {
-			setLoopOn(false);
-			setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop error: ${e instanceof Error ? e.message : String(e)}` }]);
-		}
-	};
-
-	const startCodingLoop = () => {
-		if (!loopObjective.trim() || !openSession) return;
-		setLoopOn(true);
-		setLoopIteration(0);
-		setShowLoopForm(false);
-		setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop started: ${loopObjective}` }]);
-		api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/message`, {
-			method: "POST",
-			body: JSON.stringify({ text: loopObjective.trim() }),
-		}).then(() => {
-			setTimeout(() => runLoopStepRef.current?.(), 5000);
-		});
-	};
-
-	const stopCodingLoop = () => {
-		setLoopOn(false);
-		setSummaryHistory((prev) => [...prev, { role: "system", content: "Loop stopped by user." }]);
-	};
-
 	const getActiveSession = (repoId: string) => sessions.find((s) => s.repoId === repoId && s.status === "active");
 
 	const repoLabel = (r: CodingRepo) => {
@@ -504,12 +416,12 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 							{summaryBusy && <div className="text-muted text-xs flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />Thinking...</div>}
 						</div>
 						{/* Loop form */}
-						{showLoopForm && !loopOn && (
+						{loop.showLoopForm && !loop.loopOn && (
 							<div className="bg-paper border border-line rounded-xl p-3 mt-2 flex flex-col gap-2">
 								<input
-									value={loopObjective}
-									onChange={(e) => setLoopObjective(e.target.value)}
-									onKeyDown={(e) => { if (e.key === "Enter") startCodingLoop(); }}
+									value={loop.loopObjective}
+									onChange={(e) => loop.setLoopObjective(e.target.value)}
+									onKeyDown={(e) => { if (e.key === "Enter") loop.start(); }}
 									placeholder="Objective: e.g. fix all failing tests, refactor auth..."
 									className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm"
 									autoFocus
@@ -517,11 +429,11 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 								<div className="flex items-center gap-2 justify-between">
 									<label className="text-xs text-muted flex items-center gap-1.5">
 										Max:
-										<input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} />
+										<input type="number" value={loop.loopMax} onChange={(e) => loop.setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} />
 									</label>
 									<div className="flex gap-1.5">
-										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-										<button type="button" onClick={startCodingLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start</button>
+										<button type="button" onClick={() => loop.setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+										<button type="button" onClick={loop.start} disabled={!loop.loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start</button>
 									</div>
 								</div>
 							</div>
@@ -557,13 +469,13 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 								</button>
 							)}
 							{/* Loop button */}
-							{loopOn ? (
-								<button type="button" onClick={stopCodingLoop} title={`Loop running: ${loopIteration}/${loopMax}`} className="px-2 py-2 text-sm border border-green bg-green/15 text-green rounded-lg relative">
+							{loop.loopOn ? (
+								<button type="button" onClick={loop.stop} title={`Loop running: ${loop.loopIteration}/${loop.loopMax}`} className="px-2 py-2 text-sm border border-green bg-green/15 text-green rounded-lg relative">
 									<Square size={14} />
-									<span className="absolute -top-1.5 -right-1.5 text-[0.6rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span>
+									<span className="absolute -top-1.5 -right-1.5 text-[0.6rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
 								</button>
 							) : (
-								<button type="button" onClick={() => setShowLoopForm(!showLoopForm)} title="Loop: set an objective and let the CLI work autonomously" className={`px-2 py-2 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+								<button type="button" onClick={() => loop.setShowLoopForm(!loop.showLoopForm)} title="Loop: set an objective and let the CLI work autonomously" className={`px-2 py-2 text-sm border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
 									<Repeat size={14} />
 								</button>
 							)}

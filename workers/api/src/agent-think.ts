@@ -149,7 +149,7 @@ export async function runAgentThink(opts: {
 				toolResult = await executeStorageTool(
 					{ name: tc.name, input: tc.arguments },
 					engine,
-					{ env, agentId: state.agentId, userId },
+					{ env, agentId: state.agentId, userId, emailPermitted: state.permissions?.email === true },
 				);
 			} else {
 				const callReq: ToolCallRequest = { name: tc.name, input: tc.arguments };
