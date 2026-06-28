@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
 import { mdLite, formatTime } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
+import { ArrowLeft, Trash2, Satellite, Plus } from "lucide-react";
 
 interface Props {
 	instanceId: string;
@@ -246,7 +247,7 @@ export default function CodingTab({ instanceId }: Props) {
 			<div className="flex flex-col h-[calc(100dvh-120px)] min-h-[340px]">
 				{/* Header bar */}
 				<div className="flex items-center gap-2 mb-2 flex-wrap">
-					<button type="button" onClick={closeTerminal} className="text-sm text-muted hover:text-ink">&larr;</button>
+					<button type="button" onClick={closeTerminal} className="text-sm text-muted hover:text-ink"><ArrowLeft size={16} /></button>
 					<span className="text-sm font-semibold truncate">{repo?.name || openSession.repoId}</span>
 					<div className="flex border border-line rounded-lg overflow-hidden">
 						<button type="button" onClick={() => setView("summary")} className={`px-2.5 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}>Agent</button>
@@ -313,7 +314,7 @@ export default function CodingTab({ instanceId }: Props) {
 			{/* Overseer */}
 			<div className="bg-panel border border-line rounded-xl p-3 mb-3">
 				<div className="flex gap-1.5 items-center">
-					<span title="The Overseer sees all your repos" className="shrink-0">&#128752;</span>
+					<span title="The Overseer sees all your repos" className="shrink-0"><Satellite size={16} className="text-muted" /></span>
 					<input
 						value={overseerInput}
 						onChange={(e) => setOverseerInput(e.target.value)}
@@ -398,7 +399,7 @@ export default function CodingTab({ instanceId }: Props) {
 										) : (
 											<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
 										)}
-										<button type="button" onClick={() => deleteRepo(r.id)} className="text-xs px-1.5 py-1 text-red">&#128465;</button>
+										<button type="button" onClick={() => deleteRepo(r.id)} className="text-xs px-1.5 py-1 text-red"><Trash2 size={14} /></button>
 									</div>
 								</div>
 							);

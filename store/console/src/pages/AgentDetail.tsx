@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Agent, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
 import { renderMd } from "../lib/markdown";
+import { Zap, ArrowLeft } from "lucide-react";
 
 type Tab = "chat" | "knowledge" | "memory" | "tasks" | "settings" | "analytics" | "ops";
 
@@ -176,11 +177,11 @@ export default function AgentDetail() {
 
 	return (
 		<div className="max-w-[960px] mx-auto p-4 sm:p-6">
-			<button type="button" onClick={() => navigate("/agents")} className="text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink">&larr; Back</button>
+			<button type="button" onClick={() => navigate("/agents")} className="text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink"><ArrowLeft size={14} /> Back</button>
 
 			{/* Header */}
 			<div className="flex items-start gap-4 mb-4">
-				<div className="w-[52px] h-[52px] rounded-[14px] flex items-center justify-center text-xl shrink-0 shadow-lg" style={{ background: agent.icon_bg || "#7c3aed" }}>&#9889;</div>
+				<div className="w-[52px] h-[52px] rounded-[14px] flex items-center justify-center text-xl shrink-0 shadow-lg" style={{ background: agent.icon_bg || "#7c3aed" }}><Zap size={22} className="text-white" /></div>
 				<div>
 					<h2 className="font-display text-xl font-bold">{agent.name}</h2>
 					<div className="text-xs text-muted">{agent.slug}</div>

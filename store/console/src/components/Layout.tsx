@@ -3,6 +3,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/AuthContext";
 import { api } from "../lib/api";
 import { usePolling } from "../hooks/usePolling";
+import { Zap, Bell, Menu } from "lucide-react";
 
 export default function Layout() {
 	const { user } = useAuth();
@@ -47,7 +48,7 @@ export default function Layout() {
 					className="flex items-center gap-1.5 no-underline text-ink shrink-0"
 				>
 					<span className="w-7 h-7 rounded-lg bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center text-sm">
-						&#9889;
+						<Zap size={16} />
 					</span>
 					<span className="font-display font-bold text-[0.95rem] hidden sm:inline">
 						PAGS
@@ -99,7 +100,7 @@ export default function Layout() {
 							className="relative no-underline text-[1.1rem] text-muted"
 							title="Notifications"
 						>
-							&#128276;
+							<Bell size={18} />
 							{unreadCount > 0 && (
 								<span className="absolute -top-1 -right-1.5 bg-red text-white text-[0.55rem] w-4 h-4 rounded-full flex items-center justify-center font-bold leading-none">
 									{unreadCount > 9 ? "9+" : unreadCount}
@@ -129,7 +130,7 @@ export default function Layout() {
 					}}
 					aria-label="Open menu"
 				>
-					&#9776;
+					<Menu size={20} />
 				</button>
 			</header>
 			<Outlet />

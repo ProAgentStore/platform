@@ -5,6 +5,7 @@ import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { useVoice } from "../hooks/useVoice";
+import { Copy, Trash2, Mic, Volume2, AudioLines, Send, ArrowLeft } from "lucide-react";
 import BoardTab from "../tabs/BoardTab";
 import CodingTab from "../tabs/CodingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
@@ -159,7 +160,7 @@ export default function InstanceDetail() {
 		<div className="flex flex-col h-[calc(100dvh-49px)]">
 			{/* Tab bar */}
 			<div className="flex items-center gap-2 px-3 py-1.5 border-b border-line bg-panel">
-				<button type="button" onClick={() => navigate("/instances")} className="text-sm text-muted hover:text-ink px-1">&larr;</button>
+				<button type="button" onClick={() => navigate("/instances")} className="text-sm text-muted hover:text-ink px-1"><ArrowLeft size={16} /></button>
 				{instance && (
 					<span className="text-sm font-semibold truncate max-w-40 hidden sm:inline">{instance.name}</span>
 				)}
@@ -209,7 +210,7 @@ export default function InstanceDetail() {
 										className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity"
 										title="Copy"
 									>
-										&#128203;
+										<Copy size={12} />
 									</button>
 									{m.role === "assistant" ? (
 										<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
@@ -240,7 +241,7 @@ export default function InstanceDetail() {
 								title="Push to talk — fills input"
 								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
 							>
-								&#127908;
+								<Mic size={16} />
 							</button>
 							<button
 								type="button"
@@ -248,7 +249,7 @@ export default function InstanceDetail() {
 								title="Auto-speak responses"
 								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
 							>
-								&#128264;
+								<Volume2 size={16} />
 							</button>
 							<button
 								type="button"
@@ -256,17 +257,17 @@ export default function InstanceDetail() {
 								title="Conversation mode — continuous voice chat"
 								className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}
 							>
-								&#127897;&#65039;
+								<AudioLines size={16} />
 							</button>
 							<button type="button" onClick={sendMessage} className="px-4 py-2.5 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent-hover transition-colors whitespace-nowrap">
 								<span className="hidden sm:inline">Send</span>
-								<span className="sm:hidden">&#10148;</span>
+								<Send size={16} className="sm:hidden" />
 							</button>
 							<button type="button" onClick={copyChat} title="Copy chat as JSON" className="px-2 py-2 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors">
-								&#x29C9;
+								<Copy size={14} />
 							</button>
 							<button type="button" onClick={clearChat} title="Clear chat" className="px-2 py-2 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
-								&#128465;
+								<Trash2 size={14} />
 							</button>
 						</div>
 					</div>
