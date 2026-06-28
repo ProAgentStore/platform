@@ -295,6 +295,25 @@ export default function CodingTab({ instanceId }: Props) {
 		}
 	};
 
+	// End current session + start a brand new one (no --resume, clean state)
+	const freshStart = async () => {
+		if (!openSession) return;
+		const repoId = openSession.repoId;
+		try {
+			await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/end`, { method: "POST" });
+			const d = await api<{ session: CodingSession }>(`/v1/instances/${instanceId}/coding/sessions`, {
+				method: "POST",
+				body: JSON.stringify({ repoId, engineId: defaultEngine }),
+			});
+			if (d.session) {
+				await loadCoding();
+				openTerminal(d.session);
+			}
+		} catch (e) {
+			alert("Fresh start failed: " + (e instanceof Error ? e.message : String(e)));
+		}
+	};
+
 	const getActiveSession = (repoId: string) => sessions.find((s) => s.repoId === repoId && s.status === "active");
 
 	const repoLabel = (r: CodingRepo) => {
@@ -321,7 +340,8 @@ export default function CodingTab({ instanceId }: Props) {
 						<button type="button" onClick={() => setView("terminal")} className={`px-2.5 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}>Terminal</button>
 					</div>
 					<div className="ml-auto flex gap-1.5">
-						<button type="button" onClick={restartSession} title="Restart the CLI (kills and relaunches — fixes stuck sessions)" className="text-xs px-2 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Restart</button>
+						<button type="button" onClick={freshStart} title="End this session and start a completely new one (clean state, no resume)" className="text-xs px-2 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Fresh Start</button>
+						<button type="button" onClick={restartSession} title="Restart the CLI (kills and relaunches with resume)" className="text-xs px-2 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Restart</button>
 						<button type="button" onClick={endSession} title="End the session completely" className="text-xs px-2 py-1 rounded-md border border-red text-red font-semibold">End</button>
 					</div>
 				</div>
