@@ -20,10 +20,12 @@ export default function InstanceDetail() {
 	const location = useLocation();
 	const [instance, setInstance] = useState<Instance | null>(null);
 
-	// Tab from URL — always sync with the route (no local state drift)
+	// Tab + session from URL — always sync with the route
 	const validTabs: Tab[] = ["chat", "board", "coding", "knowledge", "settings"];
-	const urlTab = (splat?.split("/")[0] || "") as Tab;
+	const splatParts = splat?.split("/") || [];
+	const urlTab = (splatParts[0] || "") as Tab;
 	const tab = validTabs.includes(urlTab) ? urlTab : "chat";
+	const urlSessionId = splatParts[1] || undefined; // e.g. coding/csess_xxx
 	const setTab = (t: Tab) => {
 		navigate(`/instances/${id}/${t}`, { replace: true });
 	};
@@ -529,7 +531,7 @@ export default function InstanceDetail() {
 				)}
 
 				{tab === "board" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><BoardTab instanceId={id} isApply={isApply} /></div>}
-				{tab === "coding" && id && <CodingTab key={id} instanceId={id} onHeaderOverride={setChildHeader} />}
+				{tab === "coding" && id && <CodingTab key={id} instanceId={id} initialSessionId={urlSessionId} onHeaderOverride={setChildHeader} />}
 				{tab === "knowledge" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><KnowledgeTab instanceId={id} isApply={isApply} /></div>}
 				{tab === "settings" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><SettingsTab instanceId={id} isApply={isApply} onUnsubscribe={() => navigate("/instances")} /></div>}
 			</div>

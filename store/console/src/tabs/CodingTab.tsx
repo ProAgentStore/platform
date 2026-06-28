@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
 import { renderMd } from "../lib/markdown";
@@ -28,6 +29,7 @@ function colorizeTerminal(text: string): string {
 
 interface Props {
 	instanceId: string;
+	initialSessionId?: string;
 	onHeaderOverride?: (content: React.ReactNode | null) => void;
 }
 
@@ -39,7 +41,8 @@ interface TimelineEntry {
 	seq?: number;
 }
 
-export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
+export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride }: Props) {
+	const navigate = useNavigate();
 	const [repos, setRepos] = useState<CodingRepo[]>([]);
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
 	const [engines, setEngines] = useState<CodingEngine[]>([]);
@@ -97,14 +100,16 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		})();
 	}, [loadCoding]);
 
-	// Auto-open the first active session on mount (survives refresh)
+	// Auto-open session on mount — prefer URL session, fall back to first active
 	const autoOpenedRef = useRef(false);
 	useEffect(() => {
 		if (autoOpenedRef.current || !sessions.length) return;
-		const active = sessions.find((s) => s.status === "active");
-		if (active) {
+		const target = initialSessionId
+			? sessions.find((s) => s.id === initialSessionId)
+			: sessions.find((s) => s.status === "active");
+		if (target) {
 			autoOpenedRef.current = true;
-			openTerminal(active);
+			openTerminal(target);
 		}
 	}, [sessions]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -185,6 +190,7 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		setOpenSession(session);
 		setView("summary");
 		setSummaryHistory([]);
+		navigate(`/instances/${instanceId}/coding/${session.id}`, { replace: true });
 		setTerminalText("(waiting...)");
 		// Ensure session is live
 		try {
@@ -208,6 +214,7 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 	const closeTerminal = () => {
 		setOpenSession(null);
 		setSummaryHistory([]);
+		navigate(`/instances/${instanceId}/coding`, { replace: true });
 	};
 
 	// Watch the Engine after delegation — poll until idle, then auto-summarize
