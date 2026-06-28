@@ -8,21 +8,44 @@ import { useVoice } from "../hooks/useVoice";
 import { useCodingLoop } from "../hooks/useCodingLoop";
 import { ArrowLeft, Trash2, Satellite, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send } from "lucide-react";
 
-/** Colorize terminal output by line prefix pattern (matches old console). */
-function colorizeTerminal(text: string): string {
-	return text.split("\n").map((line) => {
-		const e = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/** Render terminal output: colorize lines + format inline code/bold/JSON */
+function renderTerminal(text: string): string {
+	// Extract and format JSON blocks inline
+	let s = text.replace(/(?:^|\n)(\{[\s\S]*?\}|\[[\s\S]*?\])(?=\n|$)/g, (match) => {
+		try {
+			const obj = JSON.parse(match.trim());
+			const pretty = JSON.stringify(obj, null, 2);
+			const esc = pretty.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+			return `\n<code style="color:#94a3b8;font-size:0.75em">${esc}</code>\n`;
+		} catch { return match; }
+	});
+
+	return s.split("\n").map((line) => {
+		let e = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+		// Skip already-formatted code blocks
+		if (line.startsWith("<code")) return line;
+		// Inline bold
+		e = e.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+		// Inline code
+		e = e.replace(/`([^`]+)`/g, '<code style="background:#1e1e2e;padding:1px 4px;border-radius:3px;font-size:0.85em">$1</code>');
+		// Headings (### → bold colored)
+		if (/^\s*#{1,4}\s+/.test(line)) {
+			const heading = e.replace(/^\s*#+\s+/, "");
+			return `<strong style="color:#7dd3fc;font-size:1.05em">${heading}</strong>`;
+		}
 		// Prompt lines (cyan)
 		if (/^\s*❯/.test(line)) return `<span style="color:#67e8f9">${e}</span>`;
 		// Error lines (red)
 		if (/^\s*\[error\]|^Error:|^✗|^FAIL/i.test(line)) return `<span style="color:#f87171">${e}</span>`;
 		// Tool/system lines (amber)
 		if (/^\s*⚙|^\s*\[info\]|^\s*\[warn\]|^\[/.test(line)) return `<span style="color:#fbbf24">${e}</span>`;
-		// Continuation lines (dim)
+		// Continuation/result lines (dim)
 		if (/^\s*↳|^\s*│|^\s*└|^\s*├/.test(line)) return `<span style="color:#94a3b8">${e}</span>`;
 		// Success lines (green)
 		if (/^\s*✓|^\s*✔|^PASS|^Done/i.test(line)) return `<span style="color:#4ade80">${e}</span>`;
-		// Default (light grey)
+		// Bullet points
+		if (/^\s*[-*]\s+/.test(line)) return `<span style="color:#c4b5fd">${e}</span>`;
+		// Default
 		return `<span style="color:#d6d6e0">${e}</span>`;
 	}).join("\n");
 }
@@ -72,7 +95,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [showAddRepo, setShowAddRepo] = useState(false);
 	const [repoStatuses, setRepoStatuses] = useState<Record<string, string>>({});
 	const threadRef = useRef<HTMLDivElement>(null);
-	const termRef = useRef<HTMLDivElement>(null);
+	const termRef = useRef<HTMLPreElement>(null);
 
 	// Voice: wire to Co-pilot sendInstruction
 	const sendInstructionRef = useRef<(text: string) => void>(() => {});
@@ -143,13 +166,19 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	usePolling(pollStatuses, 3000, hasActiveSessions && !openSession);
 
-	// Terminal polling (1.5s when a session is open — polls on ANY view so
-	// the Agent view can show run state, and Terminal view shows live output)
+	// Terminal polling (1.5s when a session is open)
+	const termTextRef = useRef(terminalText);
+	termTextRef.current = terminalText;
 	const pollTerminal = useCallback(async () => {
 		if (!openSession) return;
 		try {
 			const d = await api<{ pane?: string; runState?: string }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
-			setTerminalText(d.pane ?? "(waiting for output...)");
+			const newText = d.pane ?? "(waiting for output...)";
+			// Skip update if text unchanged or user is selecting text
+			if (newText === termTextRef.current) return;
+			const sel = window.getSelection();
+			if (sel && sel.toString().length > 0 && termRef.current?.contains(sel.anchorNode)) return;
+			setTerminalText(newText);
 		} catch {}
 	}, [instanceId, openSession]);
 
@@ -556,16 +585,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				{/* Terminal view */}
 				{view === "terminal" && (
 					<div className="flex flex-col flex-1 min-h-0 relative">
-						<div
+						<pre
 							ref={termRef}
-							className="flex-1 min-h-0 overflow-auto bg-[#0b0b0f] text-sm leading-relaxed p-3 rounded-lg m-0 msg-md"
+							className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden bg-[#0b0b0f] text-xs leading-snug p-3 m-0 select-text"
+							style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}
 							onScroll={() => {
 								if (!termRef.current) return;
 								const el = termRef.current;
 								const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 								setTermAutoScroll(atBottom);
 							}}
-							dangerouslySetInnerHTML={{ __html: renderMd(terminalText) }}
+							dangerouslySetInnerHTML={{ __html: renderTerminal(terminalText) }}
 						/>
 						{!termAutoScroll && (
 							<button
