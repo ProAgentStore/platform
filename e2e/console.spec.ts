@@ -494,6 +494,99 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByRole("button", { name: "Load earlier messages" })).toBeVisible();
 	});
 
+	test("instance chat sends 'message' field to /chat API", async ({ page }) => {
+		let capturedBody: Record<string, unknown> | null = null;
+		await mockSignedInConsole(page);
+		await page.route("**/v1/instances/inst-1/chat", async (route) => {
+			if (route.request().method() === "POST") {
+				capturedBody = route.request().postDataJSON();
+				return route.fulfill({
+					status: 200,
+					contentType: "application/json",
+					body: JSON.stringify({ message: { role: "assistant", content: "ok" } }),
+				});
+			}
+			return route.continue();
+		});
+		await page.goto("/console/instances/inst-1");
+		const input = page.getByPlaceholder("Send a message...");
+		await input.fill("test payload");
+		await page.getByRole("button", { name: "Send", exact: true }).click();
+		await expect(page.getByText("ok")).toBeVisible();
+		expect(capturedBody).toMatchObject({ message: "test payload" });
+	});
+
+	test("coding terminal sends 'text' field to /message API", async ({ page }) => {
+		let capturedBody: Record<string, unknown> | null = null;
+		await mockSignedInConsole(page, {
+			instances: [{
+				id: "inst-1",
+				name: "Coder",
+				slug: "coder",
+				category: "code",
+				capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+			}],
+		});
+		// Mock all coding endpoints
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const method = route.request().method();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/repos")) return json({ repos: [{ id: "repo-1", name: "test-repo", workdir: "~/test", cloneStatus: "ready" }] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/message") && method === "POST") { capturedBody = route.request().postDataJSON(); return json({ ok: true }); }
+			if (url.includes("/capture")) return json({ pane: "❯ ready", runState: "idle" });
+			if (url.includes("/start")) return json({ ok: true });
+			if (url.includes("/timeline")) return json({ timeline: [] });
+			if (url.includes("/sessions") && method === "POST") return json({ session: { id: "sess-1", repoId: "repo-1", status: "active" } });
+			if (url.includes("/sessions")) return json({ sessions: [{ id: "sess-1", repoId: "repo-1", status: "active" }] });
+			return json({});
+		});
+
+		await page.goto("/console/instances/inst-1");
+		// Navigate to Coding tab, then open Terminal
+		await page.getByRole("button", { name: "Coding" }).click();
+		await page.getByRole("button", { name: "Terminal", exact: true }).click();
+		const termInput = page.getByPlaceholder("Type a message to the CLI...");
+		await termInput.fill("git status");
+		await page.getByRole("button", { name: "Send", exact: true }).last().click();
+		await expect.poll(() => capturedBody).toBeTruthy();
+		expect(capturedBody).toMatchObject({ text: "git status" });
+	});
+
+	test("coding terminal shows colorized output", async ({ page }) => {
+		await mockSignedInConsole(page, {
+			instances: [{
+				id: "inst-1",
+				name: "Coder",
+				slug: "coder",
+				category: "code",
+				capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" },
+			}],
+		});
+		await page.route("**/v1/instances/inst-1/coding/**", async (route) => {
+			const url = route.request().url();
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.includes("/repos")) return json({ repos: [{ id: "repo-1", name: "test-repo", workdir: "~/test", cloneStatus: "ready" }] });
+			if (url.includes("/engines")) return json({ engines: [], defaultEngineId: "claude" });
+			if (url.includes("/capture")) return json({ pane: "❯ hello\n[error] something broke\n✓ done", runState: "idle" });
+			if (url.includes("/start")) return json({ ok: true });
+			if (url.includes("/timeline")) return json({ timeline: [] });
+			if (url.includes("/sessions")) return json({ sessions: [{ id: "sess-1", repoId: "repo-1", status: "active" }] });
+			return json({});
+		});
+		await page.goto("/console/instances/inst-1");
+		await page.getByRole("button", { name: "Coding" }).click();
+		await page.getByRole("button", { name: "Terminal", exact: true }).click();
+
+		// Prompt line should be cyan
+		await expect(page.locator('span[style*="color:#67e8f9"]')).toBeVisible();
+		// Error line should be red
+		await expect(page.locator('span[style*="color:#f87171"]')).toBeVisible();
+		// Success line should be green
+		await expect(page.locator('span[style*="color:#4ade80"]')).toBeVisible();
+	});
+
 	test("instance chat shows error message on API failure", async ({
 		page,
 	}) => {
