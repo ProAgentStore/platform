@@ -690,6 +690,15 @@ export class AgentDO extends DurableObject<Env> {
 		}>();
 		if (!url) return json({ error: "url required" }, 400);
 
+		// SSRF protection
+		try {
+			const parsed = new URL(url);
+			if (parsed.protocol !== "https:") return json({ error: "Only https URLs allowed" }, 400);
+			const host = parsed.hostname.toLowerCase();
+			if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "[::1]" || host.endsWith(".internal") || host.endsWith(".local") || /^10\.\d+\.\d+\.\d+$/.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host))
+				return json({ error: "Cannot fetch internal/private URLs" }, 400);
+		} catch { return json({ error: "Invalid URL" }, 400); }
+
 		try {
 			const res = await fetch(url, {
 				headers: { "User-Agent": "ProAgentStore-Ingest" },

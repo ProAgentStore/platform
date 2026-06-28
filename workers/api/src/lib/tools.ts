@@ -271,6 +271,14 @@ export async function executeTool(
 				const method = (call.input.method as string) || "GET";
 				if (!url)
 					return { name: call.name, content: "url required", success: false };
+				// SSRF protection: only allow https, block internal/private URLs
+				try {
+					const parsed = new URL(url);
+					if (parsed.protocol !== "https:") return { name: call.name, content: "Only https URLs allowed", success: false };
+					const host = parsed.hostname.toLowerCase();
+					if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "[::1]" || host.endsWith(".internal") || host.endsWith(".local") || /^10\.\d+\.\d+\.\d+$/.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host))
+						return { name: call.name, content: "Cannot fetch internal/private URLs", success: false };
+				} catch { return { name: call.name, content: "Invalid URL", success: false }; }
 				const res = await fetch(url, {
 					method,
 					headers: { "User-Agent": "ProAgentStore-Agent" },
