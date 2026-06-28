@@ -168,12 +168,16 @@ export default function CodingTab({ instanceId }: Props) {
 		setSummaryHistory((prev) => [...prev, { role: "user", content: msg }]);
 		setSummaryBusy(true);
 		try {
-			const d = await api<{ reply?: string }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/explain`, {
+			console.log("[coding] sending instruction to session:", openSession.id);
+			const d = await api<{ reply?: string; response?: string }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/explain`, {
 				method: "POST",
 				body: JSON.stringify({ question: msg }),
 			});
-			if (d.reply) setSummaryHistory((prev) => [...prev, { role: "assistant", content: d.reply! }]);
+			const reply = d.reply || d.response;
+			if (reply) setSummaryHistory((prev) => [...prev, { role: "assistant", content: reply }]);
+			else setSummaryHistory((prev) => [...prev, { role: "assistant", content: "No response — the session may need to be started first." }]);
 		} catch (e) {
+			console.error("[coding] explain failed:", e);
 			setSummaryHistory((prev) => [...prev, { role: "assistant", content: `Error: ${e instanceof Error ? e.message : String(e)}` }]);
 		}
 		setSummaryBusy(false);
@@ -188,7 +192,10 @@ export default function CodingTab({ instanceId }: Props) {
 				method: "POST",
 				body: JSON.stringify({ message: msg }),
 			});
-		} catch {}
+		} catch (e) {
+			console.error("[terminal] send failed:", e);
+			alert("Terminal send failed: " + (e instanceof Error ? e.message : String(e)));
+		}
 	};
 
 	const askOverseer = async () => {
