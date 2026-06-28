@@ -38,8 +38,8 @@ export default function Layout() {
 	usePolling(loadBadge, 30000, !!user);
 
 	return (
-		<>
-			<header className="border-b border-line-strong bg-panel sticky top-0 z-60 flex items-center gap-2 px-3 h-12" style={{ boxShadow: "0 1px 6px rgba(0,0,0,0.4)" }}>
+		<div className="flex flex-col h-dvh overflow-hidden">
+			<header className="border-b border-line-strong bg-panel z-60 flex items-center gap-2 px-3 h-12 shrink-0" style={{ boxShadow: "0 1px 6px rgba(0,0,0,0.4)" }}>
 				{/* Logo — always visible */}
 				<a
 					href="/console/"
@@ -119,7 +119,9 @@ export default function Layout() {
 					</button>
 				)}
 			</header>
-			<Outlet />
-		</>
+			<main className={`flex-1 min-h-0 flex flex-col ${navHidden ? "overflow-hidden" : "overflow-auto"}`}>
+				<Outlet />
+			</main>
+		</div>
 	);
 }

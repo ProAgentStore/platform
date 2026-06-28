@@ -353,7 +353,7 @@ export default function InstanceDetail() {
 	useHeaderSlot(childHeader || headerContent);
 
 	return (
-		<div className="flex flex-col h-[calc(100dvh-49px)]">
+		<div className="flex flex-col flex-1 min-h-0">
 			{/* Tab content */}
 			<div className="flex-1 overflow-hidden flex flex-col min-h-0">
 				{tab === "chat" && (
