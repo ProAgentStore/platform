@@ -50,6 +50,7 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
 	const [view, setView] = useState<"summary" | "terminal">("summary");
 	const [terminalText, setTerminalText] = useState("(waiting...)");
+	const [termAutoScroll, setTermAutoScroll] = useState(true);
 	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string }[]>([]);
 
 	// Loop (extracted hook)
@@ -155,7 +156,7 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		try {
 			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`);
 			const entries = (d.timeline || [])
-				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "command")
+				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "system" || e.type === "command")
 				.map((e) => ({
 					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
 					content: e.content || e.text || "",
@@ -166,10 +167,17 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 
 	usePolling(pollSummary, 4500, !!openSession && view === "summary");
 
-	// Scroll on new messages
+	// Scroll on new messages (co-pilot)
 	useEffect(() => {
 		if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
 	}, [summaryHistory]);
+
+	// Auto-scroll terminal when new output arrives (only if at bottom)
+	useEffect(() => {
+		if (termAutoScroll && termRef.current) {
+			termRef.current.scrollTop = termRef.current.scrollHeight;
+		}
+	}, [terminalText, termAutoScroll]);
 
 	const openTerminal = async (session: CodingSession) => {
 		setOpenSession(session);
@@ -180,17 +188,19 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		try {
 			await api(`/v1/instances/${instanceId}/coding/sessions/${session.id}/start`, { method: "POST" });
 		} catch {}
-		// Load history (chat + system messages)
+		// Load history (chat + system + command messages)
 		try {
 			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
 			const entries = (d.timeline || [])
-				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "command")
+				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "system" || e.type === "command")
 				.map((e) => ({
 					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
 					content: e.content || e.text || "",
 				}));
-			if (entries.length > 0) setSummaryHistory(entries);
-		} catch {}
+			setSummaryHistory(entries);
+		} catch (e) {
+			console.error("[coding] timeline load failed:", e);
+		}
 	};
 
 	const closeTerminal = () => {
@@ -540,10 +550,30 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 
 				{/* Terminal view */}
 				{view === "terminal" && (
-					<div className="flex flex-col flex-1 min-h-0">
-						<pre ref={termRef} className="flex-1 min-h-0 overflow-auto bg-[#0b0b0f] text-xs leading-snug p-2.5 rounded-lg whitespace-pre-wrap break-words m-0"
+					<div className="flex flex-col flex-1 min-h-0 relative">
+						<pre
+							ref={termRef}
+							className="flex-1 min-h-0 overflow-auto bg-[#0b0b0f] text-xs leading-snug p-2.5 rounded-lg whitespace-pre-wrap break-words m-0"
+							onScroll={() => {
+								if (!termRef.current) return;
+								const el = termRef.current;
+								const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+								setTermAutoScroll(atBottom);
+							}}
 							dangerouslySetInnerHTML={{ __html: colorizeTerminal(terminalText) }}
 						/>
+						{!termAutoScroll && (
+							<button
+								type="button"
+								onClick={() => {
+									if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
+									setTermAutoScroll(true);
+								}}
+								className="absolute bottom-14 right-4 bg-accent text-white text-xs px-3 py-1.5 rounded-full shadow-lg font-bold animate-bounce"
+							>
+								New output below
+							</button>
+						)}
 						<div className="flex gap-1.5 mt-2 shrink-0">
 							<input
 								value={termInput}
