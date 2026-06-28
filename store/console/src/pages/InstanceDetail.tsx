@@ -139,14 +139,22 @@ export default function InstanceDetail() {
 		try {
 			let reply: string | undefined;
 			if (isCodingRef.current) {
-				// Coding agents: route through the Overseer which has full repo context
-				const data = await api<{ reply?: string; response?: string }>(
-					`/v1/instances/${id}/coding/overseer`,
-					{ method: "POST", body: JSON.stringify({ message: msg }) },
-				);
-				reply = data.reply || data.response;
+				// Coding agents: try Overseer first (has repo context), fall back to regular chat
+				try {
+					const data = await api<{ reply?: string; response?: string }>(
+						`/v1/instances/${id}/coding/overseer`,
+						{ method: "POST", body: JSON.stringify({ message: msg }) },
+					);
+					reply = data.reply || data.response;
+				} catch {
+					// Overseer failed (no AI key, etc.) — fall back to regular chat
+					const data = await api<{ message?: Message }>(
+						`/v1/instances/${id}/chat`,
+						{ method: "POST", body: JSON.stringify({ message: msg }) },
+					);
+					reply = data.message?.content;
+				}
 			} else {
-				// All other agents: standard AgentDO chat
 				const data = await api<{ message?: Message }>(
 					`/v1/instances/${id}/chat`,
 					{ method: "POST", body: JSON.stringify({ message: msg }) },
@@ -156,6 +164,8 @@ export default function InstanceDetail() {
 			if (reply) {
 				setMessages((prev) => [...prev, { role: "assistant", content: reply! }]);
 				speakRef.current(reply);
+			} else {
+				setMessages((prev) => [...prev, { role: "system", content: "No response from agent. Check that you have an AI provider key configured in Profile → API Keys." }]);
 			}
 		} catch (e) {
 			setMessages((prev) => [
