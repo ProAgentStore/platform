@@ -535,8 +535,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									<Repeat size={13} />
 								</button>
 							)}
-							<button type="button" onClick={copySummaryJson} title="Copy JSON" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors">
-								<Copy size={13} />
+							<button type="button" onClick={() => { if (confirm("Clear co-pilot chat history?")) setSummaryHistory([]); }} title="Clear chat" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
+								<Trash2 size={13} />
 							</button>
 						</div>
 						{/* Loop form with presets */}
