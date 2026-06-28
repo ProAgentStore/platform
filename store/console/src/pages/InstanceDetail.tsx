@@ -242,7 +242,7 @@ export default function InstanceDetail() {
 			</div>
 
 			{/* Tab content */}
-			<div className="flex-1 overflow-auto p-4 flex flex-col min-h-0">
+			<div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3 flex flex-col min-h-0">
 				{tab === "chat" && (
 					<div className="flex flex-col flex-1 min-h-0">
 						<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
@@ -259,7 +259,7 @@ export default function InstanceDetail() {
 							{messages.map((m, i) => (
 								<div
 									key={i}
-									className={`group relative max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
+									className={`group relative max-w-[92%] sm:max-w-[82%] px-3 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-sm leading-relaxed ${
 										m.role === "user"
 											? "bg-accent text-white self-end rounded-br-sm shadow-sm"
 											: m.role === "system"
@@ -291,7 +291,7 @@ export default function InstanceDetail() {
 							)}
 						</div>
 						{/* Chat input bar with voice + action buttons */}
-						<div className="flex gap-1.5 pt-3 border-t border-line shrink-0 items-center">
+						<div className="flex gap-1 sm:gap-1.5 pt-2 sm:pt-3 border-t border-line shrink-0 items-center">
 							<input
 								value={voice.interim || input}
 								onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}

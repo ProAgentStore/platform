@@ -166,7 +166,7 @@ export default function AgentDetail() {
 	// Create mode — no id means /agents/new
 	if (!id) return <CreateAgent />;
 
-	if (!agent) return <div className="max-w-[960px] mx-auto p-6 text-muted text-sm">Loading agent...</div>;
+	if (!agent) return <div className="max-w-[960px] mx-auto px-3 py-6 text-muted text-sm">Loading agent...</div>;
 
 	const allTabs: { id: Tab; label: string }[] = [
 		{ id: "chat", label: "Chat" }, { id: "knowledge", label: "Knowledge" },
@@ -176,7 +176,7 @@ export default function AgentDetail() {
 	];
 
 	return (
-		<div className="max-w-[960px] mx-auto p-4 sm:p-6">
+		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<button type="button" onClick={() => navigate("/agents")} className="text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink"><ArrowLeft size={14} /> Back</button>
 
 			{/* Header */}
@@ -384,7 +384,7 @@ function CreateAgent() {
 	};
 
 	return (
-		<div className="max-w-[960px] mx-auto p-4 sm:p-6">
+		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<button type="button" onClick={() => navigate("/agents")} className="text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink">&larr; Back</button>
 			<h2 className="font-display text-xl font-bold mb-4">Create Agent</h2>
 			<div className="bg-panel border border-line rounded-xl p-4">

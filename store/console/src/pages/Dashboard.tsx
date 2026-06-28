@@ -50,7 +50,7 @@ export default function Dashboard() {
 	}, [loadAgents, loadInstances, loadDashboard, tab]);
 
 	return (
-		<div className="max-w-[960px] mx-auto p-4 sm:p-6">
+		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			{/* Agents */}
 			{tab === "agents" && (
 				<div>
@@ -66,7 +66,7 @@ export default function Dashboard() {
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
 							{agents.map((a) => (
 								<div key={a.id} onClick={() => navigate(`/agents/${a.id}`)} onKeyDown={(e) => { if (e.key === "Enter") navigate(`/agents/${a.id}`); }} role="button" tabIndex={0}
-									className="bg-panel border border-line rounded-xl p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
+									className="bg-panel border border-line rounded-xl p-3 sm:p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
 									<h3 className="text-[0.95rem] font-bold mb-1">{a.name}</h3>
 									<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-2">{a.description || "No description"}</p>
 									<div className="flex gap-2 text-xs">
@@ -96,7 +96,7 @@ export default function Dashboard() {
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
 							{instances.map((inst) => (
 								<div key={inst.id} onClick={() => navigate(`/instances/${inst.id}`)} onKeyDown={(e) => { if (e.key === "Enter") navigate(`/instances/${inst.id}`); }} role="button" tabIndex={0}
-									className="bg-panel border border-line rounded-xl p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
+									className="bg-panel border border-line rounded-xl p-3 sm:p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
 									<h3 className="text-[0.95rem] font-bold mb-1">{inst.name}</h3>
 									<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-2">{inst.description || "No description"}</p>
 									<div className="flex gap-2 text-xs">

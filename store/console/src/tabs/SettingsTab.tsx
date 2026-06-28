@@ -43,7 +43,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 	return (
 		<div>
 			{/* Board maintenance */}
-			<div className="bg-panel border border-line rounded-xl p-4 mb-4">
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-semibold mb-1">Board maintenance</h3>
 				<p className="text-sm text-muted mb-3">
 					Tidy up the board. These only clear your view of finished items.
@@ -61,7 +61,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 			</div>
 
 			{/* Runner info */}
-			<div className="bg-panel border border-line rounded-xl p-4 mb-4">
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-semibold mb-1">Runner</h3>
 				<div className="text-sm text-muted leading-relaxed">
 					{runtimeInfo ? (
@@ -78,7 +78,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 			</div>
 
 			{/* Where things live */}
-			<div className="bg-panel border border-line rounded-xl p-4 mb-4">
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-semibold mb-1">Where things live</h3>
 				<ul className="text-sm text-muted leading-relaxed pl-4 list-disc">
 					{isApply && <li><b>Resume</b> & documents → Knowledge → Documents</li>}
@@ -89,7 +89,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 			</div>
 
 			{/* Danger zone */}
-			<div className="bg-panel border border-line rounded-xl p-4">
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4">
 				<h3 className="text-base font-semibold mb-1 text-red">Danger zone</h3>
 				<p className="text-sm text-muted mb-3">
 					Stop using this agent. Your data stays unless you clear it above.

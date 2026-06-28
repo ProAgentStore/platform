@@ -28,7 +28,7 @@ export default function Notifications() {
 	};
 
 	return (
-		<div className="max-w-[960px] mx-auto p-4 sm:p-6">
+		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<div className="flex justify-between items-center mb-4">
 				<div className="flex items-center gap-3">
 					<button type="button" onClick={() => navigate(-1)} className="text-sm text-muted hover:text-ink">&larr;</button>

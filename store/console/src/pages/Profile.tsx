@@ -125,13 +125,13 @@ export default function Profile() {
 	const prefFields = cpFields.filter(f => f.group === "preferences");
 
 	return (
-		<div className="max-w-[960px] mx-auto p-4 sm:p-6">
+		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<div className="flex justify-between items-center mb-6">
 				<h1 className="font-display text-xl font-bold">Profile</h1>
 				<button type="button" onClick={() => navigate(-1)} className="text-sm px-3 py-1.5 rounded-xl border border-line text-muted hover:border-accent hover:text-accent font-semibold">&larr; Back</button>
 			</div>
 
-			<div className="bg-panel border border-line rounded-xl p-6">
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-6">
 				{/* Header */}
 				<div className="flex items-center gap-5 mb-6">
 					<img src={user.avatar} alt="" className="w-[72px] h-[72px] rounded-full border-[3px] border-line" />
