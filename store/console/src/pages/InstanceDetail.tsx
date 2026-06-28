@@ -33,11 +33,10 @@ export default function InstanceDetail() {
 	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
 	const [runnerNode, setRunnerNode] = useState("");
 
-	// Voice: auto-send callback needs sendMessage reference, use ref
-	const sendRef = useRef<(text: string) => void>(() => {});
+	// Voice: both push-to-talk and conversation mode auto-send via this ref
+	const doSendRef = useRef<(text: string) => void>(() => {});
 	const voice = useVoice(id, {
-		onTranscript: (text) => setInput((prev) => (prev ? prev + " " : "") + text),
-		onAutoSend: (text) => sendRef.current(text),
+		onSend: (text) => doSendRef.current(text),
 	});
 
 	useEffect(() => {
@@ -86,6 +85,10 @@ export default function InstanceDetail() {
 		if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
 	}, [messages]);
 
+	// Use ref for maybeSpeakResponse to avoid circular deps
+	const speakRef = useRef(voice.maybeSpeakResponse);
+	speakRef.current = voice.maybeSpeakResponse;
+
 	const doSend = useCallback(async (msg: string) => {
 		if (!msg.trim() || !id) return;
 		setMessages((prev) => [...prev, { role: "user", content: msg }]);
@@ -97,8 +100,7 @@ export default function InstanceDetail() {
 			);
 			if (data.message) {
 				setMessages((prev) => [...prev, data.message!]);
-				// Speak response if auto-speak or conversation mode is on
-				voice.maybeSpeakResponse(data.message.content);
+				speakRef.current(data.message.content);
 			}
 		} catch (e) {
 			setMessages((prev) => [
@@ -107,10 +109,10 @@ export default function InstanceDetail() {
 			]);
 		}
 		setThinking(false);
-	}, [id, voice]);
+	}, [id]);
 
-	// Wire sendRef for conversation mode auto-send
-	sendRef.current = doSend;
+	// Wire the voice hook's auto-send to doSend
+	doSendRef.current = doSend;
 
 	const sendMessage = () => {
 		if (!input.trim()) return;

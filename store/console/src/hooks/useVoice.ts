@@ -5,13 +5,12 @@ import type { VoiceTts } from "../lib/voice-tts";
 
 /**
  * Voice hook for chat surfaces.
- *  - mic: push-to-talk (fills input or auto-sends)
- * - autoSpeak: auto-speak assistant responses
- * - convo: continuous conversation mode (STT → send → TTS → re-listen)
+ * - mic: push-to-talk — auto-sends the final transcript
+ * - autoSpeak: reads every assistant response aloud
+ * - convo: continuous conversation mode (listen → send → speak → re-listen)
  */
 export function useVoice(instanceId: string | undefined, opts: {
-	onTranscript: (text: string) => void;
-	onAutoSend?: (text: string) => void;
+	onSend: (text: string) => void;
 }) {
 	const [micOn, setMicOn] = useState(false);
 	const [speakOn, setSpeakOn] = useState(false);
@@ -19,27 +18,34 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const sttRef = useRef<VoiceStt | null>(null);
 	const ttsRef = useRef<VoiceTts | null>(null);
 
+	// Use refs to avoid stale closures in STT callbacks
+	const onSendRef = useRef(opts.onSend);
+	onSendRef.current = opts.onSend;
+	const speakOnRef = useRef(speakOn);
+	speakOnRef.current = speakOn;
+	const convoOnRef = useRef(convoOn);
+	convoOnRef.current = convoOn;
+
 	const ensureTts = useCallback(async () => {
 		if (!ttsRef.current) ttsRef.current = await createTts(instanceId);
 		return ttsRef.current;
 	}, [instanceId]);
 
-	// Speak text (for auto-speak and conversation mode)
 	const speak = useCallback(async (text: string) => {
 		const tts = await ensureTts();
 		await tts.speak(text);
 	}, [ensureTts]);
 
-	// Speak if autoSpeak is on
+	// Called after receiving an assistant response
 	const maybeSpeakResponse = useCallback(async (text: string) => {
-		if (speakOn || convoOn) await speak(text);
+		if (speakOnRef.current || convoOnRef.current) await speak(text);
 		// In convo mode, re-listen after speaking
-		if (convoOn && sttRef.current) {
+		if (convoOnRef.current && sttRef.current) {
 			try { await sttRef.current.start(); } catch {}
 		}
-	}, [speakOn, convoOn, speak]);
+	}, [speak]);
 
-	// Toggle push-to-talk mic
+	// Push-to-talk: listen, then auto-send the final transcript
 	const toggleMic = useCallback(async () => {
 		if (micOn) {
 			sttRef.current?.stop();
@@ -50,25 +56,22 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const stt = await createStt(instanceId, {
 				onResult: (text, isFinal) => {
 					if (isFinal) {
-						opts.onTranscript(text);
+						onSendRef.current(text);
 						setMicOn(false);
 					}
 				},
-				onError: (err) => { console.warn("STT error:", err); setMicOn(false); },
+				onError: () => setMicOn(false),
 				onEnd: () => setMicOn(false),
 			});
 			sttRef.current = stt;
 			await stt.start();
 			setMicOn(true);
 		} catch { setMicOn(false); }
-	}, [micOn, instanceId, opts]);
+	}, [micOn, instanceId]);
 
-	// Toggle auto-speak
-	const toggleSpeak = useCallback(() => {
-		setSpeakOn((v) => !v);
-	}, []);
+	const toggleSpeak = useCallback(() => setSpeakOn((v) => !v), []);
 
-	// Toggle conversation mode
+	// Conversation mode: continuous listen → auto-send → TTS → re-listen
 	const toggleConvo = useCallback(async () => {
 		if (convoOn) {
 			sttRef.current?.stop();
@@ -78,33 +81,25 @@ export function useVoice(instanceId: string | undefined, opts: {
 			return;
 		}
 		// Unlock audio context on gesture
-		try { const ctx = new AudioContext(); if (ctx.state === "suspended") await ctx.resume(); ctx.close(); } catch {}
+		try {
+			const ctx = new AudioContext();
+			if (ctx.state === "suspended") await ctx.resume();
+			ctx.close();
+		} catch {}
 		try {
 			const stt = await createStt(instanceId, {
 				onResult: (text, isFinal) => {
-					if (isFinal && opts.onAutoSend) {
-						opts.onAutoSend(text);
-					}
+					if (isFinal) onSendRef.current(text);
 				},
 				onError: (err) => console.warn("convo STT:", err),
-				onEnd: () => {
-					// Will be restarted after TTS finishes in maybeSpeakResponse
-				},
+				onEnd: () => {},
 			});
 			sttRef.current = stt;
 			await stt.start();
 			setConvoOn(true);
 			setMicOn(true);
 		} catch { setConvoOn(false); }
-	}, [convoOn, instanceId, opts]);
+	}, [convoOn, instanceId]);
 
-	return {
-		micOn,
-		speakOn,
-		convoOn,
-		toggleMic,
-		toggleSpeak,
-		toggleConvo,
-		maybeSpeakResponse,
-	};
+	return { micOn, speakOn, convoOn, toggleMic, toggleSpeak, toggleConvo, maybeSpeakResponse };
 }
