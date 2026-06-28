@@ -746,6 +746,69 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			},
 		);
 
+		// ── Coding session tools: terminal visibility + control ──
+
+		this.server.tool(
+			"coding_session_capture",
+			"Capture the live terminal output from a coding session (what the CLI is showing right now). Also returns run state (idle/working/offline).",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, session_id, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string }> };
+				const sessions = r.sessions || [];
+				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
+				if (!sid) return text("No active coding session found.");
+				const d = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/capture`, sessionToken, {}, this.env)) as { runState?: string; pane?: string };
+				return jsonText({ sessionId: sid, runState: d.runState, pane: d.pane });
+			},
+		);
+
+		this.server.tool(
+			"coding_session_message",
+			"Send a message/command to the coding CLI running in the terminal. This types into the tmux pane — like typing at the keyboard.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
+				message: z.string().describe("Text to type into the CLI terminal"),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, session_id, message, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string }> };
+				const sessions = r.sessions || [];
+				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
+				if (!sid) return text("No active coding session found.");
+				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/message`, sessionToken, { method: "POST", body: JSON.stringify({ message }) }, this.env);
+				return text(`Sent to session ${sid}: "${message}"`);
+			},
+		);
+
+		this.server.tool(
+			"coding_session_restart",
+			"Restart the coding CLI (kills and relaunches the tmux pane). Use when the CLI is stuck or erroring.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, session_id, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string }> };
+				const sessions = r.sessions || [];
+				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
+				if (!sid) return text("No active coding session found.");
+				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/restart`, sessionToken, { method: "POST" }, this.env);
+				return text(`Session ${sid} restarted.`);
+			},
+		);
+
 		this.server.tool(
 			"platform_guide",
 			"Get ProAgentStore platform guide",
