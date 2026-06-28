@@ -488,6 +488,9 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 							<button type="button" onClick={sendInstruction} disabled={!!voice.interim} className="px-3 py-2 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
 								<Send size={14} />
 							</button>
+							<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="px-2 py-2 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors">
+								<Copy size={14} />
+							</button>
 						</div>
 					</div>
 				)}
