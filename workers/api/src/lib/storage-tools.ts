@@ -599,15 +599,15 @@ export async function executeStorageTool(
 				if (!repo) return fail(call.name, `Repo "${repoName}" not found. Use list_coding_repos.`);
 				const session = await getActiveSessionForRepo(ctx.env as Env, ctx.agentId, ctx.userId, repo.id);
 				if (!session) return fail(call.name, `No active session for "${repoName}".`);
-				// Read terminal via relay
 				try {
 					const relay = (ctx.env as Env).RELAY;
 					if (!relay) return fail(call.name, "Runner not connected");
 					const stub = relay.get(relay.idFromName(ctx.agentId));
+					// Runner expects POST /coding/capture with { sessionId } body
 					const res = await stub.fetch(new Request("https://relay/command", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ method: "GET", path: `/coding/capture?session=${session.id}` }),
+						body: JSON.stringify({ method: "POST", path: "/coding/capture", body: { sessionId: session.id } }),
 					}));
 					const data = await res.json() as { pane?: string; runState?: string };
 					return ok(call.name, `[${data.runState || "unknown"}]\n${(data.pane || "(empty)").slice(-3000)}`);
@@ -621,6 +621,7 @@ export async function executeStorageTool(
 				const rName = call.input.repo_name as string;
 				const msg = call.input.message as string;
 				if (!rName || !msg) return fail(call.name, "repo_name and message required");
+				if (msg.length > 5000) return fail(call.name, "message too long (max 5000 chars)");
 				const rRepos = await listRepos(ctx.env as Env, ctx.agentId, ctx.userId);
 				const rRepo = rRepos.find((r) => r.name.toLowerCase() === rName.toLowerCase());
 				if (!rRepo) return fail(call.name, `Repo "${rName}" not found.`);
@@ -630,10 +631,11 @@ export async function executeStorageTool(
 					const relay = (ctx.env as Env).RELAY;
 					if (!relay) return fail(call.name, "Runner not connected");
 					const stub = relay.get(relay.idFromName(ctx.agentId));
+					// Runner expects POST /coding/act with { sessionId, action }
 					await stub.fetch(new Request("https://relay/command", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ method: "POST", path: `/coding/act?session=${rSession.id}`, body: { text: msg } }),
+						body: JSON.stringify({ method: "POST", path: "/coding/act", body: { sessionId: rSession.id, action: { kind: "message", text: msg } } }),
 					}));
 					return ok(call.name, `Sent to ${rName}: "${msg.slice(0, 100)}"`);
 				} catch {

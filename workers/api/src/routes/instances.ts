@@ -703,11 +703,13 @@ instanceRoutes.post("/:instanceId/loop-decide", async (c) => {
 		maxIterations: number;
 	}>();
 	if (!objective) throw new HttpError(400, "objective required");
+	if (typeof objective !== "string" || objective.length > 2000) throw new HttpError(400, "objective too long");
+	if (!Array.isArray(messages)) throw new HttpError(400, "messages must be an array");
+	if (messages.length > 20) throw new HttpError(400, "too many messages");
 
-	const systemPrompt = `You are a loop orchestrator. The user set this objective: "${objective}".
-You are on iteration ${iteration ?? 0}/${maxIterations ?? 10}.
+	const systemPrompt = `You are a loop orchestrator. You are on iteration ${iteration ?? 0}/${maxIterations ?? 10}.
 
-Read the conversation so far and decide ONE of:
+Read the user's objective and the conversation so far, then decide ONE of:
 - CONTINUE: the objective is not yet met. Write the next instruction to give the agent.
 - DONE: the objective is fully met. No more work needed.
 - ESCALATE: the agent is stuck, pushing back, asking questions, or needs human help.
@@ -715,16 +717,18 @@ Read the conversation so far and decide ONE of:
 
 Reply ONLY with JSON: { "decision": "continue"|"done"|"escalate"|"failed", "nextInstruction": "...", "reason": "..." }`;
 
+	// Objective and messages go in the user turn, not interpolated into the system prompt
 	const conversationText = (messages || [])
 		.slice(-6)
-		.map((m) => `${m.role}: ${m.content}`)
+		.map((m) => `${m.role}: ${(m.content || "").slice(0, 2000)}`)
 		.join("\n\n");
+	const userContent = `OBJECTIVE: ${(objective || "").slice(0, 500)}\n\nCONVERSATION:\n${conversationText || "(no messages yet)"}`;
 
 	try {
 		const res = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
 			messages: [
 				{ role: "system", content: systemPrompt },
-				{ role: "user", content: conversationText || "(no messages yet)" },
+				{ role: "user", content: userContent },
 			],
 			maxTokens: 300,
 		})) as { response?: string };

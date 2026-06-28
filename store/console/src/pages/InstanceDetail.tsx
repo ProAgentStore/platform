@@ -234,11 +234,15 @@ export default function InstanceDetail() {
 		doSend(msg);
 	};
 
-	// Resume loop after human intervention response
+	// Resume loop after human intervention — only when thinking transitions from true→false
+	const wasThinkingRef = useRef(false);
 	useEffect(() => {
-		if (loopOn && loopPaused && !thinking) {
+		if (wasThinkingRef.current && !thinking && loopOn && loopPaused) {
 			setLoopPaused(false);
+			// Trigger the next loop step after the human's answer was processed
+			continueLoop();
 		}
+		wasThinkingRef.current = thinking;
 	}, [thinking]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	const startLoop = () => {
