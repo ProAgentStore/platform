@@ -13,14 +13,19 @@ self.addEventListener("push", (event) => {
 		if (event.data) data.body = event.data.text();
 	}
 	event.waitUntil(
-		self.registration.showNotification(data.title || "ProAgentStore", {
-			body: data.body || "",
-			icon: "/icon-192.png",
-			badge: "/icon-192.png",
-			tag: data.tag || "pags",
-			data: { url: data.url || "/console/" },
-			requireInteraction: true,
-			vibrate: [120, 60, 120],
+		self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+			// Skip notification if the user has a visible console tab
+			const onSite = clients.some((c) => c.visibilityState === "visible" && c.url.includes("/console"));
+			if (onSite) return;
+			return self.registration.showNotification(data.title || "ProAgentStore", {
+				body: data.body || "",
+				icon: "/icon-192.png",
+				badge: "/icon-192.png",
+				tag: data.tag || "pags",
+				data: { url: data.url || "/console/" },
+				requireInteraction: true,
+				vibrate: [120, 60, 120],
+			});
 		}),
 	);
 });
