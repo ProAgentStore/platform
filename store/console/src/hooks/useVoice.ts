@@ -4,13 +4,16 @@ import type { VoiceStt } from "../lib/voice-stt";
 import type { VoiceTts } from "../lib/voice-tts";
 
 /**
- * Voice hook for chat.
+ * Voice hook for chat — three modes:
  *
- * Push-to-talk (🎤): shows live transcript in input → auto-sends on final.
+ * Push-to-talk (🎤): live transcript in input → auto-sends on pause.
  * Auto-speak (🔊): reads every assistant response aloud.
- * Conversation mode (🎙️): continuous loop — live transcript in input →
- *   auto-send on final → TTS speaks response → re-listens automatically.
- *   User just talks; messages appear in the input as they speak, then send.
+ * Conversation (🎙️): continuous hands-free loop:
+ *   1. You talk → words appear live in the input
+ *   2. You pause → message sends automatically
+ *   3. Agent responds → response spoken aloud
+ *   4. TTS finishes → mic re-opens, back to step 1
+ *   Toggle off to stop. No manual interaction needed.
  */
 export function useVoice(instanceId: string | undefined, opts: {
 	onSend: (text: string) => void;
@@ -18,12 +21,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [micOn, setMicOn] = useState(false);
 	const [speakOn, setSpeakOn] = useState(false);
 	const [convoOn, setConvoOn] = useState(false);
-	// Live transcript shown in the input box while the user speaks
 	const [interim, setInterim] = useState("");
 	const sttRef = useRef<VoiceStt | null>(null);
 	const ttsRef = useRef<VoiceTts | null>(null);
 
-	// Refs to avoid stale closures inside STT callbacks
+	// Stable refs for callbacks
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
 	const speakOnRef = useRef(speakOn);
@@ -36,31 +38,68 @@ export function useVoice(instanceId: string | undefined, opts: {
 		return ttsRef.current;
 	}, [instanceId]);
 
-	const speak = useCallback(async (text: string) => {
-		const tts = await ensureTts();
-		await tts.speak(text);
-	}, [ensureTts]);
-
-	// Called after receiving an assistant response
-	const maybeSpeakResponse = useCallback(async (text: string) => {
-		if (speakOnRef.current || convoOnRef.current) await speak(text);
-		// In convo mode, re-listen after speaking
-		if (convoOnRef.current && sttRef.current) {
-			try { await sttRef.current.start(); } catch {}
+	// Start listening (used by convo mode to re-open mic after TTS)
+	const startListening = useCallback(async () => {
+		if (sttRef.current) {
+			try { await sttRef.current.start(); setMicOn(true); } catch {}
 		}
-	}, [speak]);
+	}, []);
 
-	// Shared STT result handler: show interim text live, auto-send on final
+	// Speak text, then re-listen in convo mode
+	const speakAndResume = useCallback(async (text: string) => {
+		try {
+			const tts = await ensureTts();
+			await tts.speak(text);
+		} catch {}
+		// Re-open mic after TTS finishes (convo mode only)
+		if (convoOnRef.current) {
+			await startListening();
+		}
+	}, [ensureTts, startListening]);
+
+	// Called by the chat after receiving an assistant response
+	const maybeSpeakResponse = useCallback((text: string) => {
+		if (speakOnRef.current || convoOnRef.current) {
+			// Fire-and-forget — speakAndResume handles re-listen
+			speakAndResume(text);
+		}
+	}, [speakAndResume]);
+
+	// STT result handler: show live text, auto-send on final
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
 		if (isFinal) {
 			setInterim("");
 			onSendRef.current(text);
+			// In convo mode, mic will re-open after TTS via speakAndResume
+			// For push-to-talk, we stop after one utterance
+			if (!convoOnRef.current) {
+				setMicOn(false);
+			}
 		} else {
 			setInterim(text);
 		}
 	}, []);
 
-	// Push-to-talk: click to start, speaks into input, auto-sends when done
+	// Create a fresh STT recognizer
+	const makeStt = useCallback(async () => {
+		return createStt(instanceId, {
+			onResult: handleResult,
+			onError: (err) => {
+				console.warn("STT error:", err);
+				if (!convoOnRef.current) { setMicOn(false); setInterim(""); }
+			},
+			onEnd: () => {
+				// Browser STT ends periodically — restart in convo mode
+				if (convoOnRef.current) {
+					startListening();
+				} else {
+					setMicOn(false);
+				}
+			},
+		});
+	}, [instanceId, handleResult, startListening]);
+
+	// Push-to-talk
 	const toggleMic = useCallback(async () => {
 		if (micOn) {
 			sttRef.current?.stop();
@@ -69,21 +108,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 			return;
 		}
 		try {
-			const stt = await createStt(instanceId, {
-				onResult: handleResult,
-				onError: () => { setMicOn(false); setInterim(""); },
-				onEnd: () => { setMicOn(false); },
-			});
-			sttRef.current = stt;
-			await stt.start();
+			sttRef.current = await makeStt();
+			await sttRef.current.start();
 			setMicOn(true);
 		} catch { setMicOn(false); }
-	}, [micOn, instanceId, handleResult]);
+	}, [micOn, makeStt]);
 
 	const toggleSpeak = useCallback(() => setSpeakOn((v) => !v), []);
 
-	// Conversation mode: continuous listen → live transcript → auto-send →
-	// TTS speaks response → re-listens. Just toggle on and talk.
+	// Conversation mode
 	const toggleConvo = useCallback(async () => {
 		if (convoOn) {
 			sttRef.current?.stop();
@@ -93,30 +126,23 @@ export function useVoice(instanceId: string | undefined, opts: {
 			setInterim("");
 			return;
 		}
-		// Unlock audio context on user gesture
+		// Unlock audio on gesture
 		try {
 			const ctx = new AudioContext();
 			if (ctx.state === "suspended") await ctx.resume();
 			ctx.close();
 		} catch {}
 		try {
-			const stt = await createStt(instanceId, {
-				onResult: handleResult,
-				onError: (err) => console.warn("convo STT:", err),
-				onEnd: () => {},
-			});
-			sttRef.current = stt;
-			await stt.start();
+			sttRef.current = await makeStt();
+			await sttRef.current.start();
 			setConvoOn(true);
-			setSpeakOn(true); // auto-speak is implied in conversation mode
+			setSpeakOn(true);
 			setMicOn(true);
 		} catch { setConvoOn(false); }
-	}, [convoOn, instanceId, handleResult]);
+	}, [convoOn, makeStt]);
 
 	return {
-		micOn, speakOn, convoOn,
-		/** Live transcript while the user is speaking — show in input box */
-		interim,
+		micOn, speakOn, convoOn, interim,
 		toggleMic, toggleSpeak, toggleConvo,
 		maybeSpeakResponse,
 	};
