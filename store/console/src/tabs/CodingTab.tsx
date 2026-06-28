@@ -93,6 +93,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [overseerReply, setOverseerReply] = useState("");
 	const [addRepoInput, setAddRepoInput] = useState("");
 	const [showAddRepo, setShowAddRepo] = useState(false);
+	const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
+	const [repoRules, setRepoRules] = useState("");
+	const [loopPresets] = useState([
+		{ id: "bugs", label: "Fix bugs", objective: "Find and fix all bugs. Run tests after each fix. Commit when all pass." },
+		{ id: "quality", label: "Quality check", objective: "Run a full code quality audit: type check, lint, find code smells, dead code, and fix issues found. Commit improvements." },
+		{ id: "security", label: "Security audit", objective: "Audit the codebase for security vulnerabilities: injection, auth gaps, secrets exposure, SSRF, XSS. Fix critical issues and report." },
+		{ id: "refactor", label: "Refactor", objective: "Identify large or complex files. Break them into smaller, well-named modules. Keep all tests passing." },
+		{ id: "tests", label: "Add tests", objective: "Find untested code paths. Write tests for the most critical functions. Aim for meaningful coverage, not 100%." },
+	]);
 	const [repoStatuses, setRepoStatuses] = useState<Record<string, string>>({});
 	const threadRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<HTMLPreElement>(null);
@@ -547,15 +556,27 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 								<Copy size={13} />
 							</button>
 						</div>
-						{/* Loop form */}
+						{/* Loop form with presets */}
 						{loop.showLoopForm && !loop.loopOn && (
 							<div className="bg-paper border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
-								<input value={loop.loopObjective} onChange={(e) => loop.setLoopObjective(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") loop.start(); }} placeholder="Objective: fix tests, refactor auth..." className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm" autoFocus />
+								<div className="flex flex-wrap gap-1.5">
+									{loopPresets.map((p) => (
+										<button key={p.id} type="button" onClick={() => loop.setLoopObjective(p.objective)} className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${loop.loopObjective === p.objective ? "border-accent bg-accent-soft text-accent font-bold" : "border-line text-muted hover:border-accent hover:text-accent"}`}>{p.label}</button>
+									))}
+								</div>
+								<textarea
+									value={loop.loopObjective}
+									onChange={(e) => loop.setLoopObjective(e.target.value)}
+									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); loop.start(); } }}
+									placeholder="Or type a custom objective..."
+									className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm resize-none"
+									rows={2}
+								/>
 								<div className="flex items-center gap-2 justify-between">
-									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loop.loopMax} onChange={(e) => loop.setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
+									<label className="text-xs text-muted flex items-center gap-1.5">Max iterations: <input type="number" value={loop.loopMax} onChange={(e) => loop.setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
 									<div className="flex gap-1.5">
 										<button type="button" onClick={() => loop.setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-										<button type="button" onClick={loop.start} disabled={!loop.loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start</button>
+										<button type="button" onClick={loop.start} disabled={!loop.loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
 									</div>
 								</div>
 							</div>
@@ -700,29 +721,65 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						repos.map((r) => {
 							const active = getActiveSession(r.id);
 							const status = repoStatuses[r.id];
+							const isEditing = editingRepoId === r.id;
 							return (
-								<div key={r.id} className="bg-paper border border-line rounded-lg p-3 flex justify-between items-center gap-3">
-									<div className="min-w-0">
-										<div className="font-semibold text-sm truncate">{r.name}</div>
-										<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
-											{status === "thinking" || status === "working" ? (
-												<span className="inline-block w-2.5 h-2.5 border-2 border-line border-t-amber-500 rounded-full animate-spin" />
-											) : active ? (
-												<span className={`w-2 h-2 rounded-full ${status === "offline" ? "bg-muted" : "bg-green"}`} />
+								<div key={r.id} className="bg-paper border border-line rounded-lg p-3">
+									<div className="flex justify-between items-center gap-3">
+										<div className="min-w-0 cursor-pointer" onClick={() => {
+											if (isEditing) { setEditingRepoId(null); }
+											else {
+												setEditingRepoId(r.id);
+												setRepoRules(r.instructions || "");
+												// Load latest from API
+												api<{ instructions: string }>(`/v1/instances/${instanceId}/coding/repos/${r.id}/instructions`).then((d) => setRepoRules(d.instructions || "")).catch(() => {});
+											}
+										}}>
+											<div className="font-semibold text-sm truncate">{r.name}</div>
+											<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
+												{status === "thinking" || status === "working" ? (
+													<span className="inline-block w-2.5 h-2.5 border-2 border-line border-t-amber-500 rounded-full animate-spin" />
+												) : active ? (
+													<span className={`w-2 h-2 rounded-full ${status === "offline" ? "bg-muted" : "bg-green"}`} />
+												) : (
+													<span className="w-2 h-2 rounded-full bg-muted" />
+												)}
+												{repoLabel(r)}
+												{r.instructions && <span className="text-[0.6rem] px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
+											</div>
+										</div>
+										<div className="flex gap-1.5 shrink-0">
+											{active ? (
+												<button type="button" onClick={() => openTerminal(active)} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Open</button>
 											) : (
-												<span className="w-2 h-2 rounded-full bg-muted" />
+												<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
 											)}
-											{repoLabel(r)}
+											<button type="button" onClick={() => deleteRepo(r.id)} className="text-xs px-1.5 py-1 text-red"><Trash2 size={14} /></button>
 										</div>
 									</div>
-									<div className="flex gap-1.5 shrink-0">
-										{active ? (
-											<button type="button" onClick={() => openTerminal(active)} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Open</button>
-										) : (
-											<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
-										)}
-										<button type="button" onClick={() => deleteRepo(r.id)} className="text-xs px-1.5 py-1 text-red"><Trash2 size={14} /></button>
-									</div>
+									{/* Repo rules editor */}
+									{isEditing && (
+										<div className="mt-2 pt-2 border-t border-line">
+											<div className="text-xs text-muted font-bold mb-1">Rules for this repo</div>
+											<textarea
+												value={repoRules}
+												onChange={(e) => setRepoRules(e.target.value)}
+												placeholder="e.g. Always create feature branches. Never push to main. Use conventional commits. Run tests before committing."
+												className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs min-h-[60px] resize-y"
+												rows={3}
+											/>
+											<div className="flex gap-1.5 mt-1.5 justify-end">
+												<button type="button" onClick={() => setEditingRepoId(null)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted font-semibold">Cancel</button>
+												<button type="button" onClick={async () => {
+													await api(`/v1/instances/${instanceId}/coding/repos/${r.id}/instructions`, {
+														method: "PUT",
+														body: JSON.stringify({ instructions: repoRules }),
+													});
+													r.instructions = repoRules;
+													setEditingRepoId(null);
+												}} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Save</button>
+											</div>
+										</div>
+									)}
 								</div>
 							);
 						})

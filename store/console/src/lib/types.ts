@@ -72,6 +72,7 @@ export interface CodingRepo {
 	cloneStatus?: string;
 	githubRepo?: string;
 	urls?: { dev?: string; staging?: string; prod?: string };
+	instructions?: string;
 }
 
 export interface CodingSession {
