@@ -67,15 +67,17 @@ export class VoiceStt {
 	}
 
 	private _startBrowser() {
-		// Reuse existing recognizer if we have one (restart after stop)
+		// Try reusing existing recognizer (restart after stop).
+		// If it throws (InvalidStateError — Chrome does this after abort/end),
+		// discard it and create a fresh one.
 		if (this._rec) {
 			try {
 				this._rec.start();
-			} catch (e) {
-				this.onError(e instanceof Error ? e.message : String(e));
-				this.listening = false;
+				return;
+			} catch {
+				this._rec = null;
+				// Fall through to create a new one
 			}
-			return;
 		}
 		const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 		if (!SR) {
