@@ -25,9 +25,12 @@ export default function InstanceDetail() {
 	const initialTab = validTabs.includes(urlTab) ? urlTab : "chat";
 	const [tab, setTab] = useState<Tab>(initialTab);
 	const [messages, setMessages] = useState<Message[]>([]);
+	const [hasMore, setHasMore] = useState(false);
+	const [loadingMore, setLoadingMore] = useState(false);
 	const [input, setInput] = useState("");
 	const [thinking, setThinking] = useState(false);
 	const chatRef = useRef<HTMLDivElement>(null);
+	const PAGE = 20;
 
 	// Runtime status
 	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
@@ -71,19 +74,56 @@ export default function InstanceDetail() {
 	useEffect(() => { checkRuntime(); }, [checkRuntime]);
 	usePolling(checkRuntime, 4000);
 
+	// Load last N messages (newest at the bottom)
 	const loadMessages = useCallback(async () => {
 		if (!id) return;
 		try {
-			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages`);
-			setMessages(data.messages || []);
+			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages?limit=${PAGE}`);
+			const msgs = data.messages || [];
+			setMessages(msgs);
+			setHasMore(msgs.length >= PAGE);
+			// Scroll to bottom after initial load
+			requestAnimationFrame(() => {
+				if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+			});
 		} catch {}
 	}, [id]);
 
+	// Load older messages (prepend)
+	const loadMore = useCallback(async () => {
+		if (!id || loadingMore || !hasMore) return;
+		setLoadingMore(true);
+		try {
+			const oldest = messages[0];
+			const before = oldest?.id || oldest?.createdAt || "";
+			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages?limit=${PAGE}&before=${encodeURIComponent(before)}`);
+			const older = data.messages || [];
+			setHasMore(older.length >= PAGE);
+			if (older.length > 0) {
+				// Preserve scroll position: measure height before, prepend, restore
+				const el = chatRef.current;
+				const prevHeight = el?.scrollHeight || 0;
+				setMessages((prev) => [...older, ...prev]);
+				requestAnimationFrame(() => {
+					if (el) el.scrollTop = el.scrollHeight - prevHeight;
+				});
+			}
+		} catch {}
+		setLoadingMore(false);
+	}, [id, loadingMore, hasMore, messages]);
+
 	useEffect(() => { loadMessages(); }, [loadMessages]);
 
+	// Scroll to bottom only when NEW messages are added (not when loading older)
+	const prevCountRef = useRef(0);
 	useEffect(() => {
-		if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
-	}, [messages]);
+		if (messages.length > prevCountRef.current && !loadingMore) {
+			requestAnimationFrame(() => {
+				if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+			});
+		}
+		prevCountRef.current = messages.length;
+	}, [messages, loadingMore]);
 
 	// Use ref for maybeSpeakResponse to avoid circular deps
 	const speakRef = useRef(voice.maybeSpeakResponse);
@@ -194,6 +234,16 @@ export default function InstanceDetail() {
 				{tab === "chat" && (
 					<div className="flex flex-col flex-1 min-h-0">
 						<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
+							{hasMore && (
+								<button
+									type="button"
+									onClick={loadMore}
+									disabled={loadingMore}
+									className="self-center text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-colors mb-2"
+								>
+									{loadingMore ? "Loading..." : "Load earlier messages"}
+								</button>
+							)}
 							{messages.map((m, i) => (
 								<div
 									key={i}
