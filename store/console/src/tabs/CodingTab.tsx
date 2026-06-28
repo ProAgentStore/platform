@@ -74,8 +74,21 @@ export default function CodingTab({ instanceId }: Props) {
 	}, [instanceId]);
 
 	useEffect(() => {
-		loadCoding();
+		(async () => {
+			await loadCoding();
+		})();
 	}, [loadCoding]);
+
+	// Auto-open the first active session on mount (survives refresh)
+	const autoOpenedRef = useRef(false);
+	useEffect(() => {
+		if (autoOpenedRef.current || !sessions.length) return;
+		const active = sessions.find((s) => s.status === "active");
+		if (active) {
+			autoOpenedRef.current = true;
+			openTerminal(active);
+		}
+	}, [sessions]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Repo status polling (3s) — use ref for sessions to avoid interval restarts
 	const sessionsRef = useRef(sessions);
