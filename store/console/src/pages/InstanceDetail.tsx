@@ -133,6 +133,7 @@ export default function InstanceDetail() {
 	isCodingRef.current = isCoding;
 
 	const doSend = useCallback(async (msg: string) => {
+		console.log("[chat] doSend called:", msg?.slice(0, 50), "id:", id, "isCoding:", isCodingRef.current);
 		if (!msg.trim() || !id) return;
 		setMessages((prev) => [...prev, { role: "user", content: msg }]);
 		setThinking(true);

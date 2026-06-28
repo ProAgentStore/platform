@@ -96,6 +96,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [ensureTts, startListening]);
 
 	const maybeSpeakResponse = useCallback((text: string) => {
+		console.log("[voice] maybeSpeakResponse, speakOn:", speakOnRef.current, "convoOn:", convoOnRef.current);
 		if (speakOnRef.current || convoOnRef.current) {
 			speakAndResume(text);
 		} else {
@@ -105,11 +106,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [speakAndResume]);
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
+		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
 		if (isFinal) {
 			setInterim("");
 			if (convoOnRef.current) {
-				// Pause mic while agent thinks — set flag BEFORE stopping
-				// so onEnd doesn't restart it
 				pausedForThinkingRef.current = true;
 				if (sttRef.current?.listening) sttRef.current.stop();
 				setMicOn(false);
@@ -117,6 +117,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			} else {
 				setMicOn(false);
 			}
+			console.log("[voice] sending to agent...");
 			onSendRef.current(text);
 		} else {
 			setInterim(text);
@@ -124,16 +125,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, []);
 
 	const makeStt = useCallback(async () => {
-		return createStt(instanceId, {
+		console.log("[voice] creating STT, provider will be resolved...");
+		const stt = await createStt(instanceId, {
 			onResult: handleResult,
 			onError: (err) => {
-				console.warn("STT error:", err);
+				console.warn("[voice] STT error:", err);
 				if (!convoOnRef.current) { setMicOn(false); setInterim(""); }
 			},
 			onEnd: () => {
-				// Browser STT fires onEnd when it stops. Only restart if:
-				// - We're in convo mode AND
-				// - We didn't pause for thinking (agent processing)
+				console.log("[voice] STT onEnd, convo:", convoOnRef.current, "paused:", pausedForThinkingRef.current);
 				if (convoOnRef.current && !pausedForThinkingRef.current) {
 					startListening();
 				} else if (!convoOnRef.current) {
@@ -141,9 +141,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 				}
 			},
 		});
+		console.log("[voice] STT created, provider:", stt.provider);
+		return stt;
 	}, [instanceId, handleResult, startListening]);
 
 	const toggleMic = useCallback(async () => {
+		console.log("[voice] toggleMic, currently:", micOn);
 		if (micOn) {
 			sttRef.current?.stop();
 			setMicOn(false);
@@ -161,6 +164,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const toggleSpeak = useCallback(() => setSpeakOn((v) => !v), []);
 
 	const toggleConvo = useCallback(async () => {
+		console.log("[voice] toggleConvo, currently:", convoOn);
 		if (convoOn) {
 			pausedForThinkingRef.current = false;
 			sttRef.current?.stop();
