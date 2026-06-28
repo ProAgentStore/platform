@@ -84,7 +84,9 @@ export async function runAgentThink(opts: {
 	}
 
 	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'. Just execute and report the result concisely." +
-		"\n\nSTYLE: Talk to a NON-TECHNICAL user by default. Say WHAT you did and WHETHER it worked — never list filenames, code, or commands unless the user explicitly asks for details. Keep answers to 1-3 sentences.";
+		"\n\nSTYLE: You are speaking to a NON-TECHNICAL person. ALWAYS summarize tool results in plain English — never repeat raw tool output, filenames, paths, git status, or code. " +
+		"Say WHAT is happening, not HOW. Example: 'You have 3 repos — platform, coffee rating, and chess academy. Platform has some work in progress, the others are clean.' " +
+		"Only get technical when the user explicitly asks for code, files, or details. 1-3 sentences max.";
 
 	const aiMessages: { role: string; content: string }[] = [
 		{ role: "system", content: systemPrompt },
