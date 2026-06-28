@@ -810,6 +810,129 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		);
 
 		this.server.tool(
+			"coding_repos_list",
+			"List all repos registered in a coding instance, with their status and active sessions.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const r = (await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, {}, this.env)) as { repos?: unknown[] };
+				return jsonText(r.repos || []);
+			},
+		);
+
+		this.server.tool(
+			"coding_repo_add",
+			"Add a repo to a coding instance. Accepts a local path (~/dev/...), GitHub owner/repo, or clone URL.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				path: z.string().describe("Local path (~/dev/my-repo), owner/repo, or clone URL"),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, path, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const body: Record<string, string> = {};
+				if (path.startsWith("~") || path.startsWith("/")) body.localPath = path;
+				else if (path.includes("://") || path.includes(".git")) body.cloneUrl = path;
+				else if (path.includes("/")) { body.githubRepo = path; body.cloneUrl = `https://github.com/${path}.git`; }
+				else body.name = path;
+				const r = await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, { method: "POST", body: JSON.stringify(body) }, this.env);
+				return jsonText(r);
+			},
+		);
+
+		this.server.tool(
+			"coding_sessions_list",
+			"List all coding sessions (active + ended) for an instance.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: unknown[] };
+				return jsonText(r.sessions || []);
+			},
+		);
+
+		this.server.tool(
+			"coding_session_end",
+			"End a coding session completely. Stops the CLI and closes the tmux pane.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, session_id, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string }> };
+				const sid = session_id || (r.sessions || []).find((s) => s.status === "active")?.id;
+				if (!sid) return text("No active coding session found.");
+				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, this.env);
+				return text(`Session ${sid} ended.`);
+			},
+		);
+
+		this.server.tool(
+			"coding_session_fresh",
+			"End the current session and start a brand new one (clean state, no --resume). Fixes corrupted CLI state.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				repo_id: z.string().optional().describe("Repo ID. If omitted, uses the repo of the first active session."),
+				engine_id: z.string().optional().describe("Engine preset ID (default: claude)"),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, repo_id, engine_id, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string; repoId: string }> };
+				const active = (r.sessions || []).find((s) => s.status === "active");
+				const repoId = repo_id || active?.repoId;
+				if (!repoId) return text("No repo specified and no active session to infer from.");
+				if (active) await authedCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, this.env);
+				const d = await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify({ repoId, engineId: engine_id || "claude" }) }, this.env);
+				return jsonText(d);
+			},
+		);
+
+		this.server.tool(
+			"coding_overseer",
+			"Ask the cross-repo Overseer agent. It sees all repos, their live sessions, and recent terminal output. Can answer questions and drive Claude Code on specific repos.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				message: z.string().describe("Question or instruction for the Overseer"),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, message, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const d = (await authedCall(`/v1/instances/${instance_id}/coding/overseer`, sessionToken, { method: "POST", body: JSON.stringify({ message }) }, this.env)) as { reply?: string };
+				return text(d.reply || "(no response)");
+			},
+		);
+
+		this.server.tool(
+			"coding_diagnostics",
+			"Full diagnostics for a coding instance: runner connectivity, tmux sessions, repos, issues. Use to debug why sessions are offline or stuck.",
+			{
+				instance_id: z.string().describe("Instance ID"),
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			},
+			async ({ instance_id, token }) => {
+				const sessionToken = this.token(token);
+				if (!sessionToken) return authRequired();
+				const d = await authedCall(`/v1/instances/${instance_id}/coding/diagnostics`, sessionToken, {}, this.env);
+				return jsonText(d);
+			},
+		);
+
+		this.server.tool(
 			"platform_guide",
 			"Get ProAgentStore platform guide",
 			{},
