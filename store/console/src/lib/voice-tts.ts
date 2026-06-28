@@ -1,5 +1,40 @@
 /** Text-to-Speech abstraction — browser SpeechSynthesis or OpenAI TTS */
 
+/**
+ * Strip technical noise so TTS reads a clean, human summary.
+ * Paths, URLs, filenames, code blocks, hashes, stack traces — all removed.
+ * This is a vibecoding platform: speak the intent, not the internals.
+ */
+function cleanForSpeech(raw: string): string {
+	let s = raw;
+	// Remove fenced code blocks entirely
+	s = s.replace(/```[\s\S]*?```/g, " (code) ");
+	// Remove inline code
+	s = s.replace(/`[^`]+`/g, (m) => {
+		// Keep short human words, strip paths/technical tokens
+		const inner = m.slice(1, -1);
+		if (inner.length < 20 && /^[a-zA-Z ]+$/.test(inner)) return inner;
+		return "";
+	});
+	// Remove URLs
+	s = s.replace(/https?:\/\/[^\s)]+/g, " a link ");
+	// Remove file paths (~/..., /..., ./..., C:\...)
+	s = s.replace(/[~.]?\/[\w./-]+/g, " a file ");
+	s = s.replace(/[A-Z]:\\[\w.\\-]+/g, " a file ");
+	// Remove filenames with extensions (foo.ts, bar.json, etc.)
+	s = s.replace(/\b[\w.-]+\.(ts|tsx|js|jsx|json|css|html|md|yml|yaml|toml|py|rs|go|sh|sql|env|lock|txt|csv|xml|svg|png|jpg|wasm)\b/gi, " a file ");
+	// Remove git hashes
+	s = s.replace(/\b[0-9a-f]{7,40}\b/g, "");
+	// Remove markdown formatting
+	s = s.replace(/[*_#>]/g, "");
+	// Remove emoji
+	s = s.replace(/[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{27BF}]|[\u{FE00}-\u{FEFF}]/gu, "");
+	// Collapse whitespace
+	s = s.replace(/\s+/g, " ").trim();
+	// Limit length
+	return s.slice(0, 1500);
+}
+
 export interface TtsOptions {
 	apiKey?: string;
 	voice?: string;
@@ -23,11 +58,7 @@ export class VoiceTts {
 
 	async speak(text: string) {
 		if (!text?.trim()) return;
-		const clean = String(text)
-			.replace(/[*_`#>]/g, "")
-			.replace(/\s+/g, " ")
-			.trim()
-			.slice(0, 2000);
+		const clean = cleanForSpeech(String(text));
 		if (!clean) return;
 		this.speaking = true;
 		try {
