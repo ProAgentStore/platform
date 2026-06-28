@@ -186,11 +186,24 @@ export default function CodingTab({ instanceId }: Props) {
 	};
 
 	const addRepo = async () => {
-		if (!addRepoInput.trim()) return;
+		const val = addRepoInput.trim();
+		if (!val) return;
+		// Detect input type: local path vs clone URL vs owner/repo
+		const body: Record<string, string> = {};
+		if (val.startsWith("~") || val.startsWith("/")) {
+			body.localPath = val;
+		} else if (val.includes("://") || val.includes(".git")) {
+			body.cloneUrl = val;
+		} else if (val.includes("/")) {
+			body.githubRepo = val;
+			body.cloneUrl = `https://github.com/${val}.git`;
+		} else {
+			body.name = val;
+		}
 		try {
 			await api(`/v1/instances/${instanceId}/coding/repos`, {
 				method: "POST",
-				body: JSON.stringify({ path: addRepoInput.trim() }),
+				body: JSON.stringify(body),
 			});
 			setAddRepoInput("");
 			setShowAddRepo(false);
