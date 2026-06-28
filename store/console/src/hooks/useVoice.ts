@@ -10,7 +10,6 @@ function getAudioCtx(): AudioContext {
 	return _audioCtx;
 }
 
-/** Play a short tone. `freq` in Hz, `dur` in seconds. */
 function playTone(freq: number, dur: number, volume = 0.15) {
 	try {
 		const ctx = getAudioCtx();
@@ -27,13 +26,11 @@ function playTone(freq: number, dur: number, volume = 0.15) {
 	} catch {}
 }
 
-/** Ascending double-beep: "I'm listening" */
 function playListeningChime() {
 	playTone(600, 0.08);
 	setTimeout(() => playTone(900, 0.1), 100);
 }
 
-/** Descending beep: "processing your message" */
 function playThinkingChime() {
 	playTone(500, 0.12);
 	setTimeout(() => playTone(350, 0.15), 120);
@@ -45,10 +42,10 @@ function playThinkingChime() {
  * Push-to-talk (🎤): live transcript in input → auto-sends on pause.
  * Auto-speak (🔊): reads every assistant response aloud.
  * Conversation (🎙️): continuous hands-free loop:
- *   1. Chime: "listening" → you talk → words appear live in input
- *   2. You pause → chime: "thinking" → message sends, mic pauses
+ *   1. Chime → you talk → words appear live in input
+ *   2. You pause → chime → message sends, mic pauses
  *   3. Agent responds → response spoken aloud
- *   4. TTS finishes → chime: "listening" → mic re-opens → step 1
+ *   4. TTS finishes → chime → mic re-opens → step 1
  */
 export function useVoice(instanceId: string | undefined, opts: {
 	onSend: (text: string) => void;
@@ -59,6 +56,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [interim, setInterim] = useState("");
 	const sttRef = useRef<VoiceStt | null>(null);
 	const ttsRef = useRef<VoiceTts | null>(null);
+
+	// Flag: true while the agent is processing (mic should stay off)
+	const pausedForThinkingRef = useRef(false);
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
@@ -72,49 +72,49 @@ export function useVoice(instanceId: string | undefined, opts: {
 		return ttsRef.current;
 	}, [instanceId]);
 
-	// (Re-)open the mic with a listening chime
+	// Open mic with chime
 	const startListening = useCallback(async () => {
-		if (sttRef.current) {
-			try {
-				await sttRef.current.start();
-				setMicOn(true);
-				if (convoOnRef.current) playListeningChime();
-			} catch {}
-		}
+		if (!sttRef.current || pausedForThinkingRef.current) return;
+		try {
+			await sttRef.current.start();
+			setMicOn(true);
+			if (convoOnRef.current) playListeningChime();
+		} catch {}
 	}, []);
 
-	// Speak response, then re-open mic in convo mode
+	// Speak response, then re-open mic
 	const speakAndResume = useCallback(async (text: string) => {
-		// Stop STT while speaking (prevent echo pickup)
-		if (sttRef.current?.listening) sttRef.current.stop();
-		setMicOn(false);
 		try {
 			const tts = await ensureTts();
 			await tts.speak(text);
 		} catch {}
+		// Now agent is done — allow mic to reopen
+		pausedForThinkingRef.current = false;
 		if (convoOnRef.current) {
 			await startListening();
 		}
 	}, [ensureTts, startListening]);
 
-	// Called by chat after receiving assistant response
 	const maybeSpeakResponse = useCallback((text: string) => {
 		if (speakOnRef.current || convoOnRef.current) {
 			speakAndResume(text);
+		} else {
+			// Not speaking — allow mic restart for next convo turn
+			pausedForThinkingRef.current = false;
 		}
 	}, [speakAndResume]);
 
-	// STT result handler
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
 		if (isFinal) {
 			setInterim("");
-			// In convo mode: pause mic + play thinking chime while agent works
 			if (convoOnRef.current) {
+				// Pause mic while agent thinks — set flag BEFORE stopping
+				// so onEnd doesn't restart it
+				pausedForThinkingRef.current = true;
 				if (sttRef.current?.listening) sttRef.current.stop();
 				setMicOn(false);
 				playThinkingChime();
 			} else {
-				// Push-to-talk: stop after one utterance
 				setMicOn(false);
 			}
 			onSendRef.current(text);
@@ -131,10 +131,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (!convoOnRef.current) { setMicOn(false); setInterim(""); }
 			},
 			onEnd: () => {
-				// Browser STT fires onEnd periodically — restart in convo mode
-				if (convoOnRef.current) {
+				// Browser STT fires onEnd when it stops. Only restart if:
+				// - We're in convo mode AND
+				// - We didn't pause for thinking (agent processing)
+				if (convoOnRef.current && !pausedForThinkingRef.current) {
 					startListening();
-				} else {
+				} else if (!convoOnRef.current) {
 					setMicOn(false);
 				}
 			},
@@ -149,6 +151,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			return;
 		}
 		try {
+			pausedForThinkingRef.current = false;
 			sttRef.current = await makeStt();
 			await sttRef.current.start();
 			setMicOn(true);
@@ -159,6 +162,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	const toggleConvo = useCallback(async () => {
 		if (convoOn) {
+			pausedForThinkingRef.current = false;
 			sttRef.current?.stop();
 			ttsRef.current?.cancel();
 			setConvoOn(false);
@@ -166,9 +170,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			setInterim("");
 			return;
 		}
-		// Unlock audio on gesture
 		try { getAudioCtx().resume(); } catch {}
 		try {
+			pausedForThinkingRef.current = false;
 			sttRef.current = await makeStt();
 			await sttRef.current.start();
 			setConvoOn(true);
