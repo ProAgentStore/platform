@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
@@ -53,7 +53,7 @@ function renderTerminal(text: string): string {
 interface Props {
 	instanceId: string;
 	initialSessionId?: string;
-	onHeaderOverride?: (content: React.ReactNode | null) => void;
+	onHeaderOverride?: (content: ReactNode | null) => void;
 }
 
 interface TimelineEntry {

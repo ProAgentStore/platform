@@ -838,7 +838,7 @@ instanceRoutes.delete("/:instanceId/knowledge/:docId", async (c) => {
 	const docId = c.req.param("docId");
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(
-		new Request(`https://agent/knowledge/${docId}`, { method: "DELETE" }),
+		new Request(`https://agent/knowledge/${encodeURIComponent(docId)}`, { method: "DELETE" }),
 	);
 	return c.json(await doRes.json());
 });
