@@ -283,7 +283,21 @@ export class AgentDO extends DurableObject<Env> {
 		this.broadcast({ type: "status", status: "thinking" });
 
 		try {
-			const response = await this.think(state, engine, userId);
+			const { response, toolCalls } = await this.think(state, engine, userId);
+
+			// Save tool calls as a system message (visible in chat)
+			let toolMsg: AgentMessage | undefined;
+			if (toolCalls.length > 0) {
+				toolMsg = {
+					id: crypto.randomUUID(),
+					role: "system",
+					content: toolCalls.join("\n"),
+					channel: channel || "chat",
+					createdAt: new Date().toISOString(),
+				};
+				await this.appendMessage(toolMsg);
+				this.broadcast({ type: "message", message: toolMsg });
+			}
 
 			const assistantMsg: AgentMessage = {
 				id: crypto.randomUUID(),
@@ -301,7 +315,7 @@ export class AgentDO extends DurableObject<Env> {
 			await engine.logEvent("chat.response", userId, { messageId: assistantMsg.id });
 			engine.maybeSummarize(state.model).catch(() => {});
 
-			return json({ message: assistantMsg });
+			return json({ message: assistantMsg, toolMessage: toolMsg });
 		} catch (err) {
 			const errMsg = err instanceof Error ? err.message : String(err);
 			const status =
@@ -335,7 +349,7 @@ export class AgentDO extends DurableObject<Env> {
 		state: AgentState,
 		engine: AgentStorageEngine,
 		userId?: string,
-	): Promise<string> {
+	): Promise<{ response: string; toolCalls: string[] }> {
 		const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
 		const memory = await this.getAllMemory();
 		const tasks = await this.getAllTasks();

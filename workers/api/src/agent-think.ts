@@ -20,7 +20,7 @@ export async function runAgentThink(opts: {
 	env: Env;
 	doStorage: DurableObjectStorage;
 	broadcast: (data: Record<string, unknown>) => void;
-}): Promise<string> {
+}): Promise<{ response: string; toolCalls: string[] }> {
 	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast } = opts;
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
 
@@ -83,7 +83,8 @@ export async function runAgentThink(opts: {
 			"\n\nYou have tools available. Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
 	}
 
-	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'. Just execute and report the result concisely.";
+	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'. Just execute and report the result concisely." +
+		"\n\nSTYLE: Talk to a NON-TECHNICAL user by default. Say WHAT you did and WHETHER it worked — never list filenames, code, or commands unless the user explicitly asks for details. Keep answers to 1-3 sentences.";
 
 	const aiMessages: { role: string; content: string }[] = [
 		{ role: "system", content: systemPrompt },
@@ -97,7 +98,7 @@ export async function runAgentThink(opts: {
 			state.model,
 			{ messages: aiMessages },
 		)) as { response?: string };
-		return result.response || "";
+		return { response: result.response || "", toolCalls: [] };
 	}
 
 	const tools = buildAgentToolDefinitions({
@@ -126,10 +127,7 @@ export async function runAgentThink(opts: {
 		}
 
 		if (toolCalls.length === 0) {
-			const response = (rawResult.response as string) || "";
-			return allToolLog.length > 0
-				? `${allToolLog.join("\n")}\n\n${response}`
-				: response;
+			return { response: (rawResult.response as string) || "", toolCalls: allToolLog };
 		}
 
 		const toolResults: string[] = [];
@@ -182,7 +180,5 @@ export async function runAgentThink(opts: {
 		{ messages: aiMessages },
 	)) as { response?: string };
 	const response = final.response || "";
-	return allToolLog.length > 0
-		? `${allToolLog.join("\n")}\n\n${response}`
-		: response;
+	return { response, toolCalls: allToolLog };
 }

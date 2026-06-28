@@ -215,10 +215,13 @@ export default function InstanceDetail() {
 		setMessages((prev) => [...prev, { role: "user", content: msg }]);
 		setThinking(true);
 		try {
-			const data = await api<{ message?: Message }>(
+			const data = await api<{ message?: Message; toolMessage?: Message }>(
 				`/v1/instances/${id}/chat`,
 				{ method: "POST", body: JSON.stringify({ message: msg }) },
 			);
+			if (data.toolMessage) {
+				setMessages((prev) => [...prev, data.toolMessage!]);
+			}
 			if (data.message) {
 				setMessages((prev) => [...prev, data.message!]);
 				speakRef.current(data.message.content);
