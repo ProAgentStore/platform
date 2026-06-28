@@ -120,16 +120,17 @@ export default function CodingTab({ instanceId }: Props) {
 
 	usePolling(pollStatuses, 3000, hasActiveSessions && !openSession);
 
-	// Terminal polling (1.5s when a session is open)
+	// Terminal polling (1.5s when a session is open — polls on ANY view so
+	// the Agent view can show run state, and Terminal view shows live output)
 	const pollTerminal = useCallback(async () => {
 		if (!openSession) return;
 		try {
 			const d = await api<{ pane?: string; runState?: string }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
-			if (d.pane) setTerminalText(d.pane);
+			setTerminalText(d.pane ?? "(waiting for output...)");
 		} catch {}
 	}, [instanceId, openSession]);
 
-	usePolling(pollTerminal, 1500, !!openSession && view === "terminal");
+	usePolling(pollTerminal, 1500, !!openSession);
 
 	// Summary polling (4.5s)
 	const pollSummary = useCallback(async () => {
