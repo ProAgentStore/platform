@@ -276,6 +276,15 @@ authRoutes.put("/me", async (c) => {
 			return c.json({ error: error instanceof Error ? error.message : "Invalid board_config" }, 400);
 		}
 	}
+	// Validate slack webhook URL (SSRF protection)
+	if (body.slack_webhook !== undefined && body.slack_webhook !== "") {
+		try {
+			const u = new URL(body.slack_webhook);
+			if (u.protocol !== "https:") return c.json({ error: "Slack webhook must be https" }, 400);
+			if (!u.hostname.endsWith("slack.com") && !u.hostname.endsWith("discord.com"))
+				return c.json({ error: "Webhook must be a Slack or Discord URL" }, 400);
+		} catch { return c.json({ error: "Invalid webhook URL" }, 400); }
+	}
 	const allowed = [
 		["display_name", "display_name"],
 		["bio", "bio"],

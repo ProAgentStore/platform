@@ -66,8 +66,11 @@ app.use("/v1/*", rateLimitDefault());
 app.use("/v1/agents/*/chat", rateLimitStrict());
 app.use("/v1/agents/*/run", rateLimitStrict());
 app.use("/v1/instances/*/chat", rateLimitStrict());
-app.use("/v1/instances/*/loop-decide", rateLimitStrict()); // LLM-calling — same cost as /chat
-app.use("/v1/push/test", rateLimitStrict()); // sends real pushes — abuse-prone
+app.use("/v1/instances/*/loop-decide", rateLimitStrict());
+app.use("/v1/instances/*/coding/sessions/*/agent", rateLimitStrict()); // LLM: answer-or-drive
+app.use("/v1/instances/*/coding/sessions/*/explain", rateLimitStrict()); // LLM: co-pilot summary
+app.use("/v1/instances/*/coding/overseer", rateLimitStrict()); // LLM: cross-repo
+app.use("/v1/push/test", rateLimitStrict());
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 

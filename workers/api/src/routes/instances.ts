@@ -788,7 +788,8 @@ instanceRoutes.get("/:instanceId/messages", async (c) => {
 		.first();
 	if (!instance) throw new HttpError(404, "Instance not found");
 
-	const limit = c.req.query("limit") || "50";
+	const rawLimit = Number(c.req.query("limit") || "50");
+	const limit = Math.max(1, Math.min(2000, Number.isFinite(rawLimit) ? rawLimit : 50));
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(
 		new Request(`https://agent/messages?limit=${limit}`),
