@@ -174,12 +174,16 @@ export async function runAgentThink(opts: {
 		}
 
 		aiMessages.push({ role: "assistant", content: `I called tools:\n${toolResults.join("\n")}` });
-		aiMessages.push({ role: "user", content: "Continue based on the tool results above." });
+		aiMessages.push({ role: "user", content: "Continue based on the tool results above. REMEMBER: reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud." });
 		// The model only re-requested calls it already made — nothing new will
 		// happen in another round, so stop and let it write the final response.
 		if (executedThisRound === 0) break;
 	}
 
+	// Final reminder before generating the response
+	if (allToolLog.length > 0) {
+		aiMessages.push({ role: "user", content: "Now give your final answer. MAX 2 sentences, plain English, no technical details. Will be read aloud." });
+	}
 	const final = (await runUserWorkersAi(
 		env,
 		userId,
