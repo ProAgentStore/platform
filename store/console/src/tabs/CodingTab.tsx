@@ -470,7 +470,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					<button type="button" onClick={() => setView("terminal")} className={`px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}>Terminal</button>
 				</div>
 				<div className="ml-auto flex gap-1 shrink-0">
-					<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent flex items-center gap-1"><Copy size={12} /><span className="hidden sm:inline">Copy</span></button>
+					<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent flex items-center gap-1"><Copy size={12} /><span className="hidden sm:inline">Copy</span></button>
 					<button type="button" onClick={freshStart} title="Fresh start" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Fresh</button>
 					<button type="button" onClick={restartSession} title="Restart CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Restart</button>
 					<button type="button" onClick={endSession} title="End session" className="text-xs px-1.5 py-1 rounded-md border border-red text-red font-semibold">End</button>
@@ -594,11 +594,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 										key={i}
 										onClick={() => voice.cancelSpeak()}
 										onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
-										className={`max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
+										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
 											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 												: "bg-panel border border-line self-start rounded-bl-sm"
 										}`}
 									>
+										<button type="button" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
 										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold">Co-pilot</div>}
 										{m.role === "assistant" ? (
@@ -609,7 +610,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									</div>
 								);
 							})}
-							{summaryBusy && <div className="text-muted text-xs flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />Thinking...</div>}
+							{summaryBusy && <div className="text-muted text-sm flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" />Thinking...</div>}
 						</div>
 					</div>
 				)}
@@ -685,7 +686,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 								onChange={(e) => setAddRepoInput(e.target.value)}
 								onKeyDown={(e) => { if (e.key === "Enter") addRepo(); }}
 								placeholder="~/dev/my-repo or owner/repo or clone URL"
-								className="flex-1 min-w-[180px]"
+								className="flex-1 min-w-[180px] bg-panel border border-line rounded-xl px-3 py-2 text-sm"
 							/>
 							<button type="button" onClick={addRepo} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Add</button>
 						</div>
@@ -741,7 +742,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 											{active ? (
 												<button type="button" onClick={() => openTerminal(active)} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Open</button>
 											) : (
-												<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
+												<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
 											)}
 											<button type="button" onClick={() => deleteRepo(r.id)} className="text-xs px-1.5 py-1 text-red"><Trash2 size={14} /></button>
 										</div>

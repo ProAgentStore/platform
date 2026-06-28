@@ -86,7 +86,7 @@ export default function BoardTab({ instanceId, isApply }: Props) {
 								key={f}
 								type="button"
 								onClick={() => setFilter(f)}
-								className={`px-2.5 py-1 text-xs font-bold ${filter === f ? "bg-panel-hover text-ink" : "text-muted"}`}
+								className={`px-2.5 py-1 text-xs font-bold ${filter === f ? "bg-accent-soft text-accent" : "text-muted"}`}
 							>
 								{f === "active" ? "Active" : "All"}
 							</button>
