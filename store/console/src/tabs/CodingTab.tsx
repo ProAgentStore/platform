@@ -172,12 +172,14 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
 	}, [summaryHistory]);
 
-	// Auto-scroll terminal when new output arrives (only if at bottom)
+	// Auto-scroll terminal when new output arrives or view switches to terminal
 	useEffect(() => {
 		if (termAutoScroll && termRef.current) {
-			termRef.current.scrollTop = termRef.current.scrollHeight;
+			requestAnimationFrame(() => {
+				if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
+			});
 		}
-	}, [terminalText, termAutoScroll]);
+	}, [terminalText, termAutoScroll, view]);
 
 	const openTerminal = async (session: CodingSession) => {
 		setOpenSession(session);

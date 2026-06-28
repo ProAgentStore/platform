@@ -353,7 +353,7 @@ export default function InstanceDetail() {
 	return (
 		<div className="flex flex-col h-[calc(100dvh-49px)]">
 			{/* Tab content */}
-			<div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3 flex flex-col min-h-0">
+			<div className="flex-1 overflow-hidden px-2 py-2 sm:px-4 sm:py-3 flex flex-col min-h-0">
 				{tab === "chat" && (
 					<div className="flex flex-col flex-1 min-h-0">
 						<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
