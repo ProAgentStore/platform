@@ -353,9 +353,9 @@ export default function InstanceDetail() {
 	return (
 		<div className="flex flex-col h-[calc(100dvh-49px)]">
 			{/* Tab content */}
-			<div className="flex-1 overflow-hidden px-2 py-2 sm:px-4 sm:py-3 flex flex-col min-h-0">
+			<div className="flex-1 overflow-hidden flex flex-col min-h-0">
 				{tab === "chat" && (
-					<div className="flex flex-col flex-1 min-h-0">
+					<div className="flex flex-col flex-1 min-h-0 px-2 py-2 sm:px-4 sm:py-3">
 						<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
 							{hasMore && (
 								<button
@@ -528,10 +528,10 @@ export default function InstanceDetail() {
 					</div>
 				)}
 
-				{tab === "board" && id && <BoardTab instanceId={id} isApply={isApply} />}
+				{tab === "board" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><BoardTab instanceId={id} isApply={isApply} /></div>}
 				{tab === "coding" && id && <CodingTab key={id} instanceId={id} onHeaderOverride={setChildHeader} />}
-				{tab === "knowledge" && id && <KnowledgeTab instanceId={id} isApply={isApply} />}
-				{tab === "settings" && id && <SettingsTab instanceId={id} isApply={isApply} onUnsubscribe={() => navigate("/instances")} />}
+				{tab === "knowledge" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><KnowledgeTab instanceId={id} isApply={isApply} /></div>}
+				{tab === "settings" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><SettingsTab instanceId={id} isApply={isApply} onUnsubscribe={() => navigate("/instances")} /></div>}
 			</div>
 		</div>
 	);

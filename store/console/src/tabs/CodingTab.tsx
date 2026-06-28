@@ -69,7 +69,7 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 	const [showAddRepo, setShowAddRepo] = useState(false);
 	const [repoStatuses, setRepoStatuses] = useState<Record<string, string>>({});
 	const threadRef = useRef<HTMLDivElement>(null);
-	const termRef = useRef<HTMLPreElement>(null);
+	const termRef = useRef<HTMLDivElement>(null);
 
 	// Voice: wire to Co-pilot sendInstruction
 	const sendInstructionRef = useRef<(text: string) => void>(() => {});
@@ -455,12 +455,12 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 	// ── Session open: full-screen terminal/co-pilot ──
 	if (openSession) {
 		return (
-			<div className="flex flex-col h-full min-h-[340px]">
+			<div className="flex flex-col h-full">
 
 				{/* Co-pilot view */}
 				{view === "summary" && (
 					<div className="flex flex-col flex-1 min-h-0">
-						<div ref={threadRef} className="flex-1 overflow-y-auto bg-panel border border-line rounded-lg p-3 flex flex-col gap-3 chat-scroll">
+						<div ref={threadRef} className="flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll">
 							{summaryHistory.map((m, i) => (
 								<div key={i} className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed ${
 									m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
@@ -553,16 +553,16 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 				{/* Terminal view */}
 				{view === "terminal" && (
 					<div className="flex flex-col flex-1 min-h-0 relative">
-						<pre
+						<div
 							ref={termRef}
-							className="flex-1 min-h-0 overflow-auto bg-[#0b0b0f] text-xs leading-snug p-2.5 rounded-lg whitespace-pre-wrap break-words m-0"
+							className="flex-1 min-h-0 overflow-auto bg-[#0b0b0f] text-sm leading-relaxed p-3 rounded-lg m-0 msg-md"
 							onScroll={() => {
 								if (!termRef.current) return;
 								const el = termRef.current;
 								const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 								setTermAutoScroll(atBottom);
 							}}
-							dangerouslySetInnerHTML={{ __html: colorizeTerminal(terminalText) }}
+							dangerouslySetInnerHTML={{ __html: renderMd(terminalText) }}
 						/>
 						{!termAutoScroll && (
 							<button
