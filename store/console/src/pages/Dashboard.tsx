@@ -40,14 +40,19 @@ export default function Dashboard() {
 		} catch {}
 	}, []);
 
+	// Load agents + instances once on mount
 	useEffect(() => {
 		(async () => {
 			setLoading(true);
 			await Promise.all([loadAgents(), loadInstances()]);
-			if (tab === "dashboard") await loadDashboard();
 			setLoading(false);
 		})();
-	}, [loadAgents, loadInstances, loadDashboard, tab]);
+	}, [loadAgents, loadInstances]);
+
+	// Load dashboard stats only when that tab is active
+	useEffect(() => {
+		if (tab === "dashboard") loadDashboard();
+	}, [tab, loadDashboard]);
 
 	return (
 		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">

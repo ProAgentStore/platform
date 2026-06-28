@@ -1,8 +1,9 @@
 /** Escape HTML entities */
 export function esc(s: string): string {
-	const d = document.createElement("div");
-	d.textContent = s || "";
-	return d.innerHTML;
+	return String(s || "")
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;");
 }
 
 /** Escape for use in HTML attributes */
@@ -44,10 +45,10 @@ export function renderMd(raw: string): string {
 	// Inline code
 	s = s.replace(/`([^`\n]+)`/g, (_, c) => `<code>${esc(c)}</code>`);
 
-	// Headers
-	s = s.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
-	s = s.replace(/^###\s+(.+)$/gm, "<h4>$1</h4>");
-	s = s.replace(/^##\s+(.+)$/gm, "<h3>$1</h3>");
+	// Headers (escape content to prevent XSS)
+	s = s.replace(/^####\s+(.+)$/gm, (_, h) => `<h4>${esc(h)}</h4>`);
+	s = s.replace(/^###\s+(.+)$/gm, (_, h) => `<h4>${esc(h)}</h4>`);
+	s = s.replace(/^##\s+(.+)$/gm, (_, h) => `<h3>${esc(h)}</h3>`);
 
 	// Bold then italic
 	s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");

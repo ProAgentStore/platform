@@ -122,7 +122,14 @@ export default function AgentDetail() {
 		try { const d = await api<{ versions: { id: string; version_num: number; description: string; created_at: string }[] }>(`/v1/agents/${id}/versions`); setVersions(d.versions || []); } catch {}
 	}, [id]);
 
-	useEffect(() => { loadKnowledge(); loadMemory(); loadTasks(); loadAnalytics(); loadVersions(); }, [loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions]);
+	// Lazy-load: only fetch data for the active tab
+	useEffect(() => {
+		if (tab === "knowledge") loadKnowledge();
+		else if (tab === "memory") loadMemory();
+		else if (tab === "tasks") loadTasks();
+		else if (tab === "analytics") loadAnalytics();
+		else if (tab === "settings") loadVersions();
+	}, [tab, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions]);
 
 	const saveSettings = async () => {
 		if (!id) return;

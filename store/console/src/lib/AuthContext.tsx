@@ -31,14 +31,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	useEffect(() => {
 		(async () => {
-			const oauthToken = await handleOAuthCallback();
-			if (oauthToken) {
-				const u = await checkAuth();
-				setUser(u);
-			} else {
-				const u = await checkAuth();
-				setUser(u);
-			}
+			await handleOAuthCallback();
+			const u = await checkAuth();
+			setUser(u);
 			setLoading(false);
 		})();
 	}, []);
