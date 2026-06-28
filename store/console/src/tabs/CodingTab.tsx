@@ -155,9 +155,9 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		try {
 			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`);
 			const entries = (d.timeline || [])
-				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system")
+				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "command")
 				.map((e) => ({
-					role: e.type === "chat_user" ? "user" : e.type === "chat_system" ? "system" : "assistant",
+					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
 					content: e.content || e.text || "",
 				}));
 			if (entries.length > 0) setSummaryHistory(entries);
@@ -184,9 +184,9 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		try {
 			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
 			const entries = (d.timeline || [])
-				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system")
+				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "command")
 				.map((e) => ({
-					role: e.type === "chat_user" ? "user" : e.type === "chat_system" ? "system" : "assistant",
+					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
 					content: e.content || e.text || "",
 				}));
 			if (entries.length > 0) setSummaryHistory(entries);
@@ -198,12 +198,42 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 		setSummaryHistory([]);
 	};
 
+	// Watch the Engine after delegation — poll until idle, then auto-summarize
+	const watcherRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const watchForFinish = useCallback((sid: string) => {
+		if (watcherRef.current) clearTimeout(watcherRef.current);
+		const poll = async () => {
+			try {
+				const d = await api<{ pane?: string; runState?: string }>(`/v1/instances/${instanceId}/coding/sessions/${sid}/capture`);
+				const state = d.runState || "idle";
+				if (state === "thinking" || state === "working") {
+					// Still working — check again
+					watcherRef.current = setTimeout(poll, 3000);
+					return;
+				}
+				// Engine finished — auto-summarize
+				const summary = await api<{ reply?: string }>(`/v1/instances/${instanceId}/coding/sessions/${sid}/explain`, {
+					method: "POST",
+					body: JSON.stringify({}),
+				});
+				if (summary.reply) {
+					setSummaryHistory((prev) => [...prev, { role: "assistant", content: summary.reply! }]);
+					voice.maybeSpeakResponse(summary.reply);
+				}
+			} catch {}
+		};
+		// Start watching after a delay (give the Engine time to start)
+		watcherRef.current = setTimeout(poll, 4000);
+	}, [instanceId, voice]);
+
+	// Cleanup watcher on unmount
+	useEffect(() => () => { if (watcherRef.current) clearTimeout(watcherRef.current); }, []);
+
 	const doSendInstruction = async (msg: string) => {
 		if (!msg.trim() || !openSession) return;
 		setSummaryHistory((prev) => [...prev, { role: "user", content: msg }]);
 		setSummaryBusy(true);
 		try {
-			// Use /agent endpoint — it answers questions OR delegates actions to the Engine
 			const d = await api<{ reply?: string; response?: string; delegated?: boolean }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/agent`, {
 				method: "POST",
 				body: JSON.stringify({ message: msg }),
@@ -214,6 +244,10 @@ export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 				voice.maybeSpeakResponse(reply);
 			} else {
 				setSummaryHistory((prev) => [...prev, { role: "assistant", content: "No response — the session may need to be started first." }]);
+			}
+			// If delegated, watch for the Engine to finish and auto-report
+			if (d.delegated) {
+				watchForFinish(openSession.id);
 			}
 		} catch (e) {
 			setSummaryHistory((prev) => [...prev, { role: "assistant", content: `Error: ${e instanceof Error ? e.message : String(e)}` }]);
