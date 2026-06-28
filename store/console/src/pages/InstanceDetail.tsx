@@ -20,13 +20,11 @@ export default function InstanceDetail() {
 	const location = useLocation();
 	const [instance, setInstance] = useState<Instance | null>(null);
 
-	// Parse initial tab from URL path
-	const urlTab = (splat?.split("/")[0] || "") as Tab;
+	// Tab from URL — always sync with the route (no local state drift)
 	const validTabs: Tab[] = ["chat", "board", "coding", "knowledge", "settings"];
-	const initialTab = validTabs.includes(urlTab) ? urlTab : "chat";
-	const [tab, setTabState] = useState<Tab>(initialTab);
+	const urlTab = (splat?.split("/")[0] || "") as Tab;
+	const tab = validTabs.includes(urlTab) ? urlTab : "chat";
 	const setTab = (t: Tab) => {
-		setTabState(t);
 		navigate(`/instances/${id}/${t}`, { replace: true });
 	};
 	const [messages, setMessages] = useState<Message[]>([]);
@@ -61,6 +59,9 @@ export default function InstanceDetail() {
 
 	useEffect(() => {
 		if (!id) return;
+		setInstance(null);
+		setMessages([]);
+		setChildHeader(null);
 		(async () => {
 			try {
 				const data = await api<{ instances: Instance[] }>("/v1/instances/my/instances");
@@ -528,7 +529,7 @@ export default function InstanceDetail() {
 				)}
 
 				{tab === "board" && id && <BoardTab instanceId={id} isApply={isApply} />}
-				{tab === "coding" && id && <CodingTab instanceId={id} onHeaderOverride={setChildHeader} />}
+				{tab === "coding" && id && <CodingTab key={id} instanceId={id} onHeaderOverride={setChildHeader} />}
 				{tab === "knowledge" && id && <KnowledgeTab instanceId={id} isApply={isApply} />}
 				{tab === "settings" && id && <SettingsTab instanceId={id} isApply={isApply} onUnsubscribe={() => navigate("/instances")} />}
 			</div>
