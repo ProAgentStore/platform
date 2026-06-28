@@ -5,7 +5,7 @@ import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { useVoice } from "../hooks/useVoice";
-import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square } from "lucide-react";
+import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import BoardTab from "../tabs/BoardTab";
 import CodingTab from "../tabs/CodingTab";
@@ -416,27 +416,52 @@ export default function InstanceDetail() {
 									{loadingMore ? "Loading..." : "Load earlier messages"}
 								</button>
 							)}
-							{messages.map((m, i) => (
-								<div
-									key={i}
-									onClick={() => voice.cancelSpeak()}
-									onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
-									className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
-										m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
-											: m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15"
-											: "bg-panel border border-line self-start rounded-bl-sm"
-									}`}
-								>
-									<button type="button" onClick={(e) => { e.stopPropagation(); copyMsgText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
-									{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}
-									{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold">Chat</div>}
-									{m.role === "assistant" ? (
-										<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
-									) : (
-										<span className="whitespace-pre-wrap">{m.content}</span>
-									)}
-								</div>
-							))}
+							{messages.map((m, i) => {
+								// Tool calls: collapsed chip, tap to expand
+								const isToolCall = m.role === "system" && /^[✅❌]/.test(m.content);
+								if (isToolCall) {
+									const toolNames = m.content.match(/\*\*(\w+)\*\*/g)?.map((t) => t.replace(/\*\*/g, "")) || ["tools"];
+									const summary = toolNames.length <= 2 ? toolNames.join(", ") : `${toolNames.length} tools`;
+									return (
+										<details key={i} className="self-start max-w-[90%]">
+											<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
+												<Wrench size={11} className="shrink-0" />
+												<span>Used {summary}</span>
+											</summary>
+											<div className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+										</details>
+									);
+								}
+								// Regular system messages (loop status, etc.)
+								if (m.role === "system") {
+									return (
+										<div key={i} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15">
+											<span className="whitespace-pre-wrap">{m.content}</span>
+										</div>
+									);
+								}
+								// User + assistant messages
+								return (
+									<div
+										key={i}
+										onClick={() => voice.cancelSpeak()}
+										onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
+										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
+											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
+												: "bg-panel border border-line self-start rounded-bl-sm"
+										}`}
+									>
+										<button type="button" onClick={(e) => { e.stopPropagation(); copyMsgText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
+										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}
+										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold">Chat</div>}
+										{m.role === "assistant" ? (
+											<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+										) : (
+											<span className="whitespace-pre-wrap">{m.content}</span>
+										)}
+									</div>
+								);
+							})}
 							{thinking && (
 								<div className="text-muted text-sm flex items-center gap-2">
 									<span className="w-2 h-2 rounded-full bg-accent animate-pulse" />

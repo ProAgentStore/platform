@@ -6,7 +6,7 @@ import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { useVoice } from "../hooks/useVoice";
 import { useCodingLoop } from "../hooks/useCodingLoop";
-import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send } from "lucide-react";
+import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench } from "lucide-react";
 
 /** Render terminal output: colorize lines + format inline code/bold/JSON */
 function renderTerminal(text: string): string {
@@ -566,26 +566,49 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						)}
 						{/* Messages */}
 						<div ref={threadRef} className="flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll">
-							{summaryHistory.map((m, i) => (
-								<div
-									key={i}
-									onClick={() => voice.cancelSpeak()}
-									onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
-									className={`max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
-										m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
-											: m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15"
-											: "bg-paper border border-line self-start rounded-bl-sm"
-									}`}
-								>
-									{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}
-									{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold">Co-pilot</div>}
-									{m.role === "assistant" ? (
-										<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
-									) : (
-										<span className="whitespace-pre-wrap">{m.content}</span>
-									)}
-								</div>
-							))}
+							{summaryHistory.map((m, i) => {
+								// Tool calls: collapsed chip
+								const isToolCall = m.role === "system" && /^[✅❌]/.test(m.content);
+								if (isToolCall) {
+									const toolNames = m.content.match(/\*\*(\w+)\*\*/g)?.map((t) => t.replace(/\*\*/g, "")) || ["tools"];
+									const summary = toolNames.length <= 2 ? toolNames.join(", ") : `${toolNames.length} tools`;
+									return (
+										<details key={i} className="self-start max-w-[90%]">
+											<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
+												<Wrench size={11} className="shrink-0" />
+												<span>Used {summary}</span>
+											</summary>
+											<div className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+										</details>
+									);
+								}
+								if (m.role === "system") {
+									return (
+										<div key={i} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15">
+											<span className="whitespace-pre-wrap">{m.content}</span>
+										</div>
+									);
+								}
+								return (
+									<div
+										key={i}
+										onClick={() => voice.cancelSpeak()}
+										onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
+										className={`max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
+											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
+												: "bg-paper border border-line self-start rounded-bl-sm"
+										}`}
+									>
+										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}
+										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold">Co-pilot</div>}
+										{m.role === "assistant" ? (
+											<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+										) : (
+											<span className="whitespace-pre-wrap">{m.content}</span>
+										)}
+									</div>
+								);
+							})}
 							{summaryBusy && <div className="text-muted text-xs flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />Thinking...</div>}
 						</div>
 					</div>

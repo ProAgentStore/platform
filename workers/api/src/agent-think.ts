@@ -83,10 +83,15 @@ export async function runAgentThink(opts: {
 			"\n\nYou have tools available. Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
 	}
 
-	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'. Just execute and report the result concisely." +
-		"\n\nSTYLE: You are speaking to a NON-TECHNICAL person. ALWAYS summarize tool results in plain English — never repeat raw tool output, filenames, paths, git status, or code. " +
-		"Say WHAT is happening, not HOW. Example: 'You have 3 repos — platform, coffee rating, and chess academy. Platform has some work in progress, the others are clean.' " +
-		"Only get technical when the user explicitly asks for code, files, or details. 1-3 sentences max.";
+	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'." +
+		"\n\nSTYLE: You are speaking to a NON-TECHNICAL person. Your response will be READ ALOUD to them." +
+		"\nRULES:" +
+		"\n- MAXIMUM 2 sentences. Shorter is better." +
+		"\n- Never mention filenames, paths, line numbers, git status, CSS classes, function names, or code." +
+		"\n- Never repeat raw tool output. Summarize in plain English." +
+		"\n- Say WHAT happened and WHETHER it needs anything from the user." +
+		"\n- Only get technical if the user explicitly asks for details/code/files." +
+		"\n- Good: 'You have 3 repos connected. Everything looks good.' Bad: 'I found repos pags/platform with modified files agent-capabilities.ts...'.";
 
 	const aiMessages: { role: string; content: string }[] = [
 		{ role: "system", content: systemPrompt },
