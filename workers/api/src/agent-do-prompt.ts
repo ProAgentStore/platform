@@ -15,6 +15,11 @@ export const TOOL_CAPABLE_MODELS = new Set([
 	"@cf/meta/llama-4-scout-17b-16e-instruct",
 	"@cf/mistralai/mistral-small-3.1-24b-instruct",
 	"@cf/qwen/qwen2.5-coder-32b-instruct",
+	// Anthropic BYOK models
+	"claude-sonnet-4-6",
+	"claude-opus-4-6",
+	"claude-haiku-4-5",
+	"claude-sonnet-4-5-20250514",
 ]);
 
 export function defaultGuardrails(input?: Partial<Guardrails>): Guardrails {
