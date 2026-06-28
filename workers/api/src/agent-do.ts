@@ -142,6 +142,19 @@ export class AgentDO extends DurableObject<Env> {
 				return this.handleGetMessages(url);
 			if (path === "/messages" && request.method === "DELETE")
 				return this.handleClearMessages();
+			if (path === "/system-message" && request.method === "POST") {
+				const { content } = await request.json<{ content: string }>();
+				if (content) {
+					await this.appendMessage({
+						id: crypto.randomUUID(),
+						role: "system",
+						content: String(content).slice(0, 2000),
+						channel: "chat",
+						createdAt: new Date().toISOString(),
+					});
+				}
+				return json({ ok: true });
+			}
 
 			// Knowledge base
 			if (path === "/knowledge" && request.method === "GET")

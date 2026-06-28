@@ -14,6 +14,17 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 	const [loopMax, setLoopMax] = useState(10);
 	const [showLoopForm, setShowLoopForm] = useState(false);
 
+	/** Emit a system message to the UI + persist to timeline. */
+	const emitSystem = (content: string) => {
+		onMessageRef.current({ role: "system", content });
+		if (sessionId) {
+			api(`/v1/instances/${instanceId}/coding/sessions/${sessionId}/system-message`, {
+				method: "POST",
+				body: JSON.stringify({ content }),
+			}).catch(() => {});
+		}
+	};
+
 	const loopOnRef = useRef(false);
 	const loopObjectiveRef = useRef("");
 	const loopIterationRef = useRef(0);
@@ -68,7 +79,7 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 
 			if (decision.decision === "continue" && decision.nextInstruction) {
 				setLoopIteration((i) => i + 1);
-				onMessageRef.current({ role: "system", content: `Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}` });
+				emitSystem(`Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}`);
 
 				await api(`/v1/instances/${instanceId}/coding/sessions/${sessionId}/message`, {
 					method: "POST",
@@ -78,14 +89,14 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 				setTimeout(() => runStepRef.current?.(), 5000);
 			} else if (decision.decision === "done") {
 				setLoopOn(false);
-				onMessageRef.current({ role: "system", content: `Loop complete: ${decision.reason || "Objective met."}` });
+				emitSystem(`Loop complete: ${decision.reason || "Objective met."}`);
 			} else {
 				setLoopOn(false);
-				onMessageRef.current({ role: "system", content: `Loop ${decision.decision}: ${decision.reason || "Needs your input."}` });
+				emitSystem(`Loop ${decision.decision}: ${decision.reason || "Needs your input."}`);
 			}
 		} catch (e) {
 			setLoopOn(false);
-			onMessageRef.current({ role: "system", content: `Loop error: ${e instanceof Error ? e.message : String(e)}` });
+			emitSystem(`Loop error: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	};
 
@@ -94,7 +105,7 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 		setLoopOn(true);
 		setLoopIteration(0);
 		setShowLoopForm(false);
-		onMessageRef.current({ role: "system", content: `Loop started: ${loopObjective}` });
+		emitSystem(`Loop started: ${loopObjective}`);
 		api(`/v1/instances/${instanceId}/coding/sessions/${sessionId}/message`, {
 			method: "POST",
 			body: JSON.stringify({ text: loopObjective.trim() }),
@@ -105,7 +116,7 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 
 	const stop = () => {
 		setLoopOn(false);
-		onMessageRef.current({ role: "system", content: "Loop stopped by user." });
+		emitSystem("Loop stopped by user.");
 	};
 
 	return {

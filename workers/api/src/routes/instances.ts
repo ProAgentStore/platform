@@ -757,6 +757,25 @@ Reply ONLY with JSON: { "decision": "continue"|"done"|"escalate"|"failed", "next
 	}
 });
 
+/** Persist a system/status message to the instance chat history. */
+instanceRoutes.post("/:instanceId/system-message", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const instance = await c.env.DB.prepare(
+		"SELECT id FROM agent_instances WHERE id = ?1 AND user_id = ?2",
+	).bind(instanceId, session.uid).first();
+	if (!instance) throw new HttpError(404, "Instance not found");
+	const { content } = await c.req.json<{ content: string }>();
+	if (!content) throw new HttpError(400, "content required");
+	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
+	await stub.fetch(new Request("https://agent/system-message", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ content }),
+	}));
+	return c.json({ ok: true });
+});
+
 /** Get messages for my instance. */
 instanceRoutes.get("/:instanceId/messages", async (c) => {
 	const session = await requireUser(c);

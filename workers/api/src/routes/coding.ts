@@ -439,6 +439,16 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	return c.json({ ...(snap as object), runnerConnected: true });
 });
 
+/** Persist a system/status message to the coding timeline (loop events, errors). */
+codingRoutes.post("/:instanceId/coding/sessions/:sessionId/system-message", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const sessionId = c.req.param("sessionId");
+	const { content } = await c.req.json<{ content: string }>();
+	if (!content || typeof content !== "string") return c.json({ error: "content required" }, 400);
+	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "system", content: content.slice(0, 2000) });
+	return c.json({ ok: true });
+});
+
 /**
  * Co-pilot: read the live terminal and give the user a SHORT summary of what's
  * happening + what's needed from them, or answer a follow-up question. Uses the

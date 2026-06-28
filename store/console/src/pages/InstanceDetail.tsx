@@ -157,6 +157,17 @@ export default function InstanceDetail() {
 	const messagesRef2 = useRef(messages);
 	messagesRef2.current = messages;
 
+	/** Add a system message to the chat + persist to DO. */
+	const emitSystemChat = useCallback((content: string) => {
+		setMessages((prev) => [...prev, { role: "system", content }]);
+		if (id) {
+			api(`/v1/instances/${id}/system-message`, {
+				method: "POST",
+				body: JSON.stringify({ content }),
+			}).catch(() => {});
+		}
+	}, [id]);
+
 	const continueLoop = useCallback(async () => {
 		if (!loopOnRef.current || loopPausedRef.current || !id) return;
 		try {
@@ -177,23 +188,21 @@ export default function InstanceDetail() {
 
 			if (decision.decision === "continue" && decision.nextInstruction) {
 				setLoopIteration((i) => i + 1);
-				setMessages((prev) => [...prev, { role: "system", content: `Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}` }]);
-				// Small delay so user can see the instruction, then send
+				emitSystemChat(`Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}`);
 				await new Promise((r) => setTimeout(r, 1500));
 				if (loopOnRef.current && !loopPausedRef.current) {
 					doSendRef.current(decision.nextInstruction);
 				}
 			} else if (decision.decision === "done") {
 				setLoopOn(false);
-				setMessages((prev) => [...prev, { role: "system", content: `Loop complete: ${decision.reason || "Objective met."}` }]);
+				emitSystemChat(`Loop complete: ${decision.reason || "Objective met."}`);
 			} else {
-				// escalate or failed
 				setLoopOn(false);
-				setMessages((prev) => [...prev, { role: "system", content: `Loop paused — ${decision.decision}: ${decision.reason || "Needs your input."}` }]);
+				emitSystemChat(`Loop paused — ${decision.decision}: ${decision.reason || "Needs your input."}`);
 			}
 		} catch (e) {
 			setLoopOn(false);
-			setMessages((prev) => [...prev, { role: "system", content: `Loop error: ${e instanceof Error ? e.message : String(e)}` }]);
+			emitSystemChat(`Loop error: ${e instanceof Error ? e.message : String(e)}`);
 		}
 	}, [id]);
 
@@ -261,7 +270,7 @@ export default function InstanceDetail() {
 	const stopLoop = () => {
 		setLoopOn(false);
 		setLoopPaused(false);
-		setMessages((prev) => [...prev, { role: "system", content: "Loop stopped by user." }]);
+		emitSystemChat("Loop stopped by user.");
 	};
 
 	const clearChat = async () => {
