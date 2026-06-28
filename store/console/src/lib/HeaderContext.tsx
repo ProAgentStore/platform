@@ -1,22 +1,28 @@
-import { createContext, useContext, useState, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, type ReactNode } from "react";
 
-interface HeaderSlot {
-	content: ReactNode | null;
-	set: (content: ReactNode | null) => void;
-}
-
-const HeaderContext = createContext<HeaderSlot>({ content: null, set: () => {} });
+const HideNavContext = createContext<{ hidden: boolean; setHidden: (v: boolean) => void }>({
+	hidden: false,
+	setHidden: () => {},
+});
 
 export function HeaderProvider({ children }: { children: ReactNode }) {
-	const [content, setContent] = useState<ReactNode | null>(null);
+	const [hidden, setHidden] = useState(false);
 	return (
-		<HeaderContext.Provider value={{ content, set: setContent }}>
+		<HideNavContext.Provider value={{ hidden, setHidden }}>
 			{children}
-		</HeaderContext.Provider>
+		</HideNavContext.Provider>
 	);
 }
 
-/** Set custom content in the header (replaces nav links). Pass null to restore default nav. */
-export function useHeaderSlot() {
-	return useContext(HeaderContext);
+/** Tell the Layout to hide its nav links (instance detail renders its own controls) */
+export function useHideNav(hide: boolean) {
+	const { setHidden } = useContext(HideNavContext);
+	useEffect(() => {
+		setHidden(hide);
+		return () => setHidden(false);
+	}, [hide, setHidden]);
+}
+
+export function useNavHidden() {
+	return useContext(HideNavContext).hidden;
 }

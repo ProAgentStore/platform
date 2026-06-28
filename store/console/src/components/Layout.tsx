@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/AuthContext";
-import { useHeaderSlot } from "../lib/HeaderContext";
+import { useNavHidden } from "../lib/HeaderContext";
 import { api } from "../lib/api";
 import { usePolling } from "../hooks/usePolling";
 import { Zap, Bell, Menu } from "lucide-react";
@@ -12,7 +12,7 @@ export default function Layout() {
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [unreadCount, setUnreadCount] = useState(0);
 	const navRef = useRef<HTMLElement>(null);
-	const header = useHeaderSlot();
+	const navHidden = useNavHidden();
 
 	useEffect(() => {
 		if (!menuOpen) return;
@@ -56,13 +56,8 @@ export default function Layout() {
 					</span>
 				</a>
 
-				{/* Middle: either instance controls or default nav */}
-				{header.content ? (
-					// Instance/detail header replaces the nav
-					<div className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
-						{header.content}
-					</div>
-				) : (
+				{/* Nav links — hidden when instance detail renders its own controls */}
+				{!navHidden && (
 					<>
 						<nav
 							ref={navRef}
@@ -104,7 +99,7 @@ export default function Layout() {
 				)}
 
 				{/* Hamburger — only when default nav is showing */}
-				{!header.content && (
+				{!navHidden && (
 					<button
 						type="button"
 						className="lg:hidden shrink-0 text-xl text-muted hover:text-ink hover:bg-line rounded-md px-1.5 py-1"

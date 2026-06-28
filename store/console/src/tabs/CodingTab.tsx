@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../lib/api";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
-import { mdLite } from "../lib/markdown";
+import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { ArrowLeft, Trash2, Satellite } from "lucide-react";
 
@@ -353,7 +353,7 @@ export default function CodingTab({ instanceId }: Props) {
 							{summaryHistory.map((m, i) => (
 								<div key={i} className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed ${m.role === "user" ? "bg-accent text-white self-end rounded-br-sm" : "bg-paper border border-line self-start rounded-bl-sm"}`}>
 									{m.role === "assistant" ? (
-										<div className="msg-md" dangerouslySetInnerHTML={{ __html: mdLite(m.content) }} />
+										<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 									) : (
 										<span className="whitespace-pre-wrap">{m.content}</span>
 									)}
@@ -413,7 +413,7 @@ export default function CodingTab({ instanceId }: Props) {
 					<button type="button" onClick={askOverseer} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Ask</button>
 				</div>
 				{overseerReply && (
-					<div className="text-sm leading-relaxed mt-2 bg-paper border border-line rounded-lg p-2.5" dangerouslySetInnerHTML={{ __html: mdLite(overseerReply) }} />
+					<div className="text-sm leading-relaxed mt-2 bg-paper border border-line rounded-lg p-2.5" dangerouslySetInnerHTML={{ __html: renderMd(overseerReply) }} />
 				)}
 			</div>
 

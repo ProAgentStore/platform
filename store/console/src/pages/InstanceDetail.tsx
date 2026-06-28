@@ -6,7 +6,7 @@ import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { useVoice } from "../hooks/useVoice";
 import { Copy, Trash2, Mic, Volume2, AudioLines, Send, ArrowLeft } from "lucide-react";
-import { useHeaderSlot } from "../lib/HeaderContext";
+import { useHideNav } from "../lib/HeaderContext";
 import BoardTab from "../tabs/BoardTab";
 import CodingTab from "../tabs/CodingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
@@ -204,11 +204,13 @@ export default function InstanceDetail() {
 	tabDefs.push({ id: "knowledge", label: "Knowledge", icon: "📚" });
 	tabDefs.push({ id: "settings", label: "Settings", icon: "⚙" });
 
-	// Push instance controls into the shared Layout header
-	const header = useHeaderSlot();
-	useEffect(() => {
-		header.set(
-			<>
+	// Hide Layout's nav links — we render our own controls
+	useHideNav(true);
+
+	return (
+		<div className="flex flex-col h-[calc(100dvh-49px)]">
+			{/* Instance header bar */}
+			<div className="flex items-center gap-2 px-3 py-1.5 border-b border-line bg-panel">
 				<button type="button" onClick={() => navigate("/instances")} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
 				{instance && <span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>}
 				<span
@@ -231,14 +233,9 @@ export default function InstanceDetail() {
 						</button>
 					))}
 				</div>
-			</>
-		);
-		return () => header.set(null);
-	}); // runs every render to keep tab/badge state current
+			</div>
 
-	return (
-		<div className="flex flex-col h-[calc(100dvh-49px)]">
-			{/* Tab content — header is in the Layout now */}
+			{/* Tab content */}
 			<div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3 flex flex-col min-h-0">
 				{tab === "chat" && (
 					<div className="flex flex-col flex-1 min-h-0">
