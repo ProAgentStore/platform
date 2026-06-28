@@ -505,7 +505,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									</div>
 								)}
 							</div>
-							<button type="button" onClick={sendInstruction} disabled={!!voice.interim} className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
+							<button type="button" onClick={sendInstruction} disabled={!!voice.interim} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
 								<Send size={14} />
 							</button>
 						</div>
@@ -541,7 +541,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						</div>
 						{/* Loop form with presets */}
 						{loop.showLoopForm && !loop.loopOn && (
-							<div className="bg-paper border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
+							<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
 								<div className="flex flex-wrap gap-1.5">
 									{loopPresets.map((p) => (
 										<button key={p.id} type="button" onClick={() => loop.setLoopObjective(p.objective)} className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${loop.loopObjective === p.objective ? "border-accent bg-accent-soft text-accent font-bold" : "border-line text-muted hover:border-accent hover:text-accent"}`}>{p.label}</button>
@@ -596,7 +596,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 										onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
 										className={`max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
 											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
-												: "bg-paper border border-line self-start rounded-bl-sm"
+												: "bg-panel border border-line self-start rounded-bl-sm"
 										}`}
 									>
 										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}

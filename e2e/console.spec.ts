@@ -547,7 +547,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		// Navigate to Coding tab, then open Terminal
 		await page.getByRole("button", { name: "Coding" }).click();
 		await page.getByRole("button", { name: "Terminal", exact: true }).click();
-		const termInput = page.getByPlaceholder("Type a message to the CLI...");
+		const termInput = page.getByPlaceholder(/message to the (CLI|Engine)/i);
 		await termInput.fill("git status");
 		await page.getByRole("button", { name: "Send", exact: true }).last().click();
 		await expect.poll(() => capturedBody).toBeTruthy();

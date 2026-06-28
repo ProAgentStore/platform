@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
-import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
@@ -17,7 +17,6 @@ type Tab = "chat" | "board" | "coding" | "knowledge" | "settings";
 export default function InstanceDetail() {
 	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
 	const navigate = useNavigate();
-	const location = useLocation();
 	const [instance, setInstance] = useState<Instance | null>(null);
 
 	// Tab + session from URL — always sync with the route
@@ -396,15 +395,23 @@ export default function InstanceDetail() {
 							<button type="button" onClick={copyChat} title="Copy JSON" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors"><Copy size={13} /></button>
 							<button type="button" onClick={clearChat} title="Clear" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors"><Trash2 size={13} /></button>
 						</div>
-						{/* Loop form */}
+						{/* Loop form with presets */}
 						{showLoopForm && !loopOn && (
 							<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
-								<input value={loopObjective} onChange={(e) => setLoopObjective(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") startLoop(); }} placeholder="Objective: fix all bugs, refactor auth..." className="w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" autoFocus />
+								<textarea
+									value={loopObjective}
+									onChange={(e) => setLoopObjective(e.target.value)}
+									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startLoop(); } }}
+									placeholder="What should the agent work on?"
+									className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm resize-none"
+									rows={2}
+									autoFocus
+								/>
 								<div className="flex items-center gap-2 justify-between">
-									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))} className="w-14 bg-paper border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
+									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
 									<div className="flex gap-1.5">
 										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-										<button type="button" onClick={startLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start</button>
+										<button type="button" onClick={startLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
 									</div>
 								</div>
 							</div>
