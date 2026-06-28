@@ -54,6 +54,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [micOn, setMicOn] = useState(false);
 	const [speakOn, setSpeakOn] = useState(false);
 	const [convoOn, setConvoOn] = useState(false);
+	const [muted, setMuted] = useState(false);
+	const mutedRef = useRef(false);
+	mutedRef.current = muted;
 	const [interim, setInterim] = useState("");
 	/** 0-1 audio level from mic — drives the waveform visualizer */
 	const [audioLevel, setAudioLevel] = useState(0);
@@ -110,7 +113,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// Open mic with chime
 	const startListening = useCallback(async () => {
-		if (!sttRef.current || pausedForThinkingRef.current) return;
+		if (!sttRef.current || pausedForThinkingRef.current || mutedRef.current) return;
 		try {
 			await sttRef.current.start();
 			startAudioMonitor();
@@ -234,11 +237,38 @@ export function useVoice(instanceId: string | undefined, opts: {
 		} catch { setConvoOn(false); }
 	}, [convoOn, makeStt, startAudioMonitor, stopAudioMonitor]);
 
+	/** Stop speaking immediately (tap a message to interrupt). */
+	const cancelSpeak = useCallback(() => {
+		ttsRef.current?.cancel();
+		// If in convo mode and not muted, re-open mic so user can talk
+		pausedForThinkingRef.current = false;
+		if (convoOnRef.current && !mutedRef.current) {
+			startListening();
+		}
+	}, [startListening]);
+
+	const toggleMute = useCallback(() => {
+		if (muted) {
+			// Unmute: resume listening
+			setMuted(false);
+			if (convoOnRef.current && !pausedForThinkingRef.current) {
+				startListening();
+			}
+		} else {
+			// Mute: stop mic but keep convo mode on
+			setMuted(true);
+			sttRef.current?.stop();
+			stopAudioMonitor();
+			setMicOn(false);
+			setInterim("");
+		}
+	}, [muted, startListening, stopAudioMonitor]);
+
 	return {
-		micOn, speakOn, convoOn, interim,
+		micOn, speakOn, convoOn, muted, interim,
 		/** 0-1 audio level from mic — use to render waveform */
 		audioLevel,
-		toggleMic, toggleSpeak, toggleConvo,
+		toggleMic, toggleSpeak, toggleConvo, toggleMute, cancelSpeak,
 		maybeSpeakResponse,
 	};
 }

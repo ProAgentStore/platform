@@ -5,6 +5,8 @@
 import { AgentStorageEngine } from "../agent-storage.js";
 import type { CollectionField } from "../agent-storage-types.js";
 import type { ToolCallResult, ToolDef } from "./tools.js";
+import { listRepos, listSessions, getActiveSessionForRepo } from "./coding-store.js";
+import type { Env } from "../types.js";
 
 export interface StorageToolCallRequest {
 	name: string;
@@ -203,15 +205,32 @@ export const STORAGE_TOOLS: ToolDef[] = [
 			within_days: { type: "number", description: "How many days back to search (1-7, default 1)" },
 		},
 	},
+
+	// ── Coding tools (Coder agent) ────────────────────────────────────────────
+	{
+		name: "list_coding_repos",
+		description: "List the coding repositories attached to this instance, with their status and active sessions.",
+		parameters: {},
+	},
+	{
+		name: "read_terminal",
+		description: "Read the current terminal output from an active coding session. Shows what the Engine (Claude Code / Codex / etc.) is doing right now.",
+		parameters: {
+			repo_name: { type: "string", description: "Repository name (from list_coding_repos)", required: true },
+		},
+	},
+	{
+		name: "send_to_cli",
+		description: "Send an instruction to the coding Engine (CLI running in tmux) for a specific repo. The Engine will execute it.",
+		parameters: {
+			repo_name: { type: "string", description: "Repository name", required: true },
+			message: { type: "string", description: "Instruction to send to the CLI", required: true },
+		},
+	},
 ];
 
 export interface StorageToolContext {
-	env?: {
-		DB: D1Database;
-		KEY_ENCRYPTION_KEY?: string;
-		GOOGLE_CLIENT_ID?: string;
-		GOOGLE_CLIENT_SECRET?: string;
-	};
+	env?: Env;
 	agentId?: string;
 	userId?: string;
 }
@@ -555,6 +574,70 @@ export async function executeStorageTool(
 				} catch (err) {
 					if (err instanceof GmailError) return fail(call.name, err.message);
 					throw err;
+				}
+			}
+
+			// ── Coding tools ──────────────────────────────────────────────────
+			case "list_coding_repos": {
+				if (!ctx?.env?.DB || !ctx.agentId || !ctx.userId) return fail(call.name, "Not available");
+				const repos = await listRepos(ctx.env as Env, ctx.agentId, ctx.userId);
+				if (repos.length === 0) return ok(call.name, "No repositories attached.");
+				const sessions = await listSessions(ctx.env as Env, ctx.agentId, ctx.userId);
+				const lines = repos.map((r) => {
+					const active = sessions.find((s) => s.repoId === r.id && s.status === "active");
+					return `- ${r.name}${r.githubRepo ? ` (${r.githubRepo})` : ""}${active ? ` [active session: ${active.clientType || "claude"}]` : ""}`;
+				});
+				return ok(call.name, lines.join("\n"));
+			}
+
+			case "read_terminal": {
+				if (!ctx?.env || !ctx.agentId || !ctx.userId) return fail(call.name, "Not available");
+				const repoName = call.input.repo_name as string;
+				if (!repoName) return fail(call.name, "repo_name required");
+				const allRepos = await listRepos(ctx.env as Env, ctx.agentId, ctx.userId);
+				const repo = allRepos.find((r) => r.name.toLowerCase() === repoName.toLowerCase());
+				if (!repo) return fail(call.name, `Repo "${repoName}" not found. Use list_coding_repos.`);
+				const session = await getActiveSessionForRepo(ctx.env as Env, ctx.agentId, ctx.userId, repo.id);
+				if (!session) return fail(call.name, `No active session for "${repoName}".`);
+				// Read terminal via relay
+				try {
+					const relay = (ctx.env as Env).RELAY;
+					if (!relay) return fail(call.name, "Runner not connected");
+					const stub = relay.get(relay.idFromName(ctx.agentId));
+					const res = await stub.fetch(new Request("https://relay/command", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ method: "GET", path: `/coding/capture?session=${session.id}` }),
+					}));
+					const data = await res.json() as { pane?: string; runState?: string };
+					return ok(call.name, `[${data.runState || "unknown"}]\n${(data.pane || "(empty)").slice(-3000)}`);
+				} catch {
+					return fail(call.name, "Runner offline — terminal not available");
+				}
+			}
+
+			case "send_to_cli": {
+				if (!ctx?.env || !ctx.agentId || !ctx.userId) return fail(call.name, "Not available");
+				const rName = call.input.repo_name as string;
+				const msg = call.input.message as string;
+				if (!rName || !msg) return fail(call.name, "repo_name and message required");
+				const rRepos = await listRepos(ctx.env as Env, ctx.agentId, ctx.userId);
+				const rRepo = rRepos.find((r) => r.name.toLowerCase() === rName.toLowerCase());
+				if (!rRepo) return fail(call.name, `Repo "${rName}" not found.`);
+				const rSession = await getActiveSessionForRepo(ctx.env as Env, ctx.agentId, ctx.userId, rRepo.id);
+				if (!rSession) return fail(call.name, `No active session for "${rName}".`);
+				try {
+					const relay = (ctx.env as Env).RELAY;
+					if (!relay) return fail(call.name, "Runner not connected");
+					const stub = relay.get(relay.idFromName(ctx.agentId));
+					await stub.fetch(new Request("https://relay/command", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ method: "POST", path: `/coding/act?session=${rSession.id}`, body: { text: msg } }),
+					}));
+					return ok(call.name, `Sent to ${rName}: "${msg.slice(0, 100)}"`);
+				} catch {
+					return fail(call.name, "Runner offline — cannot send");
 				}
 			}
 

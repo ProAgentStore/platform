@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
 import { useVoice } from "../hooks/useVoice";
-import { Copy, Trash2, Mic, Volume2, AudioLines, Send, ArrowLeft } from "lucide-react";
-import { useHideNav } from "../lib/HeaderContext";
+import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square } from "lucide-react";
+import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import BoardTab from "../tabs/BoardTab";
 import CodingTab from "../tabs/CodingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
@@ -36,6 +36,18 @@ export default function InstanceDetail() {
 	// Runtime status
 	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
 	const [runnerNode, setRunnerNode] = useState("");
+
+	// Agent loop state
+	const [loopOn, setLoopOn] = useState(false);
+	const [loopObjective, setLoopObjective] = useState("");
+	const [loopIteration, setLoopIteration] = useState(0);
+	const [loopMax, setLoopMax] = useState(10);
+	const [loopPaused, setLoopPaused] = useState(false);
+	const [showLoopForm, setShowLoopForm] = useState(false);
+	const loopOnRef = useRef(false);
+	const loopPausedRef = useRef(false);
+	loopOnRef.current = loopOn;
+	loopPausedRef.current = loopPaused;
 
 	// Voice: both push-to-talk and conversation mode auto-send via this ref
 	const doSendRef = useRef<(text: string) => void>(() => {});
@@ -130,14 +142,63 @@ export default function InstanceDetail() {
 	speakRef.current = voice.maybeSpeakResponse;
 
 	const isCoding = instance?.capabilities?.surfaces?.includes("coding") ?? false;
+
+	// Refs for loop state used inside the async loop continuation
+	const loopObjectiveRef = useRef(loopObjective);
+	const loopIterationRef = useRef(loopIteration);
+	const loopMaxRef = useRef(loopMax);
+	loopObjectiveRef.current = loopObjective;
+	loopIterationRef.current = loopIteration;
+	loopMaxRef.current = loopMax;
+	const messagesRef2 = useRef(messages);
+	messagesRef2.current = messages;
+
+	const continueLoop = useCallback(async () => {
+		if (!loopOnRef.current || loopPausedRef.current || !id) return;
+		try {
+			const recent = messagesRef2.current.slice(-6).map((m) => ({ role: m.role, content: m.content }));
+			const decision = await api<{ decision: string; nextInstruction?: string; reason?: string }>(
+				`/v1/instances/${id}/loop-decide`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						objective: loopObjectiveRef.current,
+						messages: recent,
+						iteration: loopIterationRef.current,
+						maxIterations: loopMaxRef.current,
+					}),
+				},
+			);
+			if (!loopOnRef.current) return; // stopped while waiting
+
+			if (decision.decision === "continue" && decision.nextInstruction) {
+				setLoopIteration((i) => i + 1);
+				setMessages((prev) => [...prev, { role: "system", content: `Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}` }]);
+				// Small delay so user can see the instruction, then send
+				await new Promise((r) => setTimeout(r, 1500));
+				if (loopOnRef.current && !loopPausedRef.current) {
+					doSendRef.current(decision.nextInstruction);
+				}
+			} else if (decision.decision === "done") {
+				setLoopOn(false);
+				setMessages((prev) => [...prev, { role: "system", content: `Loop complete: ${decision.reason || "Objective met."}` }]);
+			} else {
+				// escalate or failed
+				setLoopOn(false);
+				setMessages((prev) => [...prev, { role: "system", content: `Loop paused — ${decision.decision}: ${decision.reason || "Needs your input."}` }]);
+			}
+		} catch (e) {
+			setLoopOn(false);
+			setMessages((prev) => [...prev, { role: "system", content: `Loop error: ${e instanceof Error ? e.message : String(e)}` }]);
+		}
+	}, [id]);
+
 	const doSend = useCallback(async (msg: string) => {
 		console.log("[chat] doSend:", msg?.slice(0, 50), "id:", id);
 		if (!msg.trim() || !id) return;
 		setMessages((prev) => [...prev, { role: "user", content: msg }]);
 		setThinking(true);
 		try {
-			// Always use /chat — it persists messages and works for all agents.
-			// The AgentDO handles the response (uses BYOK AI or CF Workers AI).
 			const data = await api<{ message?: Message }>(
 				`/v1/instances/${id}/chat`,
 				{ method: "POST", body: JSON.stringify({ message: msg }) },
@@ -155,7 +216,11 @@ export default function InstanceDetail() {
 			]);
 		}
 		setThinking(false);
-	}, [id]);
+		// If the loop is active, continue after agent response
+		if (loopOnRef.current && !loopPausedRef.current) {
+			continueLoop();
+		}
+	}, [id, continueLoop]);
 
 	// Wire the voice hook's auto-send to doSend
 	doSendRef.current = doSend;
@@ -164,7 +229,31 @@ export default function InstanceDetail() {
 		if (!input.trim()) return;
 		const msg = input.trim();
 		setInput("");
+		// If loop is running, pause it for human intervention
+		if (loopOn) setLoopPaused(true);
 		doSend(msg);
+	};
+
+	// Resume loop after human intervention response
+	useEffect(() => {
+		if (loopOn && loopPaused && !thinking) {
+			setLoopPaused(false);
+		}
+	}, [thinking]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	const startLoop = () => {
+		if (!loopObjective.trim()) return;
+		setLoopOn(true);
+		setLoopIteration(0);
+		setLoopPaused(false);
+		setShowLoopForm(false);
+		doSend(loopObjective.trim());
+	};
+
+	const stopLoop = () => {
+		setLoopOn(false);
+		setLoopPaused(false);
+		setMessages((prev) => [...prev, { role: "system", content: "Loop stopped by user." }]);
 	};
 
 	const clearChat = async () => {
@@ -196,45 +285,55 @@ export default function InstanceDetail() {
 
 	const surfaces = instance?.capabilities?.surfaces || [];
 	const isApply = surfaces.includes("apply");
-	const tabDefs: { id: Tab; label: string; icon: string }[] = [
-		{ id: "chat", label: "Chat", icon: "💬" },
-	];
-	if (isApply || !surfaces.includes("coding")) tabDefs.push({ id: "board", label: "Board", icon: "📋" });
-	if (surfaces.includes("coding")) tabDefs.push({ id: "coding", label: "Coding", icon: "💻" });
-	tabDefs.push({ id: "knowledge", label: "Knowledge", icon: "📚" });
-	tabDefs.push({ id: "settings", label: "Settings", icon: "⚙" });
+	const hasCoding = surfaces.includes("coding");
+	const tabDefs = useMemo(() => {
+		const tabs: { id: Tab; label: string; icon: string }[] = [
+			{ id: "chat", label: "Chat", icon: "💬" },
+		];
+		if (isApply || !hasCoding) tabs.push({ id: "board", label: "Board", icon: "📋" });
+		if (hasCoding) tabs.push({ id: "coding", label: "Coding", icon: "💻" });
+		tabs.push({ id: "knowledge", label: "Knowledge", icon: "📚" });
+		tabs.push({ id: "settings", label: "Settings", icon: "⚙" });
+		return tabs;
+	}, [isApply, hasCoding]);
 
-	// Hide Layout's nav links — we render our own controls
+	// Inject instance controls into the Layout header (single bar)
 	useHideNav(true);
+	const headerContent = useMemo(() => (
+		<div className="flex items-center gap-2 min-w-0">
+			<button type="button" onClick={() => navigate("/instances")} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
+			{instance && <span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>}
+			<span
+				className="text-[0.7rem] font-bold px-1.5 py-0.5 rounded-full shrink-0"
+				style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-green)" : "var(--color-muted)" }}
+				title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
+			>
+				{runnerOnline ? "●" : "○"}
+			</span>
+			<div className="flex border border-line rounded-lg overflow-x-auto overflow-y-hidden shrink min-w-0 scrollbar-none">
+				{tabDefs.map((t) => (
+					<button
+						key={t.id}
+						type="button"
+						onClick={() => setTab(t.id)}
+						className={`px-2 py-1 text-xs font-bold whitespace-nowrap shrink-0 transition-all ${tab === t.id ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}
+					>
+						<span className="sm:hidden">{t.icon}</span>
+						<span className="hidden sm:inline">{t.label}</span>
+					</button>
+				))}
+			</div>
+		</div>
+	), [instance, runnerOnline, runnerNode, tab, tabDefs, navigate]);
+
+	// Child tabs (CodingTab) can override the header when they have their own controls
+	const [childHeader, setChildHeader] = useState<ReactNode | null>(null);
+	// Clear override when switching away from the tab that set it
+	useEffect(() => { if (tab !== "coding") setChildHeader(null); }, [tab]);
+	useHeaderSlot(childHeader || headerContent);
 
 	return (
 		<div className="flex flex-col h-[calc(100dvh-49px)]">
-			{/* Instance header bar */}
-			<div className="flex items-center gap-2 px-3 py-1.5 border-b border-line bg-panel">
-				<button type="button" onClick={() => navigate("/instances")} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
-				{instance && <span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>}
-				<span
-					className="text-[0.7rem] font-bold px-1.5 py-0.5 rounded-full shrink-0"
-					style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-green)" : "var(--color-muted)" }}
-					title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
-				>
-					{runnerOnline ? "●" : "○"}
-				</span>
-				<div className="flex border border-line rounded-lg overflow-x-auto overflow-y-hidden shrink min-w-0 scrollbar-none">
-					{tabDefs.map((t) => (
-						<button
-							key={t.id}
-							type="button"
-							onClick={() => setTab(t.id)}
-							className={`px-2 py-1 text-xs font-bold whitespace-nowrap shrink-0 transition-all ${tab === t.id ? "bg-accent-soft text-accent" : "text-muted hover:bg-panel-hover"}`}
-						>
-							<span className="sm:hidden">{t.icon}</span>
-							<span className="hidden sm:inline">{t.label}</span>
-						</button>
-					))}
-				</div>
-			</div>
-
 			{/* Tab content */}
 			<div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3 flex flex-col min-h-0">
 				{tab === "chat" && (
@@ -253,6 +352,7 @@ export default function InstanceDetail() {
 							{messages.map((m, i) => (
 								<div
 									key={i}
+									onClick={() => voice.cancelSpeak()}
 									className={`group relative max-w-[92%] sm:max-w-[82%] px-3 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-sm leading-relaxed ${
 										m.role === "user"
 											? "bg-accent text-white self-end rounded-br-sm shadow-sm"
@@ -284,6 +384,36 @@ export default function InstanceDetail() {
 								</div>
 							)}
 						</div>
+						{/* Loop form — shown inline above the input bar */}
+						{showLoopForm && !loopOn && (
+							<div className="bg-panel border border-line rounded-xl p-3 mb-2 flex flex-col gap-2">
+								<input
+									value={loopObjective}
+									onChange={(e) => setLoopObjective(e.target.value)}
+									onKeyDown={(e) => { if (e.key === "Enter") startLoop(); }}
+									placeholder="Objective: e.g. fix all bugs, refactor the auth module..."
+									className="w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+									autoFocus
+								/>
+								<div className="flex items-center gap-2 justify-between">
+									<label className="text-xs text-muted flex items-center gap-1.5">
+										Max iterations:
+										<input
+											type="number"
+											value={loopMax}
+											onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))}
+											className="w-14 bg-paper border border-line rounded px-2 py-1 text-xs"
+											min={1}
+											max={50}
+										/>
+									</label>
+									<div className="flex gap-1.5">
+										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+										<button type="button" onClick={startLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
+									</div>
+								</div>
+							</div>
+						)}
 						{/* Chat input bar with voice + action buttons */}
 						<div className="flex gap-1 sm:gap-1.5 pt-2 sm:pt-3 border-t border-line shrink-0 items-center">
 							<div className="flex-1 min-w-0 relative">
@@ -329,6 +459,37 @@ export default function InstanceDetail() {
 							>
 								<AudioLines size={16} />
 							</button>
+							{voice.convoOn && (
+								<button
+									type="button"
+									onClick={voice.toggleMute}
+									title={voice.muted ? "Unmute — resume listening" : "Mute — pause mic without ending conversation"}
+									className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red/15 text-red" : "border-line text-muted hover:border-accent hover:text-accent"}`}
+								>
+									<MicOff size={16} />
+								</button>
+							)}
+							{/* Loop button */}
+							{loopOn ? (
+								<button
+									type="button"
+									onClick={stopLoop}
+									title={`Loop running: ${loopIteration}/${loopMax} — click to stop`}
+									className="px-2 py-2 text-sm border border-green bg-green/15 text-green rounded-lg transition-colors relative"
+								>
+									<Square size={16} />
+									<span className="absolute -top-1.5 -right-1.5 text-[0.6rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span>
+								</button>
+							) : (
+								<button
+									type="button"
+									onClick={() => setShowLoopForm(!showLoopForm)}
+									title="Agent loop: set an objective and let the agent work autonomously"
+									className={`px-2 py-2 text-sm border rounded-lg transition-colors ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}
+								>
+									<Repeat size={16} />
+								</button>
+							)}
 							<button
 								type="button"
 								onClick={sendMessage}
@@ -350,7 +511,7 @@ export default function InstanceDetail() {
 				)}
 
 				{tab === "board" && id && <BoardTab instanceId={id} isApply={isApply} />}
-				{tab === "coding" && id && <CodingTab instanceId={id} />}
+				{tab === "coding" && id && <CodingTab instanceId={id} onHeaderOverride={setChildHeader} />}
 				{tab === "knowledge" && id && <KnowledgeTab instanceId={id} isApply={isApply} />}
 				{tab === "settings" && id && <SettingsTab instanceId={id} isApply={isApply} onUnsubscribe={() => navigate("/instances")} />}
 			</div>

@@ -7,6 +7,7 @@ import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
+import { listRepos, listSessions } from "./lib/coding-store.js";
 import type { Env } from "./types.js";
 
 export async function runAgentThink(opts: {
@@ -52,6 +53,28 @@ export async function runAgentThink(opts: {
 				systemPrompt += `- ${key}: ${value}\n`;
 			}
 		}
+	}
+
+	// Coding repos & sessions context (Coder instances)
+	if (userId && state.agentId) {
+		try {
+			const repos = await listRepos(env, state.agentId, userId);
+			if (repos.length > 0) {
+				systemPrompt += "\n\n## Attached Repositories\n";
+				for (const r of repos) {
+					systemPrompt += `- ${r.name}${r.githubRepo ? ` (${r.githubRepo})` : ""}\n`;
+				}
+				const sessions = await listSessions(env, state.agentId, userId);
+				const active = sessions.filter((s) => s.status === "active");
+				if (active.length > 0) {
+					systemPrompt += "\n## Active Coding Sessions\n";
+					for (const s of active) {
+						const repo = repos.find((r) => r.id === s.repoId);
+						systemPrompt += `- ${repo?.name || s.repoId} — engine: ${s.launchCommand || s.clientType || "claude"}\n`;
+					}
+				}
+			}
+		} catch {}
 	}
 
 	const useTools = TOOL_CAPABLE_MODELS.has(state.model);

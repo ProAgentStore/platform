@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
@@ -684,6 +685,70 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 		);
 	}
 	return c.json(data, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
+});
+
+/** Loop orchestrator — BYOK Claude decides next action for an autonomous loop. */
+instanceRoutes.post("/:instanceId/loop-decide", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const instance = await c.env.DB.prepare(
+		"SELECT id FROM agent_instances WHERE id = ?1 AND user_id = ?2",
+	).bind(instanceId, session.uid).first();
+	if (!instance) throw new HttpError(404, "Instance not found");
+
+	const { objective, messages, iteration, maxIterations } = await c.req.json<{
+		objective: string;
+		messages: { role: string; content: string }[];
+		iteration: number;
+		maxIterations: number;
+	}>();
+	if (!objective) throw new HttpError(400, "objective required");
+
+	const systemPrompt = `You are a loop orchestrator. The user set this objective: "${objective}".
+You are on iteration ${iteration ?? 0}/${maxIterations ?? 10}.
+
+Read the conversation so far and decide ONE of:
+- CONTINUE: the objective is not yet met. Write the next instruction to give the agent.
+- DONE: the objective is fully met. No more work needed.
+- ESCALATE: the agent is stuck, pushing back, asking questions, or needs human help.
+- FAILED: something went wrong or the agent keeps repeating itself.
+
+Reply ONLY with JSON: { "decision": "continue"|"done"|"escalate"|"failed", "nextInstruction": "...", "reason": "..." }`;
+
+	const conversationText = (messages || [])
+		.slice(-6)
+		.map((m) => `${m.role}: ${m.content}`)
+		.join("\n\n");
+
+	try {
+		const res = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
+			messages: [
+				{ role: "system", content: systemPrompt },
+				{ role: "user", content: conversationText || "(no messages yet)" },
+			],
+			maxTokens: 300,
+		})) as { response?: string };
+
+		const raw = res.response || "";
+		const jsonMatch = raw.match(/\{[\s\S]*\}/);
+		if (jsonMatch) {
+			try {
+				const parsed = JSON.parse(jsonMatch[0]);
+				return c.json({
+					decision: parsed.decision || "escalate",
+					nextInstruction: parsed.nextInstruction || "",
+					reason: parsed.reason || "",
+				});
+			} catch {}
+		}
+		return c.json({ decision: "escalate", nextInstruction: "", reason: "Could not parse LLM response" });
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		if (msg.includes("API key") || msg.includes("credentials")) {
+			throw new HttpError(402, "No API key configured. Add one in Profile → API Keys.");
+		}
+		throw e;
+	}
 });
 
 /** Get messages for my instance. */

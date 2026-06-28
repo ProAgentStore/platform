@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "../lib/api";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
 import { renderMd } from "../lib/markdown";
 import { usePolling } from "../hooks/usePolling";
-import { ArrowLeft, Trash2, Satellite } from "lucide-react";
+import { useVoice } from "../hooks/useVoice";
+import { ArrowLeft, Trash2, Satellite, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send } from "lucide-react";
 
 /** Colorize terminal output by line prefix pattern (matches old console). */
 function colorizeTerminal(text: string): string {
@@ -26,6 +27,7 @@ function colorizeTerminal(text: string): string {
 
 interface Props {
 	instanceId: string;
+	onHeaderOverride?: (content: React.ReactNode | null) => void;
 }
 
 interface TimelineEntry {
@@ -36,18 +38,35 @@ interface TimelineEntry {
 	seq?: number;
 }
 
-export default function CodingTab({ instanceId }: Props) {
+export default function CodingTab({ instanceId, onHeaderOverride }: Props) {
 	const [repos, setRepos] = useState<CodingRepo[]>([]);
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
 	const [engines, setEngines] = useState<CodingEngine[]>([]);
 	const [defaultEngine, setDefaultEngine] = useState("claude");
 	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
 
+	// Loop state
+	const [loopOn, setLoopOn] = useState(false);
+	const [loopObjective, setLoopObjective] = useState("");
+	const [loopIteration, setLoopIteration] = useState(0);
+	const [loopMax, setLoopMax] = useState(10);
+	const [showLoopForm, setShowLoopForm] = useState(false);
+	const loopOnRef = useRef(false);
+	const loopObjectiveRef = useRef("");
+	const loopIterationRef = useRef(0);
+	const loopMaxRef = useRef(10);
+	loopOnRef.current = loopOn;
+	loopObjectiveRef.current = loopObjective;
+	loopIterationRef.current = loopIteration;
+	loopMaxRef.current = loopMax;
+
 	// Session view state
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
 	const [view, setView] = useState<"summary" | "terminal">("summary");
 	const [terminalText, setTerminalText] = useState("(waiting...)");
 	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string }[]>([]);
+	const summaryHistoryRef = useRef(summaryHistory);
+	summaryHistoryRef.current = summaryHistory;
 	const [summaryBusy, setSummaryBusy] = useState(false);
 	const [chatInput, setChatInput] = useState("");
 	const [termInput, setTermInput] = useState("");
@@ -58,6 +77,12 @@ export default function CodingTab({ instanceId }: Props) {
 	const [repoStatuses, setRepoStatuses] = useState<Record<string, string>>({});
 	const threadRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<HTMLPreElement>(null);
+
+	// Voice: wire to Co-pilot sendInstruction
+	const sendInstructionRef = useRef<(text: string) => void>(() => {});
+	const voice = useVoice(instanceId, {
+		onSend: (text) => sendInstructionRef.current(text),
+	});
 
 	const loadCoding = useCallback(async () => {
 		try {
@@ -175,26 +200,34 @@ export default function CodingTab({ instanceId }: Props) {
 		setSummaryHistory([]);
 	};
 
-	const sendInstruction = async () => {
-		if (!chatInput.trim() || !openSession) return;
-		const msg = chatInput.trim();
-		setChatInput("");
+	const doSendInstruction = async (msg: string) => {
+		if (!msg.trim() || !openSession) return;
 		setSummaryHistory((prev) => [...prev, { role: "user", content: msg }]);
 		setSummaryBusy(true);
 		try {
-			console.log("[coding] sending instruction to session:", openSession.id);
 			const d = await api<{ reply?: string; response?: string }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/explain`, {
 				method: "POST",
 				body: JSON.stringify({ question: msg }),
 			});
 			const reply = d.reply || d.response;
-			if (reply) setSummaryHistory((prev) => [...prev, { role: "assistant", content: reply }]);
-			else setSummaryHistory((prev) => [...prev, { role: "assistant", content: "No response — the session may need to be started first." }]);
+			if (reply) {
+				setSummaryHistory((prev) => [...prev, { role: "assistant", content: reply }]);
+				voice.maybeSpeakResponse(reply);
+			} else {
+				setSummaryHistory((prev) => [...prev, { role: "assistant", content: "No response — the session may need to be started first." }]);
+			}
 		} catch (e) {
-			console.error("[coding] explain failed:", e);
 			setSummaryHistory((prev) => [...prev, { role: "assistant", content: `Error: ${e instanceof Error ? e.message : String(e)}` }]);
 		}
 		setSummaryBusy(false);
+	};
+	sendInstructionRef.current = doSendInstruction;
+
+	const sendInstruction = () => {
+		if (!chatInput.trim()) return;
+		const msg = chatInput.trim();
+		setChatInput("");
+		doSendInstruction(msg);
 	};
 
 	const sendTerminalMessage = async () => {
@@ -314,6 +347,102 @@ export default function CodingTab({ instanceId }: Props) {
 		}
 	};
 
+	const copySummaryJson = async () => {
+		if (!openSession) return;
+		try {
+			const d = await api<{ timeline: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline?full=1`);
+			const entries = (d.timeline || []).map((e) => ({
+				type: e.type,
+				role: e.role,
+				content: e.content || e.text || "",
+				seq: e.seq,
+			}));
+			await navigator.clipboard.writeText(JSON.stringify({ sessionId: openSession.id, count: entries.length, timeline: entries }, null, 2));
+		} catch (e) {
+			alert("Copy failed: " + (e instanceof Error ? e.message : String(e)));
+		}
+	};
+
+	// ── Loop engine: reads terminal, asks loop-decide, sends next instruction to CLI ──
+	const runLoopStepRef = useRef<() => Promise<void>>(async () => {});
+	runLoopStepRef.current = async () => {
+		if (!loopOnRef.current || !openSession) return;
+		try {
+			const capture = await api<{ pane?: string; runState?: string }>(
+				`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`,
+			);
+			const termSnap = capture.pane || "(empty terminal)";
+			const runState = capture.runState || "idle";
+
+			// Wait for the CLI to finish if it's still working
+			if (runState === "thinking" || runState === "working") {
+				setTimeout(() => runLoopStepRef.current?.(), 3000);
+				return;
+			}
+
+			// Build messages from the co-pilot history + terminal snapshot
+			const recent = [
+				...summaryHistoryRef.current.slice(-4).map((m) => ({ role: m.role, content: m.content })),
+				{ role: "assistant", content: `[Terminal output]\n${termSnap.slice(-2000)}` },
+			];
+
+			const decision = await api<{ decision: string; nextInstruction?: string; reason?: string }>(
+				`/v1/instances/${instanceId}/loop-decide`,
+				{
+					method: "POST",
+					body: JSON.stringify({
+						objective: loopObjectiveRef.current,
+						messages: recent,
+						iteration: loopIterationRef.current,
+						maxIterations: loopMaxRef.current,
+					}),
+				},
+			);
+
+			if (!loopOnRef.current) return;
+
+			if (decision.decision === "continue" && decision.nextInstruction) {
+				setLoopIteration((i) => i + 1);
+				setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}` }]);
+
+				await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/message`, {
+					method: "POST",
+					body: JSON.stringify({ text: decision.nextInstruction }),
+				});
+
+				setTimeout(() => runLoopStepRef.current?.(), 5000);
+			} else if (decision.decision === "done") {
+				setLoopOn(false);
+				setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop complete: ${decision.reason || "Objective met."}` }]);
+			} else {
+				setLoopOn(false);
+				setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop ${decision.decision}: ${decision.reason || "Needs your input."}` }]);
+			}
+		} catch (e) {
+			setLoopOn(false);
+			setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop error: ${e instanceof Error ? e.message : String(e)}` }]);
+		}
+	};
+
+	const startCodingLoop = () => {
+		if (!loopObjective.trim() || !openSession) return;
+		setLoopOn(true);
+		setLoopIteration(0);
+		setShowLoopForm(false);
+		setSummaryHistory((prev) => [...prev, { role: "system", content: `Loop started: ${loopObjective}` }]);
+		api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/message`, {
+			method: "POST",
+			body: JSON.stringify({ text: loopObjective.trim() }),
+		}).then(() => {
+			setTimeout(() => runLoopStepRef.current?.(), 5000);
+		});
+	};
+
+	const stopCodingLoop = () => {
+		setLoopOn(false);
+		setSummaryHistory((prev) => [...prev, { role: "system", content: "Loop stopped by user." }]);
+	};
+
 	const getActiveSession = (repoId: string) => sessions.find((s) => s.repoId === repoId && s.status === "active");
 
 	const repoLabel = (r: CodingRepo) => {
@@ -326,32 +455,44 @@ export default function CodingTab({ instanceId }: Props) {
 		return "Active";
 	};
 
+	// Push session header override to parent when session is open
+	const openRepo = openSession ? repos.find((r) => getActiveSession(r.id)?.id === openSession.id) : null;
+	useEffect(() => {
+		if (!openSession || !onHeaderOverride) return;
+		onHeaderOverride(
+			<div className="flex items-center gap-2 min-w-0">
+				<button type="button" onClick={closeTerminal} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
+				<span className="text-sm font-semibold truncate max-w-28">{openRepo?.name || openSession.repoId}</span>
+				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
+					<button type="button" onClick={() => setView("summary")} className={`px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}>Co-pilot</button>
+					<button type="button" onClick={() => setView("terminal")} className={`px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}>Terminal</button>
+				</div>
+				<div className="ml-auto flex gap-1 shrink-0">
+					<button type="button" onClick={copySummaryJson} title="Copy JSON" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Copy size={12} /></button>
+					<button type="button" onClick={freshStart} title="Fresh start" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Fresh</button>
+					<button type="button" onClick={restartSession} title="Restart CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Restart</button>
+					<button type="button" onClick={endSession} title="End session" className="text-xs px-1.5 py-1 rounded-md border border-red text-red font-semibold">End</button>
+				</div>
+			</div>
+		);
+		return () => onHeaderOverride(null);
+	}); // intentionally no deps — re-renders on every state change to keep buttons current
+
 	// ── Session open: full-screen terminal/co-pilot ──
 	if (openSession) {
-		const repo = repos.find((r) => getActiveSession(r.id)?.id === openSession.id);
 		return (
-			<div className="flex flex-col h-[calc(100dvh-120px)] min-h-[340px]">
-				{/* Header bar */}
-				<div className="flex items-center gap-2 mb-2 flex-wrap">
-					<button type="button" onClick={closeTerminal} className="text-sm text-muted hover:text-ink"><ArrowLeft size={16} /></button>
-					<span className="text-sm font-semibold truncate">{repo?.name || openSession.repoId}</span>
-					<div className="flex border border-line rounded-lg overflow-hidden">
-						<button type="button" onClick={() => setView("summary")} className={`px-2.5 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}>Agent</button>
-						<button type="button" onClick={() => setView("terminal")} className={`px-2.5 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}>Terminal</button>
-					</div>
-					<div className="ml-auto flex gap-1.5">
-						<button type="button" onClick={freshStart} title="End this session and start a completely new one (clean state, no resume)" className="text-xs px-2 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Fresh Start</button>
-						<button type="button" onClick={restartSession} title="Restart the CLI (kills and relaunches with resume)" className="text-xs px-2 py-1 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent">Restart</button>
-						<button type="button" onClick={endSession} title="End the session completely" className="text-xs px-2 py-1 rounded-md border border-red text-red font-semibold">End</button>
-					</div>
-				</div>
+			<div className="flex flex-col h-full min-h-[340px]">
 
-				{/* Agent view */}
+				{/* Co-pilot view */}
 				{view === "summary" && (
 					<div className="flex flex-col flex-1 min-h-0">
 						<div ref={threadRef} className="flex-1 overflow-y-auto bg-panel border border-line rounded-lg p-3 flex flex-col gap-3 chat-scroll">
 							{summaryHistory.map((m, i) => (
-								<div key={i} className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed ${m.role === "user" ? "bg-accent text-white self-end rounded-br-sm" : "bg-paper border border-line self-start rounded-bl-sm"}`}>
+								<div key={i} className={`max-w-[85%] px-3 py-2 rounded-xl text-sm leading-relaxed ${
+									m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
+										: m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15"
+										: "bg-paper border border-line self-start rounded-bl-sm"
+								}`}>
 									{m.role === "assistant" ? (
 										<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 									) : (
@@ -361,15 +502,73 @@ export default function CodingTab({ instanceId }: Props) {
 							))}
 							{summaryBusy && <div className="text-muted text-xs flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />Thinking...</div>}
 						</div>
-						<div className="flex gap-1.5 mt-2 shrink-0">
-							<input
-								value={chatInput}
-								onChange={(e) => setChatInput(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") sendInstruction(); }}
-								placeholder="Ask about it, or tell it to do something..."
-								className="flex-1 min-w-0"
-							/>
-							<button type="button" onClick={sendInstruction} className="px-3 py-2 bg-accent text-white rounded-xl font-bold text-sm">Send</button>
+						{/* Loop form */}
+						{showLoopForm && !loopOn && (
+							<div className="bg-paper border border-line rounded-xl p-3 mt-2 flex flex-col gap-2">
+								<input
+									value={loopObjective}
+									onChange={(e) => setLoopObjective(e.target.value)}
+									onKeyDown={(e) => { if (e.key === "Enter") startCodingLoop(); }}
+									placeholder="Objective: e.g. fix all failing tests, refactor auth..."
+									className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm"
+									autoFocus
+								/>
+								<div className="flex items-center gap-2 justify-between">
+									<label className="text-xs text-muted flex items-center gap-1.5">
+										Max:
+										<input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} />
+									</label>
+									<div className="flex gap-1.5">
+										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+										<button type="button" onClick={startCodingLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start</button>
+									</div>
+								</div>
+							</div>
+						)}
+						<div className="flex gap-1 sm:gap-1.5 mt-2 shrink-0 items-center">
+							<div className="flex-1 min-w-0 relative">
+								<input
+									value={voice.interim || chatInput}
+									onChange={(e) => { if (!voice.interim) setChatInput(e.target.value); }}
+									onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendInstruction(); }}
+									placeholder={voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : "Ask about it, or tell it to do something..."}
+									readOnly={!!voice.interim}
+									className={`w-full bg-panel border rounded-xl px-3 py-2 text-sm transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
+								/>
+								{voice.micOn && (
+									<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
+										<div className="h-full bg-green rounded-full transition-all" style={{ width: `${Math.round(voice.audioLevel * 100)}%`, transitionDuration: "50ms" }} />
+									</div>
+								)}
+							</div>
+							<button type="button" onClick={voice.toggleMic} title="Push to talk" className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+								<Mic size={14} />
+							</button>
+							<button type="button" onClick={voice.toggleSpeak} title="Auto-speak responses" className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+								<Volume2 size={14} />
+							</button>
+							<button type="button" onClick={voice.toggleConvo} title="Conversation mode: hands-free voice" className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+								<AudioLines size={14} />
+							</button>
+							{voice.convoOn && (
+								<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute" : "Mute mic"} className={`px-2 py-2 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red/15 text-red" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+									<MicOff size={14} />
+								</button>
+							)}
+							{/* Loop button */}
+							{loopOn ? (
+								<button type="button" onClick={stopCodingLoop} title={`Loop running: ${loopIteration}/${loopMax}`} className="px-2 py-2 text-sm border border-green bg-green/15 text-green rounded-lg relative">
+									<Square size={14} />
+									<span className="absolute -top-1.5 -right-1.5 text-[0.6rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span>
+								</button>
+							) : (
+								<button type="button" onClick={() => setShowLoopForm(!showLoopForm)} title="Loop: set an objective and let the CLI work autonomously" className={`px-2 py-2 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+									<Repeat size={14} />
+								</button>
+							)}
+							<button type="button" onClick={sendInstruction} disabled={!!voice.interim} className="px-3 py-2 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
+								<Send size={14} />
+							</button>
 						</div>
 					</div>
 				)}

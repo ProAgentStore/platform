@@ -27,6 +27,9 @@ const CORE_TOOLS = new Set([
 	"get_user_context",
 	"set_user_preference",
 	"submit_job_application",
+	"list_coding_repos",
+	"read_terminal",
+	"send_to_cli",
 ]);
 
 export function buildAgentToolDefinitions(opts?: { emailEnabled?: boolean }) {
