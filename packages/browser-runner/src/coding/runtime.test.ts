@@ -112,9 +112,11 @@ describe("CodingRuntime over the stream-json engine", () => {
 
 		rt.act("s1", { kind: "message", text: "do-the-thing" });
 		await until(() => rt.snapshot("s1").pane.includes("REPLY:do-the-thing"));
+		// Wait for runState to settle — result event may arrive after pane content
+		await until(() => rt.snapshot("s1").runState === "idle");
 		const snap = rt.snapshot("s1");
 		expect(snap.pane).toContain("REPLY:do-the-thing");
-		expect(snap.runState).toBe("idle"); // result event → real idle
+		expect(snap.runState).toBe("idle");
 	});
 
 	it("lists sessions and ends them", () => {
