@@ -72,6 +72,22 @@ const pages = {
 		"utf-8",
 	),
 	consolePage: consoleHtml,
+	privacyPage: fs.readFileSync(
+		path.join(storeDir, "app", "privacy", "index.html"),
+		"utf-8",
+	),
+	termsPage: fs.readFileSync(
+		path.join(storeDir, "app", "terms", "index.html"),
+		"utf-8",
+	),
+	supportPage: fs.readFileSync(
+		path.join(storeDir, "app", "support", "index.html"),
+		"utf-8",
+	),
+	deletePage: fs.readFileSync(
+		path.join(storeDir, "app", "delete", "index.html"),
+		"utf-8",
+	),
 	agentDetailPage: fs.readFileSync(
 		path.join(storeDir, "agents", "detail.html"),
 		"utf-8",

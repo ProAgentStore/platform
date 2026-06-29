@@ -4,6 +4,7 @@
  */
 import {
 	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, agentDetailPage,
+	privacyPage, termsPage, supportPage, deletePage,
 	widgetJs, authWidgetJs, swJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
 	faviconSvg, manifestJson,
@@ -30,6 +31,14 @@ const PAGES: Record<string, string> = {
 	"/admin/": adminPage,
 	"/changelog": changelogPage,
 	"/changelog/": changelogPage,
+	"/app/privacy": privacyPage,
+	"/app/privacy/": privacyPage,
+	"/app/terms": termsPage,
+	"/app/terms/": termsPage,
+	"/app/support": supportPage,
+	"/app/support/": supportPage,
+	"/app/delete": deletePage,
+	"/app/delete/": deletePage,
 };
 
 const HTML_HEADERS: Record<string, string> = {
