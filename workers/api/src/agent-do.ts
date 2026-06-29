@@ -87,7 +87,6 @@ interface RepoIngestJob {
 	description?: string | null;
 	language?: string | null;
 	readme?: string | null;
-	overviewDocId?: string;
 	error?: string;
 	startedAt: string;
 	finishedAt?: string;
@@ -877,17 +876,13 @@ export class AgentDO extends DurableObject<Env> {
 		);
 	}
 
-	/** Remove one repo's data (vectors, overview, staged files, job, index entry). */
+	/** Remove one repo's data (vectors incl. overview, staged files, job, index entry). */
 	private async clearRepo(key: string): Promise<void> {
 		const state = await this.getState();
 		const engine = state ? this.getStorageEngine(state.agentId) : null;
+		// The overview is a repo vector (sourceId `${key}::OVERVIEW`), so clearing
+		// the repo's vectors removes it too — no separate KB-doc cleanup needed.
 		if (engine) await engine.clearRepoVectors(key).catch(() => undefined);
-		const prior = await this.getRepoJob(key);
-		if (prior?.overviewDocId) {
-			await this.ctx.storage.delete(`kb:${prior.overviewDocId}`);
-			// The overview was vectorized as a "knowledge" source — drop it too.
-			if (engine) await engine.vectorDelete("knowledge", prior.overviewDocId).catch(() => undefined);
-		}
 		const staged = await this.ctx.storage.list({ prefix: `rifile:${key}:` });
 		await deleteKeysBatched(this.ctx.storage, [...staged.keys()]);
 		// Drop membership first so a mid-flight alarm's saveJob() guard bails before
@@ -1057,14 +1052,15 @@ export class AgentDO extends DurableObject<Env> {
 					paths: job.paths,
 					readme: job.readme,
 				});
-				const doc = await engine.addKnowledge(`Repository overview: ${job.key}`, overview).catch(() => null);
+				// Store the overview as a repo vector (sourceId `${key}::OVERVIEW`), not a
+				// KB doc — keeps it out of the 20-doc KB cap and auto-cleared with the repo.
+				await engine.vectorizeRepoFile(job.key, "OVERVIEW", overview).catch(() => 0);
 				await engine.logEvent("repo.indexed", undefined, { repo: job.key, files: job.total }).catch(() => undefined);
-				if (await this.saveJob(job, { status: "done", overviewDocId: doc?.id, finishedAt: new Date().toISOString() })) {
+				if (await this.saveJob(job, { status: "done", finishedAt: new Date().toISOString() })) {
 					await this.refreshRepoMemory();
-				} else if (doc?.id) {
-					// Job was removed while summarizing — don't leak the overview doc.
-					await this.ctx.storage.delete(`kb:${doc.id}`);
-					await engine.vectorDelete("knowledge", doc.id).catch(() => undefined);
+				} else {
+					// Job was removed/re-indexed while summarizing — drop the overview vector we just wrote.
+					await engine.clearRepoVectors(job.key).catch(() => undefined);
 				}
 			}
 		} catch (err) {
