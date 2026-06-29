@@ -395,6 +395,63 @@ agentRoutes.put("/:id", async (c) => {
 	return c.json({ success: true });
 });
 
+/** Read the agent's declared custom surfaces (owner only). */
+agentRoutes.get("/:id/capabilities", async (c) => {
+	const session = await requireUser(c);
+	const id = c.req.param("id");
+	const row = await c.env.DB.prepare("SELECT owner_id, config FROM agents WHERE (id = ?1 OR slug = ?1)")
+		.bind(id)
+		.first<{ owner_id: string; config: string | null }>();
+	if (!row) throw new HttpError(404, "Agent not found");
+	if (row.owner_id !== session.uid && !session.roles.includes("admin")) {
+		throw new HttpError(403, "Not your agent");
+	}
+	let customSurfaces: unknown = [];
+	try {
+		const config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {};
+		const caps = config.capabilities as Record<string, unknown> | undefined;
+		customSurfaces = Array.isArray(caps?.customSurfaces) ? caps.customSurfaces : [];
+	} catch { /* malformed config */ }
+	return c.json({ customSurfaces });
+});
+
+/** Declare the agent's custom (published) console surfaces — owner only. Stored in
+ *  config.capabilities.customSurfaces; the console loads each bundle dynamically. */
+agentRoutes.put("/:id/capabilities", async (c) => {
+	const session = await requireUser(c);
+	const id = c.req.param("id");
+	const row = await c.env.DB.prepare("SELECT owner_id, config FROM agents WHERE id = ?1")
+		.bind(id)
+		.first<{ owner_id: string; config: string | null }>();
+	if (!row) throw new HttpError(404, "Agent not found");
+	if (row.owner_id !== session.uid && !session.roles.includes("admin")) {
+		throw new HttpError(403, "Not your agent");
+	}
+	const body = (await c.req.json().catch(() => ({}))) as { customSurfaces?: unknown };
+	// Validate: each surface needs id + label and an https bundle URL (it loads as CODE
+	// into the console origin, so reject http/javascript/relative URLs).
+	const customSurfaces = Array.isArray(body.customSurfaces)
+		? body.customSurfaces.flatMap((v) => {
+				if (!v || typeof v !== "object") return [];
+				const o = v as Record<string, unknown>;
+				const sid = typeof o.id === "string" ? o.id.trim() : "";
+				const label = typeof o.label === "string" ? o.label.trim() : "";
+				const bundleUrl = typeof o.bundleUrl === "string" ? o.bundleUrl.trim() : "";
+				if (!sid || !label || !/^https:\/\//.test(bundleUrl)) return [];
+				return [{ id: sid, label, bundleUrl, ...(typeof o.icon === "string" && o.icon ? { icon: o.icon } : {}) }];
+			})
+		: [];
+	let config: Record<string, unknown> = {};
+	try { config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {}; } catch { config = {}; }
+	const caps = (config.capabilities && typeof config.capabilities === "object" ? config.capabilities : {}) as Record<string, unknown>;
+	caps.customSurfaces = customSurfaces;
+	config.capabilities = caps;
+	await c.env.DB.prepare("UPDATE agents SET config = ?1, updated_at = datetime('now') WHERE id = ?2")
+		.bind(JSON.stringify(config), id)
+		.run();
+	return c.json({ customSurfaces });
+});
+
 /** Clone/fork a published agent as your own draft. */
 agentRoutes.post("/:id/clone", async (c) => {
 	const session = await requireCreator(c);

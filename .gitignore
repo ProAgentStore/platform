@@ -15,4 +15,5 @@ ios/build/
 android/.gradle/
 android/app/build/
 android/local.properties
+android/upload-keystore.jks
 .playwright-mcp/

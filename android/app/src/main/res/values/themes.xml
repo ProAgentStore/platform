@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.PAGS" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">#F7F9FC</item>
+        <item name="android:navigationBarColor">#F7F9FC</item>
+    </style>
+</resources>
