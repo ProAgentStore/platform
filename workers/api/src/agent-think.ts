@@ -55,6 +55,31 @@ export async function runAgentThink(opts: {
 		}
 	}
 
+	// Repo-chat: list the repositories actually indexed, read live from the DO so
+	// the agent's awareness is authoritative (never a stale/phantom repo). Single
+	// source of truth — there is no separate "indexed repos" memory entry.
+	try {
+		const members = await doStorage.list({ prefix: "repoMember:" });
+		const keys = [...members.keys()].map((k) => k.slice("repoMember:".length));
+		if (keys.length > 0) {
+			const ready: string[] = [];
+			const pending: string[] = [];
+			for (const key of keys) {
+				const job = await doStorage.get<{ status?: string; total?: number; language?: string | null }>(`repoJob:${key}`);
+				if (!job) continue;
+				if (job.status === "done") ready.push(`${key}${job.total ? ` (${job.total} files${job.language ? `, ${job.language}` : ""})` : ""}`);
+				else if (job.status !== "error") pending.push(key);
+			}
+			if (ready.length > 0 || pending.length > 0) {
+				systemPrompt += "\n\n## Indexed repositories";
+				if (ready.length) systemPrompt += `\nReady: ${ready.join("; ")}.`;
+				if (pending.length) systemPrompt += `\nStill indexing (ask again shortly): ${pending.join(", ")}.`;
+				systemPrompt +=
+					"\nAnswer about these repositories, grounded in the retrieved code above, and cite the repository + file path. If asked about code you can't find in your knowledge, say it isn't indexed yet (suggest adding it in the Repo tab) rather than guessing.";
+			}
+		}
+	} catch {}
+
 	// Coding repos & sessions context (Coder instances)
 	if (userId && state.agentId) {
 		try {

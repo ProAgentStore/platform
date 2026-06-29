@@ -857,25 +857,6 @@ export class AgentDO extends DurableObject<Env> {
 		return true;
 	}
 
-	/** Rebuild the combined "which repos are indexed" memory entry from all jobs. */
-	private async refreshRepoMemory(): Promise<void> {
-		const keys = await this.getRepoIndex();
-		const done: string[] = [];
-		for (const key of keys) {
-			const job = await this.getRepoJob(key);
-			if (job?.status === "done") done.push(`${job.key} (${job.total} files${job.language ? `, ${job.language}` : ""})`);
-		}
-		if (done.length === 0) {
-			await this.ctx.storage.delete("mem:repository");
-			return;
-		}
-		await this.setMemory(
-			"repository",
-			"context",
-			`Indexed repositories: ${done.join("; ")}. You can explain any file, function, or how the code fits together in any of them; cite the repo when files share names. You are READ-ONLY — you never modify these repositories.`,
-		);
-	}
-
 	/** Remove one repo's data (vectors incl. overview, staged files, job, index entry). */
 	private async clearRepo(key: string): Promise<void> {
 		const state = await this.getState();
@@ -962,7 +943,7 @@ export class AgentDO extends DurableObject<Env> {
 		} else {
 			for (const k of await this.getRepoIndex()) await this.clearRepo(k);
 		}
-		await this.refreshRepoMemory();
+		await this.ctx.storage.delete("mem:repository"); // retire any legacy memory entry
 		return json({ status: "cleared" });
 	}
 
@@ -1056,9 +1037,7 @@ export class AgentDO extends DurableObject<Env> {
 				// KB doc — keeps it out of the 20-doc KB cap and auto-cleared with the repo.
 				await engine.vectorizeRepoFile(job.key, "OVERVIEW", overview).catch(() => 0);
 				await engine.logEvent("repo.indexed", undefined, { repo: job.key, files: job.total }).catch(() => undefined);
-				if (await this.saveJob(job, { status: "done", finishedAt: new Date().toISOString() })) {
-					await this.refreshRepoMemory();
-				} else {
+				if (!(await this.saveJob(job, { status: "done", finishedAt: new Date().toISOString() }))) {
 					// Job was removed/re-indexed while summarizing — drop the overview vector we just wrote.
 					await engine.clearRepoVectors(job.key).catch(() => undefined);
 				}
