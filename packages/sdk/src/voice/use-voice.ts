@@ -291,8 +291,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// Surface real errors (Whisper 401/400, mic denied) in the input —
 					// otherwise a swallowed failure is indistinguishable from "nothing
 					// happened", which is exactly how Whisper looked broken.
-					flushSync(() => setInterim(`⚠ ${err}`));
+					const msg = `⚠ ${err}`;
+					flushSync(() => setInterim(msg));
 					pausedForThinkingRef.current = false;
+					// Auto-clear so the error doesn't lock the input (readOnly while interim
+					// is set). Only clears if it's still showing this same error.
+					setTimeout(() => setInterim((cur) => (cur === msg ? "" : cur)), 4500);
 				}
 				if (!convoOnRef.current) setMicOn(false);
 			},
