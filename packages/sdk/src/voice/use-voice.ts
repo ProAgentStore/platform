@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
-import { createStt, createTts, getVoiceConfig } from "./config.js";
+import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -246,6 +246,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	const makeStt = useCallback(async () => {
 		console.log("[voice] creating STT, provider will be resolved...");
+		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page
+		// reload: invalidate the SDK cache, re-read, and refresh the refs the VAD and
+		// debounce use. makeStt runs on every mic/conversation start.
+		invalidateVoiceConfig();
+		try {
+			const c = await getVoiceConfig(instanceId);
+			silenceMsRef.current = c.silenceMs;
+			sttIsWhisperRef.current = c.sttProvider === "openai";
+		} catch {}
 		const stt = await createStt(instanceId, {
 			onResult: handleResult,
 			onError: (err) => {
