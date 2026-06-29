@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } fro
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
-import { renderMd } from "../lib/markdown";
+import { renderMd } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "../hooks/useVoice";
 import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench } from "lucide-react";

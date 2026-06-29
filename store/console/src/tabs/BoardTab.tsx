@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { RuntimeTask, RuntimeEvent, AppRecord } from "../lib/types";
-import { formatTime } from "../lib/markdown";
+import { formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 
 const COLUMNS = [

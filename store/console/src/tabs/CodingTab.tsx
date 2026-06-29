@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
-import { renderMd } from "../lib/markdown";
+import { renderMd } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "../hooks/useVoice";
 import { useCodingLoop } from "../hooks/useCodingLoop";
