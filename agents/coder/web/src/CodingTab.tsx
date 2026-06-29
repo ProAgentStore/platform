@@ -6,7 +6,7 @@ import { renderMd, formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
-import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench, Settings } from "lucide-react";
+import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench, Settings, ChevronDown } from "lucide-react";
 
 /** Render terminal output: colorize lines + format inline code/bold/JSON */
 function renderTerminal(text: string): string {
@@ -465,14 +465,48 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		return "Active";
 	};
 
+	const [repoMenuOpen, setRepoMenuOpen] = useState(false);
+	const reposRef = useRef(repos);
+	reposRef.current = repos;
+	const switchToRepo = (r: CodingRepo) => {
+		setRepoMenuOpen(false);
+		const active = getActiveSession(r.id);
+		if (active) openTerminal(active);
+		else startSession(r.id);
+	};
+
 	// Push session header override to parent when session is open
 	const openRepo = openSession ? repos.find((r) => getActiveSession(r.id)?.id === openSession.id) : null;
 	useEffect(() => {
 		if (!openSession || !onHeaderOverride) return;
 		onHeaderOverride(
 			<div className="flex items-center gap-2 min-w-0">
-				<button type="button" onClick={closeTerminal} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
-				<span className="text-sm font-semibold truncate max-w-28">{openRepo?.name || openSession.repoId}</span>
+				<button type="button" onClick={closeTerminal} title="All repos" className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
+				<div className="relative shrink-0">
+					<button type="button" onClick={() => setRepoMenuOpen((v) => !v)} title="Switch repo" className="flex items-center gap-1 text-sm font-semibold hover:text-accent max-w-[11rem]">
+						<span className="truncate">{openRepo?.name || openSession.repoId}</span>
+						<ChevronDown size={14} className="shrink-0 text-muted" />
+					</button>
+					{repoMenuOpen && (
+						<>
+							<button type="button" aria-label="Close menu" onClick={() => setRepoMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
+							<div className="absolute top-full left-0 mt-1 z-50 min-w-52 max-h-72 overflow-auto bg-panel border border-line rounded-lg shadow-lg py-1">
+								<button type="button" onClick={() => { setRepoMenuOpen(false); closeTerminal(); }} className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"><ArrowLeft size={12} /> All repos</button>
+								<div className="border-t border-line my-1" />
+								{reposRef.current.map((r) => {
+									const st = repoStatuses[r.id];
+									const current = r.id === openSession.repoId;
+									return (
+										<button key={r.id} type="button" onClick={() => switchToRepo(r)} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-panel-hover flex items-center justify-between gap-2 ${current ? "text-accent font-bold" : ""}`}>
+											<span className="truncate">{r.name}</span>
+											{current ? <span className="text-accent text-xs shrink-0">●</span> : (st === "thinking" || st === "working") ? <span className="text-amber-500 text-[0.6rem] shrink-0">working</span> : null}
+										</button>
+									);
+								})}
+							</div>
+						</>
+					)}
+				</div>
 				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
 					<button type="button" onClick={() => setView("summary")} className={`px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}>Co-pilot</button>
 					<button type="button" onClick={() => setView("terminal")} className={`px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}>Terminal</button>
@@ -489,7 +523,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		// Deps so this only re-runs when the header's VISIBLE content changes. With no
 		// deps it was a render storm: each run handed setChildHeader a fresh element →
 		// re-rendered the parent → this child → effect again, continuously.
-	}, [openSession, onHeaderOverride, openRepo?.name, view]);
+	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen]);
 
 	// ── Session open: full-screen terminal/co-pilot ──
 	if (openSession) {
