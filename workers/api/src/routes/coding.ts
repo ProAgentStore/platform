@@ -703,7 +703,16 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	if (!conn) throw new HttpError(409, "No coding runner connected. Start it with: pags up");
 	if (action.kind === "message" && action.text) {
+		// Log the user's clean text first…
 		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: fromChat ? "chat_user" : "command", content: action.text }).catch(() => undefined);
+		// …then prepend the combined rules (instance Special Instructions + per-repo
+		// Rules) before sending to the CLI. Manual sends bypass the autonomous brain
+		// (which injects rules into its own prompt), so without this the CLI never sees
+		// them. This makes the rules bind the CLI no matter how it's driven.
+		const session = await getSession(c.env, instanceId, uid, sessionId);
+		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
+		const combined = [await readSpecialInstructions(c.env, instanceId, uid), repo?.instructions].filter(Boolean).join("\n\n");
+		if (combined) action.text = `[Project rules — follow these for everything you do:\n${combined}\n]\n\n${action.text}`;
 	}
 	let snap = await callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
 	if (snap === null) {

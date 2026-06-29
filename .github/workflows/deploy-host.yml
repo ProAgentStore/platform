@@ -5,6 +5,10 @@ on:
     paths:
       - 'workers/host/**'
       - 'store/**'
+      # The console bundles @proagentstore/sdk + the coder UI at build time, so
+      # changes there must redeploy the console (else SDK-only fixes never go live).
+      - 'packages/sdk/**'
+      - 'agents/coder/web/**'
       - '.github/workflows/deploy-host.yml'
 
 concurrency:
