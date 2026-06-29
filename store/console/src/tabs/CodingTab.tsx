@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
 import { renderMd } from "../lib/markdown";
-import { usePolling } from "../hooks/usePolling";
+import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "../hooks/useVoice";
 import { useCodingLoop } from "../hooks/useCodingLoop";
 import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench } from "lucide-react";

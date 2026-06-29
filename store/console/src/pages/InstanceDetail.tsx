@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
-import { usePolling } from "../hooks/usePolling";
+import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "../hooks/useVoice";
 import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";

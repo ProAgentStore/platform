@@ -1,9 +1,21 @@
 // @proagentstore/sdk/hooks — React hooks for agent UIs.
 //
-// Stub. The console's reusable hooks (usePolling, useInstance, useRunner,
-// useVoice…) are extracted here as the agent-OS SDK forms (P1/P2) so agents call
-// platform "system services" the same way — mirrors @freeappstore/sdk's `./hooks`
-// subpath. React lands as a peer dependency when the first hook moves in.
-// See ../../PLAN-agent-os.md.
+// Shared hooks the console shell and agent UIs both call, so every agent's UI
+// talks to platform "system services" the same way — mirrors @freeappstore/sdk's
+// `./hooks` subpath. React is an optional peer dependency (only UIs pull it in).
+// More hooks (useInstance, useRunner, useVoice…) move here from the console as
+// the agent-OS SDK forms. See ../../PLAN-agent-os.md.
 
-export {};
+import { useEffect, useRef } from "react";
+
+/** Call `fn` every `ms` milliseconds while the component is mounted (and `enabled`). */
+export function usePolling(fn: () => void, ms: number, enabled = true): void {
+	const savedFn = useRef(fn);
+	savedFn.current = fn;
+
+	useEffect(() => {
+		if (!enabled || ms <= 0) return;
+		const id = setInterval(() => savedFn.current(), ms);
+		return () => clearInterval(id);
+	}, [ms, enabled]);
+}
