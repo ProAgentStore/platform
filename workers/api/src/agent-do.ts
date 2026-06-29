@@ -943,6 +943,14 @@ export class AgentDO extends DurableObject<Env> {
 			const { token: _t, queue: _q, readme: _r, ...pub } = job;
 			repos.push(pub);
 		}
+		// Self-heal: with no repos indexed, drop any stale "indexed repository"
+		// memory (e.g. left by the pre-multi-repo scheme) so the agent doesn't
+		// claim to know a repo that isn't actually indexed. Also retire the legacy
+		// single-repo job key if present.
+		if (repos.length === 0) {
+			await this.ctx.storage.delete("mem:repository");
+			await this.ctx.storage.delete("repoIngest");
+		}
 		return json({ repos });
 	}
 
