@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
-import { createStt, createTts } from "./config.js";
+import { createStt, createTts, getVoiceConfig } from "./config.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -119,6 +119,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// loop can peg the CPU and hang the page. Track the last start + rapid-end count.
 	const lastListenStartRef = useRef(0);
 	const rapidEndsRef = useRef(0);
+	// Conversation mode: buffer speech and only send after `silenceMs` of quiet, so a
+	// mid-sentence pause doesn't cut you off. Configurable via voice settings.
+	const pendingTextRef = useRef("");
+	const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const silenceMsRef = useRef(1500);
+	useEffect(() => {
+		getVoiceConfig(instanceId).then((c) => { silenceMsRef.current = c.silenceMs; }).catch(() => {});
+	}, [instanceId]);
 
 	const ensureTts = useCallback(async () => {
 		if (!ttsRef.current) ttsRef.current = await createTts(instanceId);
@@ -166,26 +174,42 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// feedback loop (agent hears itself → "replies" → loops).
 		if (ttsRef.current?.speaking) return;
 		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
-		if (isFinal) {
-			// flushSync forces React to render immediately — the user sees
-			// interim text clear and the message appear without waiting
-			flushSync(() => {
-				setInterim("");
-				stopAudioMonitor();
-				if (convoOnRef.current) {
+
+		// Conversation mode: accumulate speech and only SEND after the user has been
+		// quiet for `silenceMs`. Every result (interim or final) resets the timer, so a
+		// short mid-sentence pause no longer cuts them off — only a real pause sends.
+		if (convoOnRef.current) {
+			if (isFinal && text.trim()) {
+				pendingTextRef.current = `${pendingTextRef.current} ${text}`.trim();
+			}
+			flushSync(() => setInterim(`${pendingTextRef.current}${isFinal ? "" : ` ${text}`}`.trim()));
+			if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+			silenceTimerRef.current = setTimeout(() => {
+				const msg = pendingTextRef.current.trim();
+				pendingTextRef.current = "";
+				if (!msg) return;
+				flushSync(() => {
+					setInterim("");
+					stopAudioMonitor();
 					pausedForThinkingRef.current = true;
 					if (sttRef.current?.listening) sttRef.current.stop();
 					setMicOn(false);
 					playThinkingChime();
-				} else {
-					setMicOn(false);
-				}
+				});
+				onSendRef.current(msg);
+			}, silenceMsRef.current);
+			return;
+		}
+
+		// Push-to-talk: send immediately on the recognizer's final result.
+		if (isFinal) {
+			flushSync(() => {
+				setInterim("");
+				stopAudioMonitor();
+				setMicOn(false);
 			});
-			console.log("[voice] sending to agent...");
 			onSendRef.current(text);
 		} else {
-			// flushSync so interim text appears in the input IMMEDIATELY,
-			// not batched with other state updates
 			flushSync(() => setInterim(text));
 		}
 	}, [stopAudioMonitor]);
@@ -255,6 +279,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// updates the ref only on the next render — too late, the mic restarts.)
 			convoOnRef.current = false;
 			pausedForThinkingRef.current = true;
+			if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+			pendingTextRef.current = "";
 			sttRef.current?.stop();
 			ttsRef.current?.cancel();
 			stopAudioMonitor();
@@ -296,6 +322,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Tear everything down on unmount — otherwise leaving the page mid-conversation
 	// keeps the recognizer listening, the TTS speaking, and the mic stream + rAF loop alive.
 	useEffect(() => () => {
+		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 		sttRef.current?.stop();
 		ttsRef.current?.cancel();
 		stopAudioMonitor();

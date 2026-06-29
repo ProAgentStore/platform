@@ -9,6 +9,9 @@ interface VoiceConfig {
 	voice: string;
 	speed: number;
 	language: string;
+	/** Conversation mode: how long (ms) to wait after you stop talking before
+	 *  sending — higher = more tolerant of mid-sentence pauses. */
+	silenceMs: number;
 }
 
 let _cache: VoiceConfig | null = null;
@@ -48,6 +51,7 @@ export async function getVoiceConfig(
 		voice: (vs.openai as Record<string, unknown>)?.voice as string || "alloy",
 		speed: (vs.speed as number) || 100,
 		language: (vs.language as string) || "en-US",
+		silenceMs: Math.max(500, Math.min(6000, (vs.silenceMs as number) || 1500)),
 	};
 	_cacheInstanceId = instanceId || null;
 	return _cache;

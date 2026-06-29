@@ -309,9 +309,13 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		throw new HttpError(400, "provider must be browser, openai-realtime, or gemini-live");
 	}
 	const speed = typeof body.speed === "number" ? Math.max(50, Math.min(200, Math.round(body.speed))) : 100;
+	// Conversation mode: ms of silence after you stop talking before the message is
+	// sent. Higher = more tolerant of mid-sentence pauses.
+	const silenceMs = typeof body.silenceMs === "number" ? Math.max(500, Math.min(6000, Math.round(body.silenceMs))) : 1500;
 	const settings = {
 		provider,
 		speed,
+		silenceMs,
 		openai: body.openai && typeof body.openai === "object" ? body.openai : undefined,
 		gemini: body.gemini && typeof body.gemini === "object" ? body.gemini : undefined,
 		language: typeof body.language === "string" ? body.language.slice(0, 10) : "en-US",
