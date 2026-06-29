@@ -79,6 +79,7 @@ export const initCommand = new Command("init")
 						category: "general",
 						model: "@cf/meta/llama-3.2-3b-instruct",
 						template,
+						capabilities: { surfaces: [], runtime: null, workflow: null },
 						serverConfig: {
 							durableObject: template === "worker",
 							cron: template === "cron" ? "0 8 * * *" : undefined,
