@@ -10,6 +10,9 @@ interface Props {
 export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	const [runtimeInfo, setRuntimeInfo] = useState<Record<string, unknown> | null>(null);
+	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
+	const [silenceMs, setSilenceMs] = useState(1500);
+	const [voiceMsg, setVoiceMsg] = useState("");
 
 	useEffect(() => {
 		(async () => {
@@ -17,8 +20,29 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 				const d = await api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`);
 				setRuntimeInfo(d);
 			} catch {}
+			try {
+				const d = await api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`);
+				const vs = d.voiceSettings || {};
+				setVoiceSettings(vs);
+				if (typeof vs.silenceMs === "number") setSilenceMs(vs.silenceMs);
+			} catch {}
 		})();
 	}, [instanceId]);
+
+	const saveSilence = async (ms: number) => {
+		setSilenceMs(ms);
+		try {
+			// Merge so we don't wipe provider/speed (the PUT replaces the whole object).
+			await api(`/v1/instances/${instanceId}/voice-settings`, {
+				method: "PUT",
+				body: JSON.stringify({ ...(voiceSettings || {}), silenceMs: ms }),
+			});
+			setVoiceMsg("Saved — applies on your next message");
+			setTimeout(() => setVoiceMsg(""), 2500);
+		} catch (e) {
+			setVoiceMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
 
 	const clearFinished = async () => {
 		try {
@@ -86,6 +110,27 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 					<li><b>Rules / special instructions</b> → Knowledge → Rules & Tips</li>
 					<li><b>Logins & secrets</b> → Knowledge → Credentials</li>
 				</ul>
+			</div>
+
+			{/* Voice — conversation mode */}
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Voice — conversation mode</h3>
+				<p className="text-sm text-muted mb-3">
+					How long to keep listening after you stop talking before sending. Higher = you can pause mid-sentence without being cut off.
+				</p>
+				<div className="flex items-center gap-2 flex-wrap">
+					<select
+						value={silenceMs}
+						onChange={(e) => saveSilence(Number(e.target.value))}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+					>
+						<option value={800}>Quick — send after 0.8s pause</option>
+						<option value={1500}>Normal — 1.5s pause</option>
+						<option value={2500}>Relaxed — 2.5s pause</option>
+						<option value={4000}>Patient — 4s pause</option>
+					</select>
+					{voiceMsg && <span className="text-sm text-muted">{voiceMsg}</span>}
+				</div>
 			</div>
 
 			{/* Danger zone */}
