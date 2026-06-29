@@ -6,6 +6,7 @@ on:
       - 'workers/api/**'
       - 'packages/sdk/**'
       - '.github/workflows/deploy-api.yml'
+  workflow_dispatch: {}
 
 concurrency:
   group: deploy-api
