@@ -493,16 +493,16 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				{/* Co-pilot view */}
 				{view === "summary" && (
 					<div className="flex flex-col flex-1 min-h-0">
-						{/* Input bar — top, always visible */}
-						<div className="flex gap-1 sm:gap-1.5 px-2 py-2 shrink-0 items-center border-b border-line">
+						{/* Input bar — top, always visible. Compact input, big controls. */}
+						<div className="flex gap-1.5 px-2 py-1.5 shrink-0 items-center border-b border-line">
 							<div className="flex-1 min-w-0 relative">
 								<input
 									value={voice.interim || chatInput}
 									onChange={(e) => { if (!voice.interim) setChatInput(e.target.value); }}
 									onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendInstruction(); }}
-									placeholder={voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : "Ask or tell the agent to do something..."}
+									placeholder={voice.micOn ? "Listening — speak now…" : voice.convoOn ? "Conversation mode — just talk" : "Ask or tell the agent…"}
 									readOnly={!!voice.interim}
-									className={`w-full bg-panel border rounded-xl px-3 py-2.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
+									className={`w-full bg-panel border rounded-lg px-2.5 py-1.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent font-semibold" : voice.micOn ? "border-green" : "border-line"}`}
 								/>
 								{voice.micOn && (
 									<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
@@ -510,38 +510,46 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									</div>
 								)}
 							</div>
-							<button type="button" onClick={sendInstruction} disabled={!!voice.interim} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
-								<Send size={14} />
+							<button type="button" onClick={sendInstruction} disabled={!!voice.interim} aria-label="Send" className="px-3 py-2 bg-accent text-white rounded-lg font-bold disabled:opacity-40 shrink-0">
+								<Send size={17} />
 							</button>
 						</div>
-						{/* Controls bar */}
-						<div className="flex gap-1 px-2 py-1 shrink-0 items-center">
-							<button type="button" onClick={voice.toggleMic} title="Push to talk" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-								<Mic size={13} />
+						{/* Live transcript — show the user exactly what's being heard. */}
+						{voice.interim && (
+							<div className="px-3 py-1.5 shrink-0 text-sm text-accent font-semibold border-b border-line bg-accent-soft/40 truncate">🎙 {voice.interim}</div>
+						)}
+						{/* Controls bar — larger tap targets */}
+						<div className="flex gap-1.5 px-2 py-1.5 shrink-0 items-center">
+							<button type="button" onClick={voice.toggleMic} title="Push to talk" className={`px-2.5 py-2 border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+								<Mic size={17} />
 							</button>
-							<button type="button" onClick={voice.toggleSpeak} title="Auto-speak" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-								<Volume2 size={13} />
+							<button type="button" onClick={voice.toggleSpeak} title="Auto-speak" className={`px-2.5 py-2 border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+								<Volume2 size={17} />
 							</button>
-							<button type="button" onClick={voice.toggleConvo} title="Hands-free voice" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-								<AudioLines size={13} />
+							<button type="button" onClick={voice.toggleConvo} title="Hands-free voice" className={`px-2.5 py-2 border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+								<AudioLines size={17} />
 							</button>
 							{voice.convoOn && (
-								<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute" : "Mute"} className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red/15 text-red" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-									<MicOff size={13} />
+								<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute" : "Mute"} className={`px-2.5 py-2 border rounded-lg transition-colors ${voice.muted ? "border-red bg-red/15 text-red" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+									<MicOff size={17} />
 								</button>
 							)}
 							{loop.loopOn ? (
-								<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative">
-									<Square size={13} />
+								<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-2.5 py-2 border border-green bg-green/15 text-green rounded-lg relative">
+									<Square size={17} />
 									<span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
 								</button>
 							) : (
-								<button type="button" onClick={() => loop.setShowLoopForm(!loop.showLoopForm)} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-									<Repeat size={13} />
+								<button type="button" onClick={() => loop.setShowLoopForm(!loop.showLoopForm)} title="Loop" className={`px-2.5 py-2 border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+									<Repeat size={17} />
 								</button>
 							)}
-							<button type="button" onClick={() => { if (confirm("Clear co-pilot chat history?")) setSummaryHistory([]); }} title="Clear chat" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
-								<Trash2 size={13} />
+							<button type="button" onClick={async () => {
+								if (!openSession || !confirm("Clear co-pilot chat history?")) return;
+								try { await api(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline`, { method: "DELETE" }); } catch {}
+								setSummaryHistory([]);
+							}} title="Clear chat" className="px-2.5 py-2 border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
+								<Trash2 size={17} />
 							</button>
 						</div>
 						{/* Loop form with presets */}
