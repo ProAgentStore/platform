@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
-import type { RuntimeTask, RuntimeEvent, AppRecord } from "../lib/types";
+import type { RuntimeTask, RuntimeEvent } from "../lib/types";
 import { formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 
@@ -13,23 +13,11 @@ const COLUMNS = [
 	{ id: "cancelled", title: "Cancelled", color: "#a3a3a3", statuses: ["cancelled"] },
 ];
 
-const APP_COLUMNS = [
-	{ id: "queued", title: "Queued", color: "#eab308", statuses: ["queued"] },
-	{ id: "pending", title: "Pending", color: "#3b82f6", statuses: ["pending"] },
-	{ id: "submitted", title: "Submitted", color: "#7c3aed", statuses: ["submitted"] },
-	{ id: "interview", title: "Interview", color: "#22c55e", statuses: ["interview"] },
-	{ id: "rejected", title: "Rejected", color: "#ef4444", statuses: ["rejected"] },
-	{ id: "accepted", title: "Accepted", color: "#22c55e", statuses: ["accepted"] },
-];
+// Generic runtime board (tasks + activity) for any agent. The job-application
+// agent's applications pipeline lives in its own ApplyTab, which composes this.
 
-interface Props {
-	instanceId: string;
-	isApply: boolean;
-}
-
-export default function BoardTab({ instanceId, isApply }: Props) {
+export default function BoardTab({ instanceId }: { instanceId: string }) {
 	const [tasks, setTasks] = useState<RuntimeTask[]>([]);
-	const [apps, setApps] = useState<AppRecord[]>([]);
 	const [events, setEvents] = useState<RuntimeEvent[]>([]);
 	const [filter, setFilter] = useState<"active" | "all">("active");
 
@@ -42,16 +30,7 @@ export default function BoardTab({ instanceId, isApply }: Props) {
 			setTasks(taskData.tasks || []);
 			setEvents(eventData.events || []);
 		} catch {}
-
-		if (isApply) {
-			try {
-				const data = await api<{ records: AppRecord[] }>(
-					`/v1/instances/${instanceId}/collections/applications/records`,
-				);
-				setApps(data.records || []);
-			} catch {}
-		}
-	}, [instanceId, isApply]);
+	}, [instanceId]);
 
 	useEffect(() => { loadBoard(); }, [loadBoard]);
 	usePolling(loadBoard, 2500);
@@ -76,7 +55,6 @@ export default function BoardTab({ instanceId, isApply }: Props) {
 					<h3 className="text-base font-bold mb-0.5">Board</h3>
 					<div className="text-xs text-muted">
 						{tasks.length} task{tasks.length !== 1 ? "s" : ""}
-						{isApply ? ` · ${apps.length} application${apps.length !== 1 ? "s" : ""}` : ""}
 					</div>
 				</div>
 				<div className="flex items-center gap-2">
@@ -132,39 +110,6 @@ export default function BoardTab({ instanceId, isApply }: Props) {
 					);
 				})}
 			</div>
-
-			{/* Application records kanban (apply agents only) */}
-			{isApply && apps.length > 0 && (
-				<>
-					<h3 className="text-sm font-bold mb-2 mt-4">Applications</h3>
-					<div className="grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3 items-start">
-						{APP_COLUMNS.map((col) => {
-							const items = apps.filter((a) => col.statuses.includes(a.status || "queued"));
-							return (
-								<div key={col.id} className="border border-line rounded-xl bg-panel/55 min-h-[120px]">
-									<div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-line">
-										<div className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide">
-											<span className="w-2 h-2 rounded-full" style={{ background: col.color }} />
-											{col.title}
-										</div>
-										<span className="text-[0.65rem] text-muted border border-line rounded-full px-1.5 font-bold">
-											{items.length}
-										</span>
-									</div>
-									<div className="flex flex-col gap-1.5 p-2">
-										{items.map((app) => (
-											<div key={app.id} className="bg-paper border border-line rounded-lg p-2.5 text-sm">
-												<div className="font-bold text-xs mb-0.5">{app.company || "Unknown"}</div>
-												<div className="text-xs text-muted line-clamp-1">{app.role || ""}</div>
-											</div>
-										))}
-									</div>
-								</div>
-							);
-						})}
-					</div>
-				</>
-			)}
 
 			{/* Recent activity */}
 			{events.length > 0 && (

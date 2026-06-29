@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { CodingTab } from "@proagentstore/coder-web";
+import ApplyTab from "../tabs/ApplyTab";
 import BoardTab from "../tabs/BoardTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import SettingsTab from "../tabs/SettingsTab";
@@ -17,7 +18,7 @@ import SettingsTab from "../tabs/SettingsTab";
 // See ../../../PLAN-agent-os.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type SurfaceId = "chat" | "board" | "coding" | "knowledge" | "settings";
+export type SurfaceId = "chat" | "apply" | "board" | "coding" | "knowledge" | "settings";
 
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
@@ -46,13 +47,22 @@ export interface SurfaceDef {
 export const SURFACES: SurfaceDef[] = [
 	{ id: "chat", label: "Chat", icon: "💬", show: () => true },
 	{
+		id: "apply",
+		label: "Apply",
+		icon: "📮",
+		// The job-application agent's dedicated surface (applications + the shared board).
+		show: (s) => s.includes("apply"),
+		scroll: true,
+		render: ({ instanceId }) => <ApplyTab instanceId={instanceId} />,
+	},
+	{
 		id: "board",
 		label: "Board",
 		icon: "📋",
-		// Board shows for apply agents, or any agent that isn't a coding agent.
-		show: (s) => s.includes("apply") || !s.includes("coding"),
+		// Generic runtime board for non-coding, non-apply agents (those have their own surface).
+		show: (s) => !s.includes("coding") && !s.includes("apply"),
 		scroll: true,
-		render: ({ instanceId, isApply }) => <BoardTab instanceId={instanceId} isApply={isApply} />,
+		render: ({ instanceId }) => <BoardTab instanceId={instanceId} />,
 	},
 	{
 		id: "coding",
