@@ -412,7 +412,9 @@ export class LocalRunner {
 		this.store.putTask(task);
 		this.addTaskEvent(task, "task.completed", `Task completed: ${task.type}`, output);
 		await this.endTakeover(taskId);
-		return { submitted: true, output };
+		// This path only CLEARED a challenge — the form was NOT submitted (output.submitted
+		// is false). Report it accurately so the console doesn't show a false "submitted".
+		return { submitted: false, resumed: true, output };
 	}
 
 	/**
@@ -751,25 +753,35 @@ export class LocalRunner {
 	/** Whether the brain can resume: a solved captcha (auto), a human "Resume" for a stuck step, or a provided value. */
 	async browserHandoffStatus(taskId: string): Promise<{ solved: boolean; challenge: string | null; value?: string }> {
 		const session = this.takeovers.get(taskId);
-		const page = session?.page ?? (await this.getActivePage());
+		// No live takeover session (the runner restarted mid-handoff, or it expired): stay
+		// UNRESOLVED. The old code fell through and relaunched a blank page via
+		// getActivePage(), which detected no challenge and reported solved:true — so the
+		// brain resumed the application WITHOUT the human's captcha/value. A status poll
+		// must never relaunch the browser or claim a lost handoff is done.
+		if (!session) return { solved: false, challenge: null };
+		const page = session.page;
 		if (page.isClosed()) return { solved: true, challenge: null };
 		// A needs_input handoff resumes once the user supplies the value.
-		if (session?.reason === "needs_input") return { solved: !!session.inputValue, challenge: null, value: session.inputValue };
+		if (session.reason === "needs_input") return { solved: !!session.inputValue, challenge: null, value: session.inputValue };
 		// A stuck handoff resumes only when the human explicitly clicks Resume —
 		// there's nothing to auto-detect.
-		if (session?.reason === "stuck") return { solved: !!session.humanDone, challenge: null };
+		if (session.reason === "stuck") return { solved: !!session.humanDone, challenge: null };
 		// A challenge resumes when the token/widget clears OR the human clicks Done —
 		// custom captchas (e.g. PageUp's "not a robot") have no detectable token, so
 		// the human's explicit Done is the authority; never strand them.
 		const challenge = await detectHumanChallenge(page);
-		const solved = !challenge || (await challengeSolved(page)) || !!session?.humanDone;
+		const solved = !challenge || (await challengeSolved(page)) || !!session.humanDone;
 		return { solved, challenge };
 	}
 
 	/** The user supplied the value the agent asked for (ask-and-hold). */
 	browserSubmitInput(taskId: string, value: string): { ok: boolean } {
 		const session = this.takeovers.get(taskId);
-		if (session) session.inputValue = value;
+		// No live takeover (session expired / runner restarted): the value can't be
+		// delivered. Don't discard it silently AND resurrect the already-terminal task as
+		// "running" — report failure so the console can say "session expired, re-run".
+		if (!session) return { ok: false };
+		session.inputValue = value;
 		const task = this.store.getTask(taskId);
 		if (task) {
 			task.status = "running";

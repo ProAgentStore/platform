@@ -69,6 +69,15 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 	if (!resumePath) throw new ApplyError("no résumé on file — upload one in the console (Knowledge → Résumé) so the agent can attach it");
 
 	await requireRuntime(env, instanceId, userId); // throws if no runner
+
+	// Single-flight: the runner drives ONE browser page, so a second concurrent
+	// application on the same instance would clobber the first (interleaved fills +
+	// submits). Reject while one is still active.
+	const active = await env.DB.prepare(
+		"SELECT id FROM instance_runtime_tasks WHERE instance_id = ?1 AND user_id = ?2 AND type = 'job.apply_agent' AND status IN ('queued','running','needs_human') AND hidden = 0 LIMIT 1",
+	).bind(instanceId, userId).first<{ id: string }>();
+	if (active) throw new ApplyError("An application is already in progress on this agent — finish or cancel it before starting another.", 409);
+
 	const cand = input.candidate ?? {};
 	const rawProfile = await getProfile(env, userId);
 	const prof = profileToCandidate(rawProfile);
