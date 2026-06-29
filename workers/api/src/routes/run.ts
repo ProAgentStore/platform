@@ -86,13 +86,17 @@ runRoutes.get("/:id/executions", async (c) => {
 	const session = await requireUser(c);
 	const id = c.req.param("id");
 	const limit = Math.min(Number(c.req.query("limit")) || 50, 200);
+	// Resolve slug→UUID — agent_executions.agent_id stores the UUID, so binding the raw
+	// param (a slug in the normal case) silently returned an empty history.
+	const agent = await c.env.DB.prepare("SELECT id FROM agents WHERE id = ?1 OR slug = ?1").bind(id).first<{ id: string }>();
+	if (!agent) return c.json({ executions: [] });
 
 	const { results } = await c.env.DB.prepare(
 		`SELECT id, model, input_tokens, output_tokens, duration_ms, created_at
      FROM agent_executions WHERE agent_id = ?1 AND user_id = ?2
      ORDER BY created_at DESC LIMIT ?3`,
 	)
-		.bind(id, session.uid, limit)
+		.bind(agent.id, session.uid, limit)
 		.all();
 
 	return c.json({ executions: results });

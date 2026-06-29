@@ -24,21 +24,21 @@ analyticsRoutes.get("/:id/analytics", async (c) => {
 	const subs = await c.env.DB.prepare(
 		`SELECT COUNT(*) as count FROM agent_instances WHERE agent_id = ?1 AND status = 'active'`,
 	)
-		.bind(id)
+		.bind(agent.id)
 		.first<{ count: number }>();
 
 	// Total executions
 	const execs = await c.env.DB.prepare(
 		"SELECT COUNT(*) as count FROM agent_executions WHERE agent_id = ?1",
 	)
-		.bind(id)
+		.bind(agent.id)
 		.first<{ count: number }>();
 
 	// Total chat messages (from usage table)
 	const chats = await c.env.DB.prepare(
 		`SELECT COUNT(*) as count FROM usage WHERE agent_id = ?1 AND event IN ('chat', 'instance_chat')`,
 	)
-		.bind(id)
+		.bind(agent.id)
 		.first<{ count: number }>();
 
 	// Usage by day (last 30 days)
@@ -47,7 +47,7 @@ analyticsRoutes.get("/:id/analytics", async (c) => {
      FROM usage WHERE agent_id = ?1 AND created_at >= datetime('now', '-30 days')
      GROUP BY day ORDER BY day`,
 	)
-		.bind(id)
+		.bind(agent.id)
 		.all<{ day: string; count: number }>();
 
 	// Recent executions
@@ -55,21 +55,21 @@ analyticsRoutes.get("/:id/analytics", async (c) => {
 		`SELECT id, model, duration_ms, created_at FROM agent_executions
      WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 10`,
 	)
-		.bind(id)
+		.bind(agent.id)
 		.all();
 
 	// Funnel: views → trials → subscribes
 	const views = await c.env.DB.prepare(
 		"SELECT COUNT(*) as count FROM usage WHERE agent_id = ?1 AND event = 'view'",
-	).bind(id).first<{ count: number }>();
+	).bind(agent.id).first<{ count: number }>();
 
 	const trials = await c.env.DB.prepare(
 		"SELECT COUNT(*) as count FROM usage WHERE agent_id = ?1 AND event = 'trial_start'",
-	).bind(id).first<{ count: number }>();
+	).bind(agent.id).first<{ count: number }>();
 
 	const subscribes = await c.env.DB.prepare(
 		"SELECT COUNT(*) as count FROM usage WHERE agent_id = ?1 AND event = 'subscribe'",
-	).bind(id).first<{ count: number }>();
+	).bind(agent.id).first<{ count: number }>();
 
 	return c.json({
 		subscribers: subs?.count || 0,

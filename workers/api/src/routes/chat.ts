@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import type { Env } from "../types.js";
@@ -6,34 +6,31 @@ import type { Env } from "../types.js";
 export const chatRoutes = new Hono<{ Bindings: Env }>();
 
 /** Resolve agent from :id param (by id or slug). Returns id + name for DO init. */
-async function resolveAgent(c: {
-	req: { param(k: string): string };
-	env: Env;
-}) {
+async function resolveAgent(c: Context<{ Bindings: Env }>) {
+	// SECURITY: these are creator-management routes (the TEMPLATE agent's state/memory/
+	// knowledge/tasks/chat). Without an ownership check any authenticated user could
+	// read another creator's chat history or OVERWRITE their agent's memory/identity/
+	// knowledge by id or slug. Require ownership (or admin).
+	const session = await requireUser(c);
 	const id = c.req.param("id");
 	const agent = await c.env.DB.prepare(
-		"SELECT id, name, model FROM agents WHERE (id = ?1 OR slug = ?1)",
+		"SELECT id, name, model, owner_id FROM agents WHERE (id = ?1 OR slug = ?1)",
 	)
 		.bind(id)
-		.first<{ id: string; name: string; model: string }>();
+		.first<{ id: string; name: string; model: string; owner_id: string }>();
 	if (!agent) throw new HttpError(404, "Agent not found");
+	if (agent.owner_id !== session.uid && !session.roles.includes("admin")) {
+		throw new HttpError(403, "Not your agent");
+	}
 	return agent;
 }
 
 /** Send a message to an agent (HTTP). */
 chatRoutes.post("/:id/chat", async (c) => {
 	const session = await requireUser(c);
-	const id = c.req.param("id");
 	const { message } = await c.req.json<{ message: string }>();
 	if (!message) throw new HttpError(400, "message required");
-
-	// Verify agent exists in D1
-	const agent = await c.env.DB.prepare(
-		"SELECT id, name, model FROM agents WHERE (id = ?1 OR slug = ?1)",
-	)
-		.bind(id)
-		.first<{ id: string; name: string; model: string }>();
-	if (!agent) throw new HttpError(404, "Agent not found");
+	const agent = await resolveAgent(c);
 
 	// Forward to the agent's Durable Object (pass name+id for auto-init)
 	const doId = c.env.AGENT.idFromName(agent.id);
@@ -89,15 +86,7 @@ chatRoutes.get("/:id/ws", async (c) => {
 
 /** Get message history. */
 chatRoutes.get("/:id/messages", async (c) => {
-	await requireUser(c);
-	const id = c.req.param("id");
-
-	const agent = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
-	)
-		.bind(id)
-		.first<{ id: string }>();
-	if (!agent) throw new HttpError(404, "Agent not found");
+	const agent = await resolveAgent(c);
 
 	const doId = c.env.AGENT.idFromName(agent.id);
 	const stub = c.env.AGENT.get(doId);
@@ -112,14 +101,7 @@ chatRoutes.get("/:id/messages", async (c) => {
 
 /** Get/set agent memory. */
 chatRoutes.get("/:id/memory", async (c) => {
-	await requireUser(c);
-	const id = c.req.param("id");
-	const agent = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
-	)
-		.bind(id)
-		.first<{ id: string }>();
-	if (!agent) throw new HttpError(404, "Agent not found");
+	const agent = await resolveAgent(c);
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(new Request("https://agent/memory"));
@@ -127,14 +109,7 @@ chatRoutes.get("/:id/memory", async (c) => {
 });
 
 chatRoutes.put("/:id/memory", async (c) => {
-	await requireUser(c);
-	const id = c.req.param("id");
-	const agent = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
-	)
-		.bind(id)
-		.first<{ id: string }>();
-	if (!agent) throw new HttpError(404, "Agent not found");
+	const agent = await resolveAgent(c);
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
@@ -149,14 +124,7 @@ chatRoutes.put("/:id/memory", async (c) => {
 
 /** Tasks CRUD — forwarded to DO. */
 chatRoutes.get("/:id/tasks", async (c) => {
-	await requireUser(c);
-	const id = c.req.param("id");
-	const agent = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
-	)
-		.bind(id)
-		.first<{ id: string }>();
-	if (!agent) throw new HttpError(404, "Agent not found");
+	const agent = await resolveAgent(c);
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(new Request("https://agent/tasks"));
@@ -164,14 +132,7 @@ chatRoutes.get("/:id/tasks", async (c) => {
 });
 
 chatRoutes.post("/:id/tasks", async (c) => {
-	await requireUser(c);
-	const id = c.req.param("id");
-	const agent = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
-	)
-		.bind(id)
-		.first<{ id: string }>();
-	if (!agent) throw new HttpError(404, "Agent not found");
+	const agent = await resolveAgent(c);
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(
