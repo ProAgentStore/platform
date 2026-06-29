@@ -207,9 +207,16 @@ publicRoutes.post("/agents/:id/import-gdoc", async (c) => {
 
 	const id = c.req.param("id");
 	const agent = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
-	).bind(id).first<{ id: string }>();
+		"SELECT id, owner_id FROM agents WHERE (id = ?1 OR slug = ?1)",
+	).bind(id).first<{ id: string; owner_id: string }>();
 	if (!agent) throw new HttpError(404, "Agent not found");
+	// SECURITY: only the owner (or an admin) may write to an agent's canonical KB.
+	// Without this any authenticated user could inject documents into another
+	// creator's knowledge base (RAG/system-context poisoning). Mirrors resolveAgent
+	// in routes/storage.ts.
+	if (agent.owner_id !== session.uid && !session.roles.includes("admin")) {
+		throw new HttpError(403, "Not your agent");
+	}
 
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(agent.id));
 	const doRes = await stub.fetch(new Request("https://agent/knowledge", {
