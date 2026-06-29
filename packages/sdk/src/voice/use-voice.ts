@@ -104,9 +104,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 				for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
 				const level = Math.min(1, Math.sqrt(sum / data.length) / 128);
 				setAudioLevel(level);
-				// Whisper convo VAD: once we've heard voice, a sustained quiet of silenceMs
-				// ends the turn → stop recording → transcribe → send (see handleResult).
-				if (sttIsWhisperRef.current && convoOnRef.current && !pausedForThinkingRef.current) {
+				// Whisper VAD (push-to-talk AND conversation): Whisper has no streaming
+				// results — unlike dictation it can't auto-send on a pause — so we detect
+				// the end of a turn from the mic level ourselves. Once we've heard voice, a
+				// sustained quiet of silenceMs stops recording → transcribe → send. The
+				// monitor only runs while listening, so this is correct in BOTH modes.
+				if (sttIsWhisperRef.current && !pausedForThinkingRef.current) {
 					const now = Date.now();
 					if (level > 0.05) { vadLastLoudRef.current = now; vadVoiceSeenRef.current = true; }
 					else if (vadVoiceSeenRef.current && now - vadLastLoudRef.current > silenceMsRef.current) {
