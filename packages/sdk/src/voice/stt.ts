@@ -1,5 +1,7 @@
 /** Speech-to-Text abstraction — browser Web Speech API or OpenAI Whisper */
 
+import { API, getToken } from "../client.js";
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 declare global {
 	interface Window {
@@ -197,11 +199,15 @@ export class VoiceStt {
 		form.append("model", "whisper-1");
 		form.append("language", this.language.slice(0, 2));
 		try {
+			// Route via the platform proxy — it injects the user's key server-side.
+			// Calling api.openai.com directly from the browser is blocked by CORS (the
+			// request fails before reaching OpenAI), which is why a valid key still
+			// produced nothing.
 			const res = await fetch(
-				"https://api.openai.com/v1/audio/transcriptions",
+				`${API}/v1/keys/proxy/api.openai.com/v1/audio/transcriptions`,
 				{
 					method: "POST",
-					headers: { Authorization: `Bearer ${this.apiKey}` },
+					headers: { Authorization: `Bearer ${getToken() ?? ""}` },
 					body: form,
 				},
 			);

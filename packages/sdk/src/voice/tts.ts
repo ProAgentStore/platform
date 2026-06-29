@@ -1,5 +1,7 @@
 /** Text-to-Speech abstraction — browser SpeechSynthesis or OpenAI TTS */
 
+import { API, getToken } from "../client.js";
+
 /**
  * Strip technical noise so TTS reads a clean, human summary.
  * Paths, URLs, filenames, code blocks, hashes, stack traces — all removed.
@@ -125,10 +127,13 @@ export class VoiceTts {
 	private async _speakOpenAI(text: string) {
 		const gen = this._gen;
 		try {
-			const res = await fetch("https://api.openai.com/v1/audio/speech", {
+			// Route via the platform proxy (injects the key server-side); a direct
+			// browser call to api.openai.com is blocked by CORS, so OpenAI TTS was
+			// silently failing and falling back to the browser voice.
+			const res = await fetch(`${API}/v1/keys/proxy/api.openai.com/v1/audio/speech`, {
 				method: "POST",
 				headers: {
-					Authorization: `Bearer ${this.apiKey}`,
+					Authorization: `Bearer ${getToken() ?? ""}`,
 					"Content-Type": "application/json",
 				},
 				body: JSON.stringify({
