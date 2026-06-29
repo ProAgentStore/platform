@@ -51,6 +51,7 @@ export class VoiceTts {
 	private _queue: string[] = [];
 	private _processing = false;
 	private _currentSource: AudioBufferSourceNode | null = null;
+	private _gen = 0;
 
 	constructor(provider: string, opts: TtsOptions = {}) {
 		this.provider = provider;
@@ -85,6 +86,7 @@ export class VoiceTts {
 	}
 
 	cancel() {
+		this._gen++; // invalidate any in-flight fetch/decode in _speakOpenAI
 		this._queue = [];
 		this._processing = false;
 		this.speaking = false;
@@ -115,6 +117,7 @@ export class VoiceTts {
 	}
 
 	private async _speakOpenAI(text: string) {
+		const gen = this._gen;
 		try {
 			const res = await fetch("https://api.openai.com/v1/audio/speech", {
 				method: "POST",
@@ -139,6 +142,9 @@ export class VoiceTts {
 			const audioBuf = await this._audioCtx.decodeAudioData(
 				arrayBuf.slice(0),
 			);
+			// cancel() bumped the generation while we were fetching/decoding — abort so
+			// we don't start playing audio the user already tried to stop (tap/Esc).
+			if (gen !== this._gen) return;
 			const source = this._audioCtx.createBufferSource();
 			source.buffer = audioBuf;
 			source.connect(this._audioCtx.destination);

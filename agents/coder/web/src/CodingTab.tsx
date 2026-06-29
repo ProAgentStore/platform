@@ -486,7 +486,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			</div>
 		);
 		return () => onHeaderOverride(null);
-	}); // intentionally no deps — re-renders on every state change to keep buttons current
+		// Deps so this only re-runs when the header's VISIBLE content changes. With no
+		// deps it was a render storm: each run handed setChildHeader a fresh element →
+		// re-rendered the parent → this child → effect again, continuously.
+	}, [openSession, onHeaderOverride, openRepo?.name, view]);
 
 	// ── Session open: full-screen terminal/co-pilot ──
 	if (openSession) {

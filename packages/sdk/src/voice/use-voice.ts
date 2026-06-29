@@ -62,13 +62,32 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [audioLevel, setAudioLevel] = useState(0);
 	const sttRef = useRef<VoiceStt | null>(null);
 	const ttsRef = useRef<VoiceTts | null>(null);
-	const analyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; source: MediaStreamAudioSourceNode; raf: number } | null>(null);
+	const analyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; source: MediaStreamAudioSourceNode; stream: MediaStream; raf: number } | null>(null);
 
 	// Flag: true while the agent is processing (mic should stay off)
 	const pausedForThinkingRef = useRef(false);
 
+	const stopAudioMonitor = useCallback(() => {
+		if (analyserRef.current) {
+			cancelAnimationFrame(analyserRef.current.raf);
+			analyserRef.current.source.disconnect();
+			// Stop the mic tracks too — closing the AudioContext alone leaves the
+			// MediaStream (and the browser "mic in use" indicator) alive.
+			analyserRef.current.stream.getTracks().forEach((t) => t.stop());
+			analyserRef.current.ctx.close().catch(() => {});
+			analyserRef.current = null;
+		}
+		setAudioLevel(0);
+	}, []);
+
 	// Start audio level monitoring from mic stream
 	const startAudioMonitor = useCallback(async () => {
+		// Tear down any prior monitor FIRST. In conversation mode the mic restarts
+		// every turn (and on each silence timeout), so without this each start would
+		// leak an AudioContext + mic stream + requestAnimationFrame loop — and after
+		// ~6 contexts the browser throws and the meter dies. Left on long enough, a
+		// real, growing leak.
+		stopAudioMonitor();
 		try {
 			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 			const ctx = new AudioContext();
@@ -78,26 +97,17 @@ export function useVoice(instanceId: string | undefined, opts: {
 			source.connect(analyser);
 			const data = new Uint8Array(analyser.frequencyBinCount);
 			const tick = () => {
+				if (!analyserRef.current) return; // monitor was stopped between frames
 				analyser.getByteFrequencyData(data);
 				// RMS level normalized to 0-1
 				let sum = 0;
 				for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
 				setAudioLevel(Math.min(1, Math.sqrt(sum / data.length) / 128));
-				analyserRef.current!.raf = requestAnimationFrame(tick);
+				analyserRef.current.raf = requestAnimationFrame(tick);
 			};
-			analyserRef.current = { ctx, analyser, source, raf: requestAnimationFrame(tick) };
+			analyserRef.current = { ctx, analyser, source, stream, raf: requestAnimationFrame(tick) };
 		} catch {}
-	}, []);
-
-	const stopAudioMonitor = useCallback(() => {
-		if (analyserRef.current) {
-			cancelAnimationFrame(analyserRef.current.raf);
-			analyserRef.current.source.disconnect();
-			analyserRef.current.ctx.close().catch(() => {});
-			analyserRef.current = null;
-		}
-		setAudioLevel(0);
-	}, []);
+	}, [stopAudioMonitor]);
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
@@ -274,6 +284,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
 	}, [cancelSpeak]);
+
+	// Tear everything down on unmount — otherwise leaving the page mid-conversation
+	// keeps the recognizer listening, the TTS speaking, and the mic stream + rAF loop alive.
+	useEffect(() => () => {
+		sttRef.current?.stop();
+		ttsRef.current?.cancel();
+		stopAudioMonitor();
+	}, [stopAudioMonitor]);
 
 	const toggleMute = useCallback(() => {
 		if (muted) {
