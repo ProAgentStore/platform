@@ -13,6 +13,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
 	const [sttMode, setSttMode] = useState("browser");
+	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
 
 	useEffect(() => {
@@ -28,6 +29,14 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 				if (typeof vs.silenceMs === "number") setSilenceMs(vs.silenceMs);
 				if (typeof vs.sttMode === "string") setSttMode(vs.sttMode);
 			} catch {}
+			// Is there an OpenAI key? Smart (AI) recognition silently falls back to
+			// browser dictation without one, so surface it explicitly.
+			try {
+				const k = await api<{ key?: string }>("/v1/keys/openai/reveal");
+				setHasOpenAiKey(!!(k.key && k.key.trim()));
+			} catch {
+				setHasOpenAiKey(false);
+			}
 		})();
 	}, [instanceId]);
 
@@ -123,11 +132,18 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 				<select
 					value={sttMode}
 					onChange={(e) => { setSttMode(e.target.value); saveVoice({ sttMode: e.target.value }); }}
-					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-4 block w-full sm:w-auto"
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
 				>
 					<option value="browser">Dictation — fast, on-device</option>
 					<option value="openai">Smart (AI) — Whisper, most accurate</option>
 				</select>
+				{sttMode === "openai" && hasOpenAiKey !== null && (
+					hasOpenAiKey ? (
+						<p className="text-xs text-green mb-4">✓ OpenAI key found — voice is transcribed with Whisper (AI).</p>
+					) : (
+						<p className="text-xs text-red mb-4">⚠ No OpenAI key found — Smart (AI) can't run, so it's still using plain dictation. Add your key in <b>Knowledge → Credentials</b> to enable Whisper.</p>
+					)
+				)}
 
 				<label className="block text-sm font-semibold mb-1">Conversation — pause before sending</label>
 				<p className="text-xs text-muted mb-2">
