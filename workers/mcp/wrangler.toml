@@ -6,7 +6,7 @@ workers_dev = false
 
 [vars]
 API_BASE = "https://api.proagentstore.online"
-AUTH_START = "https://api.freeappstore.online/v1/auth/github/start"
+AUTH_START = "https://api.proagentstore.online/v1/auth/github/start"
 GITHUB_ORG = "ProAgentStore"
 
 [[routes]]

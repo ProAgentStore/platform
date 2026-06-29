@@ -1,10 +1,169 @@
 import { Hono } from "hono";
-import { signSession, verifySession } from "../lib/session.js";
+import { signPayload, signSession, verifyPayload, verifySession } from "../lib/session.js";
+import { isAllowedReturnTo } from "../lib/origins.js";
 import type { Env } from "../types.js";
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
 const FAS_API = "https://api.freeappstore.online";
+
+interface OAuthState {
+	returnTo: string;
+	exp: number;
+}
+
+/** Upsert a user row and return their roles. Shared by both providers. */
+async function upsertUser(
+	env: Env,
+	uid: string,
+	login: string,
+	name: string,
+	avatar: string,
+): Promise<string[]> {
+	await env.DB.prepare(
+		`INSERT INTO users (id, github_login, github_name, avatar_url, updated_at)
+     VALUES (?1, ?2, ?3, ?4, datetime('now'))
+     ON CONFLICT(id) DO UPDATE SET
+       github_login = excluded.github_login,
+       github_name = excluded.github_name,
+       avatar_url = excluded.avatar_url,
+       updated_at = excluded.updated_at`,
+	)
+		.bind(uid, login, name || login, avatar)
+		.run();
+	const row = await env.DB.prepare("SELECT roles FROM users WHERE id = ?1")
+		.bind(uid)
+		.first<{ roles: string }>();
+	return row?.roles ? JSON.parse(row.roles) : ["user"];
+}
+
+/** GET /v1/auth/github/start — redirect the user to GitHub's OAuth consent. */
+authRoutes.get("/github/start", async (c) => {
+	const returnTo = c.req.query("return_to") ?? "";
+	if (!returnTo) return c.text("missing return_to", 400);
+	if (!isAllowedReturnTo(returnTo)) return c.text("return_to not allowed", 400);
+	if (!c.env.GITHUB_CLIENT_ID) return c.text("GitHub OAuth not configured", 501);
+
+	const state = await signPayload<OAuthState>(
+		{ returnTo, exp: Math.floor(Date.now() / 1000) + 600 },
+		c.env.SESSION_SIGNING_KEY,
+	);
+	const url = new URL("https://github.com/login/oauth/authorize");
+	url.searchParams.set("client_id", c.env.GITHUB_CLIENT_ID);
+	url.searchParams.set("scope", "read:user");
+	url.searchParams.set("state", state);
+	url.searchParams.set(
+		"redirect_uri",
+		new URL("/v1/auth/github/callback", c.req.url).toString(),
+	);
+	return c.redirect(url.toString());
+});
+
+/** GET /v1/auth/github/callback — exchange code, mint a PAGS session, bounce back. */
+authRoutes.get("/github/callback", async (c) => {
+	const code = c.req.query("code");
+	const stateRaw = c.req.query("state");
+	if (!code || !stateRaw) return c.text("missing code or state", 400);
+	const state = await verifyPayload<OAuthState>(stateRaw, c.env.SESSION_SIGNING_KEY);
+	if (!state || state.exp < Math.floor(Date.now() / 1000)) {
+		return c.text("invalid or expired state", 400);
+	}
+	if (!isAllowedReturnTo(state.returnTo)) return c.text("return_to not allowed", 400);
+
+	const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
+		method: "POST",
+		headers: { "Content-Type": "application/json", Accept: "application/json" },
+		body: JSON.stringify({
+			client_id: c.env.GITHUB_CLIENT_ID,
+			client_secret: c.env.GITHUB_CLIENT_SECRET,
+			code,
+		}),
+	});
+	const tokenData = await tokenRes.json<{ access_token?: string; error?: string }>();
+	if (!tokenData.access_token) {
+		return c.text(`OAuth failed: ${tokenData.error ?? "no token"}`, 401);
+	}
+	const ghUser = await (
+		await fetch("https://api.github.com/user", {
+			headers: {
+				Authorization: `Bearer ${tokenData.access_token}`,
+				"User-Agent": "ProAgentStore",
+			},
+		})
+	).json<{ id: number; login: string; avatar_url: string; name: string }>();
+
+	const uid = String(ghUser.id);
+	const roles = await upsertUser(c.env, uid, ghUser.login, ghUser.name, ghUser.avatar_url);
+	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles });
+	const redirect = new URL(state.returnTo);
+	redirect.searchParams.set("session", session);
+	return c.redirect(redirect.toString());
+});
+
+/** GET /v1/auth/google/start — redirect to Google's OAuth consent. */
+authRoutes.get("/google/start", async (c) => {
+	const returnTo = c.req.query("return_to") ?? "";
+	if (!returnTo) return c.text("missing return_to", 400);
+	if (!isAllowedReturnTo(returnTo)) return c.text("return_to not allowed", 400);
+	if (!c.env.GOOGLE_CLIENT_ID) return c.text("Google login not configured yet", 501);
+
+	const state = await signPayload<OAuthState>(
+		{ returnTo, exp: Math.floor(Date.now() / 1000) + 600 },
+		c.env.SESSION_SIGNING_KEY,
+	);
+	const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+	url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
+	url.searchParams.set(
+		"redirect_uri",
+		new URL("/v1/auth/google/callback", c.req.url).toString(),
+	);
+	url.searchParams.set("response_type", "code");
+	url.searchParams.set("scope", "openid email profile");
+	url.searchParams.set("state", state);
+	return c.redirect(url.toString());
+});
+
+/** GET /v1/auth/google/callback — exchange code, mint a PAGS session, bounce back. */
+authRoutes.get("/google/callback", async (c) => {
+	const code = c.req.query("code");
+	const stateRaw = c.req.query("state");
+	if (!code || !stateRaw) return c.text("missing code or state", 400);
+	const state = await verifyPayload<OAuthState>(stateRaw, c.env.SESSION_SIGNING_KEY);
+	if (!state || state.exp < Math.floor(Date.now() / 1000)) {
+		return c.text("invalid or expired state", 400);
+	}
+	if (!isAllowedReturnTo(state.returnTo)) return c.text("return_to not allowed", 400);
+	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
+		return c.text("Google login not configured", 501);
+	}
+
+	const redirectUri = new URL("/v1/auth/google/callback", c.req.url).toString();
+	const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+		method: "POST",
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			code,
+			client_id: c.env.GOOGLE_CLIENT_ID,
+			client_secret: c.env.GOOGLE_CLIENT_SECRET,
+			redirect_uri: redirectUri,
+			grant_type: "authorization_code",
+		}).toString(),
+	});
+	const tok = await tokenRes.json<{ access_token?: string }>();
+	if (!tok.access_token) return c.text("Google OAuth failed", 401);
+	const gUser = await (
+		await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+			headers: { Authorization: `Bearer ${tok.access_token}` },
+		})
+	).json<{ id: string; email: string; name: string; picture: string }>();
+
+	const uid = `google:${gUser.id}`;
+	const roles = await upsertUser(c.env, uid, gUser.email, gUser.name, gUser.picture);
+	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles });
+	const redirect = new URL(state.returnTo);
+	redirect.searchParams.set("session", session);
+	return c.redirect(redirect.toString());
+});
 
 function parseJsonOrNull(value: string | null | undefined): unknown {
 	if (!value) return null;
@@ -98,10 +257,11 @@ export function normalizeBoardConfigInput(input: unknown): BoardConfig {
 
 /** Auth config — tells the console how to start the OAuth flow. */
 authRoutes.get("/config", async (c) => {
+	const base = new URL(c.req.url).origin;
 	return c.json({
-		// Use FAS shared OAuth (same approach as FAGS console)
-		oauth_url: `${FAS_API}/v1/auth/github/start`,
-		google_oauth_url: `${FAS_API}/v1/auth/google/start`,
+		// ProAgentStore's own OAuth — no FAS dependency.
+		oauth_url: `${base}/v1/auth/github/start`,
+		google_oauth_url: `${base}/v1/auth/google/start`,
 		app_id: "pags-console",
 		response_mode: "query",
 	});

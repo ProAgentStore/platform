@@ -193,7 +193,7 @@ async function continueAuthorize(
 	const provider: AuthProvider =
 		url.searchParams.get("provider") === "google" ? "google" : "github";
 	const authStart =
-		env.AUTH_START || "https://api.freeappstore.online/v1/auth/github/start";
+		env.AUTH_START || "https://api.proagentstore.online/v1/auth/github/start";
 	const authUrl = new URL(startEndpointFor(authStart, provider));
 	authUrl.searchParams.set("response_mode", "query");
 	authUrl.searchParams.set("app_id", "pags-mcp");
@@ -204,28 +204,6 @@ async function continueAuthorize(
 		status: 302,
 		headers: { Location: authUrl.toString() },
 	});
-}
-
-async function exchangeFasSession(
-	apiBaseUrl: string,
-	fasSession: string,
-): Promise<string | null> {
-	const res = await fetch(`${apiBaseUrl}/v1/auth/exchange`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ fas_session: fasSession }),
-	});
-	if (!res.ok) return null;
-	const data = await res.json<{ token?: string }>();
-	return data.token || null;
-}
-
-async function maybeExchangeFasSession(
-	apiBaseUrl: string,
-	fasSession: string | null,
-): Promise<string | null> {
-	if (!fasSession) return null;
-	return exchangeFasSession(apiBaseUrl, fasSession);
 }
 
 async function validatePagsSession(
@@ -255,9 +233,8 @@ async function oauthCallback(
 	const url = new URL(request.url);
 	const nonce = url.searchParams.get("nonce");
 	const apiBaseUrl = apiBase(env);
-	const session =
-		url.searchParams.get("session") ||
-		(await maybeExchangeFasSession(apiBaseUrl, url.searchParams.get("fas_session")));
+	// PAGS's own auth backend returns ?session=<pags_session> directly — no FAS exchange.
+	const session = url.searchParams.get("session");
 
 	if (!nonce || !session) {
 		return new Response("missing nonce or session", { status: 400 });
@@ -287,7 +264,10 @@ async function oauthCallback(
 
 	const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
 		request: authReq,
-		userId: subject || session,
+		// CF tokens/codes are `userId:grantId:secret`, so the userId must be
+		// colon-free. PAGS uids can be `google:<id>`; sanitize for the library and
+		// keep the real uid in props.mcpSubject below.
+		userId: (subject || session).replace(/:/g, "_"),
 		scope: scopes,
 		metadata: { via: "pags-mcp" },
 		props: {

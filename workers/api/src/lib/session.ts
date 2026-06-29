@@ -48,6 +48,40 @@ export async function signSession(
 	return `${data}.${sig}`;
 }
 
+/** Sign an arbitrary JSON payload (e.g. OAuth `state`) with the same HMAC. */
+export async function signPayload<T>(payload: T, signingKey: string): Promise<string> {
+	const data = b64url(
+		new TextEncoder().encode(JSON.stringify(payload)).buffer as ArrayBuffer,
+	);
+	const key = await hmacKey(signingKey);
+	const sig = b64url(
+		await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)),
+	);
+	return `${data}.${sig}`;
+}
+
+/** Verify + decode a payload produced by signPayload. Null if tampered/garbage. */
+export async function verifyPayload<T>(
+	token: string,
+	signingKey: string,
+): Promise<T | null> {
+	const [data, sig] = token.split(".");
+	if (!data || !sig) return null;
+	const key = await hmacKey(signingKey);
+	const valid = await crypto.subtle.verify(
+		"HMAC",
+		key,
+		unb64url(sig),
+		new TextEncoder().encode(data),
+	);
+	if (!valid) return null;
+	try {
+		return JSON.parse(new TextDecoder().decode(unb64url(data))) as T;
+	} catch {
+		return null;
+	}
+}
+
 export async function verifySession(
 	token: string,
 	signingKey: string,
