@@ -105,6 +105,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	speakOnRef.current = speakOn;
 	const convoOnRef = useRef(convoOn);
 	convoOnRef.current = convoOn;
+	// Freeze guard: if the recognizer keeps ending instantly, a convo-mode restart
+	// loop can peg the CPU and hang the page. Track the last start + rapid-end count.
+	const lastListenStartRef = useRef(0);
+	const rapidEndsRef = useRef(0);
 
 	const ensureTts = useCallback(async () => {
 		if (!ttsRef.current) ttsRef.current = await createTts(instanceId);
@@ -116,6 +120,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (!sttRef.current || pausedForThinkingRef.current || mutedRef.current) return;
 		try {
 			await sttRef.current.start();
+			lastListenStartRef.current = Date.now();
 			startAudioMonitor();
 			setMicOn(true);
 			if (convoOnRef.current) playListeningChime();
@@ -182,7 +187,23 @@ export function useVoice(instanceId: string | undefined, opts: {
 			onEnd: () => {
 				console.log("[voice] STT onEnd, convo:", convoOnRef.current, "paused:", pausedForThinkingRef.current);
 				if (convoOnRef.current && !pausedForThinkingRef.current) {
-					startListening();
+					// If the recognizer just ended almost immediately after starting, we're
+					// in a failing restart loop (mic blocked / instant abort). Back off, and
+					// after a few rapid ends bail out of convo mode so the page never freezes.
+					if (Date.now() - lastListenStartRef.current < 800) {
+						rapidEndsRef.current += 1;
+						if (rapidEndsRef.current >= 4) {
+							rapidEndsRef.current = 0;
+							setConvoOn(false);
+							setMicOn(false);
+							return;
+						}
+					} else {
+						rapidEndsRef.current = 0;
+					}
+					setTimeout(() => {
+						if (convoOnRef.current && !pausedForThinkingRef.current) startListening();
+					}, 350);
 				} else if (!convoOnRef.current) {
 					setMicOn(false);
 				}
