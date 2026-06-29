@@ -275,7 +275,7 @@ describe("runtime task protocol shape", () => {
 		});
 		expect(task.input).toMatchObject({
 			install: "npm i -g @proagentstore/cli",
-			connect: "pags runner connect inst-1 --pags-token <your-token>",
+			connect: "pags up",
 		});
 	});
 });
