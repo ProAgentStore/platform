@@ -5,6 +5,8 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { installationTokenForOwner } from "../lib/github-app.js";
+import { parseGithubUrl } from "../lib/repo-ingest.js";
 import type { Env } from "../types.js";
 
 export const storageRoutes = new Hono<{ Bindings: Env }>();
@@ -411,6 +413,36 @@ instanceStorageRoutes.delete("/:id/knowledge/:docId", async (c) => {
 	const instance = await resolveOwnedInstance(c, session);
 	const docId = c.req.param("docId");
 	return proxyDO(c, instance.id, `/knowledge/${encodeURIComponent(docId)}`, { method: "DELETE" });
+});
+
+// ── Repo ingestion (read-only "chat with a repository" agent) ────────────────
+
+instanceStorageRoutes.post("/:id/ingest-repo", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const body = await c.req.json<{ repoUrl?: string; branch?: string }>();
+	if (!body.repoUrl) throw new HttpError(400, "repoUrl required");
+	const ref = parseGithubUrl(body.repoUrl);
+	if (!ref) throw new HttpError(400, "Not a recognizable GitHub repository URL");
+	// Private repos need an installation token; public repos work without one.
+	const token = await installationTokenForOwner(c.env, session.uid, ref.owner);
+	return proxyDO(c, instance.id, "/ingest-repo", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ repoUrl: body.repoUrl, branch: body.branch, token: token ?? undefined }),
+	});
+});
+
+instanceStorageRoutes.get("/:id/ingest-repo/status", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/ingest-repo/status");
+});
+
+instanceStorageRoutes.post("/:id/ingest-repo/clear", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/ingest-repo/clear", { method: "POST" });
 });
 
 instanceStorageRoutes.get("/:id/messages", async (c) => {

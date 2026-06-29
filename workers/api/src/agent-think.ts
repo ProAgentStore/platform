@@ -83,15 +83,34 @@ export async function runAgentThink(opts: {
 			"\n\nYou have tools available. Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
 	}
 
-	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'." +
-		"\n\nSTYLE: You are speaking to a NON-TECHNICAL person. Your response will be READ ALOUD to them." +
-		"\nRULES:" +
-		"\n- MAXIMUM 2 sentences. Shorter is better." +
-		"\n- Never mention filenames, paths, line numbers, git status, CSS classes, function names, or code." +
-		"\n- Never repeat raw tool output. Summarize in plain English." +
-		"\n- Say WHAT happened and WHETHER it needs anything from the user." +
-		"\n- Only get technical if the user explicitly asks for details/code/files." +
-		"\n- Good: 'You have 3 repos connected. Everything looks good.' Bad: 'I found repos pags/platform with modified files agent-capabilities.ts...'.";
+	// A "technical" response style (e.g. the read-only repo-chat explainer) needs
+	// the opposite of the default plain-speech rules — it must be free to cite real
+	// files, functions, and code. Everything else keeps the concise, read-aloud
+	// voice tuned for non-technical users.
+	const technical = state.guardrails?.responseStyle === "technical";
+	const styleReminder = technical
+		? "Answer accurately and concretely, grounded in the code above. Lead with a plain-English explanation; cite real file paths/functions and add short snippets only when they help."
+		: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.";
+
+	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'.";
+	if (technical) {
+		systemPrompt +=
+			"\n\nSTYLE: You are a precise code explainer helping a developer understand a repository." +
+			"\n- Be accurate and concrete. Reference real file paths, functions, and types from the indexed code above when relevant." +
+			"\n- Ground every claim about how the code works in the retrieved context. If something isn't in your indexed knowledge, say you didn't find it rather than guessing." +
+			"\n- You are READ-ONLY: you explain and analyze the repository, you never modify it and you have no ability to change code." +
+			"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
+	} else {
+		systemPrompt +=
+			"\n\nSTYLE: You are speaking to a NON-TECHNICAL person. Your response will be READ ALOUD to them." +
+			"\nRULES:" +
+			"\n- MAXIMUM 2 sentences. Shorter is better." +
+			"\n- Never mention filenames, paths, line numbers, git status, CSS classes, function names, or code." +
+			"\n- Never repeat raw tool output. Summarize in plain English." +
+			"\n- Say WHAT happened and WHETHER it needs anything from the user." +
+			"\n- Only get technical if the user explicitly asks for details/code/files." +
+			"\n- Good: 'You have 3 repos connected. Everything looks good.' Bad: 'I found repos pags/platform with modified files agent-capabilities.ts...'.";
+	}
 
 	const aiMessages: { role: string; content: string }[] = [
 		{ role: "system", content: systemPrompt },
@@ -174,7 +193,7 @@ export async function runAgentThink(opts: {
 		}
 
 		aiMessages.push({ role: "assistant", content: `I called tools:\n${toolResults.join("\n")}` });
-		aiMessages.push({ role: "user", content: "Continue based on the tool results above. REMEMBER: reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud." });
+		aiMessages.push({ role: "user", content: `Continue based on the tool results above. REMEMBER: ${styleReminder}` });
 		// The model only re-requested calls it already made — nothing new will
 		// happen in another round, so stop and let it write the final response.
 		if (executedThisRound === 0) break;
@@ -182,7 +201,7 @@ export async function runAgentThink(opts: {
 
 	// Final reminder before generating the response
 	if (allToolLog.length > 0) {
-		aiMessages.push({ role: "user", content: "Now give your final answer. MAX 2 sentences, plain English, no technical details. Will be read aloud." });
+		aiMessages.push({ role: "user", content: `Now give your final answer. ${styleReminder}` });
 	}
 	const final = (await runUserWorkersAi(
 		env,

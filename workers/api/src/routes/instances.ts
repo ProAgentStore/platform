@@ -69,10 +69,10 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 
 	// Verify agent exists and is published
 	const agent = await c.env.DB.prepare(
-		`SELECT id, name, model, visibility FROM agents WHERE (id = ?1 OR slug = ?1) AND visibility = 'published'`,
+		`SELECT id, name, model, visibility, config FROM agents WHERE (id = ?1 OR slug = ?1) AND visibility = 'published'`,
 	)
 		.bind(agentId)
-		.first<{ id: string; name: string; model: string }>();
+		.first<{ id: string; name: string; model: string; config: string | null }>();
 	if (!agent) throw new HttpError(404, "Agent not found or not published");
 
 	// Check if already subscribed
@@ -107,6 +107,20 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	const stateRes = await templateStub.fetch(new Request("https://agent/state"));
 	const templateState = (await stateRes.json()) as Record<string, unknown>;
 
+	// First-party agents seeded straight into the catalog have no initialized
+	// template DO, so their identity (personality/goal/guardrails) lives in the
+	// agents.config.identity blob. Use it as the fallback when the template DO is
+	// uninitialized; a real creator's template DO state always wins.
+	const templateInited = Boolean(templateState.name) && !templateState.error;
+	let identity: Record<string, unknown> = {};
+	if (!templateInited && agent.config) {
+		try {
+			identity = ((JSON.parse(agent.config) as Record<string, unknown>).identity as Record<string, unknown>) || {};
+		} catch {
+			identity = {};
+		}
+	}
+
 	// Initialize instance DO with template config
 	const instanceDoId = c.env.AGENT.idFromName(instanceId);
 	const instanceStub = c.env.AGENT.get(instanceDoId);
@@ -117,11 +131,11 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 			body: JSON.stringify({
 				agentId: instanceId,
 				name: templateState.name || agent.name,
-				personality: templateState.personality || "",
-				goal: templateState.goal || "",
+				personality: templateState.personality || identity.personality || "",
+				goal: templateState.goal || identity.goal || "",
 				model: templateState.model || agent.model,
-				guardrails: templateState.guardrails || {},
-				welcomeMessage: templateState.welcomeMessage || "",
+				guardrails: templateState.guardrails || identity.guardrails || {},
+				welcomeMessage: templateState.welcomeMessage || identity.welcomeMessage || "",
 			}),
 		}),
 	);

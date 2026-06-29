@@ -148,6 +148,69 @@ export class AgentStorageEngine {
 		}
 	}
 
+	// ── Repo ingestion (read-only code indexing) ───────────────────────────────
+
+	/**
+	 * Vectorize one repository file. The file path is prepended to EVERY chunk so
+	 * RAG results carry their source location into the chat context (the LLM can
+	 * cite "this lives in src/foo.ts"). Embeds + upserts the whole file in one
+	 * batched call each — keeps repo ingestion within the Worker subrequest budget.
+	 */
+	async vectorizeRepoFile(path: string, content: string): Promise<number> {
+		if (!this.vectorize || !this.ai) return 0;
+		const chunks = chunkText(content, CHUNK_SIZE).map((c) => `File: ${path}\n${c}`);
+		if (chunks.length === 0) return 0;
+
+		let stored = 0;
+		// bge accepts a bounded batch of inputs per call.
+		for (let start = 0; start < chunks.length; start += 90) {
+			const batch = chunks.slice(start, start + 90);
+			let embeddings: number[][];
+			try {
+				const result = await this.ai.run("@cf/baai/bge-base-en-v1.5", { text: batch });
+				embeddings = (result as { data: number[][] }).data || [];
+			} catch {
+				continue;
+			}
+			const vectors: VectorizeVector[] = [];
+			const metas: Array<{ key: string; meta: VectorMeta }> = [];
+			for (let i = 0; i < batch.length; i++) {
+				const embedding = embeddings[i];
+				if (!embedding) continue;
+				const chunkIndex = start + i;
+				const id = await shortId(this.agentId, "repo", path, chunkIndex);
+				vectors.push({
+					id,
+					values: embedding,
+					metadata: { agentId: this.agentId, sourceType: "repo", sourceId: path, chunkIndex, text: batch[i].slice(0, 1000) },
+				});
+				metas.push({ key: `vec:${id}`, meta: { id, agentId: this.agentId, sourceType: "repo", sourceId: path, chunkIndex, text: batch[i], createdAt: new Date().toISOString() } });
+			}
+			if (vectors.length === 0) continue;
+			await this.vectorize.upsert(vectors);
+			for (const { key, meta } of metas) await this.doStorage.put(key, meta);
+			stored += vectors.length;
+		}
+		return stored;
+	}
+
+	/** Drop every vector that came from repo ingestion (used on re-index/clear). */
+	async clearRepoVectors(): Promise<void> {
+		if (!this.vectorize) return;
+		const all = await this.doStorage.list<VectorMeta>({ prefix: "vec:" });
+		const ids: string[] = [];
+		const keys: string[] = [];
+		for (const [key, meta] of all.entries()) {
+			if (meta.agentId === this.agentId && meta.sourceType === "repo") {
+				ids.push(meta.id);
+				keys.push(key);
+			}
+		}
+		if (ids.length === 0) return;
+		for (let i = 0; i < ids.length; i += 128) await this.vectorize.deleteByIds(ids.slice(i, i + 128));
+		for (let i = 0; i < keys.length; i += 128) await this.doStorage.delete(keys.slice(i, i + 128));
+	}
+
 	// ── Knowledge base (editable via chat) ─────────────────────────────────────
 
 	/** List knowledge documents (id, title, size) — not the full content. */

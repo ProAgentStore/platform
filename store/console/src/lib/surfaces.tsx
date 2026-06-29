@@ -3,6 +3,7 @@ import { CodingTab } from "@proagentstore/coder-web";
 import ApplyTab from "../tabs/ApplyTab";
 import BoardTab from "../tabs/BoardTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
+import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -18,7 +19,7 @@ import SettingsTab from "../tabs/SettingsTab";
 // See ../../../PLAN-agent-os.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type SurfaceId = "chat" | "apply" | "board" | "coding" | "knowledge" | "settings";
+export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "knowledge" | "settings";
 
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
@@ -59,10 +60,19 @@ export const SURFACES: SurfaceDef[] = [
 		id: "board",
 		label: "Board",
 		icon: "📋",
-		// Generic runtime board for non-coding, non-apply agents (those have their own surface).
-		show: (s) => !s.includes("coding") && !s.includes("apply"),
+		// Generic runtime board for agents without their own dedicated surface.
+		show: (s) => !s.includes("coding") && !s.includes("apply") && !s.includes("repo"),
 		scroll: true,
 		render: ({ instanceId }) => <BoardTab instanceId={instanceId} />,
+	},
+	{
+		id: "repo",
+		label: "Repo",
+		icon: "🔍",
+		// The read-only repo-chat agent's surface: index a GitHub repo, then chat with it.
+		show: (s) => s.includes("repo"),
+		scroll: true,
+		render: ({ instanceId }) => <RepoTab instanceId={instanceId} />,
 	},
 	{
 		id: "coding",

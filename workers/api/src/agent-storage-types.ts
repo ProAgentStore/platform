@@ -30,7 +30,7 @@
 export interface VectorMeta {
 	id: string;
 	agentId: string;
-	sourceType: "knowledge" | "message" | "file" | "collection";
+	sourceType: "knowledge" | "message" | "file" | "collection" | "repo";
 	sourceId: string;
 	chunkIndex: number;
 	text: string;
@@ -105,6 +105,7 @@ export interface ActivityEvent {
 		| "knowledge.added"
 		| "knowledge.removed"
 		| "knowledge.updated"
+		| "repo.indexed"
 		| "file.uploaded"
 		| "file.deleted"
 		| "collection.created"

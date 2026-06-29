@@ -29,6 +29,14 @@ import {
 } from "./agent-do-prompt.js";
 import { runAgentThink } from "./agent-think.js";
 import {
+	buildRepoOverview,
+	extractTextFiles,
+	fetchRepoMeta,
+	fetchRepoTarball,
+	findReadme,
+	parseGithubUrl,
+} from "./lib/repo-ingest.js";
+import {
 	UserAiCredentialsError,
 	UserAiProviderError,
 } from "./lib/user-ai.js";
@@ -46,6 +54,34 @@ export type {
 } from "./agent-types.js";
 
 const MAX_CONTEXT_MESSAGES = 10;
+
+// ── Repo ingestion tuning ─────────────────────────────────────────────────────
+const REPO_MAX_FILES = 300;
+const REPO_MAX_FILE_BYTES = 32_000;
+const REPO_MAX_TOTAL_BYTES = 4_000_000;
+const REPO_INDEX_BATCH = 8; // files vectorized per alarm tick
+
+/** Background job that pulls a GitHub repo into the agent's vector store. */
+interface RepoIngestJob {
+	repoUrl: string;
+	owner: string;
+	repo: string;
+	branch?: string;
+	token?: string;
+	status: "fetching" | "indexing" | "summarizing" | "done" | "error";
+	total: number;
+	done: number;
+	skipped: number;
+	queue: number[];
+	paths: string[];
+	description?: string | null;
+	language?: string | null;
+	readme?: string | null;
+	overviewDocId?: string;
+	error?: string;
+	startedAt: string;
+	finishedAt?: string;
+}
 
 export class AgentDO extends DurableObject<Env> {
 	private getStorageEngine(agentId: string): AgentStorageEngine {
@@ -170,6 +206,14 @@ export class AgentDO extends DurableObject<Env> {
 			}
 			if (path === "/knowledge/ingest-url" && request.method === "POST")
 				return this.handleIngestUrl(request);
+
+			// Repo ingestion (read-only "chat with a repository" agent)
+			if (path === "/ingest-repo" && request.method === "POST")
+				return this.handleIngestRepo(request);
+			if (path === "/ingest-repo/status" && request.method === "GET")
+				return this.handleIngestRepoStatus();
+			if (path === "/ingest-repo/clear" && request.method === "POST")
+				return this.handleClearRepo();
 
 			// State
 			if (path === "/init-collections" && request.method === "POST")
@@ -771,6 +815,165 @@ export class AgentDO extends DurableObject<Env> {
 				},
 				400,
 			);
+		}
+	}
+
+	// ── Repo ingestion ──────────────────────────────────────────────────────────
+
+	private async getRepoJob(): Promise<RepoIngestJob | null> {
+		return (await this.ctx.storage.get<RepoIngestJob>("repoIngest")) ?? null;
+	}
+
+	/** Wipe everything from a prior repo ingest (vectors, staged files, overview, memory). */
+	private async clearRepoData(): Promise<void> {
+		const state = await this.getState();
+		if (state) {
+			const engine = this.getStorageEngine(state.agentId);
+			await engine.clearRepoVectors().catch(() => undefined);
+		}
+		const prior = await this.getRepoJob();
+		if (prior?.overviewDocId) {
+			await this.ctx.storage.delete(`kb:${prior.overviewDocId}`);
+		}
+		// Drop any staged file blobs left over from an interrupted run.
+		const staged = await this.ctx.storage.list({ prefix: "rifile:" });
+		const keys = [...staged.keys()];
+		for (let i = 0; i < keys.length; i += 128) await this.ctx.storage.delete(keys.slice(i, i + 128));
+		await this.ctx.storage.delete("mem:repository");
+		await this.ctx.storage.delete("repoIngest");
+	}
+
+	private async handleIngestRepo(request: Request): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const { repoUrl, branch, token } = await request.json<{ repoUrl: string; branch?: string; token?: string }>();
+		if (!repoUrl) return json({ error: "repoUrl required" }, 400);
+		const ref = parseGithubUrl(repoUrl);
+		if (!ref) return json({ error: "Not a recognizable GitHub repository URL" }, 400);
+
+		await this.clearRepoData();
+
+		const job: RepoIngestJob = {
+			repoUrl,
+			owner: ref.owner,
+			repo: ref.repo,
+			branch: branch || undefined,
+			token: token || undefined,
+			status: "fetching",
+			total: 0,
+			done: 0,
+			skipped: 0,
+			queue: [],
+			paths: [],
+			startedAt: new Date().toISOString(),
+		};
+		await this.ctx.storage.put("repoIngest", job);
+		await this.ctx.storage.setAlarm(Date.now());
+		return json({ status: job.status, repo: `${ref.owner}/${ref.repo}` }, 202);
+	}
+
+	private async handleIngestRepoStatus(): Promise<Response> {
+		const job = await this.getRepoJob();
+		if (!job) return json({ status: "none" });
+		// Don't leak the access token to the client.
+		const { token: _t, queue: _q, readme: _r, ...pub } = job;
+		return json({ ...pub, repo: `${job.owner}/${job.repo}` });
+	}
+
+	private async handleClearRepo(): Promise<Response> {
+		await this.clearRepoData();
+		return json({ status: "cleared" });
+	}
+
+	/** Alarm-driven repo ingestion state machine — keeps each tick small. */
+	async alarm(): Promise<void> {
+		const job = await this.getRepoJob();
+		if (!job || job.status === "done" || job.status === "error") return;
+
+		const state = await this.getState();
+		if (!state) return;
+		const engine = this.getStorageEngine(state.agentId);
+		const ref = { owner: job.owner, repo: job.repo };
+
+		try {
+			if (job.status === "fetching") {
+				const meta = await fetchRepoMeta(ref, job.token);
+				const tar = await fetchRepoTarball(ref, job.branch || meta?.defaultBranch || undefined, job.token);
+				const { files, skipped } = extractTextFiles(tar, {
+					maxFiles: REPO_MAX_FILES,
+					maxFileBytes: REPO_MAX_FILE_BYTES,
+					maxTotalBytes: REPO_MAX_TOTAL_BYTES,
+				});
+				if (files.length === 0) {
+					await this.ctx.storage.put("repoIngest", { ...job, status: "error", error: "No indexable text files found in this repository.", finishedAt: new Date().toISOString() });
+					return;
+				}
+				// Stage each file as its own DO entry (the job object can't hold them all).
+				for (let i = 0; i < files.length; i++) {
+					await this.ctx.storage.put(`rifile:${i}`, files[i]);
+				}
+				const updated: RepoIngestJob = {
+					...job,
+					status: "indexing",
+					total: files.length,
+					done: 0,
+					skipped,
+					queue: files.map((_, i) => i),
+					paths: files.map((f) => f.path),
+					description: meta?.description ?? null,
+					language: meta?.language ?? null,
+					readme: findReadme(files),
+				};
+				await this.ctx.storage.put("repoIngest", updated);
+				await this.ctx.storage.setAlarm(Date.now() + 50);
+				return;
+			}
+
+			if (job.status === "indexing") {
+				const batch = job.queue.slice(0, REPO_INDEX_BATCH);
+				for (const idx of batch) {
+					const file = await this.ctx.storage.get<{ path: string; content: string }>(`rifile:${idx}`);
+					if (file) {
+						await engine.vectorizeRepoFile(file.path, file.content).catch(() => undefined);
+						await this.ctx.storage.delete(`rifile:${idx}`);
+					}
+				}
+				const remaining = job.queue.slice(batch.length);
+				const next: RepoIngestJob = {
+					...job,
+					done: job.done + batch.length,
+					queue: remaining,
+					status: remaining.length === 0 ? "summarizing" : "indexing",
+				};
+				await this.ctx.storage.put("repoIngest", next);
+				await this.ctx.storage.setAlarm(Date.now() + 50);
+				return;
+			}
+
+			if (job.status === "summarizing") {
+				const overview = buildRepoOverview(ref, {
+					description: job.description,
+					language: job.language,
+					paths: job.paths,
+					readme: job.readme,
+				});
+				const doc = await engine.addKnowledge(`Repository overview: ${job.owner}/${job.repo}`, overview).catch(() => null);
+				await this.setMemory(
+					"repository",
+					"context",
+					`Indexed repository ${job.owner}/${job.repo}. ${job.description || ""} ${job.total} files indexed (${job.language || "mixed"}). You can explain any file, function, or how the code fits together. You are READ-ONLY — you never modify the repository.`.trim(),
+				);
+				await engine.logEvent("repo.indexed", undefined, { repo: `${job.owner}/${job.repo}`, files: job.total }).catch(() => undefined);
+				await this.ctx.storage.put("repoIngest", { ...job, status: "done", overviewDocId: doc?.id, finishedAt: new Date().toISOString() });
+				return;
+			}
+		} catch (err) {
+			await this.ctx.storage.put("repoIngest", {
+				...job,
+				status: "error",
+				error: err instanceof Error ? err.message : String(err),
+				finishedAt: new Date().toISOString(),
+			});
 		}
 	}
 

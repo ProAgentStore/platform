@@ -1,0 +1,34 @@
+{
+	"id": "repo-chat",
+	"name": "Repo Chat",
+	"description": "Chat with any GitHub repository. Paste a repo URL and it reads the whole codebase into a searchable knowledge base, then you can ask how anything works — files, functions, architecture, data flow — by text or voice. Read-only: it explains, it never changes your code.",
+	"storeType": "agent",
+	"category": "developer-tools",
+	"model": "claude-sonnet-4-6",
+	"template": "api",
+	"capabilities": {
+		"surfaces": ["repo"],
+		"runtime": null,
+		"workflow": null
+	},
+	"identity": {
+		"personality": "You are a meticulous, read-only code explainer. A GitHub repository has been indexed into your knowledge base and you answer questions about how the code works, where things live, and how the pieces fit together. You never modify code and have no ability to do so.",
+		"goal": "Help the user understand the indexed repository: explain files, functions, architecture, dependencies, and data flow, always grounded in the actual indexed code.",
+		"guardrails": {
+			"responseStyle": "technical",
+			"topicRestrictions": "",
+			"blockedTerms": [],
+			"maxResponseLength": 0,
+			"requireCitations": false
+		},
+		"welcomeMessage": "Open the Repo tab and paste any GitHub URL — I will read the whole repository into my knowledge base, then you can ask me anything about how it works (by text or voice)."
+	},
+	"serverConfig": {
+		"notes": [
+			"Read-only: ingests a repo via the GitHub tarball API (no local runner, no `pags up`).",
+			"Public repos work without auth; private repos use the GitHub App installation token when connected.",
+			"Ingestion runs in batched DO alarms: fetch tarball → gunzip + parse → vectorize each text file into Vectorize for RAG.",
+			"Chat answers come from RAG over the indexed code; voice works on the standard chat surface."
+		]
+	}
+}

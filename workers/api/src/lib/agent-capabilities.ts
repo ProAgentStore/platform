@@ -15,7 +15,7 @@
  */
 
 /** A console surface an agent opts into (drives tabs + which UI blocks render). */
-export type AgentSurface = "apply" | "coding" | "insurance";
+export type AgentSurface = "apply" | "coding" | "insurance" | "repo";
 
 /** Which local runner runtime the agent's hands use (null = no local runner). */
 export type AgentRuntimeKind = "browser" | "coding" | null;
@@ -30,7 +30,7 @@ export interface AgentCapabilities {
 }
 
 const EMPTY: AgentCapabilities = { surfaces: [], runtime: null, workflow: null };
-const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance"]);
+const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "repo"]);
 
 /** Minimal shape we need off an `agents` row to resolve capabilities. */
 export interface AgentLike {
