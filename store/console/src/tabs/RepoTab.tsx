@@ -15,6 +15,7 @@ interface RepoState {
 	status: IngestStatus;
 	total?: number;
 	done?: number;
+	failed?: number;
 	skipped?: number;
 	paths?: string[];
 	description?: string | null;
@@ -37,6 +38,7 @@ export default function RepoTab({ instanceId }: Props) {
 	const [loaded, setLoaded] = useState(false);
 	const [url, setUrl] = useState("");
 	const [busy, setBusy] = useState(false);
+	const [err, setErr] = useState("");
 	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -71,13 +73,14 @@ export default function RepoTab({ instanceId }: Props) {
 	const addRepo = async (repoUrl: string) => {
 		if (!repoUrl.trim()) return;
 		setBusy(true);
+		setErr("");
 		try {
 			await api(`/v1/instances/${instanceId}/ingest-repo`, { method: "POST", body: JSON.stringify({ repoUrl: repoUrl.trim() }) });
 			setUrl("");
 			await loadStatus();
 			startPoll();
 		} catch (e) {
-			alert(e instanceof Error ? e.message : String(e));
+			setErr(e instanceof Error ? e.message : String(e));
 		} finally {
 			setBusy(false);
 		}
@@ -85,11 +88,15 @@ export default function RepoTab({ instanceId }: Props) {
 
 	const removeRepo = async (repoUrl?: string, key?: string) => {
 		setBusy(true);
+		setErr("");
 		try {
 			await api(`/v1/instances/${instanceId}/ingest-repo/clear`, { method: "POST", body: JSON.stringify({ repoUrl, key }) });
 			await loadStatus();
-		} catch {}
-		setBusy(false);
+		} catch (e) {
+			setErr(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
 	};
 
 	return (
@@ -112,7 +119,8 @@ export default function RepoTab({ instanceId }: Props) {
 						{busy ? "…" : "Index"}
 					</button>
 				</div>
-				<p className="text-xs text-muted-soft mt-2">Public repos work as-is. Private repos need GitHub connected. Large repos are capped at 300 files each.</p>
+				{err && <p className="text-xs text-red mt-2">{err}</p>}
+				<p className="text-xs text-muted-soft mt-2">Public repos work as-is. Private repos need GitHub connected. Up to 20 repos, 300 files each.</p>
 			</div>
 
 			{/* Indexed repositories */}
@@ -130,7 +138,7 @@ export default function RepoTab({ instanceId }: Props) {
 									<div className="font-bold text-sm truncate">{r.key}</div>
 									<div className={`text-xs mt-0.5 ${r.status === "error" ? "text-red" : "text-muted"}`}>
 										{PHASE_LABEL[r.status]}
-										{r.status === "done" && <> · {r.total} files{r.language ? ` · ${r.language}` : ""}{r.skipped ? ` · ${r.skipped} skipped` : ""}</>}
+										{r.status === "done" && <> · {r.total} files{r.language ? ` · ${r.language}` : ""}{r.skipped ? ` · ${r.skipped} skipped` : ""}{r.failed ? ` · ${r.failed} failed` : ""}</>}
 										{r.status === "indexing" && <> · {r.done || 0}/{r.total || 0}</>}
 									</div>
 								</div>
