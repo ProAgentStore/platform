@@ -41,6 +41,17 @@ export async function signIn(provider: "google" | "github" = "github") {
 
 export async function handleOAuthCallback(): Promise<string | null> {
 	const params = new URLSearchParams(window.location.search);
+
+	// Direct PAGS OAuth (Google/GitHub via /v1/auth/*/start) redirects back with
+	// ?session=<PAGS JWT> — store it directly, no exchange needed.
+	const session = params.get("session");
+	if (session) {
+		setToken(session);
+		window.history.replaceState({}, "", window.location.pathname);
+		return session;
+	}
+
+	// Legacy FAS-delegated flow returns ?fas_session=... → exchange for a PAGS token.
 	const fasSession = params.get("fas_session");
 	if (!fasSession) return null;
 
