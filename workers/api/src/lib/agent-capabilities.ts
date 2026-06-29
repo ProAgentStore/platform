@@ -20,6 +20,14 @@ export type AgentSurface = "apply" | "coding" | "insurance" | "repo";
 /** Which local runner runtime the agent's hands use (null = no local runner). */
 export type AgentRuntimeKind = "browser" | "coding" | null;
 
+/** A custom (agent-published) console surface — its UI loads from a bundle URL. */
+export interface CustomSurface {
+	id: string;
+	label: string;
+	icon?: string;
+	bundleUrl: string;
+}
+
 export interface AgentCapabilities {
 	/** Console surfaces this agent shows (e.g. the Coding tab, the apply UI). */
 	surfaces: AgentSurface[];
@@ -27,6 +35,25 @@ export interface AgentCapabilities {
 	runtime: AgentRuntimeKind;
 	/** Brain workflow binding name, when the agent has an autonomous loop. */
 	workflow: "JOB_APPLY" | "CODING_SESSION" | "INSURANCE_QUOTES" | null;
+	/** Phase 3: agent-published UIs the console loads dynamically from bundles. */
+	customSurfaces?: CustomSurface[];
+}
+
+/** Validate declared custom surfaces — these load as CODE into the console origin,
+ *  so require an https bundle URL and reject anything malformed. */
+function sanitizeCustomSurfaces(value: unknown): CustomSurface[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const out: CustomSurface[] = [];
+	for (const v of value) {
+		if (!v || typeof v !== "object") continue;
+		const o = v as Record<string, unknown>;
+		const id = typeof o.id === "string" ? o.id : "";
+		const label = typeof o.label === "string" ? o.label : "";
+		const bundleUrl = typeof o.bundleUrl === "string" ? o.bundleUrl : "";
+		if (!id || !label || !/^https:\/\//.test(bundleUrl)) continue;
+		out.push({ id, label, bundleUrl, icon: typeof o.icon === "string" ? o.icon : undefined });
+	}
+	return out.length ? out : undefined;
 }
 
 const EMPTY: AgentCapabilities = { surfaces: [], runtime: null, workflow: null };
@@ -60,6 +87,7 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 			surfaces: declared.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface)),
 			runtime: declared.runtime ?? null,
 			workflow: declared.workflow ?? null,
+			customSurfaces: sanitizeCustomSurfaces((declared as Record<string, unknown>).customSurfaces),
 		};
 	}
 

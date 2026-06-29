@@ -7,24 +7,30 @@ import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
-import { SURFACES, SURFACE_IDS, visibleSurfaces, type SurfaceId } from "../lib/surfaces";
+import { SURFACES, visibleSurfaces } from "../lib/surfaces";
+import DynamicSurface from "../components/DynamicSurface";
 
-type Tab = SurfaceId;
+// A built-in SurfaceId or a custom (agent-published) surface id.
+type Tab = string;
 
 export default function InstanceDetail() {
 	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
 	const navigate = useNavigate();
 	const [instance, setInstance] = useState<Instance | null>(null);
 	const surfaces = instance?.capabilities?.surfaces || [];
+	// Phase 3: agent-published UIs, loaded dynamically (see DynamicSurface).
+	const customSurfaces = instance?.capabilities?.customSurfaces || [];
 
 	// Tab + session from URL — always sync with the route. Gate the tab against the
-	// surfaces THIS instance actually exposes, so a deep link like /coding on a
-	// non-coding agent falls back to chat instead of mounting a broken surface.
-	const validTabs: Tab[] = SURFACE_IDS;
+	// surfaces THIS instance actually exposes (built-in + custom), so a deep link like
+	// /coding on a non-coding agent falls back to chat instead of mounting a broken tab.
 	const splatParts = splat?.split("/") || [];
-	const urlTab = (splatParts[0] || "") as Tab;
-	const allowedSurfaces = new Set(visibleSurfaces(surfaces).map((s) => s.id));
-	const tab = validTabs.includes(urlTab) && allowedSurfaces.has(urlTab) ? urlTab : "chat";
+	const urlTab = splatParts[0] || "";
+	const allowedSurfaces = new Set<string>([
+		...visibleSurfaces(surfaces).map((s) => s.id),
+		...customSurfaces.map((c) => c.id),
+	]);
+	const tab: Tab = allowedSurfaces.has(urlTab) ? urlTab : "chat";
 	const urlSessionId = splatParts[1] || undefined; // e.g. coding/csess_xxx
 	const setTab = (t: Tab) => {
 		navigate(`/instances/${id}/${t}`, { replace: true });
@@ -320,9 +326,12 @@ export default function InstanceDetail() {
 	const isApply = surfaces.includes("apply");
 	// Tabs are derived from the surface registry filtered by this instance's capabilities.
 	const tabDefs = useMemo(
-		() => visibleSurfaces(surfaces).map((s) => ({ id: s.id, label: s.label, icon: s.icon })),
+		() => [
+			...visibleSurfaces(surfaces).map((s) => ({ id: s.id as string, label: s.label, icon: s.icon })),
+			...customSurfaces.map((c) => ({ id: c.id, label: c.label, icon: c.icon || "🧩" })),
+		],
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[surfaces.join(",")],
+		[surfaces.join(","), customSurfaces.map((c) => c.id).join(",")],
 	);
 
 	// Inject instance controls into the Layout header (single bar)
@@ -486,6 +495,12 @@ export default function InstanceDetail() {
 				)}
 
 				{tab !== "chat" && id && (() => {
+					// Agent-published (Phase 3) surface — load its bundle dynamically.
+					const custom = customSurfaces.find((c) => c.id === tab);
+					if (custom) {
+						return <DynamicSurface bundleUrl={custom.bundleUrl} instanceId={id} sessionId={urlSessionId} />;
+					}
+					// Built-in surface from the static registry.
 					const active = SURFACES.find((s) => s.id === tab);
 					if (!active?.render) return null;
 					const body = active.render({

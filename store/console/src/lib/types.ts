@@ -16,6 +16,14 @@ export interface Agent {
 	};
 }
 
+export interface CustomSurface {
+	id: string;
+	label: string;
+	icon?: string;
+	/** ESM bundle exporting mount(ctx). Loaded by DynamicSurface. */
+	bundleUrl: string;
+}
+
 export interface Instance {
 	id: string;
 	agent_id: string;
@@ -31,6 +39,8 @@ export interface Instance {
 		surfaces: string[];
 		runtime?: string;
 		workflow?: string;
+		/** Phase 3: agent-published UIs, loaded dynamically from a bundle URL. */
+		customSurfaces?: CustomSurface[];
 	};
 }
 
