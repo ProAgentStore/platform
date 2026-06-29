@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { AppRecord } from "../lib/types";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import BoardTab from "./BoardTab";
+import ApplicationDetail from "./ApplicationDetail";
 
 // The job-application agent's dedicated surface: the applications pipeline on top
 // of the shared runtime board (tasks + activity, via BoardTab). Registered as the
@@ -17,7 +19,8 @@ const APP_COLUMNS = [
 	{ id: "accepted", title: "Accepted", color: "#22c55e", statuses: ["accepted"] },
 ];
 
-export default function ApplyTab({ instanceId }: { instanceId: string }) {
+export default function ApplyTab({ instanceId, recordId }: { instanceId: string; recordId?: string }) {
+	const navigate = useNavigate();
 	const [apps, setApps] = useState<AppRecord[]>([]);
 
 	const loadApps = useCallback(async () => {
@@ -29,8 +32,13 @@ export default function ApplyTab({ instanceId }: { instanceId: string }) {
 		} catch {}
 	}, [instanceId]);
 
-	useEffect(() => { loadApps(); }, [loadApps]);
-	usePolling(loadApps, 2500);
+	useEffect(() => { if (!recordId) loadApps(); }, [loadApps, recordId]);
+	usePolling(loadApps, 2500, !recordId);
+
+	// Deep-linked to a single application → the rich detail page (agent-custom UI).
+	if (recordId) {
+		return <ApplicationDetail instanceId={instanceId} recordId={recordId} onBack={() => navigate(`/instances/${instanceId}/apply`)} />;
+	}
 
 	return (
 		<div>
@@ -67,17 +75,16 @@ export default function ApplyTab({ instanceId }: { instanceId: string }) {
 										const company = app.company || (typeof d.company === "string" ? d.company : "") || host || "Untitled";
 										const role = app.role || (typeof d.role === "string" ? d.role : "");
 										return (
-											<a
+											<button
 												key={app.id}
-												href={url || undefined}
-												target="_blank"
-												rel="noopener"
-												className="block bg-paper border border-line rounded-lg p-2.5 text-sm no-underline text-ink hover:border-accent"
-												title={url || company}
+												type="button"
+												onClick={() => navigate(`/instances/${instanceId}/apply/${app.id}`)}
+												className="block text-left w-full bg-paper border border-line rounded-lg p-2.5 text-sm text-ink hover:border-accent cursor-pointer"
+												title={company}
 											>
 												<div className="font-bold text-xs mb-0.5 line-clamp-1">{company}</div>
-												<div className="text-xs text-muted line-clamp-1">{role || (url ? "Open job ↗" : "")}</div>
-											</a>
+												<div className="text-xs text-muted line-clamp-1">{role || host}</div>
+											</button>
 										);
 									})}
 								</div>

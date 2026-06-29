@@ -53,7 +53,7 @@ export const SURFACES: SurfaceDef[] = [
 		// The job-application agent's dedicated surface (applications + the shared board).
 		show: (s) => s.includes("apply"),
 		scroll: true,
-		render: ({ instanceId }) => <ApplyTab instanceId={instanceId} />,
+		render: ({ instanceId, sessionId }) => <ApplyTab instanceId={instanceId} recordId={sessionId} />,
 	},
 	{
 		id: "board",
