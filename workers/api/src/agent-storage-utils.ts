@@ -268,6 +268,11 @@ export function encodeIndexValue(value: string): string {
  * Generate a short (<= 64 byte) deterministic ID for Vectorize.
  * Uses first 12 chars of a SHA-256 hash + chunk index.
  */
+/** Delete many DO storage keys, batched under the 128-keys-per-delete limit. */
+export async function deleteKeysBatched(store: DurableObjectStorage, keys: string[]): Promise<void> {
+	for (let i = 0; i < keys.length; i += 128) await store.delete(keys.slice(i, i + 128));
+}
+
 export async function shortId(
 	agentId: string,
 	sourceType: string,

@@ -19,7 +19,7 @@ import type {
 	VectorSearchResult,
 } from "./agent-storage-types.js";
 import type { AgentMessage, KnowledgeDoc, MemoryEntry } from "./agent-types.js";
-import { chunkText, encodeIndexValue, extractFileText, shortId, validateRecord } from "./agent-storage-utils.js";
+import { chunkText, deleteKeysBatched, encodeIndexValue, extractFileText, shortId, validateRecord } from "./agent-storage-utils.js";
 
 const MAX_EVENTS = 500;
 const SUMMARY_THRESHOLD = 20;
@@ -142,9 +142,7 @@ export class AgentStorageEngine {
 
 		if (toDelete.length > 0) {
 			await this.vectorize.deleteByIds(toDelete);
-			for (let i = 0; i < keysToDelete.length; i += 128) {
-				await this.doStorage.delete(keysToDelete.slice(i, i + 128));
-			}
+			await deleteKeysBatched(this.doStorage, keysToDelete);
 		}
 	}
 
@@ -204,7 +202,7 @@ export class AgentStorageEngine {
 		}
 		if (ids.length === 0) return;
 		for (let i = 0; i < ids.length; i += 128) await this.vectorize.deleteByIds(ids.slice(i, i + 128));
-		for (let i = 0; i < keys.length; i += 128) await this.doStorage.delete(keys.slice(i, i + 128));
+		await deleteKeysBatched(this.doStorage, keys);
 	}
 
 	// ── Knowledge base (editable via chat) ─────────────────────────────────────

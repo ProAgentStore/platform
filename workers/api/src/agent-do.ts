@@ -12,7 +12,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { AgentStorageEngine } from "./agent-storage.js";
-import { bytesFromBase64 } from "./agent-storage-utils.js";
+import { bytesFromBase64, deleteKeysBatched } from "./agent-storage-utils.js";
 import type {
 	AgentMessage,
 	AgentState,
@@ -63,6 +63,7 @@ const REPO_MAX_TOTAL_BYTES = 4_000_000;
 // shouldn't push one tick past the Worker time/subrequest budget. Always processes
 // at least one file so progress is guaranteed even if a single file is huge.
 const REPO_CHUNK_BUDGET = 60; // ~60 embed calls per alarm tick
+const REPO_MAX_REPOS = 20; // indexed repos per instance
 
 /**
  * Background job that pulls one GitHub repo into the agent's vector store. An
@@ -79,6 +80,7 @@ interface RepoIngestJob {
 	status: "fetching" | "indexing" | "summarizing" | "done" | "error";
 	total: number;
 	done: number;
+	failed: number; // files whose embedding threw — surfaced, not silently dropped
 	skipped: number;
 	queue: number[];
 	paths: string[];
@@ -827,13 +829,33 @@ export class AgentDO extends DurableObject<Env> {
 	}
 
 	// ── Repo ingestion (multi-repo) ──────────────────────────────────────────────
+	//
+	// Each repo has a job at `repoJob:{key}` (key = `owner/repo`). Membership is one
+	// marker key per repo (`repoMember:{key}`) rather than a single array, so two
+	// concurrent adds can't lose-update each other. `alarm()` advances ONE active
+	// repo per tick and guards every write with saveJob() so a re-index or remove
+	// landing mid-tick can't resurrect or clobber a job (the DO lets fetch handlers
+	// interleave with the alarm at network awaits).
 
 	private async getRepoIndex(): Promise<string[]> {
-		return (await this.ctx.storage.get<string[]>("repoIndex")) ?? [];
+		const all = await this.ctx.storage.list({ prefix: "repoMember:" });
+		return [...all.keys()].map((k) => k.slice("repoMember:".length));
 	}
 
 	private async getRepoJob(key: string): Promise<RepoIngestJob | null> {
 		return (await this.ctx.storage.get<RepoIngestJob>(`repoJob:${key}`)) ?? null;
+	}
+
+	/**
+	 * Persist a job ONLY if it's still the current one (same key present, same
+	 * startedAt). Returns false when a concurrent remove/re-index has superseded it
+	 * — the caller then drops its stale write instead of resurrecting the job.
+	 */
+	private async saveJob(prev: RepoIngestJob, patch: Partial<RepoIngestJob>): Promise<boolean> {
+		const current = await this.getRepoJob(prev.key);
+		if (!current || current.startedAt !== prev.startedAt) return false;
+		await this.ctx.storage.put(`repoJob:${prev.key}`, { ...prev, ...patch });
+		return true;
 	}
 
 	/** Rebuild the combined "which repos are indexed" memory entry from all jobs. */
@@ -867,11 +889,11 @@ export class AgentDO extends DurableObject<Env> {
 			if (engine) await engine.vectorDelete("knowledge", prior.overviewDocId).catch(() => undefined);
 		}
 		const staged = await this.ctx.storage.list({ prefix: `rifile:${key}:` });
-		const sk = [...staged.keys()];
-		for (let i = 0; i < sk.length; i += 128) await this.ctx.storage.delete(sk.slice(i, i + 128));
+		await deleteKeysBatched(this.ctx.storage, [...staged.keys()]);
+		// Drop membership first so a mid-flight alarm's saveJob() guard bails before
+		// it can resurrect this repo, then delete the job itself.
+		await this.ctx.storage.delete(`repoMember:${key}`);
 		await this.ctx.storage.delete(`repoJob:${key}`);
-		const idx = (await this.getRepoIndex()).filter((k) => k !== key);
-		await this.ctx.storage.put("repoIndex", idx);
 	}
 
 	private async handleIngestRepo(request: Request): Promise<Response> {
@@ -883,6 +905,10 @@ export class AgentDO extends DurableObject<Env> {
 		if (!ref) return json({ error: "Not a recognizable GitHub repository URL" }, 400);
 
 		const key = `${ref.owner}/${ref.repo}`;
+		const existing = await this.getRepoIndex();
+		if (!existing.includes(key) && existing.length >= REPO_MAX_REPOS) {
+			return json({ error: `Repo limit reached (max ${REPO_MAX_REPOS}). Remove one before adding another.` }, 400);
+		}
 		// Re-indexing an existing repo: clear just that one, keep the rest.
 		await this.clearRepo(key);
 
@@ -896,14 +922,14 @@ export class AgentDO extends DurableObject<Env> {
 			status: "fetching",
 			total: 0,
 			done: 0,
+			failed: 0,
 			skipped: 0,
 			queue: [],
 			paths: [],
 			startedAt: new Date().toISOString(),
 		};
 		await this.ctx.storage.put(`repoJob:${key}`, job);
-		const idx = await this.getRepoIndex();
-		if (!idx.includes(key)) await this.ctx.storage.put("repoIndex", [...idx, key]);
+		await this.ctx.storage.put(`repoMember:${key}`, 1);
 		await this.ctx.storage.setAlarm(Date.now());
 		return json({ status: job.status, repo: key }, 202);
 	}
