@@ -215,7 +215,8 @@ export function fagsRuntimeSetupTask(
 		},
 		input: {
 			install: "npm i -g @proagentstore/cli",
-			connect: `pags runner connect ${instanceId} --pags-token <your-token>`,
+			// Canonical command: one runner serves ALL your agents (coding + browser).
+			connect: "pags up",
 		},
 		error: "No FAGS browser runtime is registered for this instance.",
 		createdAt: now,
