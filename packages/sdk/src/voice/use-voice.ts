@@ -140,6 +140,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const sttIsWhisperRef = useRef(false);
 	const vadVoiceSeenRef = useRef(false);
 	const vadLastLoudRef = useRef(0);
+	// When the agent last finished speaking — used to ignore the speaker echo tail.
+	const speakEndedAtRef = useRef(0);
 	useEffect(() => {
 		getVoiceConfig(instanceId).then((c) => {
 			silenceMsRef.current = c.silenceMs;
@@ -166,11 +168,20 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// Speak response, then re-open mic
 	const speakAndResume = useCallback(async (text: string) => {
+		// Hard-STOP the recognizer while the agent talks so it can never transcribe its
+		// own voice. Critical for push-to-talk + auto-speak, where the recognizer keeps
+		// running (it only flips micOn) and would otherwise hear the agent and reply to
+		// itself. In conversation mode it's already paused; this just double-ensures it.
+		pausedForThinkingRef.current = true;
+		if (sttRef.current?.listening) sttRef.current.stop();
+		setMicOn(false);
 		try {
 			const tts = await ensureTts();
 			await tts.speak(text);
 		} catch {}
-		// Now agent is done — allow mic to reopen
+		speakEndedAtRef.current = Date.now();
+		// Now the agent is done — allow the mic to reopen. Only auto-resume in
+		// conversation mode; push-to-talk waits for the next tap (so it can't self-trigger).
 		pausedForThinkingRef.current = false;
 		if (convoOnRef.current) {
 			await startListening();
@@ -188,11 +199,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [speakAndResume]);
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
-		// Echo guard (CONVERSATION MODE ONLY): ignore the agent's own voice bleeding
-		// into the mic during TTS — stops the self-triggering loop. Scoped to convo so
-		// push-to-talk is NEVER blocked by a stuck speaking flag (there you control the
-		// mic, so there's no feedback loop to guard against).
-		if (convoOnRef.current && ttsRef.current?.speaking) return;
+		// Echo guard (CONVERSATION MODE): ignore anything captured while the agent is
+		// speaking OR within ~0.8s after (the speaker echo/reverb tail) — it's the
+		// agent's own voice, not you. Push-to-talk is hard-stopped during speech in
+		// speakAndResume, so it doesn't need (and isn't blocked by) this guard.
+		if (convoOnRef.current && (ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < 800)) return;
 		// Swallow late results while paused — e.g. a Whisper transcription that lands
 		// AFTER conversation mode was turned off would otherwise fall through to the
 		// push-to-talk path and send the turn the user just abandoned. (Cleared whenever
