@@ -1,10 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
+import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
-import { apiBase, apiCall, authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
+import { apiCall, authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
 import { registerInstanceTools } from "./instance-tools.js";
 import { registerStorageTools } from "./storage-tools.js";
-import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
+import { loginHandler } from "./oauth-provider.js";
 import {
 	AGENT_ID,
 	agentTemplateFiles,
@@ -16,18 +17,17 @@ import {
 	putRepoFile,
 	repoNameFor,
 	triggerDeploy,
-	validatePagsToken,
 	type AgentSummary,
 } from "./repo-tools.js";
 import {
 	audit,
 	dryRun,
 	listAuditEvents,
+	MCP_SCOPES,
 	type SafetyContext,
 	requireConfirmation,
 	requirePermission,
 } from "./safety.js";
-import { verifyMcpSession } from "./session.js";
 
 type Props = {
 	authToken?: string;
@@ -972,66 +972,38 @@ await agent.tasks.create('title', 'description')
 # Widget: <script src="https://proagentstore.online/widget.js" data-agent="slug"></script>
 # Webhook: POST /v1/public/webhook/INSTANCE_ID/ingest with {title, content}`;
 
-export default {
-	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
-		const url = new URL(request.url);
-		const issuer = `${url.protocol}//${url.host}`;
+/**
+ * Environment as seen by OAuth handlers — the library injects `OAUTH_PROVIDER`
+ * (the helper API) into env before invoking the default handler.
+ */
+type ProviderEnv = Env & { OAUTH_PROVIDER: OAuthHelpers };
 
-		if (env.OAUTH_KV && env.SESSION_SIGNING_KEY) {
-			const oauthRes = await handleOAuthRoute(request, {
-				issuer,
-				authStart: env.AUTH_START || "https://api.freeappstore.online/v1/auth/github/start",
-				apiBase: apiBase(env),
-				kv: env.OAUTH_KV,
-				sessionSigningKey: env.SESSION_SIGNING_KEY,
-			});
-			if (oauthRes) return oauthRes;
-		}
-
-		const isMcpTransport = url.pathname === "/mcp" || url.pathname.startsWith("/mcp/");
-		if (isMcpTransport) {
-			let bearer = request.headers.get("Authorization")?.replace(/^Bearer\s+/i, "");
-			let mcpScopes: string[] | null = null;
-			if (bearer && env.OAUTH_KV) {
-				const resolved = await resolveOAuthToken(bearer, env.OAUTH_KV);
-				if (resolved) {
-					bearer = resolved.session;
-					mcpScopes = resolved.scopes;
-				}
-			}
-			const validUser = bearer ? await validatePagsToken(env, bearer) : false;
-
-			if (
-				request.method !== "OPTIONS" &&
-				env.OAUTH_KV &&
-				env.SESSION_SIGNING_KEY &&
-				!validUser
-			) {
-				return createAuthChallenge({ issuer }, bearer ? "invalid_token" : undefined);
-			}
-
-			if (bearer && validUser) {
-				const session = env.SESSION_SIGNING_KEY
-					? await verifyMcpSession(bearer, env.SESSION_SIGNING_KEY)
-					: null;
-				(ctx as unknown as { props?: Props }).props = {
-					...((ctx as unknown as { props?: Props }).props ?? {}),
-					authToken: bearer,
-					mcpScopes,
-					mcpSubject: session?.uid,
-				};
-			}
-			return PagsMcp.serve("/mcp").fetch(request, env, ctx);
-		}
-		if (url.pathname === "/health") {
-			return new Response(
-				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 36 }),
-				{ headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "https://proagentstore.online" } },
-			);
-		}
-		return new Response(
-			"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for text private instances. Use register_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, and instance_task_events for browser-capable private instances.\n\nSafety: OAuth scopes are read/write/runtime/destructive. Mutating tools support dry_run where useful. Destructive and repository overwrite tools require exact confirm values. Use mcp_audit_log to inspect recent MCP events.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, register/manage instance runtimes, run/approve/cancel instance tasks, scaffold_agent, create_agent, update_agent, get/update agent board config, list/read/write agent files, add/list knowledge, analytics, deploy status, MCP audit log, platform guide, SDK reference.",
-			{ headers: { "Content-Type": "text/plain" } },
-		);
+/**
+ * The worker entry is the Cloudflare OAuth provider.
+ *
+ * - `apiRoute: "/mcp"` — requests under /mcp require a valid access token. The
+ *   provider validates the token, decrypts the stored grant `props`, sets them on
+ *   `ctx.props`, then forwards to the MCP transport (`PagsMcp.serve`). PagsMcp keeps
+ *   reading `this.props.authToken` / `mcpScopes` / `mcpSubject` unchanged.
+ * - `defaultHandler: loginHandler` — serves /authorize consent + login delegation,
+ *   /oauth/callback, /health, and the human-readable root text.
+ * - `/token` and `/register` (DCR) plus the `.well-known/*` metadata and the
+ *   401 WWW-Authenticate challenge are implemented by the library.
+ *
+ * Token storage uses the `OAUTH_KV` binding (already configured).
+ */
+export default new OAuthProvider<ProviderEnv>({
+	apiRoute: "/mcp",
+	apiHandler: PagsMcp.serve("/mcp") as ExportedHandler<ProviderEnv> & {
+		fetch: NonNullable<ExportedHandler<ProviderEnv>["fetch"]>;
 	},
-};
+	defaultHandler: loginHandler as ExportedHandler<ProviderEnv>,
+	authorizeEndpoint: "/authorize",
+	tokenEndpoint: "/token",
+	clientRegistrationEndpoint: "/register",
+	scopesSupported: [...MCP_SCOPES],
+	// OAuth 2.1: only S256 PKCE, matching the previous hand-rolled server.
+	allowPlainPKCE: false,
+	// Preserve the previous 24h access-token lifetime.
+	accessTokenTTL: 86_400,
+});

@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { createAuthChallenge, handleOAuthRoute, resolveOAuthToken } from "./oauth-provider.js";
+import type {
+	AuthRequest,
+	ClientInfo,
+	CompleteAuthorizationOptions,
+	OAuthHelpers,
+} from "@cloudflare/workers-oauth-provider";
+import { describe, expect, it, vi } from "vitest";
+import { type LoginEnv, loginHandler } from "./oauth-provider.js";
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
 	const data = new Map(Object.entries(seed));
@@ -14,217 +20,276 @@ function makeKv(seed: Record<string, string> = {}): KVNamespace {
 	} as unknown as KVNamespace;
 }
 
-const config = (kv = makeKv()) => ({
-	issuer: "https://mcp.proagentstore.online",
-	authStart: "https://api.freeappstore.online/v1/auth/github/start",
-	apiBase: "https://api.proagentstore.online",
-	kv,
-	sessionSigningKey: "test-key",
+const DEFAULT_AUTH_REQ: AuthRequest = {
+	responseType: "code",
+	clientId: "client-1",
+	redirectUri: "http://127.0.0.1:9876/callback",
+	scope: [],
+	state: "",
+	codeChallenge: "abc",
+	codeChallengeMethod: "S256",
+};
+
+function makeOAuthHelpers(overrides: Partial<OAuthHelpers> = {}): OAuthHelpers {
+	return {
+		parseAuthRequest: async () => DEFAULT_AUTH_REQ,
+		lookupClient: async (clientId: string): Promise<ClientInfo> => ({
+			clientId,
+			redirectUris: [DEFAULT_AUTH_REQ.redirectUri],
+			clientName: "Codex",
+			tokenEndpointAuthMethod: "none",
+		}),
+		completeAuthorization: async (_opts: CompleteAuthorizationOptions) => ({
+			redirectTo: "http://127.0.0.1:9876/callback?code=xyz",
+		}),
+		...overrides,
+	} as unknown as OAuthHelpers;
+}
+
+function makeEnv(
+	overrides: Partial<LoginEnv> = {},
+	helpers?: Partial<OAuthHelpers>,
+): LoginEnv {
+	return {
+		API_BASE: "https://api.proagentstore.online",
+		AUTH_START: "https://api.freeappstore.online/v1/auth/github/start",
+		SESSION_SIGNING_KEY: "test-key",
+		OAUTH_KV: makeKv(),
+		OAUTH_PROVIDER: makeOAuthHelpers(helpers),
+		...overrides,
+	} as LoginEnv;
+}
+
+const ctx = {} as ExecutionContext;
+
+async function run(env: LoginEnv, url: string): Promise<Response> {
+	const res = await loginHandler.fetch?.(new Request(url), env, ctx);
+	if (!res) throw new Error("Expected a Response from loginHandler");
+	return res;
+}
+
+describe("loginHandler health + root", () => {
+	it("serves a health probe", async () => {
+		const res = await run(makeEnv(), "https://mcp.proagentstore.online/health");
+		expect(res.status).toBe(200);
+		await expect(res.json()).resolves.toEqual({
+			ok: true,
+			service: "proagentstore-mcp",
+			tools: 36,
+		});
+	});
+
+	it("serves the human-readable landing page for unknown paths", async () => {
+		const res = await run(makeEnv(), "https://mcp.proagentstore.online/");
+		expect(res.status).toBe(200);
+		expect(res.headers.get("Content-Type")).toBe("text/plain");
+		const body = await res.text();
+		expect(body).toContain("ProAgentStore MCP Server");
+		expect(body).toContain("npx mcp-remote");
+	});
 });
 
-describe("createAuthChallenge", () => {
-	it("returns an MCP OAuth protected-resource challenge", () => {
-		const res = createAuthChallenge({
-			issuer: "https://mcp.proagentstore.online",
-		});
+describe("loginHandler /authorize", () => {
+	it("shows a consent page with GitHub and Google buttons", async () => {
+		const kv = makeKv();
+		const env = makeEnv({ OAUTH_KV: kv });
 
-		expect(res.status).toBe(401);
-		expect(res.headers.get("WWW-Authenticate")).toBe(
-			'Bearer resource_metadata="https://mcp.proagentstore.online/.well-known/oauth-protected-resource/mcp"',
-		);
-	});
-
-	it("can mark invalid bearer tokens", () => {
-		const res = createAuthChallenge(
-			{ issuer: "https://mcp.proagentstore.online" },
-			"invalid_token",
+		const res = await run(
+			env,
+			"https://mcp.proagentstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256",
 		);
 
-		expect(res.headers.get("WWW-Authenticate")).toContain(
-			'error="invalid_token"',
-		);
-	});
-});
-
-describe("handleOAuthRoute", () => {
-	it("serves protected resource metadata for the MCP endpoint", async () => {
-		const res = await handleOAuthRoute(
-			new Request(
-				"https://mcp.proagentstore.online/.well-known/oauth-protected-resource/mcp",
-			),
-			config(),
-		);
-
-		expect(res?.status).toBe(200);
-		await expect(res?.json()).resolves.toEqual({
-			resource: "https://mcp.proagentstore.online/mcp",
-			authorization_servers: ["https://mcp.proagentstore.online"],
-		});
-	});
-
-	it("serves authorization server metadata", async () => {
-		const res = await handleOAuthRoute(
-			new Request(
-				"https://mcp.proagentstore.online/.well-known/oauth-authorization-server",
-			),
-			config(),
-		);
-
-		expect(res?.status).toBe(200);
-		const body = (await res?.json()) as Record<string, unknown>;
-		expect(body.issuer).toBe("https://mcp.proagentstore.online");
-		expect(body.authorization_endpoint).toBe(
-			"https://mcp.proagentstore.online/authorize",
-		);
-		expect(body.registration_endpoint).toBe(
-			"https://mcp.proagentstore.online/register",
-		);
-		expect(body.scopes_supported).toEqual([
-			"read",
-			"write",
-			"runtime",
-			"destructive",
-		]);
-	});
-
-	it("registers dynamic MCP clients", async () => {
-		const res = await handleOAuthRoute(
-			new Request("https://mcp.proagentstore.online/register", {
-				method: "POST",
-				body: JSON.stringify({
-					redirect_uris: ["http://127.0.0.1:9876/callback"],
-					client_name: "Codex",
-				}),
-			}),
-			config(),
-		);
-
-		expect(res?.status).toBe(201);
-		const body = (await res?.json()) as Record<string, unknown>;
-		expect(body.client_id).toBeTruthy();
-		expect(body.token_endpoint_auth_method).toBe("none");
-	});
-
-	it("shows a browser confirmation page before redirecting to FAS auth", async () => {
-		const kv = makeKv({
-			"client:client-1": JSON.stringify({
-				redirect_uris: ["http://127.0.0.1:9876/callback"],
-				client_name: "Codex",
-			}),
-		});
-
-		const res = await handleOAuthRoute(
-			new Request(
-				"https://mcp.proagentstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256",
-			),
-			config(kv),
-		);
-
-		expect(res?.status).toBe(200);
-			if (!res) throw new Error("Expected OAuth response");
-			// The in-flight cookie that used to deadlock retries is gone.
-			expect(res.headers.get("Set-Cookie")).toBeNull();
-			const html = await res.text();
+		expect(res.status).toBe(200);
+		// No legacy in-flight cookie.
+		expect(res.headers.get("Set-Cookie")).toBeNull();
+		const html = await res.text();
 		expect(html).toContain("Connect ProAgentStore MCP");
 		expect(html).toContain("Codex wants to use ProAgentStore MCP tools");
 		expect(html).toContain("/authorize/continue?nonce=");
-		// Both providers are offered.
 		expect(html).toContain("provider=github");
 		expect(html).toContain("provider=google");
 	});
 
-	it("redirects to FAS GitHub OAuth after the user continues", async () => {
-		const kv = makeKv({
-			"authreq:nonce-1": JSON.stringify({
-				clientId: "client-1",
-				redirectUri: "http://127.0.0.1:9876/callback",
-				codeChallenge: "abc",
-				state: null,
-			}),
+	it("stashes the parsed auth request under the consent nonce", async () => {
+		const stored: Record<string, string> = {};
+		const kv = {
+			get: async (key: string) => stored[key] ?? null,
+			put: async (key: string, value: string) => {
+				stored[key] = value;
+			},
+			delete: async (key: string) => {
+				delete stored[key];
+			},
+		} as unknown as KVNamespace;
+
+		await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/authorize?response_type=code&client_id=client-1&redirect_uri=http%3A%2F%2F127.0.0.1%3A9876%2Fcallback&code_challenge=abc&code_challenge_method=S256",
+		);
+
+		const keys = Object.keys(stored).filter((k) => k.startsWith("authreq:"));
+		expect(keys).toHaveLength(1);
+		expect(JSON.parse(stored[keys[0]])).toMatchObject({
+			clientId: "client-1",
+			redirectUri: "http://127.0.0.1:9876/callback",
+			codeChallenge: "abc",
+		});
+	});
+
+	it("returns 400 when the auth request is invalid", async () => {
+		const env = makeEnv({}, {
+			parseAuthRequest: async () => {
+				throw new Error("Invalid client. The clientId provided does not match to this client.");
+			},
 		});
 
-		const res = await handleOAuthRoute(
-			new Request(
-				"https://mcp.proagentstore.online/authorize/continue?nonce=nonce-1&provider=github",
-			),
-			config(kv),
+		const res = await run(
+			env,
+			"https://mcp.proagentstore.online/authorize?response_type=code&client_id=bogus",
 		);
 
-		expect(res?.status).toBe(302);
-		expect(res?.headers.get("Location")).toContain(
+		expect(res.status).toBe(400);
+		await expect(res.text()).resolves.toContain("Invalid client");
+	});
+});
+
+describe("loginHandler /authorize/continue", () => {
+	it("redirects to FAS GitHub OAuth after the user continues", async () => {
+		const kv = makeKv({
+			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
+		});
+
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/authorize/continue?nonce=nonce-1&provider=github",
+		);
+
+		expect(res.status).toBe(302);
+		const location = res.headers.get("Location") ?? "";
+		expect(location).toContain(
 			"https://api.freeappstore.online/v1/auth/github/start",
 		);
-		expect(res?.headers.get("Location")).toContain("app_id=pags-mcp");
-		expect(res?.headers.get("Location")).toContain("response_mode=query");
+		expect(location).toContain("app_id=pags-mcp");
+		expect(location).toContain("response_mode=query");
+		expect(decodeURIComponent(location)).toContain(
+			"return_to=https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1",
+		);
 	});
 
 	it("redirects to FAS Google OAuth when provider=google", async () => {
 		const kv = makeKv({
-			"authreq:nonce-1": JSON.stringify({
-				clientId: "client-1",
-				redirectUri: "http://127.0.0.1:9876/callback",
-				codeChallenge: "abc",
-				state: null,
-			}),
+			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
 		});
 
-		const res = await handleOAuthRoute(
-			new Request(
-				"https://mcp.proagentstore.online/authorize/continue?nonce=nonce-1&provider=google",
-			),
-			config(kv),
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/authorize/continue?nonce=nonce-1&provider=google",
 		);
 
-		expect(res?.status).toBe(302);
-		expect(res?.headers.get("Location")).toContain(
+		expect(res.status).toBe(302);
+		const location = res.headers.get("Location") ?? "";
+		expect(location).toContain(
 			"https://api.freeappstore.online/v1/auth/google/start",
 		);
-		expect(res?.headers.get("Location")).toContain("app_id=pags-mcp");
+		expect(location).toContain("app_id=pags-mcp");
 	});
 
 	it("defaults to GitHub when no provider is given", async () => {
 		const kv = makeKv({
-			"authreq:nonce-1": JSON.stringify({
-				clientId: "client-1",
-				redirectUri: "http://127.0.0.1:9876/callback",
-				codeChallenge: "abc",
-				state: null,
-			}),
+			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
 		});
 
-		const res = await handleOAuthRoute(
-			new Request(
-				"https://mcp.proagentstore.online/authorize/continue?nonce=nonce-1",
-			),
-			config(kv),
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/authorize/continue?nonce=nonce-1",
 		);
 
-		expect(res?.status).toBe(302);
-		expect(res?.headers.get("Location")).toContain(
+		expect(res.status).toBe(302);
+		expect(res.headers.get("Location")).toContain(
 			"https://api.freeappstore.online/v1/auth/github/start",
 		);
 	});
 
-	it("resolves scoped OAuth access tokens", async () => {
+	it("rejects an unknown or expired nonce", async () => {
+		const res = await run(
+			makeEnv(),
+			"https://mcp.proagentstore.online/authorize/continue?nonce=missing",
+		);
+		expect(res.status).toBe(400);
+		await expect(res.text()).resolves.toContain("invalid or expired nonce");
+	});
+});
+
+describe("loginHandler /oauth/callback", () => {
+	it("validates the session, then completes the authorization grant", async () => {
 		const kv = makeKv({
-			"token:access-1": JSON.stringify({
-				session: "pags-session",
-				scopes: ["read", "runtime"],
+			"authreq:nonce-1": JSON.stringify({
+				...DEFAULT_AUTH_REQ,
+				scope: ["read", "runtime"],
 			}),
 		});
+		const completeAuthorization = vi.fn(
+			async (_opts: CompleteAuthorizationOptions) => ({
+				redirectTo: "http://127.0.0.1:9876/callback?code=xyz&state=",
+			}),
+		);
+		const env = makeEnv({ OAUTH_KV: kv }, { completeAuthorization });
 
-		await expect(resolveOAuthToken("access-1", kv)).resolves.toEqual({
-			session: "pags-session",
-			scopes: ["read", "runtime"],
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("{}", { status: 200 }));
+
+		const res = await run(
+			env,
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&session=pags-session",
+		);
+
+		fetchSpy.mockRestore();
+
+		expect(res.status).toBe(302);
+		expect(res.headers.get("Location")).toBe(
+			"http://127.0.0.1:9876/callback?code=xyz&state=",
+		);
+		expect(completeAuthorization).toHaveBeenCalledTimes(1);
+		const opts = completeAuthorization.mock.calls[0][0];
+		// Granted scope + wrapped grant props mirror the legacy token-wrapping shape.
+		expect(opts.scope).toEqual(["read", "runtime"]);
+		expect(opts.props).toMatchObject({
+			authToken: "pags-session",
+			mcpScopes: ["read", "runtime"],
 		});
+		// The consent nonce is single-use.
+		await expect(kv.get("authreq:nonce-1")).resolves.toBeNull();
 	});
 
-	it("keeps compatibility with legacy token values", async () => {
-		const kv = makeKv({ "token:legacy": "pags-session" });
-
-		await expect(resolveOAuthToken("legacy", kv)).resolves.toEqual({
-			session: "pags-session",
-			scopes: ["read", "write", "runtime", "destructive"],
+	it("rejects a session that fails platform validation", async () => {
+		const kv = makeKv({
+			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
 		});
+		const fetchSpy = vi
+			.spyOn(globalThis, "fetch")
+			.mockResolvedValue(new Response("nope", { status: 401 }));
+
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&session=bad-session",
+		);
+
+		fetchSpy.mockRestore();
+
+		expect(res.status).toBe(400);
+		await expect(res.text()).resolves.toContain("invalid session");
+	});
+
+	it("rejects a callback that is missing the session", async () => {
+		const kv = makeKv({
+			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
+		});
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1",
+		);
+		expect(res.status).toBe(400);
+		await expect(res.text()).resolves.toContain("missing nonce or session");
 	});
 });

@@ -1,210 +1,121 @@
-import { MCP_SCOPES, parseScopes } from "./safety.js";
+import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provider";
+import { apiBase, type McpEnv } from "./http.js";
+import { parseScopes } from "./safety.js";
+import { verifyMcpSession } from "./session.js";
 
 type AuthProvider = "github" | "google";
 
-export interface OAuthConfig {
-	issuer: string;
-	authStart: string;
-	apiBase: string;
-	kv: KVNamespace;
-	sessionSigningKey: string;
-}
+/**
+ * Environment seen by the OAuth default handler. `OAUTH_PROVIDER` is injected by
+ * `@cloudflare/workers-oauth-provider` before the default handler runs and exposes
+ * the helper methods (parseAuthRequest / lookupClient / completeAuthorization).
+ */
+export type LoginEnv = McpEnv & { OAUTH_PROVIDER: OAuthHelpers };
 
-export interface ResolvedOAuthToken {
-	session: string;
-	scopes: string[];
-}
+/**
+ * Default (non-API) request handler for the OAuth provider.
+ *
+ * The `@cloudflare/workers-oauth-provider` library owns dynamic client
+ * registration (`/register`), the token endpoint (`/token`), PKCE verification,
+ * token issuance/encryption, and the `.well-known/*` metadata. This handler only
+ * implements the interactive consent + login-delegation surface:
+ *
+ *   GET /authorize           — consent page with GitHub / Google buttons
+ *   GET /authorize/continue  — redirect to the platform login start endpoint
+ *   GET /oauth/callback       — platform login callback → completeAuthorization
+ *   GET /health               — health probe
+ *   GET /                     — human-readable landing text
+ */
+export const loginHandler: ExportedHandler<LoginEnv> = {
+	async fetch(request, env): Promise<Response> {
+		const url = new URL(request.url);
+		const path = url.pathname;
+		const issuer = `${url.protocol}//${url.host}`;
 
-export function createAuthChallenge(
-	config: Pick<OAuthConfig, "issuer">,
-	error?: "invalid_token",
-): Response {
-	const metadata = new URL("/.well-known/oauth-protected-resource/mcp", config.issuer);
-	const params = [`resource_metadata="${metadata.toString()}"`];
-	if (error) params.push(`error="${error}"`);
-	return new Response("Authentication required", {
-		status: 401,
-		headers: {
-			"WWW-Authenticate": `Bearer ${params.join(", ")}`,
-			"Access-Control-Allow-Origin": "*",
-		},
-	});
-}
-
-export async function handleOAuthRoute(
-	request: Request,
-	config: OAuthConfig,
-): Promise<Response | null> {
-	const url = new URL(request.url);
-	const path = url.pathname;
-
-	if (request.method === "OPTIONS" && (
-		path.startsWith("/.well-known/") ||
-		path === "/register" ||
-		path === "/authorize" ||
-		path === "/authorize/continue" ||
-		path === "/oauth/callback" ||
-		path === "/token"
-	)) {
-		return new Response(null, {
-			headers: {
-				"Access-Control-Allow-Origin": "*",
-				"Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-				"Access-Control-Allow-Headers": "Content-Type, Authorization",
-			},
-		});
-	}
-
-	if (
-		path === "/.well-known/oauth-protected-resource" ||
-		path === "/.well-known/oauth-protected-resource/mcp"
-	) {
-		return json({
-			resource: `${config.issuer}/mcp`,
-			authorization_servers: [config.issuer],
-		});
-	}
-	if (path === "/.well-known/oauth-authorization-server") {
-		return json({
-			issuer: config.issuer,
-			authorization_endpoint: `${config.issuer}/authorize`,
-			token_endpoint: `${config.issuer}/token`,
-			registration_endpoint: `${config.issuer}/register`,
-			response_types_supported: ["code"],
-			grant_types_supported: ["authorization_code"],
-			code_challenge_methods_supported: ["S256"],
-			scopes_supported: MCP_SCOPES,
-			token_endpoint_auth_methods_supported: ["none"],
-		});
-	}
-	if (path === "/register" && request.method === "POST") return register(request, config);
-	if (path === "/authorize" && request.method === "GET") return authorize(request, config);
-	if (path === "/authorize/continue" && request.method === "GET") {
-		return continueAuthorize(request, config);
-	}
-	if (path === "/oauth/callback" && request.method === "GET") return oauthCallback(request, config);
-	if (path === "/token" && request.method === "POST") return tokenExchange(request, config);
-
-	return null;
-}
-
-export async function resolveOAuthToken(
-	bearer: string,
-	kv: KVNamespace,
-): Promise<ResolvedOAuthToken | null> {
-	const raw = await kv.get(`token:${bearer}`);
-	if (!raw) return null;
-	try {
-		const parsed = JSON.parse(raw) as { session?: string; scopes?: string[] };
-		if (parsed.session) {
-			return { session: parsed.session, scopes: parseScopes(parsed.scopes) };
+		if (path === "/authorize" && request.method === "GET") {
+			return authorize(request, env);
 		}
-	} catch {
-		return { session: raw, scopes: parseScopes(null) };
-	}
-	return null;
-}
+		if (path === "/authorize/continue" && request.method === "GET") {
+			return continueAuthorize(request, env, issuer);
+		}
+		if (path === "/oauth/callback" && request.method === "GET") {
+			return oauthCallback(request, env, issuer);
+		}
+		if (path === "/health") {
+			return new Response(
+				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 36 }),
+				{
+					headers: {
+						"Content-Type": "application/json",
+						"Access-Control-Allow-Origin": "https://proagentstore.online",
+					},
+				},
+			);
+		}
+		return new Response(ROOT_TEXT, {
+			headers: { "Content-Type": "text/plain" },
+		});
+	},
+};
 
-function json(data: unknown, status = 200): Response {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: {
-			"Content-Type": "application/json",
-			"Access-Control-Allow-Origin": "*",
-		},
-	});
-}
+const ROOT_TEXT =
+	"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for text private instances. Use register_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, and instance_task_events for browser-capable private instances.\n\nSafety: OAuth scopes are read/write/runtime/destructive. Mutating tools support dry_run where useful. Destructive and repository overwrite tools require exact confirm values. Use mcp_audit_log to inspect recent MCP events.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, register/manage instance runtimes, run/approve/cancel instance tasks, scaffold_agent, create_agent, update_agent, get/update agent board config, list/read/write agent files, add/list knowledge, analytics, deploy status, MCP audit log, platform guide, SDK reference.";
 
 function escapeHtml(value: string): string {
-	return value.replace(/[&<>"']/g, (ch) => ({
-		"&": "&amp;",
-		"<": "&lt;",
-		">": "&gt;",
-		'"': "&quot;",
-		"'": "&#39;",
-	})[ch] || ch);
+	return value.replace(
+		/[&<>"']/g,
+		(ch) =>
+			({
+				"&": "&amp;",
+				"<": "&lt;",
+				">": "&gt;",
+				'"': "&quot;",
+				"'": "&#39;",
+			})[ch] || ch,
+	);
 }
 
-function startEndpointFor(config: OAuthConfig, provider: AuthProvider): string {
-	const base = config.authStart.replace(/\/(?:github|google)\/start$/, "");
-	if (base === config.authStart) return config.authStart;
+function startEndpointFor(authStart: string, provider: AuthProvider): string {
+	const base = authStart.replace(/\/(?:github|google)\/start$/, "");
+	if (base === authStart) return authStart;
 	return `${base}/${provider}/start`;
 }
 
-async function register(request: Request, config: OAuthConfig): Promise<Response> {
-	const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-	const hour = Math.floor(Date.now() / 3_600_000);
-	const rlKey = `rl:reg:${ip}:${hour}`;
-	const count = parseInt((await config.kv.get(rlKey)) ?? "0", 10);
-	if (count >= 20) return json({ error: "rate_limit_exceeded" }, 429);
-	await config.kv.put(rlKey, String(count + 1), { expirationTtl: 3600 });
-
-	let body: Record<string, unknown>;
+/**
+ * Render the consent page. The user picks an identity provider; the parsed
+ * OAuth authorization request is stashed in KV under a one-time nonce so it can
+ * be restored after the platform login round-trip.
+ */
+async function authorize(request: Request, env: LoginEnv): Promise<Response> {
+	let authReq: AuthRequest;
 	try {
-		body = (await request.json()) as Record<string, unknown>;
-	} catch {
-		return json({ error: "invalid_request" }, 400);
+		authReq = await env.OAUTH_PROVIDER.parseAuthRequest(request);
+	} catch (err) {
+		return new Response((err as Error).message || "invalid_request", {
+			status: 400,
+		});
 	}
 
-	const redirectUris = body.redirect_uris;
-	if (!Array.isArray(redirectUris) || redirectUris.length === 0) {
-		return json({ error: "invalid_redirect_uri" }, 400);
-	}
-
-	const clientId = crypto.randomUUID();
-	const client = {
-		client_id: clientId,
-		redirect_uris: redirectUris,
-		client_name: body.client_name ?? null,
-		grant_types: ["authorization_code"],
-		response_types: ["code"],
-		token_endpoint_auth_method: "none",
-	};
-	await config.kv.put(`client:${clientId}`, JSON.stringify(client), {
-		expirationTtl: 90 * 86_400,
-	});
-	return json(client, 201);
-}
-
-async function authorize(request: Request, config: OAuthConfig): Promise<Response> {
-	const url = new URL(request.url);
-	const responseType = url.searchParams.get("response_type");
-	const clientId = url.searchParams.get("client_id");
-	const redirectUri = url.searchParams.get("redirect_uri");
-	const codeChallenge = url.searchParams.get("code_challenge");
-	const codeChallengeMethod = url.searchParams.get("code_challenge_method");
-	const state = url.searchParams.get("state");
-	const scopes = parseScopes(url.searchParams.get("scope"));
-
-	if (responseType !== "code") return new Response("unsupported_response_type", { status: 400 });
-	if (!clientId || !redirectUri || !codeChallenge) {
-		return new Response("missing client_id, redirect_uri, or code_challenge", { status: 400 });
-	}
-	if (codeChallengeMethod && codeChallengeMethod !== "S256") {
-		return new Response("only S256 is supported", { status: 400 });
-	}
-
-	const clientRaw = await config.kv.get(`client:${clientId}`);
-	if (!clientRaw) return new Response("invalid client_id", { status: 400 });
-	const client = JSON.parse(clientRaw) as { redirect_uris: string[]; client_name?: string | null };
-	if (!client.redirect_uris.includes(redirectUri)) {
-		return new Response("redirect_uri not registered", { status: 400 });
-	}
+	const client = await env.OAUTH_PROVIDER.lookupClient(authReq.clientId);
 
 	const nonce = crypto.randomUUID();
-	await config.kv.put(
-		`authreq:${nonce}`,
-		JSON.stringify({ clientId, redirectUri, codeChallenge, state, scopes }),
-		{ expirationTtl: 600 },
-	);
+	await env.OAUTH_KV?.put(`authreq:${nonce}`, JSON.stringify(authReq), {
+		expirationTtl: 600,
+	});
 
 	const continueWith = (provider: AuthProvider): string => {
-		const continueUrl = new URL("/authorize/continue", config.issuer);
+		const continueUrl = new URL(
+			"/authorize/continue",
+			`${new URL(request.url).protocol}//${new URL(request.url).host}`,
+		);
 		continueUrl.searchParams.set("nonce", nonce);
 		continueUrl.searchParams.set("provider", provider);
 		return escapeHtml(continueUrl.toString());
 	};
-	const clientName = client.client_name ? escapeHtml(client.client_name) : "your MCP client";
+	const clientName = client?.clientName
+		? escapeHtml(client.clientName)
+		: "your MCP client";
+
 	return new Response(
 		`<!doctype html>
 <html lang="en">
@@ -242,18 +153,26 @@ async function authorize(request: Request, config: OAuthConfig): Promise<Respons
 	);
 }
 
-async function continueAuthorize(request: Request, config: OAuthConfig): Promise<Response> {
+/** Redirect the user to the platform login start endpoint for the chosen provider. */
+async function continueAuthorize(
+	request: Request,
+	env: LoginEnv,
+	issuer: string,
+): Promise<Response> {
 	const url = new URL(request.url);
 	const nonce = url.searchParams.get("nonce");
 	if (!nonce) return new Response("missing nonce", { status: 400 });
-	const reqRaw = await config.kv.get(`authreq:${nonce}`);
+	const reqRaw = await env.OAUTH_KV?.get(`authreq:${nonce}`);
 	if (!reqRaw) return new Response("invalid or expired nonce", { status: 400 });
 
-	const provider: AuthProvider = url.searchParams.get("provider") === "google" ? "google" : "github";
-	const authUrl = new URL(startEndpointFor(config, provider));
+	const provider: AuthProvider =
+		url.searchParams.get("provider") === "google" ? "google" : "github";
+	const authStart =
+		env.AUTH_START || "https://api.freeappstore.online/v1/auth/github/start";
+	const authUrl = new URL(startEndpointFor(authStart, provider));
 	authUrl.searchParams.set("response_mode", "query");
 	authUrl.searchParams.set("app_id", "pags-mcp");
-	const callbackUrl = new URL("/oauth/callback", config.issuer);
+	const callbackUrl = new URL("/oauth/callback", issuer);
 	callbackUrl.searchParams.set("nonce", nonce);
 	authUrl.searchParams.set("return_to", callbackUrl.toString());
 	return new Response(null, {
@@ -263,10 +182,10 @@ async function continueAuthorize(request: Request, config: OAuthConfig): Promise
 }
 
 async function exchangeFasSession(
-	config: OAuthConfig,
+	apiBaseUrl: string,
 	fasSession: string,
 ): Promise<string | null> {
-	const res = await fetch(`${config.apiBase}/v1/auth/exchange`, {
+	const res = await fetch(`${apiBaseUrl}/v1/auth/exchange`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ fas_session: fasSession }),
@@ -276,134 +195,77 @@ async function exchangeFasSession(
 	return data.token || null;
 }
 
+async function maybeExchangeFasSession(
+	apiBaseUrl: string,
+	fasSession: string | null,
+): Promise<string | null> {
+	if (!fasSession) return null;
+	return exchangeFasSession(apiBaseUrl, fasSession);
+}
+
 async function validatePagsSession(
-	config: Pick<OAuthConfig, "apiBase">,
+	apiBaseUrl: string,
 	session: string,
 ): Promise<boolean> {
-	const res = await fetch(`${config.apiBase}/v1/auth/me`, {
+	const res = await fetch(`${apiBaseUrl}/v1/auth/me`, {
 		headers: { Authorization: `Bearer ${session}` },
 	});
 	return res.ok;
 }
 
-async function oauthCallback(request: Request, config: OAuthConfig): Promise<Response> {
+/**
+ * Platform login callback. Resolves the PAGS session (directly or by exchanging a
+ * FAS session), validates it, then hands control back to the OAuth library which
+ * mints the authorization code and redirects to the client's redirect_uri.
+ *
+ * The stored grant `props` mirror what the legacy implementation put in KV, so
+ * the MCP transport (PagsMcp) keeps reading `authToken` / `mcpScopes` /
+ * `mcpSubject` from `this.props` unchanged.
+ */
+async function oauthCallback(
+	request: Request,
+	env: LoginEnv,
+	_issuer: string,
+): Promise<Response> {
 	const url = new URL(request.url);
 	const nonce = url.searchParams.get("nonce");
+	const apiBaseUrl = apiBase(env);
 	const session =
 		url.searchParams.get("session") ||
-		(await maybeExchangeFasSession(config, url.searchParams.get("fas_session")));
+		(await maybeExchangeFasSession(apiBaseUrl, url.searchParams.get("fas_session")));
 
-	if (!nonce || !session) return new Response("missing nonce or session", { status: 400 });
+	if (!nonce || !session) {
+		return new Response("missing nonce or session", { status: 400 });
+	}
 
-	const reqRaw = await config.kv.get(`authreq:${nonce}`);
+	const reqRaw = await env.OAUTH_KV?.get(`authreq:${nonce}`);
 	if (!reqRaw) return new Response("invalid or expired nonce", { status: 400 });
-	await config.kv.delete(`authreq:${nonce}`);
+	await env.OAUTH_KV?.delete(`authreq:${nonce}`);
 
-	if (!(await validatePagsSession(config, session))) {
+	if (!(await validatePagsSession(apiBaseUrl, session))) {
 		return new Response("invalid session", { status: 400 });
 	}
 
-	const authReq = JSON.parse(reqRaw) as {
-		clientId: string;
-		redirectUri: string;
-		codeChallenge: string;
-		state: string | null;
-		scopes?: string[];
-	};
+	const authReq = JSON.parse(reqRaw) as AuthRequest;
+	const scopes = parseScopes(authReq.scope);
+	const subject = env.SESSION_SIGNING_KEY
+		? (await verifyMcpSession(session, env.SESSION_SIGNING_KEY))?.uid
+		: undefined;
 
-	const code = crypto.randomUUID();
-	await config.kv.put(
-		`code:${code}`,
-		JSON.stringify({
-			session,
-			codeChallenge: authReq.codeChallenge,
-			redirectUri: authReq.redirectUri,
-			clientId: authReq.clientId,
-			scopes: parseScopes(authReq.scopes),
-		}),
-		{ expirationTtl: 600 },
-	);
-
-	const redirect = new URL(authReq.redirectUri);
-	redirect.searchParams.set("code", code);
-	if (authReq.state) redirect.searchParams.set("state", authReq.state);
-	return new Response(null, {
-		status: 302,
-		headers: {
-			Location: redirect.toString(),
+	const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
+		request: authReq,
+		userId: subject || session,
+		scope: scopes,
+		metadata: { via: "pags-mcp" },
+		props: {
+			authToken: session,
+			mcpScopes: scopes,
+			mcpSubject: subject,
 		},
 	});
-}
 
-async function maybeExchangeFasSession(
-	config: OAuthConfig,
-	fasSession: string | null,
-): Promise<string | null> {
-	if (!fasSession) return null;
-	return exchangeFasSession(config, fasSession);
-}
-
-async function tokenExchange(request: Request, config: OAuthConfig): Promise<Response> {
-	let body: URLSearchParams;
-	try {
-		body = new URLSearchParams(await request.text());
-	} catch {
-		return json({ error: "invalid_request" }, 400);
-	}
-
-	if (body.get("grant_type") !== "authorization_code") {
-		return json({ error: "unsupported_grant_type" }, 400);
-	}
-
-	const code = body.get("code");
-	const redirectUri = body.get("redirect_uri");
-	const clientId = body.get("client_id");
-	const codeVerifier = body.get("code_verifier");
-	if (!code || !redirectUri || !clientId || !codeVerifier) {
-		return json({ error: "invalid_request" }, 400);
-	}
-
-	const codeRaw = await config.kv.get(`code:${code}`);
-	if (!codeRaw) return json({ error: "invalid_grant" }, 400);
-	await config.kv.delete(`code:${code}`);
-
-	const codeData = JSON.parse(codeRaw) as {
-		session: string;
-		codeChallenge: string;
-		redirectUri: string;
-		clientId: string;
-		scopes?: string[];
-	};
-	if (codeData.redirectUri !== redirectUri || codeData.clientId !== clientId) {
-		return json({ error: "invalid_grant" }, 400);
-	}
-
-	const digest = await crypto.subtle.digest(
-		"SHA-256",
-		new TextEncoder().encode(codeVerifier),
-	);
-	const computed = btoa(String.fromCharCode(...new Uint8Array(digest)))
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
-	if (computed !== codeData.codeChallenge) {
-		return json({ error: "invalid_grant", error_description: "PKCE verification failed" }, 400);
-	}
-
-	const accessToken = crypto.randomUUID();
-	await config.kv.put(
-		`token:${accessToken}`,
-		JSON.stringify({
-			session: codeData.session,
-			scopes: parseScopes(codeData.scopes),
-		}),
-		{ expirationTtl: 86_400 },
-	);
-
-	return json({
-		access_token: accessToken,
-		token_type: "bearer",
-		expires_in: 86_400,
-		scope: parseScopes(codeData.scopes).join(" "),
+	return new Response(null, {
+		status: 302,
+		headers: { Location: redirectTo },
 	});
 }

@@ -1,5 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
+// Capture the options the worker passes to `new OAuthProvider(...)` so we can
+// assert the security-critical wiring (which paths require a token, the PKCE
+// policy, scopes, and token lifetime) without needing the Workers runtime.
+const captured = vi.hoisted(() => ({ options: undefined as Record<string, unknown> | undefined }));
+
+vi.mock("@cloudflare/workers-oauth-provider", () => ({
+	OAuthProvider: class {
+		constructor(options: Record<string, unknown>) {
+			captured.options = options;
+		}
+	},
+}));
+
 vi.mock("agents/mcp", () => ({
 	// biome-ignore lint/complexity/noStaticOnlyClass: The mock must match the agents/mcp class API.
 	McpAgent: class {
@@ -19,54 +32,42 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
 	},
 }));
 
-const { default: worker } = await import("./index.js");
+await import("./index.js");
+const { loginHandler } = await import("./oauth-provider.js");
 
-const env = {
-	API_BASE: "https://api.proagentstore.online",
-	AUTH_START: "https://api.freeappstore.online/v1/auth/github/start",
-	OAUTH_KV: {} as KVNamespace,
-	SESSION_SIGNING_KEY: "test-key",
-};
-
-const ctx = {} as ExecutionContext;
-
-describe("MCP transport auth", () => {
-	it("challenges unauthenticated MCP transport requests", async () => {
-		const res = await worker.fetch(
-			new Request("https://mcp.proagentstore.online/mcp"),
-			env,
-			ctx,
-		);
-
-		expect(res.status).toBe(401);
-		expect(res.headers.get("WWW-Authenticate")).toBe(
-			'Bearer resource_metadata="https://mcp.proagentstore.online/.well-known/oauth-protected-resource/mcp"',
+describe("OAuthProvider wiring", () => {
+	it("protects only the /mcp API route with the MCP transport handler", () => {
+		const options = captured.options;
+		expect(options).toBeDefined();
+		expect(options?.apiRoute).toBe("/mcp");
+		// apiHandler is the MCP transport returned by PagsMcp.serve("/mcp").
+		expect(typeof (options?.apiHandler as { fetch?: unknown })?.fetch).toBe(
+			"function",
 		);
 	});
 
-	it("keeps the landing page unauthenticated", async () => {
-		const res = await worker.fetch(
-			new Request("https://mcp.proagentstore.online/"),
-			env,
-			ctx,
-		);
-
-		expect(res.status).toBe(200);
-		await expect(res.text()).resolves.toContain("ProAgentStore MCP Server");
+	it("delegates consent + login + landing to the login handler", () => {
+		expect(captured.options?.defaultHandler).toBe(loginHandler);
 	});
 
-	it("reports the current MCP tool count in health metadata", async () => {
-		const res = await worker.fetch(
-			new Request("https://mcp.proagentstore.online/health"),
-			env,
-			ctx,
-		);
+	it("configures the standard OAuth endpoints and DCR", () => {
+		const options = captured.options;
+		expect(options?.authorizeEndpoint).toBe("/authorize");
+		expect(options?.tokenEndpoint).toBe("/token");
+		expect(options?.clientRegistrationEndpoint).toBe("/register");
+	});
 
-		expect(res.status).toBe(200);
-		await expect(res.json()).resolves.toMatchObject({
-			ok: true,
-			service: "proagentstore-mcp",
-			tools: 36,
-		});
+	it("advertises the MCP safety scopes", () => {
+		expect(captured.options?.scopesSupported).toEqual([
+			"read",
+			"write",
+			"runtime",
+			"destructive",
+		]);
+	});
+
+	it("enforces OAuth 2.1 S256-only PKCE and the 24h access-token lifetime", () => {
+		expect(captured.options?.allowPlainPKCE).toBe(false);
+		expect(captured.options?.accessTokenTTL).toBe(86_400);
 	});
 });
