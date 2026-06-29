@@ -19,11 +19,11 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	{
 		name: "search_knowledge",
 		description:
-			"Semantic search across your knowledge base, conversation history, and files. Returns the most relevant chunks.",
+			"Semantic search across your knowledge base, indexed repository code, conversation history, and files. Returns the most relevant chunks. Leave source_type unset to search everything (including indexed repo code).",
 		parameters: {
 			query: { type: "string", description: "Natural language search query", required: true },
 			top_k: { type: "number", description: "Number of results (default 5, max 20)" },
-			source_type: { type: "string", description: "Filter by source: knowledge, message, file, collection" },
+			source_type: { type: "string", description: "Optional filter by source: knowledge, repo, message, file, collection" },
 		},
 	},
 
@@ -251,7 +251,7 @@ export async function executeStorageTool(
 				const topK = Math.min(Number(call.input.top_k) || 5, 20);
 				const sourceType = call.input.source_type as string | undefined;
 				const results = await engine.vectorSearch(query, topK, {
-					sourceType: sourceType as "knowledge" | "message" | "file" | "collection" | undefined,
+					sourceType: sourceType as "knowledge" | "repo" | "message" | "file" | "collection" | undefined,
 				});
 				if (results.length === 0) {
 					return ok(call.name, "No relevant results found. The knowledge base may be empty or the query didn't match any stored content.");
