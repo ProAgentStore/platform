@@ -963,25 +963,30 @@ export class AgentDO extends DurableObject<Env> {
 		return json({ status: "cleared" });
 	}
 
-	/** Alarm-driven repo ingestion: advances ONE active repo job per tick. */
+	/**
+	 * Alarm-driven repo ingestion: advances ONE active repo job per tick, then
+	 * reschedules so the next pending repo (or the next phase) runs. Every write
+	 * goes through saveJob(), which drops the write if the job was removed or
+	 * re-indexed mid-tick — so a concurrent remove/re-index can never be clobbered
+	 * or resurrected. The tick always reschedules; an idle tick (no active repo)
+	 * simply returns without rescheduling.
+	 */
 	async alarm(): Promise<void> {
 		const state = await this.getState();
 		if (!state) return;
 		const engine = this.getStorageEngine(state.agentId);
 
 		// Find the first repo that still needs work.
-		const keys = await this.getRepoIndex();
 		let job: RepoIngestJob | null = null;
-		for (const key of keys) {
+		for (const key of await this.getRepoIndex()) {
 			const j = await this.getRepoJob(key);
 			if (j && j.status !== "done" && j.status !== "error") {
 				job = j;
 				break;
 			}
 		}
-		if (!job) return;
+		if (!job) return; // nothing pending — stop the chain
 		const ref = { owner: job.owner, repo: job.repo };
-		const jobKey = `repoJob:${job.key}`;
 
 		try {
 			if (job.status === "fetching") {
@@ -993,54 +998,51 @@ export class AgentDO extends DurableObject<Env> {
 					maxTotalBytes: REPO_MAX_TOTAL_BYTES,
 				});
 				if (files.length === 0) {
-					await this.ctx.storage.put(jobKey, { ...job, status: "error", error: "No indexable text files found in this repository.", finishedAt: new Date().toISOString() });
-					await this.ctx.storage.setAlarm(Date.now() + 50);
-					return;
+					await this.saveJob(job, { status: "error", error: "No indexable text files found in this repository.", finishedAt: new Date().toISOString() });
+				} else if (await this.getRepoJob(job.key).then((c) => c?.startedAt === job?.startedAt)) {
+					// Only stage + advance if this job is still current (not removed/re-indexed mid-fetch).
+					for (let i = 0; i < files.length; i++) await this.ctx.storage.put(`rifile:${job.key}:${i}`, files[i]);
+					const advanced = await this.saveJob(job, {
+						status: "indexing",
+						total: files.length,
+						done: 0,
+						queue: files.map((_, i) => i),
+						paths: files.map((f) => f.path),
+						skipped,
+						description: meta?.description ?? null,
+						language: meta?.language ?? null,
+						readme: findReadme(files),
+					});
+					// Superseded after staging → don't leave orphan staged files behind.
+					if (!advanced) {
+						const staged = await this.ctx.storage.list({ prefix: `rifile:${job.key}:` });
+						await deleteKeysBatched(this.ctx.storage, [...staged.keys()]);
+					}
 				}
-				for (let i = 0; i < files.length; i++) {
-					await this.ctx.storage.put(`rifile:${job.key}:${i}`, files[i]);
-				}
-				await this.ctx.storage.put(jobKey, {
-					...job,
-					status: "indexing",
-					total: files.length,
-					done: 0,
-					skipped,
-					queue: files.map((_, i) => i),
-					paths: files.map((f) => f.path),
-					description: meta?.description ?? null,
-					language: meta?.language ?? null,
-					readme: findReadme(files),
-				} satisfies RepoIngestJob);
-				await this.ctx.storage.setAlarm(Date.now() + 50);
-				return;
-			}
-
-			if (job.status === "indexing") {
+			} else if (job.status === "indexing") {
 				const queue = [...job.queue];
 				let processed = 0;
+				let failed = 0;
 				let chunks = 0;
 				// Process files until the chunk budget is hit (but always ≥1 file).
 				while (queue.length > 0 && (processed === 0 || chunks < REPO_CHUNK_BUDGET)) {
 					const idx = queue.shift() as number;
 					const file = await this.ctx.storage.get<{ path: string; content: string }>(`rifile:${job.key}:${idx}`);
 					if (file) {
-						chunks += await engine.vectorizeRepoFile(job.key, file.path, file.content).catch(() => 0);
+						const n = await engine.vectorizeRepoFile(job.key, file.path, file.content).then((v) => v, () => -1);
+						if (n < 0) failed++;
 						await this.ctx.storage.delete(`rifile:${job.key}:${idx}`);
+						if (n > 0) chunks += n;
 					}
 					processed++;
 				}
-				await this.ctx.storage.put(jobKey, {
-					...job,
+				await this.saveJob(job, {
 					done: job.done + processed,
+					failed: (job.failed ?? 0) + failed,
 					queue,
 					status: queue.length === 0 ? "summarizing" : "indexing",
-				} satisfies RepoIngestJob);
-				await this.ctx.storage.setAlarm(Date.now() + 50);
-				return;
-			}
-
-			if (job.status === "summarizing") {
+				});
+			} else if (job.status === "summarizing") {
 				const overview = buildRepoOverview(ref, {
 					description: job.description,
 					language: job.language,
@@ -1049,20 +1051,23 @@ export class AgentDO extends DurableObject<Env> {
 				});
 				const doc = await engine.addKnowledge(`Repository overview: ${job.key}`, overview).catch(() => null);
 				await engine.logEvent("repo.indexed", undefined, { repo: job.key, files: job.total }).catch(() => undefined);
-				await this.ctx.storage.put(jobKey, { ...job, status: "done", overviewDocId: doc?.id, finishedAt: new Date().toISOString() });
-				await this.refreshRepoMemory();
-				await this.ctx.storage.setAlarm(Date.now() + 50); // pick up any other pending repo
-				return;
+				if (await this.saveJob(job, { status: "done", overviewDocId: doc?.id, finishedAt: new Date().toISOString() })) {
+					await this.refreshRepoMemory();
+				} else if (doc?.id) {
+					// Job was removed while summarizing — don't leak the overview doc.
+					await this.ctx.storage.delete(`kb:${doc.id}`);
+					await engine.vectorDelete("knowledge", doc.id).catch(() => undefined);
+				}
 			}
 		} catch (err) {
-			await this.ctx.storage.put(jobKey, {
-				...job,
+			await this.saveJob(job, {
 				status: "error",
 				error: err instanceof Error ? err.message : String(err),
 				finishedAt: new Date().toISOString(),
 			});
-			await this.ctx.storage.setAlarm(Date.now() + 50);
 		}
+		// Keep the chain alive for the next phase / next pending repo.
+		await this.ctx.storage.setAlarm(Date.now() + 50);
 	}
 
 	// ── Collections ───────────────────────────────────────────────────────────
