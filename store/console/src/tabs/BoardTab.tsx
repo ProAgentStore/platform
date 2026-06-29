@@ -16,11 +16,19 @@ const COLUMNS = [
 // Generic runtime board (tasks + activity) for any agent. The job-application
 // agent's applications pipeline lives in its own ApplyTab, which composes this.
 
-export default function BoardTab({ instanceId }: { instanceId: string }) {
+export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: string; onTaskOpen?: (task: RuntimeTask) => boolean }) {
 	const [tasks, setTasks] = useState<RuntimeTask[]>([]);
 	const [events, setEvents] = useState<RuntimeEvent[]>([]);
 	const [filter, setFilter] = useState<"active" | "all">("active");
 	const [detailId, setDetailId] = useState<string | null>(null);
+
+	// Open a task: let a host (e.g. the apply surface) redirect it to a richer page;
+	// if it doesn't handle it, fall back to the generic detail modal.
+	const openTask = (id: string) => {
+		const task = tasks.find((t) => t.id === id);
+		if (task && onTaskOpen?.(task)) return;
+		setDetailId(id);
+	};
 
 	const loadBoard = useCallback(async () => {
 		try {
@@ -117,7 +125,7 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 									</div>
 								) : (
 									items.map((task) => (
-										<TaskCard key={task.id} task={task} onAction={handleAction} onResume={handleResume} onOpen={setDetailId} />
+										<TaskCard key={task.id} task={task} onAction={handleAction} onResume={handleResume} onOpen={openTask} />
 									))
 								)}
 							</div>

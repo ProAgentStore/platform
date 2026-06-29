@@ -36,10 +36,16 @@ export default function ApplicationDetail({ instanceId, recordId, onBack }: { in
 		} catch { /* keep last */ }
 		try {
 			const ev = await api<{ events: RuntimeEvent[] }>(`/v1/instances/${instanceId}/task-events`);
-			setEvents((ev.events || []).filter((e) => {
+			const all = ev.events || [];
+			const scoped = all.filter((e) => {
 				const data = (e.data ?? {}) as Record<string, unknown>;
 				return str(data.recordId) === recordId || data.collection === "applications";
-			}));
+			});
+			// Apply task events (agent.*/job.*/task.*) are not record-scoped — if nothing
+			// is tied to this record, fall back to the apply agent's recent progress so the
+			// page (esp. for a stuck/failed application) still shows what happened.
+			const applyActivity = all.filter((e) => /^(agent\.|job\.|task\.)/.test(e.type));
+			setEvents(scoped.length ? scoped : applyActivity.slice(0, 30));
 		} catch { /* keep last */ }
 	}, [instanceId, recordId]);
 

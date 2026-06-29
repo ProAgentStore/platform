@@ -98,8 +98,21 @@ export default function ApplyTab({ instanceId, recordId }: { instanceId: string;
 				</div>
 			)}
 
-			{/* Shared runtime board (tasks + activity) */}
-			<BoardTab instanceId={instanceId} />
+			{/* Shared runtime board — apply tasks redirect to their application's detail page. */}
+			<BoardTab
+				instanceId={instanceId}
+				onTaskOpen={(task) => {
+					const taskUrl = String((task.input as Record<string, unknown> | undefined)?.url ?? "");
+					if (!taskUrl) return false;
+					const match = apps.find((a) => {
+						const d = (a.data ?? {}) as Record<string, unknown>;
+						const aUrl = a.url || (typeof d.url === "string" ? d.url : "");
+						return aUrl === taskUrl;
+					});
+					if (match) { navigate(`/instances/${instanceId}/apply/${match.id}`); return true; }
+					return false;
+				}}
+			/>
 		</div>
 	);
 }
