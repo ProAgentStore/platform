@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createStt, createTts } from "./config.js";
 import type { VoiceStt } from "./stt.js";
@@ -246,6 +246,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 			startListening();
 		}
 	}, [startListening]);
+
+	// Esc stops speech immediately, anywhere in the app.
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancelSpeak(); };
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [cancelSpeak]);
 
 	const toggleMute = useCallback(() => {
 		if (muted) {

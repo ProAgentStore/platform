@@ -48,6 +48,9 @@ export class VoiceTts {
 	speed: number;
 	speaking = false;
 	private _audioCtx: AudioContext | null = null;
+	private _queue: string[] = [];
+	private _processing = false;
+	private _currentSource: AudioBufferSourceNode | null = null;
 
 	constructor(provider: string, opts: TtsOptions = {}) {
 		this.provider = provider;
@@ -56,22 +59,39 @@ export class VoiceTts {
 		this.speed = opts.speed || 100;
 	}
 
+	/**
+	 * Queue a message to speak. A message that arrives while one is already
+	 * playing WAITS its turn — speech never overlaps. cancel() stops the current
+	 * utterance and drops anything queued behind it.
+	 */
 	async speak(text: string) {
 		if (!text?.trim()) return;
 		const clean = cleanForSpeech(String(text));
 		if (!clean) return;
+		this._queue.push(clean);
+		if (this._processing) return; // a turn is already draining the queue
+		this._processing = true;
 		this.speaking = true;
 		try {
-			if (this.provider === "openai" && this.apiKey)
-				return await this._speakOpenAI(clean);
-			return await this._speakBrowser(clean);
+			while (this._processing && this._queue.length) {
+				const next = this._queue.shift() as string;
+				if (this.provider === "openai" && this.apiKey) await this._speakOpenAI(next);
+				else await this._speakBrowser(next);
+			}
 		} finally {
+			this._processing = false;
 			this.speaking = false;
 		}
 	}
 
 	cancel() {
+		this._queue = [];
+		this._processing = false;
 		this.speaking = false;
+		if (this._currentSource) {
+			try { this._currentSource.stop(); } catch { /* already stopped */ }
+			this._currentSource = null;
+		}
 		if (window.speechSynthesis) speechSynthesis.cancel();
 	}
 
@@ -122,10 +142,12 @@ export class VoiceTts {
 			const source = this._audioCtx.createBufferSource();
 			source.buffer = audioBuf;
 			source.connect(this._audioCtx.destination);
+			this._currentSource = source;
 			await new Promise<void>((resolve) => {
 				source.onended = () => resolve();
 				source.start();
 			});
+			this._currentSource = null;
 		} catch {
 			return this._speakBrowser(text);
 		}
