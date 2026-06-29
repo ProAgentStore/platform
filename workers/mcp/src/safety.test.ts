@@ -32,16 +32,14 @@ function makeKv(): KVNamespace {
 }
 
 describe("MCP safety helpers", () => {
-	it("parses scopes with safe defaults", () => {
-		expect(parseScopes(null)).toEqual(["read", "write", "runtime", "destructive"]);
+	it("parses scopes with safe defaults (no/invalid scope → no destructive)", () => {
+		// Default grant excludes `destructive` — delete/overwrite need explicit opt-in.
+		expect(parseScopes(null)).toEqual(["read", "write", "runtime"]);
 		expect(parseScopes("read runtime unknown")).toEqual(["read", "runtime"]);
-		expect(parseScopes("openid email profile")).toEqual([
-			"read",
-			"write",
-			"runtime",
-			"destructive",
-		]);
-		expect(parseScopes("unknown")).toEqual(["read", "write", "runtime", "destructive"]);
+		expect(parseScopes("openid email profile")).toEqual(["read", "write", "runtime"]);
+		expect(parseScopes("unknown")).toEqual(["read", "write", "runtime"]);
+		// …but an explicit destructive request is still honored.
+		expect(parseScopes("read destructive")).toEqual(["read", "destructive"]);
 	});
 
 	it("blocks writes in read-only mode", async () => {

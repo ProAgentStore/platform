@@ -96,6 +96,14 @@ async function authorize(request: Request, env: LoginEnv): Promise<Response> {
 		});
 	}
 
+	// PKCE (S256) is mandatory. The library only runs PKCE verification when a
+	// code_challenge is present, so a client sending code_challenge_method with no
+	// challenge would skip PKCE and fall back to redirect_uri matching. Reject it —
+	// the pre-migration server hard-required code_challenge.
+	if (!authReq.codeChallenge) {
+		return new Response("code_challenge required (PKCE S256)", { status: 400 });
+	}
+
 	const client = await env.OAUTH_PROVIDER.lookupClient(authReq.clientId);
 
 	const nonce = crypto.randomUUID();

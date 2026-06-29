@@ -3,6 +3,12 @@ import { jsonText, text, type McpEnv, type TextResult } from "./http.js";
 export const MCP_SCOPES = ["read", "write", "runtime", "destructive"] as const;
 export type McpScope = (typeof MCP_SCOPES)[number];
 
+/** Default grant when a client requests no (valid) scope — e.g. a plain browser
+ *  sign-in via mcp-remote. Everything EXCEPT `destructive`: read/write/runtime cover
+ *  normal use, but delete-agent / overwrite-repo require an explicit `destructive`
+ *  scope so they can never run on a default connection. */
+const DEFAULT_SCOPES: McpScope[] = ["read", "write", "runtime"];
+
 export interface SafetyContext {
 	env: McpEnv;
 	subject?: string;
@@ -11,12 +17,12 @@ export interface SafetyContext {
 }
 
 export function parseScopes(value: string | string[] | null | undefined): McpScope[] {
-	if (!value) return [...MCP_SCOPES];
+	if (!value) return [...DEFAULT_SCOPES];
 	const parts = Array.isArray(value) ? value : value.split(/[,\s]+/);
 	const scopes = parts.filter((part): part is McpScope =>
 		(MCP_SCOPES as readonly string[]).includes(part),
 	);
-	return scopes.length > 0 ? Array.from(new Set(scopes)) : [...MCP_SCOPES];
+	return scopes.length > 0 ? Array.from(new Set(scopes)) : [...DEFAULT_SCOPES];
 }
 
 export function hasScope(ctx: SafetyContext, scope: McpScope): boolean {
