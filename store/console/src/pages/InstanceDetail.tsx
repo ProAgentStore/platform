@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
 import { renderMd } from "../lib/markdown";
 import { usePolling } from "@proagentstore/sdk/hooks";

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 
 interface UseApiResult<T> {
 	data: T | null;

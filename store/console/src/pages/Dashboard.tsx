@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 import type { Agent, Instance } from "../lib/types";
 
 export default function Dashboard() {

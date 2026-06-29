@@ -1,3 +1,10 @@
+// @proagentstore/sdk/client — browser-side authenticated client for the platform API.
+//
+// The "system service" every agent UI (and the console shell) uses to talk to
+// api.proagentstore.online with the signed Bearer session. Kept in its own subpath
+// so browser UIs don't pull in the backend `.` export (initPro/Stripe/etc).
+// See ../../PLAN-agent-os.md. (Base-URL override can come later if a UI needs it.)
+
 const API = "https://api.proagentstore.online";
 const SESSION_KEY = "pags:session";
 

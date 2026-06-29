@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 import type { Agent, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
 import { renderMd } from "../lib/markdown";
 import { Zap, ArrowLeft } from "lucide-react";

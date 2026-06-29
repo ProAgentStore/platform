@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { api } from "@proagentstore/sdk/client";
 import { VoiceStt, type SttOptions } from "./voice-stt";
 import { VoiceTts } from "./voice-tts";
 

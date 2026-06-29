@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
-import { api, getToken } from "../lib/api";
+import { api, getToken } from "@proagentstore/sdk/client";
 
 interface ProfileField {
 	key: string;
