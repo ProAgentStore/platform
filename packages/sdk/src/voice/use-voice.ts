@@ -89,7 +89,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// real, growing leak.
 		stopAudioMonitor();
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
 			const ctx = new AudioContext();
 			const source = ctx.createMediaStreamSource(stream);
 			const analyser = ctx.createAnalyser();
@@ -161,6 +161,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [speakAndResume]);
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
+		// Ignore anything captured WHILE the agent is speaking — it's the agent's own
+		// voice echoing into the mic, not you. This is what stops the self-triggering
+		// feedback loop (agent hears itself → "replies" → loops).
+		if (ttsRef.current?.speaking) return;
 		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
 		if (isFinal) {
 			// flushSync forces React to render immediately — the user sees
@@ -246,7 +250,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const toggleConvo = useCallback(async () => {
 		console.log("[voice] toggleConvo, currently:", convoOn);
 		if (convoOn) {
-			pausedForThinkingRef.current = false;
+			// Turn OFF synchronously: flip the ref NOW so any in-flight onEnd handler or
+			// queued restart timer sees convo is off and does NOT re-open the mic. (State
+			// updates the ref only on the next render — too late, the mic restarts.)
+			convoOnRef.current = false;
+			pausedForThinkingRef.current = true;
 			sttRef.current?.stop();
 			ttsRef.current?.cancel();
 			stopAudioMonitor();
