@@ -1,7 +1,7 @@
 // @proagentstore/sdk/hooks — React hooks for agent UIs.
 //
 // Shared hooks the console shell and agent UIs both call, so every agent's UI
-// talks to platform "system services" the same way — mirrors @freeappstore/sdk's
+// talks to platform "system services" the same way, exposed on the
 // `./hooks` subpath. React is an optional peer dependency (only UIs pull it in).
 // More hooks (useInstance, useRunner, useVoice…) move here from the console as
 // the agent-OS SDK forms. See ../../PLAN-agent-os.md.

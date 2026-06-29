@@ -8,8 +8,9 @@ info:
     isolated memory, knowledge base, and message history.
 
     **Auth:** All protected endpoints require a Bearer token in the `Authorization`
-    header. Obtain a token via `POST /v1/auth/exchange` (FAS OAuth flow) or
-    `POST /v1/auth/github` (direct GitHub OAuth).
+    header. Obtain a token by signing in through ProAgentStore's own OAuth
+    (`GET /v1/auth/google/start` or `GET /v1/auth/github/start`, which redirect back
+    with a `session` token), or via `POST /v1/auth/github` (direct GitHub code exchange).
   version: 1.0.0
   contact:
     url: https://proagentstore.online
@@ -451,58 +452,13 @@ paths:
                   response_mode:
                     type: string
 
-  /v1/auth/exchange:
-    post:
-      summary: Exchange FAS token for PAGS token
-      description: |
-        Exchange a FreeAppStore session token for a ProAgentStore session token.
-        This is the primary auth flow: complete GitHub OAuth on FAS, then call
-        this endpoint with the resulting `fas_session` token.
-      operationId: exchangeToken
-      security: []
-      tags: [Auth]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [fas_session]
-              properties:
-                fas_session:
-                  type: string
-                  description: Bearer token from FAS OAuth
-      responses:
-        "200":
-          description: PAGS session token issued
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  token:
-                    type: string
-                  user:
-                    $ref: "#/components/schemas/User"
-        "400":
-          description: fas_session missing
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "401":
-          description: Invalid FAS session
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
   /v1/auth/github:
     post:
       summary: Direct GitHub OAuth exchange
       description: |
-        Exchange a GitHub OAuth code for a PAGS token. Only works when PAGS has
-        its own OAuth app configured. Prefer `/v1/auth/exchange` instead.
+        Exchange a GitHub OAuth code for a PAGS token using ProAgentStore's own
+        GitHub OAuth app. Most clients should use the redirect flow
+        (`GET /v1/auth/github/start`) instead.
       operationId: githubAuth
       security: []
       tags: [Auth]

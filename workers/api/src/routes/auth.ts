@@ -5,8 +5,6 @@ import type { Env } from "../types.js";
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
 
-const FAS_API = "https://api.freeappstore.online";
-
 interface OAuthState {
 	returnTo: string;
 	exp: number;
@@ -268,73 +266,7 @@ authRoutes.get("/config", async (c) => {
 });
 
 /**
- * Exchange a FAS session token for a PAGS session token.
- * Flow: Console → FAS OAuth → fas_session in URL → POST here → PAGS token.
- * Same pattern as FAGS console — piggyback on FAS's GitHub OAuth app.
- */
-authRoutes.post("/exchange", async (c) => {
-	const { fas_session } = await c.req.json<{ fas_session: string }>();
-	if (!fas_session) return c.json({ error: "fas_session required" }, 400);
-
-	// Verify the FAS token by calling FAS /v1/auth/me
-	const fasRes = await fetch(`${FAS_API}/v1/auth/me`, {
-		headers: { Authorization: `Bearer ${fas_session}` },
-	});
-	if (!fasRes.ok) {
-		return c.json({ error: "Invalid FAS session" }, 401);
-	}
-	// FAS /v1/auth/me returns: { id, login, githubLogin, avatarUrl, roles, ... }
-	const fasUser = await fasRes.json<{
-		id?: string;
-		login?: string;
-		githubLogin?: string;
-		avatarUrl?: string;
-	}>();
-	if (!fasUser.id) {
-		return c.json({ error: "FAS session invalid" }, 401);
-	}
-
-	const uid = fasUser.id;
-	const github_login = fasUser.githubLogin || fasUser.login || "unknown";
-	const avatar_url = fasUser.avatarUrl || "";
-	const github_name = fasUser.login || github_login;
-
-	// Upsert user in PAGS D1 — everyone is a creator on PAGS (it's a creator platform)
-	const defaultRoles = JSON.stringify(["user", "creator"]);
-	await c.env.DB.prepare(
-		`INSERT INTO users (id, github_login, github_name, avatar_url, roles, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'))
-     ON CONFLICT(id) DO UPDATE SET
-       github_login = excluded.github_login,
-       github_name = excluded.github_name,
-       avatar_url = excluded.avatar_url,
-       updated_at = excluded.updated_at`,
-	)
-		.bind(
-			uid,
-			github_login,
-			github_name || github_login,
-			avatar_url,
-			defaultRoles,
-		)
-		.run();
-
-	// Fetch roles (existing users keep their roles, new users get user+creator)
-	const row = await c.env.DB.prepare("SELECT roles FROM users WHERE id = ?1")
-		.bind(uid)
-		.first<{ roles: string }>();
-	const roles = row?.roles ? JSON.parse(row.roles) : ["user", "creator"];
-
-	const token = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles });
-	return c.json({
-		token,
-		user: { id: uid, login: github_login, avatar: avatar_url, roles },
-	});
-});
-
-/**
- * Direct GitHub OAuth callback — exchange code for token.
- * Kept for future use when PAGS has its own OAuth app.
+ * Direct GitHub OAuth code-exchange endpoint — ProAgentStore's own OAuth app.
  */
 authRoutes.post("/github", async (c) => {
 	const { code, return_to } = await c.req.json<{
@@ -345,10 +277,7 @@ authRoutes.post("/github", async (c) => {
 
 	if (!c.env.GITHUB_CLIENT_ID || !c.env.GITHUB_CLIENT_SECRET) {
 		return c.json(
-			{
-				error:
-					"GitHub OAuth not configured. Use /v1/auth/exchange with a FAS token instead.",
-			},
+			{ error: "GitHub OAuth not configured." },
 			501,
 		);
 	}

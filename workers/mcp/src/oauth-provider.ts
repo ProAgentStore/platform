@@ -160,7 +160,7 @@ async function authorize(request: Request, env: LoginEnv): Promise<Response> {
 				// the same nonce back in a cookie. Without it, an attacker can run /authorize
 				// themselves and lure a victim through /authorize/continue with the attacker's
 				// nonce, stapling the victim's session onto the attacker's request (login CSRF
-				// / authorization-code injection). SameSite=Lax so it survives the FAS round-trip.
+				// / authorization-code injection). SameSite=Lax so it survives the OAuth round-trip.
 				"Set-Cookie": `pags_authnonce=${nonce}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`,
 			},
 		},
@@ -217,9 +217,9 @@ async function validatePagsSession(
 }
 
 /**
- * Platform login callback. Resolves the PAGS session (directly or by exchanging a
- * FAS session), validates it, then hands control back to the OAuth library which
- * mints the authorization code and redirects to the client's redirect_uri.
+ * Platform login callback. Resolves the PAGS session (returned directly by
+ * ProAgentStore's own OAuth), validates it, then hands control back to the OAuth
+ * library which mints the authorization code and redirects to the client's redirect_uri.
  *
  * The stored grant `props` mirror what the legacy implementation put in KV, so
  * the MCP transport (PagsMcp) keeps reading `authToken` / `mcpScopes` /

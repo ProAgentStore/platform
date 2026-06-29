@@ -52,7 +52,7 @@ function makeEnv(
 ): LoginEnv {
 	return {
 		API_BASE: "https://api.proagentstore.online",
-		AUTH_START: "https://api.freeappstore.online/v1/auth/github/start",
+		AUTH_START: "https://api.proagentstore.online/v1/auth/github/start",
 		SESSION_SIGNING_KEY: "test-key",
 		OAUTH_KV: makeKv(),
 		OAUTH_PROVIDER: makeOAuthHelpers(helpers),
@@ -157,7 +157,7 @@ describe("loginHandler /authorize", () => {
 });
 
 describe("loginHandler /authorize/continue", () => {
-	it("redirects to FAS GitHub OAuth after the user continues", async () => {
+	it("redirects to GitHub OAuth after the user continues", async () => {
 		const kv = makeKv({
 			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
 		});
@@ -170,7 +170,7 @@ describe("loginHandler /authorize/continue", () => {
 		expect(res.status).toBe(302);
 		const location = res.headers.get("Location") ?? "";
 		expect(location).toContain(
-			"https://api.freeappstore.online/v1/auth/github/start",
+			"https://api.proagentstore.online/v1/auth/github/start",
 		);
 		expect(location).toContain("app_id=pags-mcp");
 		expect(location).toContain("response_mode=query");
@@ -179,7 +179,7 @@ describe("loginHandler /authorize/continue", () => {
 		);
 	});
 
-	it("redirects to FAS Google OAuth when provider=google", async () => {
+	it("redirects to Google OAuth when provider=google", async () => {
 		const kv = makeKv({
 			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
 		});
@@ -192,7 +192,7 @@ describe("loginHandler /authorize/continue", () => {
 		expect(res.status).toBe(302);
 		const location = res.headers.get("Location") ?? "";
 		expect(location).toContain(
-			"https://api.freeappstore.online/v1/auth/google/start",
+			"https://api.proagentstore.online/v1/auth/google/start",
 		);
 		expect(location).toContain("app_id=pags-mcp");
 	});
@@ -209,7 +209,7 @@ describe("loginHandler /authorize/continue", () => {
 
 		expect(res.status).toBe(302);
 		expect(res.headers.get("Location")).toContain(
-			"https://api.freeappstore.online/v1/auth/github/start",
+			"https://api.proagentstore.online/v1/auth/github/start",
 		);
 	});
 

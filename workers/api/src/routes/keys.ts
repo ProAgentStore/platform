@@ -1,5 +1,5 @@
 /**
- * User API Key Vault + Proxy — vendored from FAGS/FAS pattern.
+ * User API Key Vault + Proxy.
  *
  * Users store their AI provider keys once (encrypted AES-256-GCM).
  * Agents access external APIs via the proxy which injects the key.

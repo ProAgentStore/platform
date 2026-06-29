@@ -42,34 +42,14 @@ export async function signIn(provider: "google" | "github" = "github") {
 export async function handleOAuthCallback(): Promise<string | null> {
 	const params = new URLSearchParams(window.location.search);
 
-	// Direct PAGS OAuth (Google/GitHub via /v1/auth/*/start) redirects back with
-	// ?session=<PAGS JWT> — store it directly, no exchange needed.
+	// ProAgentStore's own OAuth (Google/GitHub via /v1/auth/*/start) redirects back
+	// with ?session=<PAGS JWT> — store it directly. No FAS, no exchange.
 	const session = params.get("session");
 	if (session) {
 		setToken(session);
 		window.history.replaceState({}, "", window.location.pathname);
 		return session;
 	}
-
-	// Legacy FAS-delegated flow returns ?fas_session=... → exchange for a PAGS token.
-	const fasSession = params.get("fas_session");
-	if (!fasSession) return null;
-
-	try {
-		const res = await api<{ token?: string; user?: User }>(
-			"/v1/auth/exchange",
-			{ method: "POST", body: JSON.stringify({ fas_session: fasSession }) },
-			true,
-		);
-		if (res.token) {
-			setToken(res.token);
-			window.history.replaceState({}, "", window.location.pathname);
-			return res.token;
-		}
-	} catch (e) {
-		console.error("OAuth exchange error:", e);
-	}
-	window.history.replaceState({}, "", window.location.pathname);
 	return null;
 }
 

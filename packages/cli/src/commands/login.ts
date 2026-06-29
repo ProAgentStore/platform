@@ -8,7 +8,6 @@ import { writeLine, writeError } from "../output.js";
 const CONFIG_DIR = join(homedir(), ".config", "proagentstore");
 const TOKEN_FILE = join(CONFIG_DIR, "session.json");
 const API_BASE = "https://api.proagentstore.online";
-const FAS_API = "https://api.freeappstore.online";
 
 export interface StoredSession {
 	token: string;
@@ -56,37 +55,36 @@ export const loginCommand = new Command("login")
 				const url = new URL(req.url || "/", `http://127.0.0.1:${port}`);
 				if (url.pathname !== "/callback") { res.writeHead(404); res.end(); return; }
 
-				const fasSession = url.searchParams.get("fas_session");
-				if (!fasSession) {
+				// PAGS's own OAuth redirects back with ?session=<PAGS JWT> directly.
+				const session = url.searchParams.get("session");
+				if (!session) {
 					res.writeHead(400, { "Content-Type": "text/html" });
 					res.end("<h1>Sign-in failed</h1><p>No session received.</p>");
 					clearTimeout(timeout);
 					server.close();
-					reject(new Error("No fas_session in callback"));
+					reject(new Error("No session in callback"));
 					return;
 				}
 
-				// Exchange FAS token for PAGS token
+				// Resolve the signed-in user with the PAGS session token.
 				try {
-					const exchangeRes = await fetch(`${API_BASE}/v1/auth/exchange`, {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ fas_session: fasSession }),
+					const meRes = await fetch(`${API_BASE}/v1/auth/me`, {
+						headers: { Authorization: `Bearer ${session}` },
 					});
-					const data = await exchangeRes.json() as { token?: string; user?: { id: string; login: string; avatar: string }; error?: string };
-					if (!data.token) throw new Error(data.error || "Exchange failed");
+					if (!meRes.ok) throw new Error("Session validation failed");
+					const me = await meRes.json() as { id: string; login: string; avatar: string };
 
 					saveSession({
-						token: data.token,
-						user: data.user!,
+						token: session,
+						user: { id: me.id, login: me.login, avatar: me.avatar },
 						expiresAt: Date.now() + 29 * 24 * 60 * 60 * 1000, // ~29 days
 					});
 
 					res.writeHead(200, { "Content-Type": "text/html" });
-					res.end(`<h1>Signed in as ${data.user?.login}</h1><p>You can close this tab and return to the terminal.</p><script>window.close()</script>`);
+					res.end(`<h1>Signed in as ${me.login}</h1><p>You can close this tab and return to the terminal.</p><script>window.close()</script>`);
 					clearTimeout(timeout);
 					server.close();
-					resolve(data.token);
+					resolve(session);
 				} catch (err) {
 					res.writeHead(500, { "Content-Type": "text/html" });
 					res.end(`<h1>Sign-in failed</h1><p>${err instanceof Error ? err.message : String(err)}</p>`);
@@ -98,11 +96,11 @@ export const loginCommand = new Command("login")
 			server.listen(port, "127.0.0.1");
 		});
 
-		// Build OAuth URL
+		// Build OAuth URL — ProAgentStore's own OAuth, no FAS dependency.
 		const oauthBase = provider === "google"
-			? `${FAS_API}/v1/auth/google/start`
-			: `${FAS_API}/v1/auth/github/start`;
-		const oauthUrl = `${oauthBase}?app_id=pags-cli&response_mode=query&return_to=${encodeURIComponent(callbackUrl)}`;
+			? `${API_BASE}/v1/auth/google/start`
+			: `${API_BASE}/v1/auth/github/start`;
+		const oauthUrl = `${oauthBase}?return_to=${encodeURIComponent(callbackUrl)}`;
 
 		// Open browser
 		const open = (await import("node:child_process")).exec;
