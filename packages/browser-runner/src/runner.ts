@@ -620,6 +620,19 @@ export class LocalRunner {
 		});
 	}
 
+	/** Close every page except the active one. ATS forms open popups/extra tabs that
+	 *  otherwise stay open in the persistent context until shutdown; over many
+	 *  applications they accumulate (memory/handles). Called when a task finishes. */
+	private async closeStalePages(): Promise<void> {
+		const ctx = this.browserContext;
+		if (!ctx) return;
+		for (const p of ctx.pages()) {
+			if (p !== this.activePage && !p.isClosed()) {
+				await p.close().catch(() => undefined);
+			}
+		}
+	}
+
 	/** The page the brain drives and the human takes over — created on demand. */
 	private async getActivePage(): Promise<Page> {
 		const context = await this.getBrowserContext();
@@ -822,6 +835,7 @@ export class LocalRunner {
 			this.store.putTask(task);
 			this.addTaskEvent(task, success ? "task.completed" : "task.failed", detail || `Application ${outcome}`, { outcome, detail });
 		}
+		await this.closeStalePages().catch(() => undefined);
 		return { ok: true };
 	}
 
