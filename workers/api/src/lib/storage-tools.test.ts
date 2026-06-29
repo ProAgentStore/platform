@@ -27,15 +27,20 @@ function makeEngine() {
 }
 
 function mockRuntimeEnv() {
-	const first = vi.fn(async () => ({
-		endpoint_url: "https://runner.example.test",
-		token_plaintext: "runner-token",
-		token_ciphertext: null,
-		token_dek_wrapped: null,
-		token_iv: null,
-	}));
-	const bind = vi.fn(() => ({ first, run: vi.fn(async () => ({})), all: vi.fn(async () => ({ results: [] })) }));
-	const prepare = vi.fn(() => ({ bind }));
+	const first = vi.fn(async (sql: string) => {
+		if (sql.includes("FROM instance_runtimes")) {
+			return {
+				endpoint_url: "https://runner.example.test",
+				token_plaintext: "runner-token",
+				token_ciphertext: null,
+				token_dek_wrapped: null,
+				token_iv: null,
+			};
+		}
+		return null;
+	});
+	const bind = vi.fn((sql: string) => ({ first: () => first(sql), run: vi.fn(async () => ({})), all: vi.fn(async () => ({ results: [] })) }));
+	const prepare = vi.fn((sql: string) => ({ bind: () => bind(sql) }));
 	const create = vi.fn(async () => ({ id: "wf_123" }));
 	return {
 		env: {
