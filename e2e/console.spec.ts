@@ -389,7 +389,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("Live Agent")).toBeVisible();
 	});
 
-	test("signed-in user can open an instance and see the board tab", async ({
+	test("signed-in user can open an instance and see the apply tab", async ({
 		page,
 	}) => {
 		const mock = await mockSignedInConsole(page);
@@ -399,10 +399,10 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.getByRole("link", { name: "Instances" }).click();
 		await page.getByText("Job Application Assistant").click();
 
-		// Board tab should be available for apply agents
-		await page.getByRole("button", { name: "Board", exact: true }).click();
+		// Apply agents get their own Apply tab (which embeds the runtime board).
+		await page.getByRole("button", { name: "Apply", exact: true }).click();
 
-		// Should show task count
+		// Should show task count (from the embedded board)
 		await expect(page.getByText(/2 task/)).toBeVisible();
 		// Should show the approval task
 		await expect(page.getByText("Job application").first()).toBeVisible();
