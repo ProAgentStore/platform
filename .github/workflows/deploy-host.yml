@@ -29,6 +29,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      - name: Build SDK
+        # The console bundles @proagentstore/sdk from its built dist — emit it first.
+        working-directory: packages/sdk
+        run: npx tsc
+
       - name: Build console React app
         working-directory: store/console
         run: npx vite build
