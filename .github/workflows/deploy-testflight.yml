@@ -14,6 +14,7 @@ jobs:
     env:
       ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
       XCODE_PROJECT: PAGS.xcodeproj
       XCODE_SCHEME: PAGS
     steps:
@@ -41,10 +42,77 @@ jobs:
             exit 1
           fi
 
+      - name: Validate App Store Connect secrets
+        run: |
+          missing=0
+          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub secret for $name. Configure APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID, and APP_STORE_CONNECT_PRIVATE_KEY."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Install App Store Connect API Key
         run: |
           mkdir -p ~/private_keys
-          echo '${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}' > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          printf '%s' "$ASC_PRIVATE_KEY" > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Prune Development certificates (keep max 1)
+        shell: ruby {0}
+        run: |
+          require 'json'
+          require 'net/http'
+          require 'openssl'
+          require 'base64'
+
+          key_id = ENV['ASC_KEY_ID']
+          issuer_id = ENV['ASC_ISSUER_ID']
+          key_file = File.expand_path("~/private_keys/AuthKey_#{key_id}.p8")
+
+          header = Base64.urlsafe_encode64({"alg"=>"ES256","kid"=>key_id,"typ"=>"JWT"}.to_json, padding: false)
+          now = Time.now.to_i
+          payload = Base64.urlsafe_encode64({"iss"=>issuer_id,"iat"=>now,"exp"=>now+1200,"aud"=>"appstoreconnect-v1"}.to_json, padding: false)
+          signing_input = "#{header}.#{payload}"
+          key = OpenSSL::PKey::EC.new(File.read(key_file))
+          sig_der = key.sign("SHA256", signing_input)
+          asn1 = OpenSSL::ASN1.decode(sig_der)
+          r = asn1.value[0].value.to_s(2).rjust(32, "\0")
+          s = asn1.value[1].value.to_s(2).rjust(32, "\0")
+          sig = Base64.urlsafe_encode64(r + s, padding: false)
+          jwt = "#{signing_input}.#{sig}"
+
+          uri = URI("https://api.appstoreconnect.apple.com/v1/certificates?filter%5BcertificateType%5D=DEVELOPMENT&limit=200")
+          req = Net::HTTP::Get.new(uri)
+          req["Authorization"] = "Bearer #{jwt}"
+          res = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) { |http| http.request(req) }
+
+          unless res.is_a?(Net::HTTPSuccess)
+            puts "Warning: Could not list certs (HTTP #{res.code}), continuing anyway"
+            exit 0
+          end
+
+          certs = (JSON.parse(res.body)["data"] || [])
+          puts "Found #{certs.length} Development certificate(s)"
+
+          sorted = certs.sort_by { |c| c.dig("attributes", "expirationDate") || "" }.reverse
+          to_revoke = sorted.drop(1)
+
+          if to_revoke.empty?
+            puts "Already at 0-1 certs, nothing to prune"
+            exit 0
+          end
+
+          puts "Revoking #{to_revoke.length} stale cert(s) to make room..."
+          to_revoke.each do |cert|
+            id = cert["id"]
+            del_uri = URI("https://api.appstoreconnect.apple.com/v1/certificates/#{id}")
+            del_req = Net::HTTP::Delete.new(del_uri)
+            del_req["Authorization"] = "Bearer #{jwt}"
+            del_res = Net::HTTP.start(del_uri.hostname, del_uri.port, use_ssl: true) { |http| http.request(del_req) }
+            puts "  #{id} -> HTTP #{del_res.code}"
+          end
+          puts "Done - room for xcodebuild to create a signing cert"
 
       - name: Run unit tests
         working-directory: ios
