@@ -2,4 +2,5 @@ packages:
   - 'packages/*'
   - 'workers/*'
   - 'agents/job-application-assistant'
+  - 'agents/coder/web'
   - 'store/console'

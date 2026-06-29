@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
+import { CodingTab } from "@proagentstore/coder-web";
 import BoardTab from "../tabs/BoardTab";
-import CodingTab from "../tabs/CodingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import SettingsTab from "../tabs/SettingsTab";
 

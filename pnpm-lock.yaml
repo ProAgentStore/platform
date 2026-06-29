@@ -24,6 +24,28 @@ importers:
         specifier: ^3.2.4
         version: 3.2.6(@types/node@22.19.20)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.22.4)(yaml@2.9.0)
 
+  agents/coder/web:
+    dependencies:
+      '@proagentstore/sdk':
+        specifier: workspace:*
+        version: link:../../../packages/sdk
+      lucide-react:
+        specifier: '>=1'
+        version: 1.21.0(react@19.2.7)
+      react:
+        specifier: '>=18'
+        version: 19.2.7
+      react-router-dom:
+        specifier: '>=7'
+        version: 7.18.0(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+    devDependencies:
+      '@types/react':
+        specifier: ^19.2.0
+        version: 19.2.17
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+
   agents/job-application-assistant:
     dependencies:
       hono:
@@ -120,6 +142,9 @@ importers:
 
   store/console:
     dependencies:
+      '@proagentstore/coder-web':
+        specifier: workspace:*
+        version: link:../../agents/coder/web
       '@proagentstore/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk

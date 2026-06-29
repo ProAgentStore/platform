@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@proagentstore/coder-web": "workspace:*",
     "@proagentstore/sdk": "workspace:*",
     "lucide-react": "^1.21.0",
     "react": "^19.2.7",

@@ -65,30 +65,7 @@ export interface RuntimeEvent {
 	data?: Record<string, unknown>;
 }
 
-export interface CodingRepo {
-	id: string;
-	name: string;
-	workdir?: string;
-	cloneStatus?: string;
-	githubRepo?: string;
-	urls?: { dev?: string; staging?: string; prod?: string };
-	instructions?: string;
-}
-
-export interface CodingSession {
-	id: string;
-	repoId: string;
-	status: "active" | "suspended" | "ended";
-	clientType?: string;
-	launchCommand?: string;
-	createdAt?: string;
-}
-
-export interface CodingEngine {
-	id: string;
-	label: string;
-	command: string;
-}
+// Coding types (CodingRepo/CodingSession/CodingEngine) live in @proagentstore/coder-web.
 
 export interface KnowledgeDoc {
 	id: string;
