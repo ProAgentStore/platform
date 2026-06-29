@@ -6,7 +6,7 @@ import { renderMd } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
-import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench } from "lucide-react";
+import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench, Settings } from "lucide-react";
 
 /** Render terminal output: colorize lines + format inline code/bold/JSON */
 function renderTerminal(text: string): string {
@@ -91,8 +91,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [termInput, setTermInput] = useState("");
 	const [addRepoInput, setAddRepoInput] = useState("");
 	const [showAddRepo, setShowAddRepo] = useState(false);
-	const [editingRepoId, setEditingRepoId] = useState<string | null>(null);
-	const [repoRules, setRepoRules] = useState("");
+	const [settingsRepoId, setSettingsRepoId] = useState<string | null>(null);
 	const [loopPresets] = useState([
 		{ id: "bugs", label: "Fix bugs", objective: "Find and fix all bugs. Run tests after each fix. Commit when all pass." },
 		{ id: "quality", label: "Quality check", objective: "Run a full code quality audit: type check, lint, find code smells, dead code, and fix issues found. Commit improvements." },
@@ -718,19 +717,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						repos.map((r) => {
 							const active = getActiveSession(r.id);
 							const status = repoStatuses[r.id];
-							const isEditing = editingRepoId === r.id;
 							return (
 								<div key={r.id} className="bg-paper border border-line rounded-lg p-3">
 									<div className="flex justify-between items-center gap-3">
-										<div className="min-w-0 cursor-pointer" onClick={() => {
-											if (isEditing) { setEditingRepoId(null); }
-											else {
-												setEditingRepoId(r.id);
-												setRepoRules(r.instructions || "");
-												// Load latest from API
-												api<{ instructions: string }>(`/v1/instances/${instanceId}/coding/repos/${r.id}/instructions`).then((d) => setRepoRules(d.instructions || "")).catch(() => {});
-											}
-										}}>
+										<div className="min-w-0">
 											<div className="font-semibold text-sm truncate">{r.name}</div>
 											<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
 												{status === "thinking" || status === "working" ? (
@@ -744,45 +734,125 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 												{r.instructions && <span className="text-[0.6rem] px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
 											</div>
 										</div>
-										<div className="flex gap-1.5 shrink-0">
+										<div className="flex gap-1.5 shrink-0 items-center">
 											{active ? (
 												<button type="button" onClick={() => openTerminal(active)} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Open</button>
 											) : (
 												<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
 											)}
-											<button type="button" onClick={() => deleteRepo(r.id)} className="text-xs px-1.5 py-1 text-red"><Trash2 size={14} /></button>
+											<button type="button" onClick={() => setSettingsRepoId(r.id)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={14} /></button>
+											<button type="button" onClick={() => deleteRepo(r.id)} title="Delete repo" className="text-xs px-1.5 py-1 text-red"><Trash2 size={14} /></button>
 										</div>
 									</div>
-									{/* Repo rules editor */}
-									{isEditing && (
-										<div className="mt-2 pt-2 border-t border-line">
-											<div className="text-xs text-muted font-bold mb-1">Rules for this repo</div>
-											<textarea
-												value={repoRules}
-												onChange={(e) => setRepoRules(e.target.value)}
-												placeholder="e.g. Always create feature branches. Never push to main. Use conventional commits. Run tests before committing."
-												className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs min-h-[60px] resize-y"
-												rows={3}
-											/>
-											<div className="flex gap-1.5 mt-1.5 justify-end">
-												<button type="button" onClick={() => setEditingRepoId(null)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted font-semibold">Cancel</button>
-												<button type="button" onClick={async () => {
-													await api(`/v1/instances/${instanceId}/coding/repos/${r.id}/instructions`, {
-														method: "PUT",
-														body: JSON.stringify({ instructions: repoRules }),
-													});
-													r.instructions = repoRules;
-													setEditingRepoId(null);
-												}} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Save</button>
-											</div>
-										</div>
-									)}
 								</div>
 							);
 						})
 					)}
 				</div>
 			</div>
+			{settingsRepoId && (() => {
+				const repo = repos.find((r) => r.id === settingsRepoId);
+				return repo ? (
+					<RepoSettingsModal repo={repo} instanceId={instanceId} onClose={() => setSettingsRepoId(null)} onSaved={loadCoding} />
+				) : null;
+			})()}
+		</div>
+	);
+}
+
+function RepoSettingsModal({ repo, instanceId, onClose, onSaved }: {
+	repo: CodingRepo;
+	instanceId: string;
+	onClose: () => void;
+	onSaved: () => void;
+}) {
+	const [name, setName] = useState(repo.name);
+	const [rules, setRules] = useState(repo.instructions || "");
+	const [dev, setDev] = useState(repo.urls?.dev || "");
+	const [staging, setStaging] = useState(repo.urls?.staging || "");
+	const [prod, setProd] = useState(repo.urls?.prod || "");
+	const [saving, setSaving] = useState(false);
+
+	useEffect(() => {
+		// Load the latest saved rules (the list may be stale).
+		api<{ instructions: string }>(`/v1/instances/${instanceId}/coding/repos/${repo.id}/instructions`)
+			.then((d) => setRules(d.instructions || ""))
+			.catch(() => {});
+	}, [instanceId, repo.id]);
+
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [onClose]);
+
+	const save = async () => {
+		setSaving(true);
+		try {
+			await api(`/v1/instances/${instanceId}/coding/repos/${repo.id}`, {
+				method: "PUT",
+				body: JSON.stringify({ name: name.trim() || repo.name, urls: { dev: dev.trim(), staging: staging.trim(), prod: prod.trim() } }),
+			});
+			await api(`/v1/instances/${instanceId}/coding/repos/${repo.id}/instructions`, {
+				method: "PUT",
+				body: JSON.stringify({ instructions: rules }),
+			});
+			repo.instructions = rules;
+			onSaved();
+			onClose();
+		} catch (e) {
+			alert("Save failed: " + (e instanceof Error ? e.message : String(e)));
+		}
+		setSaving(false);
+	};
+
+	return (
+		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+			<div className="bg-panel border border-line rounded-t-xl sm:rounded-xl w-full sm:max-w-lg max-h-[88vh] overflow-auto p-4">
+				<div className="flex items-center justify-between gap-3 mb-3">
+					<h3 className="text-base font-bold flex items-center gap-1.5"><Settings size={16} /> Repo settings</h3>
+					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-lg leading-none">✕</button>
+				</div>
+
+				<label className="block text-xs font-bold text-muted mb-1">Name</label>
+				<input value={name} onChange={(e) => setName(e.target.value)} className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm mb-3" />
+
+				{/* Read-only details */}
+				<div className="grid grid-cols-2 gap-2 mb-3">
+					{repo.githubRepo && <Detail label="GitHub" value={repo.githubRepo} />}
+					{repo.workdir && <Detail label="Folder" value={repo.workdir} />}
+					{repo.cloneStatus && <Detail label="Clone status" value={repo.cloneStatus} />}
+					<Detail label="Repo id" value={repo.id} />
+				</div>
+
+				<label className="block text-xs font-bold text-muted mb-1">Special instructions (rules for this repo)</label>
+				<textarea
+					value={rules}
+					onChange={(e) => setRules(e.target.value)}
+					placeholder="e.g. Always create feature branches. Never push to main. Use conventional commits. Run tests before committing."
+					className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs min-h-[90px] resize-y mb-3"
+					rows={4}
+				/>
+
+				<label className="block text-xs font-bold text-muted mb-1">Launch URLs (optional)</label>
+				<input value={dev} onChange={(e) => setDev(e.target.value)} placeholder="Dev URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs mb-1.5" />
+				<input value={staging} onChange={(e) => setStaging(e.target.value)} placeholder="Staging URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs mb-1.5" />
+				<input value={prod} onChange={(e) => setProd(e.target.value)} placeholder="Production URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs" />
+
+				<div className="flex gap-2 justify-end mt-4">
+					<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>
+					<button type="button" onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-md bg-accent text-white font-bold disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+	return (
+		<div className="bg-paper border border-line rounded-lg p-2 min-w-0">
+			<div className="text-[0.6rem] uppercase tracking-wide text-muted-soft mb-0.5">{label}</div>
+			<div className="text-xs text-ink break-words font-mono">{value}</div>
 		</div>
 	);
 }
