@@ -1,10 +1,12 @@
 {
 	"name": "@proagentstore/sdk",
 	"version": "0.1.0",
-	"private": true,
 	"description": "SDK for server-powered AI agents on proagentstore.online — Workers AI, D1, R2, Stripe Connect, cron, API gateway.",
 	"license": "MIT",
 	"type": "module",
+	"publishConfig": {
+		"access": "public"
+	},
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
 	"exports": {

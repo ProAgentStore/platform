@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
     paths:
+      - 'packages/sdk/**'
       - 'packages/cli/**'
       - 'packages/browser-runner/**'
       - '.github/workflows/publish-npm.yml'
@@ -26,6 +27,24 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
       - run: pnpm install --frozen-lockfile
+
+      - name: Build SDK
+        run: pnpm --filter @proagentstore/sdk build
+
+      - name: Check published SDK version
+        id: sdk-version
+        run: |
+          version="$(node -p "require('./packages/sdk/package.json').version")"
+          existing="$(npm view "@proagentstore/sdk@$version" version 2>/dev/null || true)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "existing=$existing" >> "$GITHUB_OUTPUT"
+          if [ "$existing" = "$version" ]; then
+            echo "SDK version $version is already published; skipping npm publish."
+          fi
+
+      - name: Publish SDK
+        if: steps.sdk-version.outputs.existing != steps.sdk-version.outputs.version
+        run: cd packages/sdk && npm publish --access public
 
       - name: Build CLI
         run: pnpm --filter @proagentstore/cli build
