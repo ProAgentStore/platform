@@ -457,6 +457,9 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/system-message", asyn
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
+	// Verify the session belongs to this instance/user BEFORE touching its timeline —
+	// the timeline helpers are scoped by sessionId alone.
+	if (!(await getSession(c.env, instanceId, uid, sessionId))) throw new HttpError(404, "Session not found");
 	const body = (await c.req.json().catch(() => ({}))) as { question?: string; finished?: boolean; persist?: boolean };
 	const question = typeof body.question === "string" ? body.question.trim() : "";
 	const finished = body.finished === true;
@@ -538,7 +541,11 @@ async function driveClaude(
 	await c.env.CODING_SESSION.create({
 		id: watchId,
 		params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", mode: "watch", watchId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
-	}).catch(() => undefined);
+	}).catch(async () => {
+		// The finish-watcher failed to start — tell the user so the missing completion
+		// summary isn't a silent "did it even work?".
+		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "system", content: "(Couldn't start the progress watcher — I won't auto-report when this finishes; ask me for an update.)" }).catch(() => undefined);
+	});
 	// Show the user a plain-language summary, NOT the raw (often long/technical)
 	// instruction we sent to the CLI.
 	const reply = summary ? `On it — ${summary}` : "On it — working on that now.";
@@ -555,6 +562,8 @@ async function driveClaude(
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
+	// Verify the session belongs to this instance/user before touching its timeline.
+	if (!(await getSession(c.env, instanceId, uid, sessionId))) throw new HttpError(404, "Session not found");
 	const body = (await c.req.json().catch(() => ({}))) as { message?: string };
 	const raw = String(body.message ?? "").trim();
 	if (!raw) return c.json({ error: "message is required" }, 400);
@@ -764,7 +773,9 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 				watchId,
 				goal: { objective: action.text, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" },
 			},
-		}).catch(() => undefined);
+		}).catch(async () => {
+			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "system", content: "(Couldn't start the progress watcher — I won't auto-report when this finishes; ask me for an update.)" }).catch(() => undefined);
+		});
 	}
 	return c.json(snap as object);
 });
