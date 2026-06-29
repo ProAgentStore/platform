@@ -59,7 +59,10 @@ const MAX_CONTEXT_MESSAGES = 10;
 const REPO_MAX_FILES = 300;
 const REPO_MAX_FILE_BYTES = 32_000;
 const REPO_MAX_TOTAL_BYTES = 4_000_000;
-const REPO_INDEX_BATCH = 4; // files vectorized per alarm tick (each chunk = 1 embed call)
+// Bound each indexing alarm by embeddings done (not file count): a few big files
+// shouldn't push one tick past the Worker time/subrequest budget. Always processes
+// at least one file so progress is guaranteed even if a single file is huge.
+const REPO_CHUNK_BUDGET = 60; // ~60 embed calls per alarm tick
 
 /** Background job that pulls a GitHub repo into the agent's vector store. */
 interface RepoIngestJob {
@@ -827,13 +830,14 @@ export class AgentDO extends DurableObject<Env> {
 	/** Wipe everything from a prior repo ingest (vectors, staged files, overview, memory). */
 	private async clearRepoData(): Promise<void> {
 		const state = await this.getState();
-		if (state) {
-			const engine = this.getStorageEngine(state.agentId);
-			await engine.clearRepoVectors().catch(() => undefined);
-		}
+		const engine = state ? this.getStorageEngine(state.agentId) : null;
+		if (engine) await engine.clearRepoVectors().catch(() => undefined);
 		const prior = await this.getRepoJob();
 		if (prior?.overviewDocId) {
 			await this.ctx.storage.delete(`kb:${prior.overviewDocId}`);
+			// The overview doc was vectorized as a "knowledge" source — drop those
+			// embeddings too, or each re-index leaves stale overview chunks in RAG.
+			if (engine) await engine.vectorDelete("knowledge", prior.overviewDocId).catch(() => undefined);
 		}
 		// Drop any staged file blobs left over from an interrupted run.
 		const staged = await this.ctx.storage.list({ prefix: "rifile:" });
@@ -930,20 +934,24 @@ export class AgentDO extends DurableObject<Env> {
 			}
 
 			if (job.status === "indexing") {
-				const batch = job.queue.slice(0, REPO_INDEX_BATCH);
-				for (const idx of batch) {
+				const queue = [...job.queue];
+				let processed = 0;
+				let chunks = 0;
+				// Process files until the chunk budget is hit (but always ≥1 file).
+				while (queue.length > 0 && (processed === 0 || chunks < REPO_CHUNK_BUDGET)) {
+					const idx = queue.shift() as number;
 					const file = await this.ctx.storage.get<{ path: string; content: string }>(`rifile:${idx}`);
 					if (file) {
-						await engine.vectorizeRepoFile(file.path, file.content).catch(() => undefined);
+						chunks += await engine.vectorizeRepoFile(file.path, file.content).catch(() => 0);
 						await this.ctx.storage.delete(`rifile:${idx}`);
 					}
+					processed++;
 				}
-				const remaining = job.queue.slice(batch.length);
 				const next: RepoIngestJob = {
 					...job,
-					done: job.done + batch.length,
-					queue: remaining,
-					status: remaining.length === 0 ? "summarizing" : "indexing",
+					done: job.done + processed,
+					queue,
+					status: queue.length === 0 ? "summarizing" : "indexing",
 				};
 				await this.ctx.storage.put("repoIngest", next);
 				await this.ctx.storage.setAlarm(Date.now() + 50);
