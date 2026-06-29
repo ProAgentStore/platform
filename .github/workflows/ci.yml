@@ -22,12 +22,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Build SDK
+        # Emit dist (not just typecheck) — the console + agent UIs consume @proagentstore/sdk via its
+        # built dist. Must run BEFORE anything that builds the console (incl. the e2e webserver).
+        run: cd packages/sdk && npx tsc
       - run: pnpm test
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
-      - name: Build SDK
-        # Emit dist (not just typecheck) — the console + agent UIs consume @proagentstore/sdk via its built dist.
-        run: cd packages/sdk && npx tsc
       - name: Typecheck API worker
         run: cd workers/api && npx tsc --noEmit
       - name: Typecheck coder-web
