@@ -68,6 +68,17 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 		}
 	};
 
+	// Supply a value the agent asked for (needs_input handoff). Resume only marks the
+	// step done — it never delivers a value, so without this the agent hangs then fails.
+	const handleProvideInput = async (taskId: string, value: string) => {
+		try {
+			await api(`/v1/instances/${instanceId}/input`, { method: "POST", body: JSON.stringify({ taskId, value }) });
+			loadBoard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	// Look up the open task fresh each render so the modal stays live as the board polls.
 	const detailTask = detailId ? tasks.find((t) => t.id === detailId) ?? null : null;
 
@@ -141,6 +152,7 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 					onClose={() => setDetailId(null)}
 					onAction={handleAction}
 					onResume={handleResume}
+					onProvideInput={handleProvideInput}
 				/>
 			)}
 
@@ -153,7 +165,7 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 							<div key={ev.id} className="flex justify-between gap-3 text-xs text-muted border-b border-line pb-1.5 last:border-0">
 								<span className="font-mono text-ink">{ev.type}</span>
 								<span>{ev.message || ""}</span>
-								<span className="shrink-0">{formatTime(ev.timestamp)}</span>
+								<span className="shrink-0">{formatTime(ev.createdAt ?? ev.timestamp)}</span>
 							</div>
 						))}
 					</div>
@@ -163,13 +175,15 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 	);
 }
 
-function TaskDetailModal({ task, events, onClose, onAction, onResume }: {
+function TaskDetailModal({ task, events, onClose, onAction, onResume, onProvideInput }: {
 	task: RuntimeTask;
 	events: RuntimeEvent[];
 	onClose: () => void;
 	onAction: (id: string, action: string) => void;
 	onResume: (id: string) => void;
+	onProvideInput: (id: string, value: string) => void;
 }) {
+	const [inputVal, setInputVal] = useState("");
 	const needsHuman = task.status === "needs_human" || task.needs_human;
 	const needsApproval = task.status === "needs_approval";
 	useEffect(() => {
@@ -178,7 +192,7 @@ function TaskDetailModal({ task, events, onClose, onAction, onResume }: {
 		return () => document.removeEventListener("keydown", onKey);
 	}, [onClose]);
 	// Events that reference this task (the agent's decisions/handoffs for it).
-	const taskEvents = events.filter((e) => String((e.data as Record<string, unknown>)?.taskId ?? "") === task.id);
+	const taskEvents = events.filter((e) => String(e.taskId ?? (e.data as Record<string, unknown>)?.taskId ?? "") === task.id);
 	const fmt = (v: unknown) => { try { return JSON.stringify(v, null, 2); } catch { return String(v); } };
 	return (
 		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
@@ -197,7 +211,18 @@ function TaskDetailModal({ task, events, onClose, onAction, onResume }: {
 
 				{needsHuman && (
 					<div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-3 text-xs text-amber-600">
-						<b>Needs you{task.handoff_field ? `: ${task.handoff_field}` : ""}.</b> {task.handoff_reason || "The agent is stuck."} Do the step in your browser window, then Resume.
+						<b>Needs you{task.handoff_field ? `: ${task.handoff_field}` : ""}.</b> {task.handoff_reason || "The agent needs your input."}
+						<div className="mt-1.5 text-amber-700/80">Asked for a <b>value</b> (e.g. a salary)? Type it and Send. Stuck on a <b>step/CAPTCHA</b>? Do it in your browser, then Resume.</div>
+						<div className="flex gap-1.5 mt-2">
+							<input
+								value={inputVal}
+								onChange={(e) => setInputVal(e.target.value)}
+								onKeyDown={(e) => { if (e.key === "Enter" && inputVal.trim()) { onProvideInput(task.id, inputVal.trim()); onClose(); } }}
+								placeholder={task.handoff_field || "Value the agent asked for…"}
+								className="flex-1 min-w-0 bg-panel border border-line rounded-md px-2 py-1 text-xs text-ink"
+							/>
+							<button type="button" disabled={!inputVal.trim()} onClick={() => { onProvideInput(task.id, inputVal.trim()); onClose(); }} className="text-xs px-3 py-1 rounded-md bg-accent text-white font-bold disabled:opacity-40 shrink-0">Send</button>
+						</div>
 					</div>
 				)}
 
@@ -215,7 +240,7 @@ function TaskDetailModal({ task, events, onClose, onAction, onResume }: {
 								<div key={ev.id} className="flex justify-between gap-2 text-[0.7rem] text-muted">
 									<span className="font-mono text-ink shrink-0">{ev.type}</span>
 									<span className="truncate">{ev.message || ""}</span>
-									<span className="shrink-0">{formatTime(ev.timestamp)}</span>
+									<span className="shrink-0">{formatTime(ev.createdAt ?? ev.timestamp)}</span>
 								</div>
 							))}
 						</div>

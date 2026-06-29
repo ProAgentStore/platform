@@ -62,6 +62,10 @@ export interface RuntimeEvent {
 	type: string;
 	message?: string;
 	timestamp: string;
+	/** The API serves events with createdAt; timestamp is often absent. */
+	createdAt?: string;
+	/** Runtime events carry taskId at the top level (not under data). */
+	taskId?: string;
 	data?: Record<string, unknown>;
 }
 
