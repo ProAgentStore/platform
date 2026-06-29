@@ -24,7 +24,13 @@ export function escAttr(s: string): string {
 
 /** Render markdown-ish text to HTML (for assistant messages) */
 export function renderMd(raw: string): string {
-	let s = raw || "";
+	// Escape ALL input up front — this output is injected via dangerouslySetInnerHTML,
+	// and the content is attacker-influenceable (agent/LLM output, application data).
+	// The markdown transforms below only ADD controlled tags; links require http(s)://.
+	// (The inner esc() calls in code/header branches are therefore dropped to avoid
+	// double-escaping.) Without this, `<img src=x onerror=…>` would execute — a
+	// stored-XSS that could exfiltrate a viewer's BYOK keys.
+	let s = esc(raw || "");
 
 	// Strip embedded tool-call JSON blobs
 	s = s.replace(
@@ -45,17 +51,17 @@ export function renderMd(raw: string): string {
 	// Fenced code blocks
 	const codeBlocks: string[] = [];
 	s = s.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, _lang, code) => {
-		codeBlocks.push(`<pre><code>${esc(code.trim())}</code></pre>`);
+		codeBlocks.push(`<pre><code>${code.trim()}</code></pre>`);
 		return `@@CODE_BLOCK_${codeBlocks.length - 1}@@`;
 	});
 
 	// Inline code
-	s = s.replace(/`([^`\n]+)`/g, (_, c) => `<code>${esc(c)}</code>`);
+	s = s.replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`);
 
-	// Headers (escape content to prevent XSS)
-	s = s.replace(/^####\s+(.+)$/gm, (_, h) => `<h4>${esc(h)}</h4>`);
-	s = s.replace(/^###\s+(.+)$/gm, (_, h) => `<h4>${esc(h)}</h4>`);
-	s = s.replace(/^##\s+(.+)$/gm, (_, h) => `<h3>${esc(h)}</h3>`);
+	// Headers (content already escaped at entry)
+	s = s.replace(/^####\s+(.+)$/gm, (_, h) => `<h4>${h}</h4>`);
+	s = s.replace(/^###\s+(.+)$/gm, (_, h) => `<h4>${h}</h4>`);
+	s = s.replace(/^##\s+(.+)$/gm, (_, h) => `<h3>${h}</h3>`);
 
 	// Bold then italic
 	s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");

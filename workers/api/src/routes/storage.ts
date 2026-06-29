@@ -2,7 +2,7 @@
  * Storage routes — proxy to AgentDO for collections, files, vector search,
  * activity log, summaries, and user context.
  */
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { installationTokenForOwner } from "../lib/github-app.js";
@@ -12,14 +12,21 @@ import type { Env } from "../types.js";
 export const storageRoutes = new Hono<{ Bindings: Env }>();
 export const instanceStorageRoutes = new Hono<{ Bindings: Env }>();
 
-async function resolveAgent(c: { req: { param(k: string): string }; env: Env }) {
+async function resolveAgent(c: Context<{ Bindings: Env }>) {
+	// SECURITY: enforce ownership. These routes read/write/delete an agent's stored
+	// data (collections/files/records) and per-user context — without this any
+	// authenticated user could reach another creator's agent by id/slug.
+	const session = await requireUser(c);
 	const id = c.req.param("id");
 	const agent = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
+		"SELECT id, owner_id FROM agents WHERE (id = ?1 OR slug = ?1)",
 	)
 		.bind(id)
-		.first<{ id: string }>();
+		.first<{ id: string; owner_id: string }>();
 	if (!agent) throw new HttpError(404, "Agent not found");
+	if (agent.owner_id !== session.uid && !session.roles.includes("admin")) {
+		throw new HttpError(403, "Not your agent");
+	}
 	return agent;
 }
 
