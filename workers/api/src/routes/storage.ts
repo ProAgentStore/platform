@@ -449,7 +449,13 @@ instanceStorageRoutes.get("/:id/ingest-repo/status", async (c) => {
 instanceStorageRoutes.post("/:id/ingest-repo/clear", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
-	return proxyDO(c, instance.id, "/ingest-repo/clear", { method: "POST" });
+	// Body { repoUrl } / { key } removes one repo; empty body clears all.
+	const body = await c.req.json().catch(() => ({}));
+	return proxyDO(c, instance.id, "/ingest-repo/clear", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
 });
 
 instanceStorageRoutes.get("/:id/messages", async (c) => {

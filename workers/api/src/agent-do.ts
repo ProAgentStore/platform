@@ -64,8 +64,13 @@ const REPO_MAX_TOTAL_BYTES = 4_000_000;
 // at least one file so progress is guaranteed even if a single file is huge.
 const REPO_CHUNK_BUDGET = 60; // ~60 embed calls per alarm tick
 
-/** Background job that pulls a GitHub repo into the agent's vector store. */
+/**
+ * Background job that pulls one GitHub repo into the agent's vector store. An
+ * instance can index many repos; each has its own job at `repoJob:{key}` (key =
+ * `owner/repo`), and `repoIndex` holds the list of keys.
+ */
 interface RepoIngestJob {
+	key: string; // `${owner}/${repo}` — namespaces vectors + staged files
 	repoUrl: string;
 	owner: string;
 	repo: string;
@@ -216,7 +221,7 @@ export class AgentDO extends DurableObject<Env> {
 			if (path === "/ingest-repo/status" && request.method === "GET")
 				return this.handleIngestRepoStatus();
 			if (path === "/ingest-repo/clear" && request.method === "POST")
-				return this.handleClearRepo();
+				return this.handleClearRepo(request);
 
 			// State
 			if (path === "/init-collections" && request.method === "POST")
@@ -821,30 +826,52 @@ export class AgentDO extends DurableObject<Env> {
 		}
 	}
 
-	// ── Repo ingestion ──────────────────────────────────────────────────────────
+	// ── Repo ingestion (multi-repo) ──────────────────────────────────────────────
 
-	private async getRepoJob(): Promise<RepoIngestJob | null> {
-		return (await this.ctx.storage.get<RepoIngestJob>("repoIngest")) ?? null;
+	private async getRepoIndex(): Promise<string[]> {
+		return (await this.ctx.storage.get<string[]>("repoIndex")) ?? [];
 	}
 
-	/** Wipe everything from a prior repo ingest (vectors, staged files, overview, memory). */
-	private async clearRepoData(): Promise<void> {
+	private async getRepoJob(key: string): Promise<RepoIngestJob | null> {
+		return (await this.ctx.storage.get<RepoIngestJob>(`repoJob:${key}`)) ?? null;
+	}
+
+	/** Rebuild the combined "which repos are indexed" memory entry from all jobs. */
+	private async refreshRepoMemory(): Promise<void> {
+		const keys = await this.getRepoIndex();
+		const done: string[] = [];
+		for (const key of keys) {
+			const job = await this.getRepoJob(key);
+			if (job?.status === "done") done.push(`${job.key} (${job.total} files${job.language ? `, ${job.language}` : ""})`);
+		}
+		if (done.length === 0) {
+			await this.ctx.storage.delete("mem:repository");
+			return;
+		}
+		await this.setMemory(
+			"repository",
+			"context",
+			`Indexed repositories: ${done.join("; ")}. You can explain any file, function, or how the code fits together in any of them; cite the repo when files share names. You are READ-ONLY — you never modify these repositories.`,
+		);
+	}
+
+	/** Remove one repo's data (vectors, overview, staged files, job, index entry). */
+	private async clearRepo(key: string): Promise<void> {
 		const state = await this.getState();
 		const engine = state ? this.getStorageEngine(state.agentId) : null;
-		if (engine) await engine.clearRepoVectors().catch(() => undefined);
-		const prior = await this.getRepoJob();
+		if (engine) await engine.clearRepoVectors(key).catch(() => undefined);
+		const prior = await this.getRepoJob(key);
 		if (prior?.overviewDocId) {
 			await this.ctx.storage.delete(`kb:${prior.overviewDocId}`);
-			// The overview doc was vectorized as a "knowledge" source — drop those
-			// embeddings too, or each re-index leaves stale overview chunks in RAG.
+			// The overview was vectorized as a "knowledge" source — drop it too.
 			if (engine) await engine.vectorDelete("knowledge", prior.overviewDocId).catch(() => undefined);
 		}
-		// Drop any staged file blobs left over from an interrupted run.
-		const staged = await this.ctx.storage.list({ prefix: "rifile:" });
-		const keys = [...staged.keys()];
-		for (let i = 0; i < keys.length; i += 128) await this.ctx.storage.delete(keys.slice(i, i + 128));
-		await this.ctx.storage.delete("mem:repository");
-		await this.ctx.storage.delete("repoIngest");
+		const staged = await this.ctx.storage.list({ prefix: `rifile:${key}:` });
+		const sk = [...staged.keys()];
+		for (let i = 0; i < sk.length; i += 128) await this.ctx.storage.delete(sk.slice(i, i + 128));
+		await this.ctx.storage.delete(`repoJob:${key}`);
+		const idx = (await this.getRepoIndex()).filter((k) => k !== key);
+		await this.ctx.storage.put("repoIndex", idx);
 	}
 
 	private async handleIngestRepo(request: Request): Promise<Response> {
@@ -855,9 +882,12 @@ export class AgentDO extends DurableObject<Env> {
 		const ref = parseGithubUrl(repoUrl);
 		if (!ref) return json({ error: "Not a recognizable GitHub repository URL" }, 400);
 
-		await this.clearRepoData();
+		const key = `${ref.owner}/${ref.repo}`;
+		// Re-indexing an existing repo: clear just that one, keep the rest.
+		await this.clearRepo(key);
 
 		const job: RepoIngestJob = {
+			key,
 			repoUrl,
 			owner: ref.owner,
 			repo: ref.repo,
@@ -871,33 +901,61 @@ export class AgentDO extends DurableObject<Env> {
 			paths: [],
 			startedAt: new Date().toISOString(),
 		};
-		await this.ctx.storage.put("repoIngest", job);
+		await this.ctx.storage.put(`repoJob:${key}`, job);
+		const idx = await this.getRepoIndex();
+		if (!idx.includes(key)) await this.ctx.storage.put("repoIndex", [...idx, key]);
 		await this.ctx.storage.setAlarm(Date.now());
-		return json({ status: job.status, repo: `${ref.owner}/${ref.repo}` }, 202);
+		return json({ status: job.status, repo: key }, 202);
 	}
 
 	private async handleIngestRepoStatus(): Promise<Response> {
-		const job = await this.getRepoJob();
-		if (!job) return json({ status: "none" });
-		// Don't leak the access token to the client.
-		const { token: _t, queue: _q, readme: _r, ...pub } = job;
-		return json({ ...pub, repo: `${job.owner}/${job.repo}` });
+		const keys = await this.getRepoIndex();
+		const repos: unknown[] = [];
+		for (const key of keys) {
+			const job = await this.getRepoJob(key);
+			if (!job) continue;
+			const { token: _t, queue: _q, readme: _r, ...pub } = job;
+			repos.push(pub);
+		}
+		return json({ repos });
 	}
 
-	private async handleClearRepo(): Promise<Response> {
-		await this.clearRepoData();
+	/** Remove one repo (body { repoUrl } or { key }), or all when neither given. */
+	private async handleClearRepo(request: Request): Promise<Response> {
+		const body = await request.json<{ repoUrl?: string; key?: string }>().catch(() => ({}) as { repoUrl?: string; key?: string });
+		let key = body.key;
+		if (!key && body.repoUrl) {
+			const ref = parseGithubUrl(body.repoUrl);
+			if (ref) key = `${ref.owner}/${ref.repo}`;
+		}
+		if (key) {
+			await this.clearRepo(key);
+		} else {
+			for (const k of await this.getRepoIndex()) await this.clearRepo(k);
+		}
+		await this.refreshRepoMemory();
 		return json({ status: "cleared" });
 	}
 
-	/** Alarm-driven repo ingestion state machine — keeps each tick small. */
+	/** Alarm-driven repo ingestion: advances ONE active repo job per tick. */
 	async alarm(): Promise<void> {
-		const job = await this.getRepoJob();
-		if (!job || job.status === "done" || job.status === "error") return;
-
 		const state = await this.getState();
 		if (!state) return;
 		const engine = this.getStorageEngine(state.agentId);
+
+		// Find the first repo that still needs work.
+		const keys = await this.getRepoIndex();
+		let job: RepoIngestJob | null = null;
+		for (const key of keys) {
+			const j = await this.getRepoJob(key);
+			if (j && j.status !== "done" && j.status !== "error") {
+				job = j;
+				break;
+			}
+		}
+		if (!job) return;
 		const ref = { owner: job.owner, repo: job.repo };
+		const jobKey = `repoJob:${job.key}`;
 
 		try {
 			if (job.status === "fetching") {
@@ -909,14 +967,14 @@ export class AgentDO extends DurableObject<Env> {
 					maxTotalBytes: REPO_MAX_TOTAL_BYTES,
 				});
 				if (files.length === 0) {
-					await this.ctx.storage.put("repoIngest", { ...job, status: "error", error: "No indexable text files found in this repository.", finishedAt: new Date().toISOString() });
+					await this.ctx.storage.put(jobKey, { ...job, status: "error", error: "No indexable text files found in this repository.", finishedAt: new Date().toISOString() });
+					await this.ctx.storage.setAlarm(Date.now() + 50);
 					return;
 				}
-				// Stage each file as its own DO entry (the job object can't hold them all).
 				for (let i = 0; i < files.length; i++) {
-					await this.ctx.storage.put(`rifile:${i}`, files[i]);
+					await this.ctx.storage.put(`rifile:${job.key}:${i}`, files[i]);
 				}
-				const updated: RepoIngestJob = {
+				await this.ctx.storage.put(jobKey, {
 					...job,
 					status: "indexing",
 					total: files.length,
@@ -927,8 +985,7 @@ export class AgentDO extends DurableObject<Env> {
 					description: meta?.description ?? null,
 					language: meta?.language ?? null,
 					readme: findReadme(files),
-				};
-				await this.ctx.storage.put("repoIngest", updated);
+				} satisfies RepoIngestJob);
 				await this.ctx.storage.setAlarm(Date.now() + 50);
 				return;
 			}
@@ -940,20 +997,19 @@ export class AgentDO extends DurableObject<Env> {
 				// Process files until the chunk budget is hit (but always ≥1 file).
 				while (queue.length > 0 && (processed === 0 || chunks < REPO_CHUNK_BUDGET)) {
 					const idx = queue.shift() as number;
-					const file = await this.ctx.storage.get<{ path: string; content: string }>(`rifile:${idx}`);
+					const file = await this.ctx.storage.get<{ path: string; content: string }>(`rifile:${job.key}:${idx}`);
 					if (file) {
-						chunks += await engine.vectorizeRepoFile(file.path, file.content).catch(() => 0);
-						await this.ctx.storage.delete(`rifile:${idx}`);
+						chunks += await engine.vectorizeRepoFile(job.key, file.path, file.content).catch(() => 0);
+						await this.ctx.storage.delete(`rifile:${job.key}:${idx}`);
 					}
 					processed++;
 				}
-				const next: RepoIngestJob = {
+				await this.ctx.storage.put(jobKey, {
 					...job,
 					done: job.done + processed,
 					queue,
 					status: queue.length === 0 ? "summarizing" : "indexing",
-				};
-				await this.ctx.storage.put("repoIngest", next);
+				} satisfies RepoIngestJob);
 				await this.ctx.storage.setAlarm(Date.now() + 50);
 				return;
 			}
@@ -965,23 +1021,21 @@ export class AgentDO extends DurableObject<Env> {
 					paths: job.paths,
 					readme: job.readme,
 				});
-				const doc = await engine.addKnowledge(`Repository overview: ${job.owner}/${job.repo}`, overview).catch(() => null);
-				await this.setMemory(
-					"repository",
-					"context",
-					`Indexed repository ${job.owner}/${job.repo}. ${job.description || ""} ${job.total} files indexed (${job.language || "mixed"}). You can explain any file, function, or how the code fits together. You are READ-ONLY — you never modify the repository.`.trim(),
-				);
-				await engine.logEvent("repo.indexed", undefined, { repo: `${job.owner}/${job.repo}`, files: job.total }).catch(() => undefined);
-				await this.ctx.storage.put("repoIngest", { ...job, status: "done", overviewDocId: doc?.id, finishedAt: new Date().toISOString() });
+				const doc = await engine.addKnowledge(`Repository overview: ${job.key}`, overview).catch(() => null);
+				await engine.logEvent("repo.indexed", undefined, { repo: job.key, files: job.total }).catch(() => undefined);
+				await this.ctx.storage.put(jobKey, { ...job, status: "done", overviewDocId: doc?.id, finishedAt: new Date().toISOString() });
+				await this.refreshRepoMemory();
+				await this.ctx.storage.setAlarm(Date.now() + 50); // pick up any other pending repo
 				return;
 			}
 		} catch (err) {
-			await this.ctx.storage.put("repoIngest", {
+			await this.ctx.storage.put(jobKey, {
 				...job,
 				status: "error",
 				error: err instanceof Error ? err.message : String(err),
 				finishedAt: new Date().toISOString(),
 			});
+			await this.ctx.storage.setAlarm(Date.now() + 50);
 		}
 	}
 

@@ -5,12 +5,14 @@ interface Props {
 	instanceId: string;
 }
 
-type IngestStatus = "none" | "fetching" | "indexing" | "summarizing" | "done" | "error";
+type IngestStatus = "fetching" | "indexing" | "summarizing" | "done" | "error";
 
 interface RepoState {
-	status: IngestStatus;
-	repo?: string;
+	key: string;
 	repoUrl?: string;
+	owner?: string;
+	repo?: string;
+	status: IngestStatus;
 	total?: number;
 	done?: number;
 	skipped?: number;
@@ -23,185 +25,157 @@ interface RepoState {
 const ACTIVE: IngestStatus[] = ["fetching", "indexing", "summarizing"];
 
 const PHASE_LABEL: Record<IngestStatus, string> = {
-	none: "",
-	fetching: "Downloading repository…",
-	indexing: "Reading & indexing files…",
+	fetching: "Downloading…",
+	indexing: "Indexing files…",
 	summarizing: "Finishing up…",
 	done: "Indexed",
 	error: "Failed",
 };
 
 export default function RepoTab({ instanceId }: Props) {
-	const [state, setState] = useState<RepoState>({ status: "none" });
+	const [repos, setRepos] = useState<RepoState[]>([]);
+	const [loaded, setLoaded] = useState(false);
 	const [url, setUrl] = useState("");
 	const [busy, setBusy] = useState(false);
-	const [showFiles, setShowFiles] = useState(false);
+	const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 	const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	const loadStatus = useCallback(async () => {
 		try {
-			const s = await api<RepoState>(`/v1/instances/${instanceId}/ingest-repo/status`);
-			setState(s);
-			return s.status;
+			const d = await api<{ repos: RepoState[] }>(`/v1/instances/${instanceId}/ingest-repo/status`);
+			setRepos(d.repos || []);
+			setLoaded(true);
+			return (d.repos || []).some((r) => ACTIVE.includes(r.status));
 		} catch {
-			return "none" as IngestStatus;
+			setLoaded(true);
+			return false;
 		}
 	}, [instanceId]);
 
 	const stopPoll = () => {
-		if (pollRef.current) {
-			clearInterval(pollRef.current);
-			pollRef.current = null;
-		}
+		if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
 	};
-
 	const startPoll = useCallback(() => {
 		stopPoll();
 		pollRef.current = setInterval(async () => {
-			const status = await loadStatus();
-			if (!ACTIVE.includes(status)) stopPoll();
+			const active = await loadStatus();
+			if (!active) stopPoll();
 		}, 1500);
 	}, [loadStatus]);
 
 	useEffect(() => {
-		(async () => {
-			const status = await loadStatus();
-			if (ACTIVE.includes(status)) startPoll();
-		})();
+		(async () => { if (await loadStatus()) startPoll(); })();
 		return stopPoll;
 	}, [loadStatus, startPoll]);
 
-	const index = async (repoUrl: string) => {
+	const addRepo = async (repoUrl: string) => {
 		if (!repoUrl.trim()) return;
 		setBusy(true);
 		try {
-			await api(`/v1/instances/${instanceId}/ingest-repo`, {
-				method: "POST",
-				body: JSON.stringify({ repoUrl: repoUrl.trim() }),
-			});
-			setState({ status: "fetching", repoUrl: repoUrl.trim() });
+			await api(`/v1/instances/${instanceId}/ingest-repo`, { method: "POST", body: JSON.stringify({ repoUrl: repoUrl.trim() }) });
+			setUrl("");
+			await loadStatus();
 			startPoll();
 		} catch (e) {
-			setState({ status: "error", error: e instanceof Error ? e.message : String(e) });
+			alert(e instanceof Error ? e.message : String(e));
 		} finally {
 			setBusy(false);
 		}
 	};
 
-	const clear = async () => {
+	const removeRepo = async (repoUrl?: string, key?: string) => {
 		setBusy(true);
-		stopPoll();
 		try {
-			await api(`/v1/instances/${instanceId}/ingest-repo/clear`, { method: "POST" });
+			await api(`/v1/instances/${instanceId}/ingest-repo/clear`, { method: "POST", body: JSON.stringify({ repoUrl, key }) });
+			await loadStatus();
 		} catch {}
-		setState({ status: "none" });
-		setUrl("");
 		setBusy(false);
 	};
 
-	const active = ACTIVE.includes(state.status);
-	const pct = state.total ? Math.min(100, Math.round(((state.done || 0) / state.total) * 100)) : 0;
-
-	// ── Idle: prompt for a repo URL ──────────────────────────────────────────
-	if (state.status === "none") {
-		return (
-			<div className="max-w-xl mx-auto">
-				<div className="bg-panel border border-line rounded-xl p-5">
-					<h3 className="text-base font-bold mb-1">Chat with a repository</h3>
-					<p className="text-sm text-muted mb-4">
-						Paste any GitHub repository URL. I'll read the whole codebase into my knowledge base, then you can ask me how anything works in the Chat tab — by text or voice. I'm read-only: I explain, I never change your code.
-					</p>
+	return (
+		<div className="max-w-2xl mx-auto">
+			{/* Add a repository */}
+			<div className="bg-panel border border-line rounded-xl p-5 mb-4">
+				<h3 className="text-base font-bold mb-1">Add a repository</h3>
+				<p className="text-sm text-muted mb-3">
+					Paste any GitHub URL. I'll read the whole codebase into my knowledge base, then you can ask about it in the Chat tab — by text or voice. You can index several repos and chat across all of them. Read-only: I explain, I never change your code.
+				</p>
+				<div className="flex gap-2">
 					<input
 						value={url}
 						onChange={(e) => setUrl(e.target.value)}
-						onKeyDown={(e) => e.key === "Enter" && index(url)}
+						onKeyDown={(e) => e.key === "Enter" && addRepo(url)}
 						placeholder="https://github.com/owner/repo"
-						className="mb-3"
+						className="flex-1"
 					/>
-					<button
-						type="button"
-						onClick={() => index(url)}
-						disabled={busy || !url.trim()}
-						className="text-sm px-4 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-50"
-					>
-						{busy ? "Starting…" : "Index repository"}
+					<button type="button" onClick={() => addRepo(url)} disabled={busy || !url.trim()} className="text-sm px-4 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-50 shrink-0">
+						{busy ? "…" : "Index"}
 					</button>
-					<p className="text-xs text-muted-soft mt-3">
-						Public repos work as-is. Private repos need GitHub connected. Large repos are capped at 300 files.
-					</p>
 				</div>
+				<p className="text-xs text-muted-soft mt-2">Public repos work as-is. Private repos need GitHub connected. Large repos are capped at 300 files each.</p>
 			</div>
-		);
-	}
 
-	// ── Working / done / error ───────────────────────────────────────────────
-	return (
-		<div className="max-w-xl mx-auto">
-			<div className="bg-panel border border-line rounded-xl p-5">
-				<div className="flex items-center justify-between gap-2 mb-3">
-					<div className="min-w-0">
-						<div className="font-bold text-sm truncate">{state.repo || state.repoUrl || "Repository"}</div>
-						<div className={`text-xs mt-0.5 ${state.status === "error" ? "text-red" : "text-muted"}`}>
-							{PHASE_LABEL[state.status]}
-						</div>
-					</div>
-					{state.status === "done" && <span className="text-xl shrink-0">✅</span>}
-					{active && <span className="text-xl shrink-0 animate-pulse">⏳</span>}
-					{state.status === "error" && <span className="text-xl shrink-0">⚠️</span>}
-				</div>
-
-				{active && (
-					<>
-						<div className="h-2 rounded-full bg-line overflow-hidden mb-2">
-							<div className="h-full bg-accent transition-all" style={{ width: `${state.status === "fetching" ? 5 : pct}%` }} />
-						</div>
-						{state.status === "indexing" && (
-							<p className="text-xs text-muted">{state.done || 0} / {state.total || 0} files indexed</p>
-						)}
-					</>
-				)}
-
-				{state.status === "done" && (
-					<>
-						{state.description && <p className="text-sm text-muted mb-3">{state.description}</p>}
-						<p className="text-sm mb-3">
-							Indexed <span className="font-bold">{state.total}</span> files
-							{state.language ? <> · {state.language}</> : null}
-							{state.skipped ? <span className="text-muted-soft"> · {state.skipped} skipped (caps)</span> : null}.
-						</p>
-						<p className="text-sm text-accent font-semibold mb-4">→ Switch to the Chat tab and ask me anything about it.</p>
-						{state.paths && state.paths.length > 0 && (
-							<div className="mb-4">
-								<button type="button" onClick={() => setShowFiles((v) => !v)} className="text-xs text-muted hover:text-accent font-semibold">
-									{showFiles ? "▾ Hide" : "▸ Show"} indexed files ({state.paths.length})
-								</button>
-								{showFiles && (
-									<div className="mt-2 max-h-64 overflow-y-auto bg-base border border-line rounded-lg p-3 font-mono text-xs text-muted leading-relaxed">
-										{state.paths.map((p) => <div key={p} className="truncate">{p}</div>)}
+			{/* Indexed repositories */}
+			{loaded && repos.length === 0 && (
+				<p className="text-center py-6 text-muted-soft text-sm">No repositories yet. Add one above to start chatting with it.</p>
+			)}
+			<div className="flex flex-col gap-3">
+				{repos.map((r) => {
+					const active = ACTIVE.includes(r.status);
+					const pct = r.total ? Math.min(100, Math.round(((r.done || 0) / r.total) * 100)) : 0;
+					return (
+						<div key={r.key} className="bg-panel border border-line rounded-xl p-4">
+							<div className="flex items-center justify-between gap-2">
+								<div className="min-w-0">
+									<div className="font-bold text-sm truncate">{r.key}</div>
+									<div className={`text-xs mt-0.5 ${r.status === "error" ? "text-red" : "text-muted"}`}>
+										{PHASE_LABEL[r.status]}
+										{r.status === "done" && <> · {r.total} files{r.language ? ` · ${r.language}` : ""}{r.skipped ? ` · ${r.skipped} skipped` : ""}</>}
+										{r.status === "indexing" && <> · {r.done || 0}/{r.total || 0}</>}
 									</div>
-								)}
+								</div>
+								<div className="flex items-center gap-2 shrink-0">
+									{r.status === "done" && <span className="text-lg">✅</span>}
+									{active && <span className="text-lg animate-pulse">⏳</span>}
+									{r.status === "error" && <span className="text-lg">⚠️</span>}
+								</div>
 							</div>
-						)}
-					</>
-				)}
 
-				{state.status === "error" && (
-					<p className="text-sm text-red mb-4">{state.error || "Something went wrong indexing this repository."}</p>
-				)}
+							{active && (
+								<div className="h-1.5 rounded-full bg-line overflow-hidden mt-2">
+									<div className="h-full bg-accent transition-all" style={{ width: `${r.status === "fetching" ? 5 : pct}%` }} />
+								</div>
+							)}
+							{r.status === "done" && r.description && <p className="text-sm text-muted mt-2">{r.description}</p>}
+							{r.status === "error" && <p className="text-sm text-red mt-2">{r.error || "Indexing failed."}</p>}
 
-				{!active && (
-					<div className="flex gap-2 flex-wrap">
-						{state.status === "done" && state.repoUrl && (
-							<button type="button" onClick={() => index(state.repoUrl as string)} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">
-								Re-index
-							</button>
-						)}
-						<button type="button" onClick={clear} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">
-							Index a different repo
-						</button>
-					</div>
-				)}
+							{!active && (
+								<div className="flex gap-3 mt-3 text-xs">
+									{r.status === "done" && r.paths && r.paths.length > 0 && (
+										<button type="button" onClick={() => setExpanded((e) => ({ ...e, [r.key]: !e[r.key] }))} className="text-muted hover:text-accent font-semibold">
+											{expanded[r.key] ? "▾ Hide" : "▸ Show"} files ({r.paths.length})
+										</button>
+									)}
+									{r.repoUrl && (
+										<button type="button" onClick={() => addRepo(r.repoUrl as string)} disabled={busy} className="text-muted hover:text-accent font-semibold disabled:opacity-50">Re-index</button>
+									)}
+									<button type="button" onClick={() => removeRepo(r.repoUrl, r.key)} disabled={busy} className="text-muted hover:text-red font-semibold disabled:opacity-50">Remove</button>
+								</div>
+							)}
+
+							{expanded[r.key] && r.paths && (
+								<div className="mt-2 max-h-56 overflow-y-auto bg-base border border-line rounded-lg p-3 font-mono text-xs text-muted leading-relaxed">
+									{r.paths.map((p) => <div key={p} className="truncate">{p}</div>)}
+								</div>
+							)}
+						</div>
+					);
+				})}
 			</div>
+
+			{repos.some((r) => r.status === "done") && (
+				<p className="text-sm text-accent font-semibold mt-4 text-center">→ Switch to the Chat tab and ask about your repositories.</p>
+			)}
 		</div>
 	);
 }

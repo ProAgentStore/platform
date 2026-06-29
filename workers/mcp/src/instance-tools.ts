@@ -463,7 +463,7 @@ export function registerInstanceTools(
 
 	server.tool(
 		"ingest_repo",
-		"Index a GitHub repository into a read-only repo-chat instance (the 'repo-chat' agent). Pulls the whole repo into the instance's vector store so you can ask how the code works. Re-running re-indexes (replaces the prior index). Public repos work as-is; private repos need GitHub connected.",
+		"Index a GitHub repository into a read-only repo-chat instance (the 'repo-chat' agent). Pulls the whole repo into the instance's vector store so you can ask how the code works. An instance can hold MANY repos — call again with a different URL to add another; call with the same URL to re-index that one. Public repos work as-is; private repos need GitHub connected.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -501,7 +501,7 @@ export function registerInstanceTools(
 
 	server.tool(
 		"ingest_repo_status",
-		"Check progress of a repo indexing job on a repo-chat instance (status: none | fetching | indexing | summarizing | done | error, with files indexed).",
+		"List the repositories indexed on a repo-chat instance and each one's progress (status: fetching | indexing | summarizing | done | error, with files indexed).",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -511,6 +511,38 @@ export function registerInstanceTools(
 			if (!sessionToken) return authRequired();
 			const data = await authedCall(`/v1/instances/${instance_id}/ingest-repo/status`, sessionToken, {}, env);
 			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"remove_repo",
+		"Remove one indexed repository from a repo-chat instance (by repo_url or owner/repo), or all of them if neither is given. Deletes its vectors and overview.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			repo_url: z.string().optional().describe("Repo URL or owner/repo to remove. Omit to remove ALL repos."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, repo_url, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, repo_url };
+			const denied = await requirePermission(safetyFor(token), "write", "remove_repo", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "remove_repo", repo_url ? "remove one indexed repository" : "remove ALL indexed repositories", input, {
+					endpoint: `/v1/instances/${instance_id}/ingest-repo/clear`,
+					repo_url: repo_url || "(all)",
+				});
+			}
+			await authedCall(
+				`/v1/instances/${instance_id}/ingest-repo/clear`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify(repo_url ? { repoUrl: repo_url } : {}) },
+				env,
+			);
+			await audit(safetyFor(token), { tool: "remove_repo", action: "completed", input });
+			return text(repo_url ? `Removed ${repo_url}.` : "Removed all repositories.");
 		},
 	);
 

@@ -151,32 +151,33 @@ export class AgentStorageEngine {
 	// ── Repo ingestion (read-only code indexing) ───────────────────────────────
 
 	/**
-	 * Vectorize one repository file. The file path is prepended to EVERY chunk so
-	 * RAG results carry their source location into the chat context (the LLM can
-	 * cite "this lives in src/foo.ts"). Embeds one chunk at a time — the same
-	 * proven path the knowledge base uses — then upserts the file's vectors in one
-	 * batch. (An earlier version embedded the whole file in a single batched
-	 * ai.run({text:[...]}) call; that silently returned nothing, so only the
-	 * overview doc made it into the index.)
+	 * Vectorize one repository file. The repo + file path is prepended to EVERY
+	 * chunk so RAG results carry their source location into the chat context (the
+	 * LLM can cite "this lives in owner/repo › src/foo.ts") — important once an
+	 * instance has more than one repo indexed. The vector sourceId is namespaced
+	 * by repo (`${repoKey}::${path}`) so a single repo can be cleared on re-index
+	 * without touching the others. Embeds one chunk at a time — the proven path the
+	 * knowledge base uses — then upserts the file's vectors in one batch.
 	 */
-	async vectorizeRepoFile(path: string, content: string): Promise<number> {
+	async vectorizeRepoFile(repoKey: string, path: string, content: string): Promise<number> {
 		if (!this.vectorize || !this.ai) return 0;
 		const chunks = chunkText(content, CHUNK_SIZE);
 		if (chunks.length === 0) return 0;
 
+		const sourceId = `${repoKey}::${path}`;
 		const vectors: VectorizeVector[] = [];
 		const metas: Array<{ key: string; meta: VectorMeta }> = [];
 		for (let i = 0; i < chunks.length; i++) {
-			const labeled = `File: ${path}\n${chunks[i]}`;
+			const labeled = `File: ${repoKey}/${path}\n${chunks[i]}`;
 			const embedding = await this.embed(labeled);
 			if (!embedding) continue;
-			const id = await shortId(this.agentId, "repo", path, i);
+			const id = await shortId(this.agentId, "repo", sourceId, i);
 			vectors.push({
 				id,
 				values: embedding,
-				metadata: { agentId: this.agentId, sourceType: "repo", sourceId: path, chunkIndex: i, text: labeled.slice(0, 1000) },
+				metadata: { agentId: this.agentId, sourceType: "repo", sourceId, chunkIndex: i, text: labeled.slice(0, 1000) },
 			});
-			metas.push({ key: `vec:${id}`, meta: { id, agentId: this.agentId, sourceType: "repo", sourceId: path, chunkIndex: i, text: labeled, createdAt: new Date().toISOString() } });
+			metas.push({ key: `vec:${id}`, meta: { id, agentId: this.agentId, sourceType: "repo", sourceId, chunkIndex: i, text: labeled, createdAt: new Date().toISOString() } });
 		}
 		if (vectors.length === 0) return 0;
 		for (let i = 0; i < vectors.length; i += 100) await this.vectorize.upsert(vectors.slice(i, i + 100));
@@ -184,14 +185,19 @@ export class AgentStorageEngine {
 		return vectors.length;
 	}
 
-	/** Drop every vector that came from repo ingestion (used on re-index/clear). */
-	async clearRepoVectors(): Promise<void> {
+	/**
+	 * Drop repo-ingestion vectors. With `repoKey`, only that repo's vectors
+	 * (sourceId `${repoKey}::…`) are removed; without it, every repo's vectors are
+	 * removed (full wipe).
+	 */
+	async clearRepoVectors(repoKey?: string): Promise<void> {
 		if (!this.vectorize) return;
+		const prefix = repoKey ? `${repoKey}::` : "";
 		const all = await this.doStorage.list<VectorMeta>({ prefix: "vec:" });
 		const ids: string[] = [];
 		const keys: string[] = [];
 		for (const [key, meta] of all.entries()) {
-			if (meta.agentId === this.agentId && meta.sourceType === "repo") {
+			if (meta.agentId === this.agentId && meta.sourceType === "repo" && (!repoKey || meta.sourceId.startsWith(prefix))) {
 				ids.push(meta.id);
 				keys.push(key);
 			}
