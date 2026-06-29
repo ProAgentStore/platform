@@ -422,7 +422,7 @@ export default function InstanceDetail() {
 									const toolNames = m.content.match(/\*\*(\w+)\*\*/g)?.map((t) => t.replace(/\*\*/g, "")) || ["tools"];
 									const summary = toolNames.length <= 2 ? toolNames.join(", ") : `${toolNames.length} tools`;
 									return (
-										<details key={i} className="self-start max-w-[90%]">
+										<details key={m.id || m.createdAt || i} className="self-start max-w-[90%]">
 											<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
 												<Wrench size={11} className="shrink-0" />
 												<span>Used {summary}</span>
@@ -434,7 +434,7 @@ export default function InstanceDetail() {
 								// Regular system messages (loop status, etc.)
 								if (m.role === "system") {
 									return (
-										<div key={i} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15">
+										<div key={m.id || m.createdAt || i} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15">
 											<span className="whitespace-pre-wrap">{m.content}</span>
 										</div>
 									);
@@ -442,7 +442,7 @@ export default function InstanceDetail() {
 								// User + assistant messages
 								return (
 									<div
-										key={i}
+										key={m.id || m.createdAt || i}
 										onClick={() => voice.cancelSpeak()}
 										onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
 										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
