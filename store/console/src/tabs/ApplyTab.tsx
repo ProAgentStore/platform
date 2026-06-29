@@ -57,12 +57,29 @@ export default function ApplyTab({ instanceId }: { instanceId: string }) {
 									</span>
 								</div>
 								<div className="flex flex-col gap-1.5 p-2">
-									{items.map((app) => (
-										<div key={app.id} className="bg-paper border border-line rounded-lg p-2.5 text-sm">
-											<div className="font-bold text-xs mb-0.5">{app.company || "Unknown"}</div>
-											<div className="text-xs text-muted line-clamp-1">{app.role || ""}</div>
-										</div>
-									))}
+									{items.map((app) => {
+										// Records logged by the agent may not have company/role at the top
+										// level — fall back to the inserted data, then the job URL host.
+										const d = (app.data ?? {}) as Record<string, unknown>;
+										const url = app.url || (typeof d.url === "string" ? d.url : "");
+										let host = "";
+										try { if (url) host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* not a URL */ }
+										const company = app.company || (typeof d.company === "string" ? d.company : "") || host || "Untitled";
+										const role = app.role || (typeof d.role === "string" ? d.role : "");
+										return (
+											<a
+												key={app.id}
+												href={url || undefined}
+												target="_blank"
+												rel="noopener"
+												className="block bg-paper border border-line rounded-lg p-2.5 text-sm no-underline text-ink hover:border-accent"
+												title={url || company}
+											>
+												<div className="font-bold text-xs mb-0.5 line-clamp-1">{company}</div>
+												<div className="text-xs text-muted line-clamp-1">{role || (url ? "Open job ↗" : "")}</div>
+											</a>
+										);
+									})}
 								</div>
 							</div>
 						);

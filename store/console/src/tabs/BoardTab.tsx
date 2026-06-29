@@ -48,6 +48,17 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 		}
 	};
 
+	// Resume a paused human-takeover task (the agent is stuck on a step / captcha).
+	// You do the highlighted step in your own browser window, then click Resume.
+	const handleResume = async (taskId: string) => {
+		try {
+			await api(`/v1/instances/${instanceId}/takeover/${taskId}/resume`, { method: "POST" });
+			loadBoard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	return (
 		<div>
 			<div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
@@ -102,7 +113,7 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 									</div>
 								) : (
 									items.map((task) => (
-										<TaskCard key={task.id} task={task} onAction={handleAction} />
+										<TaskCard key={task.id} task={task} onAction={handleAction} onResume={handleResume} />
 									))
 								)}
 							</div>
@@ -130,7 +141,9 @@ export default function BoardTab({ instanceId }: { instanceId: string }) {
 	);
 }
 
-function TaskCard({ task, onAction }: { task: RuntimeTask; onAction: (id: string, action: string) => void }) {
+function TaskCard({ task, onAction, onResume }: { task: RuntimeTask; onAction: (id: string, action: string) => void; onResume: (id: string) => void }) {
+	const needsHuman = task.status === "needs_human" || task.needs_human;
+	const needsApproval = task.status === "needs_approval";
 	return (
 		<div className="bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent hover:-translate-y-px">
 			<h3 className="text-sm font-bold mb-0.5 break-words">{task.title || task.type}</h3>
@@ -143,15 +156,30 @@ function TaskCard({ task, onAction }: { task: RuntimeTask; onAction: (id: string
 					<span className="text-muted-soft">{formatTime(task.createdAt)}</span>
 				)}
 			</div>
-			{(task.status === "needs_approval" || task.needs_human) && (
-				<div className="flex gap-1.5 mt-2">
-					<button
-						type="button"
-						onClick={() => onAction(task.id, "approve")}
-						className="text-xs px-2 py-1 rounded-md bg-green/15 text-green font-bold"
-					>
-						Approve
-					</button>
+			{needsHuman && (
+				<p className="text-[0.7rem] text-amber-500 mt-2 leading-snug">
+					The agent is stuck — do the highlighted step in your browser window, then click <b>Resume</b>.
+				</p>
+			)}
+			{(needsApproval || needsHuman) && (
+				<div className="flex gap-1.5 mt-2 flex-wrap">
+					{needsHuman ? (
+						<button
+							type="button"
+							onClick={() => onResume(task.id)}
+							className="text-xs px-2 py-1 rounded-md bg-green/15 text-green font-bold"
+						>
+							Resume
+						</button>
+					) : (
+						<button
+							type="button"
+							onClick={() => onAction(task.id, "approve")}
+							className="text-xs px-2 py-1 rounded-md bg-green/15 text-green font-bold"
+						>
+							Approve
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={() => onAction(task.id, "cancel")}
