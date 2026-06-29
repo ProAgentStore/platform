@@ -1,6 +1,6 @@
-import { api } from "./api";
-import { VoiceStt, type SttOptions } from "./voice-stt";
-import { VoiceTts } from "./voice-tts";
+import { api } from "../client.js";
+import { VoiceStt, type SttOptions } from "./stt.js";
+import { VoiceTts } from "./tts.js";
 
 interface VoiceConfig {
 	sttProvider: string;

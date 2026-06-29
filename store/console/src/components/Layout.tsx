@@ -2,8 +2,8 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
-import { api } from "../lib/api";
-import { usePolling } from "../hooks/usePolling";
+import { api } from "@proagentstore/sdk/client";
+import { usePolling } from "@proagentstore/sdk/hooks";
 import { Zap, Bell, Menu } from "lucide-react";
 
 export default function Layout() {

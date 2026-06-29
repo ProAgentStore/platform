@@ -25,10 +25,13 @@ jobs:
       - run: pnpm test
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm test:e2e
-      - name: Typecheck SDK
-        run: cd packages/sdk && npx tsc --noEmit
+      - name: Build SDK
+        # Emit dist (not just typecheck) — the console + agent UIs consume @proagentstore/sdk via its built dist.
+        run: cd packages/sdk && npx tsc
       - name: Typecheck API worker
         run: cd workers/api && npx tsc --noEmit
+      - name: Typecheck coder-web
+        run: cd agents/coder/web && npx tsc --noEmit
       - name: Typecheck Console
         run: cd store/console && npx tsc --noEmit
       - name: Build Console

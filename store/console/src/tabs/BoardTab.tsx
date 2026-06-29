@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 import type { RuntimeTask, RuntimeEvent, AppRecord } from "../lib/types";
-import { formatTime } from "../lib/markdown";
-import { usePolling } from "../hooks/usePolling";
+import { formatTime } from "@proagentstore/sdk/ui";
+import { usePolling } from "@proagentstore/sdk/hooks";
 
 const COLUMNS = [
 	{ id: "waiting", title: "Waiting", color: "#eab308", statuses: ["queued", "needs_approval"] },

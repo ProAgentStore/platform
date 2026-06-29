@@ -11,6 +11,18 @@
 		".": {
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
+		},
+		"./client": {
+			"types": "./dist/client.d.ts",
+			"import": "./dist/client.js"
+		},
+		"./ui": {
+			"types": "./dist/ui.d.ts",
+			"import": "./dist/ui.js"
+		},
+		"./hooks": {
+			"types": "./dist/hooks.d.ts",
+			"import": "./dist/hooks.js"
 		}
 	},
 	"homepage": "https://github.com/ProAgentStore/platform#readme",
@@ -37,7 +49,21 @@
 		"build": "tsc",
 		"typecheck": "tsc --noEmit"
 	},
+	"peerDependencies": {
+		"react": ">=18",
+		"react-dom": ">=18"
+	},
+	"peerDependenciesMeta": {
+		"react": {
+			"optional": true
+		},
+		"react-dom": {
+			"optional": true
+		}
+	},
 	"devDependencies": {
+		"@types/react": "^19.2.0",
+		"@types/react-dom": "^19.2.0",
 		"typescript": "^5.7.0"
 	},
 	"sideEffects": false

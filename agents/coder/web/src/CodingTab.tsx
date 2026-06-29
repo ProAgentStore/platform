@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
-import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
-import { renderMd } from "../lib/markdown";
-import { usePolling } from "../hooks/usePolling";
-import { useVoice } from "../hooks/useVoice";
-import { useCodingLoop } from "../hooks/useCodingLoop";
+import { api } from "@proagentstore/sdk/client";
+import type { CodingRepo, CodingSession, CodingEngine } from "./types";
+import { renderMd } from "@proagentstore/sdk/ui";
+import { usePolling } from "@proagentstore/sdk/hooks";
+import { useVoice } from "@proagentstore/sdk/hooks";
+import { useCodingLoop } from "./use-coding-loop";
 import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench } from "lucide-react";
 
 /** Render terminal output: colorize lines + format inline code/bold/JSON */

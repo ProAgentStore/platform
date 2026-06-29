@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 import type { Notification } from "../lib/types";
 
 export default function Notifications() {

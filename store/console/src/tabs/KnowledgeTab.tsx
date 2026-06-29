@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 import type { KnowledgeDoc, MemoryEntry, Credential } from "../lib/types";
-import { formatTime } from "../lib/markdown";
+import { formatTime } from "@proagentstore/sdk/ui";
 
 type KbSubTab = "docs" | "memory" | "files" | "credentials" | "rules" | "chat";
 

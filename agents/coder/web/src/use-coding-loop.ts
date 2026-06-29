@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 
 interface CodingLoopOpts {
 	instanceId: string;

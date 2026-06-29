@@ -1,18 +1,15 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { api } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
-import { renderMd } from "../lib/markdown";
-import { usePolling } from "../hooks/usePolling";
-import { useVoice } from "../hooks/useVoice";
+import { renderMd } from "@proagentstore/sdk/ui";
+import { usePolling } from "@proagentstore/sdk/hooks";
+import { useVoice } from "@proagentstore/sdk/hooks";
 import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
-import BoardTab from "../tabs/BoardTab";
-import CodingTab from "../tabs/CodingTab";
-import KnowledgeTab from "../tabs/KnowledgeTab";
-import SettingsTab from "../tabs/SettingsTab";
+import { SURFACES, SURFACE_IDS, visibleSurfaces, type SurfaceId } from "../lib/surfaces";
 
-type Tab = "chat" | "board" | "coding" | "knowledge" | "settings";
+type Tab = SurfaceId;
 
 export default function InstanceDetail() {
 	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
@@ -20,7 +17,7 @@ export default function InstanceDetail() {
 	const [instance, setInstance] = useState<Instance | null>(null);
 
 	// Tab + session from URL — always sync with the route
-	const validTabs: Tab[] = ["chat", "board", "coding", "knowledge", "settings"];
+	const validTabs: Tab[] = SURFACE_IDS;
 	const splatParts = splat?.split("/") || [];
 	const urlTab = (splatParts[0] || "") as Tab;
 	const tab = validTabs.includes(urlTab) ? urlTab : "chat";
@@ -307,17 +304,12 @@ export default function InstanceDetail() {
 
 	const surfaces = instance?.capabilities?.surfaces || [];
 	const isApply = surfaces.includes("apply");
-	const hasCoding = surfaces.includes("coding");
-	const tabDefs = useMemo(() => {
-		const tabs: { id: Tab; label: string; icon: string }[] = [
-			{ id: "chat", label: "Chat", icon: "💬" },
-		];
-		if (isApply || !hasCoding) tabs.push({ id: "board", label: "Board", icon: "📋" });
-		if (hasCoding) tabs.push({ id: "coding", label: "Coding", icon: "💻" });
-		tabs.push({ id: "knowledge", label: "Knowledge", icon: "📚" });
-		tabs.push({ id: "settings", label: "Settings", icon: "⚙" });
-		return tabs;
-	}, [isApply, hasCoding]);
+	// Tabs are derived from the surface registry filtered by this instance's capabilities.
+	const tabDefs = useMemo(
+		() => visibleSurfaces(surfaces).map((s) => ({ id: s.id, label: s.label, icon: s.icon })),
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[surfaces.join(",")],
+	);
 
 	// Inject instance controls into the Layout header (single bar)
 	useHideNav(true);
@@ -479,10 +471,20 @@ export default function InstanceDetail() {
 					</div>
 				)}
 
-				{tab === "board" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><BoardTab instanceId={id} isApply={isApply} /></div>}
-				{tab === "coding" && id && <CodingTab key={id} instanceId={id} initialSessionId={urlSessionId} onHeaderOverride={setChildHeader} />}
-				{tab === "knowledge" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><KnowledgeTab instanceId={id} isApply={isApply} /></div>}
-				{tab === "settings" && id && <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3"><SettingsTab instanceId={id} isApply={isApply} onUnsubscribe={() => navigate("/instances")} /></div>}
+				{tab !== "chat" && id && (() => {
+					const active = SURFACES.find((s) => s.id === tab);
+					if (!active?.render) return null;
+					const body = active.render({
+						instanceId: id,
+						isApply,
+						sessionId: urlSessionId,
+						setChildHeader,
+						onUnsubscribe: () => navigate("/instances"),
+					});
+					return active.scroll
+						? <div className="flex-1 overflow-auto px-2 py-2 sm:px-4 sm:py-3">{body}</div>
+						: body;
+				})()}
 			</div>
 		</div>
 	);

@@ -61,7 +61,7 @@ export class VoiceStt {
 			} catch {}
 		}
 		if (this._stream) {
-			this._stream.getTracks().forEach((t) => t.stop());
+			for (const t of this._stream.getTracks()) t.stop();
 			this._stream = null;
 		}
 	}
@@ -149,7 +149,7 @@ export class VoiceStt {
 				if (e.data.size > 0) chunks.push(e.data);
 			};
 			mediaRec.onstop = async () => {
-				this._stream?.getTracks().forEach((t) => t.stop());
+				for (const t of this._stream?.getTracks() ?? []) t.stop();
 				this._stream = null;
 				if (!chunks.length) {
 					this.onEnd();

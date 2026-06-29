@@ -1,3 +1,10 @@
+// @proagentstore/sdk/ui — UI building blocks for agent UIs.
+//
+// Presentation helpers (now) and shared "lovable shell" components (as they're
+// extracted from the console). Mirrors @freeappstore/sdk's `./ui` subpath. The
+// helpers below are framework-agnostic (no React); React lands as an optional
+// peer dependency when the first component moves in. See ../../PLAN-agent-os.md.
+
 /** Escape HTML entities */
 export function esc(s: string): string {
 	return String(s || "")

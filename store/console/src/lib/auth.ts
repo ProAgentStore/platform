@@ -1,4 +1,4 @@
-import { api, getToken, setToken } from "./api";
+import { api, getToken, setToken } from "@proagentstore/sdk/client";
 
 export interface User {
 	id: string;
