@@ -49,6 +49,26 @@ export default function AgentDetail() {
 	// Versions
 	const [versions, setVersions] = useState<{ id: string; version_num: number; description: string; created_at: string }[]>([]);
 
+	// Custom surfaces (Phase 3 — agent-published UIs)
+	type CSurface = { id: string; label: string; icon?: string; bundleUrl: string };
+	const [surfaces, setSurfaces] = useState<CSurface[]>([]);
+	const loadSurfaces = useCallback(async () => {
+		try {
+			const d = await api<{ customSurfaces?: CSurface[] }>(`/v1/agents/${id}/capabilities`);
+			setSurfaces(d.customSurfaces || []);
+		} catch { /* none */ }
+	}, [id]);
+	const saveSurfaces = async () => {
+		const clean = surfaces.filter((s) => s.id.trim() && s.label.trim() && /^https:\/\//.test(s.bundleUrl.trim()));
+		try {
+			const d = await api<{ customSurfaces: CSurface[] }>(`/v1/agents/${id}/capabilities`, { method: "PUT", body: JSON.stringify({ customSurfaces: clean }) });
+			setSurfaces(d.customSurfaces || []);
+			alert("Custom surfaces saved. Subscribers see them on their next load.");
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	const loadAgent = useCallback(async () => {
 		if (!id) return;
 		try {
@@ -128,7 +148,7 @@ export default function AgentDetail() {
 		else if (tab === "memory") loadMemory();
 		else if (tab === "tasks") loadTasks();
 		else if (tab === "analytics") loadAnalytics();
-		else if (tab === "settings") loadVersions();
+		else if (tab === "settings") { loadVersions(); loadSurfaces(); }
 	}, [tab, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions]);
 
 	const saveSettings = async () => {
@@ -298,6 +318,30 @@ export default function AgentDetail() {
 						<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
 							<div><label className="text-xs text-muted font-semibold block mb-1">Visibility</label><select value={sVis} onChange={e => setSVis(e.target.value)}><option value="draft">Draft</option><option value="published">Published</option><option value="unlisted">Unlisted</option></select></div>
 							<div><label className="text-xs text-muted font-semibold block mb-1">Model</label><select value={sModel} onChange={e => setSModel(e.target.value)}>{MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</select></div>
+						</div>
+					</div>
+
+					{/* Custom surfaces (Phase 3) */}
+					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
+						<h3 className="text-base font-semibold mb-1">Custom surfaces</h3>
+						<p className="text-xs text-muted mb-3">Ship your own UI as a published bundle — each loads from an https URL that exports <code>mount(ctx)</code>. See docs/custom-surfaces.md (example: <code>/console/surfaces/notes.js</code>).</p>
+						<div className="flex flex-col gap-3">
+							{surfaces.map((s, i) => (
+								<div key={i} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
+									<div className="flex gap-2">
+										<input value={s.id} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. notes)" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
+										<input value={s.label} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
+										<input value={s.icon || ""} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, icon: e.target.value } : x))} placeholder="🧩" className="w-12 bg-paper border border-line rounded px-2 py-1 text-sm text-center" />
+										<button type="button" onClick={() => setSurfaces(cs => cs.filter((_, j) => j !== i))} className="text-red text-xs px-1.5">Remove</button>
+									</div>
+									<input value={s.bundleUrl} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, bundleUrl: e.target.value } : x))} placeholder="https://…/surface.js" className="bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
+								</div>
+							))}
+							{surfaces.length === 0 && <div className="text-xs text-muted-soft">No custom surfaces yet — add one to ship your own UI.</div>}
+						</div>
+						<div className="flex gap-2 mt-3">
+							<button type="button" onClick={() => setSurfaces(cs => [...cs, { id: "", label: "", bundleUrl: "" }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add surface</button>
+							<button type="button" onClick={saveSurfaces} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save surfaces</button>
 						</div>
 					</div>
 
