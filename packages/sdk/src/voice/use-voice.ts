@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback } from "react";
 import { flushSync } from "react-dom";
-import { createStt, createTts } from "../lib/voice-config";
-import type { VoiceStt } from "../lib/voice-stt";
-import type { VoiceTts } from "../lib/voice-tts";
+import { createStt, createTts } from "./config.js";
+import type { VoiceStt } from "./stt.js";
+import type { VoiceTts } from "./tts.js";
 
 // Short tones via Web Audio — no external files
 let _audioCtx: AudioContext | null = null;

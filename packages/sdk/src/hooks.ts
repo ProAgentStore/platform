@@ -8,6 +8,8 @@
 
 import { useEffect, useRef } from "react";
 
+export { useVoice } from "./voice/use-voice.js";
+
 /** Call `fn` every `ms` milliseconds while the component is mounted (and `enabled`). */
 export function usePolling(fn: () => void, ms: number, enabled = true): void {
 	const savedFn = useRef(fn);

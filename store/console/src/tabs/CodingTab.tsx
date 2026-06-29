@@ -4,7 +4,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo, CodingSession, CodingEngine } from "../lib/types";
 import { renderMd } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { useVoice } from "../hooks/useVoice";
+import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "../hooks/useCodingLoop";
 import { ArrowLeft, Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench } from "lucide-react";
 

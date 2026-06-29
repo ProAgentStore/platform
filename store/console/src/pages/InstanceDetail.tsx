@@ -4,7 +4,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
 import { renderMd } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { useVoice } from "../hooks/useVoice";
+import { useVoice } from "@proagentstore/sdk/hooks";
 import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, SURFACE_IDS, visibleSurfaces, type SurfaceId } from "../lib/surfaces";
