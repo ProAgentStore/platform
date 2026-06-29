@@ -32,21 +32,22 @@ export async function getVoiceConfig(
 		} catch {}
 	}
 
-	const isApi = String(vs.provider || "").includes("openai");
+	const wantsOpenAiTts = String(vs.provider || "").includes("openai");
+	const wantsWhisperStt = String(vs.sttMode || "") === "openai";
 	let apiKey = "";
-	if (isApi) {
+	if (wantsOpenAiTts || wantsWhisperStt) {
 		try {
 			const d = await api<{ key?: string }>("/v1/keys/openai/reveal");
 			apiKey = d.key || "";
 		} catch {}
 	}
-	const useApi = isApi && !!apiKey;
 
 	_cache = {
-		// STT is ALWAYS browser — Web Speech API gives real-time interim results.
-		// OpenAI Whisper is batch (record → stop → upload → wait) — no streaming.
-		sttProvider: "browser",
-		ttsProvider: useApi ? "openai" : "browser",
+		// Dictation (browser Web Speech) is real-time but error-prone with accents;
+		// "openai" records and transcribes with Whisper — far more accurate, but needs
+		// the user's OpenAI key (falls back to browser if the key is missing).
+		sttProvider: wantsWhisperStt && apiKey ? "openai" : "browser",
+		ttsProvider: wantsOpenAiTts && apiKey ? "openai" : "browser",
 		apiKey,
 		voice: (vs.openai as Record<string, unknown>)?.voice as string || "alloy",
 		speed: (vs.speed as number) || 100,

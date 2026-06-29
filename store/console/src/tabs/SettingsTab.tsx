@@ -12,6 +12,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 	const [runtimeInfo, setRuntimeInfo] = useState<Record<string, unknown> | null>(null);
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
+	const [sttMode, setSttMode] = useState("browser");
 	const [voiceMsg, setVoiceMsg] = useState("");
 
 	useEffect(() => {
@@ -25,19 +26,18 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 				const vs = d.voiceSettings || {};
 				setVoiceSettings(vs);
 				if (typeof vs.silenceMs === "number") setSilenceMs(vs.silenceMs);
+				if (typeof vs.sttMode === "string") setSttMode(vs.sttMode);
 			} catch {}
 		})();
 	}, [instanceId]);
 
-	const saveSilence = async (ms: number) => {
-		setSilenceMs(ms);
+	// Merge so a PUT (which replaces the whole object) doesn't wipe other settings.
+	const saveVoice = async (patch: Record<string, unknown>) => {
+		const next = { ...(voiceSettings || {}), ...patch };
+		setVoiceSettings(next);
 		try {
-			// Merge so we don't wipe provider/speed (the PUT replaces the whole object).
-			await api(`/v1/instances/${instanceId}/voice-settings`, {
-				method: "PUT",
-				body: JSON.stringify({ ...(voiceSettings || {}), silenceMs: ms }),
-			});
-			setVoiceMsg("Saved — applies on your next message");
+			await api(`/v1/instances/${instanceId}/voice-settings`, { method: "PUT", body: JSON.stringify(next) });
+			setVoiceMsg("Saved — applies on your next turn");
 			setTimeout(() => setVoiceMsg(""), 2500);
 		} catch (e) {
 			setVoiceMsg(e instanceof Error ? e.message : "Failed");
@@ -112,19 +112,34 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 				</ul>
 			</div>
 
-			{/* Voice — conversation mode */}
+			{/* Voice */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-1">Voice — conversation mode</h3>
-				<p className="text-sm text-muted mb-3">
-					How long to keep listening after you stop talking before sending. Higher = you can pause mid-sentence without being cut off.
+				<h3 className="text-base font-bold mb-2">Voice</h3>
+
+				<label className="block text-sm font-semibold mb-1">Recognition</label>
+				<p className="text-xs text-muted mb-2">
+					<b>Dictation</b> is instant but error-prone with accents. <b>Smart (AI)</b> records and transcribes with OpenAI Whisper — far more accurate (needs your OpenAI key in Knowledge → Credentials; falls back to dictation without it).
+				</p>
+				<select
+					value={sttMode}
+					onChange={(e) => { setSttMode(e.target.value); saveVoice({ sttMode: e.target.value }); }}
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-4 block w-full sm:w-auto"
+				>
+					<option value="browser">Dictation — fast, on-device</option>
+					<option value="openai">Smart (AI) — Whisper, most accurate</option>
+				</select>
+
+				<label className="block text-sm font-semibold mb-1">Conversation — pause before sending</label>
+				<p className="text-xs text-muted mb-2">
+					How long to keep listening after you stop talking. Higher = pause mid-sentence without being cut off.
 				</p>
 				<div className="flex items-center gap-2 flex-wrap">
 					<select
 						value={silenceMs}
-						onChange={(e) => saveSilence(Number(e.target.value))}
+						onChange={(e) => { setSilenceMs(Number(e.target.value)); saveVoice({ silenceMs: Number(e.target.value) }); }}
 						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
 					>
-						<option value={800}>Quick — send after 0.8s pause</option>
+						<option value={800}>Quick — 0.8s pause</option>
 						<option value={1500}>Normal — 1.5s pause</option>
 						<option value={2500}>Relaxed — 2.5s pause</option>
 						<option value={4000}>Patient — 4s pause</option>

@@ -102,7 +102,18 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// RMS level normalized to 0-1
 				let sum = 0;
 				for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-				setAudioLevel(Math.min(1, Math.sqrt(sum / data.length) / 128));
+				const level = Math.min(1, Math.sqrt(sum / data.length) / 128);
+				setAudioLevel(level);
+				// Whisper convo VAD: once we've heard voice, a sustained quiet of silenceMs
+				// ends the turn → stop recording → transcribe → send (see handleResult).
+				if (sttIsWhisperRef.current && convoOnRef.current && !pausedForThinkingRef.current) {
+					const now = Date.now();
+					if (level > 0.05) { vadLastLoudRef.current = now; vadVoiceSeenRef.current = true; }
+					else if (vadVoiceSeenRef.current && now - vadLastLoudRef.current > silenceMsRef.current) {
+						vadVoiceSeenRef.current = false;
+						sttRef.current?.stop();
+					}
+				}
 				analyserRef.current.raf = requestAnimationFrame(tick);
 			};
 			analyserRef.current = { ctx, analyser, source, stream, raf: requestAnimationFrame(tick) };
@@ -124,8 +135,16 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const pendingTextRef = useRef("");
 	const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const silenceMsRef = useRef(1500);
+	// Whisper (AI) STT has no streaming results, so in conversation mode we detect the
+	// end of a turn from the mic level ourselves (VAD), then stop → transcribe → send.
+	const sttIsWhisperRef = useRef(false);
+	const vadVoiceSeenRef = useRef(false);
+	const vadLastLoudRef = useRef(0);
 	useEffect(() => {
-		getVoiceConfig(instanceId).then((c) => { silenceMsRef.current = c.silenceMs; }).catch(() => {});
+		getVoiceConfig(instanceId).then((c) => {
+			silenceMsRef.current = c.silenceMs;
+			sttIsWhisperRef.current = c.sttProvider === "openai";
+		}).catch(() => {});
 	}, [instanceId]);
 
 	const ensureTts = useCallback(async () => {
@@ -175,10 +194,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (ttsRef.current?.speaking) return;
 		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
 
-		// Conversation mode: accumulate speech and only SEND after the user has been
-		// quiet for `silenceMs`. Every result (interim or final) resets the timer, so a
-		// short mid-sentence pause no longer cuts them off — only a real pause sends.
+		// Conversation mode.
 		if (convoOnRef.current) {
+			// Whisper: `text` is the full transcribed turn (our VAD already detected the
+			// pause). Send it straight away — no interim accumulation or debounce.
+			if (sttIsWhisperRef.current) {
+				if (isFinal && text.trim()) {
+					pausedForThinkingRef.current = true;
+					flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); playThinkingChime(); });
+					onSendRef.current(text.trim());
+				}
+				return;
+			}
+			// Browser dictation: accumulate speech and only SEND after the user has been
+			// quiet for `silenceMs`. Every result resets the timer, so a short mid-sentence
+			// pause no longer cuts them off — only a real pause sends.
 			if (isFinal && text.trim()) {
 				pendingTextRef.current = `${pendingTextRef.current} ${text}`.trim();
 			}

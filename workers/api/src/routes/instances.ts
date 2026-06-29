@@ -312,10 +312,13 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 	// Conversation mode: ms of silence after you stop talking before the message is
 	// sent. Higher = more tolerant of mid-sentence pauses.
 	const silenceMs = typeof body.silenceMs === "number" ? Math.max(500, Math.min(6000, Math.round(body.silenceMs))) : 1500;
+	// Speech recognition: "browser" dictation (default) or "openai" Whisper (AI).
+	const sttMode = body.sttMode === "openai" ? "openai" : "browser";
 	const settings = {
 		provider,
 		speed,
 		silenceMs,
+		sttMode,
 		openai: body.openai && typeof body.openai === "object" ? body.openai : undefined,
 		gemini: body.gemini && typeof body.gemini === "object" ? body.gemini : undefined,
 		language: typeof body.language === "string" ? body.language.slice(0, 10) : "en-US",
