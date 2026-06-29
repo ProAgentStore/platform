@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * @proagentstore/cli — create and publish server-powered AI agents.
- * Mirrors FAGS CLI (@freeagentstore/cli) for platform consistency.
+ * Create, publish, and run server-powered AI agents from the terminal.
  */
 import { createRequire } from "node:module";
 import { Command } from "commander";

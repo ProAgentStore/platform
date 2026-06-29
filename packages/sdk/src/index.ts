@@ -1,5 +1,5 @@
 // @proagentstore/sdk — server-powered AI agent SDK
-// Extends @freeagentstore/sdk with Workers AI, D1, R2, Stripe, cron.
+// Server-powered agent SDK: Workers AI, D1, R2, Stripe, cron.
 
 export type { AiClient } from "./ai.js";
 export type { DbClient } from "./db.js";
