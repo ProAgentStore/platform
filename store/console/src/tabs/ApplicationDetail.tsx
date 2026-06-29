@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api } from "@proagentstore/sdk/client";
-import { renderMd } from "@proagentstore/sdk/ui";
+import { renderMd, formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import type { RuntimeEvent } from "../lib/types";
 import { ArrowLeft, Send } from "lucide-react";
@@ -24,7 +24,7 @@ const FIELD_ORDER = ["company", "role", "job_title", "status", "url", "cover_not
 export default function ApplicationDetail({ instanceId, recordId, onBack }: { instanceId: string; recordId: string; onBack: () => void }) {
 	const [record, setRecord] = useState<AppRecordFull | null>(null);
 	const [events, setEvents] = useState<RuntimeEvent[]>([]);
-	const [messages, setMessages] = useState<{ id: string; role: string; content: string }[]>([]);
+	const [messages, setMessages] = useState<{ id: string; role: string; content: string; time: string }[]>([]);
 	const [input, setInput] = useState("");
 	const [thinking, setThinking] = useState(false);
 	const chatRef = useRef<HTMLDivElement>(null);
@@ -76,7 +76,7 @@ export default function ApplicationDetail({ instanceId, recordId, onBack }: { in
 		const msg = input.trim();
 		if (!msg) return;
 		setInput("");
-		setMessages((m) => [...m, { id: crypto.randomUUID(), role: "user", content: msg }]);
+		setMessages((m) => [...m, { id: crypto.randomUUID(), time: new Date().toISOString(), role: "user", content: msg }]);
 		setThinking(true);
 		const context = `[Context: We are discussing the application to ${company} for the ${role || "?"} role. Application ID: ${recordId}. Status: ${status}. URL: ${url || "none"}]\n\n${msg}`;
 		try {
@@ -84,10 +84,10 @@ export default function ApplicationDetail({ instanceId, recordId, onBack }: { in
 				`/v1/instances/${instanceId}/chat`,
 				{ method: "POST", body: JSON.stringify({ message: context }) },
 			);
-			if (data.message) setMessages((m) => [...m, { id: crypto.randomUUID(), role: "assistant", content: data.message!.content }]);
-			else if (data.error) setMessages((m) => [...m, { id: crypto.randomUUID(), role: "system", content: data.error! }]);
+			if (data.message) setMessages((m) => [...m, { id: crypto.randomUUID(), time: new Date().toISOString(), role: "assistant", content: data.message!.content }]);
+			else if (data.error) setMessages((m) => [...m, { id: crypto.randomUUID(), time: new Date().toISOString(), role: "system", content: data.error! }]);
 		} catch (e) {
-			setMessages((m) => [...m, { id: crypto.randomUUID(), role: "system", content: e instanceof Error ? e.message : String(e) }]);
+			setMessages((m) => [...m, { id: crypto.randomUUID(), time: new Date().toISOString(), role: "system", content: e instanceof Error ? e.message : String(e) }]);
 		}
 		setThinking(false);
 		requestAnimationFrame(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight; });
@@ -159,6 +159,7 @@ export default function ApplicationDetail({ instanceId, recordId, onBack }: { in
 								) : (
 									<span className="whitespace-pre-wrap">{m.content}</span>
 								)}
+								{m.time && <div className="text-[0.6rem] opacity-60 mt-1 text-right">{formatTime(m.time)}</div>}
 							</div>
 						))}
 						{thinking && <div className="text-muted text-xs self-start">Thinking…</div>}

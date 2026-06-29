@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo, CodingSession, CodingEngine } from "./types";
-import { renderMd } from "@proagentstore/sdk/ui";
+import { renderMd, formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
@@ -62,6 +62,7 @@ interface TimelineEntry {
 	content?: string;
 	text?: string;
 	seq?: number;
+	createdAt?: string;
 }
 
 export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride }: Props) {
@@ -77,7 +78,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [view, setView] = useState<"summary" | "terminal">("summary");
 	const [terminalText, setTerminalText] = useState("(waiting...)");
 	const [termAutoScroll, setTermAutoScroll] = useState(true);
-	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string }[]>([]);
+	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string; time?: string }[]>([]);
 
 	// Loop (extracted hook)
 	const loop = useCodingLoop({
@@ -200,6 +201,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				.map((e) => ({
 					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
 					content: e.content || e.text || "",
+					time: e.createdAt,
 				}));
 			if (entries.length > 0) setSummaryHistory(entries);
 		} catch {}
@@ -239,6 +241,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				.map((e) => ({
 					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
 					content: e.content || e.text || "",
+					time: e.createdAt,
 				}));
 			setSummaryHistory(entries);
 		} catch (e) {
@@ -613,8 +616,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 										}`}
 									>
 										<button type="button" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
-										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold">You</div>}
-										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold">Co-pilot</div>}
+										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span>You</span>{m.time && <span className="font-normal opacity-80">{formatTime(m.time)}</span>}</div>}
+										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Co-pilot</span>{m.time && <span className="font-normal text-muted">{formatTime(m.time)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 										) : (
