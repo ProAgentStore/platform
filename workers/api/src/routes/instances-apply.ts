@@ -4,7 +4,8 @@ import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
 import type { Env } from "../types.js";
-import { callRuntime, isRecord, mirrorRuntimeTasks, requireOwnedInstance, requireRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
+import { createBrowserRuntimeTask } from "./browser-workflows.js";
+import { callRuntime, requireOwnedInstance, requireRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
 
 /** An apply failure with an HTTP-ish status so callers can map it. */
 export class ApplyError extends Error {
@@ -67,7 +68,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 	const resumePath = await resolveResumeReference(env, instanceId, userId, String(input.resumePath ?? ""));
 	if (!resumePath) throw new ApplyError("no résumé on file — upload one in the console (Knowledge → Résumé) so the agent can attach it");
 
-	const runtime = await requireRuntime(env, instanceId, userId); // throws if no runner
+	await requireRuntime(env, instanceId, userId); // throws if no runner
 	const cand = input.candidate ?? {};
 	const rawProfile = await getProfile(env, userId);
 	const prof = profileToCandidate(rawProfile);
@@ -99,15 +100,16 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 		preferences: prefs,
 	};
 
-	const taskRes = await callRuntime(env, runtime, "/tasks", {
-		method: "POST",
-		body: JSON.stringify({ type: "job.apply_agent", input: { url, resumePath } }),
-	});
-	const taskPayload = await runtimeJson(taskRes);
-	if (!taskRes.ok) throw new ApplyError("the runner rejected the task", 502);
-	await mirrorRuntimeTasks(env, instanceId, userId, taskPayload);
-	const taskId = isRecord(taskPayload) ? String(taskPayload.id ?? "") : "";
-	if (!taskId) throw new ApplyError("the runner did not return a task id", 502);
+	let taskId: string;
+	try {
+		({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
+			type: "job.apply_agent",
+			input: { url, resumePath },
+		}));
+	} catch (e) {
+		const msg = e instanceof Error ? e.message : String(e);
+		throw new ApplyError(msg, 502);
+	}
 
 	const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job } });
 	return { workflowId: instance.id, taskId };

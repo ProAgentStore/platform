@@ -15,7 +15,7 @@
  */
 
 /** A console surface an agent opts into (drives tabs + which UI blocks render). */
-export type AgentSurface = "apply" | "coding";
+export type AgentSurface = "apply" | "coding" | "insurance";
 
 /** Which local runner runtime the agent's hands use (null = no local runner). */
 export type AgentRuntimeKind = "browser" | "coding" | null;
@@ -26,10 +26,11 @@ export interface AgentCapabilities {
 	/** Local runner runtime the brain drives. */
 	runtime: AgentRuntimeKind;
 	/** Brain workflow binding name, when the agent has an autonomous loop. */
-	workflow: "JOB_APPLY" | "CODING_SESSION" | null;
+	workflow: "JOB_APPLY" | "CODING_SESSION" | "INSURANCE_QUOTES" | null;
 }
 
 const EMPTY: AgentCapabilities = { surfaces: [], runtime: null, workflow: null };
+const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance"]);
 
 /** Minimal shape we need off an `agents` row to resolve capabilities. */
 export interface AgentLike {
@@ -56,7 +57,7 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 	const declared = cfg.capabilities as Partial<AgentCapabilities> | undefined;
 	if (declared && Array.isArray(declared.surfaces)) {
 		return {
-			surfaces: declared.surfaces.filter((s): s is AgentSurface => s === "apply" || s === "coding"),
+			surfaces: declared.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface)),
 			runtime: declared.runtime ?? null,
 			workflow: declared.workflow ?? null,
 		};
@@ -68,6 +69,9 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 	}
 	if (agent.slug === "coder" || agent.category === "code") {
 		return { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" };
+	}
+	if (agent.slug === "like4like-insurance-quotes" || agent.category === "insurance") {
+		return { surfaces: ["insurance"], runtime: "browser", workflow: "INSURANCE_QUOTES" };
 	}
 	return EMPTY;
 }
