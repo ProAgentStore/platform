@@ -12,7 +12,7 @@
  */
 import { DurableObject } from "cloudflare:workers";
 import { AgentStorageEngine } from "./agent-storage.js";
-import { bytesFromBase64, deleteKeysBatched } from "./agent-storage-utils.js";
+import { bytesFromBase64 } from "./agent-storage-utils.js";
 import type {
 	AgentMessage,
 	AgentState,
@@ -37,6 +37,13 @@ import {
 	parseGithubUrl,
 } from "./lib/repo-ingest.js";
 import {
+	addRepo,
+	removeRepo,
+	repoAlarmTick,
+	statusList,
+	type RepoFetchers,
+} from "./lib/repo-ingest-runner.js";
+import {
 	UserAiCredentialsError,
 	UserAiProviderError,
 } from "./lib/user-ai.js";
@@ -54,43 +61,6 @@ export type {
 } from "./agent-types.js";
 
 const MAX_CONTEXT_MESSAGES = 10;
-
-// ── Repo ingestion tuning ─────────────────────────────────────────────────────
-const REPO_MAX_FILES = 300;
-const REPO_MAX_FILE_BYTES = 32_000;
-const REPO_MAX_TOTAL_BYTES = 4_000_000;
-// Bound each indexing alarm by embeddings done (not file count): a few big files
-// shouldn't push one tick past the Worker time/subrequest budget. Always processes
-// at least one file so progress is guaranteed even if a single file is huge.
-const REPO_CHUNK_BUDGET = 60; // ~60 embed calls per alarm tick
-const REPO_MAX_REPOS = 20; // indexed repos per instance
-
-/**
- * Background job that pulls one GitHub repo into the agent's vector store. An
- * instance can index many repos; each has its own job at `repoJob:{key}` (key =
- * `owner/repo`), and `repoIndex` holds the list of keys.
- */
-interface RepoIngestJob {
-	key: string; // `${owner}/${repo}` — namespaces vectors + staged files
-	repoUrl: string;
-	owner: string;
-	repo: string;
-	branch?: string;
-	token?: string;
-	status: "fetching" | "indexing" | "summarizing" | "done" | "error";
-	total: number;
-	done: number;
-	failed: number; // files whose embedding threw — surfaced, not silently dropped
-	skipped: number;
-	queue: number[];
-	paths: string[];
-	description?: string | null;
-	language?: string | null;
-	readme?: string | null;
-	error?: string;
-	startedAt: string;
-	finishedAt?: string;
-}
 
 export class AgentDO extends DurableObject<Env> {
 	private getStorageEngine(agentId: string): AgentStorageEngine {
@@ -827,49 +797,11 @@ export class AgentDO extends DurableObject<Env> {
 		}
 	}
 
-	// ── Repo ingestion (multi-repo) ──────────────────────────────────────────────
-	//
-	// Each repo has a job at `repoJob:{key}` (key = `owner/repo`). Membership is one
-	// marker key per repo (`repoMember:{key}`) rather than a single array, so two
-	// concurrent adds can't lose-update each other. `alarm()` advances ONE active
-	// repo per tick and guards every write with saveJob() so a re-index or remove
-	// landing mid-tick can't resurrect or clobber a job (the DO lets fetch handlers
-	// interleave with the alarm at network awaits).
+	// ── Repo ingestion (multi-repo) — logic lives in lib/repo-ingest-runner.ts ───
 
-	private async getRepoIndex(): Promise<string[]> {
-		const all = await this.ctx.storage.list({ prefix: "repoMember:" });
-		return [...all.keys()].map((k) => k.slice("repoMember:".length));
-	}
-
-	private async getRepoJob(key: string): Promise<RepoIngestJob | null> {
-		return (await this.ctx.storage.get<RepoIngestJob>(`repoJob:${key}`)) ?? null;
-	}
-
-	/**
-	 * Persist a job ONLY if it's still the current one (same key present, same
-	 * startedAt). Returns false when a concurrent remove/re-index has superseded it
-	 * — the caller then drops its stale write instead of resurrecting the job.
-	 */
-	private async saveJob(prev: RepoIngestJob, patch: Partial<RepoIngestJob>): Promise<boolean> {
-		const current = await this.getRepoJob(prev.key);
-		if (!current || current.startedAt !== prev.startedAt) return false;
-		await this.ctx.storage.put(`repoJob:${prev.key}`, { ...prev, ...patch });
-		return true;
-	}
-
-	/** Remove one repo's data (vectors incl. overview, staged files, job, index entry). */
-	private async clearRepo(key: string): Promise<void> {
-		const state = await this.getState();
-		const engine = state ? this.getStorageEngine(state.agentId) : null;
-		// The overview is a repo vector (sourceId `${key}::OVERVIEW`), so clearing
-		// the repo's vectors removes it too — no separate KB-doc cleanup needed.
-		if (engine) await engine.clearRepoVectors(key).catch(() => undefined);
-		const staged = await this.ctx.storage.list({ prefix: `rifile:${key}:` });
-		await deleteKeysBatched(this.ctx.storage, [...staged.keys()]);
-		// Drop membership first so a mid-flight alarm's saveJob() guard bails before
-		// it can resurrect this repo, then delete the job itself.
-		await this.ctx.storage.delete(`repoMember:${key}`);
-		await this.ctx.storage.delete(`repoJob:${key}`);
+	/** GitHub + parsing deps injected into the runner. */
+	private repoFetchers(): RepoFetchers {
+		return { fetchRepoMeta, fetchRepoTarball, extractTextFiles, buildRepoOverview, findReadme, now: () => new Date().toISOString() };
 	}
 
 	private async handleIngestRepo(request: Request): Promise<Response> {
@@ -879,178 +811,37 @@ export class AgentDO extends DurableObject<Env> {
 		if (!repoUrl) return json({ error: "repoUrl required" }, 400);
 		const ref = parseGithubUrl(repoUrl);
 		if (!ref) return json({ error: "Not a recognizable GitHub repository URL" }, 400);
-
-		const key = `${ref.owner}/${ref.repo}`;
-		const existing = await this.getRepoIndex();
-		if (!existing.includes(key) && existing.length >= REPO_MAX_REPOS) {
-			return json({ error: `Repo limit reached (max ${REPO_MAX_REPOS}). Remove one before adding another.` }, 400);
-		}
-		// Re-indexing an existing repo: clear just that one, keep the rest.
-		await this.clearRepo(key);
-
-		const job: RepoIngestJob = {
-			key,
-			repoUrl,
-			owner: ref.owner,
-			repo: ref.repo,
-			branch: branch || undefined,
-			token: token || undefined,
-			status: "fetching",
-			total: 0,
-			done: 0,
-			failed: 0,
-			skipped: 0,
-			queue: [],
-			paths: [],
-			startedAt: new Date().toISOString(),
-		};
-		await this.ctx.storage.put(`repoJob:${key}`, job);
-		await this.ctx.storage.put(`repoMember:${key}`, 1);
+		const engine = this.getStorageEngine(state.agentId);
+		const { job, error } = await addRepo(this.ctx.storage, engine, { ref, repoUrl, branch, token, now: new Date().toISOString() });
+		if (error || !job) return json({ error: error || "Failed to add repository" }, 400);
 		await this.ctx.storage.setAlarm(Date.now());
-		return json({ status: job.status, repo: key }, 202);
+		return json({ status: job.status, repo: job.key }, 202);
 	}
 
 	private async handleIngestRepoStatus(): Promise<Response> {
-		const keys = await this.getRepoIndex();
-		const repos: unknown[] = [];
-		for (const key of keys) {
-			const job = await this.getRepoJob(key);
-			if (!job) continue;
-			const { token: _t, queue: _q, readme: _r, ...pub } = job;
-			repos.push(pub);
-		}
-		// Self-heal: with no repos indexed, drop any stale "indexed repository"
-		// memory (e.g. left by the pre-multi-repo scheme) so the agent doesn't
-		// claim to know a repo that isn't actually indexed. Also retire the legacy
-		// single-repo job key if present.
-		if (repos.length === 0) {
-			await this.ctx.storage.delete("mem:repository");
-			await this.ctx.storage.delete("repoIngest");
-		}
-		return json({ repos });
+		return json({ repos: await statusList(this.ctx.storage) });
 	}
 
-	/** Remove one repo (body { repoUrl } or { key }), or all when neither given. */
 	private async handleClearRepo(request: Request): Promise<Response> {
+		const state = await this.getState();
+		const engine = state ? this.getStorageEngine(state.agentId) : null;
 		const body = await request.json<{ repoUrl?: string; key?: string }>().catch(() => ({}) as { repoUrl?: string; key?: string });
 		let key = body.key;
 		if (!key && body.repoUrl) {
 			const ref = parseGithubUrl(body.repoUrl);
 			if (ref) key = `${ref.owner}/${ref.repo}`;
 		}
-		if (key) {
-			await this.clearRepo(key);
-		} else {
-			for (const k of await this.getRepoIndex()) await this.clearRepo(k);
-		}
-		await this.ctx.storage.delete("mem:repository"); // retire any legacy memory entry
+		await removeRepo(this.ctx.storage, engine, key);
 		return json({ status: "cleared" });
 	}
 
-	/**
-	 * Alarm-driven repo ingestion: advances ONE active repo job per tick, then
-	 * reschedules so the next pending repo (or the next phase) runs. Every write
-	 * goes through saveJob(), which drops the write if the job was removed or
-	 * re-indexed mid-tick — so a concurrent remove/re-index can never be clobbered
-	 * or resurrected. The tick always reschedules; an idle tick (no active repo)
-	 * simply returns without rescheduling.
-	 */
+	/** Alarm: advance one repo-ingestion tick, reschedule while work remains. */
 	async alarm(): Promise<void> {
 		const state = await this.getState();
 		if (!state) return;
 		const engine = this.getStorageEngine(state.agentId);
-
-		// Find the first repo that still needs work.
-		let job: RepoIngestJob | null = null;
-		for (const key of await this.getRepoIndex()) {
-			const j = await this.getRepoJob(key);
-			if (j && j.status !== "done" && j.status !== "error") {
-				job = j;
-				break;
-			}
-		}
-		if (!job) return; // nothing pending — stop the chain
-		const ref = { owner: job.owner, repo: job.repo };
-
-		try {
-			if (job.status === "fetching") {
-				const meta = await fetchRepoMeta(ref, job.token);
-				const tar = await fetchRepoTarball(ref, job.branch || meta?.defaultBranch || undefined, job.token);
-				const { files, skipped } = extractTextFiles(tar, {
-					maxFiles: REPO_MAX_FILES,
-					maxFileBytes: REPO_MAX_FILE_BYTES,
-					maxTotalBytes: REPO_MAX_TOTAL_BYTES,
-				});
-				if (files.length === 0) {
-					await this.saveJob(job, { status: "error", error: "No indexable text files found in this repository.", finishedAt: new Date().toISOString() });
-				} else if (await this.getRepoJob(job.key).then((c) => c?.startedAt === job?.startedAt)) {
-					// Only stage + advance if this job is still current (not removed/re-indexed mid-fetch).
-					for (let i = 0; i < files.length; i++) await this.ctx.storage.put(`rifile:${job.key}:${i}`, files[i]);
-					const advanced = await this.saveJob(job, {
-						status: "indexing",
-						total: files.length,
-						done: 0,
-						queue: files.map((_, i) => i),
-						paths: files.map((f) => f.path),
-						skipped,
-						description: meta?.description ?? null,
-						language: meta?.language ?? null,
-						readme: findReadme(files),
-					});
-					// Superseded after staging → don't leave orphan staged files behind.
-					if (!advanced) {
-						const staged = await this.ctx.storage.list({ prefix: `rifile:${job.key}:` });
-						await deleteKeysBatched(this.ctx.storage, [...staged.keys()]);
-					}
-				}
-			} else if (job.status === "indexing") {
-				const queue = [...job.queue];
-				let processed = 0;
-				let failed = 0;
-				let chunks = 0;
-				// Process files until the chunk budget is hit (but always ≥1 file).
-				while (queue.length > 0 && (processed === 0 || chunks < REPO_CHUNK_BUDGET)) {
-					const idx = queue.shift() as number;
-					const file = await this.ctx.storage.get<{ path: string; content: string }>(`rifile:${job.key}:${idx}`);
-					if (file) {
-						const n = await engine.vectorizeRepoFile(job.key, file.path, file.content).then((v) => v, () => -1);
-						if (n < 0) failed++;
-						await this.ctx.storage.delete(`rifile:${job.key}:${idx}`);
-						if (n > 0) chunks += n;
-					}
-					processed++;
-				}
-				await this.saveJob(job, {
-					done: job.done + processed,
-					failed: (job.failed ?? 0) + failed,
-					queue,
-					status: queue.length === 0 ? "summarizing" : "indexing",
-				});
-			} else if (job.status === "summarizing") {
-				const overview = buildRepoOverview(ref, {
-					description: job.description,
-					language: job.language,
-					paths: job.paths,
-					readme: job.readme,
-				});
-				// Store the overview as a repo vector (sourceId `${key}::OVERVIEW`), not a
-				// KB doc — keeps it out of the 20-doc KB cap and auto-cleared with the repo.
-				await engine.vectorizeRepoFile(job.key, "OVERVIEW", overview).catch(() => 0);
-				await engine.logEvent("repo.indexed", undefined, { repo: job.key, files: job.total }).catch(() => undefined);
-				if (!(await this.saveJob(job, { status: "done", finishedAt: new Date().toISOString() }))) {
-					// Job was removed/re-indexed while summarizing — drop the overview vector we just wrote.
-					await engine.clearRepoVectors(job.key).catch(() => undefined);
-				}
-			}
-		} catch (err) {
-			await this.saveJob(job, {
-				status: "error",
-				error: err instanceof Error ? err.message : String(err),
-				finishedAt: new Date().toISOString(),
-			});
-		}
-		// Keep the chain alive for the next phase / next pending repo.
-		await this.ctx.storage.setAlarm(Date.now() + 50);
+		const didWork = await repoAlarmTick(this.ctx.storage, engine, this.repoFetchers());
+		if (didWork) await this.ctx.storage.setAlarm(Date.now() + 50);
 	}
 
 	// ── Collections ───────────────────────────────────────────────────────────
