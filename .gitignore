@@ -10,3 +10,9 @@ test-results/
 .vibe-check/
 .gstack/
 package-lock.json
+ios/.build/
+ios/build/
+android/.gradle/
+android/app/build/
+android/local.properties
+.playwright-mcp/

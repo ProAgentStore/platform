@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{width:1290px;height:2796px;background:#0a0a0a;color:#fafafa;font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",sans-serif;overflow:hidden}.top{height:560px;background:linear-gradient(135deg,#047857,#0f766e);padding:150px 88px 0}.top h1{font-size:92px;line-height:1.04;font-weight:800}.top p{font-size:38px;line-height:1.35;color:rgba(255,255,255,.82);margin-top:24px;max-width:860px}.phone{height:2236px;padding:70px 54px 0}.status{display:flex;justify-content:space-between;font-size:28px;font-weight:700;margin-bottom:38px}.title{font-size:58px;font-weight:760;margin-bottom:28px}.board{display:grid;grid-template-columns:1fr 1fr;gap:24px}.column{background:#111113;border:1px solid #27272a;border-radius:30px;padding:24px;min-height:450px}.column h2{font-size:29px;margin-bottom:20px;display:flex;justify-content:space-between}.count{color:#a1a1aa}.card{background:#1f1f23;border:1px solid #33333a;border-radius:22px;padding:24px;margin-bottom:18px}.card h3{font-size:26px;line-height:1.25;margin-bottom:12px}.card p{font-size:22px;color:#c7c7ce;line-height:1.35;margin-bottom:16px}.pill{display:inline-block;border-radius:999px;padding:8px 13px;font-size:18px;font-weight:750}.waiting{background:#fef3c7;color:#92400e}.active{background:#dbeafe;color:#1d4ed8}.done{background:#dcfce7;color:#166534}.failed{background:#fee2e2;color:#991b1b}.actions{position:absolute;left:54px;right:54px;bottom:70px;background:#18181b;border:1px solid #33333a;border-radius:30px;padding:30px;display:grid;grid-template-columns:1fr 1fr;gap:18px}.button{height:74px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:800}.primary{background:#7c3aed}.secondary{background:#27272a;color:#e5e7eb}
+</style>
+</head>
+<body>
+<section class="top"><h1>Review agent work on a board</h1><p>Approve, resume, cancel, and inspect runtime tasks without opening a web console.</p></section>
+<section class="phone">
+  <div class="status"><span>9:41</span><span>5G 100%</span></div>
+  <div class="title">Board</div>
+  <div class="board">
+    <div class="column"><h2>Active <span class="count">2</span></h2><div class="card"><h3>Prepare App Store archive</h3><p>Running signing checks and release build.</p><span class="pill active">running</span></div><div class="card"><h3>Refresh screenshots</h3><p>Rendering native app flows for review.</p><span class="pill active">running</span></div></div>
+    <div class="column"><h2>Waiting <span class="count">1</span></h2><div class="card"><h3>Approve listing copy</h3><p>Review description, keywords, support URLs, and privacy answers.</p><span class="pill waiting">approval</span></div></div>
+    <div class="column"><h2>Completed <span class="count">4</span></h2><div class="card"><h3>Native chat UI</h3><p>SwiftUI conversation screen verified.</p><span class="pill done">complete</span></div><div class="card"><h3>Keychain storage</h3><p>Session token migration complete.</p><span class="pill done">complete</span></div></div>
+    <div class="column"><h2>Failed <span class="count">1</span></h2><div class="card"><h3>Old web wrapper</h3><p>Rejected from scope. Native-only policy enforced.</p><span class="pill failed">blocked</span></div></div>
+  </div>
+  <div class="actions"><div class="button primary">Approve</div><div class="button secondary">Open Details</div></div>
+</section>
+</body>
+</html>

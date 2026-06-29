@@ -1,0 +1,89 @@
+name: Deploy to TestFlight
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-testflight
+  cancel-in-progress: true
+
+jobs:
+  build-and-upload:
+    name: Build & Upload to TestFlight
+    runs-on: macos-15
+    env:
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      XCODE_PROJECT: PAGS.xcodeproj
+      XCODE_SCHEME: PAGS
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XCODE_PATH=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: |
+          xcodegen generate
+
+      - name: Native-only guard
+        run: |
+          if grep -R -E "WKWebView|WebView|SFSafariViewController|SafariServices|UIViewRepresentable" ios/PAGS; then
+            echo "Native-only guard failed: web embedding API found."
+            exit 1
+          fi
+
+      - name: Install App Store Connect API Key
+        run: |
+          mkdir -p ~/private_keys
+          echo '${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}' > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Run unit tests
+        working-directory: ios
+        run: |
+          xcodebuild test \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -derivedDataPath .build/test \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Build Archive
+        working-directory: ios
+        run: |
+          xcodebuild archive \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -archivePath "$RUNNER_TEMP/PAGS.xcarchive" \
+            -destination "generic/platform=iOS" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            CODE_SIGNING_ALLOWED=YES \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            -skipPackagePluginValidation
+
+      - name: Export & Upload to TestFlight
+        working-directory: ios
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/PAGS.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Clean up
+        if: always()
+        run: rm -rf ~/private_keys

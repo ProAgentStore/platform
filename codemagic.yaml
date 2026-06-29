@@ -1,0 +1,138 @@
+workflows:
+  ios-release:
+    name: iOS Release
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: Codemagic CI
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: online.proagentstore.app
+      vars:
+        XCODE_SCHEME: PAGS
+        XCODE_PROJECT: PAGS.xcodeproj
+        BUNDLE_ID: online.proagentstore.app
+      xcode: latest
+    scripts:
+      - name: Prepare Xcode project
+        script: |
+          cd ios
+          if command -v xcodegen >/dev/null 2>&1; then
+            xcodegen generate
+          else
+            echo "xcodegen not available; using checked-in $XCODE_PROJECT"
+          fi
+      - name: Native-only guard
+        script: |
+          if grep -R -E "WKWebView|WebView|SFSafariViewController|SafariServices|UIViewRepresentable" ios/PAGS; then
+            echo "Native-only guard failed: web embedding API found."
+            exit 1
+          fi
+      - name: Set up code signing
+        script: |
+          xcode-project use-profiles
+      - name: Increment build number
+        script: |
+          cd ios
+          if [ -n "${APP_STORE_APP_ID:-}" ]; then
+            LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APP_ID" || echo 0)
+            agvtool new-version -all $((LATEST_BUILD + 1))
+          else
+            agvtool new-version -all "${CM_BUILD_NUMBER:-1}"
+          fi
+      - name: Build IPA
+        script: |
+          cd ios
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --archive-flags="-destination 'generic/platform=iOS'"
+    artifacts:
+      - ios/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
+        expire_build_submitted_for_review: true
+
+  ios-testflight:
+    name: iOS TestFlight
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: Codemagic CI
+    environment:
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: online.proagentstore.app
+      vars:
+        XCODE_SCHEME: PAGS
+        XCODE_PROJECT: PAGS.xcodeproj
+        BUNDLE_ID: online.proagentstore.app
+      xcode: latest
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+          include: true
+      cancel_previous_builds: true
+    scripts:
+      - name: Prepare Xcode project
+        script: |
+          cd ios
+          if command -v xcodegen >/dev/null 2>&1; then
+            xcodegen generate
+          else
+            echo "xcodegen not available; using checked-in $XCODE_PROJECT"
+          fi
+      - name: Native-only guard
+        script: |
+          if grep -R -E "WKWebView|WebView|SFSafariViewController|SafariServices|UIViewRepresentable" ios/PAGS; then
+            echo "Native-only guard failed: web embedding API found."
+            exit 1
+          fi
+      - name: Run unit tests
+        script: |
+          cd ios
+          xcodebuild test \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -derivedDataPath .build/test
+      - name: Static analyzer
+        script: |
+          cd ios
+          xcodebuild analyze \
+            -project "$XCODE_PROJECT" \
+            -scheme "$XCODE_SCHEME" \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/analyze
+      - name: Set up code signing
+        script: |
+          xcode-project use-profiles
+      - name: Increment build number
+        script: |
+          cd ios
+          if [ -n "${APP_STORE_APP_ID:-}" ]; then
+            LATEST_BUILD=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APP_ID" || echo 0)
+            agvtool new-version -all $((LATEST_BUILD + 1))
+          else
+            agvtool new-version -all "${CM_BUILD_NUMBER:-1}"
+          fi
+      - name: Build IPA
+        script: |
+          cd ios
+          xcode-project build-ipa \
+            --project "$XCODE_PROJECT" \
+            --scheme "$XCODE_SCHEME" \
+            --archive-flags="-destination 'generic/platform=iOS'"
+    artifacts:
+      - ios/build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
