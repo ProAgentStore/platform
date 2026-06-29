@@ -107,14 +107,22 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 
 	const deleteDoc = async (docId: string) => {
 		if (!confirm("Delete this document?")) return;
-		await api(`/v1/instances/${instanceId}/knowledge/${docId}`, { method: "DELETE" });
-		loadDocs();
+		try {
+			await api(`/v1/instances/${instanceId}/knowledge/${docId}`, { method: "DELETE" });
+			loadDocs();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
 	};
 
 	const deleteFile = async (fileId: string) => {
 		if (!confirm("Delete this file?")) return;
-		await api(`/v1/instances/${instanceId}/files/${fileId}`, { method: "DELETE" });
-		loadFiles();
+		try {
+			await api(`/v1/instances/${instanceId}/files/${fileId}`, { method: "DELETE" });
+			loadFiles();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
 	};
 
 	const saveInstructions = async () => {

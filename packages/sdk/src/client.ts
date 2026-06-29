@@ -29,6 +29,13 @@ export async function api<T = Record<string, unknown>>(
 	};
 	if (!noAuth && token) headers.Authorization = `Bearer ${token}`;
 	const res = await fetch(`${API}${path}`, { ...opts, headers });
+	// Session expired/invalid mid-use: clear the dead token and signal the app so it
+	// can re-show Login, instead of leaving every subsequent call to throw "HTTP 401"
+	// and components to render error text or silently empty.
+	if (res.status === 401 && !noAuth && token) {
+		setToken(null);
+		if (typeof window !== "undefined") window.dispatchEvent(new Event("pags:unauthorized"));
+	}
 	// Handle empty/non-JSON responses (e.g. 204 No Content, DELETE)
 	const text = await res.text();
 	let data: unknown;

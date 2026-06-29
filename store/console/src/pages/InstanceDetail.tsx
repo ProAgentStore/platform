@@ -15,12 +15,16 @@ export default function InstanceDetail() {
 	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
 	const navigate = useNavigate();
 	const [instance, setInstance] = useState<Instance | null>(null);
+	const surfaces = instance?.capabilities?.surfaces || [];
 
-	// Tab + session from URL — always sync with the route
+	// Tab + session from URL — always sync with the route. Gate the tab against the
+	// surfaces THIS instance actually exposes, so a deep link like /coding on a
+	// non-coding agent falls back to chat instead of mounting a broken surface.
 	const validTabs: Tab[] = SURFACE_IDS;
 	const splatParts = splat?.split("/") || [];
 	const urlTab = (splatParts[0] || "") as Tab;
-	const tab = validTabs.includes(urlTab) ? urlTab : "chat";
+	const allowedSurfaces = new Set(visibleSurfaces(surfaces).map((s) => s.id));
+	const tab = validTabs.includes(urlTab) && allowedSurfaces.has(urlTab) ? urlTab : "chat";
 	const urlSessionId = splatParts[1] || undefined; // e.g. coding/csess_xxx
 	const setTab = (t: Tab) => {
 		navigate(`/instances/${id}/${t}`, { replace: true });
@@ -119,9 +123,15 @@ export default function InstanceDetail() {
 				const el = chatRef.current;
 				const prevHeight = el?.scrollHeight || 0;
 				setMessages((prev) => [...older, ...prev]);
+				// Restore scroll position AND clear loadingMore in the SAME frame — if we
+				// cleared it synchronously here, React would batch it with the prepend so
+				// the bottom-scroll effect sees loadingMore=false and yanks to the newest
+				// message instead of staying where you were.
 				requestAnimationFrame(() => {
 					if (el) el.scrollTop = el.scrollHeight - prevHeight;
+					setLoadingMore(false);
 				});
+				return;
 			}
 		} catch {}
 		setLoadingMore(false);
@@ -280,7 +290,12 @@ export default function InstanceDetail() {
 		try {
 			await api(`/v1/instances/${id}/messages`, { method: "DELETE" });
 			setMessages([]);
-		} catch {}
+			// Otherwise "Load earlier messages" would re-fetch (with an empty cursor) and
+			// repopulate the chat we just cleared.
+			setHasMore(false);
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
 	};
 
 	const copyChat = async () => {
@@ -302,7 +317,6 @@ export default function InstanceDetail() {
 		await navigator.clipboard.writeText(raw);
 	};
 
-	const surfaces = instance?.capabilities?.surfaces || [];
 	const isApply = surfaces.includes("apply");
 	// Tabs are derived from the surface registry filtered by this instance's capabilities.
 	const tabDefs = useMemo(

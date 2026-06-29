@@ -115,8 +115,12 @@ export default function Profile() {
 
 	const removeKey = async (providerId: string, providerName: string) => {
 		if (!confirm(`Remove ${providerName} key?`)) return;
-		await api(`/v1/keys/${providerId}`, { method: "DELETE" });
-		loadKeys();
+		try {
+			await api(`/v1/keys/${providerId}`, { method: "DELETE" });
+			loadKeys();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
 	};
 
 	if (!user) return null;

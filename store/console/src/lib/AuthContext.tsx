@@ -38,6 +38,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 		})();
 	}, []);
 
+	// When any API call hits a 401 mid-session, the client clears the token and fires
+	// this event — drop the user so the app shows Login instead of wedging on errors.
+	useEffect(() => {
+		const onUnauth = () => setUser(null);
+		window.addEventListener("pags:unauthorized", onUnauth);
+		return () => window.removeEventListener("pags:unauthorized", onUnauth);
+	}, []);
+
 	const signOut = useCallback(() => {
 		doSignOut();
 		setUser(null);
