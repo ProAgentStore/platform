@@ -4,6 +4,13 @@ export interface Env {
 	AGENT: DurableObjectNamespace;
 	AI: Ai;
 	VECTORIZE: VectorizeIndex;
+	/**
+	 * Master switch for platform-paid internal AI (knowledge embeddings + conversation
+	 * summary, billed to the platform's Workers AI). "true" = allowed for all users;
+	 * anything else (default) = BYOK-only, the platform never spends tokens.
+	 * LLM chat is always BYOK regardless of this flag.
+	 */
+	PLATFORM_AI_ENABLED?: string;
 	/** Remote LLM brain that drives the runner through a job application. */
 	JOB_APPLY: Workflow;
 	/** Remote LLM brain that drives a local coding CLI toward an objective (AgentCoder port). */

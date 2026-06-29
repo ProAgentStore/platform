@@ -12,6 +12,11 @@ custom_domain = true
 [vars]
 GITHUB_CLIENT_ID = ""  # Set after creating GitHub OAuth app
 GITHUB_ORG = "ProAgentStore"
+# Master switch for platform-paid internal AI (knowledge embeddings + conversation
+# summary). "true" = ON for ALL users (platform pays). Currently ON because Serge is
+# the sole user. FLIP TO "false" (or remove) before onboarding real users → BYOK-only.
+# LLM chat is always BYOK regardless.
+PLATFORM_AI_ENABLED = "true"
 
 [[d1_databases]]
 binding = "DB"
