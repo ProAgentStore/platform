@@ -107,8 +107,14 @@ export class VoiceTts {
 				speechSynthesis.cancel();
 				const u = new SpeechSynthesisUtterance(text);
 				u.rate = Math.max(0.5, Math.min(3, this.speed / 100));
-				u.onend = () => resolve();
-				u.onerror = () => resolve();
+				// Some browsers (Chrome, intermittently) never fire onend — without a
+				// fallback the promise hangs, `speaking` stays true forever, and the
+				// conversation-mode echo guard would wedge the mic. Resolve no matter what.
+				let done = false;
+				const finish = () => { if (!done) { done = true; resolve(); } };
+				u.onend = finish;
+				u.onerror = finish;
+				setTimeout(finish, Math.min(60000, 3000 + text.length * 80));
 				speechSynthesis.speak(u);
 			} catch {
 				resolve();

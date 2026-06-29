@@ -188,10 +188,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [speakAndResume]);
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
-		// Ignore anything captured WHILE the agent is speaking — it's the agent's own
-		// voice echoing into the mic, not you. This is what stops the self-triggering
-		// feedback loop (agent hears itself → "replies" → loops).
-		if (ttsRef.current?.speaking) return;
+		// Echo guard (CONVERSATION MODE ONLY): ignore the agent's own voice bleeding
+		// into the mic during TTS — stops the self-triggering loop. Scoped to convo so
+		// push-to-talk is NEVER blocked by a stuck speaking flag (there you control the
+		// mic, so there's no feedback loop to guard against).
+		if (convoOnRef.current && ttsRef.current?.speaking) return;
 		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
 
 		// Conversation mode.
