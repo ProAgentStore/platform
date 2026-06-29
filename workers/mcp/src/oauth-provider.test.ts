@@ -62,8 +62,8 @@ function makeEnv(
 
 const ctx = {} as ExecutionContext;
 
-async function run(env: LoginEnv, url: string): Promise<Response> {
-	const res = await loginHandler.fetch?.(new Request(url), env, ctx);
+async function run(env: LoginEnv, url: string, init?: RequestInit): Promise<Response> {
+	const res = await loginHandler.fetch?.(new Request(url, init), env, ctx);
 	if (!res) throw new Error("Expected a Response from loginHandler");
 	return res;
 }
@@ -100,8 +100,11 @@ describe("loginHandler /authorize", () => {
 		);
 
 		expect(res.status).toBe(200);
-		// No legacy in-flight cookie.
-		expect(res.headers.get("Set-Cookie")).toBeNull();
+		// Browser-binding cookie ties this flow to the authenticating browser.
+		const setCookie = res.headers.get("Set-Cookie") ?? "";
+		expect(setCookie).toContain("pags_authnonce=");
+		expect(setCookie).toContain("HttpOnly");
+		expect(setCookie).toContain("SameSite=Lax");
 		const html = await res.text();
 		expect(html).toContain("Connect ProAgentStore MCP");
 		expect(html).toContain("Codex wants to use ProAgentStore MCP tools");
@@ -242,6 +245,7 @@ describe("loginHandler /oauth/callback", () => {
 		const res = await run(
 			env,
 			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&session=pags-session",
+			{ headers: { Cookie: "pags_authnonce=nonce-1" } },
 		);
 
 		fetchSpy.mockRestore();
@@ -273,12 +277,28 @@ describe("loginHandler /oauth/callback", () => {
 		const res = await run(
 			makeEnv({ OAUTH_KV: kv }),
 			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&session=bad-session",
+			{ headers: { Cookie: "pags_authnonce=nonce-1" } },
 		);
 
 		fetchSpy.mockRestore();
 
 		expect(res.status).toBe(400);
 		await expect(res.text()).resolves.toContain("invalid session");
+	});
+
+	it("rejects a callback whose nonce is not bound to the browser cookie", async () => {
+		const kv = makeKv({
+			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
+		});
+		// Attacker's nonce in the URL, but the victim's browser has no matching cookie
+		// (or a different one) — must be rejected before any session is honored.
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&session=pags-session",
+			{ headers: { Cookie: "pags_authnonce=someone-elses-nonce" } },
+		);
+		expect(res.status).toBe(400);
+		await expect(res.text()).resolves.toContain("not bound to this browser");
 	});
 
 	it("rejects a callback that is missing the session", async () => {
