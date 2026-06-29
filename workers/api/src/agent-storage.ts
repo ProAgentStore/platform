@@ -153,45 +153,35 @@ export class AgentStorageEngine {
 	/**
 	 * Vectorize one repository file. The file path is prepended to EVERY chunk so
 	 * RAG results carry their source location into the chat context (the LLM can
-	 * cite "this lives in src/foo.ts"). Embeds + upserts the whole file in one
-	 * batched call each — keeps repo ingestion within the Worker subrequest budget.
+	 * cite "this lives in src/foo.ts"). Embeds one chunk at a time — the same
+	 * proven path the knowledge base uses — then upserts the file's vectors in one
+	 * batch. (An earlier version embedded the whole file in a single batched
+	 * ai.run({text:[...]}) call; that silently returned nothing, so only the
+	 * overview doc made it into the index.)
 	 */
 	async vectorizeRepoFile(path: string, content: string): Promise<number> {
 		if (!this.vectorize || !this.ai) return 0;
-		const chunks = chunkText(content, CHUNK_SIZE).map((c) => `File: ${path}\n${c}`);
+		const chunks = chunkText(content, CHUNK_SIZE);
 		if (chunks.length === 0) return 0;
 
-		let stored = 0;
-		// bge accepts a bounded batch of inputs per call.
-		for (let start = 0; start < chunks.length; start += 90) {
-			const batch = chunks.slice(start, start + 90);
-			let embeddings: number[][];
-			try {
-				const result = await this.ai.run("@cf/baai/bge-base-en-v1.5", { text: batch });
-				embeddings = (result as { data: number[][] }).data || [];
-			} catch {
-				continue;
-			}
-			const vectors: VectorizeVector[] = [];
-			const metas: Array<{ key: string; meta: VectorMeta }> = [];
-			for (let i = 0; i < batch.length; i++) {
-				const embedding = embeddings[i];
-				if (!embedding) continue;
-				const chunkIndex = start + i;
-				const id = await shortId(this.agentId, "repo", path, chunkIndex);
-				vectors.push({
-					id,
-					values: embedding,
-					metadata: { agentId: this.agentId, sourceType: "repo", sourceId: path, chunkIndex, text: batch[i].slice(0, 1000) },
-				});
-				metas.push({ key: `vec:${id}`, meta: { id, agentId: this.agentId, sourceType: "repo", sourceId: path, chunkIndex, text: batch[i], createdAt: new Date().toISOString() } });
-			}
-			if (vectors.length === 0) continue;
-			await this.vectorize.upsert(vectors);
-			for (const { key, meta } of metas) await this.doStorage.put(key, meta);
-			stored += vectors.length;
+		const vectors: VectorizeVector[] = [];
+		const metas: Array<{ key: string; meta: VectorMeta }> = [];
+		for (let i = 0; i < chunks.length; i++) {
+			const labeled = `File: ${path}\n${chunks[i]}`;
+			const embedding = await this.embed(labeled);
+			if (!embedding) continue;
+			const id = await shortId(this.agentId, "repo", path, i);
+			vectors.push({
+				id,
+				values: embedding,
+				metadata: { agentId: this.agentId, sourceType: "repo", sourceId: path, chunkIndex: i, text: labeled.slice(0, 1000) },
+			});
+			metas.push({ key: `vec:${id}`, meta: { id, agentId: this.agentId, sourceType: "repo", sourceId: path, chunkIndex: i, text: labeled, createdAt: new Date().toISOString() } });
 		}
-		return stored;
+		if (vectors.length === 0) return 0;
+		for (let i = 0; i < vectors.length; i += 100) await this.vectorize.upsert(vectors.slice(i, i + 100));
+		for (const { key, meta } of metas) await this.doStorage.put(key, meta);
+		return vectors.length;
 	}
 
 	/** Drop every vector that came from repo ingestion (used on re-index/clear). */

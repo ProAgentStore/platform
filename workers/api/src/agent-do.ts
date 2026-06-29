@@ -59,7 +59,7 @@ const MAX_CONTEXT_MESSAGES = 10;
 const REPO_MAX_FILES = 300;
 const REPO_MAX_FILE_BYTES = 32_000;
 const REPO_MAX_TOTAL_BYTES = 4_000_000;
-const REPO_INDEX_BATCH = 8; // files vectorized per alarm tick
+const REPO_INDEX_BATCH = 4; // files vectorized per alarm tick (each chunk = 1 embed call)
 
 /** Background job that pulls a GitHub repo into the agent's vector store. */
 interface RepoIngestJob {
