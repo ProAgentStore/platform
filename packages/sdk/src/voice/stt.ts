@@ -29,6 +29,13 @@ export class VoiceStt {
 	private _mediaRec: MediaRecorder | null = null;
 	private _stream: MediaStream | null = null;
 
+	/** The recorder's mic stream (Whisper mode) so the audio meter can reuse it
+	 *  instead of opening a SECOND getUserMedia — a second capture mutes the recorder
+	 *  on iOS Safari, yielding silent audio and empty transcriptions. */
+	get stream(): MediaStream | null {
+		return this._stream;
+	}
+
 	constructor(provider: string, opts: SttOptions = {}) {
 		this.provider = provider;
 		this.apiKey = opts.apiKey || "";
@@ -55,12 +62,14 @@ export class VoiceStt {
 			// via _startBrowser's internal restart logic, and so the onend
 			// handler in the closure still points at the right object.
 		}
-		if (this._mediaRec) {
+		if (this._mediaRec && this._mediaRec.state !== "inactive") {
+			// Only stop the recorder — its onstop handler stops the tracks AFTER the
+			// final `dataavailable` fires. Tearing the tracks down here races that and
+			// can drop the recorded audio (→ empty blob → no transcription).
 			try {
 				this._mediaRec.stop();
 			} catch {}
-		}
-		if (this._stream) {
+		} else if (this._stream) {
 			for (const t of this._stream.getTracks()) t.stop();
 			this._stream = null;
 		}
@@ -131,7 +140,9 @@ export class VoiceStt {
 	private async _startRecording() {
 		try {
 			this._stream = await navigator.mediaDevices.getUserMedia({
-				audio: true,
+				// noiseSuppression keeps the silence floor low (so the VAD can detect a
+				// pause) and autoGainControl:false avoids boosting that floor between words.
+				audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
 			});
 			const chunks: Blob[] = [];
 			const mimeType =
@@ -178,7 +189,11 @@ export class VoiceStt {
 			return;
 		}
 		const form = new FormData();
-		form.append("file", blob, "audio.webm");
+		// Whisper picks the format from the filename extension, so it MUST match the
+		// recorded mimeType — Safari records audio/mp4, which under "audio.webm" gets
+		// rejected with a 400.
+		const ext = blob.type.includes("mp4") ? "mp4" : blob.type.includes("ogg") ? "ogg" : "webm";
+		form.append("file", blob, `audio.${ext}`);
 		form.append("model", "whisper-1");
 		form.append("language", this.language.slice(0, 2));
 		try {

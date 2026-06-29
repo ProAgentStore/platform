@@ -62,7 +62,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [audioLevel, setAudioLevel] = useState(0);
 	const sttRef = useRef<VoiceStt | null>(null);
 	const ttsRef = useRef<VoiceTts | null>(null);
-	const analyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; source: MediaStreamAudioSourceNode; stream: MediaStream; raf: number } | null>(null);
+	const analyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; source: MediaStreamAudioSourceNode; stream: MediaStream; ownsStream: boolean; raf: number } | null>(null);
 
 	// Flag: true while the agent is processing (mic should stay off)
 	const pausedForThinkingRef = useRef(false);
@@ -71,9 +71,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (analyserRef.current) {
 			cancelAnimationFrame(analyserRef.current.raf);
 			analyserRef.current.source.disconnect();
-			// Stop the mic tracks too — closing the AudioContext alone leaves the
-			// MediaStream (and the browser "mic in use" indicator) alive.
-			analyserRef.current.stream.getTracks().forEach((t) => t.stop());
+			// Stop the mic tracks only if WE opened the stream. In Whisper mode we reuse
+			// the recorder's stream — stopping it here would kill the recording.
+			if (analyserRef.current.ownsStream) {
+				analyserRef.current.stream.getTracks().forEach((t) => t.stop());
+			}
 			analyserRef.current.ctx.close().catch(() => {});
 			analyserRef.current = null;
 		}
@@ -89,7 +91,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// real, growing leak.
 		stopAudioMonitor();
 		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+			// Reuse the recognizer's existing mic stream if it has one (Whisper records
+			// via getUserMedia). Opening a SECOND getUserMedia mutes the recorder on iOS
+			// Safari → silent audio → empty transcription. Browser dictation exposes no
+			// stream, so we open our own there.
+			const shared = sttRef.current?.stream ?? null;
+			const ownsStream = !shared;
+			const stream = shared ?? (await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }));
 			const ctx = new AudioContext();
 			const source = ctx.createMediaStreamSource(stream);
 			const analyser = ctx.createAnalyser();
@@ -119,7 +127,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				}
 				analyserRef.current.raf = requestAnimationFrame(tick);
 			};
-			analyserRef.current = { ctx, analyser, source, stream, raf: requestAnimationFrame(tick) };
+			analyserRef.current = { ctx, analyser, source, stream, ownsStream, raf: requestAnimationFrame(tick) };
 		} catch {}
 	}, [stopAudioMonitor]);
 
@@ -279,7 +287,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 			onResult: handleResult,
 			onError: (err) => {
 				console.warn("[voice] STT error:", err);
-				if (!convoOnRef.current) { setMicOn(false); setInterim(""); }
+				if (err && err !== "no-speech") {
+					// Surface real errors (Whisper 401/400, mic denied) in the input —
+					// otherwise a swallowed failure is indistinguishable from "nothing
+					// happened", which is exactly how Whisper looked broken.
+					flushSync(() => setInterim(`⚠ ${err}`));
+					pausedForThinkingRef.current = false;
+				}
+				if (!convoOnRef.current) setMicOn(false);
 			},
 			onEnd: () => {
 				console.log("[voice] STT onEnd, convo:", convoOnRef.current, "paused:", pausedForThinkingRef.current);
