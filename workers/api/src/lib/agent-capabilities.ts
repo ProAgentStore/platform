@@ -82,26 +82,31 @@ function parseConfig(config: string | null | undefined): Record<string, unknown>
 export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 	const cfg = parseConfig(agent.config);
 	const declared = cfg.capabilities as Partial<AgentCapabilities> | undefined;
+	// Honor declared custom surfaces in EVERY path — even an agent that doesn't declare
+	// a `surfaces` array (e.g. a generic agent that only ships its own UI).
+	const customSurfaces = sanitizeCustomSurfaces((declared as Record<string, unknown> | undefined)?.customSurfaces);
+
 	if (declared && Array.isArray(declared.surfaces)) {
 		return {
 			surfaces: declared.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface)),
 			runtime: declared.runtime ?? null,
 			workflow: declared.workflow ?? null,
-			customSurfaces: sanitizeCustomSurfaces((declared as Record<string, unknown>).customSurfaces),
+			customSurfaces,
 		};
 	}
 
-	// Fallback derivation (pre-registry agents).
+	// Fallback derivation (pre-registry agents) — still attach any declared customSurfaces.
+	let base: AgentCapabilities;
 	if (agent.slug === "job-application-assistant") {
-		return { surfaces: ["apply"], runtime: "browser", workflow: "JOB_APPLY" };
+		base = { surfaces: ["apply"], runtime: "browser", workflow: "JOB_APPLY" };
+	} else if (agent.slug === "coder" || agent.category === "code") {
+		base = { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" };
+	} else if (agent.slug === "like4like-insurance-quotes" || agent.category === "insurance") {
+		base = { surfaces: ["insurance"], runtime: "browser", workflow: "INSURANCE_QUOTES" };
+	} else {
+		base = { ...EMPTY };
 	}
-	if (agent.slug === "coder" || agent.category === "code") {
-		return { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" };
-	}
-	if (agent.slug === "like4like-insurance-quotes" || agent.category === "insurance") {
-		return { surfaces: ["insurance"], runtime: "browser", workflow: "INSURANCE_QUOTES" };
-	}
-	return EMPTY;
+	return { ...base, customSurfaces };
 }
 
 /** True if the agent opts into a given console surface. */
