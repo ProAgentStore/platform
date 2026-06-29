@@ -47,6 +47,17 @@ export function mount(ctx) {
       .join("");
   }
 
+  async function ensureCollection() {
+    // Surfaces self-provision their storage — create the collection if it's not there
+    // yet (idempotent; ignore the error if it already exists).
+    try {
+      await sdk.api(`/v1/instances/${instanceId}/collections`, {
+        method: "POST",
+        body: JSON.stringify({ name: COLLECTION, fields: [{ name: "text", type: "string" }] }),
+      });
+    } catch { /* already exists */ }
+  }
+
   async function load() {
     try {
       const d = await sdk.api(base);
@@ -69,7 +80,7 @@ export function mount(ctx) {
     }
   });
 
-  load();
+  ensureCollection().then(() => { if (alive) load(); });
 
   // Cleanup — the console calls this on unmount and clears `el`.
   return () => { alive = false; };

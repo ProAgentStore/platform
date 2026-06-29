@@ -256,6 +256,17 @@ instanceStorageRoutes.get("/:id/collections", async (c) => {
 	return proxyDO(c, instance.id, "/collections");
 });
 
+/** Create a collection on this instance — lets agent surfaces self-provision storage. */
+instanceStorageRoutes.post("/:id/collections", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/collections", {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	});
+});
+
 instanceStorageRoutes.get("/:id/collections/:name/records", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
