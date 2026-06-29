@@ -32,8 +32,8 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 			// Is there an OpenAI key? Smart (AI) recognition silently falls back to
 			// browser dictation without one, so surface it explicitly.
 			try {
-				const k = await api<{ key?: string }>("/v1/keys/openai/reveal");
-				setHasOpenAiKey(!!(k.key && k.key.trim()));
+				const k = await api<{ providers?: Array<{ id: string; hasKey: boolean }> }>("/v1/keys/status");
+				setHasOpenAiKey(!!k.providers?.find((p) => p.id === "openai")?.hasKey);
 			} catch {
 				setHasOpenAiKey(false);
 			}

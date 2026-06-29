@@ -34,21 +34,25 @@ export async function getVoiceConfig(
 
 	const wantsOpenAiTts = String(vs.provider || "").includes("openai");
 	const wantsWhisperStt = String(vs.sttMode || "") === "openai";
-	let apiKey = "";
+	// We only need to know the key EXISTS — the actual requests go through the key
+	// proxy, which injects it server-side. So check presence via /status instead of
+	// revealing the raw key to the browser (which would be an exfiltration target).
+	let hasOpenAiKey = false;
 	if (wantsOpenAiTts || wantsWhisperStt) {
 		try {
-			const d = await api<{ key?: string }>("/v1/keys/openai/reveal");
-			apiKey = d.key || "";
+			const d = await api<{ providers?: Array<{ id: string; hasKey: boolean }> }>("/v1/keys/status");
+			hasOpenAiKey = !!d.providers?.find((p) => p.id === "openai")?.hasKey;
 		} catch {}
 	}
 
 	_cache = {
 		// Dictation (browser Web Speech) is real-time but error-prone with accents;
 		// "openai" records and transcribes with Whisper — far more accurate, but needs
-		// the user's OpenAI key (falls back to browser if the key is missing).
-		sttProvider: wantsWhisperStt && apiKey ? "openai" : "browser",
-		ttsProvider: wantsOpenAiTts && apiKey ? "openai" : "browser",
-		apiKey,
+		// the user's OpenAI key (falls back to browser if it's missing).
+		sttProvider: wantsWhisperStt && hasOpenAiKey ? "openai" : "browser",
+		ttsProvider: wantsOpenAiTts && hasOpenAiKey ? "openai" : "browser",
+		// The key never reaches the browser now — the proxy injects it server-side.
+		apiKey: "",
 		voice: (vs.openai as Record<string, unknown>)?.voice as string || "alloy",
 		speed: (vs.speed as number) || 100,
 		language: (vs.language as string) || "en-US",

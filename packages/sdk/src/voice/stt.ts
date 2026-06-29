@@ -186,10 +186,9 @@ export class VoiceStt {
 	}
 
 	private async _transcribeWhisper(blob: Blob) {
-		if (!this.apiKey) {
-			this.onError("OpenAI API key required for Whisper STT");
-			return;
-		}
+		// No apiKey check — the request goes through the platform proxy, which injects
+		// the key server-side; the browser never holds it. (provider==="openai" is only
+		// chosen when the key is confirmed present via /status.)
 		const form = new FormData();
 		// Whisper picks the format from the filename extension, so it MUST match the
 		// recorded mimeType — Safari records audio/mp4, which under "audio.webm" gets

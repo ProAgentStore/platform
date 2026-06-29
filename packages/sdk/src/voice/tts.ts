@@ -78,7 +78,7 @@ export class VoiceTts {
 		try {
 			while (this._processing && this._queue.length) {
 				const next = this._queue.shift() as string;
-				if (this.provider === "openai" && this.apiKey) await this._speakOpenAI(next);
+				if (this.provider === "openai") await this._speakOpenAI(next);
 				else await this._speakBrowser(next);
 			}
 		} finally {
