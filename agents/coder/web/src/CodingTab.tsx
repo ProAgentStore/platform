@@ -312,6 +312,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				voice.maybeSpeakResponse(reply);
 			} else {
 				setSummaryHistory((prev) => [...prev, { role: "assistant", content: "No response — the session may need to be started first." }]);
+				voice.maybeSpeakResponse(""); // no reply — still resume the mic so convo mode doesn't wedge
 			}
 			// If delegated, watch for the Engine to finish and auto-report
 			if (d.delegated) {
@@ -319,6 +320,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			}
 		} catch (e) {
 			setSummaryHistory((prev) => [...prev, { role: "assistant", content: `Error: ${e instanceof Error ? e.message : String(e)}` }]);
+			voice.maybeSpeakResponse(""); // failed send — resume the mic so convo mode doesn't wedge
 		}
 		setSummaryBusy(false);
 	};

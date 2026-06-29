@@ -193,6 +193,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// push-to-talk is NEVER blocked by a stuck speaking flag (there you control the
 		// mic, so there's no feedback loop to guard against).
 		if (convoOnRef.current && ttsRef.current?.speaking) return;
+		// Swallow late results while paused — e.g. a Whisper transcription that lands
+		// AFTER conversation mode was turned off would otherwise fall through to the
+		// push-to-talk path and send the turn the user just abandoned. (Cleared whenever
+		// a fresh mic session starts via toggleMic/toggleConvo.)
+		if (pausedForThinkingRef.current) return;
 		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
 
 		// Conversation mode.
@@ -362,6 +367,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Tear everything down on unmount — otherwise leaving the page mid-conversation
 	// keeps the recognizer listening, the TTS speaking, and the mic stream + rAF loop alive.
 	useEffect(() => () => {
+		// Mark convo off + paused so no onEnd/resume path reopens the mic after we're
+		// gone (would leak a getUserMedia stream + rAF loop on a dead component).
+		convoOnRef.current = false;
+		pausedForThinkingRef.current = true;
 		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 		sttRef.current?.stop();
 		ttsRef.current?.cancel();
