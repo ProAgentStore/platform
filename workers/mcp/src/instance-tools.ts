@@ -462,6 +462,59 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"ingest_repo",
+		"Index a GitHub repository into a read-only repo-chat instance (the 'repo-chat' agent). Pulls the whole repo into the instance's vector store so you can ask how the code works. Re-running re-indexes (replaces the prior index). Public repos work as-is; private repos need GitHub connected.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			repo_url: z.string().describe("GitHub repo URL or owner/repo, e.g. https://github.com/sindresorhus/slugify"),
+			branch: z.string().optional().describe("Optional branch (defaults to the repo's default branch)"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, repo_url, branch, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, repo_url, branch };
+			const denied = await requirePermission(safetyFor(token), "write", "ingest_repo", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "ingest_repo", "index a GitHub repository into a repo-chat instance", input, {
+					endpoint: `/v1/instances/${instance_id}/ingest-repo`,
+					repo_url,
+					branch,
+				});
+			}
+			const data = (await authedCall(
+				`/v1/instances/${instance_id}/ingest-repo`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ repoUrl: repo_url, branch }) },
+				env,
+			)) as { status?: string; repo?: string; error?: string };
+			if (data.status) await audit(safetyFor(token), { tool: "ingest_repo", action: "completed", input: { instance_id, repo_url, branch }, result: { status: data.status } });
+			return text(
+				data.status
+					? `Indexing started for ${data.repo || repo_url} (status: ${data.status}). Poll ingest_repo_status until it reads "done".`
+					: `Error: ${data.error}`,
+			);
+		},
+	);
+
+	server.tool(
+		"ingest_repo_status",
+		"Check progress of a repo indexing job on a repo-chat instance (status: none | fetching | indexing | summarizing | done | error, with files indexed).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/ingest-repo/status`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"list_instance_knowledge",
 		"List user-specific knowledge documents in your private subscribed instance.",
 		{
