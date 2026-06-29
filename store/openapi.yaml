@@ -432,7 +432,7 @@ paths:
   /v1/auth/config:
     get:
       summary: Get OAuth config
-      description: Returns the OAuth URL and app ID for starting the GitHub OAuth flow via FAS.
+      description: Returns ProAgentStore's own OAuth start URLs (Google + GitHub) and app ID for the console sign-in flow.
       operationId: getAuthConfig
       security: []
       tags: [Auth]
