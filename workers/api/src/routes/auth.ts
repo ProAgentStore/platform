@@ -281,7 +281,11 @@ authRoutes.put("/me", async (c) => {
 		try {
 			const u = new URL(body.slack_webhook);
 			if (u.protocol !== "https:") return c.json({ error: "Slack webhook must be https" }, 400);
-			if (!u.hostname.endsWith("slack.com") && !u.hostname.endsWith("discord.com"))
+			// Exact host or a dot-prefixed subdomain — a bare endsWith("slack.com") would also
+			// match attacker-controlled domains like evilslack.com (allow-list / SSRF bypass).
+			const h = u.hostname.toLowerCase();
+			const allowedHost = (d: string) => h === d || h.endsWith(`.${d}`);
+			if (!allowedHost("slack.com") && !allowedHost("discord.com"))
 				return c.json({ error: "Webhook must be a Slack or Discord URL" }, 400);
 		} catch { return c.json({ error: "Invalid webhook URL" }, 400); }
 	}

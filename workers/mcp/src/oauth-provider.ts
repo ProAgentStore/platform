@@ -156,9 +156,26 @@ async function authorize(request: Request, env: LoginEnv): Promise<Response> {
 		{
 			headers: {
 				"Content-Type": "text/html; charset=utf-8",
+				// Bind this authorization request to THIS browser: the callback must present
+				// the same nonce back in a cookie. Without it, an attacker can run /authorize
+				// themselves and lure a victim through /authorize/continue with the attacker's
+				// nonce, stapling the victim's session onto the attacker's request (login CSRF
+				// / authorization-code injection). SameSite=Lax so it survives the FAS round-trip.
+				"Set-Cookie": `pags_authnonce=${nonce}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=600`,
 			},
 		},
 	);
+}
+
+/** Read a single cookie value from the request's Cookie header. */
+function readCookie(request: Request, name: string): string | null {
+	const header = request.headers.get("Cookie");
+	if (!header) return null;
+	for (const part of header.split(/;\s*/)) {
+		const eq = part.indexOf("=");
+		if (eq > 0 && part.slice(0, eq) === name) return part.slice(eq + 1);
+	}
+	return null;
 }
 
 /** Redirect the user to the platform login start endpoint for the chosen provider. */
@@ -244,6 +261,14 @@ async function oauthCallback(
 
 	if (!nonce || !session) {
 		return new Response("missing nonce or session", { status: 400 });
+	}
+
+	// Browser binding: the nonce must match the cookie set at /authorize, proving this is
+	// the same browser that started the flow. Blocks login-CSRF / code injection where a
+	// victim is lured through an attacker-initiated authorization request.
+	const cookieNonce = readCookie(request, "pags_authnonce");
+	if (!cookieNonce || cookieNonce !== nonce) {
+		return new Response("authorization flow not bound to this browser", { status: 400 });
 	}
 
 	const reqRaw = await env.OAUTH_KV?.get(`authreq:${nonce}`);
