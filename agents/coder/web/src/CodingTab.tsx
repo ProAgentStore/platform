@@ -277,7 +277,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				// Engine finished — get a completion summary
 				const summary = await api<{ reply?: string }>(`/v1/instances/${instanceId}/coding/sessions/${sid}/explain`, {
 					method: "POST",
-					body: JSON.stringify({ finished: true }),
+					// persist:false — the durable server watch workflow already saves this
+					// summary; we only need it here to show + speak (avoids a duplicate bubble).
+					body: JSON.stringify({ finished: true, persist: false }),
 				});
 				if (summary.reply) {
 					setSummaryHistory((prev) => [...prev, { role: "assistant", content: summary.reply! }]);
@@ -433,12 +435,16 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		if (!openSession) return;
 		try {
 			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/timeline?full=1`);
-			const entries = (d.chat || d.timeline || []).map((e) => ({
-				type: e.type,
-				role: e.role,
-				content: e.content || e.text || "",
-				seq: e.seq,
-			}));
+			// Copy only the last 10 messages (history is kept server-side; the clipboard
+			// just gets the recent context).
+			const entries = (d.chat || d.timeline || [])
+				.slice(-10)
+				.map((e) => ({
+					type: e.type,
+					role: e.role,
+					content: e.content || e.text || "",
+					seq: e.seq,
+				}));
 			await navigator.clipboard.writeText(JSON.stringify({ sessionId: openSession.id, count: entries.length, timeline: entries }, null, 2));
 		} catch (e) {
 			alert("Copy failed: " + (e instanceof Error ? e.message : String(e)));

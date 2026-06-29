@@ -457,9 +457,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/system-message", asyn
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
-	const body = (await c.req.json().catch(() => ({}))) as { question?: string; finished?: boolean };
+	const body = (await c.req.json().catch(() => ({}))) as { question?: string; finished?: boolean; persist?: boolean };
 	const question = typeof body.question === "string" ? body.question.trim() : "";
 	const finished = body.finished === true;
+	// The client's finish-watcher passes persist:false — the durable server watch
+	// workflow already persists the finish summary, so persisting here too would
+	// show a DUPLICATE bubble in the thread.
+	const persist = body.persist !== false;
 
 	// Capture the current terminal.
 	const conn = await getRunnerConn(c.env, instanceId, uid);
@@ -494,7 +498,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	// top of the thread as stale, confusing history. Show it live, but only save real
 	// replies (an answer to a question, or a summary of an actual live terminal).
 	const offlineAutoSummary = !question && !pane.trim();
-	if (!offlineAutoSummary) {
+	if (!offlineAutoSummary && persist) {
 		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply });
 	}
 	return c.json({ reply });
@@ -510,6 +514,7 @@ async function driveClaude(
 	uid: string,
 	sessionId: string,
 	instruction: string,
+	summary?: string,
 ): Promise<{ delegated: boolean; reply: string }> {
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	if (!conn) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
@@ -534,7 +539,9 @@ async function driveClaude(
 		id: watchId,
 		params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", mode: "watch", watchId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
 	}).catch(() => undefined);
-	const reply = `On it — I asked Claude to: ${instruction}`;
+	// Show the user a plain-language summary, NOT the raw (often long/technical)
+	// instruction we sent to the CLI.
+	const reply = summary ? `On it — ${summary}` : "On it — working on that now.";
 	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply }).catch(() => undefined);
 	return { delegated: true, reply };
 }
@@ -582,7 +589,10 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 			function: {
 				name: "drive_claude",
 				description: "Delegate an action to Claude Code running in the repo (it edits files, runs commands). Use for any request to DO work.",
-				parameters: { type: "object", properties: { instruction: { type: "string", description: "A single clear instruction for Claude Code." } }, required: ["instruction"] },
+				parameters: { type: "object", properties: {
+					instruction: { type: "string", description: "A single clear instruction for Claude Code — technical detail (file names, commands) is fine HERE; the CLI needs it." },
+					summary: { type: "string", description: "A plain, NON-TECHNICAL one-line summary of what you asked, for the user. No file names, commands, or code. e.g. 'swapping the food field for a milk-type picker'." },
+				}, required: ["instruction", "summary"] },
 			},
 		},
 	];
@@ -593,7 +603,8 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	}).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
 	const call = res.tool_calls?.find((t) => t.name === "drive_claude");
 	const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";
-	if (instruction) return c.json(await driveClaude(c, instanceId, uid, sessionId, instruction));
+	const summary = call && typeof call.arguments?.summary === "string" ? (call.arguments.summary as string).trim() : "";
+	if (instruction) return c.json(await driveClaude(c, instanceId, uid, sessionId, instruction, summary || undefined));
 	const reply = res.response || "(no response)";
 	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply }).catch(() => undefined);
 	return c.json({ delegated: false, reply });
