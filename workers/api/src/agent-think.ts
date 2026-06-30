@@ -8,6 +8,7 @@ import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/to
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
+import { lastTerminal } from "./lib/coding-timeline.js";
 import type { Env } from "./types.js";
 
 export async function runAgentThink(opts: {
@@ -80,14 +81,27 @@ export async function runAgentThink(opts: {
 		}
 	} catch {}
 
-	// Coding repos & sessions context (Coder instances)
+	// Coding repos & sessions context (Coder instances). Inject the live registry
+	// so the Chat tab can actually answer "what's happening in repo X" instead of
+	// the old "I don't see any repos" — and flip to the technical style below,
+	// since this is a developer-facing agent, not the plain-speech default.
+	let hasCodingContext = false;
 	if (userId && state.agentId) {
 		try {
 			const repos = await listRepos(env, state.agentId, userId);
 			if (repos.length > 0) {
+				hasCodingContext = true;
 				systemPrompt += "\n\n## Attached Repositories\n";
 				for (const r of repos) {
-					systemPrompt += `- ${r.name}${r.githubRepo ? ` (${r.githubRepo})` : ""}\n`;
+					const status =
+						r.cloneStatus === "ready"
+							? "ready"
+							: r.cloneStatus === "cloning"
+								? "cloning…"
+								: r.cloneStatus === "error"
+									? `clone error${r.cloneError ? `: ${r.cloneError}` : ""}`
+									: r.cloneStatus;
+					systemPrompt += `- ${r.name}${r.githubRepo ? ` (${r.githubRepo})` : ""} — ${status}\n`;
 				}
 				const sessions = await listSessions(env, state.agentId, userId);
 				const active = sessions.filter((s) => s.status === "active");
@@ -96,8 +110,18 @@ export async function runAgentThink(opts: {
 					for (const s of active) {
 						const repo = repos.find((r) => r.id === s.repoId);
 						systemPrompt += `- ${repo?.name || s.repoId} — engine: ${s.launchCommand || s.clientType || "claude"}\n`;
+						// The latest terminal snapshot is the cheapest "what's happening"
+						// signal — what the engine is doing right now in that repo.
+						const tail = await lastTerminal(env, s.id).catch(() => null);
+						const snippet = tail?.replace(/\s+/g, " ").trim().slice(-400);
+						if (snippet) systemPrompt += `  Latest terminal: ${snippet}\n`;
 					}
+				} else {
+					systemPrompt +=
+						"\nNo active coding session right now. To work on a repo, start a session in the Coding tab (the local runner must be online — `pags up`).\n";
 				}
+				systemPrompt +=
+					"\nAnswer questions about these repositories and sessions concretely. If asked what's happening, summarize the latest terminal/session state above. You can explain and summarize from here, but actual coding runs in the Coding tab — you don't drive the engine or run shell commands from this chat.";
 			}
 		} catch {}
 	}
@@ -108,11 +132,13 @@ export async function runAgentThink(opts: {
 			"\n\nYou have tools available. Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
 	}
 
-	// A "technical" response style (e.g. the read-only repo-chat explainer) needs
-	// the opposite of the default plain-speech rules — it must be free to cite real
-	// files, functions, and code. Everything else keeps the concise, read-aloud
-	// voice tuned for non-technical users.
-	const technical = state.guardrails?.responseStyle === "technical";
+	// A "technical" response style needs the opposite of the default plain-speech
+	// rules — it must be free to cite real files, functions, and code. Two cases:
+	// the explicit repo-chat explainer (responseStyle === "technical", read-only),
+	// and any coding-capable instance (it has attached repos). Everything else
+	// keeps the concise, read-aloud voice tuned for non-technical users.
+	const repoChatStyle = state.guardrails?.responseStyle === "technical";
+	const technical = repoChatStyle || hasCodingContext;
 	const styleReminder = technical
 		? "Answer accurately and concretely, grounded in the code above. Lead with a plain-English explanation; cite real file paths/functions and add short snippets only when they help."
 		: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.";
@@ -123,7 +149,9 @@ export async function runAgentThink(opts: {
 			"\n\nSTYLE: You are a precise code explainer helping a developer understand a repository." +
 			"\n- Be accurate and concrete. Reference real file paths, functions, and types from the indexed code above when relevant." +
 			"\n- Ground every claim about how the code works in the retrieved context. If something isn't in your indexed knowledge, say you didn't find it rather than guessing." +
-			"\n- You are READ-ONLY: you explain and analyze the repository, you never modify it and you have no ability to change code." +
+			(repoChatStyle
+				? "\n- You are READ-ONLY: you explain and analyze the repository, you never modify it and you have no ability to change code."
+				: "\n- From this chat you explain, summarize, and answer — you do not edit code or run commands here; the coding engine in the Coding tab does that.") +
 			"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
 	} else {
 		systemPrompt +=
