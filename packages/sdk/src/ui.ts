@@ -70,14 +70,20 @@ export function renderMd(raw: string): string {
 	// Blockquotes
 	s = s.replace(/^>\s+(.+)$/gm, "<blockquote>$1</blockquote>");
 
-	// Links
+	// Links. esc() already ran on the whole string, so <, >, & are entities — but
+	// NOT the quote characters, and the markdown-link URL group accepts spaces and
+	// quotes. Without neutralizing them, `[x](https://a/" onmouseover=...)` breaks
+	// out of the href attribute and injects an event handler (stored XSS that can
+	// exfiltrate the viewer's session token / BYOK key). Encode the quotes in the
+	// href value; encoding only " and ' avoids double-escaping the already-entitied &.
+	const hrefSafe = (u: string) => u.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 	s = s.replace(
 		/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g,
-		'<a href="$2" target="_blank" rel="noopener">$1</a>',
+		(_, text, url) => `<a href="${hrefSafe(url)}" target="_blank" rel="noopener">${text}</a>`,
 	);
 	s = s.replace(
 		/(?<![="'/])https?:\/\/[^\s<)"']+/g,
-		(u) => `<a href="${u}" target="_blank" rel="noopener">${u}</a>`,
+		(u) => `<a href="${hrefSafe(u)}" target="_blank" rel="noopener">${u}</a>`,
 	);
 
 	// Process lists

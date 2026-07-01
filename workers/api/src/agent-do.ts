@@ -47,6 +47,7 @@ import {
 	UserAiCredentialsError,
 	UserAiProviderError,
 } from "./lib/user-ai.js";
+import { checkPublicHttpsUrl } from "./lib/ssrf.js";
 import type { Env } from "./types.js";
 
 export type {
@@ -127,7 +128,7 @@ export class AgentDO extends DurableObject<Env> {
 
 		// WebSocket upgrade for real-time chat
 		if (request.headers.get("Upgrade") === "websocket") {
-			return this.handleWebSocket();
+			return this.handleWebSocket(request);
 		}
 
 		try {
@@ -395,11 +396,17 @@ export class AgentDO extends DurableObject<Env> {
 
 	// ── WebSocket ──────────────────────────────────────────────────────────────
 
-	private handleWebSocket(): Response {
+	private handleWebSocket(request: Request): Response {
 		const pair = new WebSocketPair();
 		const [client, server] = [pair[0], pair[1]];
 
+		// Pin the server-verified user id (set by the authenticated /ws route) to
+		// this socket. webSocketMessage reads it back instead of trusting any
+		// client-supplied userId — which is what stops cross-user key abuse.
+		const userId = new URL(request.url).searchParams.get("user_id") || undefined;
+
 		this.ctx.acceptWebSocket(server);
+		if (userId) server.serializeAttachment({ userId });
 
 		return new Response(null, { status: 101, webSocket: client });
 	}
@@ -416,13 +423,17 @@ export class AgentDO extends DurableObject<Env> {
 		try {
 			const parsed = JSON.parse(data);
 			if (parsed.type === "chat" && parsed.message) {
-				// Handle chat via WebSocket — reuse the same logic
+				// Use the server-verified uid pinned to the socket at accept time —
+				// NEVER parsed.userId (a client could otherwise name any victim's uid
+				// and run inference on their stored API key).
+				const attach = ws.deserializeAttachment() as { userId?: string } | null;
+				const userId = attach?.userId;
 				const request = new Request("https://internal/chat", {
 					method: "POST",
 					body: JSON.stringify({
 						message: parsed.message,
 						channel: "chat",
-						userId: parsed.userId,
+						userId,
 					}),
 				});
 				await this.handleChat(request);
@@ -744,14 +755,9 @@ export class AgentDO extends DurableObject<Env> {
 		}>();
 		if (!url) return json({ error: "url required" }, 400);
 
-		// SSRF protection
-		try {
-			const parsed = new URL(url);
-			if (parsed.protocol !== "https:") return json({ error: "Only https URLs allowed" }, 400);
-			const host = parsed.hostname.toLowerCase();
-			if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "[::1]" || host.endsWith(".internal") || host.endsWith(".local") || /^10\.\d+\.\d+\.\d+$/.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host))
-				return json({ error: "Cannot fetch internal/private URLs" }, 400);
-		} catch { return json({ error: "Invalid URL" }, 400); }
+		// SSRF protection: https-only + reject non-public hosts (shared guard).
+		const check = checkPublicHttpsUrl(url);
+		if (!check.ok) return json({ error: check.reason }, 400);
 
 		try {
 			const res = await fetch(url, {

@@ -47,6 +47,15 @@ const HTML_HEADERS: Record<string, string> = {
 	"X-Content-Type-Options": "nosniff",
 	"Referrer-Policy": "strict-origin-when-cross-origin",
 	"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+	// Defense-in-depth against injected markup. These directives don't touch
+	// script-src, so they can't break the store's inline bootstrap scripts, but
+	// they close several exfiltration/hijack channels an XSS would otherwise use:
+	// no <object>/<embed>, no <base> rewrite, no framing (clickjacking), and
+	// form submissions can't be redirected off-origin. A full script-src CSP
+	// without 'unsafe-inline' needs per-script nonces (the store pages carry
+	// inline <script>), tracked as a follow-up.
+	"Content-Security-Policy":
+		"object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
 };
 
 const JS_HEADERS: Record<string, string> = {

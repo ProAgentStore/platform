@@ -677,6 +677,11 @@ export function registerInstanceTools(
 			const inst = await findInstanceForAgent(env, sessionToken, instance_id);
 			const id = inst?.id || instance_id;
 			const maxIter = max_iterations ?? 10;
+			// An autonomous loop drives chat + engine for up to 50 iterations —
+			// runtime-scoped, gated by MCP_READ_ONLY, and audited (was ungated).
+			const denied = await requirePermission(safetyFor(token), "runtime", "coding_loop_start", { instance_id: id, max_iterations: maxIter });
+			if (denied) return denied;
+			await audit(safetyFor(token), { tool: "coding_loop_start", action: "completed", input: { instance_id: id, objectiveBytes: new TextEncoder().encode(objective).length, maxIterations: maxIter } });
 
 			// Send the objective as the first message
 			const chatRes = (await authedCall(

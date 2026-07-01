@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
 
 export const chatRoutes = new Hono<{ Bindings: Env }>();
@@ -69,19 +70,35 @@ chatRoutes.get("/:id/ws", async (c) => {
 		throw new HttpError(426, "Expected WebSocket upgrade");
 	}
 
+	// SECURITY: authenticate the upgrade. WS clients can't reliably send an
+	// Authorization header, so the session token comes as ?token= (same as the
+	// relay). Without this the DO trusted a client-supplied `userId` and would
+	// run inference on ANY user's stored API key. Return plain-HTTP errors — WS
+	// clients don't surface JSON error bodies.
+	const token = c.req.query("token");
+	if (!token) return new Response("Missing token", { status: 401 });
+	const session = await verifySession(token, c.env.SESSION_SIGNING_KEY);
+	if (!session) return new Response("Invalid or expired token", { status: 401 });
+
 	const id = c.req.param("id");
 	const agent = await c.env.DB.prepare(
-		"SELECT id FROM agents WHERE (id = ?1 OR slug = ?1)",
+		"SELECT id, owner_id FROM agents WHERE (id = ?1 OR slug = ?1)",
 	)
 		.bind(id)
-		.first<{ id: string }>();
+		.first<{ id: string; owner_id: string }>();
 	if (!agent) throw new HttpError(404, "Agent not found");
+	if (agent.owner_id !== session.uid && !session.roles.includes("admin")) {
+		return new Response("Forbidden", { status: 403 });
+	}
 
 	const doId = c.env.AGENT.idFromName(agent.id);
 	const stub = c.env.AGENT.get(doId);
 
-	// Forward the WebSocket upgrade to the DO
-	return stub.fetch(c.req.raw);
+	// Forward the upgrade with the SERVER-verified uid pinned in the URL; the DO
+	// binds it to the socket and ignores any client-supplied userId.
+	const doUrl = new URL(c.req.url);
+	doUrl.searchParams.set("user_id", session.uid);
+	return stub.fetch(new Request(doUrl.toString(), c.req.raw));
 });
 
 /** Get message history. */

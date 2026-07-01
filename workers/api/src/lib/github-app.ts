@@ -101,6 +101,13 @@ export async function getInstallationToken(env: Env, userId: string, installatio
 		.bind(userId, installationId)
 		.first<{ id: string; token_ciphertext: ArrayBuffer | null; token_dek: ArrayBuffer | null; token_iv: ArrayBuffer | null; token_expires_at: string | null }>();
 
+	// SECURITY: never mint for an installation this user has no *verified* binding
+	// to. The binding row is created only by authorizeInstallation() after we
+	// confirm the user controls the account. Without this guard, any signed-in
+	// user could mint a token for ANY installationId (the App JWT will happily
+	// issue one) and read every installed org's private repos — a cross-tenant IDOR.
+	if (!row) return null;
+
 	const fresh = row?.token_expires_at && new Date(row.token_expires_at).getTime() - Date.now() > 5 * 60 * 1000;
 	if (fresh && row?.token_ciphertext && row.token_dek && row.token_iv && env.KEY_ENCRYPTION_KEY) {
 		try {
@@ -190,6 +197,76 @@ export async function installationTokenForOwner(env: Env, userId: string, owner:
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Does `githubLogin` control this installation's account? A personal (User)
+ * install is owned iff the login matches. An Organization install is owned iff
+ * the user is an *active* member — checked with a throwaway installation token
+ * (server-side, read-only). No login, no match, or an unverifiable org all fail
+ * closed. This is the ownership proof that gates binding creation.
+ */
+async function verifyUserOwnsInstallation(env: Env, githubLogin: string | null, inst: GhInstallation): Promise<boolean> {
+	if (!githubLogin) return false;
+	const type = (inst.account.type || "User").toLowerCase();
+	if (type !== "organization") {
+		return inst.account.login.toLowerCase() === githubLogin.toLowerCase();
+	}
+	// Org install: verify active membership via a short-lived installation token.
+	try {
+		const minted = await mintInstallationToken(env, inst.id);
+		if (!minted) return false;
+		const res = await fetch(
+			`https://api.github.com/orgs/${encodeURIComponent(inst.account.login)}/memberships/${encodeURIComponent(githubLogin)}`,
+			{ headers: GH_HEADERS(minted.token, "token") },
+		);
+		if (!res.ok) return false;
+		const body = (await res.json()) as { state?: string };
+		return body.state === "active";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Verify the user controls `installationId`, and only then create the binding
+ * (mint + cache its token). This is the ONLY path that may create a
+ * github_installations row; getInstallationToken() refuses to mint without one.
+ * Returns a reason on failure so the callback can surface it.
+ */
+export async function authorizeInstallation(
+	env: Env,
+	userId: string,
+	githubLogin: string | null,
+	installationId: number,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+	if (!githubAppConfigured(env)) return { ok: false, reason: "not_configured" };
+	const installs = await listInstallations(env).catch(() => [] as GhInstallation[]);
+	const match = installs.find((i) => i.id === installationId);
+	if (!match) return { ok: false, reason: "unknown_installation" };
+	if (!(await verifyUserOwnsInstallation(env, githubLogin, match))) {
+		return { ok: false, reason: "not_authorized" };
+	}
+	const minted = await mintInstallationToken(env, installationId);
+	if (!minted) return { ok: false, reason: "mint_failed" };
+	await cacheInstallationToken(env, userId, installationId, minted.token, minted.expiresAt, {
+		login: match.account.login,
+		type: match.account.type,
+	});
+	return { ok: true };
+}
+
+/** The installations this user has a *verified* binding to (from our DB, not the global App list). */
+export async function listUserInstallations(
+	env: Env,
+	userId: string,
+): Promise<{ id: number; account: string; type: string }[]> {
+	const { results } = await env.DB.prepare(
+		"SELECT installation_id, account_login, account_type FROM github_installations WHERE user_id = ?1 ORDER BY updated_at DESC",
+	)
+		.bind(userId)
+		.all<{ installation_id: number; account_login: string; account_type: string }>();
+	return (results ?? []).map((r) => ({ id: r.installation_id, account: r.account_login, type: r.account_type }));
 }
 
 /** The App's slug (for building install URLs) — falls back to the numeric App id. */

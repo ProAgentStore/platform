@@ -2,11 +2,10 @@ import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import {
 	appIdentifier,
-	cacheInstallationToken,
-	getInstallationToken,
+	authorizeInstallation,
 	githubAppConfigured,
 	listInstallationRepos,
-	listInstallations,
+	listUserInstallations,
 } from "../lib/github-app.js";
 import type { Env } from "../types.js";
 
@@ -34,9 +33,12 @@ githubRoutes.get("/install-url", async (c) => {
 /** The App's installations (the orgs/users that granted access). */
 githubRoutes.get("/installations", async (c) => {
 	if (!githubAppConfigured(c.env)) return c.json({ error: "GitHub App not configured" }, 503);
-	await requireUser(c);
-	const installs = await listInstallations(c.env);
-	return c.json({ installations: installs.map((i) => ({ id: i.id, account: i.account.login, type: i.account.type })) });
+	const session = await requireUser(c);
+	// Only the installations this user has a VERIFIED binding to — never the
+	// global App installation list (that enumeration was the recon step of the
+	// cross-tenant IDOR).
+	const installs = await listUserInstallations(c.env, session.uid);
+	return c.json({ installations: installs });
 });
 
 /** The repos an installation can access (for importing into a workspace). */
@@ -68,15 +70,15 @@ githubRoutes.get("/callback", async (c) => {
 	const session = await requireUser(c);
 	const installationId = Number(c.req.query("installation_id"));
 	if (!Number.isFinite(installationId)) return c.json({ error: "missing installation_id" }, 400);
-	const installs = await listInstallations(c.env).catch(() => []);
-	const match = installs.find((i) => i.id === installationId);
-	// Minting the token here both validates the install and warms the cache.
-	const token = await getInstallationToken(c.env, session.uid, installationId);
-	if (token && match) {
-		await cacheInstallationToken(c.env, session.uid, installationId, token, new Date(Date.now() + 3600_000).toISOString(), {
-			login: match.account.login,
-			type: match.account.type,
-		}).catch(() => undefined);
-	}
-	return c.json({ ok: Boolean(token), installationId });
+	// SECURITY: verify the user actually controls this installation's account
+	// before binding it (personal → login match; org → active membership). The
+	// installation_id query param is attacker-controlled, so it must be proven —
+	// not trusted — before we mint/cache a token for it. This is the only path
+	// that creates a github_installations row.
+	const user = await c.env.DB.prepare("SELECT github_login FROM users WHERE id = ?1")
+		.bind(session.uid)
+		.first<{ github_login: string | null }>();
+	const result = await authorizeInstallation(c.env, session.uid, user?.github_login ?? null, installationId);
+	if (!result.ok) return c.json({ ok: false, error: result.reason, installationId }, 403);
+	return c.json({ ok: true, installationId });
 });

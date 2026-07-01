@@ -780,11 +780,17 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			async ({ instance_id, session_id, message, token }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
+				// SECURITY: typing into the CLI is code execution on the user's machine —
+				// the most powerful action here. Gate it like every other mutating tool
+				// (scope + MCP_READ_ONLY) and audit it; it was previously ungated.
+				const denied = await requirePermission(this.safety(token), "runtime", "coding_session_message", { instance_id, session_id });
+				if (denied) return denied;
 				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string }> };
 				const sessions = r.sessions || [];
 				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 				if (!sid) return text("No active coding session found.");
 				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/message`, sessionToken, { method: "POST", body: JSON.stringify({ text: message }) }, this.env);
+				await audit(this.safety(token), { tool: "coding_session_message", action: "completed", input: { instance_id, session_id: sid, messageBytes: new TextEncoder().encode(message).length } });
 				return text(`Sent to session ${sid}: "${message}"`);
 			},
 		);
@@ -800,11 +806,14 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			async ({ instance_id, session_id, token }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(this.safety(token), "runtime", "coding_session_restart", { instance_id, session_id });
+				if (denied) return denied;
 				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string }> };
 				const sessions = r.sessions || [];
 				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 				if (!sid) return text("No active coding session found.");
 				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/restart`, sessionToken, { method: "POST" }, this.env);
+				await audit(this.safety(token), { tool: "coding_session_restart", action: "completed", input: { instance_id, session_id: sid } });
 				return text(`Session ${sid} restarted.`);
 			},
 		);
@@ -835,12 +844,15 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			async ({ instance_id, path, token }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(this.safety(token), "write", "coding_repo_add", { instance_id, path });
+				if (denied) return denied;
 				const body: Record<string, string> = {};
 				if (path.startsWith("~") || path.startsWith("/")) body.localPath = path;
 				else if (path.includes("://") || path.includes(".git")) body.cloneUrl = path;
 				else if (path.includes("/")) { body.githubRepo = path; body.cloneUrl = `https://github.com/${path}.git`; }
 				else body.name = path;
 				const r = await authedCall(`/v1/instances/${instance_id}/coding/repos`, sessionToken, { method: "POST", body: JSON.stringify(body) }, this.env);
+				await audit(this.safety(token), { tool: "coding_repo_add", action: "completed", input: { instance_id, path } });
 				return jsonText(r);
 			},
 		);
@@ -871,10 +883,13 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			async ({ instance_id, session_id, token }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(this.safety(token), "runtime", "coding_session_end", { instance_id, session_id });
+				if (denied) return denied;
 				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string }> };
 				const sid = session_id || (r.sessions || []).find((s) => s.status === "active")?.id;
 				if (!sid) return text("No active coding session found.");
 				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, this.env);
+				await audit(this.safety(token), { tool: "coding_session_end", action: "completed", input: { instance_id, session_id: sid } });
 				return text(`Session ${sid} ended.`);
 			},
 		);
@@ -891,12 +906,15 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			async ({ instance_id, repo_id, engine_id, token }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
+				const denied = await requirePermission(this.safety(token), "runtime", "coding_session_fresh", { instance_id, repo_id });
+				if (denied) return denied;
 				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string; repoId: string }> };
 				const active = (r.sessions || []).find((s) => s.status === "active");
 				const repoId = repo_id || active?.repoId;
 				if (!repoId) return text("No repo specified and no active session to infer from.");
 				if (active) await authedCall(`/v1/instances/${instance_id}/coding/sessions/${active.id}/end`, sessionToken, { method: "POST" }, this.env);
 				const d = await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, { method: "POST", body: JSON.stringify({ repoId, engineId: engine_id || "claude" }) }, this.env);
+				await audit(this.safety(token), { tool: "coding_session_fresh", action: "completed", input: { instance_id, repoId } });
 				return jsonText(d);
 			},
 		);
@@ -912,7 +930,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			async ({ instance_id, message, token }) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return authRequired();
+				// The Overseer can drive Claude Code on any repo → runtime-scoped.
+				const denied = await requirePermission(this.safety(token), "runtime", "coding_overseer", { instance_id });
+				if (denied) return denied;
 				const d = (await authedCall(`/v1/instances/${instance_id}/coding/overseer`, sessionToken, { method: "POST", body: JSON.stringify({ message }) }, this.env)) as { reply?: string };
+				await audit(this.safety(token), { tool: "coding_overseer", action: "completed", input: { instance_id, messageBytes: new TextEncoder().encode(message).length } });
 				return text(d.reply || "(no response)");
 			},
 		);
