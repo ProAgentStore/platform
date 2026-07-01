@@ -121,6 +121,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	let actedLast = false;
 	let lastSnapshot = "";
 	let filledSomething = false; // any field typed → the application is in progress (dry-run safety)
+	let lastActionWasArrow = false; // last act was an arrow key (autocomplete nav) → a following Enter is an accept, not a submit
 	const recentKeys: string[] = [];
 
 	for (let step = 0; step < maxSteps; step++) {
@@ -191,14 +192,22 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 
-		// Dry-run safety for one-page flows whose FINAL button is "Apply"/"Apply now"
-		// (not "Submit"): once any field has been filled, treat an Apply click as the
-		// submit and STOP without clicking it. (The workflow's act guard already blocks
-		// "Submit"/"Send"; "Apply" can't be blocked there because it's also the ENTRY
-		// button before anything is filled.)
-		if (job.dryRun && decision.action.action === "click" && filledSomething && /\bapply\b/i.test(decision.action.name ?? "")) {
-			await deps.onEvent?.("agent.dryrun", `Reached the final "${decision.action.name}" — stopping without submitting (test mode)`, {});
-			return { outcome: "ready", detail: `reached final submit "${decision.action.name}" — test mode, not submitted`, url: snap.url, steps: step, transcript: [...actionLog] };
+		// Dry-run safety: once any field is filled, STOP before anything that could
+		// submit. Two channels the old guard missed (only matched "Apply"): a final
+		// button under any common terminal label (Submit/Send/Finish/Done, plus the
+		// one-page "Apply"), and an Enter/Return keypress, which submits a focused
+		// form. "Continue"/"Next"/"Review" are deliberately NOT matched — they advance
+		// multi-page forms and must stay walkable in test mode. An Enter right after an
+		// arrow key is an autocomplete accept, not a submit, so that case is allowed.
+		if (job.dryRun && filledSomething) {
+			const act = decision.action;
+			const submitClick = act.action === "click" && /\b(apply|submit|send|finish|done)\b/i.test(act.name ?? "");
+			const enterSubmit = act.action === "key" && /^(enter|return)$/i.test(act.key ?? "") && !lastActionWasArrow;
+			if (submitClick || enterSubmit) {
+				const label = act.name ?? act.key ?? "submit";
+				await deps.onEvent?.("agent.dryrun", `Reached final "${label}" — stopping without submitting (test mode)`, {});
+				return { outcome: "ready", detail: `reached final submit "${label}" — test mode, not submitted`, url: snap.url, steps: step, transcript: [...actionLog] };
+			}
 		}
 
 		const key = JSON.stringify(decision.action);
@@ -234,6 +243,9 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			repeatFails = 0;
 			lastActionKey = "";
 			if (decision.action.action === "type") filledSomething = true;
+			// Track arrow-key nav so a following Enter is an autocomplete accept
+			// (allowed in dry-run), not a form submit.
+			lastActionWasArrow = decision.action.action === "key" && /^arrow/i.test(decision.action.key ?? "");
 			actionLog.push(describeAction(decision.action));
 			// A click/select/check/type is expected to change the page; if the NEXT
 			// snapshot shows no change, the loop top tells the brain so it adapts.

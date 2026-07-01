@@ -62,6 +62,21 @@ Endpoints:
 }
 
 const config = configFromArgs();
+
+// SECURITY: the runner's endpoints spawn CLIs and drive a browser as the user.
+// Without a token, `authorize()` allows every request, so a tokenless runner must
+// never be reachable off the local machine. Refuse to start if bound to a
+// non-loopback address without a token. (`pags up` always generates one; this
+// only guards the low-level binary run manually with --host 0.0.0.0 and no token.)
+const LOOPBACK = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+if (!config.token && !LOOPBACK.has(config.host)) {
+	process.stderr.write(
+		`Refusing to start: --host ${config.host} exposes the runner off-machine with no --token. ` +
+			`Set --token (or PAGS_RUNNER_TOKEN), or bind to 127.0.0.1.\n`,
+	);
+	process.exit(1);
+}
+
 const started = await startRunnerServer(config);
 process.stdout.write(`FAGS browser runtime listening at ${started.url}\n`);
 process.stdout.write(`Data dir: ${config.dataDir}\n`);

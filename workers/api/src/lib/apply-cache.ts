@@ -8,7 +8,11 @@ import type { Env } from "../types.js";
  * not guessable. Always contains upper/lower/digit/symbol (the "Pj9!" prefix).
  */
 export async function deriveJobPassword(env: Env, userId: string): Promise<string> {
-	const secret = env.SESSION_SIGNING_KEY || "pags-fallback-secret";
+	// Fail closed: a hardcoded fallback would make every user's derived job-site
+	// password predictable from their (semi-public) userId if the signing key were
+	// ever unset. The key is provisioned in prod; refuse rather than degrade.
+	const secret = env.SESSION_SIGNING_KEY;
+	if (!secret) throw new Error("SESSION_SIGNING_KEY is not configured");
 	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
 	const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`jobpw:${userId}`));
 	const b64 = btoa(String.fromCharCode(...new Uint8Array(sig))).replace(/[+/=]/g, "");

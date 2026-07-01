@@ -9,6 +9,12 @@ import type { Env } from "../types.js";
 
 export const publicRoutes = new Hono<{ Bindings: Env }>();
 
+/** Hex SHA-256 — used to derive a stable, non-forgeable per-caller trial id. */
+async function sha256Hex(input: string): Promise<string> {
+	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+	return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Public agent detail — full info for the store detail page. */
 publicRoutes.get("/agents/:id", async (c) => {
 	const id = c.req.param("id");
@@ -61,9 +67,8 @@ publicRoutes.get("/developers/:login", async (c) => {
 			bio: (user as Record<string, unknown>).bio,
 			website: (user as Record<string, unknown>).website,
 			twitter: (user as Record<string, unknown>).twitter,
-			roles: JSON.parse(
-				((user as Record<string, unknown>).roles as string) || '["user"]',
-			),
+			// `roles` (user/creator/admin) is intentionally NOT exposed on this
+			// unauthenticated endpoint — it discloses who holds admin/creator.
 			agentCount: agents.length,
 		},
 		agents,
@@ -89,8 +94,15 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 		.first<{ id: string; name: string; model: string }>();
 	if (!agent) throw new HttpError(404, "Agent not found");
 
-	// Ephemeral session — keyed by agent + client session (or random)
-	const sid = sessionId || crypto.randomUUID();
+	// Ephemeral session — keyed by agent + a SERVER-derived per-caller id (hash of
+	// the client IP), NOT the client-supplied sessionId. A client-chosen id let a
+	// caller reset the 20-message trial cap (and re-trigger the KB copy) by rotating
+	// it; deriving it from the IP ties the cap to the caller. (`sessionId` is still
+	// accepted for backwards compatibility but no longer affects the cap.)
+	void sessionId;
+	const ip = c.req.header("CF-Connecting-IP") || c.req.header("x-forwarded-for") || "unknown";
+	const ipHash = await sha256Hex(`${agent.id}:${ip}`);
+	const sid = ipHash.slice(0, 32);
 	const doKey = `trial:${agent.id}:${sid}`;
 	const doId = c.env.AGENT.idFromName(doKey);
 	const stub = c.env.AGENT.get(doId);

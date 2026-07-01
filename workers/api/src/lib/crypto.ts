@@ -4,6 +4,18 @@
  * Vendored from FAGS platform/workers/host/src/api.ts.
  */
 
+/**
+ * Constant-time string comparison for secrets/HMACs (tokens, proofs). Avoids the
+ * early-exit timing leak of `===`/`!==`. Length is not itself secret here (fixed-
+ * width hex), and an early length mismatch is fine.
+ */
+export function timingSafeEqualStr(a: string, b: string): boolean {
+	if (a.length !== b.length) return false;
+	let diff = 0;
+	for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+	return diff === 0;
+}
+
 async function importKek(kekHex: string): Promise<CryptoKey> {
 	const matches = kekHex.match(/.{2}/g);
 	if (!matches) throw new Error("Invalid KEK hex string");

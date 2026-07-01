@@ -3,6 +3,7 @@ import { requireUser } from "../lib/auth.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
+import { timingSafeEqualStr } from "../lib/crypto.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
 import { callRuntime, requireOwnedInstance, requireRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
@@ -180,7 +181,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const token = c.req.query("token") || "";
 		if (!uid || !exp || !token || Date.now() > Number(exp)) return c.json({ error: "unauthorized" }, 401);
 		const expected = await resumeHmac(c.env, `${uid}.${instanceId}.${exp}`);
-		if (expected !== token) return c.json({ error: "unauthorized" }, 401);
+		if (!timingSafeEqualStr(expected, token)) return c.json({ error: "unauthorized" }, 401);
 		const obj = await c.env.STORAGE.get(resumeKey(uid, instanceId));
 		if (!obj) return c.json({ error: "no résumé on file" }, 404);
 		const name = (obj.customMetadata?.name as string) || "resume.pdf";

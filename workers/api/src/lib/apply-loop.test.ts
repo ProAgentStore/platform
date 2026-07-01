@@ -148,6 +148,47 @@ describe("runApplyLoop", () => {
 		expect(acted.map((a) => a.action)).toEqual(["type"]); // the Apply submit was NOT acted
 	});
 
+	it("dry-run BLOCKS a final button under a non-'Apply' label (Send/Finish/Done) once filled", async () => {
+		const { deps, acted } = scriptedDeps(
+			[page('- textbox "Name"'), page('- button "Send"')],
+			[
+				{ action: { action: "type", role: "textbox", name: "Name", text: "Sergey" } },
+				{ action: { action: "click", role: "button", name: "Send" } }, // old guard only matched /apply/i → bypass
+			],
+		);
+		const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 5 });
+		expect(result.outcome).toBe("ready");
+		expect(acted.map((a) => a.action)).toEqual(["type"]); // the Send submit was NOT acted
+	});
+
+	it("dry-run BLOCKS an Enter keypress once filled (submits a focused form)", async () => {
+		const { deps, acted } = scriptedDeps(
+			[page('- textbox "Name"'), page('- textbox "Name": Sergey')],
+			[
+				{ action: { action: "type", role: "textbox", name: "Name", text: "Sergey" } },
+				{ action: { action: "key", key: "Enter" } },
+			],
+		);
+		const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 5 });
+		expect(result.outcome).toBe("ready");
+		expect(acted.map((a) => a.action)).toEqual(["type"]); // the Enter submit was NOT acted
+	});
+
+	it("dry-run ALLOWS Enter right after an arrow key (autocomplete accept, not a submit)", async () => {
+		const { deps, acted } = scriptedDeps(
+			[page('- textbox "City"'), page('- textbox "City"'), page('- textbox "City": Sydney'), page('- button "Submit"')],
+			[
+				{ action: { action: "type", role: "textbox", name: "City", text: "Sydney" } },
+				{ action: { action: "key", key: "ArrowDown" } },
+				{ action: { action: "key", key: "Enter" } }, // accept suggestion — must be allowed
+				{ finish: { status: "ready", detail: "filled" } },
+			],
+		);
+		const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 6 });
+		expect(result.outcome).toBe("ready");
+		expect(acted.map((a) => a.action)).toEqual(["type", "key", "key"]); // type + ArrowDown + Enter all acted
+	});
+
 	it("injects a mid-flight pollHint message into the NEXT decision only (one-shot steering)", async () => {
 		let polls = 0;
 		const seen: Array<string | null> = [];

@@ -592,8 +592,11 @@ export async function encodeRuntimeToken(env: Env, token: string | undefined): P
 	if (!token) {
 		return { ciphertext: null, dekWrapped: null, iv: null, plaintext: null };
 	}
+	// Fail closed: this is the runner/relay auth token — every other vault path
+	// stores nothing when the KEK is absent rather than persisting a secret in the
+	// clear. In prod the KEK is set, so refuse instead of writing plaintext.
 	if (!env.KEY_ENCRYPTION_KEY) {
-		return { ciphertext: null, dekWrapped: null, iv: null, plaintext: token };
+		throw new Error("KEY_ENCRYPTION_KEY is not configured; refusing to store runtime token unencrypted");
 	}
 	const encrypted = await encryptKey(token, env.KEY_ENCRYPTION_KEY);
 	return {
