@@ -1,7 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { signSession, verifySession } from "./session.js";
+import { signSession, verifySession, signRelayToken, verifyRelayToken, signPayload } from "./session.js";
 
 const SECRET = "test-secret-key-for-hmac-signing";
+
+describe("relay token", () => {
+	it("signs + verifies an instance-scoped relay token", async () => {
+		const { token } = await signRelayToken("inst-1", "user-1", SECRET);
+		const p = await verifyRelayToken(token, SECRET);
+		expect(p?.instanceId).toBe("inst-1");
+		expect(p?.uid).toBe("user-1");
+		expect(p?.typ).toBe("relay");
+	});
+
+	it("rejects a full account session JWT (no relay typ)", async () => {
+		const account = await signSession("user-1", SECRET);
+		expect(await verifyRelayToken(account, SECRET)).toBeNull();
+	});
+
+	it("rejects an expired relay token", async () => {
+		const expired = await signPayload({ typ: "relay", instanceId: "i", uid: "u", exp: 1 }, SECRET);
+		expect(await verifyRelayToken(expired, SECRET)).toBeNull();
+	});
+
+	it("rejects a wrong signing key", async () => {
+		const { token } = await signRelayToken("inst-1", "user-1", SECRET);
+		expect(await verifyRelayToken(token, "other-key")).toBeNull();
+	});
+});
 
 describe("session", () => {
 	it("signs and verifies a session", async () => {

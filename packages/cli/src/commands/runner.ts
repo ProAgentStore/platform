@@ -304,7 +304,12 @@ async function connectViaRelay(
 	}
 
 	for (const id of instanceIds) {
-		openRelaySocket(id, apiBase, pagsToken, localUrl, runnerToken, force);
+		// Each connect mints a fresh instance-scoped relay token using the account
+		// session token (resolved above; opts.pagsToken may be unset if it came from
+		// the saved session).
+		const mintToken = () =>
+			requestPags<{ token: string }>("POST", `/v1/relay/${apiPathSegment(id)}/token`, { ...opts, pagsToken }, {}).then((r) => r.token);
+		openRelaySocket(id, apiBase, mintToken, localUrl, runnerToken, force);
 	}
 
 	writeLine("Runtime registered with PAGS ✓");
@@ -332,7 +337,7 @@ async function connectViaRelay(
 function openRelaySocket(
 	instanceId: string,
 	wsBase: string,
-	pagsToken: string,
+	mintToken: () => Promise<string>,
 	localUrl: string,
 	runnerToken: string,
 	force = false,
@@ -340,8 +345,21 @@ function openRelaySocket(
 	let backoffMs = 1000;
 	let reconnecting = false;
 
-	const connect = () => {
-		const url = `${wsBase}/v1/relay/${encodeURIComponent(instanceId)}/connect?token=${encodeURIComponent(pagsToken)}${force ? "&force=1" : ""}`;
+	const connect = async () => {
+		// Mint a fresh short-lived, instance-scoped relay token per connect — the
+		// long-lived account session token is never placed in the WS URL.
+		let relayToken: string;
+		try {
+			relayToken = await mintToken();
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			const hint = /401|token|sign/i.test(msg) ? " (run `pags login`)" : "";
+			writeLine(`Relay token mint failed: ${instanceId.slice(0, 8)}…${hint} — retrying in ${Math.round(backoffMs / 1000)}s`);
+			setTimeout(() => { connect(); }, backoffMs);
+			backoffMs = Math.min(backoffMs * 2, 30_000);
+			return;
+		}
+		const url = `${wsBase}/v1/relay/${encodeURIComponent(instanceId)}/connect?token=${encodeURIComponent(relayToken)}${force ? "&force=1" : ""}`;
 		const ws = new WebSocket(url);
 
 		ws.onopen = () => {

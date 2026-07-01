@@ -48,6 +48,39 @@ export async function signSession(
 	return `${data}.${sig}`;
 }
 
+/**
+ * A short-lived, instance-scoped token for the WebSocket relay handshake. Unlike
+ * the account session JWT (30-day, full API authority), this grants ONLY the
+ * ability to connect the relay for one instance and expires in minutes — so a
+ * leaked relay URL (edge logs, support bundle) can't be replayed into account
+ * takeover or machine control.
+ */
+export interface RelayToken {
+	typ: "relay";
+	instanceId: string;
+	uid: string;
+	exp: number;
+}
+
+const RELAY_TTL = 10 * 60; // only needs to be valid at the WS handshake
+
+export async function signRelayToken(
+	instanceId: string,
+	uid: string,
+	signingKey: string,
+): Promise<{ token: string; exp: number }> {
+	const exp = Math.floor(Date.now() / 1000) + RELAY_TTL;
+	const token = await signPayload<RelayToken>({ typ: "relay", instanceId, uid, exp }, signingKey);
+	return { token, exp };
+}
+
+export async function verifyRelayToken(token: string, signingKey: string): Promise<RelayToken | null> {
+	const p = await verifyPayload<RelayToken>(token, signingKey);
+	if (!p || p.typ !== "relay" || typeof p.exp !== "number" || !p.instanceId || !p.uid) return null;
+	if (p.exp < Math.floor(Date.now() / 1000)) return null;
+	return p;
+}
+
 /** Sign an arbitrary JSON payload (e.g. OAuth `state`) with the same HMAC. */
 export async function signPayload<T>(payload: T, signingKey: string): Promise<string> {
 	const data = b64url(
