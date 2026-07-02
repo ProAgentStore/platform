@@ -3,6 +3,8 @@ import { decideAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type Ap
 import { callRunner, getRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { guessProfileKey, setProfileField } from "../lib/profile.js";
+import { decryptKey } from "../lib/crypto.js";
+import { buildQuery, extractCode, findMatchingMessage, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
 import type { Env } from "../types.js";
 
 export interface JobApplyParams {
@@ -39,6 +41,23 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		const host = atsHost(job.url);
 		const cacheHint = await step.do("load-cache", async () => (await getAtsCacheHint(env, userId, host)) ?? "");
 		if (cacheHint) job.cacheHint = cacheHint;
+
+		// May the brain read the candidate's inbox for a one-time sign-in link / code
+		// this run? Requires: Gmail OAuth configured on the deployment, the user has
+		// connected Gmail, AND the instance has the email permission toggled on.
+		job.emailEnabled = await step.do("email-enabled", async () => {
+			if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.KEY_ENCRYPTION_KEY) return false;
+			const tokenRow = await env.DB.prepare("SELECT 1 AS ok FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'").bind(userId).first<{ ok: number }>();
+			if (!tokenRow) return false;
+			try {
+				const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
+				const res = await stub.fetch(new Request("https://agent/state"));
+				const state = (await res.json()) as { permissions?: { email?: boolean } };
+				return state.permissions?.email === true;
+			} catch {
+				return false;
+			}
+		});
 
 		await step.do("open", () => callRunner<{ url: string }>(conn, "/browser/act", { action: "navigate", url: job.url }));
 
@@ -87,6 +106,28 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				if (h) await env.DB.prepare("UPDATE instance_runtime_tasks SET user_hint = NULL WHERE id = ?1 AND user_id = ?2").bind(taskId, userId).run();
 				return h;
 			}) as Promise<string | null>,
+			// Read the connected Gmail for a one-time sign-in link / verification code.
+			// Durable step; never throws — returns a message the brain acts on next turn.
+			readEmail: (q) => step.do(`s${n++}-email`, retry, async () => {
+				const row = await env.DB.prepare("SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'").bind(userId).first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+				if (!row || !env.KEY_ENCRYPTION_KEY) return "Gmail is not connected — use request_user_info to ask the user for the link/code.";
+				try {
+					const refresh = await decryptKey(new Uint8Array(row.key_ciphertext), new Uint8Array(row.dek_wrapped), new Uint8Array(row.iv), env.KEY_ENCRYPTION_KEY);
+					const token = await mintGmailAccessToken(env, refresh);
+					const query = buildQuery({ from: q.from, subject: q.subject, withinDays: q.withinDays });
+					const match = await findMatchingMessage(token, query);
+					if (!match) return `No matching email yet (searched: ${query}). It may not have arrived — wait a few seconds and call read_email_link again.`;
+					const ranked = rankConfirmationLinks(match.links, q.from);
+					const code = extractCode(match.text);
+					const parts = [`Email "${match.subject}" from ${match.from}.`];
+					if (ranked[0]) parts.push(`Most likely sign-in link: ${ranked[0]}`);
+					if (code) parts.push(`Verification code: ${code}`);
+					if (!ranked[0] && !code) parts.push("No link or code found in it — try a different subject/from, or request_user_info.");
+					return parts.join(" ");
+				} catch (e) {
+					return `Could not read email: ${e instanceof Error ? e.message.slice(0, 200) : String(e)}`;
+				}
+			}) as Promise<string>,
 		};
 
 		// Drive; on a CAPTCHA hand off to the human (same session), wait, resume,

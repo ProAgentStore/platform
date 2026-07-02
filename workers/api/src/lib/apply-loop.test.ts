@@ -306,3 +306,45 @@ describe("toolCallToDecision", () => {
 		expect(d.action).toMatchObject({ action: "select", role: "combobox", name: "Country", text: "Australia" });
 	});
 });
+
+describe("runApplyLoop read_email_link", () => {
+	it("reads the inbox, feeds the link back, and continues to navigate", async () => {
+		let s = 0;
+		let d = 0;
+		const emailCalls: unknown[] = [];
+		const snaps = [page('- textbox "Email"'), page('- textbox "Email"'), page("Application received")];
+		const decisions: ApplyDecision[] = [
+			{ readEmail: { from: "coles" } },
+			{ action: { action: "navigate", url: "https://coles.com.au/signin?token=abc" } },
+			{ finish: { status: "submitted", detail: "done" } },
+		];
+		const deps: ApplyDeps = {
+			snapshot: async () => snaps[Math.min(s++, snaps.length - 1)],
+			act: async () => ({ url: "https://coles.com.au/signin?token=abc", challenge: null }),
+			decide: async () => decisions[Math.min(d++, decisions.length - 1)],
+			readEmail: async (q) => { emailCalls.push(q); return "Email \"Sign in\" from Coles. Most likely sign-in link: https://coles.com.au/signin?token=abc"; },
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 10 });
+		expect(emailCalls).toEqual([{ from: "coles" }]);
+		expect(result.outcome).toBe("submitted");
+	});
+
+	it("without a readEmail dep, it reports unavailable and does not crash", async () => {
+		let s = 0;
+		let d = 0;
+		const snaps = [page('- textbox "Email"'), page("x")];
+		const decisions: ApplyDecision[] = [{ readEmail: {} }, { finish: { status: "blocked", detail: "no email" } }];
+		const deps: ApplyDeps = {
+			snapshot: async () => snaps[Math.min(s++, snaps.length - 1)],
+			act: async () => ({ url: "x", challenge: null }),
+			decide: async () => decisions[Math.min(d++, decisions.length - 1)],
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 10 });
+		expect(result.outcome).toBe("blocked");
+	});
+
+	it("maps a read_email_link tool call to a readEmail decision", () => {
+		const d = toolCallToDecision({ name: "read_email_link", arguments: { from: "coles", subject: "sign in", within_days: 2 } }, JOB);
+		expect(d.readEmail).toEqual({ from: "coles", subject: "sign in", withinDays: 2 });
+	});
+});

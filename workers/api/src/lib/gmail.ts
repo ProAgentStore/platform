@@ -91,6 +91,24 @@ export function extractLinks(body: string): string[] {
 	return [...links];
 }
 
+/**
+ * Pull a one-time verification / sign-in CODE out of an email body. Tries a
+ * context-anchored match first ("your code is 123456"), then bare 6/8-digit and
+ * 6–8 char alphanumeric tokens. Returns null when nothing code-like is present.
+ */
+export function extractCode(body: string): string | null {
+	const text = body.replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/gi, " ");
+	// Keyword, then skip a few non-digit chars/words, then a 4–8 digit code.
+	const context = text.match(/(?:code|verification|otp|pin|passcode|confirm(?:ation)?)\D{0,20}(\d{4,8})\b/i);
+	if (context) return context[1];
+	// A bare 6- or 8-digit OTP anywhere.
+	const digits = text.match(/\b\d{6}\b|\b\d{8}\b/);
+	if (digits) return digits[0];
+	// An alphanumeric code that CONTAINS a digit (so plain words never match).
+	const alnum = text.match(/\b(?=[A-Z0-9]*\d)[A-Z0-9]{5,8}\b/);
+	return alnum ? alnum[0] : null;
+}
+
 const CONFIRM_HINTS = [
 	"confirm",
 	"verify",
@@ -128,6 +146,8 @@ export interface GmailMessageMatch {
 	subject: string;
 	date: string;
 	links: string[];
+	/** Decoded body text (html+plain), for code extraction. Truncated for safety. */
+	text: string;
 }
 
 async function gmailFetch(accessToken: string, path: string): Promise<Response> {
@@ -172,6 +192,7 @@ export async function findMatchingMessage(
 		subject: header("subject"),
 		date: header("date"),
 		links: extractLinks(body),
+		text: body.slice(0, 20000),
 	};
 }
 

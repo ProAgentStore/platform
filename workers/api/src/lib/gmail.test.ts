@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { buildQuery, extractLinks, rankConfirmationLinks } from "./gmail.js";
+import { buildQuery, extractCode, extractLinks, rankConfirmationLinks } from "./gmail.js";
+
+describe("extractCode", () => {
+	it("prefers a context-anchored code", () => {
+		expect(extractCode("Your verification code is 483920. It expires soon.")).toBe("483920");
+	});
+	it("finds a bare 6-digit code", () => {
+		expect(extractCode("<p>Use 728104 to sign in</p>")).toBe("728104");
+	});
+	it("returns null when there is nothing code-like", () => {
+		expect(extractCode("Welcome to Coles careers, thanks for applying.")).toBeNull();
+	});
+});
 
 describe("extractLinks", () => {
 	it("pulls href and bare links from an html body", () => {

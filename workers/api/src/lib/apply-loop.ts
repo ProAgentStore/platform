@@ -32,6 +32,9 @@ export interface ApplyJob {
 	preferences?: { targetRoles?: string; targetLocations?: string; workType?: string; openToRelocation?: string };
 	/** Notes from a previous successful run on this ATS (the per-ATS cache). */
 	cacheHint?: string;
+	/** The candidate's Gmail is connected + email permitted → the brain may read it
+	 *  for a one-time sign-in link / verification code instead of pausing. */
+	emailEnabled?: boolean;
 }
 
 /** One action the runner performs on the live page (mirrors the runner's BrowserAction). */
@@ -65,6 +68,8 @@ export interface ApplyDecision {
 	finish?: { status: "submitted" | "ready" | "expired" | "blocked"; detail: string };
 	/** The agent needs a value from the user (ask-and-hold). */
 	needsInput?: { field: string; why?: string };
+	/** Read the candidate's connected inbox for a sign-in link / verification code. */
+	readEmail?: { from?: string; subject?: string; withinDays?: number };
 	/** Token usage for the LLM call that produced this decision. */
 	usage?: { input: number; output: number };
 }
@@ -91,6 +96,10 @@ export interface ApplyDeps {
 	/** Read (and clear) any free-text message the user sent to this RUNNING task — so
 	 *  guidance can be injected mid-flight, not only on a handoff resume. */
 	pollHint?: () => Promise<string | null>;
+	/** Read the candidate's connected Gmail for a one-time sign-in link / code.
+	 *  Returns a short human-readable result the brain acts on next turn. Optional:
+	 *  when absent (tests, email off), the read_email_link tool isn't offered. */
+	readEmail?: (q: { from?: string; subject?: string; withinDays?: number }) => Promise<string>;
 }
 
 /**
@@ -187,6 +196,18 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			// Ask-and-hold: pause for the user to supply a value (same machinery as captcha).
 			await deps.onEvent?.("agent.needs_input", `Needs your input — ${decision.needsInput.field}${decision.needsInput.why ? ` (${decision.needsInput.why})` : ""}`, decision.needsInput);
 			return { outcome: "needs_input", fieldNeeded: decision.needsInput.field, detail: decision.needsInput.why, url: snap.url, steps: step, transcript: [...actionLog] };
+		}
+		if (decision.readEmail) {
+			// Read the connected inbox for a sign-in link / code, feed the result back
+			// into the log, and let the brain navigate to it next turn. Not a browser
+			// act — no fixation/dry-run bookkeeping. Never throws (returns a message).
+			const found = deps.readEmail
+				? await deps.readEmail(decision.readEmail).catch((e) => `email read failed: ${e instanceof Error ? e.message : String(e)}`)
+				: "email reading is not available for this agent";
+			actionLog.push(`read_email_link → ${found}`);
+			await deps.onEvent?.("agent.read_email", found, decision.readEmail);
+			actedLast = false;
+			continue;
 		}
 		if (!decision.action) {
 			return { outcome: "failed", detail: decision.thought || "brain returned no action", url: snap.url, steps: step, transcript: [...actionLog] };
@@ -317,6 +338,18 @@ export const BROWSER_TOOLS = [
 	}, ["status", "detail"]),
 ];
 
+/** Extra tool offered ONLY when the candidate's Gmail is connected + permitted. */
+const READ_EMAIL_TOOL = tool(
+	"read_email_link",
+	"Read the candidate's connected inbox for a one-time sign-in link or verification code (e.g. a magic-link login or an email-confirmation step). Returns the most likely link and any code. Use it when the page says it emailed a link/code — then `navigate` to the link or `type` the code. Do NOT ask the user for a link you can read yourself.",
+	{
+		from: { type: "string", description: "sender domain/name to match, e.g. the ATS or company (optional but improves accuracy)" },
+		subject: { type: "string", description: "words expected in the subject, e.g. \"sign in\" or \"verify\" (optional)" },
+		within_days: { type: "number", description: "how recent, default 1" },
+	},
+	[],
+);
+
 /** Build the system prompt that turns Claude into a job-application driver. */
 export function applySystemPrompt(job: ApplyJob): string {
 	const c = job.candidate;
@@ -365,7 +398,9 @@ export function applySystemPrompt(job: ApplyJob): string {
 			: "- You have NO saved login for this site (this is your first application here). If the page offers BOTH 'Sign in' and 'Create an account' / 'Register', choose **Create an account** and register with the candidate email + the account password above. Do NOT try to Sign in first — the account does not exist yet.",
 		"- After clicking 'Create an account' / 'Register', a registration FORM appears — fill it (name, email, password, confirm password) and submit it. Do NOT click the 'Create an account' link again; act on the new form fields in the snapshot.",
 		"- If you try to register and the email is ALREADY REGISTERED ('already exists', 'email is taken'), switch to Sign in / Log in with the same email + the account password above.",
-		"- Some sites email a verification/confirmation link after registration. If you're blocked waiting on email verification and have no way to read it, call finish(status:\"blocked\", detail:\"email verification required to continue\").",
+		job.emailEnabled
+			? "- Some sites sign you in with a ONE-TIME LINK or CODE emailed to the candidate (passwordless / magic-link), or ask you to confirm your email. You CAN read the candidate's connected inbox: call read_email_link(from, subject) to fetch the link + any code, then `navigate` to the link (or `type` the code into the field). Only if that returns nothing after a short wait should you request_user_info or finish(blocked)."
+			: "- Some sites email a verification/confirmation link after registration. If you're blocked waiting on email verification and have no way to read it, call finish(status:\"blocked\", detail:\"email verification required to continue\").",
 		"",
 		"RULES:",
 		"- Do exactly ONE tool call per turn — the next page snapshot follows.",
@@ -374,7 +409,7 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"- For ANY dropdown, combobox, or autocomplete/typeahead field (including a city/location box), use the `select` tool with the value — it opens the control, filters if needed, and picks the option for you. Do NOT `type` then `click` a suggestion for these.",
 		"- AUTOCOMPLETE TEXTBOX (city, suburb, address, school, company): some of these LOOK like a plain `textbox` in the snapshot but only accept a value when you PICK a suggestion. If you `type` into such a field and it does not stick (the action log says no visible change, the field still reads empty, or a list of options/suggestions is now open), DO NOT retype the same text. Instead: CLICK the matching suggestion/option shown in the snapshot, or press_key \"ArrowDown\" then press_key \"Enter\" to accept the first match. If still stuck, try `select` on that field.",
 		"- To FIX or CLEAR a field that has the wrong value (e.g. text landed in the wrong box), just call `type` again with the correct value on that field — it REPLACES the existing text. There is no triple-click, double-click, or clear tool; never call those.",
-		"- The ONLY tools that exist are: type, select, check, click, upload, navigate, scroll, press_key, request_user_info, finish. Never call any other tool name.",
+		`- The ONLY tools that exist are: type, select, check, click, upload, navigate, scroll, press_key, request_user_info, finish${job.emailEnabled ? ", read_email_link" : ""}. Never call any other tool name.`,
 		"- NEVER invent data. Use ONLY the candidate values above. Do not make up a phone number, salary, address, or any value you weren't given. For a REQUIRED field you don't have a value for, call request_user_info(field, why) to ask the user and wait — do NOT guess or fabricate.",
 		"- Demographic / EEO / voluntary self-identification questions (gender, race, ethnicity, veteran status, disability): ALWAYS choose \"Decline to self-identify\" / \"I don't wish to answer\" / \"Prefer not to say\" unless a candidate value above explicitly provides it. Never guess these.",
 		"- You may answer genuine screening questions (years of experience, work authorization) from the candidate data; if a required one isn't answerable from the data, use request_user_info rather than fabricating.",
@@ -404,6 +439,7 @@ export function toolCallToDecision(call: { name: string; arguments: Record<strin
 		case "scroll": return { thought, action: { action: "scroll", dy: num(a.dy) ?? 600 } };
 		case "press_key": return { thought, action: { action: "key", key: str(a.key) || "Enter" } };
 		case "request_user_info": return { thought, needsInput: { field: str(a.field) || "this field", why: str(a.why) } };
+		case "read_email_link": return { thought, readEmail: { from: str(a.from), subject: str(a.subject), withinDays: num(a.within_days) } };
 		case "finish": {
 			const status = str(a.status);
 			const valid = status === "submitted" || status === "ready" || status === "expired" || status === "blocked" ? status : "blocked";
@@ -436,12 +472,14 @@ export async function decideAction(
 		"\nDo the single next action toward submitting the application. Call exactly one tool.",
 	].join("\n");
 
+	// Offer the mailbox-read tool only when the candidate's Gmail is connected + permitted.
+	const tools = params.job.emailEnabled ? [...BROWSER_TOOLS, READ_EMAIL_TOOL] : BROWSER_TOOLS;
 	const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
 		messages: [
 			{ role: "system", content: applySystemPrompt(params.job) },
 			{ role: "user", content: userMsg },
 		],
-		tools: BROWSER_TOOLS,
+		tools,
 	})) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
 
 	const call = res.tool_calls?.[0];
