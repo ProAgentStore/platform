@@ -26,7 +26,7 @@ function makeEngine() {
 	return new AgentStorageEngine(mockDoStorage(), null, null, null, "test-agent");
 }
 
-function mockRuntimeEnv() {
+function mockRuntimeEnv(opts?: { profile?: Record<string, unknown> }) {
 	const first = vi.fn(async (sql: string) => {
 		if (sql.includes("FROM instance_runtimes")) {
 			return {
@@ -37,6 +37,7 @@ function mockRuntimeEnv() {
 				token_iv: null,
 			};
 		}
+		if (sql.includes("FROM user_profile")) return opts?.profile ?? null;
 		return null;
 	});
 	const bind = vi.fn((sql: string) => ({ first: () => first(sql), run: vi.fn(async () => ({})), all: vi.fn(async () => ({ results: [] })) }));
@@ -250,6 +251,37 @@ describe("storage tools", () => {
 		const body = JSON.parse(String(init.body));
 		expect(body.type).toBe("job.apply_agent");
 		expect(body.input.url).toBe("https://example.com/jobs/1");
+	});
+
+	it("falls back to the candidate Profile when the model omits name/email", async () => {
+		const engine = makeEngine();
+		// The model called submit_job_application with only a url — no candidate.
+		// storage-tools passes candidate.fullName/email as "" (empty strings), which
+		// must NOT defeat the Profile fallback in startJobApply.
+		const runtime = mockRuntimeEnv({
+			profile: { first_name: "Sergey", last_name: "Ivochkin", email: "serge.pro.job@gmail.com" },
+		});
+		const fetchMock = vi.fn(async () => new Response(
+			JSON.stringify({ id: "task_123", status: "needs_approval" }),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await executeStorageTool(
+			{
+				name: "submit_job_application",
+				input: {
+					url: "https://example.com/jobs/1",
+					resume_path: "/tmp/resume.pdf",
+				},
+			},
+			engine,
+			{ env: runtime.env, agentId: "instance-1", userId: "user-1" },
+		);
+
+		expect(result.success).toBe(true);
+		expect(result.content).toContain("Application started");
+		expect(runtime.create).toHaveBeenCalledTimes(1);
 	});
 
 	it("does not create job application task without a résumé on file", async () => {

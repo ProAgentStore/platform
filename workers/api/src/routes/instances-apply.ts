@@ -85,8 +85,8 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 	const prefs = profileToPreferences(rawProfile);
 	const cfg = await readInstanceConfig(env, instanceId, userId);
 	const cred = await findCredentialForHost(env, instanceId, userId, url);
-	const fullName = String(cand.fullName ?? cand.full_name ?? prof.fullName ?? "");
-	const email = String(cand.email ?? cred?.username ?? prof.email ?? "");
+	const fullName = trimmed(cand.fullName) ?? trimmed(cand.full_name) ?? prof.fullName ?? "";
+	const email = trimmed(cand.email) ?? cred?.username ?? prof.email ?? "";
 	if (!fullName || !email) throw new ApplyError("no candidate name/email in your Profile — fill it in the console (Profile → Candidate Profile)");
 
 	const job = {
