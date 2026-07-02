@@ -15,6 +15,9 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 	const [sttMode, setSttMode] = useState("browser");
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
+	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean } | null>(null);
+	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
+	const [emailMsg, setEmailMsg] = useState("");
 
 	useEffect(() => {
 		(async () => {
@@ -37,8 +40,26 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 			} catch {
 				setHasOpenAiKey(false);
 			}
+			await refreshEmail();
+			try {
+				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
+				setEmailPermission(st.permissions?.email === true);
+			} catch {}
 		})();
 	}, [instanceId]);
+
+	// Gmail is connected in a popup; re-check when the user returns to this tab.
+	const refreshEmail = async () => {
+		try {
+			const s = await api<{ connected: boolean; configured: boolean }>("/v1/email/status");
+			setEmailStatus(s);
+		} catch {}
+	};
+	useEffect(() => {
+		const onFocus = () => { refreshEmail(); };
+		window.addEventListener("focus", onFocus);
+		return () => window.removeEventListener("focus", onFocus);
+	}, []);
 
 	// Merge so a PUT (which replaces the whole object) doesn't wipe other settings.
 	const saveVoice = async (patch: Record<string, unknown>) => {
@@ -50,6 +71,38 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 			setTimeout(() => setVoiceMsg(""), 2500);
 		} catch (e) {
 			setVoiceMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const connectGmail = async () => {
+		try {
+			const { url } = await api<{ url: string }>("/v1/email/google/start");
+			window.open(url, "_blank", "noopener");
+			setEmailMsg("Complete the Google sign-in in the new tab, then come back here.");
+		} catch (e) {
+			setEmailMsg(e instanceof Error ? e.message : "Failed to start Gmail connection");
+		}
+	};
+
+	const disconnectGmail = async () => {
+		if (!confirm("Disconnect Gmail? Agents will no longer be able to read your inbox for sign-in links.")) return;
+		try {
+			await api("/v1/email/google", { method: "DELETE" });
+			setEmailStatus((s) => (s ? { ...s, connected: false } : s));
+			setEmailMsg("Gmail disconnected.");
+		} catch (e) {
+			setEmailMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const toggleEmailPermission = async (on: boolean) => {
+		setEmailPermission(on);
+		try {
+			await api(`/v1/instances/${instanceId}/state`, { method: "PUT", body: JSON.stringify({ permissions: { email: on } }) });
+			setEmailMsg(on ? "This agent can now read your inbox for sign-in links & codes." : "Email access turned off for this agent.");
+		} catch (e) {
+			setEmailPermission(!on); // revert on failure
+			setEmailMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -119,6 +172,52 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 					<li><b>Rules / special instructions</b> → Knowledge → Rules & Tips</li>
 					<li><b>Logins & secrets</b> → Knowledge → Credentials</li>
 				</ul>
+			</div>
+
+			{/* Permissions & Connections */}
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Permissions &amp; Connections</h3>
+				<p className="text-sm text-muted mb-3">
+					Connect Gmail so this agent can read <b>one-time sign-in links and verification codes</b> when a site (e.g. a job portal) emails one — instead of pausing to ask you.
+				</p>
+
+				{emailStatus && !emailStatus.configured && (
+					<p className="text-xs text-red mb-2">Email connection isn’t configured on this deployment yet.</p>
+				)}
+
+				<div className="flex items-center justify-between gap-3 mb-3">
+					<div className="text-sm">
+						<span className="font-semibold">Gmail</span>{" "}
+						{emailStatus?.connected
+							? <span className="text-green">· connected</span>
+							: <span className="text-muted">· not connected</span>}
+					</div>
+					{emailStatus?.configured && (
+						emailStatus.connected ? (
+							<button type="button" onClick={disconnectGmail} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
+								Disconnect
+							</button>
+						) : (
+							<button type="button" onClick={connectGmail} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
+								Connect Gmail
+							</button>
+						)
+					)}
+				</div>
+
+				<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
+					<input
+						type="checkbox"
+						checked={emailPermission === true}
+						disabled={!emailStatus?.connected}
+						onChange={(e) => toggleEmailPermission(e.target.checked)}
+					/>
+					<span>Allow <b>this agent</b> to read my inbox for sign-in links &amp; codes</span>
+				</label>
+				{!emailStatus?.connected && (
+					<p className="text-xs text-muted mt-1">Connect Gmail above to enable this.</p>
+				)}
+				{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
 			</div>
 
 			{/* Voice */}
