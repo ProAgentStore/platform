@@ -109,4 +109,17 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		await runner.browserComplete(task.id, "submitted", "Application received");
 		expect(runner.store.getTask(task.id)?.status).toBe("completed");
 	}, 60_000);
+
+	it("snapshot exposes [ref=] and actions target by ref (Playwright-MCP parity)", async () => {
+		await runner.browserAct({ action: "navigate", url: server.jobUrl });
+		const snap = await runner.browserSnapshot();
+		// _snapshotForAI annotates interactive elements with a stable [ref=eNN].
+		expect(snap.snapshot).toMatch(/\[ref=e\d+\]/);
+		// Pull the Full name textbox's ref straight from the snapshot and type by ref.
+		const m = snap.snapshot.match(/textbox "Full name"[^\n]*\[ref=(e\d+)\]/);
+		expect(m).toBeTruthy();
+		const res = await runner.browserAct({ action: "type", ref: (m as RegExpMatchArray)[1], text: "Sergey Ivochkin" });
+		expect(res.feedback ?? "").not.toContain("REJECTED");
+		expect((await runner.browserSnapshot()).snapshot).toContain("Sergey Ivochkin");
+	}, 60_000);
 });

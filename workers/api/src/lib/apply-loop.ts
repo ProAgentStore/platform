@@ -40,6 +40,8 @@ export interface ApplyJob {
 /** One action the runner performs on the live page (mirrors the runner's BrowserAction). */
 export interface BrowserAction {
 	action: "click" | "type" | "select" | "check" | "upload" | "navigate" | "scroll" | "key" | "wait";
+	/** Stable element ref from the snapshot (e.g. "e42") — unambiguous targeting. */
+	ref?: string;
 	role?: string;
 	name?: string;
 	nth?: number;
@@ -311,27 +313,34 @@ function tool(name: string, description: string, props: Record<string, { type: s
 	return { type: "function" as const, function: { name, description, parameters: { type: "object", properties: props, required } } };
 }
 
-/** The browser actions exposed to Claude as tools — addressed by ARIA role + accessible name. */
+/** The browser actions exposed to Claude as tools — target by the snapshot's [ref=eNN]
+ *  (preferred, unambiguous) plus the accessible name for readability. */
+const REF = { type: "string", description: 'the element\'s ref from the snapshot, e.g. "e42" — ALWAYS include it; it targets the exact element even when two fields share a label' };
 export const BROWSER_TOOLS = [
-	tool("type", "Type text into a field identified by its ARIA role and accessible name.", {
+	tool("type", "Type text into a field. Target it by its snapshot ref.", {
+		ref: REF,
 		role: { type: "string", description: 'usually "textbox"' },
 		name: { type: "string", description: "the field's label/accessible name from the snapshot" },
 		text: { type: "string", description: "text to type" },
-	}, ["name", "text"]),
-	tool("select", "Choose an option in a dropdown/combobox.", {
+	}, ["ref", "text"]),
+	tool("select", "Choose an option in a dropdown/combobox. Target the control by its snapshot ref.", {
+		ref: REF,
 		name: { type: "string", description: "the select's label" },
 		value: { type: "string", description: "the option label to choose" },
-	}, ["name", "value"]),
-	tool("check", "Check a radio button or checkbox by its label.", {
+	}, ["ref", "value"]),
+	tool("check", "Check a radio button or checkbox. Target it by its snapshot ref.", {
+		ref: REF,
 		name: { type: "string", description: "the option's label" },
-	}, ["name"]),
-	tool("click", "Click a button or link by its accessible name.", {
+	}, ["ref"]),
+	tool("click", "Click a button or link. Target it by its snapshot ref.", {
+		ref: REF,
 		role: { type: "string", description: '"button" or "link"' },
 		name: { type: "string", description: "the control's visible text/label" },
-	}, ["name"]),
-	tool("upload", "Upload the candidate's résumé to a file field by its label (the file is attached automatically).", {
+	}, ["ref"]),
+	tool("upload", "Upload the candidate's résumé to a file field (the file is attached automatically). Target it by its snapshot ref.", {
+		ref: REF,
 		name: { type: "string", description: "the upload control's label, e.g. \"Resume\"" },
-	}, ["name"]),
+	}, ["ref"]),
 	tool("navigate", "Go to a URL (e.g. the application page).", {
 		url: { type: "string", description: "absolute http(s) URL" },
 	}, ["url"]),
@@ -368,7 +377,9 @@ export function applySystemPrompt(job: ApplyJob): string {
 	const c = job.candidate;
 	const lines = [
 		"You are a job-application agent operating a real web browser through tools.",
-		"You see each page as an ARIA snapshot (roles + accessible names + values). You act ONLY through the provided tools — there are no CSS selectors. Address elements by their role + accessible name exactly as they appear in the snapshot.",
+		"You see each page as an accessibility snapshot: every element shows its role, accessible name, current value, state (e.g. [disabled], [checked], [expanded], [active]), and a stable reference like [ref=e42]. You act ONLY through the provided tools — no CSS selectors.",
+		"- TARGET BY REF: always pass the element's exact `ref` from the snapshot (e.g. \"e42\") to type/select/check/click/upload. The ref points at the EXACT element, so two fields sharing a label (e.g. a phone-country \"Country\" and an address \"Country\") are never confused. Include the accessible name too for clarity.",
+		"- Read element STATE: a field marked [disabled] or [readonly] is already set and cannot be changed — do NOT try; move on. [checked]/[expanded] tell you a control's current state.",
 		job.userHint
 			? `\n‼️ LIVE MESSAGE FROM THE USER — they are watching you right now and just sent this; it describes the CURRENT screen. TRUST IT over your previous assumption: re-read the snapshot fresh and act on this, do NOT repeat the action you were stuck on. Message: "${job.userHint}"\n`
 			: "",
@@ -446,11 +457,11 @@ export function toolCallToDecision(call: { name: string; arguments: Record<strin
 	const str = (v: unknown) => (typeof v === "string" ? v : v == null ? undefined : String(v));
 	const num = (v: unknown) => (typeof v === "number" ? v : undefined);
 	switch (call.name) {
-		case "type": return { thought, action: { action: "type", role: str(a.role) || "textbox", name: str(a.name), text: str(a.text) ?? "" } };
-		case "select": return { thought, action: { action: "select", role: "combobox", name: str(a.name), text: str(a.value) } };
-		case "check": return { thought, action: { action: "check", role: "checkbox", name: str(a.name) } };
-		case "click": return { thought, action: { action: "click", role: str(a.role) || "button", name: str(a.name) } };
-		case "upload": return { thought, action: { action: "upload", name: str(a.name) || "Resume", file: job.resumePath } };
+		case "type": return { thought, action: { action: "type", ref: str(a.ref), role: str(a.role) || "textbox", name: str(a.name), text: str(a.text) ?? "" } };
+		case "select": return { thought, action: { action: "select", ref: str(a.ref), role: "combobox", name: str(a.name), text: str(a.value) } };
+		case "check": return { thought, action: { action: "check", ref: str(a.ref), role: "checkbox", name: str(a.name) } };
+		case "click": return { thought, action: { action: "click", ref: str(a.ref), role: str(a.role) || "button", name: str(a.name) } };
+		case "upload": return { thought, action: { action: "upload", ref: str(a.ref), name: str(a.name) || "Resume", file: job.resumePath } };
 		case "navigate": return { thought, action: { action: "navigate", url: str(a.url) } };
 		case "scroll": return { thought, action: { action: "scroll", dy: num(a.dy) ?? 600 } };
 		case "press_key": return { thought, action: { action: "key", key: str(a.key) || "Enter" } };

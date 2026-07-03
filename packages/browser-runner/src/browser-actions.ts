@@ -62,6 +62,10 @@ async function typeRobustly(loc: Locator, text: string): Promise<boolean> {
  */
 export async function performBrowserAction(page: Page, action: BrowserAction, clickRobustly: ClickRobustly, resumeFile?: string | null): Promise<void> {
 	const locate = () => {
+		// Prefer the stable snapshot ref (aria-ref) — points at the exact element, so two
+		// fields sharing a label (e.g. a phone "Country" code and an address "Country")
+		// are never confused. Fall back to role+name for older snapshots.
+		if (action.ref) return page.locator(`aria-ref=${action.ref}`);
 		const role = action.role as Parameters<Page["getByRole"]>[0] | undefined;
 		let loc = role
 			? page.getByRole(role, action.name ? { name: action.name } : undefined)
@@ -245,11 +249,15 @@ export async function performBrowserAction(page: Page, action: BrowserAction, cl
  */
 export async function inspectField(page: Page, action: BrowserAction): Promise<string> {
 	if (action.action !== "type" && action.action !== "select" && action.action !== "check") return "";
-	if (!action.name) return "";
+	if (!action.name && !action.ref) return "";
 	try {
 		const role = action.role as Parameters<Page["getByRole"]>[0] | undefined;
-		let loc = role ? page.getByRole(role, { name: action.name }) : page.getByText(action.name, { exact: false });
-		loc = typeof action.nth === "number" ? loc.nth(action.nth) : loc.first();
+		let loc = action.ref
+			? page.locator(`aria-ref=${action.ref}`)
+			: role
+				? page.getByRole(role, action.name ? { name: action.name } : undefined)
+				: page.getByText(action.name ?? "", { exact: false });
+		if (!action.ref) loc = typeof action.nth === "number" ? loc.nth(action.nth) : loc.first();
 		const el = await loc.elementHandle({ timeout: 1_500 }).catch(() => null);
 		if (!el) return "";
 		const info = await el

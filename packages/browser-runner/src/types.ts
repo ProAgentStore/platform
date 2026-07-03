@@ -84,6 +84,9 @@ export interface TakeoverInput {
  */
 export interface BrowserAction {
 	action: "click" | "type" | "select" | "check" | "upload" | "navigate" | "scroll" | "key" | "wait";
+	/** Stable element reference from the snapshot (e.g. "e42"). Resolved via the
+	 *  aria-ref selector — unambiguous, preferred over role+name when present. */
+	ref?: string;
 	/** ARIA role of the target element, e.g. "textbox" | "button" | "link" | "combobox" | "radio" | "checkbox". */
 	role?: string;
 	/** Accessible name of the target (from the snapshot). */

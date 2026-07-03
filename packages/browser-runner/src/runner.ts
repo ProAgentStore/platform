@@ -654,7 +654,16 @@ export class LocalRunner {
 		}
 		const page = await this.getActivePage();
 		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
-		const full = await page.locator("body").ariaSnapshot().catch(() => "");
+		// Match what a direct Claude + Playwright-MCP agent sees: `ariaSnapshot({mode:"ai"})`
+		// carries element STATE (disabled/checked/expanded/selected/value) and a stable
+		// [ref=eNN] on each interactive element, so the brain targets them unambiguously via
+		// the aria-ref selector (instead of role+name, which collides when two fields share a
+		// label). This is exactly the call Playwright's own MCP uses. Falls back to the plain
+		// aria snapshot if the option is ever unavailable.
+		const aria = page as unknown as { ariaSnapshot: (opts?: { mode?: string }) => Promise<string> };
+		const full =
+			(await aria.ariaSnapshot({ mode: "ai" }).catch(() => "")) ||
+			(await page.locator("body").ariaSnapshot().catch(() => ""));
 		const MAX = 16_000;
 		const snapshot = full.length > MAX ? `${full.slice(0, MAX)}\n… [snapshot truncated]` : full;
 		return {
