@@ -76,7 +76,11 @@ function collectText(part: GmailPart | undefined): string {
 	return out;
 }
 
-/** Pull all http(s) links out of an email body (html href + bare urls). */
+/** True for image / stylesheet / font / script asset URLs — never the action link. */
+const ASSET_URL = /\.(png|jpe?g|gif|svg|webp|ico|bmp|css|js|woff2?|ttf|eot)(\?|#|$)/i;
+
+/** Pull all http(s) links out of an email body (html href + bare urls), dropping
+ *  image/asset URLs (logos, tracking pixels) which are never the sign-in link. */
 export function extractLinks(body: string): string[] {
 	const links = new Set<string>();
 	const hrefRe = /href\s*=\s*["']?(https?:\/\/[^"'\s>]+)/gi;
@@ -85,7 +89,9 @@ export function extractLinks(body: string): string[] {
 		let m: RegExpExecArray | null;
 		// biome-ignore lint/suspicious/noAssignInExpressions: standard regex iteration
 		while ((m = re.exec(body)) !== null) {
-			links.add(m[1] ?? m[0]);
+			const url = (m[1] ?? m[0]).replace(/[).,;'"]+$/, "");
+			if (ASSET_URL.test(url)) continue;
+			links.add(url);
 		}
 	}
 	return [...links];
@@ -122,6 +128,18 @@ const CONFIRM_HINTS = [
 	"complete",
 	"signup",
 	"register",
+	// one-time sign-in / magic-link / passwordless login (e.g. "Your one time login link")
+	"login",
+	"log-in",
+	"signin",
+	"sign-in",
+	"onetime",
+	"one-time",
+	"magic",
+	"magiclink",
+	"passwordless",
+	"token",
+	"otl",
 ];
 
 /** Rank links so the most likely confirmation/verification URL comes first. */
@@ -135,6 +153,8 @@ export function rankConfirmationLinks(links: string[], domainHint?: string): str
 		if (/[?&/][a-z0-9]{16,}/i.test(url)) s += 1;
 		// Deprioritise unsubscribe / help / privacy noise.
 		if (/unsubscribe|privacy|terms|help|support|preferences/.test(u)) s -= 5;
+		// An image/asset URL that slipped through is never the action link.
+		if (ASSET_URL.test(u)) s -= 10;
 		return s;
 	};
 	return [...links].sort((a, b) => score(b) - score(a));

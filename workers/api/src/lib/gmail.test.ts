@@ -62,3 +62,23 @@ describe("buildQuery", () => {
 		expect(buildQuery({ withinDays: 99 })).toBe("newer_than:7d");
 	});
 });
+
+describe("extractLinks drops assets", () => {
+	it("skips image/css URLs, keeps the real link", () => {
+		const body = `<img src="https://mail.coles.com.au/logo.png"><a href="https://colescareers.com.au/onetime-login?token=abcdef0123456789abcdef">Sign in</a>`;
+		const links = extractLinks(body);
+		expect(links).toContain("https://colescareers.com.au/onetime-login?token=abcdef0123456789abcdef");
+		expect(links.some((l) => l.endsWith(".png"))).toBe(false);
+	});
+});
+
+describe("rankConfirmationLinks prefers the sign-in link", () => {
+	it("ranks a one-time login link above an image and unsubscribe", () => {
+		const links = [
+			"https://mail.colescareers.com.au/banner.jpg",
+			"https://colescareers.com.au/unsubscribe?u=1",
+			"https://colescareers.com.au/onetime-login?token=abcdef0123456789abcdef",
+		];
+		expect(rankConfirmationLinks(links, "colescareers")[0]).toBe("https://colescareers.com.au/onetime-login?token=abcdef0123456789abcdef");
+	});
+});
