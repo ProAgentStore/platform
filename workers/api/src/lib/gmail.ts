@@ -156,6 +156,25 @@ async function gmailFetch(accessToken: string, path: string): Promise<Response> 
 	});
 }
 
+/** Pull Google's actual error reason out of a failed Gmail API response — so a 403
+ *  says "insufficient scopes" vs "Gmail API not enabled" instead of a bare status. */
+async function gmailErrorReason(res: Response): Promise<string> {
+	try {
+		const raw = await res.text();
+		try {
+			const j = JSON.parse(raw) as { error?: { message?: string; status?: string } | string; error_description?: string };
+			const e = j.error;
+			if (typeof e === "object" && e?.message) return e.message;
+			if (typeof e === "string") return j.error_description || e;
+		} catch {
+			/* not JSON */
+		}
+		return raw.slice(0, 200) || "no error body";
+	} catch {
+		return "unreadable error body";
+	}
+}
+
 /**
  * Search the mailbox and return the newest matching message with its links.
  * `query` is Gmail search syntax (e.g. `from:coles newer_than:1d`).
@@ -169,14 +188,14 @@ export async function findMatchingMessage(
 		`/messages?q=${encodeURIComponent(query)}&maxResults=5`,
 	);
 	if (!listRes.ok) {
-		throw new GmailError(`Gmail search failed (${listRes.status})`);
+		throw new GmailError(`Gmail search failed (${listRes.status}): ${await gmailErrorReason(listRes)}`);
 	}
 	const list = (await listRes.json()) as { messages?: { id: string }[] };
 	const first = list.messages?.[0];
 	if (!first) return null;
 
 	const msgRes = await gmailFetch(accessToken, `/messages/${first.id}?format=full`);
-	if (!msgRes.ok) throw new GmailError(`Gmail message fetch failed (${msgRes.status})`);
+	if (!msgRes.ok) throw new GmailError(`Gmail message fetch failed (${msgRes.status}): ${await gmailErrorReason(msgRes)}`);
 	const msg = (await msgRes.json()) as {
 		id: string;
 		internalDate?: string;
