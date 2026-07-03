@@ -144,9 +144,18 @@ export class VoiceTts {
 					response_format: "wav",
 				}),
 			});
-			if (!res.ok) return this._speakBrowser(text);
+			if (!res.ok) {
+				// Log WHY OpenAI TTS failed before degrading to the browser voice —
+				// don't silently swallow it.
+				const detail = await res.text().catch(() => "");
+				console.warn(`[tts] OpenAI TTS ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""} — falling back to browser voice`);
+				return this._speakBrowser(text);
+			}
 			const arrayBuf = await res.arrayBuffer();
-			if (!arrayBuf.byteLength) return this._speakBrowser(text);
+			if (!arrayBuf.byteLength) {
+				console.warn("[tts] OpenAI TTS returned an empty audio body — falling back to browser voice");
+				return this._speakBrowser(text);
+			}
 			if (!this._audioCtx) this._audioCtx = new AudioContext();
 			if (this._audioCtx.state === "suspended")
 				await this._audioCtx.resume();
@@ -165,7 +174,8 @@ export class VoiceTts {
 				source.start();
 			});
 			this._currentSource = null;
-		} catch {
+		} catch (e) {
+			console.warn(`[tts] OpenAI TTS failed: ${e instanceof Error ? e.message : String(e)} — falling back to browser voice`);
 			return this._speakBrowser(text);
 		}
 	}

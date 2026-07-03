@@ -360,6 +360,14 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 	const respHeaders = new Headers(upstream.headers);
 	respHeaders.set("Access-Control-Allow-Origin", allowedCorsOrigin(c.req.header("Origin")));
 	respHeaders.set("Vary", "Origin");
+	// Never swallow an upstream failure: log the status + body (visible in `wrangler
+	// tail`) and pass the real body through to the caller. Success responses stream
+	// straight through untouched (don't buffer AI/audio streams).
+	if (!upstream.ok) {
+		const errBody = await upstream.text().catch(() => "");
+		console.error(`[keys-proxy] ${providerId} ${host}${upstreamPath} → ${upstream.status} ${errBody.slice(0, 800)}`);
+		return new Response(errBody, { status: upstream.status, headers: respHeaders });
+	}
 	return new Response(upstream.body, {
 		status: upstream.status,
 		headers: respHeaders,

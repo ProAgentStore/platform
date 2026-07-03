@@ -211,7 +211,19 @@ export class VoiceStt {
 				},
 			);
 			if (!res.ok) {
-				this.onError(`Whisper error: ${res.status}`);
+				// Surface OpenAI's actual reason (e.g. "audio file is too short") — never
+				// throw it away behind a bare status. The upstream body is JSON with
+				// { error: { message } }; fall back to raw text if it isn't.
+				let detail = "";
+				try {
+					const raw = await res.text();
+					try {
+						detail = (JSON.parse(raw) as { error?: { message?: string } })?.error?.message || raw;
+					} catch {
+						detail = raw;
+					}
+				} catch {}
+				this.onError(`Whisper error ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
 				return;
 			}
 			const data = await res.json();
