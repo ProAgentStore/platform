@@ -8,6 +8,53 @@ import type { BrowserAction } from "./types.js";
 export type ClickRobustly = (page: Page, loc: Locator) => Promise<boolean>;
 
 /**
+ * Enter text and VERIFY it actually took, escalating through the best-practice ladder
+ * for masked / framework-controlled inputs (intl-tel, React-controlled, etc.):
+ *   1) fill()  2) pressSequentially() + blur()  3) native value setter + dispatch events.
+ * Returns true once the field holds the value. Generic — no site/widget-specific logic.
+ */
+async function typeRobustly(loc: Locator, text: string): Promise<boolean> {
+	const norm = (s: string) => s.replace(/\s+/g, "");
+	const took = async (): Promise<boolean> => {
+		const v = await loc.inputValue({ timeout: 1_500 }).catch(() => null);
+		if (v == null) return false;
+		return v === text || norm(v) === norm(text) || (norm(text).length > 3 && norm(v).includes(norm(text)));
+	};
+	// 1. Playwright fill — fires input/change for most inputs.
+	if (await loc.fill(text, { timeout: 6_000 }).then(() => true).catch(() => false)) {
+		if (await took()) return true;
+	}
+	// 2. Real per-character typing + blur — for masks/typeaheads that only validate on key events.
+	try {
+		await loc.click({ timeout: 3_000 });
+		await loc.fill("", { timeout: 2_000 }).catch(() => undefined); // clear first
+		await loc.pressSequentially(text, { delay: 25, timeout: 8_000 });
+		await loc.blur().catch(() => undefined);
+		if (await took()) return true;
+	} catch {
+		/* fall through */
+	}
+	// 3. Native value setter + dispatched events — for React/Vue-controlled inputs where
+	//    fill() sets the DOM value but the framework's onChange never fires.
+	try {
+		await loc.evaluate((el, val) => {
+			const input = el as HTMLInputElement | HTMLTextAreaElement;
+			const proto = input instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+			const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+			if (setter) setter.call(input, val);
+			else input.value = val;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+			input.dispatchEvent(new Event("change", { bubbles: true }));
+			input.dispatchEvent(new Event("blur", { bubbles: true }));
+		}, text);
+		if (await took()) return true;
+	} catch {
+		/* fall through */
+	}
+	return false;
+}
+
+/**
  * Execute one selector-free browser action — address by ARIA role + accessible
  * name, with robust fallbacks for custom comboboxes, typeaheads, fuzzy <select>
  * matches, hidden checkboxes, and hidden file inputs. Pure over `page`; the
@@ -30,9 +77,10 @@ export async function performBrowserAction(page: Page, action: BrowserAction, cl
 		case "type": {
 			const text = String(action.text ?? "");
 			const loc = locate();
-			// Plain fill, then combobox/label fill (the field may be a combobox or
-			// typeahead, not a bare textbox), then click + keyboard type (typeaheads).
-			if (await loc.fill(text, { timeout: 6_000 }).then(() => true).catch(() => false)) break;
+			// Verified ladder (fill → pressSequentially+blur → setter+dispatch) — makes the
+			// value actually take on masked / framework-controlled inputs.
+			if (await typeRobustly(loc, text)) break;
+			// The field may be a combobox or typeahead rather than a bare textbox.
 			if (action.name && (await page.getByRole("combobox", { name: action.name }).fill(text, { timeout: 3_000 }).then(() => true).catch(() => false))) break;
 			if (action.name && (await page.getByLabel(action.name).fill(text, { timeout: 3_000 }).then(() => true).catch(() => false))) break;
 			await clickRobustly(page, loc);
@@ -46,9 +94,15 @@ export async function performBrowserAction(page: Page, action: BrowserAction, cl
 			const value = String(action.text ?? "");
 			const loc = locate();
 			const pickOption = async () => {
+				// Custom dropdowns render options async/with animation — WAIT for the list
+				// to appear before clicking (else you click an overlay or nothing).
+				await page.locator('[role="option"], [role="listbox"] li, ul[role="listbox"] > *').first().waitFor({ state: "visible", timeout: 2_000 }).catch(() => undefined);
 				const opt = page.getByRole("option", { name: value, exact: false }).first();
-				if ((await opt.count().catch(() => 0)) === 0) return false;
-				return opt.click({ timeout: 2_500 }).then(() => true).catch(() => false);
+				if ((await opt.count().catch(() => 0)) > 0) return opt.click({ timeout: 2_500 }).then(() => true).catch(() => false);
+				// Fallback: any visible option/li whose text contains the value.
+				const alt = page.locator('[role="option"], li').filter({ hasText: value }).first();
+				if ((await alt.count().catch(() => 0)) > 0) return alt.click({ timeout: 2_500 }).then(() => true).catch(() => false);
+				return false;
 			};
 			// 1. Native <select>: exact label/value, then a fuzzy (case/punctuation
 			//    -insensitive) match so "Decline to self-identify" hits the option
@@ -220,7 +274,7 @@ export async function inspectField(page: Page, action: BrowserAction): Promise<s
 					const t = (cand?.textContent || "").trim();
 					if (t && rx.test(t) && t.length < 180) err = t;
 				}
-				return { value, invalid, err: err.replace(/\s+/g, " ").slice(0, 180) };
+				return { value, invalid, err: err.replace(/\s+/g, " ").slice(0, 180), tag: e.tagName.toLowerCase(), html: (e.outerHTML || "").replace(/\s+/g, " ").slice(0, 500) };
 			})
 			.catch(() => null);
 		if (!info) return "";
@@ -240,6 +294,10 @@ export async function inspectField(page: Page, action: BrowserAction): Promise<s
 		if (info.invalid || (typed && !stuck)) {
 			if (info.err) parts.unshift(`⚠ "${action.name}" REJECTED: "${info.err}"`);
 			else if (info.invalid) parts.unshift(`⚠ "${action.name}" is marked invalid`);
+			// Value didn't take / field invalid → show the widget's real DOM so the brain
+			// can pick the right interaction (custom dropdown → click to open + click the
+			// option by text; masked input → a different shape) instead of blindly retrying.
+			if (info.html) parts.push(`DOM: <${info.tag}> ${info.html}`);
 		}
 		return parts.join("; ");
 	} catch {
