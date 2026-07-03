@@ -274,7 +274,8 @@ export async function inspectField(page: Page, action: BrowserAction): Promise<s
 					const t = (cand?.textContent || "").trim();
 					if (t && rx.test(t) && t.length < 180) err = t;
 				}
-				return { value, invalid, err: err.replace(/\s+/g, " ").slice(0, 180), tag: e.tagName.toLowerCase(), html: (e.outerHTML || "").replace(/\s+/g, " ").slice(0, 500) };
+				const disabled = e.hasAttribute("disabled") || e.getAttribute("aria-disabled") === "true" || e.hasAttribute("readonly");
+				return { value, invalid, err: err.replace(/\s+/g, " ").slice(0, 180), tag: e.tagName.toLowerCase(), html: (e.outerHTML || "").replace(/\s+/g, " ").slice(0, 500), disabled };
 			})
 			.catch(() => null);
 		if (!info) return "";
@@ -292,12 +293,18 @@ export async function inspectField(page: Page, action: BrowserAction): Promise<s
 		// or belongs to another field — reporting it as REJECTED sent the brain into a
 		// false-retry loop on a value that was actually accepted.
 		if (info.invalid || (typed && !stuck)) {
-			if (info.err) parts.unshift(`⚠ "${action.name}" REJECTED: "${info.err}"`);
-			else if (info.invalid) parts.unshift(`⚠ "${action.name}" is marked invalid`);
-			// Value didn't take / field invalid → show the widget's real DOM so the brain
-			// can pick the right interaction (custom dropdown → click to open + click the
-			// option by text; masked input → a different shape) instead of blindly retrying.
-			if (info.html) parts.push(`DOM: <${info.tag}> ${info.html}`);
+			if (info.disabled) {
+				// A disabled/read-only control can't be changed — it's almost always already
+				// set correctly. Tell the brain to move on instead of fixating on it.
+				parts.unshift(`ℹ "${action.name}" is DISABLED / read-only — it is likely already set correctly; do NOT keep trying, move on to other fields.`);
+			} else {
+				if (info.err) parts.unshift(`⚠ "${action.name}" REJECTED: "${info.err}"`);
+				else if (info.invalid) parts.unshift(`⚠ "${action.name}" is marked invalid`);
+				// Value didn't take / field invalid → show the widget's real DOM so the brain
+				// can pick the right interaction (custom dropdown → click to open + click the
+				// option by text; masked input → a different shape) instead of blindly retrying.
+				if (info.html) parts.push(`DOM: <${info.tag}> ${info.html}`);
+			}
 		}
 		return parts.join("; ");
 	} catch {
