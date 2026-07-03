@@ -180,3 +180,59 @@ export async function performBrowserAction(page: Page, action: BrowserAction, cl
 		}
 	}
 }
+
+/**
+ * After a WRITE action (type/select/check), read back what the field actually
+ * holds now + any validation error rendered near it. This is the semantic
+ * feedback the brain otherwise lacks: `fill()` succeeding doesn't mean the value
+ * "took" (masked/intl widgets concatenate; validators reject a format). Returns a
+ * short human string for the action log, or "" when there's nothing notable.
+ * Never throws.
+ */
+export async function inspectField(page: Page, action: BrowserAction): Promise<string> {
+	if (action.action !== "type" && action.action !== "select" && action.action !== "check") return "";
+	if (!action.name) return "";
+	try {
+		const role = action.role as Parameters<Page["getByRole"]>[0] | undefined;
+		let loc = role ? page.getByRole(role, { name: action.name }) : page.getByText(action.name, { exact: false });
+		loc = typeof action.nth === "number" ? loc.nth(action.nth) : loc.first();
+		const el = await loc.elementHandle({ timeout: 1_500 }).catch(() => null);
+		if (!el) return "";
+		const info = await el
+			.evaluate((node) => {
+				const e = node as HTMLElement & { value?: string };
+				const raw = typeof e.value === "string" ? e.value : (e.getAttribute("aria-checked") ?? e.textContent ?? "");
+				const value = String(raw).trim().slice(0, 120);
+				const invalid = e.getAttribute("aria-invalid") === "true" || (typeof e.matches === "function" && e.matches(":invalid"));
+				let err = "";
+				const rx = /invalid|required|must|valid|error|format|enter a|please/i;
+				const describedby = e.getAttribute("aria-describedby");
+				if (describedby) {
+					for (const id of describedby.split(/\s+/)) {
+						const d = document.getElementById(id);
+						const t = (d?.textContent || "").trim();
+						if (t && rx.test(t)) { err = t; break; }
+					}
+				}
+				if (!err) {
+					const scope = e.closest("[class*=field], [class*=form-group], [class*=form-item], fieldset") || e.parentElement;
+					const cand = scope?.querySelector('[role="alert"], [class*=error i], [class*=invalid i], [class*=danger i], [class*=help-block i]');
+					const t = (cand?.textContent || "").trim();
+					if (t && rx.test(t) && t.length < 180) err = t;
+				}
+				return { value, invalid, err: err.replace(/\s+/g, " ").slice(0, 180) };
+			})
+			.catch(() => null);
+		if (!info) return "";
+		const typed = String(action.text ?? "").trim();
+		const parts: string[] = [];
+		if (info.err) parts.push(`⚠ "${action.name}" REJECTED: "${info.err}"`);
+		if (info.value && (info.invalid || info.err || (typed && info.value !== typed))) {
+			parts.push(`"${action.name}" now reads "${info.value}"${typed && info.value !== typed ? ` (you sent "${typed}")` : ""}`);
+		}
+		if (info.invalid && !info.err) parts.push(`"${action.name}" is marked invalid`);
+		return parts.join("; ");
+	} catch {
+		return "";
+	}
+}

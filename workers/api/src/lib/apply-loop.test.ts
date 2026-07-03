@@ -348,3 +348,25 @@ describe("runApplyLoop read_email_link", () => {
 		expect(d.readEmail).toEqual({ from: "coles", subject: "sign in", withinDays: 2 });
 	});
 });
+
+describe("runApplyLoop write-back feedback", () => {
+	it("surfaces the runner's validation feedback into the next decision's action log", async () => {
+		let s = 0;
+		let d = 0;
+		const logs: string[][] = [];
+		const snaps = [page('- textbox "Mobile Phone"'), page('- textbox "Mobile Phone"'), page('- button "Submit"'), page("done")];
+		const decisions: ApplyDecision[] = [
+			{ action: { action: "type", role: "textbox", name: "Mobile Phone", text: "404453580" } },
+			{ action: { action: "type", role: "textbox", name: "Mobile Phone", text: "+61404453580" } },
+			{ finish: { status: "submitted", detail: "ok" } },
+		];
+		const deps: ApplyDeps = {
+			snapshot: async () => snaps[Math.min(s++, snaps.length - 1)],
+			act: async () => ({ url: "u", challenge: null, feedback: '⚠ "Mobile Phone" REJECTED: "Invalid phone number format"' }),
+			decide: async (p) => { logs.push([...p.actionLog]); return decisions[Math.min(d++, decisions.length - 1)]; },
+		};
+		await runApplyLoop(deps, JOB, { maxSteps: 10 });
+		// By the 2nd decision, the log carries the rejection from the 1st type.
+		expect(logs[1].some((l) => l.includes("REJECTED") && l.includes("Invalid phone number format"))).toBe(true);
+	});
+});

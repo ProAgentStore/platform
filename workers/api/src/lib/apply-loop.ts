@@ -89,8 +89,9 @@ export interface ApplyResult {
 /** Side-effecting hooks the loop drives — real ones hit the runner; tests mock them. */
 export interface ApplyDeps {
 	snapshot: () => Promise<PageSnapshot>;
-	/** Perform an action. A Playwright failure comes back as `error` (never throws) so the brain can adapt. */
-	act: (action: BrowserAction) => Promise<{ url: string; challenge: string | null; error?: string }>;
+	/** Perform an action. A Playwright failure comes back as `error` (never throws) so the brain can adapt.
+	 *  For write actions, `feedback` reports the field's real value + any validation error after the write. */
+	act: (action: BrowserAction) => Promise<{ url: string; challenge: string | null; error?: string; feedback?: string }>;
 	decide: (params: { job: ApplyJob; actionLog: string[]; snapshot: PageSnapshot }) => Promise<ApplyDecision>;
 	onEvent?: (type: string, message: string, data?: unknown) => Promise<void> | void;
 	/** Read (and clear) any free-text message the user sent to this RUNNING task — so
@@ -267,7 +268,9 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			// Track arrow-key nav so a following Enter is an autocomplete accept
 			// (allowed in dry-run), not a form submit.
 			lastActionWasArrow = decision.action.action === "key" && /^arrow/i.test(decision.action.key ?? "");
-			actionLog.push(describeAction(decision.action));
+			// Surface the runner's write-back feedback (real value + validation error) so
+			// the brain self-corrects a rejected/mangled input instead of resending it.
+			actionLog.push(actResult.feedback ? `${describeAction(decision.action)} — ${actResult.feedback}` : describeAction(decision.action));
 			// A click/select/check/type is expected to change the page; if the NEXT
 			// snapshot shows no change, the loop top tells the brain so it adapts.
 			actedLast = decision.action.action !== "scroll" && decision.action.action !== "wait";
@@ -409,6 +412,7 @@ export function applySystemPrompt(job: ApplyJob): string {
 		"- For ANY dropdown, combobox, or autocomplete/typeahead field (including a city/location box), use the `select` tool with the value — it opens the control, filters if needed, and picks the option for you. Do NOT `type` then `click` a suggestion for these.",
 		"- AUTOCOMPLETE TEXTBOX (city, suburb, address, school, company): some of these LOOK like a plain `textbox` in the snapshot but only accept a value when you PICK a suggestion. If you `type` into such a field and it does not stick (the action log says no visible change, the field still reads empty, or a list of options/suggestions is now open), DO NOT retype the same text. Instead: CLICK the matching suggestion/option shown in the snapshot, or press_key \"ArrowDown\" then press_key \"Enter\" to accept the first match. If still stuck, try `select` on that field.",
 		"- To FIX or CLEAR a field that has the wrong value (e.g. text landed in the wrong box), just call `type` again with the correct value on that field — it REPLACES the existing text. There is no triple-click, double-click, or clear tool; never call those.",
+		"- VALIDATION FEEDBACK: after you type/select, the action log reports the field's ACTUAL value and any validation error — e.g. `⚠ \"Mobile Phone\" REJECTED: \"Invalid phone number format\"` or `\"Mobile Phone\" now reads \"61404453580\" (you sent \"404453580\")`. If a value was REJECTED or the field reads differently than you sent, DO NOT resend the same value — the field likely has a mask/format or a country-code prefix. Try a MATERIALLY DIFFERENT format each time (phone: with/without country code, with/without leading zero, with spaces; dates/emails: another format). After ~3 distinct failed attempts on one field, call request_user_info for the exact format, or if the field is optional move on. Never repeat a value the log already showed as rejected.",
 		`- The ONLY tools that exist are: type, select, check, click, upload, navigate, scroll, press_key, request_user_info, finish${job.emailEnabled ? ", read_email_link" : ""}. Never call any other tool name.`,
 		"- NEVER invent data. Use ONLY the candidate values above. Do not make up a phone number, salary, address, or any value you weren't given. For a REQUIRED field you don't have a value for, call request_user_info(field, why) to ask the user and wait — do NOT guess or fabricate.",
 		"- Demographic / EEO / voluntary self-identification questions (gender, race, ethnicity, veteran status, disability): ALWAYS choose \"Decline to self-identify\" / \"I don't wish to answer\" / \"Prefer not to say\" unless a candidate value above explicitly provides it. Never guess these.",

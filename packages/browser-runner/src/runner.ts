@@ -7,7 +7,7 @@ import type { BrowserContext, CDPSession, Locator, Page } from "playwright";
 import { humanApproach } from "./human-mouse.js";
 import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from "./challenge.js";
 import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
-import { performBrowserAction } from "./browser-actions.js";
+import { inspectField, performBrowserAction } from "./browser-actions.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
@@ -671,7 +671,7 @@ export class LocalRunner {
 	 * by ARIA role + accessible name (from the snapshot) via Playwright's
 	 * getByRole — robust and selector-free. Returns the resulting page state.
 	 */
-	async browserAct(action: BrowserAction, resumePath?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null }> {
+	async browserAct(action: BrowserAction, resumePath?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string }> {
 		const page = await this.getActivePage();
 		// Arm résumé auto-attach so a file chooser never blocks the flow (see method).
 		// resumePath may be a signed URL (remote runner) or a local path — resolve to
@@ -697,11 +697,15 @@ export class LocalRunner {
 		if (action.action === "click" || action.action === "navigate" || action.action === "key") {
 			await active.waitForLoadState("networkidle", { timeout: 3_500 }).catch(() => undefined);
 		}
+		// Read back what a write action actually did (real field value + any validation
+		// error) so the brain gets semantic feedback, not just "Playwright didn't throw".
+		const feedback = await inspectField(active, action).catch(() => "");
 		return {
 			ok: true,
 			url: active.url(),
 			title: await active.title().catch(() => ""),
 			challenge: await detectHumanChallenge(active),
+			feedback: feedback || undefined,
 		};
 	}
 
