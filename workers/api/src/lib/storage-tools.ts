@@ -200,7 +200,7 @@ export const STORAGE_TOOLS: ToolDef[] = [
 		name: "find_confirmation_link",
 		description: "Search the user's connected Gmail (read-only) for a recent confirmation/verification email and return the action link to open — e.g. to confirm a newly registered account. Only available when the user has connected Gmail and granted this agent email permission.",
 		parameters: {
-			from: { type: "string", description: "Sender to filter by, e.g. a domain like 'coles' or 'noreply@coles.com.au'" },
+			from: { type: "string", description: "Sender to filter by, e.g. a company domain or address like 'acme' or 'noreply@acme.com'" },
 			subject: { type: "string", description: "Words expected in the subject, e.g. 'confirm your account'" },
 			within_days: { type: "number", description: "How many days back to search (1-7, default 1)" },
 		},
