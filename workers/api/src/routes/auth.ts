@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { signPayload, signSession, verifyPayload, verifySession } from "../lib/session.js";
 import { isAllowedReturnTo } from "../lib/origins.js";
+import { logError } from "../lib/error-log.js";
 import type { Env } from "../types.js";
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
@@ -79,7 +80,9 @@ authRoutes.get("/github/callback", async (c) => {
 	});
 	const tokenData = await tokenRes.json<{ access_token?: string; error?: string }>();
 	if (!tokenData.access_token) {
-		return c.text(`OAuth failed: ${tokenData.error ?? "no token"}`, 401);
+		const reason = tokenData.error ?? "no token";
+		await logError(c.env, { source: "auth", status: 401, message: `GitHub sign-in failed: ${reason}`, context: { provider: "github" } });
+		return c.text(`OAuth failed: ${reason}`, 401);
 	}
 	const ghUser = await (
 		await fetch("https://api.github.com/user", {
@@ -147,8 +150,13 @@ authRoutes.get("/google/callback", async (c) => {
 			grant_type: "authorization_code",
 		}).toString(),
 	});
-	const tok = await tokenRes.json<{ access_token?: string }>();
-	if (!tok.access_token) return c.text("Google OAuth failed", 401);
+	const tok = await tokenRes.json<{ access_token?: string; error?: string; error_description?: string }>();
+	if (!tok.access_token) {
+		// Persist + surface WHY (e.g. redirect_uri_mismatch) instead of a generic 401.
+		const reason = tok.error_description || tok.error || `token exchange returned ${tokenRes.status}`;
+		await logError(c.env, { source: "auth", status: 401, message: `Google sign-in failed: ${reason}`, context: { provider: "google", redirectUri } });
+		return c.text(`Google OAuth failed: ${reason}`, 401);
+	}
 	const gUser = await (
 		await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
 			headers: { Authorization: `Bearer ${tok.access_token}` },

@@ -4,6 +4,7 @@ import { callRunner, getRunnerConn, type RunnerConn } from "../lib/runner-client
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { guessProfileKey, setProfileField } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
+import { logError } from "../lib/error-log.js";
 import { buildQuery, extractCode, findMatchingMessage, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
 import type { Env } from "../types.js";
 
@@ -159,6 +160,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 			if (!solved) {
 				await step.do(`complete-timeout-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "failed", detail: `${reason} not resolved in time` }));
+				await step.do(`log-timeout-${round}`, async () => { await logError(env, { source: "job-apply", userId, message: `apply timed out: ${reason} not resolved in time`, context: { instanceId, taskId, url: job.url, reason, steps: result.steps } }); return null; });
 				// Save the partial run's learnings (incl. what got stuck) before bailing.
 				if (transcript.length) await step.do(`save-cache-timeout-${round}`, async () => { await saveAtsCache(env, userId, host, transcript, result.outcome); return null; });
 				return { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps };
@@ -179,6 +181,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		}
 
 		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
+
+		// Persist a non-success terminal outcome so an apply failure isn't only in events.
+		if (["failed", "blocked", "expired", "max_steps"].includes(result.outcome)) {
+			await step.do("log-outcome", async () => { await logError(env, { source: "job-apply", userId, message: `apply ${result.outcome}: ${result.detail ?? ""}`, context: { instanceId, taskId, url: job.url, outcome: result.outcome, steps: result.steps } }); return null; });
+		}
 
 		// Remember this run's path (what worked AND what failed) for the next
 		// application to this ATS + the transparency view — not just on submit.

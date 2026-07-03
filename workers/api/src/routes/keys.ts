@@ -7,6 +7,7 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
+import { logError } from "../lib/error-log.js";
 import {
 	encodeCloudflareAiCredentials,
 	runUserWorkersAi,
@@ -366,6 +367,13 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 	if (!upstream.ok) {
 		const errBody = await upstream.text().catch(() => "");
 		console.error(`[keys-proxy] ${providerId} ${host}${upstreamPath} → ${upstream.status} ${errBody.slice(0, 800)}`);
+		await logError(c.env, {
+			source: "keys-proxy",
+			userId: session.uid,
+			status: upstream.status,
+			message: errBody || `${host}${upstreamPath} → ${upstream.status}`,
+			context: { provider: providerId, host, path: upstreamPath, method: c.req.method },
+		});
 		return new Response(errBody, { status: upstream.status, headers: respHeaders });
 	}
 	return new Response(upstream.body, {
