@@ -175,7 +175,17 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			await deps.onEvent?.("agent.guidance", `Message from you: "${liveHint}"`, { hint: liveHint });
 		}
 
-		const decision = await deps.decide({ job, actionLog, snapshot: snap });
+		let decision: ApplyDecision;
+		try {
+			decision = await deps.decide({ job, actionLog, snapshot: snap });
+		} catch (e) {
+			// The brain step failed (e.g. the BYOK AI timed out or errored). Do NOT let it
+			// crash the whole durable run with no output — hand off for this step so the
+			// human can take over or it fails cleanly (and gets logged) on timeout.
+			const msg = e instanceof Error ? e.message : String(e);
+			await deps.onEvent?.("agent.decide_failed", `Deciding the next step failed: ${msg} — handing off`, { error: msg });
+			return { outcome: "stuck", detail: `assistant error: ${msg}`, url: snap.url, steps: step, transcript: [...actionLog] };
+		}
 		if (liveHint) job.userHint = undefined; // applied to this step only
 		if (decision.usage) { tokens.input += decision.usage.input; tokens.output += decision.usage.output; }
 		await deps.onEvent?.(
@@ -469,8 +479,16 @@ export async function decideAction(
 	userId: string,
 	params: { job: ApplyJob; actionLog: string[]; snapshot: PageSnapshot },
 ): Promise<ApplyDecision> {
+	// Keep the action log bounded — it grows every step (and one entry can be an
+	// 800-char sign-in link), which bloated the context until the AI call timed out.
+	// The recent steps are what matter; older ones are summarised as a count.
+	const MAX_LOG = 30;
+	const log =
+		params.actionLog.length > MAX_LOG
+			? [`… (${params.actionLog.length - MAX_LOG} earlier steps omitted) …`, ...params.actionLog.slice(-MAX_LOG)]
+			: params.actionLog;
 	const userMsg = [
-		`Actions so far:\n${params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)"}`,
+		`Actions so far:\n${log.length ? log.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)"}`,
 		`\nCURRENT PAGE — ${params.snapshot.title || ""} <${params.snapshot.url}>`,
 		params.snapshot.snapshot,
 		"\nDo the single next action toward submitting the application. Call exactly one tool.",
@@ -484,6 +502,9 @@ export async function decideAction(
 			{ role: "user", content: userMsg },
 		],
 		tools,
+		// The apply runs in a durable Workflow (2-min step budget), not an interactive
+		// request — a 25s cap crashed the whole run on a big-context decision. Give it 60s.
+		timeoutMs: 60_000,
 	})) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
 
 	const call = res.tool_calls?.[0];

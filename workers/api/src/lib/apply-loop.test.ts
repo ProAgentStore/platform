@@ -370,3 +370,16 @@ describe("runApplyLoop write-back feedback", () => {
 		expect(logs[1].some((l) => l.includes("REJECTED") && l.includes("Invalid phone number format"))).toBe(true);
 	});
 });
+
+describe("runApplyLoop resilience", () => {
+	it("hands off (stuck) instead of crashing when the decide step throws", async () => {
+		const deps: ApplyDeps = {
+			snapshot: async () => page('- textbox "Name"'),
+			act: async () => ({ url: "u", challenge: null }),
+			decide: async () => { throw new Error("AI request timed out (60s)"); },
+		};
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 5 });
+		expect(result.outcome).toBe("stuck");
+		expect(result.detail).toContain("timed out");
+	});
+});

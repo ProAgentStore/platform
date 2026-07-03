@@ -42,7 +42,7 @@ export async function runUserWorkersAi(
 	// BYOK: try providers in order of what the user has configured
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");
 	if (anthropicKey) {
-		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[]; maxTokens?: number });
+		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number });
 	}
 
 	const cfCredentials = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
@@ -57,7 +57,7 @@ async function runAnthropic(
 	env: Env,
 	userId: string | undefined,
 	apiKey: string,
-	body: { messages: Array<{ role: string; content: string }>; tools?: unknown[]; maxTokens?: number },
+	body: { messages: Array<{ role: string; content: string }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number },
 ): Promise<unknown> {
 	const messages = (body.messages || []).filter((m) => m.role !== "system");
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
@@ -88,8 +88,9 @@ async function runAnthropic(
 		}
 	}
 
+	const timeoutMs = body.timeoutMs ?? 25_000;
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 25_000);
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	let res: Response;
 	try {
 		res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -105,7 +106,7 @@ async function runAnthropic(
 	} catch (err) {
 		clearTimeout(timeout);
 		if (err instanceof Error && err.name === "AbortError") {
-			throw new UserAiProviderError("AI request timed out (25s)", 504);
+			throw new UserAiProviderError(`AI request timed out (${Math.round(timeoutMs / 1000)}s)`, 504);
 		}
 		throw err;
 	}
@@ -169,8 +170,9 @@ async function runCloudflareAi(
 	body: unknown,
 ): Promise<unknown> {
 	const encodedModel = model.split("/").map(encodeURIComponent).join("/");
+	const timeoutMs = (body as { timeoutMs?: number })?.timeoutMs ?? 25_000;
 	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 25_000);
+	const timeout = setTimeout(() => controller.abort(), timeoutMs);
 	let res: Response;
 	try {
 		res = await fetch(
@@ -188,7 +190,7 @@ async function runCloudflareAi(
 	} catch (err) {
 		clearTimeout(timeout);
 		if (err instanceof Error && err.name === "AbortError") {
-			throw new UserAiProviderError("AI request timed out (25s)", 504);
+			throw new UserAiProviderError(`AI request timed out (${Math.round(timeoutMs / 1000)}s)`, 504);
 		}
 		throw err;
 	}
