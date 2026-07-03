@@ -8,8 +8,8 @@
  */
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { encryptKey } from "../lib/crypto.js";
-import { GMAIL_SCOPE } from "../lib/gmail.js";
+import { decryptKey, encryptKey } from "../lib/crypto.js";
+import { GMAIL_SCOPE, mintGmailAccessToken } from "../lib/gmail.js";
 import type { Env } from "../types.js";
 
 export const emailRoutes = new Hono<{ Bindings: Env }>();
@@ -93,19 +93,32 @@ emailRoutes.get("/google/start", async (c) => {
 	return c.json({ url: url.toString() });
 });
 
-/** Whether the current user has Gmail connected. */
+/** Whether the current user has Gmail connected — and which account. */
 emailRoutes.get("/status", async (c) => {
 	const session = await requireUser(c);
+	const configured = !!(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET);
 	const row = await c.env.DB.prepare(
-		"SELECT created_at FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
+		"SELECT created_at, account_label, key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'",
 	)
 		.bind(session.uid)
-		.first<{ created_at: string }>();
-	return c.json({
-		connected: !!row,
-		connectedAt: row?.created_at ?? null,
-		configured: !!(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET),
-	});
+		.first<{ created_at: string; account_label: string | null; key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+	let email = row?.account_label ?? null;
+	// Backfill the account email for a connection made before we captured it — this
+	// also verifies the token still works (a revoked one makes minting throw).
+	if (row && !email && configured && c.env.KEY_ENCRYPTION_KEY) {
+		try {
+			const refresh = await decryptKey(new Uint8Array(row.key_ciphertext), new Uint8Array(row.dek_wrapped), new Uint8Array(row.iv), c.env.KEY_ENCRYPTION_KEY);
+			const accessToken = await mintGmailAccessToken(c.env, refresh);
+			const ui = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", { headers: { Authorization: `Bearer ${accessToken}` } });
+			if (ui.ok) {
+				email = ((await ui.json()) as { email?: string }).email ?? null;
+				if (email) await c.env.DB.prepare("UPDATE user_api_keys SET account_label = ?1 WHERE user_id = ?2 AND provider = 'gmail'").bind(email, session.uid).run();
+			}
+		} catch {
+			/* token may be revoked/expired — leave email null, still "connected" per the row */
+		}
+	}
+	return c.json({ connected: !!row, email, connectedAt: row?.created_at ?? null, configured });
 });
 
 /** Disconnect Gmail. */
@@ -144,7 +157,7 @@ emailRoutes.get("/google/callback", async (c) => {
 		}),
 	});
 	if (!tokenRes.ok) return c.text(`Gmail token exchange failed (${tokenRes.status})`, 400);
-	const tok = (await tokenRes.json()) as { refresh_token?: string };
+	const tok = (await tokenRes.json()) as { refresh_token?: string; access_token?: string };
 	if (!tok.refresh_token) {
 		return c.text(
 			"Google did not return a refresh token. Remove this app's access at myaccount.google.com/permissions and reconnect.",
@@ -152,20 +165,34 @@ emailRoutes.get("/google/callback", async (c) => {
 		);
 	}
 
+	// Capture WHICH account this is, so the UI can show it (scope includes `email`).
+	let accountLabel: string | null = null;
+	if (tok.access_token) {
+		try {
+			const ui = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+				headers: { Authorization: `Bearer ${tok.access_token}` },
+			});
+			if (ui.ok) accountLabel = ((await ui.json()) as { email?: string }).email ?? null;
+		} catch {
+			/* non-fatal — the connection still works without the label */
+		}
+	}
+
 	const { ciphertext, dekWrapped, iv } = await encryptKey(
 		tok.refresh_token,
 		c.env.KEY_ENCRYPTION_KEY,
 	);
 	await c.env.DB.prepare(
-		`INSERT INTO user_api_keys (user_id, provider, key_ciphertext, dek_wrapped, iv, created_at)
-     VALUES (?1, 'gmail', ?2, ?3, ?4, datetime('now'))
+		`INSERT INTO user_api_keys (user_id, provider, key_ciphertext, dek_wrapped, iv, account_label, created_at)
+     VALUES (?1, 'gmail', ?2, ?3, ?4, ?5, datetime('now'))
      ON CONFLICT(user_id, provider) DO UPDATE SET
        key_ciphertext = excluded.key_ciphertext,
        dek_wrapped = excluded.dek_wrapped,
        iv = excluded.iv,
+       account_label = excluded.account_label,
        created_at = excluded.created_at`,
 	)
-		.bind(uid, ciphertext, dekWrapped, iv)
+		.bind(uid, ciphertext, dekWrapped, iv, accountLabel)
 		.run();
 
 	return c.html(

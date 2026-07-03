@@ -15,7 +15,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 	const [sttMode, setSttMode] = useState("browser");
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
-	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean } | null>(null);
+	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
 	const [emailMsg, setEmailMsg] = useState("");
 
@@ -51,7 +51,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 	// Gmail is connected in a popup; re-check when the user returns to this tab.
 	const refreshEmail = async () => {
 		try {
-			const s = await api<{ connected: boolean; configured: boolean }>("/v1/email/status");
+			const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status");
 			setEmailStatus(s);
 		} catch {}
 	};
@@ -189,7 +189,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 					<div className="text-sm">
 						<span className="font-semibold">Gmail</span>{" "}
 						{emailStatus?.connected
-							? <span className="text-green">· connected</span>
+							? <span className="text-green">· connected{emailStatus.email ? ` (${emailStatus.email})` : ""}</span>
 							: <span className="text-muted">· not connected</span>}
 					</div>
 					{emailStatus?.configured && (
