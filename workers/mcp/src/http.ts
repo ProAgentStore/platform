@@ -44,8 +44,12 @@ export async function apiCall(
 	} catch {
 		json = { raw };
 	}
-	if (!res.ok && typeof json === "object" && json !== null) {
-		return { error: `API ${res.status}`, ...json };
+	// Never let a non-2xx pass as success — always return a visible error object,
+	// whatever the body shape, so a tool can't silently format a failure as a result.
+	if (!res.ok) {
+		return typeof json === "object" && json !== null
+			? { error: `API ${res.status}`, ...json }
+			: { error: `API ${res.status}`, detail: json };
 	}
 	return json;
 }

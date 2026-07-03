@@ -417,6 +417,27 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"list_errors",
+		"Read the platform error log — persisted failures (key-proxy, sign-in, apply/coding, and workflow crashes) that would otherwise be invisible. Yours by default; scope \"all\" returns everyone's (admin only). Filter by source and limit.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			scope: z.enum(["me", "all"]).optional().describe('"all" = every user\'s errors (admin only); default your own.'),
+			source: z.string().optional().describe("Filter by source, e.g. keys-proxy | auth | job-apply | coding."),
+			limit: z.number().int().min(1).max(500).optional(),
+		},
+		async ({ token, scope, source, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams();
+			if (scope === "all") qs.set("scope", "all");
+			if (source) qs.set("source", source);
+			if (limit) qs.set("limit", String(limit));
+			const data = await authedCall(`/v1/errors${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"add_instance_knowledge",
 		"Add user-specific knowledge to your private subscribed instance. This does not alter the creator's template agent.",
 		{
