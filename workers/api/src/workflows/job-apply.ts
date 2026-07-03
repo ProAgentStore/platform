@@ -28,7 +28,29 @@ const CAPTCHA_WAIT_POLLS = 180; // 180 × 5s = 15 min
  * restarts and runs far past the 30s request limit.
  */
 export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
+	/** Entry point: run the apply, but NEVER let an uncaught throw vanish into an
+	 *  "Errored" workflow with no trace. Any crash is persisted to error_log and the
+	 *  runner task is marked failed — so it shows up in /v1/errors, the MCP, and the
+	 *  console, not only in `wrangler workflows instances describe`. */
 	async run(event: WorkflowEvent<JobApplyParams>, step: WorkflowStep): Promise<ApplyResult> {
+		try {
+			return await this.runInner(event, step);
+		} catch (err) {
+			const { instanceId, userId, taskId, job } = event.payload;
+			const msg = err instanceof Error ? err.message : String(err);
+			await logError(this.env, { source: "job-apply", userId, status: 500, message: `apply workflow crashed: ${msg}`, context: { instanceId, taskId, url: job?.url } });
+			// Best-effort: don't leave the task stuck "running" after a crash.
+			try {
+				const conn = await getRunnerConn(this.env, instanceId, userId);
+				if (conn) await callRunner(conn, "/browser/complete", { taskId, outcome: "failed", detail: msg.slice(0, 300) });
+			} catch {
+				/* best-effort */
+			}
+			return { outcome: "failed", detail: msg, steps: 0 };
+		}
+	}
+
+	private async runInner(event: WorkflowEvent<JobApplyParams>, step: WorkflowStep): Promise<ApplyResult> {
 		const { instanceId, userId, taskId, job } = event.payload;
 		const env = this.env;
 
