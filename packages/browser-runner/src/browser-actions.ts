@@ -225,12 +225,22 @@ export async function inspectField(page: Page, action: BrowserAction): Promise<s
 			.catch(() => null);
 		if (!info) return "";
 		const typed = String(action.text ?? "").trim();
+		const stuck = !!typed && info.value === typed; // our value actually took
 		const parts: string[] = [];
-		if (info.err) parts.push(`⚠ "${action.name}" REJECTED: "${info.err}"`);
-		if (info.value && (info.invalid || info.err || (typed && info.value !== typed))) {
+		// Report the field's real value when it differs from what we sent, or when the
+		// field is authoritatively invalid.
+		if (info.value && (info.invalid || !stuck)) {
 			parts.push(`"${action.name}" now reads "${info.value}"${typed && info.value !== typed ? ` (you sent "${typed}")` : ""}`);
 		}
-		if (info.invalid && !info.err) parts.push(`"${action.name}" is marked invalid`);
+		// Flag REJECTED ONLY on an authoritative per-field signal (aria-invalid / :invalid)
+		// or when our value clearly did NOT take. A nearby error while the value stuck is
+		// often stale (widgets show a "format" error mid-type that clears on blur/submit)
+		// or belongs to another field — reporting it as REJECTED sent the brain into a
+		// false-retry loop on a value that was actually accepted.
+		if (info.invalid || (typed && !stuck)) {
+			if (info.err) parts.unshift(`⚠ "${action.name}" REJECTED: "${info.err}"`);
+			else if (info.invalid) parts.unshift(`⚠ "${action.name}" is marked invalid`);
+		}
 		return parts.join("; ");
 	} catch {
 		return "";
