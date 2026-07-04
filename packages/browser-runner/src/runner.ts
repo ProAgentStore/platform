@@ -784,12 +784,21 @@ export class LocalRunner {
 			case "check":
 				return mcp.callTool("browser_click", { element: label, target: this.refOf(a) });
 			case "upload": {
-				// Standard two-step: clicking the upload control opens the file chooser,
-				// which puts the @playwright/mcp server into its file-chooser modal state;
-				// browser_file_upload then resolves that state with the résumé path.
-				await mcp.callTool("browser_click", { element: label, target: this.refOf(a) });
 				if (!this.applyResumePath) throw new RunnerInputError("no résumé file available to upload");
-				return mcp.callTool("browser_file_upload", { paths: [this.applyResumePath] });
+				// Standard two-step FIRST (respects the brain's target): clicking the upload
+				// control opens the file chooser → browser_file_upload attaches the résumé.
+				const ref = (a.ref || "").trim();
+				if (ref) await mcp.callTool("browser_click", { element: label, target: ref }).catch(() => undefined);
+				const res = await mcp.callTool("browser_file_upload", { paths: [this.applyResumePath] });
+				if (!res.isError || !/modal state|file chooser/i.test(mcp.textOf(res))) return res;
+				// The target was a LABEL / DROP-ZONE, not the chooser trigger, so no file
+				// chooser opened. Fall back to setting the résumé directly on the page's
+				// file input — robust across hidden inputs, drop-zones and custom upload
+				// widgets (the semantically-correct upload field the brain clicks is often
+				// a container, not the button that fires the chooser).
+				const page = await this.getActivePage();
+				await page.locator('input[type="file"]').first().setInputFiles(this.applyResumePath, { timeout: 8_000 });
+				return { content: [{ type: "text", text: "résumé attached directly to the file input" }] };
 			}
 			case "select":
 				return mcp.callTool("browser_select_option", { element: label, target: this.refOf(a), values: [a.text ?? ""] });

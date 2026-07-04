@@ -148,6 +148,18 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(res.feedback ?? "").toContain("+61404453580");
 	}, 60_000);
 
+	it("upload falls back to setInputFiles when the target isn't the chooser trigger (Ashby drop-zone)", async () => {
+		// Ashby: the labeled 'Resume' control is a drop-zone/button that does NOT open a
+		// native file chooser on click, so the standard two-step (click → browser_file_upload)
+		// gets 'no modal state'. The runner must fall back to setting the hidden file input.
+		await runner.browserAct({ action: "navigate", url: "data:text/html,<button aria-label='Resume'>Upload</button><input type=file style='position:absolute;left:-9999px' onchange=\"document.title='FILE:'+this.files[0].name\">" });
+		const snap = await runner.browserSnapshot();
+		// Target the BUTTON (which never opens a chooser) — the fallback must still attach.
+		await runner.browserAct({ action: "upload", ref: ref(snap.snapshot, "button", "Resume"), name: "Resume" }, resume());
+		// The input's onchange set the title to FILE:<name> → the file really attached.
+		expect((await runner.browserSnapshot()).title).toContain("FILE:");
+	}, 60_000);
+
 	it("a failed action (bad ref) throws so the workflow surfaces it to the brain", async () => {
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
 		await runner.browserSnapshot();
