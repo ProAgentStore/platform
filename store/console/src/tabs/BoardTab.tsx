@@ -194,72 +194,121 @@ function TaskDetailModal({ task, events, onClose, onAction, onResume, onProvideI
 	// Events that reference this task (the agent's decisions/handoffs for it).
 	const taskEvents = events.filter((e) => String(e.taskId ?? (e.data as Record<string, unknown>)?.taskId ?? "") === task.id);
 	const fmt = (v: unknown) => { try { return JSON.stringify(v, null, 2); } catch { return String(v); } };
+
+	// Work out WHAT the agent needs and HOW you answer it, from the handoff events —
+	// so the panel shows ONE clear ask instead of a wall of technical decisions.
+	const handoffEv = taskEvents.find((e) => e.type === "job.human_handoff_required");
+	const needsInputEv = taskEvents.find((e) => e.type === "agent.needs_input");
+	const reason = String((handoffEv?.data as Record<string, unknown>)?.reason ?? "");
+	const isValueAsk = reason === "needs_input" || !!needsInputEv || /needs a value|enter it/i.test(handoffEv?.message ?? "");
+	const isCaptcha = reason === "challenge" || /captcha|verify you|human check|not a robot/i.test(`${handoffEv?.message ?? ""} ${task.handoff_reason ?? ""}`);
+	const kind: "value" | "captcha" | "stuck" = isValueAsk ? "value" : isCaptcha ? "captcha" : "stuck";
+	// The specific field + why + the multiple-choice options (if the form listed any).
+	const detail = needsInputEv?.message ?? handoffEv?.message ?? "";
+	const field = task.handoff_field || detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
+	const paren = detail.match(/\(([^)]*)\)/)?.[1] ?? "";
+	const fromIdx = paren.toLowerCase().indexOf("from:");
+	const why = (fromIdx >= 0 ? paren.slice(0, fromIdx) : paren).trim();
+	const options = fromIdx >= 0
+		? paren.slice(fromIdx + 5).split(",").map((s) => s.trim()).filter((s) => s && s.length < 70).slice(0, 16)
+		: [];
+	const send = (v: string) => { const t = v.trim(); if (t) { onProvideInput(task.id, t); onClose(); } };
+
 	return (
 		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-			<div className="bg-panel border border-line rounded-t-xl sm:rounded-xl w-full sm:max-w-lg max-h-[85vh] overflow-auto p-4">
-				<div className="flex items-start justify-between gap-3 mb-2">
-					<h3 className="text-base font-bold break-words">{task.title || task.type}</h3>
-					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-lg leading-none shrink-0">✕</button>
+			<div className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[92vh] overflow-auto p-5 sm:p-6">
+				<div className="flex items-start justify-between gap-3 mb-1">
+					<h3 className="text-xl font-bold break-words">{task.title || "Job application"}</h3>
+					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-2xl leading-none shrink-0" aria-label="Close">✕</button>
 				</div>
-				<div className="flex gap-2 flex-wrap items-center text-[0.7rem] mb-3">
-					<span className={`px-1.5 py-0.5 rounded font-medium ${statusClass(task.status)}`}>{task.status}</span>
-					<span className="text-muted font-mono">{task.type}</span>
+				<div className="flex gap-2 flex-wrap items-center text-xs mb-5">
+					<span className={`px-2 py-0.5 rounded-full font-semibold ${statusClass(task.status)}`}>{needsHuman ? "Waiting for you" : task.status}</span>
 					{task.createdAt && <span className="text-muted-soft">started {formatTime(task.createdAt)}</span>}
 				</div>
 
-				{task.description && <p className="text-sm text-ink mb-3 whitespace-pre-wrap">{task.description}</p>}
-
-				{needsHuman && (
-					<div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-3 text-xs text-amber-600">
-						<b>Needs you{task.handoff_field ? `: ${task.handoff_field}` : ""}.</b> {task.handoff_reason || "The agent needs your input."}
-						<div className="mt-1.5 text-amber-700/80">Asked for a <b>value</b> (e.g. a salary)? Type it and Send. Stuck on a <b>step/CAPTCHA</b>? Do it in your browser, then Resume.</div>
-						<div className="flex gap-1.5 mt-2">
+				{needsHuman && kind === "value" && (
+					<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-4">
+						<div className="text-lg font-bold text-ink">✏️ The agent needs one answer to continue</div>
+						<div className="text-sm text-muted mt-0.5 mb-4">It won’t guess personal or legal details, so it’s asking you. Answer once and it keeps going on its own.</div>
+						<div className="text-base font-semibold text-ink">{field}</div>
+						{why && <div className="text-sm text-muted mt-1">{why}</div>}
+						{options.length > 0 && (
+							<div className="mt-4">
+								<div className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-2">Tap your answer</div>
+								<div className="flex flex-wrap gap-2">
+									{options.map((opt) => (
+										<button key={opt} type="button" onClick={() => send(opt)} className="px-3.5 py-2 rounded-lg bg-panel border border-line hover:border-accent hover:bg-accent/10 text-sm text-ink font-medium transition-colors">{opt}</button>
+									))}
+								</div>
+								<div className="text-xs text-muted-soft mt-4 mb-1.5">…or type a different answer</div>
+							</div>
+						)}
+						<div className="flex gap-2 mt-2">
 							<input
+								autoFocus
 								value={inputVal}
 								onChange={(e) => setInputVal(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter" && inputVal.trim()) { onProvideInput(task.id, inputVal.trim()); onClose(); } }}
-								placeholder={task.handoff_field || "Value the agent asked for…"}
-								className="flex-1 min-w-0 bg-panel border border-line rounded-md px-2 py-1 text-xs text-ink"
+								onKeyDown={(e) => { if (e.key === "Enter") send(inputVal); }}
+								placeholder={field}
+								className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink"
 							/>
-							<button type="button" disabled={!inputVal.trim()} onClick={() => { onProvideInput(task.id, inputVal.trim()); onClose(); }} className="text-xs px-3 py-1 rounded-md bg-accent text-white font-bold disabled:opacity-40 shrink-0">Send</button>
+							<button type="button" disabled={!inputVal.trim()} onClick={() => send(inputVal)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base disabled:opacity-40 shrink-0">Send</button>
 						</div>
 					</div>
 				)}
 
-				{task.input && Object.keys(task.input).length > 0 && (
-					<Section title="Input"><pre className="text-[0.7rem] text-muted whitespace-pre-wrap break-words">{fmt(task.input)}</pre></Section>
-				)}
-				{task.result && <Section title="Result"><div className="text-xs text-ink whitespace-pre-wrap">{task.result}</div></Section>}
-				{task.output && Object.keys(task.output).length > 0 && (
-					<Section title="Output"><pre className="text-[0.7rem] text-muted whitespace-pre-wrap break-words">{fmt(task.output)}</pre></Section>
-				)}
-				{taskEvents.length > 0 && (
-					<Section title="Activity">
-						<div className="flex flex-col gap-1">
-							{taskEvents.slice(0, 40).map((ev) => (
-								<div key={ev.id} className="flex justify-between gap-2 text-[0.7rem] text-muted">
-									<span className="font-mono text-ink shrink-0">{ev.type}</span>
-									<span className="truncate">{ev.message || ""}</span>
-									<span className="shrink-0">{formatTime(ev.createdAt ?? ev.timestamp)}</span>
-								</div>
-							))}
-						</div>
-					</Section>
+				{needsHuman && kind !== "value" && (
+					<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-4">
+						<div className="text-lg font-bold text-ink">{kind === "captcha" ? "🔐 A human verification appeared" : "✋ The agent is stuck on one step"}</div>
+						<div className="text-sm text-ink mt-1 mb-3">{field && field !== "your answer" ? <>It needs your help with: <b>{field}</b>.</> : "It needs you to do one step it can’t do on its own."}</div>
+						<ol className="text-sm text-muted list-decimal ml-5 space-y-1.5 mb-4">
+							<li>Switch to the <b>Chrome window the agent opened</b> — on the computer where you ran <code className="text-xs bg-paper px-1 py-0.5 rounded">pags up</code>.</li>
+							<li>{kind === "captcha" ? "Complete the “I’m not a robot” / verification there." : "Do that one step (tick the box, click the control, etc.)."}</li>
+							<li>Come back here and press <b>Resume</b> — the agent continues from where it paused.</li>
+						</ol>
+						<button type="button" onClick={() => { onResume(task.id); onClose(); }} className="px-5 py-2.5 rounded-lg bg-green/15 text-green font-bold text-base">Resume — I’ve done it</button>
+						<div className="text-xs text-muted-soft mt-3">There’s no screen to control from here — you act in that real Chrome window, then Resume.</div>
+					</div>
 				)}
 
-				{(needsApproval || needsHuman) && (
-					<div className="flex gap-2 mt-4">
-						{needsHuman ? (
-							<button type="button" onClick={() => { onResume(task.id); onClose(); }} className="text-xs px-3 py-1.5 rounded-md bg-green/15 text-green font-bold">Resume</button>
-						) : (
-							<button type="button" onClick={() => { onAction(task.id, "approve"); onClose(); }} className="text-xs px-3 py-1.5 rounded-md bg-green/15 text-green font-bold">Approve</button>
+				{/* The technical trace, tucked away — not what’s needed from you. */}
+				<details className="mt-1">
+					<summary className="cursor-pointer text-sm font-medium text-muted hover:text-ink select-none py-1">What the agent has done so far ({taskEvents.length} steps)</summary>
+					<div className="mt-3">
+						{taskEvents.length > 0 && (
+							<div className="flex flex-col gap-1.5 mb-3">
+								{taskEvents.slice(0, 60).map((ev) => (
+									<div key={ev.id} className="flex justify-between gap-3 text-xs">
+										<span className="text-ink truncate">{humanEvent(ev)}</span>
+										<span className="shrink-0 text-muted-soft">{formatTime(ev.createdAt ?? ev.timestamp)}</span>
+									</div>
+								))}
+							</div>
 						)}
-						<button type="button" onClick={() => { onAction(task.id, "cancel"); onClose(); }} className="text-xs px-3 py-1.5 rounded-md bg-red/15 text-red font-bold">Cancel</button>
+						{task.input && Object.keys(task.input).length > 0 && (
+							<Section title="Technical input"><pre className="text-[0.7rem] text-muted whitespace-pre-wrap break-words">{fmt(task.input)}</pre></Section>
+						)}
+						{task.result && <Section title="Result"><div className="text-xs text-ink whitespace-pre-wrap">{task.result}</div></Section>}
 					</div>
-				)}
+				</details>
+
+				<div className="flex gap-2 mt-5 pt-4 border-t border-line">
+					{needsApproval && <button type="button" onClick={() => { onAction(task.id, "approve"); onClose(); }} className="px-4 py-2 rounded-lg bg-green/15 text-green font-bold text-sm">Approve</button>}
+					<button type="button" onClick={() => { onAction(task.id, "cancel"); onClose(); }} className="px-4 py-2 rounded-lg bg-red/15 text-red font-semibold text-sm">Cancel application</button>
+				</div>
 			</div>
 		</div>
 	);
+}
+
+/** Turn a raw runtime event into a plain-language line (hides empty-name noise). */
+function humanEvent(ev: RuntimeEvent): string {
+	if (ev.type === "task.created") return "Started the application";
+	if (ev.type === "agent.needs_input") return "Paused — needs your answer";
+	if (ev.type === "job.human_handoff_required") return "Paused — waiting for you";
+	if (ev.type === "agent.captcha") return "Hit a human-verification check";
+	const m = (ev.message || ev.type || "").replace(/\s*(?:in|into textbox|into)\s*""/gi, "").replace(/\s+/g, " ").trim();
+	return m || ev.type;
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
