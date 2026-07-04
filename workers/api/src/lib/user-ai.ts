@@ -42,7 +42,9 @@ export async function runUserWorkersAi(
 	// BYOK: try providers in order of what the user has configured
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");
 	if (anthropicKey) {
-		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: string }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number });
+		// content is usually a string, but may be an array of content blocks (e.g. a
+		// PDF `document` block for résumé parsing) — passed straight through to Anthropic.
+		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number });
 	}
 
 	const cfCredentials = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
@@ -57,7 +59,7 @@ async function runAnthropic(
 	env: Env,
 	userId: string | undefined,
 	apiKey: string,
-	body: { messages: Array<{ role: string; content: string }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number },
+	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number },
 ): Promise<unknown> {
 	const messages = (body.messages || []).filter((m) => m.role !== "system");
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
@@ -70,7 +72,7 @@ async function runAnthropic(
 	// Prompt-cache the (large, stable) system prompt so repeated calls within a run
 	// — the apply loop fires one per step — reprocess it from cache instead of
 	// re-paying for it each time. Makes the per-step cost flat instead of growing.
-	if (systemMsg) anthropicBody.system = [{ type: "text", text: systemMsg.content, cache_control: { type: "ephemeral" } }];
+	if (systemMsg) anthropicBody.system = [{ type: "text", text: String(systemMsg.content), cache_control: { type: "ephemeral" } }];
 
 	// Convert tools to Anthropic format (deduplicate by name)
 	if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {

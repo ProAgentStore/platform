@@ -3,6 +3,7 @@ import { requireUser } from "../lib/auth.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences, profileCustomAnswers } from "../lib/profile.js";
+import { parseResumeIntoProfile } from "../lib/resume-parse.js";
 import { timingSafeEqualStr } from "../lib/crypto.js";
 import { runShotKey } from "../lib/run-shots.js";
 import type { Env } from "../types.js";
@@ -157,6 +158,11 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (!body.byteLength) return c.json({ error: "empty file" }, 400);
 		if (body.byteLength > 8 * 1024 * 1024) return c.json({ error: "résumé too large (max 8MB)" }, 400);
 		await c.env.STORAGE.put(resumeKey(session.uid, instanceId), body, { customMetadata: { name } });
+		// Parse the résumé with the user's BYOK Claude AFTER responding: pre-fill the
+		// empty structured Profile fields + seed the vector KB. Best-effort, never
+		// blocks or fails the upload. (PDF only — Claude reads PDFs natively.)
+		const mime = /\.pdf$/i.test(name) ? "application/pdf" : (c.req.header("content-type") || "");
+		c.executionCtx.waitUntil(parseResumeIntoProfile(c.env, instanceId, session.uid, new Uint8Array(body), mime).catch(() => undefined));
 		return c.json({ ok: true, name, size: body.byteLength });
 	});
 
