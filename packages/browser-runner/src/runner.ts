@@ -710,6 +710,37 @@ export class LocalRunner {
 		return head.slice(0, 400);
 	}
 
+	/**
+	 * After a WRITE action, read the field's REAL value back via the standard
+	 * browser_evaluate tool (evaluates on the element by ref — no reinvented DOM
+	 * traversal). Masked/intl fields transform input (e.g. "0404453580" → "+61404453580"),
+	 * so without this signal the brain can't tell the value "took" and oscillates
+	 * between formats. Returns the prompt's expected "…now reads…" / "REJECTED…" line.
+	 * Never throws — best-effort feedback.
+	 */
+	private async readBackField(mcp: McpRuntime, action: BrowserAction): Promise<string> {
+		if (!action.ref) return "";
+		const fn =
+			"el => ({ v: el.value !== undefined ? String(el.value) : (el.getAttribute('aria-checked') ?? el.textContent ?? '').trim(), " +
+			"bad: el.getAttribute('aria-invalid') === 'true' || !!(el.validity && !el.validity.valid), " +
+			"msg: el.validationMessage || '' })";
+		const res = await mcp.callTool("browser_evaluate", { element: action.name || "field", target: action.ref, function: fn }).catch(() => null);
+		if (!res || res.isError) return "";
+		const txt = mcp.textOf(res);
+		const i = txt.indexOf("### Result");
+		if (i < 0) return "";
+		const after = txt.slice(i + "### Result".length).trim();
+		const end = after.indexOf("\n###");
+		const block = (end >= 0 ? after.slice(0, end) : after).trim();
+		let parsed: { v?: string; bad?: boolean; msg?: string };
+		try { parsed = JSON.parse(block); } catch { return ""; }
+		if (typeof parsed?.v !== "string") return "";
+		const name = action.name || "field";
+		const shown = parsed.v.length > 80 ? `${parsed.v.slice(0, 80)}…` : parsed.v;
+		if (parsed.bad) return `⚠ "${name}" REJECTED: now reads "${shown}"${parsed.msg ? ` — ${parsed.msg.slice(0, 80)}` : ""}`;
+		return `"${name}" now reads "${shown}"`;
+	}
+
 	/** The snapshot ref the brain must target the element by (standard-tool `target`). */
 	private refOf(action: BrowserAction): string {
 		const ref = (action.ref || "").trim();
@@ -845,12 +876,20 @@ export class LocalRunner {
 		if (action.action === "click" || action.action === "navigate" || action.action === "key") {
 			await active.waitForLoadState("networkidle", { timeout: 3_500 }).catch(() => undefined);
 		}
+		// For a WRITE, read the field's real value back (masked/intl fields transform
+		// input, e.g. "0404453580" → "+61404453580") so the brain knows it took and
+		// stops oscillating between formats — the signal inspectField used to give.
+		let feedback = this.conciseFeedback(text);
+		if (action.action === "type" || action.action === "select" || action.action === "check") {
+			const rb = await this.readBackField(mcp, action);
+			if (rb) feedback = rb;
+		}
 		return {
 			ok: true,
 			url: active.url(),
 			title: await active.title().catch(() => ""),
 			challenge: await detectHumanChallenge(active),
-			feedback: this.conciseFeedback(text) || undefined,
+			feedback: feedback || undefined,
 		};
 	}
 

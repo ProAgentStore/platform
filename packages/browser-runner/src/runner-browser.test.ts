@@ -137,6 +137,17 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(after.feedback ?? "").toMatch(/dialog was accepted/i);
 	}, 60_000);
 
+	it("reads back a masked field's real value so the brain doesn't oscillate", async () => {
+		// A phone field that transforms input like a real intl mask: "0404…" → "+61404…".
+		// Without read-back the brain can't tell the value took and re-types forever.
+		await runner.browserAct({ action: "navigate", url: "data:text/html,<input aria-label=Phone oninput=\"this.value=this.value.replace(/^0/,'+61')\">" });
+		const snap = await runner.browserSnapshot();
+		const res = await runner.browserAct({ action: "type", ref: ref(snap.snapshot, "textbox", "Phone"), name: "Phone", text: "0404453580" });
+		// The runner reports what the field ACTUALLY holds now (the transformed value).
+		expect(res.feedback ?? "").toMatch(/now reads/i);
+		expect(res.feedback ?? "").toContain("+61404453580");
+	}, 60_000);
+
 	it("a failed action (bad ref) throws so the workflow surfaces it to the brain", async () => {
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
 		await runner.browserSnapshot();
