@@ -122,6 +122,21 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(runner.store.getTask(task.id)?.status).toBe("completed");
 	}, 60_000);
 
+	it("auto-handles a native dialog so the brain isn't wedged (real ATS: alert after résumé upload)", async () => {
+		// A page that pops a native alert — exactly what Coles does after résumé upload.
+		// @playwright/mcp traps the dialog as a modal state that blocks every tool; the
+		// runner must clear it transparently (the brain has no dialog vocabulary).
+		await runner.browserAct({ action: "navigate", url: "data:text/html,<button onclick=\"alert('Your resume has been uploaded and processed')\">Go</button>" });
+		const snap = await runner.browserSnapshot();
+		// Clicking opens the alert (the click itself may succeed; the dialog blocks the NEXT tool).
+		await runner.browserAct({ action: "click", ref: ref(snap.snapshot, "button", "Go"), name: "Go" });
+		// Any follow-up action hits the modal state — the runner accepts the dialog and
+		// reports it as a successful, informative step instead of throwing.
+		const after = await runner.browserAct({ action: "key", key: "Enter" });
+		expect(after.ok).toBe(true);
+		expect(after.feedback ?? "").toMatch(/dialog was accepted/i);
+	}, 60_000);
+
 	it("a failed action (bad ref) throws so the workflow surfaces it to the brain", async () => {
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
 		await runner.browserSnapshot();

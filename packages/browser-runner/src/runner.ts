@@ -796,6 +796,26 @@ export class LocalRunner {
 		const mcp = await this.getMcp();
 		const res = await this.callBrowserTool(mcp, action);
 		const text = mcp.textOf(res).trim();
+		// A native page dialog (alert/confirm/beforeunload) puts the standard server
+		// into a modal state that blocks EVERY other tool until it's handled. The brain
+		// has no dialog vocabulary (the old runtime relied on Playwright's default
+		// auto-dismiss, which @playwright/mcp overrides), so clear it transparently and
+		// report it as a successful, informative step — the brain proceeds on the next
+		// snapshot instead of thrashing into a needless human handoff.
+		if (res.isError && /modal state/i.test(text) && /dialog/i.test(text)) {
+			const dialogMsg = (text.match(/dialog with message "([^"]*)"/)?.[1] || "").slice(0, 160);
+			await mcp.callTool("browser_handle_dialog", { accept: true }).catch(() => undefined);
+			await page.waitForTimeout(400).catch(() => undefined);
+			const settled = await this.getActivePage();
+			await settled.waitForLoadState("domcontentloaded", { timeout: 6_000 }).catch(() => undefined);
+			return {
+				ok: true,
+				url: settled.url(),
+				title: await settled.title().catch(() => ""),
+				challenge: await detectHumanChallenge(settled),
+				feedback: dialogMsg ? `a native dialog was accepted: "${dialogMsg}"` : "a native dialog was accepted",
+			};
+		}
 		if (res.isError) throw new RunnerInputError(this.conciseFeedback(text) || `${action.action} failed`);
 		// A click may trigger SPA navigation or open a new tab/popup. Give it a beat
 		// to settle and follow the (possibly new) active page, so the next snapshot
