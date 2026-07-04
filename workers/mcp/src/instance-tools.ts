@@ -308,6 +308,42 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"apply_to_job",
+		"Launch the LLM-driven job application for a private apply-agent instance: the PAGS agent drives the user's local browser to fill (and, only if submit=true, SUBMIT) the application at the given job URL. The résumé comes from the instance's stored résumé and candidate details from the user's Profile. If the agent needs a value it can't truthfully invent (e.g. work authorization), it pauses with a needs_input ticket for the USER to answer in the console, then continues. Default is a safe test run that stops at the Submit button without clicking it.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("The apply-agent instance ID (from my_instances)."),
+			url: z.string().describe("The job posting / application URL to apply to."),
+			submit: z.boolean().optional().describe("false (default) = fill everything and stop at the Submit button WITHOUT clicking it (safe test). true = actually SUBMIT the application to the employer."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, url, submit, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const realSubmit = submit === true;
+			const toolInput = { instance_id, url, submit: realSubmit };
+			// A real submission is an outward, hard-to-undo action → destructive scope;
+			// a test run (fill-only) is just runtime.
+			const denied = await requirePermission(safetyFor(token), realSubmit ? "destructive" : "runtime", "apply_to_job", toolInput);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "apply_to_job", realSubmit ? "SUBMIT a job application to the employer" : "test-fill a job application (stops before submit)", toolInput, {
+					endpoint: `/v1/instances/${instance_id}/apply`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/apply`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ url, dryRun: !realSubmit }) },
+				env,
+			);
+			await audit(safetyFor(token), { tool: "apply_to_job", action: "completed", input: toolInput, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"approve_instance_task",
 		"Approve a FAGS runtime task waiting for human approval.",
 		{

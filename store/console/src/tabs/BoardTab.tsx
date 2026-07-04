@@ -190,21 +190,7 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 				/>
 			)}
 
-			{/* Recent activity */}
-			{events.length > 0 && (
-				<div className="bg-panel border border-line rounded-xl p-4 mt-4">
-					<h3 className="text-sm font-semibold mb-3">Recent Activity</h3>
-					<div className="flex flex-col gap-1.5">
-						{events.slice(0, 20).map((ev) => (
-							<div key={ev.id} className="flex justify-between gap-3 text-xs text-muted border-b border-line pb-1.5 last:border-0">
-								<span className="font-mono text-ink">{ev.type}</span>
-								<span>{ev.message || ""}</span>
-								<span className="shrink-0">{formatTime(ev.createdAt ?? ev.timestamp)}</span>
-							</div>
-						))}
-					</div>
-				</div>
-			)}
+			{/* Per-ticket activity lives inside each ticket's detail — not on the board. */}
 		</div>
 	);
 }
