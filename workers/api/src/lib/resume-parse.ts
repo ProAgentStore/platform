@@ -1,5 +1,7 @@
-import { runUserWorkersAi } from "./user-ai.js";
+import { runUserWorkersAi, UserAiCredentialsError } from "./user-ai.js";
 import { getProfile, upsertProfile, PROFILE_FIELDS, type Profile } from "./profile.js";
+import { logError } from "./error-log.js";
+import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
 /** Base64-encode bytes in chunks (avoids call-stack limits on large PDFs). */
@@ -45,12 +47,15 @@ const SAVE_RESUME_TOOL = {
  * (no key, non-PDF, provider error) is swallowed so the upload itself is unaffected.
  */
 export async function parseResumeIntoProfile(env: Env, instanceId: string, userId: string, bytes: Uint8Array, mime: string): Promise<void> {
-	// Claude reads PDFs natively; skip other formats (docx/txt) for now.
-	if (mime !== "application/pdf") return;
+	const link = `/console/instances/${instanceId}/knowledge`;
+	// Claude reads PDFs natively; skip other formats (docx/txt) for now — but SAY so.
+	if (mime !== "application/pdf") {
+		await notifyUser(env, userId, "apply", "Résumé saved (not auto-filled)", "Auto-fill needs a PDF résumé. Your file is saved and will still be attached to applications — re-upload as PDF to auto-fill your Profile.", link).catch(() => undefined);
+		return;
+	}
 
-	let res: { tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }> };
 	try {
-		res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
+		const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
 			messages: [
 				{ role: "system", content: "You extract a candidate's résumé into structured fields. Copy values EXACTLY as written — do NOT infer, translate, or invent. Leave a field blank if it isn't clearly stated. Call save_resume exactly once." },
 				{
@@ -65,35 +70,50 @@ export async function parseResumeIntoProfile(env: Env, instanceId: string, userI
 			maxTokens: 2000,
 			timeoutMs: 60_000,
 		})) as { tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }> };
-	} catch {
-		return; // no BYOK key / provider error / unreadable PDF → silently skip
-	}
 
-	const call = res.tool_calls?.find((t) => t.name === "save_resume");
-	if (!call) return;
-	const a = call.arguments || {};
-	const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+		const call = res.tool_calls?.find((t) => t.name === "save_resume");
+		if (!call) throw new Error("the résumé couldn't be read (the model returned no fields)");
+		const a = call.arguments || {};
+		const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
 
-	// Fill ONLY empty standard Profile fields — never overwrite what the user set.
-	const existing = await getProfile(env, userId);
-	const merged: Profile = { ...existing };
-	let changed = false;
-	for (const f of PROFILE_FIELDS) {
-		const v = str(a[f.key]);
-		if (v && !str(existing[f.key])) { merged[f.key] = v; changed = true; }
-	}
-	if (changed) await upsertProfile(env, userId, merged);
+		// Fill ONLY empty standard Profile fields — never overwrite what the user set.
+		const existing = await getProfile(env, userId);
+		const merged: Profile = { ...existing };
+		const filled: string[] = [];
+		for (const f of PROFILE_FIELDS) {
+			const v = str(a[f.key]);
+			if (v && !str(existing[f.key])) { merged[f.key] = v; filled.push(f.label); }
+		}
+		if (filled.length) await upsertProfile(env, userId, merged);
 
-	// Seed the vector KB with a searchable summary (the instance DO vectorizes it).
-	const summary = str(a.summaryText);
-	if (summary) {
-		const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
-		await stub
-			.fetch(new Request("https://agent/knowledge", {
+		// Seed the vector KB with a searchable summary (the instance DO vectorizes it).
+		const summary = str(a.summaryText);
+		let kbAdded = false;
+		if (summary) {
+			const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
+			const r = await stub.fetch(new Request("https://agent/knowledge", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ title: "Résumé (parsed)", content: summary }),
-			}))
-			.catch(() => undefined);
+			}));
+			kbAdded = r.ok;
+		}
+
+		// ALWAYS tell the user the outcome — never silent.
+		const parts: string[] = [];
+		if (filled.length) parts.push(`filled ${filled.length} Profile field${filled.length > 1 ? "s" : ""} (${filled.slice(0, 4).join(", ")}${filled.length > 4 ? "…" : ""})`);
+		if (kbAdded) parts.push("added a searchable summary to your knowledge base");
+		await notifyUser(env, userId, "apply", "✅ Résumé parsed",
+			parts.length ? `We ${parts.join(" and ")}.` : "Nothing new to add — your Profile was already complete.",
+			link).catch(() => undefined);
+	} catch (e) {
+		if (e instanceof UserAiCredentialsError) {
+			await notifyUser(env, userId, "apply", "Résumé saved (not auto-filled)", "Add an Anthropic API key in Profile → API Keys, then re-upload, to auto-fill your Profile from your résumé.", "/console/profile").catch(() => undefined);
+			return;
+		}
+		// A REAL failure: persist it to the error log AND alert the user (never silent).
+		const msg = e instanceof Error ? e.message : String(e);
+		await logError(env, { source: "resume-parse", userId, message: `résumé parse failed: ${msg}`.slice(0, 300), context: { instanceId } }).catch(() => undefined);
+		await notifyUser(env, userId, "apply", "⚠️ Couldn’t parse your résumé", `${msg.slice(0, 140)} — your Profile is unchanged. Try a different PDF, or fill your Profile manually.`, link).catch(() => undefined);
 	}
 }
