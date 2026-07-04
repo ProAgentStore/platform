@@ -79,6 +79,30 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 		}
 	};
 
+	// Remove a single ticket from the board (best-effort cancels it if still running).
+	const handleDelete = async (taskId: string) => {
+		try {
+			await api(`/v1/instances/${instanceId}/tasks/${taskId}`, { method: "DELETE" });
+			if (detailId === taskId) setDetailId(null);
+			loadBoard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const finishedStatuses = ["completed", "cancelled", "failed", "blocked", "expired"];
+	const finishedCount = tasks.filter((t) => finishedStatuses.includes(t.status)).length;
+	// Clear every finished ticket (done/failed/cancelled) in one go.
+	const handleClearFinished = async () => {
+		if (!finishedCount || !confirm(`Remove ${finishedCount} finished ticket${finishedCount !== 1 ? "s" : ""} from the board? This can't be undone.`)) return;
+		try {
+			await api(`/v1/instances/${instanceId}/tasks/clear-finished`, { method: "POST" });
+			loadBoard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	// Look up the open task fresh each render so the modal stays live as the board polls.
 	const detailTask = detailId ? tasks.find((t) => t.id === detailId) ?? null : null;
 
@@ -104,6 +128,15 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 							</button>
 						))}
 					</div>
+					{finishedCount > 0 && (
+						<button
+							type="button"
+							onClick={handleClearFinished}
+							className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-semibold"
+						>
+							Clear finished ({finishedCount})
+						</button>
+					)}
 					<button
 						type="button"
 						onClick={loadBoard}
@@ -136,7 +169,7 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 									</div>
 								) : (
 									items.map((task) => (
-										<TaskCard key={task.id} task={task} onAction={handleAction} onResume={handleResume} onOpen={openTask} />
+										<TaskCard key={task.id} task={task} onAction={handleAction} onResume={handleResume} onOpen={openTask} onDelete={handleDelete} />
 									))
 								)}
 							</div>
@@ -153,6 +186,7 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 					onAction={handleAction}
 					onResume={handleResume}
 					onProvideInput={handleProvideInput}
+					onDelete={handleDelete}
 				/>
 			)}
 
@@ -175,14 +209,16 @@ export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: strin
 	);
 }
 
-function TaskDetailModal({ task, events, onClose, onAction, onResume, onProvideInput }: {
+function TaskDetailModal({ task, events, onClose, onAction, onResume, onProvideInput, onDelete }: {
 	task: RuntimeTask;
 	events: RuntimeEvent[];
 	onClose: () => void;
 	onAction: (id: string, action: string) => void;
 	onResume: (id: string) => void;
 	onProvideInput: (id: string, value: string) => void;
+	onDelete: (id: string) => void;
 }) {
+	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired"].includes(task.status);
 	const [inputVal, setInputVal] = useState("");
 	const needsHuman = task.status === "needs_human" || task.needs_human;
 	const needsApproval = task.status === "needs_approval";
@@ -294,7 +330,11 @@ function TaskDetailModal({ task, events, onClose, onAction, onResume, onProvideI
 
 				<div className="flex gap-2 mt-5 pt-4 border-t border-line">
 					{needsApproval && <button type="button" onClick={() => { onAction(task.id, "approve"); onClose(); }} className="px-4 py-2 rounded-lg bg-green/15 text-green font-bold text-sm">Approve</button>}
-					<button type="button" onClick={() => { onAction(task.id, "cancel"); onClose(); }} className="px-4 py-2 rounded-lg bg-red/15 text-red font-semibold text-sm">Cancel application</button>
+					{isFinished ? (
+						<button type="button" onClick={() => { onDelete(task.id); onClose(); }} className="px-4 py-2 rounded-lg bg-red/15 text-red font-semibold text-sm">Delete from board</button>
+					) : (
+						<button type="button" onClick={() => { onAction(task.id, "cancel"); onClose(); }} className="px-4 py-2 rounded-lg bg-red/15 text-red font-semibold text-sm">Cancel application</button>
+					)}
 				</div>
 			</div>
 		</div>
@@ -320,13 +360,24 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 	);
 }
 
-function TaskCard({ task, onAction, onResume, onOpen }: { task: RuntimeTask; onAction: (id: string, action: string) => void; onResume: (id: string) => void; onOpen: (id: string) => void }) {
+function TaskCard({ task, onAction, onResume, onOpen, onDelete }: { task: RuntimeTask; onAction: (id: string, action: string) => void; onResume: (id: string) => void; onOpen: (id: string) => void; onDelete: (id: string) => void }) {
 	const needsHuman = task.status === "needs_human" || task.needs_human;
 	const needsApproval = task.status === "needs_approval";
+	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired"].includes(task.status);
 	return (
-		<div className="bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent hover:-translate-y-px">
+		<div className="relative bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent hover:-translate-y-px">
+			{isFinished && (
+				<button
+					type="button"
+					title="Remove from board"
+					onClick={(e) => { e.stopPropagation(); onDelete(task.id); }}
+					className="absolute top-1.5 right-1.5 w-6 h-6 flex items-center justify-center rounded-md text-muted-soft hover:text-red hover:bg-red/10 text-base leading-none"
+				>
+					✕
+				</button>
+			)}
 			<button type="button" onClick={() => onOpen(task.id)} className="text-left w-full cursor-pointer">
-				<h3 className="text-sm font-bold mb-0.5 break-words">{task.title || task.type}</h3>
+				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{task.title || task.type}</h3>
 				<p className="text-xs text-muted line-clamp-2 mb-2">{task.description || ""}</p>
 				<div className="flex gap-1.5 flex-wrap items-center text-[0.7rem]">
 					<span className={`px-1.5 py-0.5 rounded font-medium ${statusClass(task.status)}`}>
