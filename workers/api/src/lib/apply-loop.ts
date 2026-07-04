@@ -413,7 +413,7 @@ export function applySystemPrompt(job: ApplyJob): string {
 			? ["- Values you asked the user for (use these, don't ask again):", ...Object.entries(job.providedAnswers).map(([k, v]) => `  • ${k}: ${v}`)]
 			: []),
 		job.coverNote ? `- Cover note: ${job.coverNote}` : "",
-		"- Résumé / file uploads: ALWAYS use the `upload` tool on the upload control (the file is supplied automatically — never ask for a path). Do NOT `click` a 'Browse' / 'Choose file' / 'Upload your CV' button to open a file picker — use `upload` directly on it.",
+			"- Résumé / file uploads: ATTACH THE RÉSUMÉ EARLY. As soon as a résumé/CV upload control is present (e.g. 'Upload Resume', 'Upload CV', 'Attach resume', a file drop-zone), use the `upload` tool on it BEFORE filling the text fields — do NOT skip it. The résumé is required even when the upload control looks optional or sits among other import buttons (LinkedIn / Dropbox / Google Drive / OneDrive — IGNORE those, they are not the résumé upload; use `upload` on the résumé control). ALWAYS use the `upload` tool (the file is supplied automatically — never ask for a path); do NOT `click` a 'Browse' / 'Choose file' / 'Upload your CV' button to open a file picker — use `upload` directly on it.",
 		job.password ? `- Account password: ${job.password} — use EXACTLY this in both Password and Confirm password. Never invent a different password.` : "",
 		"",
 		"ACCOUNT:",

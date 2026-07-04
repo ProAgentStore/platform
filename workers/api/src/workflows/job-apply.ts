@@ -5,6 +5,7 @@ import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { guessProfileKey, setProfileField } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
+import { notifyUser } from "../routes/push.js";
 import { buildQuery, extractCode, findMatchingMessage, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
 import type { Env } from "../types.js";
 
@@ -171,6 +172,22 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			const reason = result.outcome === "captcha" ? "challenge" : result.outcome === "needs_input" ? "needs_input" : "stuck";
 			const label = result.outcome === "captcha" ? result.challenge ?? "captcha" : result.outcome === "needs_input" ? result.fieldNeeded ?? "a value" : result.detail ?? "this step";
 			await step.do(`handoff-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/handoff", { taskId, label, reason, challenge: result.challenge ?? undefined }));
+
+			// Reach out to the user — an in-app notification + web push (+ Slack if set) —
+			// so they know the application is paused waiting on THEM, instead of it sitting
+			// silently in needs_human until they happen to look at the console.
+			await step.do(`notify-${round}`, async () => {
+				const link = `/console/instances/${instanceId}/board`;
+				const host = atsHost(job.url) || "the job site";
+				const { title, body } =
+					reason === "needs_input"
+						? { title: "🙋 Your job application needs an answer", body: `${label} — open to provide it and the agent continues (${host}).` }
+						: reason === "challenge"
+							? { title: "🔐 Verification needed on your application", body: `A human check (${label}) appeared on ${host} — take over to solve it and the agent continues.` }
+							: { title: "✋ Your job application needs a hand", body: `Stuck on: ${label} (${host}). Take over that one step and the agent continues.` };
+				await notifyUser(env, userId, "apply", title, body, link).catch(() => undefined);
+				return null;
+			});
 
 			let solved = false;
 			let providedValue: string | undefined;
