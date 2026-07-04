@@ -399,6 +399,18 @@ export function registerInstanceTools(
 			return jsonText(data);
 		},
 	);
+
+	server.tool(
+		"get_profile",
+		"Read the authenticated user's structured candidate Profile — name, contact, city/state/country, LinkedIn/website, work authorization, salary expectation, job preferences, and any custom answers the apply agent has saved from needs_input tickets. This is what the job-application agent fills forms from.",
+		{ token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.") },
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall("/v1/profile", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
 	} // ── end apply-agent tools ──
 
 	server.tool(
@@ -678,6 +690,28 @@ export function registerInstanceTools(
 				`/v1/instances/${instance_id}/knowledge`,
 				sessionToken,
 				{},
+				env,
+			);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"search_instance_knowledge",
+		"Semantic (vector) search across a private instance's knowledge base — résumé summary, uploaded docs, indexed repo code, etc. Returns the most relevant chunks by similarity. This validates what's actually retrievable from the instance's vector store.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			query: z.string().describe("Natural-language search query."),
+			top_k: z.number().int().min(1).max(20).optional().describe("Number of results (default 5)."),
+		},
+		async ({ token, instance_id, query, top_k }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/search`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ query, top_k: top_k || 5 }) },
 				env,
 			);
 			return jsonText(data);
