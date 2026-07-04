@@ -1,13 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { basename, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { BrowserContext, CDPSession, Locator, Page } from "playwright";
-import { humanApproach } from "./human-mouse.js";
+import type { BrowserContext, CDPSession, Page } from "playwright";
 import { captureScreenshotDataUrl, challengeSolved, detectHumanChallenge } from "./challenge.js";
 import { resolveRealChromeProfileDir, seedProfileCopy } from "./browser-profile.js";
-import { inspectField, performBrowserAction } from "./browser-actions.js";
+import { McpRuntime } from "./mcp-runtime.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
@@ -59,6 +58,16 @@ export class LocalRunner {
 	private activePage: Page | null = null;
 	private readonly fileAttachArmed = new WeakSet<Page>();
 	private applyResumePath: string | null = null;
+	/**
+	 * The INDUSTRY-STANDARD `@playwright/mcp` server, attached over CDP to the same
+	 * real-profile Chrome the takeover machinery drives. Every brain-issued browser
+	 * action runs through its standard tools — no hand-rolled action code. Lazily
+	 * started once the browser is up (see {@link getMcp}).
+	 */
+	private mcp: McpRuntime | null = null;
+	private cdpEndpoint: string | null = null;
+	/** The profile dir Chrome was actually launched into (holds DevToolsActivePort). */
+	private launchedProfileDir: string | null = null;
 	readonly store: RunnerStore;
 	/** Local tmux coding sessions (the second runtime — AgentCoder port). */
 	readonly coding: CodingRuntime;
@@ -168,8 +177,12 @@ export class LocalRunner {
 
 	async close(): Promise<void> {
 		this.coding.closeAll();
+		await this.mcp?.stop().catch(() => undefined);
+		this.mcp = null;
+		this.cdpEndpoint = null;
 		await this.browserContext?.close();
 		this.browserContext = null;
+		this.launchedProfileDir = null;
 	}
 
 	private async runTask(id: string): Promise<void> {
@@ -553,7 +566,10 @@ export class LocalRunner {
 			viewport: null,
 			// Light anti-detection: drop the most obvious automation tell so fewer
 			// CAPTCHAs trigger in the first place (the human still solves the rest).
-			args: ["--disable-blink-features=AutomationControlled", "--start-maximized", "--window-size=1512,982"],
+			// --remote-debugging-port=0 → Chrome picks a free CDP port and writes it to
+			// DevToolsActivePort in the profile dir; the standard @playwright/mcp server
+			// attaches to that endpoint so it drives THIS same real-profile browser.
+			args: ["--disable-blink-features=AutomationControlled", "--start-maximized", "--window-size=1512,982", "--remote-debugging-port=0"],
 		};
 		// Prefer the real Chrome build (better TLS/fingerprint → fewer CAPTCHAs);
 		// fall back to bundled Chromium if Chrome isn't installed. Disable with
@@ -581,12 +597,12 @@ export class LocalRunner {
 					channel: "chrome",
 					args: [...baseOpts.args, "--profile-directory=Default"],
 				});
+				this.launchedProfileDir = seededDir;
 				console.log(`[runner] launched a private copy of your real Chrome profile (signed-in sessions seeded from "${realProfileDir.profile}")`);
 			} else {
-				this.browserContext = await playwright.chromium.launchPersistentContext(
-					join(this.config.dataDir, "chrome-profile"),
-					{ ...baseOpts, channel: "chrome" },
-				);
+				const dedicated = join(this.config.dataDir, "chrome-profile");
+				this.browserContext = await playwright.chromium.launchPersistentContext(dedicated, { ...baseOpts, channel: "chrome" });
+				this.launchedProfileDir = dedicated;
 			}
 		} catch (err) {
 			if (realProfileDir) {
@@ -594,6 +610,7 @@ export class LocalRunner {
 				console.warn(`[runner] real-profile launch failed (${msg}); falling back to a dedicated profile. Fully quit Chrome (Cmd+Q) to use your real profile.`);
 			}
 			this.browserContext = await playwright.chromium.launchPersistentContext(profileDir, baseOpts);
+			this.launchedProfileDir = profileDir;
 		}
 		await this.browserContext
 			.addInitScript(() => {
@@ -642,10 +659,102 @@ export class LocalRunner {
 		return page;
 	}
 
+	/** The CDP endpoint of the launched Chrome (from DevToolsActivePort in its profile). */
+	private async readCdpEndpoint(): Promise<string> {
+		if (this.cdpEndpoint) return this.cdpEndpoint;
+		const dir = this.launchedProfileDir;
+		if (!dir) throw new Error("browser context not launched yet");
+		const portFile = join(dir, "DevToolsActivePort");
+		for (let i = 0; i < 50; i++) {
+			if (existsSync(portFile)) {
+				const line = readFileSync(portFile, "utf8").split("\n")[0]?.trim();
+				if (line) {
+					this.cdpEndpoint = `http://127.0.0.1:${line}`;
+					return this.cdpEndpoint;
+				}
+			}
+			await new Promise((r) => setTimeout(r, 100));
+		}
+		throw new Error("could not read Chrome CDP port (DevToolsActivePort missing)");
+	}
+
 	/**
-	 * What the remote brain "sees": a compact ARIA tree (roles + accessible names
-	 * + values + states) of the active page — the same representation the brain
-	 * acts on via {@link browserAct}. No raw HTML/screenshots → cheap on tokens.
+	 * The standard `@playwright/mcp` server, attached over CDP to the runner's own
+	 * real-profile Chrome. Lazily started; every browser action + snapshot goes
+	 * through its standard tools. Because it shares the browser over CDP, actions it
+	 * performs land on the exact page the takeover/screencast machinery drives.
+	 */
+	private async getMcp(): Promise<McpRuntime> {
+		if (this.mcp) return this.mcp;
+		await this.getBrowserContext();
+		const cdpEndpoint = await this.readCdpEndpoint();
+		const mcp = new McpRuntime();
+		await mcp.start({ cdpEndpoint });
+		this.mcp = mcp;
+		return mcp;
+	}
+
+	/** Pull the aria tree (with [ref=eNN]) out of a standard browser_snapshot result. */
+	private extractSnapshot(text: string): string {
+		const yaml = text.match(/```yaml\n([\s\S]*?)```/);
+		if (yaml) return yaml[1].trimEnd();
+		const i = text.indexOf("Page Snapshot:");
+		return i >= 0 ? text.slice(i + "Page Snapshot:".length).trim() : text.trim();
+	}
+
+	/** Concise feedback from a tool result — drop the big page snapshot (the brain
+	 *  gets a fresh one next turn); keep the action confirmation / any error text. */
+	private conciseFeedback(text: string): string {
+		const cut = text.search(/###\s*Page state|- Page Snapshot:|```yaml/);
+		const head = (cut >= 0 ? text.slice(0, cut) : text).replace(/```[a-z]*\n?|```/g, " ").replace(/\s+/g, " ").trim();
+		return head.slice(0, 400);
+	}
+
+	/** The snapshot ref the brain must target the element by (standard-tool `target`). */
+	private refOf(action: BrowserAction): string {
+		const ref = (action.ref || "").trim();
+		if (!ref) throw new RunnerInputError(`the "${action.action}" action needs the element's snapshot ref (e.g. "e42")`);
+		return ref;
+	}
+
+	/** Map one brain BrowserAction onto the industry-standard @playwright/mcp tool. */
+	private async callBrowserTool(mcp: McpRuntime, a: BrowserAction) {
+		const label = a.name || a.role || a.action;
+		switch (a.action) {
+			case "navigate":
+				return mcp.callTool("browser_navigate", { url: a.url });
+			case "type":
+				return mcp.callTool("browser_type", { element: label, target: this.refOf(a), text: a.text ?? "" });
+			// A checkbox/radio is just a click at the standard-tool level.
+			case "click":
+			case "check":
+				return mcp.callTool("browser_click", { element: label, target: this.refOf(a) });
+			case "upload": {
+				// Standard two-step: clicking the upload control opens the file chooser,
+				// which puts the @playwright/mcp server into its file-chooser modal state;
+				// browser_file_upload then resolves that state with the résumé path.
+				await mcp.callTool("browser_click", { element: label, target: this.refOf(a) });
+				if (!this.applyResumePath) throw new RunnerInputError("no résumé file available to upload");
+				return mcp.callTool("browser_file_upload", { paths: [this.applyResumePath] });
+			}
+			case "select":
+				return mcp.callTool("browser_select_option", { element: label, target: this.refOf(a), values: [a.text ?? ""] });
+			case "key":
+				return mcp.callTool("browser_press_key", { key: a.key || "Enter" });
+			case "scroll":
+				return mcp.callTool("browser_evaluate", { function: `() => window.scrollBy(0, ${Math.round(a.dy ?? 600)})` });
+			case "wait":
+				return mcp.callTool("browser_wait_for", { time: Math.min(5, Math.max(0.1, (a.ms ?? 1000) / 1000)) });
+			default:
+				throw new RunnerInputError(`unknown action: ${a.action}`);
+		}
+	}
+
+	/**
+	 * What the remote brain "sees": the standard `@playwright/mcp` page snapshot — a
+	 * compact ARIA tree with roles, accessible names, values, states, and a stable
+	 * [ref=eNN] on each interactive element. The brain targets elements by that ref;
+	 * because {@link browserAct} routes through the SAME mcp server, the refs resolve.
 	 */
 	async browserSnapshot(taskId?: string): Promise<{ url: string; title: string; snapshot: string; challenge: string | null; truncated: boolean; cancelled?: boolean }> {
 		// If the user pressed Stop, the task is cancelled — tell the brain to halt.
@@ -654,16 +763,9 @@ export class LocalRunner {
 		}
 		const page = await this.getActivePage();
 		await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
-		// Match what a direct Claude + Playwright-MCP agent sees: `ariaSnapshot({mode:"ai"})`
-		// carries element STATE (disabled/checked/expanded/selected/value) and a stable
-		// [ref=eNN] on each interactive element, so the brain targets them unambiguously via
-		// the aria-ref selector (instead of role+name, which collides when two fields share a
-		// label). This is exactly the call Playwright's own MCP uses. Falls back to the plain
-		// aria snapshot if the option is ever unavailable.
-		const aria = page as unknown as { ariaSnapshot: (opts?: { mode?: string }) => Promise<string> };
-		const full =
-			(await aria.ariaSnapshot({ mode: "ai" }).catch(() => "")) ||
-			(await page.locator("body").ariaSnapshot().catch(() => ""));
+		const mcp = await this.getMcp();
+		const res = await mcp.callTool("browser_snapshot");
+		const full = this.extractSnapshot(mcp.textOf(res));
 		const MAX = 16_000;
 		const snapshot = full.length > MAX ? `${full.slice(0, MAX)}\n… [snapshot truncated]` : full;
 		return {
@@ -676,9 +778,10 @@ export class LocalRunner {
 	}
 
 	/**
-	 * Perform one brain-issued action on the active page. Elements are addressed
-	 * by ARIA role + accessible name (from the snapshot) via Playwright's
-	 * getByRole — robust and selector-free. Returns the resulting page state.
+	 * Perform one brain-issued action via the standard `@playwright/mcp` tools
+	 * (browser_click / browser_type / browser_select_option / …), targeting the
+	 * element by its snapshot ref. A tool-level failure is thrown so the workflow
+	 * surfaces it to the brain as an `error` (which drives its self-correction).
 	 */
 	async browserAct(action: BrowserAction, resumePath?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string }> {
 		const page = await this.getActivePage();
@@ -690,9 +793,10 @@ export class LocalRunner {
 			if (local) this.applyResumePath = local;
 		}
 		if (this.applyResumePath) this.armFileAutoAttach(page, this.applyResumePath);
-		// The selector-free action switch lives in browser-actions.ts (kept this
-		// file from ballooning); the post-action settle + result stay here.
-		await performBrowserAction(page, action, (p, loc) => this.clickRobustly(p, loc), this.applyResumePath);
+		const mcp = await this.getMcp();
+		const res = await this.callBrowserTool(mcp, action);
+		const text = mcp.textOf(res).trim();
+		if (res.isError) throw new RunnerInputError(this.conciseFeedback(text) || `${action.action} failed`);
 		// A click may trigger SPA navigation or open a new tab/popup. Give it a beat
 		// to settle and follow the (possibly new) active page, so the next snapshot
 		// reflects the new state — not the element the brain just clicked.
@@ -706,33 +810,13 @@ export class LocalRunner {
 		if (action.action === "click" || action.action === "navigate" || action.action === "key") {
 			await active.waitForLoadState("networkidle", { timeout: 3_500 }).catch(() => undefined);
 		}
-		// Read back what a write action actually did (real field value + any validation
-		// error) so the brain gets semantic feedback, not just "Playwright didn't throw".
-		const feedback = await inspectField(active, action).catch(() => "");
 		return {
 			ok: true,
 			url: active.url(),
 			title: await active.title().catch(() => ""),
 			challenge: await detectHumanChallenge(active),
-			feedback: feedback || undefined,
+			feedback: this.conciseFeedback(text) || undefined,
 		};
-	}
-
-	/**
-	 * Click an element through escalating fallbacks: normal → force (bypass
-	 * actionability) → scroll-into-view + click the element's CENTER COORDINATES
-	 * with the mouse. The coordinate click defeats custom-styled controls (hidden
-	 * inputs, overlays) that swallow locator clicks. Returns false only if the
-	 * element can't be located/positioned at all.
-	 */
-	private async clickRobustly(page: Page, loc: Locator): Promise<boolean> {
-		if (await loc.click({ timeout: 6_000 }).then(() => true).catch(() => false)) return true;
-		if (await loc.click({ force: true, timeout: 4_000 }).then(() => true).catch(() => false)) return true;
-		await loc.scrollIntoViewIfNeeded({ timeout: 3_000 }).catch(() => undefined);
-		const box = await loc.boundingBox().catch(() => null);
-		if (!box) return false;
-		await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2).catch(() => undefined);
-		return true;
 	}
 
 	// ── Agent-driven application lifecycle (called by the remote Workflow brain) ──

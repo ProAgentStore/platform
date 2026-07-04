@@ -8,8 +8,10 @@ import { startTestJobServer, type TestJobServer } from "./test-job-server.js";
 /**
  * The brain-driven path: drive the real LocalRunner ENTIRELY through the
  * selector-free browser endpoints — browserSnapshot() (what the remote LLM
- * "sees") and browserAct() (role+name actions) — and assert the application is
- * actually submitted. This is the loop a Cloudflare Workflow runs remotely.
+ * "sees") and browserAct() (ref-targeted actions) — and assert the application
+ * is actually submitted. Every action runs through the STANDARD @playwright/mcp
+ * tools attached over CDP to the runner's own Chrome. This is the loop a
+ * Cloudflare Workflow runs remotely.
  */
 describe("LocalRunner brain-driven browser endpoints", () => {
 	let dir: string;
@@ -34,26 +36,36 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		return p;
 	}
 
-	it("snapshot → act fills + uploads + submits, all by role+name (no selectors)", async () => {
+	/** Pull an element's [ref=eNN] out of a snapshot by role + accessible name. */
+	function ref(snapshot: string, role: string, name: string): string {
+		const m = snapshot.match(new RegExp(`${role} "${name}"[^\\n]*\\[ref=(e\\d+)\\]`));
+		if (!m) throw new Error(`no ref for ${role} "${name}" in snapshot:\n${snapshot}`);
+		return m[1];
+	}
+
+	it("snapshot → act fills + uploads + submits, all by ref (standard tools)", async () => {
 		// 1. Navigate.
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
 
-		// 2. Snapshot = what the brain reads. It must expose the form semantically.
+		// 2. Snapshot = what the brain reads. It must expose the form semantically,
+		//    with a stable ref on each element (the standard @playwright/mcp format).
 		const snap = await runner.browserSnapshot();
 		expect(snap.snapshot).toContain("Full name");
 		expect(snap.snapshot).toContain("Submit application");
+		expect(snap.snapshot).toMatch(/\[ref=e\d+\]/);
 		expect(snap.challenge).toBeNull();
+		const s = snap.snapshot;
 
-		// 3. Act on each field purely by ARIA role + accessible name.
-		await runner.browserAct({ action: "type", role: "textbox", name: "Full name", text: "Sergey Ivochkin" });
-		await runner.browserAct({ action: "type", role: "textbox", name: "Email", text: "sergey@example.com" });
-		await runner.browserAct({ action: "type", role: "textbox", name: "Phone", text: "+61404453580" });
-		await runner.browserAct({ action: "select", role: "combobox", name: "Work authorization", text: "Authorized to work in the United States" });
-		await runner.browserAct({ action: "upload", name: "Resume", file: resume() });
-		await runner.browserAct({ action: "type", role: "textbox", name: "Cover note", text: "Excited to apply." });
+		// 3. Act on each field purely by its snapshot ref.
+		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Full name"), name: "Full name", text: "Sergey Ivochkin" });
+		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Email"), name: "Email", text: "sergey@example.com" });
+		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Phone"), name: "Phone", text: "+61404453580" });
+		await runner.browserAct({ action: "select", ref: ref(s, "combobox", "Work authorization"), name: "Work authorization", text: "Authorized to work in the United States" });
+		await runner.browserAct({ action: "upload", ref: ref(s, "button", "Resume"), name: "Resume" }, resume());
+		await runner.browserAct({ action: "type", ref: ref(s, "textbox", "Cover note"), name: "Cover note", text: "Excited to apply." });
 
 		// 4. Submit.
-		const result = await runner.browserAct({ action: "click", role: "button", name: "Submit application" });
+		const result = await runner.browserAct({ action: "click", ref: ref(s, "button", "Submit application"), name: "Submit application" });
 
 		// 5. The server actually recorded the submission with the right data.
 		expect(server.submissions.length).toBe(1);
@@ -110,16 +122,11 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(runner.store.getTask(task.id)?.status).toBe("completed");
 	}, 60_000);
 
-	it("snapshot exposes [ref=] and actions target by ref (Playwright-MCP parity)", async () => {
+	it("a failed action (bad ref) throws so the workflow surfaces it to the brain", async () => {
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
-		const snap = await runner.browserSnapshot();
-		// _snapshotForAI annotates interactive elements with a stable [ref=eNN].
-		expect(snap.snapshot).toMatch(/\[ref=e\d+\]/);
-		// Pull the Full name textbox's ref straight from the snapshot and type by ref.
-		const m = snap.snapshot.match(/textbox "Full name"[^\n]*\[ref=(e\d+)\]/);
-		expect(m).toBeTruthy();
-		const res = await runner.browserAct({ action: "type", ref: (m as RegExpMatchArray)[1], text: "Sergey Ivochkin" });
-		expect(res.feedback ?? "").not.toContain("REJECTED");
-		expect((await runner.browserSnapshot()).snapshot).toContain("Sergey Ivochkin");
+		await runner.browserSnapshot();
+		// A ref that doesn't exist must not silently succeed — it throws (→ the
+		// workflow maps it to `error`, driving the brain's self-correction).
+		await expect(runner.browserAct({ action: "click", ref: "e99999", name: "ghost" })).rejects.toThrow();
 	}, 60_000);
 });

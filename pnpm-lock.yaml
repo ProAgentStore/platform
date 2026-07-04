@@ -92,6 +92,12 @@ importers:
 
   packages/cli:
     dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
+      '@playwright/mcp':
+        specifier: 0.0.77
+        version: 0.0.77
       chalk:
         specifier: ^5.6.2
         version: 5.6.2

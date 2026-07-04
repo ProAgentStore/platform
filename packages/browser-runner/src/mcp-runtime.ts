@@ -34,7 +34,11 @@ export class McpRuntime {
 		const browser = opts.cdpEndpoint
 			? { cdpEndpoint: opts.cdpEndpoint }
 			: { userDataDir: opts.userDataDir, isolated: opts.isolated, launchOptions: { headless: opts.headless ?? false } };
-		this.server = await createConnection({ browser });
+		// The runner is a trusted local process uploading the user's OWN résumé, which
+		// lives under the runner's data dir (outside the CWD). Lift the file-root guard
+		// (meant to stop an LLM reading arbitrary host files) so browser_file_upload can
+		// attach it — the runner, not the model, chooses the path.
+		this.server = await createConnection({ browser, allowUnrestrictedFileAccess: true });
 		const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 		await this.server.connect(serverTransport);
 		this.client = new Client({ name: "pags-runner", version: "1.0.0" });
