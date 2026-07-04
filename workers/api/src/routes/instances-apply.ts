@@ -2,7 +2,7 @@ import type { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
-import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
+import { getProfile, profileToCandidate, profileToPreferences, profileCustomAnswers } from "../lib/profile.js";
 import { timingSafeEqualStr } from "../lib/crypto.js";
 import { runShotKey } from "../lib/run-shots.js";
 import type { Env } from "../types.js";
@@ -109,6 +109,10 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 		dryRun: input.dryRun === true,
 		specialInstructions: trimmed(cfg.specialInstructions),
 		preferences: prefs,
+		// Reuse answers the agent previously asked for via a ticket (saved to the
+		// Profile's custom JSON) so it never re-asks and never falls back to a
+		// wrong-country field — e.g. "australian working rights: Australian citizen".
+		providedAnswers: profileCustomAnswers(rawProfile),
 	};
 
 	let taskId: string;

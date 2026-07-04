@@ -101,6 +101,26 @@ export function profileToPreferences(p: Profile): { targetRoles?: string; target
 	return { targetRoles: p.targetRoles, targetLocations: p.targetLocations, workType: p.workType, openToRelocation: p.openToRelocation };
 }
 
+const STD_PROFILE_KEYS = new Set(PROFILE_FIELDS.map((f) => f.key));
+
+/**
+ * Custom answers the agent previously asked the user for via a needs_input ticket
+ * (saved to the profile's `custom` JSON under a sanitized key like
+ * `australian_working_rights`). These are NOT standard candidate fields, so they'd
+ * otherwise be invisible to a later run — surface them as `providedAnswers` so a
+ * saved ticket answer ("australian working rights: Australian citizen") is REUSED
+ * next time instead of the agent re-asking or falling back to the wrong field
+ * (e.g. a US-specific `workAuthorization` value on an Australian question).
+ */
+export function profileCustomAnswers(p: Profile): Record<string, string> {
+	const out: Record<string, string> = {};
+	for (const [k, v] of Object.entries(p)) {
+		if (STD_PROFILE_KEYS.has(k) || typeof v !== "string" || !v.trim()) continue;
+		out[k.replace(/_/g, " ")] = v;
+	}
+	return out;
+}
+
 /**
  * Map a freeform field label the agent asked about ("phone", "salary
  * expectation", "LinkedIn URL") to a standard profile key, so an ask-and-hold
