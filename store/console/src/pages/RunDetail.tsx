@@ -228,19 +228,13 @@ export default function RunDetail() {
 					<div className="text-sm text-muted-soft py-4 text-center">No activity yet.</div>
 				) : (
 					<div className="flex flex-col">
-						{events.map((ev) => {
-							const isShot = ev.type === "agent.shot";
-							const seq = isShot ? Number((ev.data as Record<string, unknown>)?.seq) : undefined;
+						{events.filter((e) => e.type !== "agent.shot").map((ev) => {
 							const thought = (ev.data as Record<string, unknown>)?.thought as string | undefined;
 							return (
-								<div
-									key={ev.id}
-									className={`flex gap-3 py-1.5 border-b border-line last:border-0 text-sm ${isShot ? "cursor-pointer hover:bg-accent/5 -mx-2 px-2 rounded" : ""}`}
-									onClick={() => { if (isShot && seq != null) { const i = shots.findIndex((s) => s.seq === seq); if (i >= 0) { setPlaying(false); setIdx(i); window.scrollTo({ top: 0, behavior: "smooth" }); } } }}
-								>
+								<div key={ev.id} className="flex gap-3 py-1.5 border-b border-line last:border-0 text-sm">
 									<span className="text-xs font-mono text-muted-soft shrink-0 w-[68px] pt-0.5">{fmtTime(ev.createdAt ?? ev.timestamp)}</span>
 									<div className="min-w-0 flex-1">
-										<div className={levelClass(ev.type)}>{humanEvent(ev)}{isShot && seq != null ? <span className="text-accent text-xs ml-1.5">▶ view</span> : null}</div>
+										<div className={levelClass(ev.type)}>{humanEvent(ev)}</div>
 										{thought && <div className="text-xs text-muted-soft mt-0.5 line-clamp-2">{thought}</div>}
 									</div>
 								</div>

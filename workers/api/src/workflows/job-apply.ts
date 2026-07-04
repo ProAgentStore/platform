@@ -101,11 +101,14 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// transient error to hammer — so act catches it and returns it as data.
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
-		let shotSeq = 0;
 		const deps: ApplyDeps = {
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId })) as Promise<PageSnapshot>,
 			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideAction(env, userId, p)) as Promise<ApplyDecision>,
-			act: (a) => step.do(`s${n++}-act`, retry, async () => {
+			// Capture the step index OUTSIDE step.do so it's the SAME on a resume (n
+			// increments deterministically every execution). Using it as the screenshot
+			// seq keeps R2 keys unique + stable across handoff/resume — a plain counter
+			// would reset to 0 on resume and overwrite earlier shots.
+			act: (a) => { const sn = n++; return step.do(`s${sn}-act`, retry, async () => {
 				// Hard dry-run guard: in test mode, NEVER let a submit click reach the
 				// page — block it here (the brain can't override the runtime) and tell
 				// the brain to finish(ready). This is what makes dryRun actually safe.
@@ -126,17 +129,16 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					// key + the action (the events feed stays small). Best-effort — a shot
 					// failure must never fail the application step.
 					if (r.screenshot && env.STORAGE) {
-						const seq = ++shotSeq;
-						const key = runShotKey(userId, instanceId, taskId, seq);
+						const key = runShotKey(userId, instanceId, taskId, sn);
 						await env.STORAGE.put(key, b64ToBytes(r.screenshot), { httpMetadata: { contentType: "image/jpeg" } }).catch(() => undefined);
-						await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: describeAction(a), data: { seq, key, action: a.action, name: a.name ?? "", url: r.url ?? "" } }).catch(() => undefined);
+						await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: describeAction(a), data: { seq: sn, key, action: a.action, name: a.name ?? "", url: r.url ?? "" } }).catch(() => undefined);
 					}
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
 				} catch (e) {
 					// Return the failure to the brain instead of throwing (which would retry the same dead click).
 					return { url: "", challenge: null as string | null, error: e instanceof Error ? e.message.slice(0, 200) : String(e) };
 				}
-			}) as Promise<{ url: string; challenge: string | null; error?: string }>,
+			}) as Promise<{ url: string; challenge: string | null; error?: string }>; },
 			onEvent: (type, message, data) => step.do(`s${n++}-event`, async () => {
 				await callRunner(conn, "/browser/event", { taskId, type, message, data }).catch(() => undefined);
 				return null;

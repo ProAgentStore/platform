@@ -724,7 +724,9 @@ export class LocalRunner {
 	 *  so the cloud can store it per step and the whole run can be replayed visually. */
 	private async shot(page: Page): Promise<string | undefined> {
 		try {
-			const buf = await page.screenshot({ type: "jpeg", quality: 45 });
+			// scale:"css" avoids 2× retina bloat; a short timeout means a stuck page
+			// never delays the action (the screenshot is best-effort, not the point).
+			const buf = await page.screenshot({ type: "jpeg", quality: 45, scale: "css", timeout: 8_000 });
 			return buf.toString("base64");
 		} catch {
 			return undefined;
