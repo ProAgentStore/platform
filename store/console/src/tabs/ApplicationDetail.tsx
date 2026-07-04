@@ -3,7 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import { renderMd, formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import type { RuntimeEvent } from "../lib/types";
-import { ArrowLeft, Send } from "lucide-react";
+import { ArrowLeft, Send, Trash2 } from "lucide-react";
 
 // The job-application agent's dedicated Application detail page: a split view of
 // one application — its fields + activity on the left, a chat scoped to THIS
@@ -93,11 +93,26 @@ export default function ApplicationDetail({ instanceId, recordId, onBack }: { in
 		requestAnimationFrame(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight; });
 	};
 
+	const handleDelete = async () => {
+		if (!confirm(`Delete this application (${company}) from the board? This can't be undone.`)) return;
+		try {
+			await api(`/v1/instances/${instanceId}/collections/applications/records/${recordId}`, { method: "DELETE" });
+			onBack();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	return (
 		<div className="flex flex-col h-full min-h-0">
-			<button type="button" onClick={onBack} className="flex items-center gap-1.5 text-sm text-muted hover:text-accent mb-2 self-start">
-				<ArrowLeft size={15} /> Back to applications
-			</button>
+			<div className="flex items-center justify-between gap-2 mb-2">
+				<button type="button" onClick={onBack} className="flex items-center gap-1.5 text-sm text-muted hover:text-accent self-start">
+					<ArrowLeft size={15} /> Back to applications
+				</button>
+				<button type="button" onClick={handleDelete} className="flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg bg-red/15 text-red font-semibold hover:bg-red/25 shrink-0">
+					<Trash2 size={14} /> Delete
+				</button>
+			</div>
 			<div className="mb-3">
 				<h2 className="text-lg font-bold break-words">{company}{role ? ` — ${role}` : ""}</h2>
 				<div className="flex items-center gap-2 flex-wrap mt-1 text-xs">
