@@ -741,8 +741,7 @@ export class LocalRunner {
 				return mcp.callTool("browser_select_option", { element: label, target: this.refOf(a), values: [a.text ?? ""] });
 			case "key":
 				return mcp.callTool("browser_press_key", { key: a.key || "Enter" });
-			case "scroll":
-				return mcp.callTool("browser_evaluate", { function: `() => window.scrollBy(0, ${Math.round(a.dy ?? 600)})` });
+			// scroll is handled before this mapper (mouse-wheel on the live page).
 			case "wait":
 				return mcp.callTool("browser_wait_for", { time: Math.min(5, Math.max(0.1, (a.ms ?? 1000) / 1000)) });
 			default:
@@ -793,6 +792,22 @@ export class LocalRunner {
 			if (local) this.applyResumePath = local;
 		}
 		if (this.applyResumePath) this.armFileAutoAttach(page, this.applyResumePath);
+		// Scroll is a VIEWPORT primitive, not an element action — no ref, no standard
+		// tool in @playwright/mcp 0.0.77. Use the mouse wheel on the live page (as the
+		// prior runtime did): it scrolls the actual hovered/inner scroll container,
+		// whereas window.scrollBy is a no-op on sites that scroll an inner panel (e.g.
+		// PageUp/Coles), which made the brain scroll-loop forever.
+		if (action.action === "scroll") {
+			await page.mouse.wheel(0, Math.round(action.dy ?? 600)).catch(() => undefined);
+			await page.waitForTimeout(300).catch(() => undefined);
+			const active = await this.getActivePage();
+			return {
+				ok: true,
+				url: active.url(),
+				title: await active.title().catch(() => ""),
+				challenge: await detectHumanChallenge(active),
+			};
+		}
 		const mcp = await this.getMcp();
 		const res = await this.callBrowserTool(mcp, action);
 		const text = mcp.textOf(res).trim();
