@@ -4,7 +4,8 @@ import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { Zap, Bell, Menu } from "lucide-react";
+import { Zap, Bell, Menu, BellRing, X } from "lucide-react";
+import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
 
 export default function Layout() {
 	const { user } = useAuth();
@@ -119,9 +120,48 @@ export default function Layout() {
 					</button>
 				)}
 			</header>
+			{user && <PushPrompt />}
 			<main className={`flex-1 min-h-0 flex flex-col ${navHidden ? "overflow-hidden" : "overflow-auto"}`}>
 				<Outlet />
 			</main>
+		</div>
+	);
+}
+
+/**
+ * Enrols the browser for web-push so the agent can actually reach the user (e.g.
+ * "your application needs an answer") instead of the notice sitting silently in the
+ * bell. If permission is already granted, it re-subscribes on load and shows nothing.
+ * If it's never been asked, it shows a one-tap banner (permission needs a gesture).
+ */
+function PushPrompt() {
+	const [perm, setPerm] = useState<string>(() => pushPermission());
+	const [dismissed, setDismissed] = useState<boolean>(() => localStorage.getItem("pags:push-dismissed") === "1");
+	const [busy, setBusy] = useState(false);
+
+	useEffect(() => { void ensurePushSubscribed(); }, []);
+
+	if (!pushSupported() || perm === "granted" || perm === "denied" || dismissed) return null;
+
+	const onEnable = async () => {
+		setBusy(true);
+		const res = await enablePush();
+		setBusy(false);
+		setPerm(pushPermission());
+		if (res === "denied") { setDismissed(true); localStorage.setItem("pags:push-dismissed", "1"); }
+	};
+	const onDismiss = () => { setDismissed(true); localStorage.setItem("pags:push-dismissed", "1"); };
+
+	return (
+		<div className="shrink-0 bg-accent/10 border-b border-accent/25 px-3 py-2.5 flex items-center gap-3">
+			<BellRing size={18} className="text-accent shrink-0" />
+			<div className="text-sm text-ink flex-1 min-w-0">
+				<b>Turn on alerts</b> so your agent can reach you the moment it needs an answer — even when this tab is closed.
+			</div>
+			<button type="button" onClick={onEnable} disabled={busy} className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-sm font-bold disabled:opacity-50 shrink-0">
+				{busy ? "Enabling…" : "Enable alerts"}
+			</button>
+			<button type="button" onClick={onDismiss} className="text-muted hover:text-ink shrink-0" aria-label="Dismiss"><X size={16} /></button>
 		</div>
 	);
 }
