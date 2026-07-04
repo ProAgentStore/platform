@@ -8,6 +8,7 @@ import AgentDetail from "./pages/AgentDetail";
 import InstanceDetail from "./pages/InstanceDetail";
 import Profile from "./pages/Profile";
 import Notifications from "./pages/Notifications";
+import RunDetail from "./pages/RunDetail";
 
 function AuthGate() {
 	const { user, loading } = useAuth();
@@ -31,6 +32,7 @@ function AuthGate() {
 				<Route path="agents/:id" element={<AgentDetail />} />
 				<Route path="agents/:id/:tab" element={<AgentDetail />} />
 				<Route path="instances" element={<Dashboard />} />
+				<Route path="instances/:id/tasks/:taskId" element={<RunDetail />} />
 				<Route path="instances/:id/*" element={<InstanceDetail />} />
 				<Route path="dashboard" element={<Dashboard />} />
 				<Route path="profile" element={<Profile />} />

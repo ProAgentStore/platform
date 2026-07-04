@@ -1,10 +1,11 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { decideAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
+import { decideAction, describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { callRunner, getRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { guessProfileKey, setProfileField } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
+import { runShotKey } from "../lib/run-shots.js";
 import { notifyUser } from "../routes/push.js";
 import { buildQuery, extractCode, findMatchingMessage, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
 import type { Env } from "../types.js";
@@ -19,6 +20,14 @@ export interface JobApplyParams {
 
 /** Max minutes to wait for a human to solve a CAPTCHA before giving up. */
 const CAPTCHA_WAIT_POLLS = 180; // 180 × 5s = 15 min
+
+/** Decode a base64 JPEG (no data: prefix) to bytes for an R2 put. */
+function b64ToBytes(b64: string): Uint8Array {
+	const bin = atob(b64);
+	const arr = new Uint8Array(bin.length);
+	for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+	return arr;
+}
 
 /**
  * The remote brain: a durable Cloudflare Workflow that drives the user's local
@@ -92,6 +101,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// transient error to hammer — so act catches it and returns it as data.
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "2 minutes" as const };
 		let n = 0;
+		let shotSeq = 0;
 		const deps: ApplyDeps = {
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId })) as Promise<PageSnapshot>,
 			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideAction(env, userId, p)) as Promise<ApplyDecision>,
@@ -110,7 +120,17 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				try {
 					// Pass resumePath so the runner arms file-chooser auto-attach (résumé
 					// uploads never pop a blocking native dialog, whatever the ATS DOM).
-					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath });
+					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", { ...a, resumePath: job.resumePath });
+					// Persist a screenshot of the resulting page so the run can be REPLAYED
+					// visually. The blob goes to R2 keyed by step; the event carries only the
+					// key + the action (the events feed stays small). Best-effort — a shot
+					// failure must never fail the application step.
+					if (r.screenshot && env.STORAGE) {
+						const seq = ++shotSeq;
+						const key = runShotKey(userId, instanceId, taskId, seq);
+						await env.STORAGE.put(key, b64ToBytes(r.screenshot), { httpMetadata: { contentType: "image/jpeg" } }).catch(() => undefined);
+						await callRunner(conn, "/browser/event", { taskId, type: "agent.shot", message: describeAction(a), data: { seq, key, action: a.action, name: a.name ?? "", url: r.url ?? "" } }).catch(() => undefined);
+					}
 					return { url: r.url ?? "", challenge: r.challenge ?? null, error: undefined as string | undefined, feedback: r.feedback };
 				} catch (e) {
 					// Return the failure to the brain instead of throwing (which would retry the same dead click).

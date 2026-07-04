@@ -4,6 +4,7 @@ import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
 import { timingSafeEqualStr } from "../lib/crypto.js";
+import { runShotKey } from "../lib/run-shots.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
 import { callRuntime, requireOwnedInstance, requireRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
@@ -188,6 +189,19 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		return new Response(obj.body, {
 			headers: { "Content-Type": "application/octet-stream", "Content-Disposition": `attachment; filename="${name}"` },
 		});
+	});
+
+	/** Serve a per-step run screenshot (for the run-replay timeline). Owner-only. */
+	router.get("/:instanceId/tasks/:taskId/shots/:seq", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const taskId = c.req.param("taskId");
+		const seq = Number(c.req.param("seq"));
+		if (!Number.isFinite(seq)) return c.json({ error: "bad seq" }, 400);
+		const obj = await c.env.STORAGE.get(runShotKey(session.uid, instanceId, taskId, seq));
+		if (!obj) return c.json({ error: "no screenshot" }, 404);
+		return new Response(obj.body, { headers: { "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=31536000" } });
 	});
 
 	/** List active human-takeover sessions on my instance's runtime. */

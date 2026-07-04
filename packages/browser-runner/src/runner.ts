@@ -720,6 +720,17 @@ export class LocalRunner {
 		return head.slice(0, 400);
 	}
 
+	/** A small JPEG screenshot (base64, no data: prefix) of the page — one per action,
+	 *  so the cloud can store it per step and the whole run can be replayed visually. */
+	private async shot(page: Page): Promise<string | undefined> {
+		try {
+			const buf = await page.screenshot({ type: "jpeg", quality: 45 });
+			return buf.toString("base64");
+		} catch {
+			return undefined;
+		}
+	}
+
 	/**
 	 * After a WRITE action, read the field's REAL value back via the standard
 	 * browser_evaluate tool (evaluates on the element by ref — no reinvented DOM
@@ -830,7 +841,7 @@ export class LocalRunner {
 	 * element by its snapshot ref. A tool-level failure is thrown so the workflow
 	 * surfaces it to the brain as an `error` (which drives its self-correction).
 	 */
-	async browserAct(action: BrowserAction, resumePath?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string }> {
+	async browserAct(action: BrowserAction, resumePath?: string): Promise<{ ok: boolean; url: string; title: string; challenge: string | null; feedback?: string; screenshot?: string }> {
 		const page = await this.getActivePage();
 		// Arm résumé auto-attach so a file chooser never blocks the flow (see method).
 		// resumePath may be a signed URL (remote runner) or a local path — resolve to
@@ -854,6 +865,7 @@ export class LocalRunner {
 				url: active.url(),
 				title: await active.title().catch(() => ""),
 				challenge: await detectHumanChallenge(active),
+				screenshot: await this.shot(active),
 			};
 		}
 		const mcp = await this.getMcp();
@@ -877,6 +889,7 @@ export class LocalRunner {
 				title: await settled.title().catch(() => ""),
 				challenge: await detectHumanChallenge(settled),
 				feedback: dialogMsg ? `a native dialog was accepted: "${dialogMsg}"` : "a native dialog was accepted",
+				screenshot: await this.shot(settled),
 			};
 		}
 		if (res.isError) throw new RunnerInputError(this.conciseFeedback(text) || `${action.action} failed`);
@@ -907,6 +920,7 @@ export class LocalRunner {
 			title: await active.title().catch(() => ""),
 			challenge: await detectHumanChallenge(active),
 			feedback: feedback || undefined,
+			screenshot: await this.shot(active),
 		};
 	}
 

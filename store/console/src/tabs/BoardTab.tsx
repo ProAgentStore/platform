@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { RuntimeTask, RuntimeEvent } from "../lib/types";
 import { formatTime } from "@proagentstore/sdk/ui";
@@ -17,17 +18,18 @@ const COLUMNS = [
 // agent's applications pipeline lives in its own ApplyTab, which composes this.
 
 export default function BoardTab({ instanceId, onTaskOpen }: { instanceId: string; onTaskOpen?: (task: RuntimeTask) => boolean }) {
+	const navigate = useNavigate();
 	const [tasks, setTasks] = useState<RuntimeTask[]>([]);
 	const [events, setEvents] = useState<RuntimeEvent[]>([]);
 	const [filter, setFilter] = useState<"active" | "all">("active");
 	const [detailId, setDetailId] = useState<string | null>(null);
 
-	// Open a task: let a host (e.g. the apply surface) redirect it to a richer page;
-	// if it doesn't handle it, fall back to the generic detail modal.
+	// Open a task's REAL detail page (timestamped log + screenshot replay). A host
+	// (e.g. the apply surface) may still redirect specific tasks to a richer page.
 	const openTask = (id: string) => {
 		const task = tasks.find((t) => t.id === id);
 		if (task && onTaskOpen?.(task)) return;
-		setDetailId(id);
+		navigate(`/instances/${instanceId}/tasks/${id}`);
 	};
 
 	const loadBoard = useCallback(async () => {
