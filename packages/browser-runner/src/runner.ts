@@ -796,7 +796,14 @@ export class LocalRunner {
 		const mcp = await this.getMcp();
 		const res = await mcp.callTool("browser_snapshot");
 		const full = this.extractSnapshot(mcp.textOf(res));
-		const MAX = 16_000;
+		// The brain must see the WHOLE form or it can't finish. Real ATS forms are big
+		// (a single Coles step is ~31k chars); the old 16k cap cut the page in half, so
+		// the brain never saw the Submit button or the bottom required/EEO fields and
+		// scroll-looped hunting for controls that were truncated out of its view. Claude
+		// Sonnet's context easily holds a full page per turn (the accumulating action log
+		// is what's bounded, not the one-shot snapshot). Keep a generous ceiling only to
+		// guard against a pathological megapage.
+		const MAX = 60_000;
 		const snapshot = full.length > MAX ? `${full.slice(0, MAX)}\n… [snapshot truncated]` : full;
 		return {
 			url: page.url(),
