@@ -42,6 +42,12 @@ binding = "AI"
 [[vectorize]]
 binding = "VECTORIZE"
 index_name = "pags-agents"
+# REQUIRED metadata indexes — vectorSearch() filters by metadata.agentId, and Vectorize
+# only filters on INDEXED metadata fields (an un-indexed filter silently returns nothing,
+# which broke RAG platform-wide until 2026-07-05). If the index is ever recreated, run:
+#   wrangler vectorize create-metadata-index pags-agents --property-name=agentId    --type=string
+#   wrangler vectorize create-metadata-index pags-agents --property-name=sourceType --type=string
+# (Metadata indexes only apply to vectors inserted AFTER creation — re-index existing content.)
 
 # Remote LLM brain that drives the browser runner through a job application.
 [[workflows]]
