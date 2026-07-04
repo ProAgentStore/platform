@@ -328,13 +328,17 @@ function TaskDetailModal({ task, events, onClose, onAction, onResume, onProvideI
 					</div>
 				</details>
 
-				<div className="flex gap-2 mt-5 pt-4 border-t border-line">
+				<div className="flex gap-2 mt-5 pt-4 border-t border-line flex-wrap">
 					{needsApproval && <button type="button" onClick={() => { onAction(task.id, "approve"); onClose(); }} className="px-4 py-2 rounded-lg bg-green/15 text-green font-bold text-sm">Approve</button>}
-					{isFinished ? (
-						<button type="button" onClick={() => { onDelete(task.id); onClose(); }} className="px-4 py-2 rounded-lg bg-red/15 text-red font-semibold text-sm">Delete from board</button>
-					) : (
-						<button type="button" onClick={() => { onAction(task.id, "cancel"); onClose(); }} className="px-4 py-2 rounded-lg bg-red/15 text-red font-semibold text-sm">Cancel application</button>
-					)}
+					{!isFinished && <button type="button" onClick={() => { onAction(task.id, "cancel"); onClose(); }} className="px-4 py-2 rounded-lg bg-amber-500/15 text-amber-600 font-semibold text-sm">Cancel application</button>}
+					{/* Always available: remove the ticket from the board (stops it first if still running). */}
+					<button
+						type="button"
+						onClick={() => { if (isFinished || confirm("Delete this ticket? If it's still running it will be stopped first.")) { onDelete(task.id); onClose(); } }}
+						className="px-4 py-2 rounded-lg bg-red text-white font-bold text-sm ml-auto"
+					>
+						🗑 Delete ticket
+					</button>
 				</div>
 			</div>
 		</div>
