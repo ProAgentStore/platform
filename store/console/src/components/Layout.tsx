@@ -153,15 +153,15 @@ function PushPrompt() {
 	const onDismiss = () => { setDismissed(true); localStorage.setItem("pags:push-dismissed", "1"); };
 
 	return (
-		<div className="shrink-0 bg-accent/10 border-b border-accent/25 px-3 py-2.5 flex items-center gap-3">
+		<div className="shrink-0 bg-accent/10 border-b border-accent/25 px-3 py-2.5 flex flex-wrap items-center gap-x-3 gap-y-2">
 			<BellRing size={18} className="text-accent shrink-0" />
-			<div className="text-sm text-ink flex-1 min-w-0">
+			<div className="text-sm text-ink flex-1 min-w-[8rem]">
 				<b>Turn on alerts</b> so your agent can reach you the moment it needs an answer — even when this tab is closed.
 			</div>
-			<button type="button" onClick={onEnable} disabled={busy} className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-sm font-bold disabled:opacity-50 shrink-0">
-				{busy ? "Enabling…" : "Enable alerts"}
+			<button type="button" onClick={onEnable} disabled={busy} className="order-2 sm:order-none px-4 py-2 rounded-lg bg-accent text-white text-sm font-bold disabled:opacity-50 shrink-0 whitespace-nowrap">
+				{busy ? "Enabling…" : "🔔 Enable alerts"}
 			</button>
-			<button type="button" onClick={onDismiss} className="text-muted hover:text-ink shrink-0" aria-label="Dismiss"><X size={16} /></button>
+			<button type="button" onClick={onDismiss} className="text-muted hover:text-ink shrink-0 order-3 sm:order-none" aria-label="Dismiss"><X size={16} /></button>
 		</div>
 	);
 }
