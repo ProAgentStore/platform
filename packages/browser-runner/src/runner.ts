@@ -623,6 +623,11 @@ export class LocalRunner {
 		this.browserContext.on("page", (p) => this.trackPage(p));
 		const initial = this.browserContext.pages()[0];
 		if (initial) this.trackPage(initial);
+		// A seeded real profile can restore MANY tabs on launch; keep a single clean
+		// workspace tab so the agent's page is unambiguous and visible (not lost among
+		// restored blank tabs — the "why is the window blank?" symptom).
+		await this.closeStalePages().catch(() => undefined);
+		await this.activePage?.bringToFront().catch(() => undefined);
 		return this.browserContext;
 	}
 
@@ -653,10 +658,15 @@ export class LocalRunner {
 	/** The page the brain drives and the human takes over — created on demand. */
 	private async getActivePage(): Promise<Page> {
 		const context = await this.getBrowserContext();
-		if (this.activePage && !this.activePage.isClosed()) return this.activePage;
-		const page = context.pages().at(-1) ?? (await context.newPage());
-		this.activePage = page;
-		return page;
+		if (!this.activePage || this.activePage.isClosed()) {
+			this.activePage = context.pages().at(-1) ?? (await context.newPage());
+		}
+		// Keep the agent's working tab in the FOREGROUND so the user actually SEES what
+		// the agent is doing (and can act on it during a takeover). Without this, on a
+		// real Chrome profile that restores several tabs, the agent may drive a
+		// background tab while the user stares at a blank foreground tab.
+		await this.activePage.bringToFront().catch(() => undefined);
+		return this.activePage;
 	}
 
 	/** The CDP endpoint of the launched Chrome (from DevToolsActivePort in its profile). */
