@@ -55,6 +55,27 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		};
 	}
 
+	/**
+	 * The console-surface groups (apply / coding / repo …) across the connected
+	 * user's subscribed agents. Agent-specific tools are gated to these, so a user
+	 * only sees tools for the agents they actually have (a Repo Chat user never
+	 * sees apply_to_job). Empty when unauthenticated → only core tools show.
+	 */
+	private async userGroups(): Promise<Set<string>> {
+		const groups = new Set<string>();
+		if (!this.userToken) return groups;
+		try {
+			const data = (await authedCall("/v1/instances/my/instances", this.userToken, {}, this.env)) as
+				| Array<{ capabilities?: { surfaces?: string[] } }>
+				| { instances?: Array<{ capabilities?: { surfaces?: string[] } }> };
+			const list = Array.isArray(data) ? data : (data.instances ?? []);
+			for (const inst of list) for (const s of inst.capabilities?.surfaces ?? []) groups.add(s);
+		} catch {
+			/* unauthenticated or transient error → no agent-specific tools this connection */
+		}
+		return groups;
+	}
+
 	async init() {
 		// Refresh per-request auth from props on every start.
 		this.userToken = this.props?.authToken || null;
@@ -67,6 +88,9 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		// MCP stream and makes clients hang until they time out. Register once.
 		if (this.toolsRegistered) return;
 		this.toolsRegistered = true;
+
+		// Which agent-specific tool groups this user gets — scoped to their agents.
+		const groups = await this.userGroups();
 
 		this.server.tool(
 			"list_agents",
@@ -228,6 +252,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			this.env,
 			(provided) => this.token(provided),
 			(provided) => this.safety(provided),
+			groups,
 		);
 
 		registerStorageTools(
@@ -747,7 +772,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		);
 
 		// ── Coding session tools: terminal visibility + control ──
-
+		// Only for users who have a coding agent (e.g. Coder).
+		if (groups.has("coding")) {
 		this.server.tool(
 			"coding_session_capture",
 			"Capture the live terminal output from a coding session (what the CLI is showing right now). Also returns run state (idle/working/offline).",
@@ -953,6 +979,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				return jsonText(d);
 			},
 		);
+		} // ── end coding tools ──
 
 		this.server.tool(
 			"platform_guide",

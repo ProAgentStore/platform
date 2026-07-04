@@ -44,6 +44,10 @@ export function registerInstanceTools(
 	env: McpEnv,
 	tokenFor: TokenResolver,
 	safetyFor: SafetyResolver,
+	/** The console-surface groups the connected user's subscribed agents expose —
+	 *  agent-specific tools are gated to these so a user only sees tools for the
+	 *  agents they actually have (e.g. a Repo Chat user never sees apply_to_job). */
+	groups: Set<string>,
 ): void {
 	server.tool(
 		"subscribe_agent",
@@ -307,6 +311,56 @@ export function registerInstanceTools(
 		},
 	);
 
+	// ── Apply-agent tools — only for users who have a job-application agent ──
+	if (groups.has("apply")) {
+	server.tool(
+		"upload_resume",
+		"Upload or replace the candidate's résumé for a private apply-agent instance, from a public URL or a base64 PDF. The résumé is stored (attached to future applications) AND parsed with the user's BYOK Claude to pre-fill their structured Profile + seed the knowledge base. PDF only; the parse result is reported to the user via a notification.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("The apply-agent instance ID (from my_instances)."),
+			url: z.string().optional().describe("Public URL to the résumé PDF to fetch and upload."),
+			content_base64: z.string().optional().describe("The résumé PDF as base64 (alternative to url)."),
+			filename: z.string().optional().describe("File name, default resume.pdf."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, url, content_base64, filename, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const name = (filename || "resume.pdf").replace(/[^\w.\- ]/g, "_").slice(0, 120);
+			const input = { instance_id, source: content_base64 ? "base64" : url ? "url" : "none", filename: name };
+			const denied = await requirePermission(safetyFor(token), "write", "upload_resume", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "upload_resume", "upload a résumé to the apply agent", input, {
+					endpoint: `/v1/instances/${instance_id}/apply-resume?name=${encodeURIComponent(name)}`,
+					method: "PUT",
+				});
+			}
+			let bytes: ArrayBuffer;
+			if (content_base64) {
+				const bin = atob(content_base64.replace(/^data:[^,]*,/, ""));
+				const arr = new Uint8Array(bin.length);
+				for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+				bytes = arr.buffer;
+			} else if (url) {
+				const r = await fetch(url);
+				if (!r.ok) return text(`Error fetching résumé from URL: HTTP ${r.status}`);
+				bytes = await r.arrayBuffer();
+			} else {
+				return text("Provide either `url` or `content_base64` (a base64 PDF).");
+			}
+			const res = await authedCall(
+				`/v1/instances/${instance_id}/apply-resume?name=${encodeURIComponent(name)}`,
+				sessionToken,
+				{ method: "PUT", headers: { "Content-Type": "application/pdf" }, body: bytes },
+				env,
+			);
+			await audit(safetyFor(token), { tool: "upload_resume", action: "completed", input });
+			return jsonText(res);
+		},
+	);
+
 	server.tool(
 		"apply_to_job",
 		"Launch the LLM-driven job application for a private apply-agent instance: the PAGS agent drives the user's local browser to fill (and, only if submit=true, SUBMIT) the application at the given job URL. The résumé comes from the instance's stored résumé and candidate details from the user's Profile. If the agent needs a value it can't truthfully invent (e.g. work authorization), it pauses with a needs_input ticket for the USER to answer in the console, then continues. Default is a safe test run that stops at the Submit button without clicking it.",
@@ -342,6 +396,7 @@ export function registerInstanceTools(
 			return jsonText(data);
 		},
 	);
+	} // ── end apply-agent tools ──
 
 	server.tool(
 		"approve_instance_task",
@@ -518,6 +573,8 @@ export function registerInstanceTools(
 		},
 	);
 
+	// ── Repo-chat tools — only for users who have a repo-chat agent ──
+	if (groups.has("repo")) {
 	server.tool(
 		"ingest_repo",
 		"Index a GitHub repository into a read-only repo-chat instance (the 'repo-chat' agent). Pulls the whole repo into the instance's vector store so you can ask how the code works. An instance can hold MANY repos — call again with a different URL to add another; call with the same URL to re-index that one. Public repos work as-is; private repos need GitHub connected.",
@@ -602,6 +659,7 @@ export function registerInstanceTools(
 			return text(repo_url ? `Removed ${repo_url}.` : "Removed all repositories.");
 		},
 	);
+	} // ── end repo-chat tools ──
 
 	server.tool(
 		"list_instance_knowledge",
