@@ -166,6 +166,20 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		return c.json({ ok: true, name, size: body.byteLength });
 	});
 
+	/** Re-parse the résumé already on file (fill Profile + seed KB) without re-uploading. */
+	router.post("/:instanceId/apply-resume/parse", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const obj = await c.env.STORAGE.get(resumeKey(session.uid, instanceId));
+		if (!obj) return c.json({ error: "no résumé on file — upload one first" }, 404);
+		const name = (obj.customMetadata?.name as string) || "resume.pdf";
+		const bytes = new Uint8Array(await obj.arrayBuffer());
+		const mime = /\.pdf$/i.test(name) ? "application/pdf" : "application/pdf";
+		c.executionCtx.waitUntil(parseResumeIntoProfile(c.env, instanceId, session.uid, bytes, mime).catch(() => undefined));
+		return c.json({ ok: true, parsing: true, name });
+	});
+
 	/** Whether a résumé is on file (for the console). */
 	router.get("/:instanceId/apply-resume/status", async (c) => {
 		const session = await requireUser(c);

@@ -315,7 +315,7 @@ export function registerInstanceTools(
 	if (groups.has("apply")) {
 	server.tool(
 		"upload_resume",
-		"Upload or replace the candidate's résumé for a private apply-agent instance, from a public URL or a base64 PDF. The résumé is stored (attached to future applications) AND parsed with the user's BYOK Claude to pre-fill their structured Profile + seed the knowledge base. PDF only; the parse result is reported to the user via a notification.",
+		"Upload/replace the candidate's résumé for a private apply-agent instance (from a public URL or a base64 PDF), OR — with NO url/content_base64 — re-parse the résumé already on file. Either way it's parsed with the user's BYOK Claude to pre-fill their structured Profile + seed the knowledge base (PDF only); the result is reported via a notification.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("The apply-agent instance ID (from my_instances)."),
@@ -348,7 +348,10 @@ export function registerInstanceTools(
 				if (!r.ok) return text(`Error fetching résumé from URL: HTTP ${r.status}`);
 				bytes = await r.arrayBuffer();
 			} else {
-				return text("Provide either `url` or `content_base64` (a base64 PDF).");
+				// No source given → re-parse the résumé already on file.
+				const res = await authedCall(`/v1/instances/${instance_id}/apply-resume/parse`, sessionToken, { method: "POST" }, env);
+				await audit(safetyFor(token), { tool: "upload_resume", action: "completed", input: { ...input, mode: "reparse" } });
+				return jsonText(res);
 			}
 			const res = await authedCall(
 				`/v1/instances/${instance_id}/apply-resume?name=${encodeURIComponent(name)}`,
