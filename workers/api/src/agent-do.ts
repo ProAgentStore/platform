@@ -48,6 +48,7 @@ import {
 	UserAiProviderError,
 } from "./lib/user-ai.js";
 import { checkPublicHttpsUrl } from "./lib/ssrf.js";
+import { logError } from "./lib/error-log.js";
 import type { Env } from "./types.js";
 
 export type {
@@ -718,19 +719,32 @@ export class AgentDO extends DurableObject<Env> {
 		};
 		await this.ctx.storage.put(`kb:${doc.id}`, doc);
 
-		// Vectorize the document for semantic retrieval (best-effort — don't fail the add)
+		// Vectorize the document for semantic retrieval. The doc is saved either way, but we
+		// must NOT report an unqualified success if it isn't searchable — surface it via a
+		// `vectorized` flag + the error log so callers (résumé parse, MCP) can tell the user.
+		let vectorized = true;
 		const state = await this.getState();
 		if (state) {
 			const engine = this.getStorageEngine(state.agentId);
-			await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`).catch(() => {});
+			try {
+				await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`);
+			} catch (err) {
+				vectorized = false;
+				await logError(this.env, {
+					source: "knowledge-vectorize",
+					message: `knowledge doc saved but not searchable: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+					context: { agentId: state.agentId, docId: doc.id },
+				}).catch(() => undefined);
+			}
 			await engine.logEvent("knowledge.added", undefined, {
 				docId: doc.id,
 				title: doc.title,
 				size: doc.content.length,
+				vectorized,
 			}).catch(() => {});
 		}
 
-		return json(doc, 201);
+		return json({ ...doc, vectorized }, 201);
 	}
 
 	private async handleDeleteKnowledge(id: string): Promise<Response> {

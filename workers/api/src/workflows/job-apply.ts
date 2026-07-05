@@ -2,7 +2,7 @@ import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloud
 import { decideAction, describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { callRunner, getRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
-import { guessProfileKey, setProfileField } from "../lib/profile.js";
+import { saveAskAndHoldAnswer } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
 import { runShotKey } from "../lib/run-shots.js";
@@ -182,9 +182,11 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		const transcript: string[] = [];
 		let solvedChallengeUrl: string | undefined; // page where a captcha was just solved
 		const tokens = { input: 0, output: 0 }; // running total across ALL rounds (handoffs re-enter the loop)
+		let filled = false; // did any field get typed in a prior round? carries the dry-run submit guard across handoffs
 		for (let round = 0; round < 12; round++) {
-			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens });
+			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, filled });
 			solvedChallengeUrl = undefined;
+			filled = result.filled ?? filled; // once true, stays true for the rest of the application
 			transcript.push(...(result.transcript ?? []));
 			if (result.outcome !== "captcha" && result.outcome !== "stuck" && result.outcome !== "needs_input") break;
 
@@ -207,7 +209,12 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 						: reason === "challenge"
 							? { title: "🔐 Verification needed on your application", body: `A human check (${label}) appeared on ${host} — take over to solve it and the agent continues.` }
 							: { title: "✋ Your job application needs a hand", body: `Stuck on: ${label} (${host}). Take over that one step and the agent continues.` };
-				await notifyUser(env, userId, "apply", title, body, link).catch(() => undefined);
+				// The whole point of this notification is that the user learns their application
+				// is paused waiting on THEM. If every channel fails, that must not vanish silently —
+				// record it so it's visible in the error log rather than a lost pause.
+				await notifyUser(env, userId, "apply", title, body, link).catch(async (e) => {
+					await logError(env, { source: "job-apply", userId, message: `handoff notify failed (${reason}): ${e instanceof Error ? e.message : String(e)}`.slice(0, 300), context: { instanceId, taskId, reason } }).catch(() => undefined);
+				});
 				return null;
 			});
 
@@ -221,16 +228,16 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 			if (!solved) {
 				await step.do(`complete-timeout-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "failed", detail: `${reason} not resolved in time` }));
-				await step.do(`log-timeout-${round}`, async () => { await logError(env, { source: "job-apply", userId, message: `apply timed out: ${reason} not resolved in time`, context: { instanceId, taskId, url: job.url, reason, steps: result.steps } }); return null; });
-				// Save the partial run's learnings (incl. what got stuck) before bailing.
-				if (transcript.length) await step.do(`save-cache-timeout-${round}`, async () => { await saveAtsCache(env, userId, host, transcript, result.outcome); return null; });
+				await step.do(`log-timeout-${round}`, async () => { await logError(env, { source: "job-apply", userId, message: `apply timed out: ${reason} not resolved in time`, context: { instanceId, taskId, url: job.url, reason, steps: result.steps } }).catch(() => undefined); return null; });
+				// Save the partial run's learnings (incl. what got stuck) before bailing (best-effort).
+				if (transcript.length) await step.do(`save-cache-timeout-${round}`, async () => { await saveAtsCache(env, userId, host, transcript, result.outcome).catch(() => undefined); return null; });
 				return { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps };
 			}
 			// Persist a supplied value to the Profile + feed it into the run so it's never asked again.
 			if (result.outcome === "needs_input" && providedValue && result.fieldNeeded) {
 				const field = result.fieldNeeded;
 				const value = providedValue;
-				await step.do(`save-input-${round}`, async () => { await setProfileField(env, userId, guessProfileKey(field), value); return null; });
+				await step.do(`save-input-${round}`, async () => { await saveAskAndHoldAnswer(env, userId, field, value); return null; });
 				job.providedAnswers = { ...(job.providedAnswers ?? {}), [field]: value };
 			}
 			// After a solved captcha, suppress re-detection on that SAME page (its
@@ -244,14 +251,17 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
 
 		// Persist a non-success terminal outcome so an apply failure isn't only in events.
+		// These run AFTER /browser/complete — they must be best-effort. If a D1 hiccup here
+		// threw, the outer catch would fire /browser/complete AGAIN with "failed" and log a
+		// phantom crash for an application that actually SUBMITTED. Swallow inside the step.
 		if (["failed", "blocked", "expired", "max_steps"].includes(result.outcome)) {
-			await step.do("log-outcome", async () => { await logError(env, { source: "job-apply", userId, message: `apply ${result.outcome}: ${result.detail ?? ""}`, context: { instanceId, taskId, url: job.url, outcome: result.outcome, steps: result.steps } }); return null; });
+			await step.do("log-outcome", async () => { await logError(env, { source: "job-apply", userId, message: `apply ${result.outcome}: ${result.detail ?? ""}`, context: { instanceId, taskId, url: job.url, outcome: result.outcome, steps: result.steps } }).catch(() => undefined); return null; });
 		}
 
 		// Remember this run's path (what worked AND what failed) for the next
 		// application to this ATS + the transparency view — not just on submit.
 		if (transcript.length) {
-			await step.do("save-cache", async () => { await saveAtsCache(env, userId, host, transcript, result.outcome); return null; });
+			await step.do("save-cache", async () => { await saveAtsCache(env, userId, host, transcript, result.outcome).catch(() => undefined); return null; });
 		}
 		return result;
 	}

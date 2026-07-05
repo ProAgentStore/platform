@@ -86,6 +86,10 @@ export interface ApplyResult {
 	steps: number;
 	/** The actions taken this run — fed back into the per-ATS cache on success. */
 	transcript?: string[];
+	/** Whether any field was typed by the end of this round. Carried across handoff
+	 *  re-entries so the dry-run submit guard stays armed after a captcha/input pause
+	 *  (otherwise round ≥2 starts "empty" and a one-page Apply=submit could really submit). */
+	filled?: boolean;
 }
 
 /** Side-effecting hooks the loop drives — real ones hit the runner; tests mock them. */
@@ -111,7 +115,7 @@ export interface ApplyDeps {
  * forces a human handoff. Pure orchestration over {@link ApplyDeps} so it can be
  * unit-tested without a browser, an LLM, or a deployed Workflow.
  */
-export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number; solvedChallengeUrl?: string; tokens?: { input: number; output: number } } = {}): Promise<ApplyResult> {
+export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number; solvedChallengeUrl?: string; tokens?: { input: number; output: number }; filled?: boolean } = {}): Promise<ApplyResult> {
 	const maxSteps = opts.maxSteps ?? 40;
 	// After a human solves a captcha, its widget/"not a robot" text usually lingers
 	// on the SAME page for the rest of the form, so re-detecting it would ping-pong
@@ -132,7 +136,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 	const tokens = opts.tokens ?? { input: 0, output: 0 };
 	let actedLast = false;
 	let lastSnapshot = "";
-	let filledSomething = false; // any field typed → the application is in progress (dry-run safety)
+	let filledSomething = opts.filled ?? false; // any field typed → the application is in progress (dry-run safety); seeded from prior rounds
 	let lastActionWasArrow = false; // last act was an arrow key (autocomplete nav) → a following Enter is an accept, not a submit
 	const recentKeys: string[] = [];
 
@@ -166,7 +170,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 		// widget/text); only a captcha on a DIFFERENT page is a fresh one.
 		if (snap.challenge && pageOf(snap.url) !== solvedPage) {
 			await deps.onEvent?.("agent.captcha", `CAPTCHA detected (${snap.challenge}) — handing off`, { challenge: snap.challenge, url: snap.url });
-			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step, transcript: [...actionLog] };
+			return { outcome: "captcha", challenge: snap.challenge, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 		}
 
 		// Mid-flight steering: pick up any message you sent to this RUNNING task and
@@ -186,7 +190,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			// human can take over or it fails cleanly (and gets logged) on timeout.
 			const msg = e instanceof Error ? e.message : String(e);
 			await deps.onEvent?.("agent.decide_failed", `Deciding the next step failed: ${msg} — handing off`, { error: msg });
-			return { outcome: "stuck", detail: `assistant error: ${msg}`, url: snap.url, steps: step, transcript: [...actionLog] };
+			return { outcome: "stuck", detail: `assistant error: ${msg}`, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 		}
 		if (liveHint) job.userHint = undefined; // applied to this step only
 		if (decision.usage) { tokens.input += decision.usage.input; tokens.output += decision.usage.output; }
@@ -201,14 +205,14 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			// to a human takeover (captcha handoff) instead of failing the whole run.
 			if (decision.finish.status === "blocked" && /captcha|not a robot|are you (a )?human|verify you('?re| are) human|anti-?bot/i.test(decision.finish.detail || "")) {
 				await deps.onEvent?.("agent.captcha", `CAPTCHA the model can't solve — handing off (${decision.finish.detail})`, { challenge: "captcha", url: snap.url });
-				return { outcome: "captcha", challenge: "captcha", detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog] };
+				return { outcome: "captcha", challenge: "captcha", detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 			}
 			return { outcome: decision.finish.status, detail: decision.finish.detail, url: snap.url, steps: step, transcript: [...actionLog] };
 		}
 		if (decision.needsInput) {
 			// Ask-and-hold: pause for the user to supply a value (same machinery as captcha).
 			await deps.onEvent?.("agent.needs_input", `Needs your input — ${decision.needsInput.field}${decision.needsInput.why ? ` (${decision.needsInput.why})` : ""}`, decision.needsInput);
-			return { outcome: "needs_input", fieldNeeded: decision.needsInput.field, detail: decision.needsInput.why, url: snap.url, steps: step, transcript: [...actionLog] };
+			return { outcome: "needs_input", fieldNeeded: decision.needsInput.field, detail: decision.needsInput.why, url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 		}
 		if (decision.readEmail) {
 			// Read the connected inbox for a sign-in link / code, feed the result back
@@ -254,7 +258,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			if (recentKeys.length > 7) recentKeys.shift();
 			if (recentKeys.filter((k) => k === key).length >= 4) {
 				await deps.onEvent?.("agent.stuck", `Repeated "${describeAction(decision.action)}" with no progress — handing off`, { action: decision.action });
-				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog] };
+				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 			}
 		}
 
@@ -271,7 +275,7 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			// repeat (3×) OR on several different-but-failing attempts on one page (the
 			// brain thrashing a stubborn widget), so it never burns to max-steps.
 			if (repeatFails >= 3 || failsOnPage >= 4) {
-				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog] };
+				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 			}
 		} else {
 			repeatFails = 0;

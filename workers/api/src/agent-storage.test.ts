@@ -209,6 +209,17 @@ describe("AgentStorageEngine", () => {
 			const ids = await engine.vectorizeStore("knowledge", "doc-1", "Hello world");
 			expect(ids).toEqual([]);
 		});
+
+		it("vectorizeStore THROWS when AI is present but embedding fails (never a silent unsearchable success)", async () => {
+			const storage = mockDoStorage();
+			const vectorize = { upsert: async () => ({}), query: async () => ({ matches: [] }) };
+			// AI configured, but returns no embedding vector → embed() yields null for every chunk.
+			const ai = { run: async () => ({ data: [] }) };
+			const engine = new AgentStorageEngine(storage, null, vectorize as never, ai as never, "agent-1");
+
+			const text = "This is a résumé summary with more than enough content to produce at least one chunk for embedding.";
+			await expect(engine.vectorizeStore("knowledge", "doc-1", text)).rejects.toThrow(/not fully searchable|incomplete/);
+		});
 	});
 
 	describe("conversation summarization (no AI)", () => {

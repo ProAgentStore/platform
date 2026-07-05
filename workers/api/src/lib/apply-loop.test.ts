@@ -161,6 +161,30 @@ describe("runApplyLoop", () => {
 		expect(acted.map((a) => a.action)).toEqual(["type"]); // the Send submit was NOT acted
 	});
 
+	it("dry-run BLOCKS a one-page 'Apply' as the FIRST action after a handoff (filled carried via opts)", async () => {
+		// Regression: filledSomething is per-call, so round ≥2 after a captcha/input handoff
+		// used to start "empty" — a one-page Apply=submit as the first action would slip past
+		// the pure guard (and the workflow guard deliberately doesn't block "Apply"). Passing
+		// opts.filled from the prior round keeps the guard armed.
+		const { deps, acted } = scriptedDeps(
+			[page('- button "Apply"')],
+			[{ action: { action: "click", role: "button", name: "Apply" } }],
+		);
+		const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 5, filled: true });
+		expect(result.outcome).toBe("ready");
+		expect(acted).toEqual([]); // the Apply submit was NOT acted, even as the first action of the round
+	});
+
+	it("carries `filled` out on a handoff so the workflow can thread it to the next round", async () => {
+		const { deps } = scriptedDeps(
+			[page('- textbox "Name"'), page('- button "Verify you are human"', "captcha")],
+			[{ action: { action: "type", role: "textbox", name: "Name", text: "Sergey" } }],
+		);
+		const result = await runApplyLoop(deps, JOB, { maxSteps: 5 });
+		expect(result.outcome).toBe("captcha");
+		expect(result.filled).toBe(true); // a field was typed → surfaced for the next round
+	});
+
 	it("dry-run BLOCKS an Enter keypress once filled (submits a focused form)", async () => {
 		const { deps, acted } = scriptedDeps(
 			[page('- textbox "Name"'), page('- textbox "Name": Sergey')],

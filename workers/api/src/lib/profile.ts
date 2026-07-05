@@ -96,6 +96,26 @@ export async function setProfileField(env: Env, userId: string, key: string, val
 	await upsertProfile(env, userId, { [key]: value });
 }
 
+/**
+ * Persist an ask-and-hold answer WITHOUT corrupting canonical PII. If the field maps
+ * to a standard identity key (email, phone, salary, city…) that the user has ALREADY
+ * filled, a per-application answer must not overwrite it for all future runs — stash
+ * it under a custom key instead (still reused via {@link profileCustomAnswers}). Only
+ * an empty standard field, or a genuinely non-standard field, is written directly.
+ */
+export async function saveAskAndHoldAnswer(env: Env, userId: string, field: string, value: string): Promise<void> {
+	const key = guessProfileKey(field);
+	if (STD_PROFILE_KEYS.has(key)) {
+		const existing = await getProfile(env, userId);
+		if (typeof existing[key] === "string" && (existing[key] as string).trim()) {
+			const customKey = field.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "note";
+			await upsertProfile(env, userId, { [customKey]: value });
+			return;
+		}
+	}
+	await upsertProfile(env, userId, { [key]: value });
+}
+
 /** The user's job-search preferences (what they want), for the apply prompt. */
 export function profileToPreferences(p: Profile): { targetRoles?: string; targetLocations?: string; workType?: string; openToRelocation?: string } {
 	return { targetRoles: p.targetRoles, targetLocations: p.targetLocations, workType: p.workType, openToRelocation: p.openToRelocation };

@@ -49,14 +49,24 @@ export class AgentStorageEngine {
 		if (!this.vectorize || !this.ai) return [];
 
 		const chunks = chunkText(text, CHUNK_SIZE);
+		// chunkText drops fragments ≤20 chars, so a very short doc yields zero chunks and
+		// would be silently unsearchable while reporting success. Keep it as one chunk.
+		if (chunks.length === 0 && text.trim()) chunks.push(text.trim());
 		const ids: string[] = [];
+		let failed = 0;
 
 		for (let i = 0; i < chunks.length; i++) {
 			const chunk = chunks[i];
 			// Vectorize IDs max 64 bytes — use a short hash
 			const id = await shortId(this.agentId, sourceType, sourceId, i);
 			const embedding = await this.embed(chunk);
-			if (!embedding) continue;
+			// AI is configured (guarded above), so a null embedding is a real failure —
+			// count it and fail loudly at the end. Silently skipping a chunk here is how
+			// content ends up persisted but unsearchable with the caller told "success".
+			if (!embedding) {
+				failed++;
+				continue;
+			}
 
 			await this.vectorize.upsert([
 				{
@@ -85,6 +95,10 @@ export class AgentStorageEngine {
 			ids.push(id);
 		}
 
+		if (failed > 0)
+			throw new Error(
+				`vectorization incomplete: ${failed}/${chunks.length} chunks could not be embedded — content is not fully searchable`,
+			);
 		return ids;
 	}
 
@@ -239,7 +253,12 @@ export class AgentStorageEngine {
 			content: patch.content ?? existing.content,
 		};
 		await this.doStorage.put(`kb:${id}`, updated);
-		await this.vectorizeStore("knowledge", id, `${updated.title}\n\n${updated.content}`).catch(() => undefined);
+		// Delete the old vectors first: shortId is deterministic on chunkIndex, so if the
+		// edit produces fewer chunks the trailing old chunks would otherwise survive and
+		// keep matching RAG queries with stale content.
+		await this.vectorDelete("knowledge", id).catch(() => undefined);
+		// Not swallowed — a failed re-index must surface (the update_knowledge tool reports it).
+		await this.vectorizeStore("knowledge", id, `${updated.title}\n\n${updated.content}`);
 		await this.logEvent("knowledge.updated", undefined, { docId: id, title: updated.title }).catch(() => undefined);
 		return updated;
 	}
@@ -257,7 +276,8 @@ export class AgentStorageEngine {
 			addedAt: new Date().toISOString(),
 		};
 		await this.doStorage.put(`kb:${doc.id}`, doc);
-		await this.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`).catch(() => undefined);
+		// Not swallowed — if the doc can't be embedded the caller must know it isn't searchable.
+		await this.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`);
 		await this.logEvent("knowledge.added", undefined, { docId: doc.id, title }).catch(() => undefined);
 		return doc;
 	}
@@ -335,7 +355,14 @@ export class AgentStorageEngine {
 
 		if (extracted.text) {
 			await this.doStorage.put(`filetext:${id}`, extracted.text.slice(0, 100_000));
-			await this.vectorizeStore("file", id, extracted.text.slice(0, 100_000));
+			// Best-effort: the file + its metadata are already committed to R2/DO, so a
+			// vectorization failure must not 500 the upload (that would leave torn state).
+			// Log it so it isn't fully invisible; the file text is retained and can be re-indexed.
+			try {
+				await this.vectorizeStore("file", id, extracted.text.slice(0, 100_000));
+			} catch (err) {
+				console.error(`[storage] file ${id} stored but not vectorized:`, err);
+			}
 		}
 
 		await this.logEvent("file.uploaded", undefined, {
@@ -847,8 +874,13 @@ Extract key facts about the user, their preferences, decisions made, and informa
 				}
 			}
 
-			// Vectorize the summary for future retrieval
-			await this.vectorizeStore("message", sessionId, summary.summary);
+			// Vectorize the summary for future retrieval (best-effort — a failure here must
+			// not abort summarization; the summary itself is already persisted).
+			try {
+				await this.vectorizeStore("message", sessionId, summary.summary);
+			} catch (err) {
+				console.error(`[storage] summary ${sessionId} stored but not vectorized:`, err);
+			}
 
 			await this.logEvent("summary.generated", undefined, {
 				sessionId,

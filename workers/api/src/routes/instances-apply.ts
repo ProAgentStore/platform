@@ -157,11 +157,13 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const body = await c.req.arrayBuffer();
 		if (!body.byteLength) return c.json({ error: "empty file" }, 400);
 		if (body.byteLength > 8 * 1024 * 1024) return c.json({ error: "résumé too large (max 8MB)" }, 400);
-		await c.env.STORAGE.put(resumeKey(session.uid, instanceId), body, { customMetadata: { name } });
 		// Parse the résumé with the user's BYOK Claude AFTER responding: pre-fill the
 		// empty structured Profile fields + seed the vector KB. Best-effort, never
 		// blocks or fails the upload. (PDF only — Claude reads PDFs natively.)
-		const mime = /\.pdf$/i.test(name) ? "application/pdf" : (c.req.header("content-type") || "");
+		const mime = /\.pdf$/i.test(name) ? "application/pdf" : (c.req.header("content-type") || "application/octet-stream");
+		// Persist the content-type so a later re-parse (apply-resume/parse) knows the real
+		// format instead of guessing.
+		await c.env.STORAGE.put(resumeKey(session.uid, instanceId), body, { customMetadata: { name }, httpMetadata: { contentType: mime } });
 		c.executionCtx.waitUntil(parseResumeIntoProfile(c.env, instanceId, session.uid, new Uint8Array(body), mime).catch(() => undefined));
 		return c.json({ ok: true, name, size: body.byteLength });
 	});
@@ -175,7 +177,10 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		if (!obj) return c.json({ error: "no résumé on file — upload one first" }, 404);
 		const name = (obj.customMetadata?.name as string) || "resume.pdf";
 		const bytes = new Uint8Array(await obj.arrayBuffer());
-		const mime = /\.pdf$/i.test(name) ? "application/pdf" : "application/pdf";
+		// Use the stored content-type; fall back to the filename. A non-PDF must NOT be
+		// mislabeled as application/pdf (that made parseResumeIntoProfile's PDF read fail
+		// silently instead of telling the user to re-upload a PDF).
+		const mime = obj.httpMetadata?.contentType || (/\.pdf$/i.test(name) ? "application/pdf" : "application/octet-stream");
 		c.executionCtx.waitUntil(parseResumeIntoProfile(c.env, instanceId, session.uid, bytes, mime).catch(() => undefined));
 		return c.json({ ok: true, parsing: true, name });
 	});

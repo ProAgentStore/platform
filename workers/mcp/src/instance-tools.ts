@@ -319,7 +319,7 @@ export function registerInstanceTools(
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("The apply-agent instance ID (from my_instances)."),
-			url: z.string().optional().describe("Public URL to the résumé PDF to fetch and upload."),
+			url: z.string().url().optional().describe("Public URL to the résumé PDF to fetch and upload."),
 			content_base64: z.string().optional().describe("The résumé PDF as base64 (alternative to url)."),
 			filename: z.string().optional().describe("File name, default resume.pdf."),
 			dry_run: z.boolean().optional(),
@@ -337,29 +337,42 @@ export function registerInstanceTools(
 					method: "PUT",
 				});
 			}
+			const MAX_RESUME = 8 * 1024 * 1024;
 			let bytes: ArrayBuffer;
 			if (content_base64) {
-				const bin = atob(content_base64.replace(/^data:[^,]*,/, ""));
+				let bin: string;
+				try {
+					bin = atob(content_base64.replace(/^data:[^,]*,/, ""));
+				} catch {
+					return text("Error: content_base64 is not valid base64.");
+				}
+				if (bin.length > MAX_RESUME) return text("Error: résumé too large (max 8MB).");
 				const arr = new Uint8Array(bin.length);
 				for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
 				bytes = arr.buffer;
 			} else if (url) {
+				// Only http(s), and only accept an actual PDF back — a fetched HTML error page
+				// must not get stored and labeled application/pdf.
+				if (!/^https?:\/\//i.test(url)) return text("Error: url must be an http(s) URL.");
 				const r = await fetch(url);
 				if (!r.ok) return text(`Error fetching résumé from URL: HTTP ${r.status}`);
+				const ct = r.headers.get("content-type") || "";
+				if (ct && !/application\/pdf|application\/octet-stream|binary/i.test(ct)) return text(`Error: URL did not return a PDF (content-type: ${ct}).`);
 				bytes = await r.arrayBuffer();
+				if (bytes.byteLength > MAX_RESUME) return text("Error: résumé too large (max 8MB).");
 			} else {
 				// No source given → re-parse the résumé already on file.
-				const res = await authedCall(`/v1/instances/${instance_id}/apply-resume/parse`, sessionToken, { method: "POST" }, env);
-				await audit(safetyFor(token), { tool: "upload_resume", action: "completed", input: { ...input, mode: "reparse" } });
+				const res = (await authedCall(`/v1/instances/${instance_id}/apply-resume/parse`, sessionToken, { method: "POST" }, env)) as { error?: string };
+				if (!res.error) await audit(safetyFor(token), { tool: "upload_resume", action: "completed", input: { ...input, mode: "reparse" } });
 				return jsonText(res);
 			}
-			const res = await authedCall(
+			const res = (await authedCall(
 				`/v1/instances/${instance_id}/apply-resume?name=${encodeURIComponent(name)}`,
 				sessionToken,
 				{ method: "PUT", headers: { "Content-Type": "application/pdf" }, body: bytes },
 				env,
-			);
-			await audit(safetyFor(token), { tool: "upload_resume", action: "completed", input });
+			)) as { error?: string };
+			if (!res.error) await audit(safetyFor(token), { tool: "upload_resume", action: "completed", input });
 			return jsonText(res);
 		},
 	);
@@ -787,27 +800,32 @@ export function registerInstanceTools(
 		},
 	);
 
-	server.tool(
-		"system_status",
-		"Full diagnostics for a coding instance: runner connectivity, node name, tmux sessions, repos, issues. Use this to understand why sessions are offline or to check the runner's machine.",
-		{
-			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
-			instance_id: z.string().describe("Instance ID or slug"),
-		},
-		async ({ token, instance_id }) => {
-			const sessionToken = tokenFor(token);
-			if (!sessionToken) return authRequired();
-			const inst = await findInstanceForAgent(env, sessionToken, instance_id);
-			const id = inst?.id || instance_id;
-			const data = await authedCall(
-				`/v1/instances/${id}/coding/diagnostics`,
-				sessionToken,
-				{},
-				env,
-			);
-			return jsonText(data);
-		},
-	);
+	// Coding-only: hits /coding/diagnostics, so gate it to coding-surface agents (the same
+	// endpoint coding_diagnostics gates). Otherwise a Repo-Chat/apply-only user sees a
+	// coding tool that can't apply to their agent — the exact leak the registry closes.
+	if (groups.has("coding")) {
+		server.tool(
+			"system_status",
+			"Full diagnostics for a coding instance: runner connectivity, node name, tmux sessions, repos, issues. Use this to understand why sessions are offline or to check the runner's machine.",
+			{
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+				instance_id: z.string().describe("Instance ID or slug"),
+			},
+			async ({ token, instance_id }) => {
+				const sessionToken = tokenFor(token);
+				if (!sessionToken) return authRequired();
+				const inst = await findInstanceForAgent(env, sessionToken, instance_id);
+				const id = inst?.id || instance_id;
+				const data = await authedCall(
+					`/v1/instances/${id}/coding/diagnostics`,
+					sessionToken,
+					{},
+					env,
+				);
+				return jsonText(data);
+			},
+		);
+	}
 
 	// ── Agent Loop tools ──
 

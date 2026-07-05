@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getProfile, profileToCandidate, setProfileField, upsertProfile } from "./profile.js";
+import { getProfile, profileCustomAnswers, profileToCandidate, saveAskAndHoldAnswer, setProfileField, upsertProfile } from "./profile.js";
 import type { Env } from "../types.js";
 
 /** In-memory D1 mock for the single-row-per-user user_profile upsert. */
@@ -49,6 +49,24 @@ describe("user profile", () => {
 		expect((await getProfile(env, "u1")).phone).toBe("123");
 		await upsertProfile(env, "u1", { phone: "" });
 		expect((await getProfile(env, "u1")).phone).toBeUndefined();
+	});
+
+	it("saveAskAndHoldAnswer fills an EMPTY standard field directly", async () => {
+		const env = mockEnv();
+		await upsertProfile(env, "u1", { firstName: "Sergey" });
+		await saveAskAndHoldAnswer(env, "u1", "Phone number", "+61404453580");
+		expect((await getProfile(env, "u1")).phone).toBe("+61404453580"); // mapped to the standard key
+	});
+
+	it("saveAskAndHoldAnswer does NOT clobber a POPULATED standard field — routes to custom instead", async () => {
+		const env = mockEnv();
+		await upsertProfile(env, "u1", { email: "canonical@me.com" });
+		// A per-application "email" answer must not overwrite the canonical Profile email.
+		await saveAskAndHoldAnswer(env, "u1", "Contact email for this role", "role-specific@corp.com");
+		const p = await getProfile(env, "u1");
+		expect(p.email).toBe("canonical@me.com"); // canonical PII preserved
+		// still reusable as a providedAnswer next time (stashed under a custom key)
+		expect(Object.values(profileCustomAnswers(p))).toContain("role-specific@corp.com");
 	});
 
 	it("profileToCandidate derives fullName + location", () => {

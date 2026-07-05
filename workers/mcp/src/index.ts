@@ -815,7 +815,10 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const sessions = r.sessions || [];
 				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 				if (!sid) return text("No active coding session found.");
-				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/message`, sessionToken, { method: "POST", body: JSON.stringify({ text: message }) }, this.env);
+				const sent = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/message`, sessionToken, { method: "POST", body: JSON.stringify({ text: message }) }, this.env)) as { error?: string };
+				// authedCall returns { error } on any non-2xx (runner offline, dead session) — do
+				// NOT report "sent" for a command that never ran; this is code execution on the user's box.
+				if (sent?.error) return text(`Error sending to session ${sid}: ${sent.error}`);
 				await audit(this.safety(token), { tool: "coding_session_message", action: "completed", input: { instance_id, session_id: sid, messageBytes: new TextEncoder().encode(message).length } });
 				return text(`Sent to session ${sid}: "${message}"`);
 			},
@@ -838,7 +841,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const sessions = r.sessions || [];
 				const sid = session_id || sessions.find((s) => s.status === "active")?.id;
 				if (!sid) return text("No active coding session found.");
-				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/restart`, sessionToken, { method: "POST" }, this.env);
+				const restarted = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/restart`, sessionToken, { method: "POST" }, this.env)) as { error?: string };
+				if (restarted?.error) return text(`Error restarting session ${sid}: ${restarted.error}`);
 				await audit(this.safety(token), { tool: "coding_session_restart", action: "completed", input: { instance_id, session_id: sid } });
 				return text(`Session ${sid} restarted.`);
 			},
@@ -914,7 +918,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const r = (await authedCall(`/v1/instances/${instance_id}/coding/sessions`, sessionToken, {}, this.env)) as { sessions?: Array<{ id: string; status: string }> };
 				const sid = session_id || (r.sessions || []).find((s) => s.status === "active")?.id;
 				if (!sid) return text("No active coding session found.");
-				await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, this.env);
+				const ended = (await authedCall(`/v1/instances/${instance_id}/coding/sessions/${sid}/end`, sessionToken, { method: "POST" }, this.env)) as { error?: string };
+				if (ended?.error) return text(`Error ending session ${sid}: ${ended.error}`);
 				await audit(this.safety(token), { tool: "coding_session_end", action: "completed", input: { instance_id, session_id: sid } });
 				return text(`Session ${sid} ended.`);
 			},
@@ -959,7 +964,8 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				// The Overseer can drive Claude Code on any repo → runtime-scoped.
 				const denied = await requirePermission(this.safety(token), "runtime", "coding_overseer", { instance_id });
 				if (denied) return denied;
-				const d = (await authedCall(`/v1/instances/${instance_id}/coding/overseer`, sessionToken, { method: "POST", body: JSON.stringify({ message }) }, this.env)) as { reply?: string };
+				const d = (await authedCall(`/v1/instances/${instance_id}/coding/overseer`, sessionToken, { method: "POST", body: JSON.stringify({ message }) }, this.env)) as { reply?: string; error?: string };
+				if (d?.error) return text(`Overseer error: ${d.error}`);
 				await audit(this.safety(token), { tool: "coding_overseer", action: "completed", input: { instance_id, messageBytes: new TextEncoder().encode(message).length } });
 				return text(d.reply || "(no response)");
 			},

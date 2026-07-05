@@ -89,20 +89,42 @@ export async function parseResumeIntoProfile(env: Env, instanceId: string, userI
 		// Seed the vector KB with a searchable summary (the instance DO vectorizes it).
 		const summary = str(a.summaryText);
 		let kbAdded = false;
+		let kbSearchable = true;
 		if (summary) {
 			const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
+			// Dedup: remove any prior "Résumé (parsed)" doc so re-uploading doesn't pile up
+			// stale copies (which pollute RAG and can silently hit the 20-doc cap).
+			try {
+				const listRes = await stub.fetch(new Request("https://agent/knowledge"));
+				if (listRes.ok) {
+					const { documents } = (await listRes.json()) as { documents: Array<{ id: string; title: string }> };
+					for (const d of documents || []) {
+						if (d.title === "Résumé (parsed)")
+							await stub.fetch(new Request(`https://agent/knowledge/${encodeURIComponent(d.id)}`, { method: "DELETE" }));
+					}
+				}
+			} catch {
+				/* best-effort dedup — proceed with the add regardless */
+			}
+
 			const r = await stub.fetch(new Request("https://agent/knowledge", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ title: "Résumé (parsed)", content: summary }),
 			}));
 			kbAdded = r.ok;
+			if (r.ok) {
+				const rb = (await r.json().catch(() => ({}))) as { vectorized?: boolean };
+				kbSearchable = rb.vectorized !== false;
+			}
 		}
 
-		// ALWAYS tell the user the outcome — never silent.
+		// ALWAYS tell the user the outcome — never silent. Distinguish "added + searchable"
+		// from "added but not searchable" (embedding failed) so a broken vector store shows.
 		const parts: string[] = [];
 		if (filled.length) parts.push(`filled ${filled.length} Profile field${filled.length > 1 ? "s" : ""} (${filled.slice(0, 4).join(", ")}${filled.length > 4 ? "…" : ""})`);
-		if (kbAdded) parts.push("added a searchable summary to your knowledge base");
+		if (kbAdded && kbSearchable) parts.push("added a searchable summary to your knowledge base");
+		else if (kbAdded && !kbSearchable) parts.push("saved a résumé summary (⚠️ not searchable yet — embedding failed, will retry on next upload)");
 		await notifyUser(env, userId, "apply", "✅ Résumé parsed",
 			parts.length ? `We ${parts.join(" and ")}.` : "Nothing new to add — your Profile was already complete.",
 			link).catch(() => undefined);
