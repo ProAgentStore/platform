@@ -114,6 +114,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 		// Profile's custom JSON) so it never re-asks and never falls back to a
 		// wrong-country field — e.g. "australian working rights: Australian citizen".
 		providedAnswers: profileCustomAnswers(rawProfile),
+		today: new Date().toISOString().slice(0, 10),
 	};
 
 	let taskId: string;
