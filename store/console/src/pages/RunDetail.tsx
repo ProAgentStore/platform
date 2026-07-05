@@ -48,6 +48,8 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 	const imgRef = useRef<HTMLImageElement>(null);
 	const boxRef = useRef<HTMLDivElement>(null);
 	const lastMove = useRef(0);
+	const frameRef = useRef<{ frame: string; width: number; height: number } | null>(null);
+	frameRef.current = frame;
 
 	const poll = useCallback(async () => {
 		try {
@@ -79,7 +81,34 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 
 	const onClick = (e: React.MouseEvent) => { const c = toXY(e.clientX, e.clientY); if (c) { send({ type: "click", ...c }); boxRef.current?.focus(); setTimeout(poll, 150); } };
 	const onMove = (e: React.MouseEvent) => { const now = Date.now(); if (now - lastMove.current < 90) return; lastMove.current = now; const c = toXY(e.clientX, e.clientY); if (c) send({ type: "move", ...c }); };
-	const onWheel = (e: React.WheelEvent) => { const c = toXY(e.clientX, e.clientY); if (c) send({ type: "scroll", ...c, deltaX: e.deltaX, deltaY: e.deltaY }); };
+
+	// Scroll must be a NATIVE, non-passive wheel listener (React's onWheel is passive, so
+	// preventDefault is ignored and the local overlay eats the gesture). Throttle + ROUND the
+	// deltas — CDP mouseWheel ignores fractional deltaY, which is why remote scroll did nothing.
+	useEffect(() => {
+		const img = imgRef.current;
+		if (!img) return;
+		let lastWheel = 0;
+		const onWheelNative = (ev: WheelEvent) => {
+			ev.preventDefault();
+			const now = Date.now();
+			if (now - lastWheel < 40) return;
+			lastWheel = now;
+			const f = frameRef.current;
+			const r = img.getBoundingClientRect();
+			if (!f || !r.width || !r.height) return;
+			send({
+				type: "scroll",
+				x: Math.round(((ev.clientX - r.left) / r.width) * f.width),
+				y: Math.round(((ev.clientY - r.top) / r.height) * f.height),
+				deltaX: Math.round(ev.deltaX),
+				deltaY: Math.round(ev.deltaY),
+			});
+			setTimeout(poll, 120);
+		};
+		img.addEventListener("wheel", onWheelNative, { passive: false });
+		return () => img.removeEventListener("wheel", onWheelNative);
+	}, [!!frame, poll]); // attach once the frame (img) mounts
 	const onKey = (e: React.KeyboardEvent) => {
 		if (e.key === "Escape") { onClose(); return; }
 		if (e.key === "Tab") return; // let focus leave the panel
@@ -114,7 +143,6 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 						src={frame.frame}
 						onClick={onClick}
 						onMouseMove={onMove}
-						onWheel={onWheel}
 						draggable={false}
 						alt="Live agent browser"
 						className="max-w-full max-h-full object-contain cursor-crosshair select-none"
