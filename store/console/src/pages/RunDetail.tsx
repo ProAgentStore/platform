@@ -34,6 +34,88 @@ function levelClass(type: string): string {
 
 interface Shot { seq: number; action: string; name: string; url: string; at?: string; msg: string }
 
+/**
+ * Live remote control of the agent's browser — which runs on a REMOTE machine
+ * (the box running `pags up`), so you can't just alt-tab to it. Polls
+ * /takeover/:taskId/frame for JPEG frames and relays your mouse + keyboard to
+ * /takeover/:taskId/input (CDP Input on the runner). Coordinates map into the
+ * frame's CSS-viewport space (width/height from the frame response), so clicks
+ * land precisely regardless of how the frame is scaled in the browser.
+ */
+function TakeoverLive({ instanceId, taskId, kind, onResume }: { instanceId: string; taskId: string; kind: string; onResume: () => void }) {
+	const [frame, setFrame] = useState<{ frame: string; width: number; height: number } | null>(null);
+	const [connErr, setConnErr] = useState(false);
+	const imgRef = useRef<HTMLImageElement>(null);
+	const boxRef = useRef<HTMLDivElement>(null);
+	const lastMove = useRef(0);
+
+	const poll = useCallback(async () => {
+		try {
+			const f = await api<{ frame: string; width: number; height: number }>(`/v1/instances/${instanceId}/takeover/${taskId}/frame`);
+			if (f?.frame) { setFrame(f); setConnErr(false); }
+		} catch { setConnErr(true); }
+	}, [instanceId, taskId]);
+
+	useEffect(() => { poll(); }, [poll]);
+	usePolling(poll, 500, true); // ~2 fps; shares the high-rate takeover bucket
+	useEffect(() => { boxRef.current?.focus(); }, []);
+
+	const send = (body: Record<string, unknown>) =>
+		api(`/v1/instances/${instanceId}/takeover/${taskId}/input`, { method: "POST", body: JSON.stringify(body) }).catch(() => {});
+
+	const toXY = (clientX: number, clientY: number) => {
+		const img = imgRef.current; if (!img || !frame) return null;
+		const r = img.getBoundingClientRect();
+		if (!r.width || !r.height) return null;
+		return { x: Math.round(((clientX - r.left) / r.width) * frame.width), y: Math.round(((clientY - r.top) / r.height) * frame.height) };
+	};
+
+	const onClick = (e: React.MouseEvent) => { const c = toXY(e.clientX, e.clientY); if (c) { send({ type: "click", ...c }); boxRef.current?.focus(); setTimeout(poll, 150); } };
+	const onMove = (e: React.MouseEvent) => { const now = Date.now(); if (now - lastMove.current < 90) return; lastMove.current = now; const c = toXY(e.clientX, e.clientY); if (c) send({ type: "move", ...c }); };
+	const onWheel = (e: React.WheelEvent) => { const c = toXY(e.clientX, e.clientY); if (c) send({ type: "scroll", ...c, deltaX: e.deltaX, deltaY: e.deltaY }); };
+	const onKey = (e: React.KeyboardEvent) => {
+		if (e.key === "Tab") return; // let focus leave the panel
+		e.preventDefault();
+		if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) send({ type: "text", text: e.key });
+		else send({ type: "key", key: e.key, code: e.code, keyCode: e.keyCode });
+		setTimeout(poll, 150);
+	};
+	const endTakeover = async () => { await api(`/v1/instances/${instanceId}/takeover/${taskId}/end`, { method: "POST" }).catch(() => {}); };
+
+	return (
+		<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
+			<div className="text-lg font-bold text-ink">{kind === "captcha" ? "🔐 Solve this verification — live remote control" : "✋ Take over this one step — live remote control"}</div>
+			<div className="text-sm text-muted mt-0.5 mb-3">This is the agent's browser on your remote runner. Click and type right here — your input is sent to it live. {kind === "captcha" ? "Solve the challenge, then press Resume." : "Do the blocked step, then press Resume."}</div>
+			<div
+				ref={boxRef}
+				tabIndex={0}
+				onKeyDown={onKey}
+				className="rounded-lg overflow-hidden border border-line bg-paper flex items-center justify-center min-h-[280px] outline-none focus:ring-2 focus:ring-accent"
+			>
+				{frame ? (
+					<img
+						ref={imgRef}
+						src={frame.frame}
+						onClick={onClick}
+						onMouseMove={onMove}
+						onWheel={onWheel}
+						draggable={false}
+						alt="Live agent browser"
+						className="w-full max-h-[70vh] object-contain cursor-crosshair select-none"
+					/>
+				) : (
+					<span className="text-sm text-muted-soft py-20">{connErr ? "Can't reach the live browser — is the runner (pags up) still connected?" : "Connecting to the live browser…"}</span>
+				)}
+			</div>
+			<div className="flex flex-wrap gap-2 mt-3 items-center">
+				<button type="button" onClick={onResume} className="px-5 py-2.5 rounded-lg bg-green/15 text-green font-bold text-base">Resume — I’ve done it</button>
+				<button type="button" onClick={endTakeover} className="px-3.5 py-2 rounded-lg bg-panel border border-line text-muted text-sm hover:text-ink">End takeover</button>
+				<span className="text-xs text-muted-soft">Click the frame to focus it, then type. ~2 fps.</span>
+			</div>
+		</div>
+	);
+}
+
 export default function RunDetail() {
 	const { id: instanceId = "", taskId = "" } = useParams();
 	const navigate = useNavigate();
@@ -174,15 +256,7 @@ export default function RunDetail() {
 			)}
 
 			{needsHuman && kind !== "value" && (
-				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
-					<div className="text-lg font-bold text-ink">{kind === "captcha" ? "🔐 A human verification appeared" : "✋ The agent is stuck on one step"}</div>
-					<ol className="text-sm text-muted list-decimal ml-5 space-y-1.5 mt-2 mb-4">
-						<li>Switch to the <b>Chrome window the agent opened</b> on the computer running <code className="text-xs bg-paper px-1 py-0.5 rounded">pags up</code>.</li>
-						<li>{kind === "captcha" ? "Complete the verification there." : "Do that one step (tick the box / click the control)."}</li>
-						<li>Come back and press <b>Resume</b>.</li>
-					</ol>
-					<button type="button" onClick={resume} className="px-5 py-2.5 rounded-lg bg-green/15 text-green font-bold text-base">Resume — I’ve done it</button>
-				</div>
+				<TakeoverLive instanceId={instanceId} taskId={taskId} kind={kind} onResume={resume} />
 			)}
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
