@@ -57,6 +57,10 @@ export class LocalRunner {
 	 */
 	private activePage: Page | null = null;
 	private readonly fileAttachArmed = new WeakSet<Page>();
+	// When the explicit `upload` action is driving a chooser itself (browser_file_upload),
+	// suppress the global auto-attach handler so the résumé isn't attached TWICE (the click
+	// that opens the chooser would otherwise trigger both auto-attach AND browser_file_upload).
+	private suppressAutoAttach = false;
 	private applyResumePath: string | null = null;
 	/**
 	 * The INDUSTRY-STANDARD `@playwright/mcp` server, attached over CDP to the same
@@ -445,6 +449,8 @@ export class LocalRunner {
 		if (this.fileAttachArmed.has(page)) return;
 		this.fileAttachArmed.add(page);
 		page.on("filechooser", (chooser) => {
+			// Skip when an explicit upload action is already attaching (avoids double-attach).
+			if (this.suppressAutoAttach) return;
 			chooser.setFiles(filePath).catch(() => undefined);
 		});
 	}
@@ -787,18 +793,25 @@ export class LocalRunner {
 				if (!this.applyResumePath) throw new RunnerInputError("no résumé file available to upload");
 				// Standard two-step FIRST (respects the brain's target): clicking the upload
 				// control opens the file chooser → browser_file_upload attaches the résumé.
-				const ref = (a.ref || "").trim();
-				if (ref) await mcp.callTool("browser_click", { element: label, target: ref }).catch(() => undefined);
-				const res = await mcp.callTool("browser_file_upload", { paths: [this.applyResumePath] });
-				if (!res.isError || !/modal state|file chooser/i.test(mcp.textOf(res))) return res;
-				// The target was a LABEL / DROP-ZONE, not the chooser trigger, so no file
-				// chooser opened. Fall back to setting the résumé directly on the page's
-				// file input — robust across hidden inputs, drop-zones and custom upload
-				// widgets (the semantically-correct upload field the brain clicks is often
-				// a container, not the button that fires the chooser).
-				const page = await this.getActivePage();
-				await page.locator('input[type="file"]').first().setInputFiles(this.applyResumePath, { timeout: 8_000 });
-				return { content: [{ type: "text", text: "résumé attached directly to the file input" }] };
+				// Suppress the global auto-attach handler for the duration so the résumé isn't
+				// attached twice (the click below can itself open a chooser the handler grabs).
+				this.suppressAutoAttach = true;
+				try {
+					const ref = (a.ref || "").trim();
+					if (ref) await mcp.callTool("browser_click", { element: label, target: ref }).catch(() => undefined);
+					const res = await mcp.callTool("browser_file_upload", { paths: [this.applyResumePath] });
+					if (!res.isError || !/modal state|file chooser/i.test(mcp.textOf(res))) return res;
+					// The target was a LABEL / DROP-ZONE, not the chooser trigger, so no file
+					// chooser opened. Fall back to setting the résumé directly on the page's
+					// file input — robust across hidden inputs, drop-zones and custom upload
+					// widgets (the semantically-correct upload field the brain clicks is often
+					// a container, not the button that fires the chooser).
+					const page = await this.getActivePage();
+					await page.locator('input[type="file"]').first().setInputFiles(this.applyResumePath, { timeout: 8_000 });
+					return { content: [{ type: "text", text: "résumé attached directly to the file input" }] };
+				} finally {
+					this.suppressAutoAttach = false;
+				}
 			}
 			case "select":
 				return mcp.callTool("browser_select_option", { element: label, target: this.refOf(a), values: [a.text ?? ""] });
