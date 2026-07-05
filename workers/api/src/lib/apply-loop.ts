@@ -260,7 +260,10 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			recentKeys.push(key);
 			if (recentKeys.length > 7) recentKeys.shift();
 			if (recentKeys.filter((k) => k === key).length >= 4) {
-				await deps.onEvent?.("agent.stuck", `Repeated "${describeAction(decision.action)}" with no progress — handing off`, { action: decision.action });
+				// DIAGNOSTIC: capture the full page (ARIA tree) at the stuck point — it shows
+				// every field, disabled-button state, checkbox checked/unchecked, and any
+				// validation text, so a "button won't advance" cause is knowable, not guessed.
+				await deps.onEvent?.("agent.stuck", `Repeated "${describeAction(decision.action)}" with no progress — handing off`, { action: decision.action, url: snap.url, stuckSnapshot: snap.snapshot, recentActions: [...actionLog].slice(-8) });
 				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 			}
 		}
@@ -278,6 +281,9 @@ export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSt
 			// repeat (3×) OR on several different-but-failing attempts on one page (the
 			// brain thrashing a stubborn widget), so it never burns to max-steps.
 			if (repeatFails >= 3 || failsOnPage >= 4) {
+				// DIAGNOSTIC: same as the fixation guard — record the page so a repeated-failure
+				// stuck (a widget the agent can't operate) is diagnosable from the transcript.
+				await deps.onEvent?.("agent.stuck", `Stuck after repeated failures on "${describeAction(decision.action)}" — handing off`, { action: decision.action, url: snap.url, lastError: actResult.error, stuckSnapshot: snap.snapshot, recentActions: [...actionLog].slice(-8) });
 				return { outcome: "stuck", detail: describeAction(decision.action), url: snap.url, steps: step, transcript: [...actionLog], filled: filledSomething };
 			}
 		} else {
