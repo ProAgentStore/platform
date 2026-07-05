@@ -42,7 +42,7 @@ interface Shot { seq: number; action: string; name: string; url: string; at?: st
  * frame's CSS-viewport space (width/height from the frame response), so clicks
  * land precisely regardless of how the frame is scaled in the browser.
  */
-function TakeoverLive({ instanceId, taskId, kind, onResume }: { instanceId: string; taskId: string; kind: string; onResume: () => void }) {
+function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanceId: string; taskId: string; kind: string; onResume: () => void; onClose: () => void }) {
 	const [frame, setFrame] = useState<{ frame: string; width: number; height: number } | null>(null);
 	const [connErr, setConnErr] = useState(false);
 	const imgRef = useRef<HTMLImageElement>(null);
@@ -58,7 +58,13 @@ function TakeoverLive({ instanceId, taskId, kind, onResume }: { instanceId: stri
 
 	useEffect(() => { poll(); }, [poll]);
 	usePolling(poll, 500, true); // ~2 fps; shares the high-rate takeover bucket
-	useEffect(() => { boxRef.current?.focus(); }, []);
+	// Full-screen overlay: focus for keyboard capture + lock body scroll while open.
+	useEffect(() => {
+		boxRef.current?.focus();
+		const prev = document.body.style.overflow;
+		document.body.style.overflow = "hidden";
+		return () => { document.body.style.overflow = prev; };
+	}, []);
 
 	const send = (body: Record<string, unknown>) =>
 		api(`/v1/instances/${instanceId}/takeover/${taskId}/input`, { method: "POST", body: JSON.stringify(body) }).catch(() => {});
@@ -74,24 +80,33 @@ function TakeoverLive({ instanceId, taskId, kind, onResume }: { instanceId: stri
 	const onMove = (e: React.MouseEvent) => { const now = Date.now(); if (now - lastMove.current < 90) return; lastMove.current = now; const c = toXY(e.clientX, e.clientY); if (c) send({ type: "move", ...c }); };
 	const onWheel = (e: React.WheelEvent) => { const c = toXY(e.clientX, e.clientY); if (c) send({ type: "scroll", ...c, deltaX: e.deltaX, deltaY: e.deltaY }); };
 	const onKey = (e: React.KeyboardEvent) => {
+		if (e.key === "Escape") { onClose(); return; }
 		if (e.key === "Tab") return; // let focus leave the panel
 		e.preventDefault();
 		if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) send({ type: "text", text: e.key });
 		else send({ type: "key", key: e.key, code: e.code, keyCode: e.keyCode });
 		setTimeout(poll, 150);
 	};
-	const endTakeover = async () => { await api(`/v1/instances/${instanceId}/takeover/${taskId}/end`, { method: "POST" }).catch(() => {}); };
+	const endTakeover = async () => { await api(`/v1/instances/${instanceId}/takeover/${taskId}/end`, { method: "POST" }).catch(() => {}); onClose(); };
 
+	// Full-screen, non-scrolling overlay: a fixed toolbar + the live frame filling the rest.
 	return (
-		<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
-			<div className="text-lg font-bold text-ink">{kind === "captcha" ? "🔐 Solve this verification — live remote control" : "✋ Take over this one step — live remote control"}</div>
-			<div className="text-sm text-muted mt-0.5 mb-3">This is the agent's browser on your remote runner. Click and type right here — your input is sent to it live. {kind === "captcha" ? "Solve the challenge, then press Resume." : "Do the blocked step, then press Resume."}</div>
-			<div
-				ref={boxRef}
-				tabIndex={0}
-				onKeyDown={onKey}
-				className="rounded-lg overflow-hidden border border-line bg-paper flex items-center justify-center min-h-[280px] outline-none focus:ring-2 focus:ring-accent"
-			>
+		<div
+			ref={boxRef}
+			tabIndex={0}
+			onKeyDown={onKey}
+			className="fixed inset-0 z-[100] bg-black flex flex-col outline-none"
+		>
+			<div className="flex items-center gap-3 px-3 sm:px-4 py-2 bg-panel border-b border-line shrink-0">
+				<span className="font-bold text-ink text-sm">{kind === "captcha" ? "🔐 Live remote control — solve the verification" : "🖥 Live remote control"}</span>
+				<span className="text-xs text-muted-soft hidden md:inline">Click &amp; type here — sent live to the agent's browser (~2 fps).</span>
+				<div className="ml-auto flex items-center gap-2">
+					<button type="button" onClick={onResume} className="px-4 py-1.5 rounded-lg bg-green/20 text-green font-bold text-sm">Resume — done</button>
+					<button type="button" onClick={endTakeover} className="px-3 py-1.5 rounded-lg bg-red/15 text-red text-sm font-semibold">End</button>
+					<button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg bg-panel border border-line text-muted text-sm hover:text-ink">Close ✕</button>
+				</div>
+			</div>
+			<div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black">
 				{frame ? (
 					<img
 						ref={imgRef}
@@ -101,16 +116,11 @@ function TakeoverLive({ instanceId, taskId, kind, onResume }: { instanceId: stri
 						onWheel={onWheel}
 						draggable={false}
 						alt="Live agent browser"
-						className="w-full max-h-[70vh] object-contain cursor-crosshair select-none"
+						className="max-w-full max-h-full object-contain cursor-crosshair select-none"
 					/>
 				) : (
-					<span className="text-sm text-muted-soft py-20">{connErr ? "Can't reach the live browser — is the runner (pags up) still connected?" : "Connecting to the live browser…"}</span>
+					<span className="text-sm text-white/70">{connErr ? "Can't reach the live browser — is the runner (pags up) still connected?" : "Connecting to the live browser…"}</span>
 				)}
-			</div>
-			<div className="flex flex-wrap gap-2 mt-3 items-center">
-				<button type="button" onClick={onResume} className="px-5 py-2.5 rounded-lg bg-green/15 text-green font-bold text-base">Resume — I’ve done it</button>
-				<button type="button" onClick={endTakeover} className="px-3.5 py-2 rounded-lg bg-panel border border-line text-muted text-sm hover:text-ink">End takeover</button>
-				<span className="text-xs text-muted-soft">Click the frame to focus it, then type. ~2 fps.</span>
 			</div>
 		</div>
 	);
@@ -125,6 +135,7 @@ export default function RunDetail() {
 	const [idx, setIdx] = useState(0);
 	const [playing, setPlaying] = useState(false);
 	const [inputVal, setInputVal] = useState("");
+	const [takeoverOpen, setTakeoverOpen] = useState(false);
 	const urlsRef = useRef<Record<number, string>>({});
 
 	const load = useCallback(async () => {
@@ -256,7 +267,17 @@ export default function RunDetail() {
 			)}
 
 			{needsHuman && kind !== "value" && (
-				<TakeoverLive instanceId={instanceId} taskId={taskId} kind={kind} onResume={resume} />
+				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
+					<div className="text-lg font-bold text-ink">{kind === "captcha" ? "🔐 A human verification appeared" : "✋ The agent is stuck on one step"}</div>
+					<div className="text-sm text-muted mt-0.5 mb-3">The agent runs on your remote machine — take control of its browser here, {kind === "captcha" ? "solve the verification" : "do the blocked step"}, then press Resume.</div>
+					<div className="flex flex-wrap gap-2">
+						<button type="button" onClick={() => setTakeoverOpen(true)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base">🖥 Take over (live)</button>
+						<button type="button" onClick={resume} className="px-5 py-2.5 rounded-lg bg-green/15 text-green font-bold text-base">Resume — I’ve done it</button>
+					</div>
+				</div>
+			)}
+			{takeoverOpen && (
+				<TakeoverLive instanceId={instanceId} taskId={taskId} kind={kind} onClose={() => setTakeoverOpen(false)} onResume={() => { setTakeoverOpen(false); resume(); }} />
 			)}
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
