@@ -44,7 +44,7 @@ interface Shot { seq: number; action: string; name: string; url: string; at?: st
  */
 function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanceId: string; taskId: string; kind: string; onResume: () => void; onClose: () => void }) {
 	const [frame, setFrame] = useState<{ frame: string; width: number; height: number } | null>(null);
-	const [connErr, setConnErr] = useState(false);
+	const [connErr, setConnErr] = useState("");
 	const imgRef = useRef<HTMLImageElement>(null);
 	const boxRef = useRef<HTMLDivElement>(null);
 	const lastMove = useRef(0);
@@ -52,8 +52,9 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 	const poll = useCallback(async () => {
 		try {
 			const f = await api<{ frame: string; width: number; height: number }>(`/v1/instances/${instanceId}/takeover/${taskId}/frame`);
-			if (f?.frame) { setFrame(f); setConnErr(false); }
-		} catch { setConnErr(true); }
+			if (f?.frame && f.frame.length > 30) { setFrame(f); setConnErr(""); }
+			else setConnErr("The runner returned an empty frame (no live page to capture).");
+		} catch (e) { setConnErr(e instanceof Error ? e.message : String(e)); }
 	}, [instanceId, taskId]);
 
 	useEffect(() => { poll(); }, [poll]);
@@ -119,7 +120,14 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 						className="max-w-full max-h-full object-contain cursor-crosshair select-none"
 					/>
 				) : (
-					<span className="text-sm text-white/70">{connErr ? "Can't reach the live browser — is the runner (pags up) still connected?" : "Connecting to the live browser…"}</span>
+					<div className="text-sm text-white/70 max-w-lg text-center px-4">
+						{connErr ? (
+							<>
+								<div className="font-semibold text-red mb-1">Live view error</div>
+								<div className="text-xs text-white/60 break-words font-mono">{connErr}</div>
+							</>
+						) : "Connecting to the live browser…"}
+					</div>
 				)}
 			</div>
 		</div>
