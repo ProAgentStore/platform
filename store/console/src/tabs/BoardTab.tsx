@@ -9,10 +9,39 @@ const COLUMNS = [
 	{ id: "waiting", title: "Waiting", color: "#eab308", statuses: ["queued", "needs_approval"] },
 	{ id: "running", title: "Running", color: "#3b82f6", statuses: ["running"] },
 	{ id: "needs_human", title: "Needs you", color: "#f59e0b", statuses: ["needs_human"] },
-	{ id: "blocked", title: "Blocked", color: "#ef4444", statuses: ["blocked", "failed"] },
+	// "failed" = the run couldn't finish (max-steps, timeout, error). "blocked" = the
+	// agent stopped and needs YOU (email verification, can't proceed truthfully) —
+	// kept distinct so a real failure isn't hidden behind a "blocked" label.
+	{ id: "failed", title: "Failed", color: "#ef4444", statuses: ["failed"] },
+	{ id: "blocked", title: "Blocked", color: "#f97316", statuses: ["blocked"] },
 	{ id: "done", title: "Done", color: "#22c55e", statuses: ["completed"] },
 	{ id: "cancelled", title: "Cancelled", color: "#a3a3a3", statuses: ["cancelled"] },
 ];
+
+/**
+ * A readable card label for a runtime task. Apply tasks are created with type
+ * "job.apply_agent" and no title, so without this the card just reads
+ * "job.apply_agent" in every column. Fall back to the job URL: prettify the last
+ * path segment (the job slug) into a title and show the ATS host underneath, so a
+ * card reads e.g. "Business Ai Group Pty Ltd Head Of Engineering / employmenthero.com".
+ */
+function taskLabel(task: RuntimeTask): { title: string; subtitle: string } {
+	if (task.title) return { title: task.title, subtitle: task.description || "" };
+	const url = typeof task.input?.url === "string" ? task.input.url : "";
+	if (url) {
+		let host = "";
+		try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* not a URL */ }
+		const slug = url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() || "";
+		const pretty = slug
+			// drop a trailing random id token (e.g. "-a8f4j") — 4–8 chars containing a digit
+			.replace(/-([a-z0-9]{4,8})$/i, (m, g: string) => (/\d/.test(g) ? "" : m))
+			.replace(/[-_]+/g, " ")
+			.replace(/\b\w/g, (c) => c.toUpperCase())
+			.trim();
+		if (pretty || host) return { title: pretty || host, subtitle: pretty ? host : "" };
+	}
+	return { title: task.type, subtitle: task.description || "" };
+}
 
 // Generic runtime board (tasks + activity) for any agent. The job-application
 // agent's applications pipeline lives in its own ApplyTab, which composes this.
@@ -242,7 +271,7 @@ function TaskDetailModal({ task, events, onClose, onAction, onResume, onProvideI
 		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
 			<div className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-2xl max-h-[92vh] overflow-auto p-5 sm:p-6">
 				<div className="flex items-start justify-between gap-3 mb-1">
-					<h3 className="text-xl font-bold break-words">{task.title || "Job application"}</h3>
+					<h3 className="text-xl font-bold break-words">{taskLabel(task).title || "Job application"}</h3>
 					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-2xl leading-none shrink-0" aria-label="Close">✕</button>
 				</div>
 				<div className="flex gap-2 flex-wrap items-center text-xs mb-5">
@@ -356,6 +385,7 @@ function TaskCard({ task, onAction, onResume, onOpen, onDelete }: { task: Runtim
 	const needsHuman = task.status === "needs_human" || task.needs_human;
 	const needsApproval = task.status === "needs_approval";
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired"].includes(task.status);
+	const label = taskLabel(task);
 	return (
 		<div className="relative bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent hover:-translate-y-px">
 			{isFinished && (
@@ -369,8 +399,8 @@ function TaskCard({ task, onAction, onResume, onOpen, onDelete }: { task: Runtim
 				</button>
 			)}
 			<button type="button" onClick={() => onOpen(task.id)} className="text-left w-full cursor-pointer">
-				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{task.title || task.type}</h3>
-				<p className="text-xs text-muted line-clamp-2 mb-2">{task.description || ""}</p>
+				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{label.title}</h3>
+				<p className="text-xs text-muted line-clamp-2 mb-2">{label.subtitle}</p>
 				<div className="flex gap-1.5 flex-wrap items-center text-[0.7rem]">
 					<span className={`px-1.5 py-0.5 rounded font-medium ${statusClass(task.status)}`}>
 						{task.status}

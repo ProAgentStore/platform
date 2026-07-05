@@ -515,6 +515,27 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"instance_board",
+		"Read a private instance's live kanban board — the runtime task tickets (grouped Waiting / Running / Needs you / Failed / Blocked / Done / Cancelled) plus, for apply agents, the application records (Queued / Pending / Submitted / Interview / Rejected / Accepted). This is the same board shown in the console; use it to answer \"what's in <column>\" or \"why didn't <job> apply\".",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const tasksData = await authedCall(`/v1/instances/${instance_id}/tasks`, sessionToken, {}, env).catch(() => ({}));
+			const appsData = await authedCall(
+				`/v1/instances/${instance_id}/collections/applications/records`,
+				sessionToken,
+				{},
+				env,
+			).catch(() => ({}));
+			return jsonText(buildBoard(tasksData, appsData));
+		},
+	);
+
+	server.tool(
 		"instance_messages",
 		"Read recent messages from one of your private subscribed instances.",
 		{
@@ -949,4 +970,101 @@ export function registerInstanceTools(
 			return text(`Loop stopped at iteration ${state.iteration}/${state.maxIterations}.`);
 		},
 	);
+}
+
+interface RawTask {
+	id: string;
+	type?: string;
+	status?: string;
+	title?: string;
+	description?: string;
+	input?: Record<string, unknown>;
+	createdAt?: string;
+}
+
+/** Runtime-ticket columns — mirror the console board (BoardTab.tsx). */
+const BOARD_COLUMNS: { title: string; statuses: string[] }[] = [
+	{ title: "Waiting", statuses: ["queued", "needs_approval"] },
+	{ title: "Running", statuses: ["running"] },
+	{ title: "Needs you", statuses: ["needs_human"] },
+	{ title: "Failed", statuses: ["failed"] },
+	{ title: "Blocked", statuses: ["blocked"] },
+	{ title: "Done", statuses: ["completed"] },
+	{ title: "Cancelled", statuses: ["cancelled"] },
+];
+
+/** Application-record columns — mirror the console apply board (ApplyTab.tsx). */
+const APP_COLUMNS: { title: string; statuses: string[] }[] = [
+	{ title: "Queued", statuses: ["queued"] },
+	{ title: "Pending", statuses: ["pending"] },
+	{ title: "Submitted", statuses: ["submitted"] },
+	{ title: "Interview", statuses: ["interview"] },
+	{ title: "Rejected", statuses: ["rejected"] },
+	{ title: "Accepted", statuses: ["accepted"] },
+];
+
+/**
+ * A readable label for a runtime ticket. Apply tickets carry type "job.apply_agent"
+ * and no title, so fall back to the job URL: prettify the last path segment (job
+ * slug) and keep the ATS host — same derivation the console board uses.
+ */
+function ticketLabel(task: RawTask): string {
+	if (task.title) return task.title;
+	const url = typeof task.input?.url === "string" ? task.input.url : "";
+	if (url) {
+		let host = "";
+		try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* not a URL */ }
+		const slug = url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() || "";
+		const pretty = slug
+			.replace(/-([a-z0-9]{4,8})$/i, (m, g: string) => (/\d/.test(g) ? "" : m))
+			.replace(/[-_]+/g, " ")
+			.replace(/\b\w/g, (c) => c.toUpperCase())
+			.trim();
+		if (pretty && host) return `${pretty} (${host})`;
+		if (pretty || host) return pretty || host;
+	}
+	return task.type || "task";
+}
+
+/** Group runtime tasks + application records into the console's kanban columns. */
+function buildBoard(tasksData: unknown, appsData: unknown): unknown {
+	const tasks = (isRec(tasksData) && Array.isArray(tasksData.tasks) ? tasksData.tasks : []) as RawTask[];
+	const apps = (isRec(appsData) && Array.isArray(appsData.records) ? appsData.records : []) as Record<string, unknown>[];
+
+	const board: Record<string, unknown[]> = {};
+	for (const col of BOARD_COLUMNS) {
+		const items = tasks
+			.filter((t) => col.statuses.includes(String(t.status ?? "")))
+			.map((t) => ({ id: t.id, label: ticketLabel(t), status: t.status, url: t.input?.url, createdAt: t.createdAt }));
+		if (items.length) board[col.title] = items;
+	}
+
+	const applications: Record<string, unknown[]> = {};
+	for (const col of APP_COLUMNS) {
+		const items = apps
+			.filter((a) => col.statuses.includes(String((a.status as string) ?? (isRec(a.data) ? a.data.status : "") ?? "queued")))
+			.map((a) => {
+				const d = (isRec(a.data) ? a.data : {}) as Record<string, unknown>;
+				return {
+					id: a.id,
+					company: a.company ?? d.company ?? "",
+					role: a.role ?? d.role ?? "",
+					url: a.url ?? d.url ?? "",
+					status: a.status ?? d.status ?? "queued",
+				};
+			});
+		if (items.length) applications[col.title] = items;
+	}
+
+	return {
+		tickets: board,
+		ticketCount: tasks.length,
+		applications,
+		applicationCount: apps.length,
+		note: "tickets = runtime run board (Failed = run couldn't finish; Blocked = stopped needing you). applications = logged application records. A run that never reached submit has a Failed ticket but no application record.",
+	};
+}
+
+function isRec(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null;
 }
