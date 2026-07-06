@@ -1,7 +1,20 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { reportClientError } from "@proagentstore/sdk/client";
 import App from "./App";
 import "./index.css";
+
+// Full observability: mirror uncaught browser errors + unhandled promise rejections
+// into the durable server error log so they're visible via MCP list_errors, not just
+// in the user's DevTools. Best-effort + deduped inside reportClientError.
+window.addEventListener("error", (e) => {
+	const msg = e.error instanceof Error ? `${e.error.name}: ${e.error.message}` : String(e.message || "error");
+	reportClientError("window", msg, { file: e.filename, line: e.lineno, col: e.colno, stack: e.error instanceof Error ? String(e.error.stack || "").slice(0, 600) : undefined });
+});
+window.addEventListener("unhandledrejection", (e) => {
+	const r = e.reason;
+	reportClientError("unhandledrejection", r instanceof Error ? `${r.name}: ${r.message}` : String(r), { stack: r instanceof Error ? String(r.stack || "").slice(0, 600) : undefined });
+});
 
 // Apply saved text scale before paint
 try {

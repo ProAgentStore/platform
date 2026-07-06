@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
+import { reportClientError } from "../client.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -309,6 +310,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			onError: (err) => {
 				console.warn("[voice] STT error:", err);
 				if (err && err !== "no-speech") {
+					// Surface into the durable log so voice failures (Whisper 400 etc.) are
+					// visible server-side, not just in the user's browser console.
+					reportClientError("voice", String(err), { sttWhisper: sttIsWhisperRef.current });
 					// Surface real errors (Whisper 401/400, mic denied) in the input —
 					// otherwise a swallowed failure is indistinguishable from "nothing
 					// happened", which is exactly how Whisper looked broken.
