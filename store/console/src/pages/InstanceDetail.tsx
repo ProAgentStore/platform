@@ -224,7 +224,7 @@ export default function InstanceDetail() {
 	const doSend = useCallback(async (msg: string) => {
 		console.log("[chat] doSend:", msg?.slice(0, 50), "id:", id);
 		if (!msg.trim() || !id) return;
-		setMessages((prev) => [...prev, { role: "user", content: msg }]);
+		setMessages((prev) => [...prev, { role: "user", content: msg, createdAt: new Date().toISOString() }]);
 		setThinking(true);
 		try {
 			const data = await api<{ message?: Message; toolMessage?: Message }>(

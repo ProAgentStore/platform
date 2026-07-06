@@ -1,5 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { renderMd } from "./ui.js";
+import { renderMd, formatTime } from "./ui.js";
+
+describe("formatTime (UTC parsing)", () => {
+	it("treats a SQLite 'YYYY-MM-DD HH:MM:SS' string as UTC, not local", () => {
+		// A row written ~2s ago in SQLite UTC form must read as "just now" regardless of
+		// the runner's timezone. Parsed as local (the bug) it would read hours off.
+		const utcNow = new Date().toISOString().slice(0, 19).replace("T", " ");
+		expect(formatTime(utcNow)).toBe("just now");
+	});
+
+	it("still reads a proper ISO (T/Z) string correctly", () => {
+		expect(formatTime(new Date().toISOString())).toBe("just now");
+	});
+
+	it("shows relative buckets for older UTC timestamps", () => {
+		const twoHoursAgo = new Date(Date.now() - 2 * 3600_000).toISOString().slice(0, 19).replace("T", " ");
+		expect(formatTime(twoHoursAgo)).toBe("2h ago");
+	});
+
+	it("is empty for blank or unparseable input (no NaN)", () => {
+		expect(formatTime("")).toBe("");
+		expect(formatTime("not a date")).toBe("");
+	});
+});
 
 describe("renderMd link rendering (XSS hardening)", () => {
 	it("neutralizes a quote-breakout event-handler injection in a markdown link", () => {

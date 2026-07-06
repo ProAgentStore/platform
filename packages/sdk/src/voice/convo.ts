@@ -38,3 +38,22 @@ export function decideRestart(elapsedMs: number, rapidEnds: number, cfg: Restart
 	}
 	return { bail: false, nextRapidEnds: 0 };
 }
+
+/** A spoken command the hook acts on locally instead of sending as a chat message. */
+export type VoiceCommand = "repeat";
+
+/**
+ * Detect a hands-free voice COMMAND in a finished transcript. Right now just
+ * "repeat" (+ common phrasings) → re-speak the agent's last reply. Matches only when
+ * the whole utterance IS the command (trailing punctuation ignored), so a normal
+ * sentence that merely contains the word isn't hijacked.
+ */
+export function matchVoiceCommand(text: string): VoiceCommand | null {
+	// Whisper punctuates transcripts, so strip punctuation + collapse spaces before
+	// matching (e.g. "Repeat, please." → "repeat please").
+	const t = text.toLowerCase().replace(/[.,!?]/g, "").replace(/\s+/g, " ").trim();
+	if (/^(repeat|repeat (that|it|again|please)|say (that |it )?again|again please|come again|pardon|what did you say)$/.test(t)) {
+		return "repeat";
+	}
+	return null;
+}

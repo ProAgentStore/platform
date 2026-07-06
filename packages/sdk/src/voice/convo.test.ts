@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideRestart } from "./convo.js";
+import { decideRestart, matchVoiceCommand } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -36,5 +36,28 @@ describe("decideRestart", () => {
 	it("honours custom thresholds", () => {
 		expect(decideRestart(50, 0, { maxRapid: 1 }).bail).toBe(true); // bail on first rapid
 		expect(decideRestart(300, 5, { rapidMs: 200 }).nextRapidEnds).toBe(0); // 300ms not rapid under 200ms
+	});
+});
+
+describe("matchVoiceCommand", () => {
+	it("matches 'repeat' and its common phrasings", () => {
+		for (const phrase of ["repeat", "Repeat", "repeat that", "repeat it", "say again", "say that again", "come again", "pardon", "what did you say", "Repeat, please."]) {
+			expect(matchVoiceCommand(phrase)).toBe("repeat");
+		}
+	});
+
+	it("ignores trailing punctuation and case", () => {
+		expect(matchVoiceCommand("  REPEAT!  ")).toBe("repeat");
+	});
+
+	it("does NOT hijack a normal sentence that merely contains the word", () => {
+		expect(matchVoiceCommand("repeat the booking for next week")).toBeNull();
+		expect(matchVoiceCommand("can you say that flight is cheap")).toBeNull();
+		expect(matchVoiceCommand("book a flight to Sydney")).toBeNull();
+	});
+
+	it("returns null for empty / unrelated input", () => {
+		expect(matchVoiceCommand("")).toBeNull();
+		expect(matchVoiceCommand("hello there")).toBeNull();
 	});
 });

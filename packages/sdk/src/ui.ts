@@ -199,7 +199,13 @@ export function mdLite(raw: string): string {
 /** Relative time label */
 export function formatTime(iso: string): string {
 	if (!iso) return "";
-	const d = new Date(iso);
+	// SQLite `datetime('now')` returns "YYYY-MM-DD HH:MM:SS" in UTC with NO timezone —
+	// JS parses that as LOCAL time, so a fresh message reads "10h ago" for a user at
+	// UTC+10. Normalize to an explicit UTC ISO first. (Real ISO strings carry a T/Z,
+	// don't match the regex, and pass through unchanged.)
+	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(iso) ? `${iso.replace(" ", "T")}Z` : iso;
+	const d = new Date(normalized);
+	if (Number.isNaN(d.getTime())) return "";
 	const now = Date.now();
 	const diff = now - d.getTime();
 	if (diff < 60000) return "just now";

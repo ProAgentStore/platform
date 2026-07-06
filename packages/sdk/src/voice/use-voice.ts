@@ -4,7 +4,7 @@ import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./c
 import { reportClientError } from "../client.js";
 import { initVad, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
-import { decideRestart } from "./convo.js";
+import { decideRestart, matchVoiceCommand } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -15,6 +15,20 @@ const LEVEL_THROTTLE_MS = 66;
 const RESTART_DELAY_MS = 350;
 /** Ignore the mic for this long after TTS ends — the speaker echo/reverb tail. */
 const ECHO_GUARD_MS = 800;
+
+/**
+ * Unlock browser Text-to-Speech synchronously inside a user gesture. iOS/Safari
+ * won't speak an utterance that's queued LATER (e.g. an async agent reply) unless
+ * SpeechSynthesis was first invoked during a real tap — this is the "replied in text
+ * but not voice" cause. Speaking an empty utterance on the toggle primes it.
+ */
+function unlockSpeechSynthesis() {
+	try {
+		if (typeof window !== "undefined" && window.speechSynthesis) {
+			window.speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+		}
+	} catch {}
+}
 
 // Short tones via Web Audio — no external files
 let _audioCtx: AudioContext | null = null;
@@ -177,6 +191,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const lastLevelSetRef = useRef(0);
 	// When the agent last finished speaking — used to ignore the speaker echo tail.
 	const speakEndedAtRef = useRef(0);
+	// The agent's last reply text — re-spoken by the "repeat" voice command.
+	const lastSpokenTextRef = useRef("");
 	useEffect(() => {
 		getVoiceConfig(instanceId).then((c) => {
 			silenceMsRef.current = c.silenceMs;
@@ -226,6 +242,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [ensureTts, startListening]);
 
 	const maybeSpeakResponse = useCallback((text: string) => {
+		// Remember the last reply so a spoken "repeat" can re-speak it (even if we didn't
+		// auto-speak this time — the user may enable voice then ask to repeat).
+		if (text?.trim()) lastSpokenTextRef.current = text;
 		if (speakOnRef.current || convoOnRef.current) {
 			speakAndResume(text);
 		} else {
@@ -233,6 +252,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 			pausedForThinkingRef.current = false;
 		}
 	}, [speakAndResume]);
+
+	// "repeat" voice command → re-speak the agent's last reply (and, in hands-free,
+	// reopen the mic afterwards, same as a normal turn). Ref-backed so the STT result
+	// handler can call it without widening its dependency list.
+	const repeatLast = useCallback(() => {
+		const last = lastSpokenTextRef.current;
+		if (last) {
+			speakAndResume(last);
+		} else {
+			pausedForThinkingRef.current = false;
+			if (convoOnRef.current) startListening();
+		}
+	}, [speakAndResume, startListening]);
+	const repeatLastRef = useRef(repeatLast);
+	repeatLastRef.current = repeatLast;
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
 		// Echo guard (CONVERSATION MODE): ignore anything captured while the agent is
@@ -252,9 +286,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// pause). Send it straight away — no interim accumulation or debounce.
 			if (sttIsWhisperRef.current) {
 				if (isFinal && text.trim()) {
+					const t = text.trim();
+					if (matchVoiceCommand(t) === "repeat") {
+						flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); });
+						repeatLastRef.current();
+						return;
+					}
 					pausedForThinkingRef.current = true;
 					flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); playThinkingChime(); });
-					onSendRef.current(text.trim());
+					onSendRef.current(t);
 				}
 				return;
 			}
@@ -270,6 +310,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 				const msg = pendingTextRef.current.trim();
 				pendingTextRef.current = "";
 				if (!msg) return;
+				if (matchVoiceCommand(msg) === "repeat") {
+					flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+					repeatLastRef.current();
+					return;
+				}
 				flushSync(() => {
 					setInterim("");
 					stopAudioMonitor();
@@ -290,6 +335,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				stopAudioMonitor();
 				setMicOn(false);
 			});
+			if (matchVoiceCommand(text.trim()) === "repeat") { repeatLastRef.current(); return; }
 			onSendRef.current(text);
 		} else {
 			flushSync(() => setInterim(text));
@@ -363,7 +409,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 		} catch { setMicOn(false); }
 	}, [micOn, makeStt, startAudioMonitor, stopAudioMonitor]);
 
-	const toggleSpeak = useCallback(() => setSpeakOn((v) => !v), []);
+	const toggleSpeak = useCallback(() => {
+		// Prime TTS on this tap so a later async reply can actually speak (iOS/Safari).
+		setSpeakOn((v) => { if (!v) unlockSpeechSynthesis(); return !v; });
+	}, []);
 
 	const toggleConvo = useCallback(async () => {
 		if (convoOn) {
@@ -383,6 +432,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			return;
 		}
 		try { getAudioCtx().resume(); } catch {}
+		unlockSpeechSynthesis(); // prime TTS on this tap so replies can speak (iOS/Safari)
 		try {
 			pausedForThinkingRef.current = false;
 			sttRef.current = await makeStt();
