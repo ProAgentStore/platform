@@ -33,7 +33,6 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 	const navigate = useNavigate();
 	const cols = columns && columns.length ? columns : GENERIC_COLUMNS;
 	const [tasks, setTasks] = useState<RuntimeTask[]>([]);
-	const [filter, setFilter] = useState<"active" | "all">("active");
 
 	const loadBoard = useCallback(async () => {
 		try {
@@ -49,10 +48,17 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 	// task id for tasks with no URL). The newest attempt is the card's representative.
 	const items = groupIntoItems(tasks);
 	const finishedStatuses = ["completed", "cancelled", "failed", "blocked", "expired"];
-	const visibleItems = filter === "active"
-		? items.filter((it) => !["completed", "cancelled"].includes(it.rep.status))
-		: items;
 	const finishedCount = items.filter((it) => finishedStatuses.includes(it.rep.status)).length;
+	// Assign each job to exactly one column. Anything whose status matches no
+	// column (and there's no catchAll) falls into a trailing "Other" bucket, so a
+	// job is never silently dropped from the board.
+	const byColumn = new Map<string, BoardItem[]>();
+	const other: BoardItem[] = [];
+	for (const it of items) {
+		const colId = columnFor(cols, it.rep.status);
+		if (colId) (byColumn.get(colId) ?? byColumn.set(colId, []).get(colId)!).push(it);
+		else other.push(it);
+	}
 
 	// Hide a whole job (all its attempts) from the board. Best-effort cancels first.
 	const handleDeleteItem = async (item: BoardItem) => {
@@ -85,18 +91,6 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 					</div>
 				</div>
 				<div className="flex items-center gap-2">
-					<div className="inline-flex border border-line rounded-lg overflow-hidden">
-						{(["active", "all"] as const).map((f) => (
-							<button
-								key={f}
-								type="button"
-								onClick={() => setFilter(f)}
-								className={`px-2.5 py-1 text-xs font-bold ${filter === f ? "bg-accent-soft text-accent" : "text-muted"}`}
-							>
-								{f === "active" ? "Active" : "All"}
-							</button>
-						))}
-					</div>
 					{finishedCount > 0 && (
 						<button
 							type="button"
@@ -117,8 +111,8 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 			</div>
 
 			<div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 items-start mb-4">
-				{cols.map((col) => {
-					const colItems = visibleItems.filter((it) => columnFor(cols, it.rep.status) === col.id);
+				{[...cols, ...(other.length ? [{ id: "__other", title: "Other", color: "#a3a3a3" } as BoardColumn] : [])].map((col) => {
+					const colItems = col.id === "__other" ? other : (byColumn.get(col.id) ?? []);
 					return (
 						<div key={col.id} className="border border-line rounded-xl bg-panel/55 min-h-[180px]">
 							<div className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-line">
