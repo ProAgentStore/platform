@@ -68,9 +68,14 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 		else other.push(it);
 	}
 
-	const setStatus = async (jobKey: string, status: string) => {
+	// Send a snapshot of the display fields so a moved card can stand alone once its
+	// runs are cleared. Empty status resets to automation (clears the durable row).
+	const setStatus = async (item: BoardItem, status: string) => {
 		try {
-			await api(`/v1/instances/${instanceId}/board/status`, { method: "POST", body: JSON.stringify({ jobKey, status }) });
+			await api(`/v1/instances/${instanceId}/board/status`, {
+				method: "POST",
+				body: JSON.stringify({ jobKey: item.jobKey, status, title: item.title, subtitle: item.subtitle, url: item.url }),
+			});
 			loadBoard();
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
@@ -79,7 +84,9 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 
 	const handleDeleteItem = async (item: BoardItem) => {
 		try {
+			// Hide the runtime tasks AND clear any durable overlay row (status "").
 			await Promise.all(item.attempts.map((a) => api(`/v1/instances/${instanceId}/tasks/${a.id}`, { method: "DELETE" })));
+			if (item.userStatus) await api(`/v1/instances/${instanceId}/board/status`, { method: "POST", body: JSON.stringify({ jobKey: item.jobKey, status: "" }) });
 			loadBoard();
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
@@ -148,8 +155,8 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 											cols={cols}
 											expanded={expanded === item.jobKey}
 											onToggleAttempts={() => setExpanded(expanded === item.jobKey ? null : item.jobKey)}
-											onOpen={(taskId) => navigate(`/instances/${instanceId}/tasks/${taskId}`)}
-											onMove={(status) => setStatus(item.jobKey, status)}
+											onOpen={(taskId) => taskId && navigate(`/instances/${instanceId}/tasks/${taskId}`)}
+											onMove={(status) => setStatus(item, status)}
 											onDelete={() => handleDeleteItem(item)}
 										/>
 									))
@@ -173,12 +180,14 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onDe
 	onDelete: () => void;
 }) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
+	// A moved card whose runs are gone stands alone — no run to open.
+	const openable = !!item.latestTaskId;
 	// Current selection: the column holding this card, or "__auto" when no override.
 	const currentCol = columnFor(cols, item.status) ?? "";
 	const selectValue = item.userStatus ? currentCol : "__auto";
 	return (
 		<div className="relative bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent">
-			{isFinished && (
+			{(isFinished || !openable) && (
 				<button
 					type="button"
 					title="Remove from board"
@@ -188,7 +197,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onDe
 					✕
 				</button>
 			)}
-			<button type="button" onClick={() => onOpen(item.latestTaskId)} className="text-left w-full cursor-pointer">
+			<button type="button" onClick={() => onOpen(item.latestTaskId)} disabled={!openable} className={`text-left w-full ${openable ? "cursor-pointer" : "cursor-default"}`}>
 				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{item.title}</h3>
 				{item.subtitle && <p className="text-[0.7rem] text-muted-soft mb-1 line-clamp-1">{item.subtitle}</p>}
 				{item.description && <p className="text-xs text-muted line-clamp-2 mb-2">{item.description}</p>}

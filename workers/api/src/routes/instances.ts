@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
-import { buildInstanceBoard, setBoardItemStatus } from "../lib/board.js";
+import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems } from "../lib/board.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
@@ -493,7 +493,13 @@ instanceRoutes.post("/:instanceId/board/status", async (c) => {
 	const jobKey = typeof body.jobKey === "string" ? body.jobKey : "";
 	if (!jobKey) return c.json({ error: "jobKey required" }, 400);
 	const status = typeof body.status === "string" ? body.status.trim() : "";
-	await setBoardItemStatus(c.env, instanceId, session.uid, jobKey, status || null);
+	// Snapshot the display fields so a moved card survives its runs being cleared.
+	const meta = {
+		title: typeof body.title === "string" ? body.title : "",
+		subtitle: typeof body.subtitle === "string" ? body.subtitle : "",
+		url: typeof body.url === "string" ? body.url : "",
+	};
+	await setBoardItemStatus(c.env, instanceId, session.uid, jobKey, status || null, meta);
 	return c.json({ ok: true });
 });
 
@@ -587,6 +593,7 @@ instanceRoutes.post("/:instanceId/tasks/clear-finished", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const cleared = await clearFinishedRuntimeTasks(c.env, instanceId, session.uid);
+	await clearFinishedBoardItems(c.env, instanceId, session.uid);
 	return c.json({ ok: true, cleared });
 });
 

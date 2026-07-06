@@ -110,14 +110,14 @@ async function columnsForInstance(env: Env, instanceId: string, userId: string):
 export async function buildInstanceBoard(env: Env, instanceId: string, userId: string): Promise<InstanceBoard> {
 	const [tasks, overlayRows, columns] = await Promise.all([
 		mirroredRuntimeTasks(env, instanceId, userId),
-		env.DB.prepare("SELECT job_key, user_status FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
+		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
-			.all<{ job_key: string; user_status: string | null }>(),
+			.all<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>(),
 		columnsForInstance(env, instanceId, userId),
 	]);
 
-	const overlay = new Map<string, string | null>();
-	for (const r of overlayRows.results ?? []) overlay.set(r.job_key, r.user_status);
+	const overlay = new Map<string, { user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>();
+	for (const r of overlayRows.results ?? []) overlay.set(r.job_key, r);
 
 	// One card per job — newest attempt represents the card.
 	const byKey = new Map<string, RawTask[]>();
@@ -135,7 +135,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		const rep = arr[0];
 		const label = taskLabel(rep);
 		const runStatus = String(rep.status ?? "");
-		const userStatus = overlay.get(jobKey) ?? null;
+		const userStatus = overlay.get(jobKey)?.user_status ?? null;
 		items.push({
 			jobKey,
 			latestTaskId: String(rep.id ?? ""),
@@ -150,9 +150,37 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			updatedAt: rep.updatedAt || rep.createdAt || "",
 		});
 	}
+
+	// Standalone durable cards: a job the user MOVED whose runtime tasks are gone
+	// (cleared / aged out). These stand on the snapshot stored at move time so the
+	// tracked pipeline card (e.g. Interview) doesn't vanish with its runs.
+	for (const [jobKey, row] of overlay) {
+		if (byKey.has(jobKey) || !row.user_status) continue;
+		items.push({
+			jobKey,
+			latestTaskId: "",
+			title: row.title || jobKey,
+			subtitle: row.subtitle || "",
+			description: "",
+			url: row.url || "",
+			runStatus: "",
+			userStatus: row.user_status,
+			status: row.user_status,
+			attempts: [],
+			updatedAt: row.updated_at || "",
+		});
+	}
+
 	items.sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
 
 	return { columns, items };
+}
+
+/** Snapshot fields so a moved card can stand alone once its runs are gone. */
+export interface BoardItemMeta {
+	title?: string;
+	subtitle?: string;
+	url?: string;
 }
 
 /** Set (or clear, when status is null/empty) the human status override for a job. */
@@ -162,6 +190,7 @@ export async function setBoardItemStatus(
 	userId: string,
 	jobKey: string,
 	status: string | null,
+	meta: BoardItemMeta = {},
 ): Promise<void> {
 	if (!status) {
 		await env.DB.prepare("DELETE FROM board_items WHERE instance_id = ?1 AND user_id = ?2 AND job_key = ?3")
@@ -170,12 +199,31 @@ export async function setBoardItemStatus(
 		return;
 	}
 	await env.DB.prepare(
-		`INSERT INTO board_items (instance_id, user_id, job_key, user_status, updated_at)
-     VALUES (?1, ?2, ?3, ?4, datetime('now'))
+		`INSERT INTO board_items (instance_id, user_id, job_key, user_status, title, subtitle, url, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
      ON CONFLICT(instance_id, user_id, job_key) DO UPDATE SET
        user_status = excluded.user_status,
+       title = excluded.title,
+       subtitle = excluded.subtitle,
+       url = excluded.url,
        updated_at = excluded.updated_at`,
 	)
-		.bind(instanceId, userId, jobKey, status.slice(0, 80))
+		.bind(instanceId, userId, jobKey, status.slice(0, 80), (meta.title ?? "").slice(0, 300), (meta.subtitle ?? "").slice(0, 300), (meta.url ?? "").slice(0, 1000))
+		.run();
+}
+
+/** Delete a job's durable board-item row (used when a whole job is removed). */
+export async function deleteBoardItem(env: Env, instanceId: string, userId: string, jobKey: string): Promise<void> {
+	await env.DB.prepare("DELETE FROM board_items WHERE instance_id = ?1 AND user_id = ?2 AND job_key = ?3")
+		.bind(instanceId, userId, jobKey)
+		.run();
+}
+
+/** Remove durable board-item rows whose human status is terminal (Clear finished). */
+export async function clearFinishedBoardItems(env: Env, instanceId: string, userId: string): Promise<void> {
+	await env.DB.prepare(
+		"DELETE FROM board_items WHERE instance_id = ?1 AND user_id = ?2 AND user_status IN ('failed','blocked','completed','submitted','rejected','cancelled','expired')",
+	)
+		.bind(instanceId, userId)
 		.run();
 }
