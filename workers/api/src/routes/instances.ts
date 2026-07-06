@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
+import { buildInstanceBoard, setBoardItemStatus } from "../lib/board.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
@@ -468,6 +469,32 @@ instanceRoutes.get("/:instanceId/tasks", async (c) => {
 	})();
 	try { c.executionCtx.waitUntil(revalidate); } catch { await revalidate; }
 	return c.json({ tasks: await mirroredRuntimeTasks(c.env, instanceId, session.uid) }, 200);
+});
+
+/**
+ * The single work board: one card per job (task retries collapsed), placed in the
+ * agent's configured columns, with the durable human status override applied.
+ * Read straight from the D1 mirror — the /tasks poll keeps it fresh. Shared by the
+ * console board and the MCP `instance_board` tool so they can't drift.
+ */
+instanceRoutes.get("/:instanceId/board", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json(await buildInstanceBoard(c.env, instanceId, session.uid));
+});
+
+/** Move a job to a column (human status override); empty status resets to automation. */
+instanceRoutes.post("/:instanceId/board/status", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+	const jobKey = typeof body.jobKey === "string" ? body.jobKey : "";
+	if (!jobKey) return c.json({ error: "jobKey required" }, 400);
+	const status = typeof body.status === "string" ? body.status.trim() : "";
+	await setBoardItemStatus(c.env, instanceId, session.uid, jobKey, status || null);
+	return c.json({ ok: true });
 });
 
 /** Create a task on my registered runtime. */

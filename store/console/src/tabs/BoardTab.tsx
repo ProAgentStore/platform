@@ -1,16 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
-import type { RuntimeTask, BoardColumn } from "../lib/types";
+import type { BoardColumn } from "../lib/types";
 import { formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 
-// The single, agent-configurable work board. The platform provides the kanban;
-// each agent declares its columns/statuses (capabilities.boardColumns, resolved
-// server-side with a per-surface default). Cards are ONE per work item (a job,
-// an objective…) — retries of the same job collapse into one card instead of a
-// new row — and each opens the rich run-detail page (timeline, screenshot replay,
-// live browser takeover) rather than a shallow modal.
+// The single, agent-configurable work board. The server (lib/board.ts) is the ONE
+// place the board shape is defined: it groups runtime-task retries into one card
+// per job, resolves the agent's configured columns, and applies the durable human
+// status override. This tab just renders columns + cards and lets the user MOVE a
+// card (into a pipeline column the automation never sets) or drill into attempts.
 
 const GENERIC_COLUMNS: BoardColumn[] = [
 	{ id: "waiting", title: "Waiting", color: "#eab308", statuses: ["queued", "needs_approval"] },
@@ -22,48 +21,65 @@ const GENERIC_COLUMNS: BoardColumn[] = [
 	{ id: "cancelled", title: "Cancelled", color: "#a3a3a3", statuses: ["cancelled"] },
 ];
 
-/** A job = one card. Group its runtime tasks (attempts) under a stable key. */
+interface BoardAttempt { id: string; status: string; updatedAt: string }
 interface BoardItem {
-	key: string;
-	rep: RuntimeTask; // the latest attempt — drives the card's status + label
-	attempts: RuntimeTask[]; // newest-first
+	jobKey: string;
+	latestTaskId: string;
+	title: string;
+	subtitle: string;
+	description: string;
+	url: string;
+	runStatus: string;
+	userStatus: string | null;
+	status: string;
+	attempts: BoardAttempt[];
+	updatedAt: string;
 }
 
 export default function BoardTab({ instanceId, columns }: { instanceId: string; columns?: BoardColumn[] }) {
 	const navigate = useNavigate();
-	const cols = columns && columns.length ? columns : GENERIC_COLUMNS;
-	const [tasks, setTasks] = useState<RuntimeTask[]>([]);
+	const [items, setItems] = useState<BoardItem[]>([]);
+	const [serverCols, setServerCols] = useState<BoardColumn[] | null>(null);
+	const [expanded, setExpanded] = useState<string | null>(null);
+
+	const cols = serverCols && serverCols.length ? serverCols : (columns && columns.length ? columns : GENERIC_COLUMNS);
 
 	const loadBoard = useCallback(async () => {
 		try {
-			const taskData = await api<{ tasks: RuntimeTask[] }>(`/v1/instances/${instanceId}/tasks`);
-			setTasks(taskData.tasks || []);
+			const data = await api<{ columns?: BoardColumn[]; items?: BoardItem[] }>(`/v1/instances/${instanceId}/board`);
+			setItems(data.items || []);
+			if (data.columns?.length) setServerCols(data.columns);
 		} catch {}
 	}, [instanceId]);
 
 	useEffect(() => { loadBoard(); }, [loadBoard]);
 	usePolling(loadBoard, 2500);
 
-	// One card per job: group by a stable job key (the normalized job URL, else the
-	// task id for tasks with no URL). The newest attempt is the card's representative.
-	const items = groupIntoItems(tasks);
-	const finishedStatuses = ["completed", "cancelled", "failed", "blocked", "expired"];
-	const finishedCount = items.filter((it) => finishedStatuses.includes(it.rep.status)).length;
-	// Assign each job to exactly one column. Anything whose status matches no
-	// column (and there's no catchAll) falls into a trailing "Other" bucket, so a
-	// job is never silently dropped from the board.
+	const finishedStatuses = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"];
+	const finishedCount = items.filter((it) => finishedStatuses.includes(it.status)).length;
+
+	// Assign each job to exactly one column; unmatched jobs fall into a trailing
+	// "Other" bucket so a card is never silently dropped.
 	const byColumn = new Map<string, BoardItem[]>();
 	const other: BoardItem[] = [];
 	for (const it of items) {
-		const colId = columnFor(cols, it.rep.status);
+		const colId = columnFor(cols, it.status);
 		if (colId) (byColumn.get(colId) ?? byColumn.set(colId, []).get(colId)!).push(it);
 		else other.push(it);
 	}
 
-	// Hide a whole job (all its attempts) from the board. Best-effort cancels first.
+	const setStatus = async (jobKey: string, status: string) => {
+		try {
+			await api(`/v1/instances/${instanceId}/board/status`, { method: "POST", body: JSON.stringify({ jobKey, status }) });
+			loadBoard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	const handleDeleteItem = async (item: BoardItem) => {
 		try {
-			await Promise.all(item.attempts.map((t) => api(`/v1/instances/${instanceId}/tasks/${t.id}`, { method: "DELETE" })));
+			await Promise.all(item.attempts.map((a) => api(`/v1/instances/${instanceId}/tasks/${a.id}`, { method: "DELETE" })));
 			loadBoard();
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
@@ -80,15 +96,14 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 		}
 	};
 
+	const renderCols = [...cols, ...(other.length ? [{ id: "__other", title: "Other", color: "#a3a3a3" } as BoardColumn] : [])];
+
 	return (
 		<div>
 			<div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
 				<div>
 					<h3 className="text-base font-bold mb-0.5">Board</h3>
-					<div className="text-xs text-muted">
-						{items.length} job{items.length !== 1 ? "s" : ""}
-						{tasks.length !== items.length && <span className="text-muted-soft"> · {tasks.length} run{tasks.length !== 1 ? "s" : ""}</span>}
-					</div>
+					<div className="text-xs text-muted">{items.length} job{items.length !== 1 ? "s" : ""}</div>
 				</div>
 				<div className="flex items-center gap-2">
 					{finishedCount > 0 && (
@@ -110,8 +125,8 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 				</div>
 			</div>
 
-			<div className="grid grid-cols-[repeat(auto-fit,minmax(200px,1fr))] gap-3 items-start mb-4">
-				{[...cols, ...(other.length ? [{ id: "__other", title: "Other", color: "#a3a3a3" } as BoardColumn] : [])].map((col) => {
+			<div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-3 items-start mb-4">
+				{renderCols.map((col) => {
 					const colItems = col.id === "__other" ? other : (byColumn.get(col.id) ?? []);
 					return (
 						<div key={col.id} className="border border-line rounded-xl bg-panel/55 min-h-[180px]">
@@ -120,9 +135,7 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 									<span className="w-2.5 h-2.5 rounded-full" style={{ background: col.color }} />
 									{col.title}
 								</div>
-								<span className="text-[0.7rem] text-muted border border-line rounded-full px-1.5 py-0.5 font-bold">
-									{colItems.length}
-								</span>
+								<span className="text-[0.7rem] text-muted border border-line rounded-full px-1.5 py-0.5 font-bold">{colItems.length}</span>
 							</div>
 							<div className="flex flex-col gap-2 p-2.5">
 								{colItems.length === 0 ? (
@@ -130,9 +143,13 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 								) : (
 									colItems.map((item) => (
 										<ItemCard
-											key={item.key}
+											key={item.jobKey}
 											item={item}
-											onOpen={() => navigate(`/instances/${instanceId}/tasks/${item.rep.id}`)}
+											cols={cols}
+											expanded={expanded === item.jobKey}
+											onToggleAttempts={() => setExpanded(expanded === item.jobKey ? null : item.jobKey)}
+											onOpen={(taskId) => navigate(`/instances/${instanceId}/tasks/${taskId}`)}
+											onMove={(status) => setStatus(item.jobKey, status)}
 											onDelete={() => handleDeleteItem(item)}
 										/>
 									))
@@ -146,14 +163,21 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 	);
 }
 
-function ItemCard({ item, onOpen, onDelete }: { item: BoardItem; onOpen: () => void; onDelete: () => void }) {
-	const task = item.rep;
-	const needsHuman = task.status === "needs_human" || task.needs_human;
-	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired"].includes(task.status);
-	const label = taskLabel(task);
-	const desc = taskDescription(task);
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onDelete }: {
+	item: BoardItem;
+	cols: BoardColumn[];
+	expanded: boolean;
+	onToggleAttempts: () => void;
+	onOpen: (taskId: string) => void;
+	onMove: (status: string) => void;
+	onDelete: () => void;
+}) {
+	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
+	// Current selection: the column holding this card, or "__auto" when no override.
+	const currentCol = columnFor(cols, item.status) ?? "";
+	const selectValue = item.userStatus ? currentCol : "__auto";
 	return (
-		<div className="relative bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent hover:-translate-y-px">
+		<div className="relative bg-paper border border-line rounded-lg p-3 transition-all hover:border-accent">
 			{isFinished && (
 				<button
 					type="button"
@@ -164,64 +188,59 @@ function ItemCard({ item, onOpen, onDelete }: { item: BoardItem; onOpen: () => v
 					✕
 				</button>
 			)}
-			<button type="button" onClick={onOpen} className="text-left w-full cursor-pointer">
-				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{label.title}</h3>
-				{label.subtitle && <p className="text-[0.7rem] text-muted-soft mb-1 line-clamp-1">{label.subtitle}</p>}
-				{desc && <p className="text-xs text-muted line-clamp-2 mb-2">{desc}</p>}
+			<button type="button" onClick={() => onOpen(item.latestTaskId)} className="text-left w-full cursor-pointer">
+				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{item.title}</h3>
+				{item.subtitle && <p className="text-[0.7rem] text-muted-soft mb-1 line-clamp-1">{item.subtitle}</p>}
+				{item.description && <p className="text-xs text-muted line-clamp-2 mb-2">{item.description}</p>}
 				<div className="flex gap-1.5 flex-wrap items-center text-[0.7rem]">
-					<span className={`px-1.5 py-0.5 rounded font-medium ${statusClass(task.status)}`}>{task.status}</span>
-					{item.attempts.length > 1 && (
-						<span className="px-1.5 py-0.5 rounded font-medium bg-muted/15 text-muted" title={`${item.attempts.length} attempts`}>
-							×{item.attempts.length}
-						</span>
-					)}
-					{task.createdAt && <span className="text-muted-soft">{formatTime(task.updatedAt || task.createdAt)}</span>}
-					<span className="text-accent ml-auto">Details →</span>
+					<span className={`px-1.5 py-0.5 rounded font-medium ${statusClass(item.status)}`}>{item.status}</span>
+					{item.userStatus && <span className="text-muted-soft" title={`Automation: ${item.runStatus}`}>moved</span>}
+					{item.updatedAt && <span className="text-muted-soft">{formatTime(item.updatedAt)}</span>}
 				</div>
 			</button>
-			{needsHuman && (
-				<p className="text-[0.7rem] text-amber-500 mt-2 leading-snug">
-					The agent needs you — open the job to take over or answer, then it continues.
-				</p>
+
+			<div className="flex items-center gap-2 mt-2 pt-2 border-t border-line/60">
+				{/* Move to any column (pipeline stages the automation never sets). */}
+				<select
+					value={selectValue}
+					onClick={(e) => e.stopPropagation()}
+					onChange={(e) => { const v = e.target.value; onMove(v === "__auto" ? "" : (cols.find((c) => c.id === v)?.statuses?.[0] ?? v)); }}
+					className="text-[0.7rem] bg-panel border border-line rounded px-1.5 py-1 text-muted max-w-[8rem]"
+					title="Move to column"
+				>
+					<option value="__auto">Auto (follow run)</option>
+					{cols.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+				</select>
+				{item.attempts.length > 1 && (
+					<button
+						type="button"
+						onClick={(e) => { e.stopPropagation(); onToggleAttempts(); }}
+						className="text-[0.7rem] px-1.5 py-1 rounded border border-line text-muted hover:border-accent hover:text-accent font-medium ml-auto"
+						title="Show attempts"
+					>
+						×{item.attempts.length} runs {expanded ? "▲" : "▼"}
+					</button>
+				)}
+			</div>
+
+			{expanded && item.attempts.length > 1 && (
+				<div className="mt-2 flex flex-col gap-1">
+					{item.attempts.map((a, i) => (
+						<button
+							key={a.id}
+							type="button"
+							onClick={(e) => { e.stopPropagation(); onOpen(a.id); }}
+							className="flex items-center justify-between gap-2 text-[0.7rem] px-2 py-1 rounded bg-panel/60 border border-line hover:border-accent text-left"
+						>
+							<span className="text-ink">Attempt {item.attempts.length - i}{i === 0 ? " (latest)" : ""}</span>
+							<span className={`px-1 rounded ${statusClass(a.status)}`}>{a.status}</span>
+							{a.updatedAt && <span className="text-muted-soft shrink-0">{formatTime(a.updatedAt)}</span>}
+						</button>
+					))}
+				</div>
 			)}
 		</div>
 	);
-}
-
-/** Group runtime tasks into one card per job, newest attempt first. */
-function groupIntoItems(tasks: RuntimeTask[]): BoardItem[] {
-	const byKey = new Map<string, RuntimeTask[]>();
-	for (const t of tasks) {
-		const key = jobKey(t);
-		const arr = byKey.get(key);
-		if (arr) arr.push(t); else byKey.set(key, [t]);
-	}
-	const items: BoardItem[] = [];
-	for (const [key, arr] of byKey) {
-		arr.sort((a, b) => stamp(b) - stamp(a)); // newest first
-		items.push({ key, rep: arr[0], attempts: arr });
-	}
-	// Newest job first across the board.
-	items.sort((a, b) => stamp(b.rep) - stamp(a.rep));
-	return items;
-}
-
-function stamp(t: RuntimeTask): number {
-	const v = t.updatedAt || t.createdAt || "";
-	const n = Date.parse(v);
-	return Number.isNaN(n) ? 0 : n;
-}
-
-/** A stable per-job key: the normalized job URL, else the task id (own card). */
-function jobKey(t: RuntimeTask): string {
-	const url = typeof t.input?.url === "string" ? t.input.url : "";
-	if (url) {
-		try {
-			const u = new URL(url);
-			return `${u.hostname.replace(/^www\./, "")}${u.pathname.replace(/\/+$/, "")}`.toLowerCase();
-		} catch { /* not a URL */ }
-	}
-	return t.id;
 }
 
 /** Which column an item's status belongs to: first matching `statuses`, else catchAll. */
@@ -231,46 +250,16 @@ function columnFor(cols: BoardColumn[], status: string): string | null {
 	return catchAll ? catchAll.id : null;
 }
 
-/**
- * A readable card label. Apply tasks are created as type "job.apply_agent" with no
- * title, so fall back to the job URL: prettify the last path segment (job slug) into
- * a title and show the ATS host as the subtitle.
- */
-function taskLabel(task: RuntimeTask): { title: string; subtitle: string } {
-	if (task.title) return { title: task.title, subtitle: "" };
-	const url = typeof task.input?.url === "string" ? task.input.url : "";
-	if (url) {
-		let host = "";
-		try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* not a URL */ }
-		const slug = url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() || "";
-		const pretty = slug
-			.replace(/-([a-z0-9]{4,8})$/i, (m, g: string) => (/\d/.test(g) ? "" : m))
-			.replace(/[-_]+/g, " ")
-			.replace(/\b\w/g, (c) => c.toUpperCase())
-			.trim();
-		if (pretty || host) return { title: pretty || host, subtitle: pretty ? host : "" };
-	}
-	return { title: task.type, subtitle: "" };
-}
-
-/** A one-line description: the task's own, else the failure/outcome detail. */
-function taskDescription(task: RuntimeTask): string {
-	if (task.description) return task.description;
-	const out = task.output as { detail?: string } | undefined;
-	if (out?.detail) return out.detail;
-	if (typeof task.result === "string") return task.result;
-	return "";
-}
-
 function statusClass(status: string): string {
 	switch (status) {
 		case "queued": case "needs_approval": return "bg-yellow/15 text-yellow";
 		case "running": return "bg-blue/15 text-blue";
 		case "needs_human": return "bg-amber-500/15 text-amber-500";
-		case "completed": return "bg-green/15 text-green";
+		case "completed": case "submitted": case "offer": case "accepted": return "bg-green/15 text-green";
+		case "interview": return "bg-violet-500/15 text-violet-500";
 		case "failed": return "bg-red/15 text-red";
 		case "blocked": return "bg-orange-500/15 text-orange-500";
-		case "cancelled": return "bg-muted/15 text-muted";
+		case "rejected": case "cancelled": return "bg-muted/15 text-muted";
 		default: return "bg-muted/15 text-muted";
 	}
 }

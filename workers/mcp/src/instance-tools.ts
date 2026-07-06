@@ -524,15 +524,11 @@ export function registerInstanceTools(
 		async ({ token, instance_id }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const tasksData = await authedCall(`/v1/instances/${instance_id}/tasks`, sessionToken, {}, env).catch(() => ({}));
-			// The agent declares its columns (server resolves a per-surface default);
-			// read them off the instance so the MCP board matches the console exactly.
-			const meData = await authedCall("/v1/instances/my/instances", sessionToken, {}, env).catch(() => ({}));
-			const instances = isRec(meData) && Array.isArray(meData.instances) ? meData.instances : [];
-			const inst = instances.find((i) => isRec(i) && i.id === instance_id);
-			const caps = isRec(inst) ? inst.capabilities : undefined;
-			const cols = isRec(caps) && Array.isArray(caps.boardColumns) ? (caps.boardColumns as BoardColumn[]) : DEFAULT_BOARD_COLUMNS;
-			return jsonText(buildBoard(tasksData, cols));
+			// The API (lib/board.ts) is the single source of the board shape — one card
+			// per job, configured columns, human status overrides. Fetch it and group
+			// the flat items by column for a readable answer.
+			const data = await authedCall(`/v1/instances/${instance_id}/board`, sessionToken, {}, env).catch(() => ({}));
+			return jsonText(groupBoard(data));
 		},
 	);
 
@@ -973,75 +969,8 @@ export function registerInstanceTools(
 	);
 }
 
-interface RawTask {
-	id: string;
-	type?: string;
-	status?: string;
-	title?: string;
-	description?: string;
-	input?: Record<string, unknown>;
-	output?: Record<string, unknown>;
-	createdAt?: string;
-	updatedAt?: string;
-}
-
-interface BoardColumn {
-	id: string;
-	title: string;
-	statuses?: string[];
-	catchAll?: boolean;
-}
-
-/** Fallback columns when an instance has no configured board (generic runtime agent). */
-const DEFAULT_BOARD_COLUMNS: BoardColumn[] = [
-	{ id: "waiting", title: "Waiting", statuses: ["queued", "needs_approval"] },
-	{ id: "running", title: "Running", statuses: ["running"] },
-	{ id: "needs_human", title: "Needs you", statuses: ["needs_human"] },
-	{ id: "failed", title: "Failed", statuses: ["failed"] },
-	{ id: "blocked", title: "Blocked", statuses: ["blocked"] },
-	{ id: "done", title: "Done", statuses: ["completed"] },
-	{ id: "cancelled", title: "Cancelled", statuses: ["cancelled"] },
-];
-
-/**
- * A readable label for a job. Apply tasks carry type "job.apply_agent" and no
- * title, so fall back to the job URL: prettify the last path segment (job slug)
- * and keep the ATS host — same derivation the console board uses.
- */
-function ticketLabel(task: RawTask): string {
-	if (task.title) return task.title;
-	const url = typeof task.input?.url === "string" ? task.input.url : "";
-	if (url) {
-		let host = "";
-		try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* not a URL */ }
-		const slug = url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() || "";
-		const pretty = slug
-			.replace(/-([a-z0-9]{4,8})$/i, (m, g: string) => (/\d/.test(g) ? "" : m))
-			.replace(/[-_]+/g, " ")
-			.replace(/\b\w/g, (c) => c.toUpperCase())
-			.trim();
-		if (pretty && host) return `${pretty} (${host})`;
-		if (pretty || host) return pretty || host;
-	}
-	return task.type || "task";
-}
-
-/** A stable per-job key: the normalized job URL, else the task id (own card). */
-function jobKey(t: RawTask): string {
-	const url = typeof t.input?.url === "string" ? t.input.url : "";
-	if (url) {
-		try {
-			const u = new URL(url);
-			return `${u.hostname.replace(/^www\./, "")}${u.pathname.replace(/\/+$/, "")}`.toLowerCase();
-		} catch { /* not a URL */ }
-	}
-	return t.id;
-}
-
-function stamp(t: RawTask): number {
-	const n = Date.parse(t.updatedAt || t.createdAt || "");
-	return Number.isNaN(n) ? 0 : n;
-}
+interface BoardColumn { id: string; title: string; statuses?: string[]; catchAll?: boolean }
+interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string }
 
 function columnFor(cols: BoardColumn[], status: string): string | null {
 	for (const c of cols) if (c.statuses?.includes(status)) return c.id;
@@ -1049,39 +978,39 @@ function columnFor(cols: BoardColumn[], status: string): string | null {
 	return catchAll ? catchAll.id : null;
 }
 
-/** Group runtime tasks into ONE card per job and place them into configured columns. */
-function buildBoard(tasksData: unknown, cols: BoardColumn[]): unknown {
-	const tasks = (isRec(tasksData) && Array.isArray(tasksData.tasks) ? tasksData.tasks : []) as RawTask[];
-
-	// One card per job — newest attempt represents the card.
-	const byKey = new Map<string, RawTask[]>();
-	for (const t of tasks) {
-		const k = jobKey(t);
-		const arr = byKey.get(k);
-		if (arr) arr.push(t); else byKey.set(k, [t]);
-	}
-	const items = [...byKey.values()].map((arr) => {
-		arr.sort((a, b) => stamp(b) - stamp(a));
-		const rep = arr[0];
-		const detail = isRec(rep.output) && typeof rep.output.detail === "string" ? rep.output.detail : "";
-		return { id: rep.id, label: ticketLabel(rep), status: rep.status, attempts: arr.length, url: rep.input?.url, detail, updatedAt: rep.updatedAt || rep.createdAt };
-	});
-	items.sort((a, b) => Date.parse(String(b.updatedAt || "")) - Date.parse(String(a.updatedAt || "")));
-
+/**
+ * Group the API's flat board items (already ONE card per job, with effective
+ * status + attempts + human overrides) into the agent's configured columns for a
+ * readable answer. The API (lib/board.ts) owns the board shape; this just buckets.
+ */
+function groupBoard(data: unknown): unknown {
+	const cols = (isRec(data) && Array.isArray(data.columns) ? data.columns : []) as BoardColumn[];
+	const items = (isRec(data) && Array.isArray(data.items) ? data.items : []) as BoardItem[];
 	const board: Record<string, unknown[]> = {};
-	for (const item of items) {
-		const colId = columnFor(cols, String(item.status ?? ""));
-		if (!colId) continue;
+	const other: unknown[] = [];
+	for (const it of items) {
+		const card = {
+			jobKey: it.jobKey,
+			label: it.subtitle ? `${it.title} (${it.subtitle})` : it.title,
+			status: it.status,
+			runStatus: it.runStatus,
+			moved: it.userStatus ? true : undefined,
+			attempts: Array.isArray(it.attempts) ? it.attempts.length : undefined,
+			detail: it.description,
+			url: it.url,
+			latestTaskId: it.latestTaskId,
+		};
+		const colId = columnFor(cols, String(it.status ?? ""));
+		if (!colId) { other.push(card); continue; }
 		const title = cols.find((c) => c.id === colId)?.title ?? colId;
-		(board[title] ||= []).push(item);
+		(board[title] ||= []).push(card);
 	}
-
+	if (other.length) board.Other = other;
 	return {
 		columns: cols.map((c) => c.title),
 		board,
 		jobCount: items.length,
-		runCount: tasks.length,
-		note: "One card per job (retries of the same URL collapse into one; `attempts` counts runs). Columns are the agent's configured board. Failed = the run couldn't finish; Blocked = the agent stopped needing you.",
+		note: "One card per job (retries of the same job collapse into one; `attempts` = run count). `moved:true` means a human set the status. Failed = the run couldn't finish; Blocked = the agent stopped needing you.",
 	};
 }
 

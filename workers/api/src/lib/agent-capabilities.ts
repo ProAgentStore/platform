@@ -57,14 +57,22 @@ export interface AgentCapabilities {
 	boardColumns: BoardColumn[];
 }
 
-/** Apply agents run one browser task per job: a "completed" run means submitted. */
+/**
+ * Apply agents run one browser task per job: a "completed" run means submitted.
+ * The columns after Submitted (Interview/Offer/Rejected) are human-driven — the
+ * automation never sets them; the user moves a card there (persisted as a board
+ * item override). See lib/board.ts.
+ */
 const APPLY_BOARD_COLUMNS: BoardColumn[] = [
 	{ id: "waiting", title: "Waiting", color: "#eab308", statuses: ["queued", "needs_approval"] },
 	{ id: "applying", title: "Applying", color: "#3b82f6", statuses: ["running"] },
 	{ id: "needs_human", title: "Needs you", color: "#f59e0b", statuses: ["needs_human"] },
 	{ id: "failed", title: "Failed", color: "#ef4444", statuses: ["failed"] },
 	{ id: "blocked", title: "Blocked", color: "#f97316", statuses: ["blocked"] },
-	{ id: "submitted", title: "Submitted", color: "#22c55e", statuses: ["completed"] },
+	{ id: "submitted", title: "Submitted", color: "#22c55e", statuses: ["completed", "submitted"] },
+	{ id: "interview", title: "Interview", color: "#8b5cf6", statuses: ["interview"] },
+	{ id: "offer", title: "Offer", color: "#14b8a6", statuses: ["offer", "accepted"] },
+	{ id: "rejected", title: "Rejected", color: "#6b7280", statuses: ["rejected"] },
 	{ id: "cancelled", title: "Cancelled", color: "#a3a3a3", statuses: ["cancelled"] },
 ];
 
