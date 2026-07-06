@@ -100,6 +100,8 @@ export const AGENT_TOOLS: ToolDef[] = [
 		parameters: {
 			url: { type: "string", description: "URL to fetch", required: true },
 			method: { type: "string", description: "HTTP method (default: GET)" },
+			body: { type: "string", description: "Request body for POST/PUT/PATCH (e.g. a JSON string)" },
+			contentType: { type: "string", description: "Content-Type for the body (default: application/json)" },
 		},
 	},
 	{
@@ -269,15 +271,20 @@ export async function executeTool(
 
 			case "fetch_url": {
 				const url = call.input.url as string;
-				const method = (call.input.method as string) || "GET";
+				const method = ((call.input.method as string) || "GET").toUpperCase();
+				const body = call.input.body as string | undefined;
 				if (!url)
 					return { name: call.name, content: "url required", success: false };
 				// SSRF protection: https-only + reject non-public hosts (shared guard).
 				const check = checkPublicHttpsUrl(url);
 				if (!check.ok) return { name: call.name, content: check.reason, success: false };
+				const headers: Record<string, string> = { "User-Agent": "ProAgentStore-Agent" };
+				const hasBody = body !== undefined && method !== "GET" && method !== "HEAD";
+				if (hasBody) headers["Content-Type"] = (call.input.contentType as string) || "application/json";
 				const res = await fetch(url, {
 					method,
-					headers: { "User-Agent": "ProAgentStore-Agent" },
+					headers,
+					body: hasBody ? body : undefined,
 				});
 				const text = await res.text();
 				const truncated =
