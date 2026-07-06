@@ -55,6 +55,21 @@ export function renderMd(raw: string): string {
 		return `@@CODE_BLOCK_${codeBlocks.length - 1}@@`;
 	});
 
+	// YouTube embeds — bare watch/shorts/youtu.be URLs become playable iframes.
+	// XSS-safe: only the strictly-validated 11-char video id reaches the iframe src;
+	// every other attribute is hardcoded. Runs before autolinking so the URL isn't
+	// consumed by the <a> pass first.
+	const ytEmbeds: string[] = [];
+	s = s.replace(
+		/(?<![="'/])https?:\/\/(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([A-Za-z0-9_-]{11})[^\s<)"']*/g,
+		(_url, id) => {
+			ytEmbeds.push(
+				`<div class="yt-embed"><iframe src="https://www.youtube-nocookie.com/embed/${id}" style="aspect-ratio:16/9;width:100%;max-width:480px;border:0;border-radius:8px" loading="lazy" allow="encrypted-media; picture-in-picture" allowfullscreen title="YouTube video"></iframe><div><a href="https://www.youtube.com/watch?v=${id}" target="_blank" rel="noopener">watch on YouTube</a></div></div>`,
+			);
+			return `@@YT_EMBED_${ytEmbeds.length - 1}@@`;
+		},
+	);
+
 	// Inline code
 	s = s.replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`);
 
@@ -138,11 +153,12 @@ export function renderMd(raw: string): string {
 	}
 	s = out.join("");
 
-	// Restore code blocks
+	// Restore code blocks and YouTube embeds
 	s = s.replace(
 		/@@CODE_BLOCK_(\d+)@@/g,
 		(_, i) => codeBlocks[parseInt(i, 10)],
 	);
+	s = s.replace(/@@YT_EMBED_(\d+)@@/g, (_, i) => ytEmbeds[parseInt(i, 10)]);
 	s = s.replace(/<p>\s*<\/p>/g, "");
 	return s;
 }

@@ -22,3 +22,28 @@ describe("renderMd link rendering (XSS hardening)", () => {
 		expect(out).toContain("&lt;img");
 	});
 });
+
+describe("renderMd YouTube embeds", () => {
+	it("renders a bare watch URL as a playable youtube-nocookie iframe with a fallback link", () => {
+		const out = renderMd("check this: https://www.youtube.com/watch?v=0WkCQZd113Y");
+		expect(out).toContain('<iframe src="https://www.youtube-nocookie.com/embed/0WkCQZd113Y"');
+		expect(out).toContain('href="https://www.youtube.com/watch?v=0WkCQZd113Y"');
+	});
+
+	it("renders youtu.be and shorts URLs as embeds", () => {
+		expect(renderMd("https://youtu.be/0WkCQZd113Y")).toContain("youtube-nocookie.com/embed/0WkCQZd113Y");
+		expect(renderMd("https://www.youtube.com/shorts/0WkCQZd113Y")).toContain("youtube-nocookie.com/embed/0WkCQZd113Y");
+	});
+
+	it("never lets URL junk past the validated video id into the iframe src", () => {
+		const out = renderMd('https://www.youtube.com/watch?v=0WkCQZd113Y&t=1"><script>alert(1)</script>');
+		expect(out).toContain('embed/0WkCQZd113Y"');
+		expect(out).not.toContain("<script>");
+	});
+
+	it("leaves non-YouTube URLs as plain links", () => {
+		const out = renderMd("https://example.com/watch?v=0WkCQZd113Y");
+		expect(out).not.toContain("iframe");
+		expect(out).toContain("<a href=");
+	});
+});
