@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
 import { reportClientError } from "../client.js";
+import { initVad, vadStep } from "./vad.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -91,6 +92,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// ~6 contexts the browser throws and the meter dies. Left on long enough, a
 		// real, growing leak.
 		stopAudioMonitor();
+		vadStateRef.current = initVad(); // fresh turn — don't carry a stale peak over
 		try {
 			// Reuse the recognizer's existing mic stream if it has one (Whisper records
 			// via getUserMedia). Opening a SECOND getUserMedia mutes the recorder on iOS
@@ -116,26 +118,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// Throttle the React state update to ~15fps — updating every animation frame
 				// (60fps) re-renders the whole chat page and makes it lag/"hang".
 				if (now - lastLevelSetRef.current > 66) { lastLevelSetRef.current = now; setAudioLevel(level); }
-				// Whisper VAD: Whisper has no streaming results, so we detect end-of-turn from
-				// the mic level. RELATIVE to YOUR speech (this turn's peak, no decay) — silence
-				// = the level dropping to a fraction of how loud you were. This both LISTENS
-				// (any speech clearly above the peak-fraction registers) and STOPS (a pause
-				// falls below it), independent of the mic's absolute noise floor.
+				// Whisper VAD: Whisper has no streaming results, so we detect end-of-turn
+				// from the mic level (pure logic + tests in ./vad.ts). On a real pause it
+				// stops recording → transcribe → send.
 				if (sttIsWhisperRef.current && !pausedForThinkingRef.current && !mutedRef.current) {
-					vadPeakRef.current = Math.max(vadPeakRef.current, level); // loudest this turn (no decay)
-					const heardVoice = vadPeakRef.current > 0.05; // real speech, not room noise
-					// sensitivity scales the "still speaking" fraction: higher = smaller (keeps
-					// soft tails / quiet mics), lower = larger (cuts sooner in a noisy room).
-					const speakFrac = 0.35 / Math.max(0.4, vadSensitivityRef.current);
-					const speaking = level > vadPeakRef.current * speakFrac;
-					const endTurn = () => { vadVoiceSeenRef.current = false; vadPeakRef.current = 0; sttRef.current?.stop(); };
-					if (heardVoice && speaking) {
-						vadLastLoudRef.current = now;
-						if (!vadVoiceSeenRef.current) { vadVoiceSeenRef.current = true; vadTurnStartRef.current = now; }
-					} else if (vadVoiceSeenRef.current && now - vadLastLoudRef.current > silenceMsRef.current) {
-						endTurn(); // real pause → transcribe + send
-					} else if (vadVoiceSeenRef.current && now - vadTurnStartRef.current > 25_000) {
-						endTurn(); // safety cap: a turn can never hang forever
+					const decision = vadStep(vadStateRef.current, level, now, { silenceMs: silenceMsRef.current, sensitivity: vadSensitivityRef.current });
+					if (decision === "end") {
+						vadStateRef.current = initVad();
+						sttRef.current?.stop();
 					}
 				}
 				analyserRef.current.raf = requestAnimationFrame(tick);
@@ -162,13 +152,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Whisper (AI) STT has no streaming results, so in conversation mode we detect the
 	// end of a turn from the mic level ourselves (VAD), then stop → transcribe → send.
 	const sttIsWhisperRef = useRef(false);
-	const vadVoiceSeenRef = useRef(false);
-	const vadLastLoudRef = useRef(0);
-	// Adaptive VAD: the loudest level of the CURRENT turn (your speech, no decay) +
-	// when the turn started. Silence = the mic dropping to a fraction of that peak,
-	// so it works at any absolute volume/noise floor. Reset to 0 at end of turn.
-	const vadPeakRef = useRef(0);
-	const vadTurnStartRef = useRef(0);
+	// Adaptive end-of-turn detection (pure logic in ./vad.ts — unit-tested there).
+	const vadStateRef = useRef(initVad());
 	const vadSensitivityRef = useRef(1);
 	const lastLevelSetRef = useRef(0);
 	// When the agent last finished speaking — used to ignore the speaker echo tail.
