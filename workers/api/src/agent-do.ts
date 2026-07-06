@@ -275,6 +275,7 @@ export class AgentDO extends DurableObject<Env> {
 			userId?: string;
 			agentId?: string;
 			agentName?: string;
+			audioKey?: string;
 		}>();
 		const { message, channel, userId } = body;
 		if (!message) return json({ error: "message required" }, 400);
@@ -303,6 +304,9 @@ export class AgentDO extends DurableObject<Env> {
 			content: message,
 			channel: channel || "chat",
 			userId,
+			// Voice turns carry a per-turn audio id; the saved recording is replayed on
+			// double-tap. Sanitized (it becomes an R2 key path segment).
+			...(typeof body.audioKey === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(body.audioKey) ? { audioKey: body.audioKey } : {}),
 			createdAt: new Date().toISOString(),
 		};
 		await this.appendMessage(userMsg);

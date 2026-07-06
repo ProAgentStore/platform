@@ -60,6 +60,8 @@ export interface Message {
 	role: "user" | "assistant" | "system";
 	content: string;
 	createdAt?: string;
+	/** Per-turn id of this message's saved voice audio (R2); double-tap replays it. */
+	audioKey?: string;
 }
 
 export interface RuntimeTask {

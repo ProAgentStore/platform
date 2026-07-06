@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
-import { reportClientError } from "../client.js";
+import { API, getToken, reportClientError } from "../client.js";
 import { initVad, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { decideRestart, matchVoiceCommand } from "./convo.js";
@@ -74,8 +74,24 @@ function playThinkingChime() {
  *   3. Agent responds → response spoken aloud
  *   4. TTS finishes → chime → mic re-opens → step 1
  */
+/** Save a voice turn's audio to R2 so it can be replayed (double-tap the message).
+ *  Fire-and-forget; a failure just means that turn has no replay, not a broken send. */
+async function uploadVoiceAudio(instanceId: string, turnId: string, blob: Blob): Promise<void> {
+	try {
+		await fetch(`${API}/v1/instances/${instanceId}/voice-audio/${turnId}`, {
+			method: "PUT",
+			headers: { Authorization: `Bearer ${getToken() ?? ""}`, "Content-Type": blob.type || "audio/webm" },
+			body: blob,
+			keepalive: true,
+		});
+	} catch (e) {
+		reportClientError("voice-audio", `save failed: ${e instanceof Error ? e.message : String(e)}`);
+	}
+}
+
 export function useVoice(instanceId: string | undefined, opts: {
-	onSend: (text: string) => void;
+	/** Send a transcript. `meta.audioKey` is set for voice turns whose audio was saved. */
+	onSend: (text: string, meta?: { audioKey?: string }) => void;
 }) {
 	const [micOn, setMicOn] = useState(false);
 	const [speakOn, setSpeakOn] = useState(false);
@@ -166,6 +182,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
+	// Send a transcript, attaching a saved-audio turn id when this turn had recorded
+	// audio (Whisper). The upload is fire-and-forget; the message sends immediately.
+	const emitSend = (text: string) => {
+		const blob = lastAudioBlobRef.current;
+		lastAudioBlobRef.current = null;
+		if (blob && instanceId) {
+			const turnId = crypto.randomUUID();
+			onSendRef.current(text, { audioKey: turnId });
+			void uploadVoiceAudio(instanceId, turnId, blob);
+		} else {
+			emitSendRef.current(text);
+		}
+	};
+	const emitSendRef = useRef(emitSend);
+	emitSendRef.current = emitSend;
 	const speakOnRef = useRef(speakOn);
 	speakOnRef.current = speakOn;
 	const convoOnRef = useRef(convoOn);
@@ -193,6 +224,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const speakEndedAtRef = useRef(0);
 	// The agent's last reply text — re-spoken by the "repeat" voice command.
 	const lastSpokenTextRef = useRef("");
+	// The raw audio of the just-transcribed Whisper turn — saved for replay on send.
+	const lastAudioBlobRef = useRef<Blob | null>(null);
 	useEffect(() => {
 		getVoiceConfig(instanceId).then((c) => {
 			silenceMsRef.current = c.silenceMs;
@@ -294,7 +327,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					}
 					pausedForThinkingRef.current = true;
 					flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); playThinkingChime(); });
-					onSendRef.current(t);
+					emitSendRef.current(t);
 				}
 				return;
 			}
@@ -323,7 +356,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					setMicOn(false);
 					playThinkingChime();
 				});
-				onSendRef.current(msg);
+				emitSendRef.current(msg);
 			}, silenceMsRef.current);
 			return;
 		}
@@ -336,7 +369,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				setMicOn(false);
 			});
 			if (matchVoiceCommand(text.trim()) === "repeat") { repeatLastRef.current(); return; }
-			onSendRef.current(text);
+			emitSendRef.current(text);
 		} else {
 			flushSync(() => setInterim(text));
 		}
@@ -355,6 +388,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		} catch {}
 		const stt = await createStt(instanceId, {
 			onResult: handleResult,
+			// Stash the turn's recorded audio so emitSend can save it for replay.
+			onAudio: (blob) => { lastAudioBlobRef.current = blob; },
 			onError: (err) => {
 				console.warn("[voice] STT error:", err);
 				if (err && err !== "no-speech") {

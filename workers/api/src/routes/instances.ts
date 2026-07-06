@@ -316,6 +316,44 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	return c.json({ success: true, status: "online" });
 });
 
+/** R2 key for a voice turn's saved audio (owner-scoped path). */
+const voiceAudioKey = (userId: string, instanceId: string, turnId: string) =>
+	`voice-audio/${userId}/${instanceId}/${turnId}`;
+const cleanTurnId = (raw: string) => raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+
+/** Save a voice turn's raw audio so it can be replayed later (double-tap the message). */
+instanceRoutes.put("/:instanceId/voice-audio/:turnId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const turnId = cleanTurnId(c.req.param("turnId"));
+	if (!turnId) return c.json({ error: "bad turnId" }, 400);
+	const body = await c.req.arrayBuffer();
+	if (!body.byteLength) return c.json({ error: "empty audio" }, 400);
+	if (body.byteLength > 5 * 1024 * 1024) return c.json({ error: "audio too large (max 5MB)" }, 400);
+	const contentType = c.req.header("content-type") || "audio/webm";
+	await c.env.STORAGE.put(voiceAudioKey(session.uid, instanceId, turnId), body, {
+		httpMetadata: { contentType },
+	});
+	return c.json({ ok: true, turnId });
+});
+
+/** Fetch a saved voice turn's audio (owner-only) — the console plays it on replay. */
+instanceRoutes.get("/:instanceId/voice-audio/:turnId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const turnId = cleanTurnId(c.req.param("turnId"));
+	const obj = await c.env.STORAGE.get(voiceAudioKey(session.uid, instanceId, turnId));
+	if (!obj) return c.json({ error: "not found" }, 404);
+	return new Response(obj.body, {
+		headers: {
+			"Content-Type": obj.httpMetadata?.contentType || "audio/webm",
+			"Cache-Control": "private, max-age=31536000",
+		},
+	});
+});
+
 /** Read voice settings for hands-off mode. */
 instanceRoutes.get("/:instanceId/voice-settings", async (c) => {
 	const session = await requireUser(c);
@@ -719,7 +757,7 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 instanceRoutes.post("/:instanceId/chat", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
-	const { message } = await c.req.json<{ message: string }>();
+	const { message, audioKey } = await c.req.json<{ message: string; audioKey?: string }>();
 	if (!message) throw new HttpError(400, "message required");
 
 	// Verify ownership
@@ -744,6 +782,7 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 			body: JSON.stringify({
 				message, channel: "chat", userId: session.uid,
 				agentId: instanceId, agentName: agentMeta?.name || "Agent",
+				audioKey,
 			}),
 		}),
 	);

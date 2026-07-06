@@ -45,6 +45,9 @@ export interface SttOptions {
 	onResult?: (text: string, isFinal: boolean) => void;
 	onError?: (error: string) => void;
 	onEnd?: () => void;
+	/** Fired with the raw recorded audio for a transcribed turn (Whisper only) so the
+	 *  caller can save it for replay. Browser dictation has no blob → never fires. */
+	onAudio?: (blob: Blob) => void;
 }
 
 export class VoiceStt {
@@ -54,6 +57,7 @@ export class VoiceStt {
 	onResult: (text: string, isFinal: boolean) => void;
 	onError: (error: string) => void;
 	onEnd: () => void;
+	onAudio: (blob: Blob) => void;
 	listening = false;
 
 	private _rec: SpeechRecognitionLike | null = null;
@@ -76,6 +80,7 @@ export class VoiceStt {
 		this.onResult = opts.onResult || (() => {});
 		this.onError = opts.onError || (() => {});
 		this.onEnd = opts.onEnd || (() => {});
+		this.onAudio = opts.onAudio || (() => {});
 	}
 
 	async start() {
@@ -254,7 +259,12 @@ export class VoiceStt {
 				return;
 			}
 			const data = await res.json();
-			if (data.text?.trim()) this.onResult(data.text.trim(), true);
+			if (data.text?.trim()) {
+				// Hand the raw audio to the caller (to save for replay) BEFORE the result,
+				// so the turn id can be minted + uploaded alongside the sent message.
+				this.onAudio(blob);
+				this.onResult(data.text.trim(), true);
+			}
 		} catch (e) {
 			this.onError(
 				"Whisper failed: " +

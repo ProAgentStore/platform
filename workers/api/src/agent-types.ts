@@ -6,6 +6,9 @@ export interface AgentMessage {
 	userId?: string;
 	toolCalls?: ToolCall[];
 	toolResults?: ToolResult[];
+	/** R2 key (a per-turn id) for this message's saved voice audio, if any — the
+	 *  console fetches + replays it on double-tap. Set for voice-dictated turns. */
+	audioKey?: string;
 	createdAt: string;
 }
 

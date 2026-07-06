@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { api } from "@proagentstore/sdk/client";
+import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
 import { renderMd, formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -60,9 +60,9 @@ export default function InstanceDetail() {
 	loopPausedRef.current = loopPaused;
 
 	// Voice: both push-to-talk and conversation mode auto-send via this ref
-	const doSendRef = useRef<(text: string) => void>(() => {});
+	const doSendRef = useRef<(text: string, audioKey?: string) => void>(() => {});
 	const voice = useVoice(id, {
-		onSend: (text) => doSendRef.current(text),
+		onSend: (text, meta) => doSendRef.current(text, meta?.audioKey),
 	});
 
 	useEffect(() => {
@@ -221,15 +221,14 @@ export default function InstanceDetail() {
 		}
 	}, [id]);
 
-	const doSend = useCallback(async (msg: string) => {
-		console.log("[chat] doSend:", msg?.slice(0, 50), "id:", id);
+	const doSend = useCallback(async (msg: string, audioKey?: string) => {
 		if (!msg.trim() || !id) return;
-		setMessages((prev) => [...prev, { role: "user", content: msg, createdAt: new Date().toISOString() }]);
+		setMessages((prev) => [...prev, { role: "user", content: msg, createdAt: new Date().toISOString(), audioKey }]);
 		setThinking(true);
 		try {
 			const data = await api<{ message?: Message; toolMessage?: Message }>(
 				`/v1/instances/${id}/chat`,
-				{ method: "POST", body: JSON.stringify({ message: msg }) },
+				{ method: "POST", body: JSON.stringify({ message: msg, audioKey }) },
 			);
 			if (data.toolMessage) {
 				setMessages((prev) => [...prev, data.toolMessage!]);
@@ -255,6 +254,28 @@ export default function InstanceDetail() {
 
 	// Wire the voice hook's auto-send to doSend
 	doSendRef.current = doSend;
+
+	// Double-tap a message: play its SAVED voice recording if we have one (voice turns),
+	// else fall back to speaking the text via TTS. Owner-scoped fetch of the R2 blob.
+	const playMessage = useCallback(async (m: Message) => {
+		if (id && m.audioKey) {
+			try {
+				const res = await fetch(`${API}/v1/instances/${id}/voice-audio/${m.audioKey}`, {
+					headers: { Authorization: `Bearer ${getToken() ?? ""}` },
+				});
+				if (res.ok) {
+					const url = URL.createObjectURL(await res.blob());
+					const audio = new Audio(url);
+					const cleanup = () => URL.revokeObjectURL(url);
+					audio.onended = cleanup;
+					audio.onerror = cleanup;
+					await audio.play();
+					return;
+				}
+			} catch { /* fall through to TTS */ }
+		}
+		speakRef.current(m.content);
+	}, [id]);
 
 	const sendMessage = () => {
 		if (!input.trim()) return;
@@ -467,14 +488,14 @@ export default function InstanceDetail() {
 									<div
 										key={m.id || m.createdAt || i}
 										onClick={() => voice.cancelSpeak()}
-										onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
+										onDoubleClick={() => playMessage(m)}
 										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
 											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 												: "bg-panel border border-line self-start rounded-bl-sm"
 										}`}
 									>
 										<button type="button" onClick={(e) => { e.stopPropagation(); copyMsgText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
-										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span>You</span>{m.createdAt && <span className="font-normal opacity-80">{formatTime(m.createdAt)}</span>}</div>}
+										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Chat</span>{m.createdAt && <span className="font-normal text-muted">{formatTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
