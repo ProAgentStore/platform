@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowedCorsOrigin } from "./keys.js";
+import { allowedCorsOrigin, splitProxyHostPath } from "./keys.js";
 
 // Mirror the PROVIDERS list from the source so tests validate the real shape.
 interface Provider {
@@ -233,6 +233,40 @@ describe("proxy host mapping", () => {
 			expect(host).toBeTruthy();
 			expect(PROVIDER_BY_ID.get(providerId)).toBeDefined();
 		}
+	});
+});
+
+describe("splitProxyHostPath (greedy :host{.+} capture)", () => {
+	it("splits host from the upstream path — the Whisper case that 400'd", () => {
+		const { host, upstreamPath } = splitProxyHostPath("api.openai.com/v1/audio/transcriptions");
+		expect(host).toBe("api.openai.com"); // must be the bare host, NOT the whole string
+		expect(upstreamPath).toBe("/v1/audio/transcriptions");
+		expect(HOST_TO_PROVIDER.get(host)).toBe("openai"); // now resolves, so the proxy works
+	});
+
+	it("splits the OpenAI TTS path", () => {
+		expect(splitProxyHostPath("api.openai.com/v1/audio/speech")).toEqual({
+			host: "api.openai.com",
+			upstreamPath: "/v1/audio/speech",
+		});
+	});
+
+	it("handles a bare host with no path", () => {
+		expect(splitProxyHostPath("api.openai.com")).toEqual({ host: "api.openai.com", upstreamPath: "/" });
+	});
+
+	it("keeps deep paths intact", () => {
+		expect(splitProxyHostPath("api.anthropic.com/v1/messages")).toEqual({
+			host: "api.anthropic.com",
+			upstreamPath: "/v1/messages",
+		});
+	});
+
+	it("regression: the whole string was previously (wrongly) treated as the host", () => {
+		// Before the fix, host === the full "api.openai.com/v1/audio/transcriptions",
+		// which is NOT in the allowlist → 400 Unsupported host on every call.
+		expect(HOST_TO_PROVIDER.get("api.openai.com/v1/audio/transcriptions")).toBeUndefined();
+		expect(HOST_TO_PROVIDER.get(splitProxyHostPath("api.openai.com/v1/audio/transcriptions").host)).toBe("openai");
 	});
 });
 

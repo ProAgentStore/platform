@@ -98,6 +98,21 @@ const HOST_TO_PROVIDER = new Map(
 	PROVIDERS.filter((p) => p.host).map((p) => [p.host as string, p.id]),
 );
 
+/**
+ * The proxy route `/proxy/:host{.+}` greedily captures the hostname AND the upstream
+ * path in one param (Hono's `.+` matches across slashes), e.g.
+ * "api.openai.com/v1/audio/transcriptions". Split the hostname (first segment) from
+ * the upstream path so the allowlist check sees the bare host — reading the whole
+ * thing as the host rejected every path-bearing call as "Unsupported host", which is
+ * why Whisper STT + OpenAI TTS silently 400'd and never transcribed.
+ */
+export function splitProxyHostPath(raw: string): { host: string; upstreamPath: string } {
+	const slash = raw.indexOf("/");
+	return slash === -1
+		? { host: raw, upstreamPath: "/" }
+		: { host: raw.slice(0, slash), upstreamPath: raw.slice(slash) };
+}
+
 /** List supported providers (public). */
 keysRoutes.get("/providers", async (c) => {
 	return c.json({
@@ -268,13 +283,10 @@ keysRoutes.delete("/:provider", async (c) => {
  */
 keysRoutes.all("/proxy/:host{.+}", async (c) => {
 	const session = await requireUser(c);
-	const host = c.req.param("host");
-
-	// Extract the path after the host
+	// `:host{.+}` GREEDILY captures the hostname AND the upstream path as one string,
+	// e.g. "api.openai.com/v1/audio/transcriptions". Split them (see splitProxyHostPath).
+	const { host, upstreamPath } = splitProxyHostPath(c.req.param("host"));
 	const url = new URL(c.req.url);
-	const fullPath = url.pathname;
-	const proxyPrefix = `/v1/keys/proxy/${host}`;
-	const upstreamPath = fullPath.slice(proxyPrefix.length) || "/";
 
 	const providerId = HOST_TO_PROVIDER.get(host);
 	if (!providerId) throw new HttpError(400, `Unsupported host: ${host}`);
