@@ -21,14 +21,18 @@ function humanEvent(ev: RuntimeEvent): string {
 	if (ev.type === "job.human_handoff_required") return ev.message || "Paused — waiting for you";
 	if (ev.type === "task.completed") return ev.message || "Completed";
 	if (ev.type === "task.failed") return ev.message || "Failed";
+	if (ev.type === "job.confirmation_email") return `📧 Confirmation email: ${ev.message || "received"}`;
+	if (ev.type === "job.email") return `📧 ${ev.message || "Read an email"}`;
 	const m = (ev.message || ev.type || "").replace(/\s*(?:in|into textbox|into)\s*""/gi, "").replace(/\s+/g, " ").trim();
 	return m || ev.type;
 }
 
 function levelClass(type: string): string {
+	if (type === "job.confirmation_email") return "text-green";
 	if (/failed|error|stuck/.test(type)) return "text-red";
 	if (/completed|resumed|dryrun/.test(type)) return "text-green";
 	if (/needs_input|handoff|captcha/.test(type)) return "text-amber-500";
+	if (type === "job.email") return "text-accent";
 	return "text-muted";
 }
 
@@ -360,12 +364,22 @@ export default function RunDetail() {
 				) : (
 					<div className="flex flex-col">
 						{events.filter((e) => e.type !== "agent.shot").map((ev) => {
-							const thought = (ev.data as Record<string, unknown>)?.thought as string | undefined;
+							const data = (ev.data as Record<string, unknown>) ?? {};
+							const thought = data.thought as string | undefined;
+							// An email the agent read/received → a click-through to open it in Gmail.
+							const gmailUrl = typeof data.gmailUrl === "string" ? data.gmailUrl : "";
+							const emailFrom = typeof data.from === "string" ? data.from : "";
 							return (
 								<div key={ev.id} className="flex gap-3 py-1.5 border-b border-line last:border-0 text-sm">
 									<span className="text-xs font-mono text-muted-soft shrink-0 w-[68px] pt-0.5">{fmtTime(ev.createdAt ?? ev.timestamp)}</span>
 									<div className="min-w-0 flex-1">
 										<div className={levelClass(ev.type)}>{humanEvent(ev)}</div>
+										{gmailUrl && (
+											<div className="text-xs mt-0.5">
+												{emailFrom && <span className="text-muted-soft">from {emailFrom} · </span>}
+												<a href={gmailUrl} target="_blank" rel="noreferrer" className="text-accent font-semibold hover:underline">Open in Gmail →</a>
+											</div>
+										)}
 										{thought && <div className="text-xs text-muted-soft mt-0.5 line-clamp-2">{thought}</div>}
 									</div>
 								</div>

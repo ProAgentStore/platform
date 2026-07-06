@@ -170,6 +170,12 @@ export interface GmailMessageMatch {
 	text: string;
 }
 
+/** A deep-link that opens one specific message in the Gmail web UI. `id` is the
+ *  Gmail API message id (the same hex id the web client uses in `#all/<id>`). */
+export function gmailMessageUrl(id: string): string {
+	return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(id)}`;
+}
+
 async function gmailFetch(accessToken: string, path: string): Promise<Response> {
 	return fetch(`${GMAIL_API}${path}`, {
 		headers: { Authorization: `Bearer ${accessToken}` },

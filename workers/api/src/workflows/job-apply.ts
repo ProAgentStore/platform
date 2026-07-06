@@ -7,7 +7,7 @@ import { decryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
 import { runShotKey } from "../lib/run-shots.js";
 import { notifyUser } from "../routes/push.js";
-import { buildQuery, extractCode, findMatchingMessage, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
+import { buildQuery, extractCode, findMatchingMessage, gmailMessageUrl, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
 import type { Env } from "../types.js";
 
 export interface JobApplyParams {
@@ -163,6 +163,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 					const query = buildQuery({ from: q.from, subject: q.subject, withinDays: q.withinDays });
 					const match = await findMatchingMessage(token, query);
 					if (!match) return `No matching email yet (searched: ${query}). It may not have arrived — wait a few seconds and call read_email_link again.`;
+					// Record the email in the activity log with a click-through to open it in
+					// Gmail, so the user can see (and verify) exactly which message the agent read.
+					await callRunner(conn, "/browser/event", { taskId, type: "job.email", message: `Read email: ${match.subject}`, data: { gmailUrl: gmailMessageUrl(match.id), subject: match.subject, from: match.from, date: match.date, purpose: "sign-in / verification" } }).catch(() => undefined);
 					const ranked = rankConfirmationLinks(match.links, q.from);
 					const code = extractCode(match.text);
 					const parts = [`Email "${match.subject}" from ${match.from}.`];
@@ -246,6 +249,35 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			await step.do(`resume-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/resume", { taskId }));
 			// Any message the user sent while paused is picked up by deps.pollHint on the
 			// next loop step (same channel as mid-flight steering) — no special-casing here.
+		}
+
+		// On a successful submit, look up the employer's confirmation email in the
+		// user's connected Gmail and record it in the activity log as a click-through
+		// (they open the actual confirmation from the console). Best-effort: the email
+		// may not have arrived yet (poll a little); Gmail may be off — never fail the
+		// application over it. Search recent mail FROM the ATS domain, newest first.
+		if (result.outcome === "submitted" && job.emailEnabled) {
+			// The confirmation is sent from the ATS registrable domain (e.g. Xero via
+			// ashbyhq.com), so hint on that rather than the full job host.
+			const fromDomain = host.split(".").slice(-2).join(".");
+			for (let attempt = 0; attempt < 2; attempt++) {
+				// Give the email a moment to arrive (Ashby/Greenhouse are near-instant;
+				// some ATS take longer) — poll at ~8s then ~23s.
+				await step.sleep(`confirm-wait-${attempt}`, attempt === 0 ? "8 seconds" : "15 seconds");
+				const found = await step.do(`confirm-email-${attempt}`, async () => {
+					try {
+						const row = await env.DB.prepare("SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'").bind(userId).first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
+						if (!row || !env.KEY_ENCRYPTION_KEY) return true; // Gmail gone — stop polling
+						const refresh = await decryptKey(new Uint8Array(row.key_ciphertext), new Uint8Array(row.dek_wrapped), new Uint8Array(row.iv), env.KEY_ENCRYPTION_KEY);
+						const token = await mintGmailAccessToken(env, refresh);
+						const match = await findMatchingMessage(token, buildQuery({ from: fromDomain, withinDays: 1 }));
+						if (!match) return false;
+						await callRunner(conn, "/browser/event", { taskId, type: "job.confirmation_email", message: match.subject, data: { gmailUrl: gmailMessageUrl(match.id), subject: match.subject, from: match.from, date: match.date } }).catch(() => undefined);
+						return true;
+					} catch { return true; /* best-effort — don't spin on errors */ }
+				});
+				if (found) break;
+			}
 		}
 
 		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
