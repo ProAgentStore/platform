@@ -162,6 +162,10 @@ export default function InstanceDetail() {
 	// Use ref for maybeSpeakResponse to avoid circular deps
 	const speakRef = useRef(voice.maybeSpeakResponse);
 	speakRef.current = voice.maybeSpeakResponse;
+	// Direct (ungated) speak for manual replay — maybeSpeakResponse only speaks when a
+	// voice mode is active, so double-tapping a message to hear it was silent otherwise.
+	const directSpeakRef = useRef(voice.speak);
+	directSpeakRef.current = voice.speak;
 
 	const isCoding = instance?.capabilities?.surfaces?.includes("coding") ?? false;
 
@@ -278,7 +282,9 @@ export default function InstanceDetail() {
 				}
 			} catch { /* fall through to TTS */ }
 		}
-		speakRef.current(m.content);
+		// No saved recording (or it failed to load) — re-speak the text. Direct, not the
+		// auto-speak-gated path, so replay works even when no voice mode is active.
+		directSpeakRef.current(m.content);
 	}, [id]);
 
 	const sendMessage = () => {

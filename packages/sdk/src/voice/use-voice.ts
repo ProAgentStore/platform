@@ -25,7 +25,13 @@ const ECHO_GUARD_MS = 800;
 function unlockSpeechSynthesis() {
 	try {
 		if (typeof window !== "undefined" && window.speechSynthesis) {
-			window.speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+			window.speechSynthesis.resume();
+			// A volume-0 space (not an empty string): some engines ignore an empty
+			// utterance, so it never counts as the gesture-initiated first speak that
+			// iOS requires before a LATER async reply is allowed to speak.
+			const u = new SpeechSynthesisUtterance(" ");
+			u.volume = 0;
+			window.speechSynthesis.speak(u);
 		}
 	} catch {}
 }
@@ -256,6 +262,20 @@ export function useVoice(instanceId: string | undefined, opts: {
 		return ttsRef.current;
 	}, [instanceId]);
 
+	// Speak text on demand (e.g. double-tap a message to replay it), regardless of
+	// whether an auto-speak/hands-free mode is active. maybeSpeakResponse is gated on
+	// speakOn/convoOn — the wrong tool for a manual replay, which is why double-tap was
+	// silent outside a voice mode. Unlock inside the caller's gesture so iOS plays it.
+	const speak = useCallback(async (text: string) => {
+		if (!text?.trim()) return;
+		unlockSpeechSynthesis();
+		try {
+			const tts = await ensureTts();
+			await tts.unlock();
+			await tts.speak(text);
+		} catch {}
+	}, [ensureTts]);
+
 	// Open mic with chime
 	const startListening = useCallback(async () => {
 		if (!sttRef.current || pausedForThinkingRef.current || mutedRef.current) return;
@@ -463,9 +483,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [micOn, makeStt, startAudioMonitor, stopAudioMonitor]);
 
 	const toggleSpeak = useCallback(() => {
-		// Prime TTS on this tap so a later async reply can actually speak (iOS/Safari).
-		setSpeakOn((v) => { if (!v) unlockSpeechSynthesis(); return !v; });
-	}, []);
+		// Prime TTS on this tap so a later async reply can actually speak (iOS/Safari):
+		// unlock synchronously, and warm the TTS audio context (the OpenAI-voice path
+		// needs a running AudioContext created inside the gesture, not lazily later).
+		setSpeakOn((v) => {
+			if (!v) { unlockSpeechSynthesis(); void ensureTts().then((t) => t.unlock()).catch(() => {}); }
+			return !v;
+		});
+	}, [ensureTts]);
 
 	const toggleConvo = useCallback(async () => {
 		if (convoOn) {
@@ -486,6 +511,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 		}
 		try { getAudioCtx().resume(); } catch {}
 		unlockSpeechSynthesis(); // prime TTS on this tap so replies can speak (iOS/Safari)
+		// Warm the TTS audio context inside the gesture too — the OpenAI-voice path
+		// needs a running AudioContext, else the reply is silent (hands-free "no sound").
+		void ensureTts().then((t) => t.unlock()).catch(() => {});
 		try {
 			pausedForThinkingRef.current = false;
 			sttRef.current = await makeStt();
@@ -496,7 +524,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			setMicOn(true);
 			playListeningChime();
 		} catch { setConvoOn(false); }
-	}, [convoOn, makeStt, startAudioMonitor, stopAudioMonitor]);
+	}, [convoOn, makeStt, startAudioMonitor, stopAudioMonitor, ensureTts]);
 
 	/** Stop speaking immediately (tap a message to interrupt). */
 	const cancelSpeak = useCallback(() => {
@@ -551,5 +579,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		audioLevel,
 		toggleMic, toggleSpeak, toggleConvo, toggleMute, cancelSpeak,
 		maybeSpeakResponse,
+		/** Speak text on demand (message replay), independent of auto-speak mode. */
+		speak,
 	};
 }

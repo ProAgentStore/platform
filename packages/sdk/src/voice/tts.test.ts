@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { cleanForSpeech } from "./tts.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanForSpeech, VoiceTts } from "./tts.js";
 
 describe("cleanForSpeech", () => {
 	it("leaves plain prose untouched", () => {
@@ -48,5 +48,53 @@ describe("cleanForSpeech", () => {
 
 	it("caps the spoken length at 1500 chars", () => {
 		expect(cleanForSpeech("a".repeat(3000)).length).toBe(1500);
+	});
+});
+
+describe("VoiceTts.unlock", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("resumes a suspended SpeechSynthesis + speaks a silent priming utterance", async () => {
+		const speak = vi.fn();
+		const resume = vi.fn();
+		const synth = { resume, speak };
+		vi.stubGlobal("window", { speechSynthesis: synth });
+		vi.stubGlobal("speechSynthesis", synth);
+		vi.stubGlobal("SpeechSynthesisUtterance", class {
+			text: string;
+			volume = 1;
+			constructor(t: string) { this.text = t; }
+		});
+
+		await new VoiceTts("browser").unlock();
+
+		expect(resume).toHaveBeenCalled();
+		expect(speak).toHaveBeenCalledTimes(1);
+		// Primes with a silent (volume 0) utterance — audible artifacts would be a bug.
+		expect(speak.mock.calls[0][0].volume).toBe(0);
+	});
+
+	it("resumes a suspended AudioContext for the OpenAI voice (created in-gesture)", async () => {
+		const resume = vi.fn().mockResolvedValue(undefined);
+		vi.stubGlobal("AudioContext", class {
+			state = "suspended";
+			resume = resume;
+		});
+		const synth = { resume: vi.fn(), speak: vi.fn() };
+		vi.stubGlobal("window", { speechSynthesis: synth });
+		vi.stubGlobal("speechSynthesis", synth);
+		vi.stubGlobal("SpeechSynthesisUtterance", class { volume = 1; constructor(_: string) {} });
+
+		await new VoiceTts("openai").unlock();
+
+		expect(resume).toHaveBeenCalled();
+	});
+
+	it("never throws when no audio APIs exist in the environment", async () => {
+		vi.stubGlobal("window", {});
+		vi.stubGlobal("speechSynthesis", undefined);
+		await expect(new VoiceTts("openai").unlock()).resolves.toBeUndefined();
 	});
 });

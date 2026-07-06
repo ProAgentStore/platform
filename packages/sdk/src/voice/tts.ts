@@ -87,6 +87,33 @@ export class VoiceTts {
 		}
 	}
 
+	/**
+	 * Prime audio output from INSIDE a user gesture (mic toggle, double-tap) so a
+	 * LATER async reply can actually play. iOS/Safari refuse to start a Web Audio
+	 * context or the SpeechSynthesis queue outside a gesture — without this the
+	 * OpenAI TTS context stays "suspended" (silent) and the browser voice never
+	 * un-pauses, which is the "hands-free makes no sound" symptom. Best-effort.
+	 */
+	async unlock() {
+		if (this.provider === "openai") {
+			try {
+				if (!this._audioCtx) this._audioCtx = new AudioContext();
+				if (this._audioCtx.state !== "running") await this._audioCtx.resume();
+			} catch { /* falls back to browser voice at speak time */ }
+		}
+		try {
+			if (typeof window !== "undefined" && window.speechSynthesis) {
+				speechSynthesis.resume();
+				// A volume-0 (not empty-string) utterance: some engines ignore an empty
+				// utterance so it never counts as the gesture-initiated first speak that
+				// iOS requires. A silent space does, without an audible artifact.
+				const u = new SpeechSynthesisUtterance(" ");
+				u.volume = 0;
+				speechSynthesis.speak(u);
+			}
+		} catch { /* no synth in this browser */ }
+	}
+
 	cancel() {
 		this._gen++; // invalidate any in-flight fetch/decode in _speakOpenAI
 		this._queue = [];
