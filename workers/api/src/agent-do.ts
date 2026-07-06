@@ -703,9 +703,12 @@ export class AgentDO extends DurableObject<Env> {
 			source?: KnowledgeDoc["source"];
 			sourceUrl?: string;
 		}>();
-		if (!body.title || !body.content)
-			return json({ error: "title and content required" }, 400);
-		if (body.content.length > 100_000)
+		// Content may be empty — a document can be created title-first and filled in
+		// later (in the editor or by the agent via update_knowledge).
+		const content = typeof body.content === "string" ? body.content : "";
+		if (!body.title)
+			return json({ error: "title required" }, 400);
+		if (content.length > 100_000)
 			return json({ error: "Document too large (max 100KB)" }, 400);
 
 		// Limit total knowledge base size (max 20 docs)
@@ -716,7 +719,7 @@ export class AgentDO extends DurableObject<Env> {
 		const doc: KnowledgeDoc = {
 			id: crypto.randomUUID(),
 			title: body.title,
-			content: body.content,
+			content,
 			source: body.source || "paste",
 			sourceUrl: body.sourceUrl,
 			addedAt: new Date().toISOString(),
