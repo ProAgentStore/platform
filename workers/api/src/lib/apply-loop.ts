@@ -95,13 +95,22 @@ export interface ApplyResult {
 	filled?: boolean;
 }
 
-/** Side-effecting hooks the loop drives — real ones hit the runner; tests mock them. */
-export interface ApplyDeps {
+/** The minimum a job needs for the loop itself — everything else is read by the
+ *  injected `decide`. Kept tiny so the loop is reusable by other browser verticals
+ *  (e.g. flight booking) whose job shape differs entirely from an ApplyJob. */
+export interface BrowserJobBase {
+	dryRun?: boolean;
+	userHint?: string;
+}
+
+/** Side-effecting hooks the loop drives — real ones hit the runner; tests mock them.
+ *  Generic over the job type `J` so the SAME loop engine drives apply and booking. */
+export interface ApplyDeps<J extends BrowserJobBase = ApplyJob> {
 	snapshot: () => Promise<PageSnapshot>;
 	/** Perform an action. A Playwright failure comes back as `error` (never throws) so the brain can adapt.
 	 *  For write actions, `feedback` reports the field's real value + any validation error after the write. */
 	act: (action: BrowserAction) => Promise<{ url: string; challenge: string | null; error?: string; feedback?: string }>;
-	decide: (params: { job: ApplyJob; actionLog: string[]; snapshot: PageSnapshot }) => Promise<ApplyDecision>;
+	decide: (params: { job: J; actionLog: string[]; snapshot: PageSnapshot }) => Promise<ApplyDecision>;
 	onEvent?: (type: string, message: string, data?: unknown) => Promise<void> | void;
 	/** Read (and clear) any free-text message the user sent to this RUNNING task — so
 	 *  guidance can be injected mid-flight, not only on a handoff resume. */
@@ -118,7 +127,7 @@ export interface ApplyDeps {
  * forces a human handoff. Pure orchestration over {@link ApplyDeps} so it can be
  * unit-tested without a browser, an LLM, or a deployed Workflow.
  */
-export async function runApplyLoop(deps: ApplyDeps, job: ApplyJob, opts: { maxSteps?: number; solvedChallengeUrl?: string; tokens?: { input: number; output: number }; filled?: boolean } = {}): Promise<ApplyResult> {
+export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: ApplyDeps<J>, job: J, opts: { maxSteps?: number; solvedChallengeUrl?: string; tokens?: { input: number; output: number }; filled?: boolean } = {}): Promise<ApplyResult> {
 	const maxSteps = opts.maxSteps ?? 40;
 	// After a human solves a captcha, its widget/"not a robot" text usually lingers
 	// on the SAME page for the rest of the form, so re-detecting it would ping-pong
