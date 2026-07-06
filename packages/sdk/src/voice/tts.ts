@@ -110,6 +110,10 @@ export class VoiceTts {
 			}
 			try {
 				speechSynthesis.cancel();
+				// iOS/Safari silently PAUSES the synth queue (esp. after a prior utterance or
+				// when not driven by a fresh tap), so a queued reply never speaks and the user
+				// thinks they must tap to "unmute". resume() before speaking un-pauses it.
+				speechSynthesis.resume();
 				const u = new SpeechSynthesisUtterance(text);
 				u.rate = Math.max(0.5, Math.min(3, this.speed / 100));
 				// Some browsers (Chrome, intermittently) never fire onend — without a
