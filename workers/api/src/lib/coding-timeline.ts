@@ -74,13 +74,25 @@ export async function loadChat(env: Env, sessionId: string, limit = 200): Promis
 }
 
 /** Clear the conversation turns for a session (the console "Clear" button). Keeps
- * the activity log (terminal/brain/outcome) — only the chat thread is wiped. */
-export async function clearChat(env: Env, sessionId: string): Promise<void> {
+ * the activity log (terminal/brain/outcome) — only the chat thread is wiped. Also
+ * deletes any saved voice recordings for those turns so their R2 blobs don't orphan. */
+export async function clearChat(env: Env, sessionId: string, userId: string, instanceId: string): Promise<void> {
+	// Collect the saved-recording ids BEFORE deleting the rows so we can drop the blobs.
+	const { results } = await env.DB.prepare(
+		"SELECT audio_key FROM coding_timeline WHERE session_id = ?1 AND type = 'chat_user' AND audio_key IS NOT NULL",
+	)
+		.bind(sessionId)
+		.all<{ audio_key: string }>();
 	await env.DB.prepare(
 		"DELETE FROM coding_timeline WHERE session_id = ?1 AND type IN ('chat_user','chat_assistant','command')",
 	)
 		.bind(sessionId)
 		.run();
+	for (const r of results ?? []) {
+		if (r.audio_key && env.STORAGE) {
+			await env.STORAGE.delete(`voice-audio/${userId}/${instanceId}/${r.audio_key}`).catch(() => undefined);
+		}
+	}
 }
 
 /** The most recent stored terminal snapshot (used to dedupe before storing a new one). */

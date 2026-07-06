@@ -192,7 +192,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 			onSendRef.current(text, { audioKey: turnId });
 			void uploadVoiceAudio(instanceId, turnId, blob);
 		} else {
-			emitSendRef.current(text);
+			// No saved audio (browser dictation, or no instance) — send the raw text.
+			// NOTE: must be onSendRef, NOT emitSendRef — the latter is THIS function and
+			// would recurse forever (stack overflow) on every dictation send.
+			onSendRef.current(text);
 		}
 	};
 	const emitSendRef = useRef(emitSend);

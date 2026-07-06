@@ -706,7 +706,7 @@ codingRoutes.delete("/:instanceId/coding/sessions/:sessionId/timeline", async (c
 	const { uid, instanceId } = await requireOwned(c);
 	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
 	if (!session) throw new HttpError(404, "Session not found");
-	await clearChat(c.env, session.id);
+	await clearChat(c.env, session.id, uid, instanceId);
 	return c.json({ ok: true });
 });
 
