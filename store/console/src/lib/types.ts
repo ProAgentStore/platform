@@ -41,7 +41,18 @@ export interface Instance {
 		workflow?: string;
 		/** Phase 3: agent-published UIs, loaded dynamically from a bundle URL. */
 		customSurfaces?: CustomSurface[];
+		/** The agent's single work-board columns (server always resolves a default). */
+		boardColumns?: BoardColumn[];
 	};
+}
+
+/** One kanban column on an agent's single work board (mirrors the server type). */
+export interface BoardColumn {
+	id: string;
+	title: string;
+	color: string;
+	statuses?: string[];
+	catchAll?: boolean;
 }
 
 export interface Message {

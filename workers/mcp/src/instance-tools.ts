@@ -516,7 +516,7 @@ export function registerInstanceTools(
 
 	server.tool(
 		"instance_board",
-		"Read a private instance's live kanban board — the runtime task tickets (grouped Waiting / Running / Needs you / Failed / Blocked / Done / Cancelled) plus, for apply agents, the application records (Queued / Pending / Submitted / Interview / Rejected / Accepted). This is the same board shown in the console; use it to answer \"what's in <column>\" or \"why didn't <job> apply\".",
+		"Read a private instance's live kanban board — the agent's single work board. Cards are ONE per job (retries of the same job collapse into one card) grouped into the agent's configured columns (e.g. Waiting / Applying / Needs you / Failed / Blocked / Submitted). This is the same board shown in the console; use it to answer \"what's in <column>\" or \"why didn't <job> apply\".",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -525,13 +525,14 @@ export function registerInstanceTools(
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const tasksData = await authedCall(`/v1/instances/${instance_id}/tasks`, sessionToken, {}, env).catch(() => ({}));
-			const appsData = await authedCall(
-				`/v1/instances/${instance_id}/collections/applications/records`,
-				sessionToken,
-				{},
-				env,
-			).catch(() => ({}));
-			return jsonText(buildBoard(tasksData, appsData));
+			// The agent declares its columns (server resolves a per-surface default);
+			// read them off the instance so the MCP board matches the console exactly.
+			const meData = await authedCall("/v1/instances/my/instances", sessionToken, {}, env).catch(() => ({}));
+			const instances = isRec(meData) && Array.isArray(meData.instances) ? meData.instances : [];
+			const inst = instances.find((i) => isRec(i) && i.id === instance_id);
+			const caps = isRec(inst) ? inst.capabilities : undefined;
+			const cols = isRec(caps) && Array.isArray(caps.boardColumns) ? (caps.boardColumns as BoardColumn[]) : DEFAULT_BOARD_COLUMNS;
+			return jsonText(buildBoard(tasksData, cols));
 		},
 	);
 
@@ -979,34 +980,33 @@ interface RawTask {
 	title?: string;
 	description?: string;
 	input?: Record<string, unknown>;
+	output?: Record<string, unknown>;
 	createdAt?: string;
+	updatedAt?: string;
 }
 
-/** Runtime-ticket columns — mirror the console board (BoardTab.tsx). */
-const BOARD_COLUMNS: { title: string; statuses: string[] }[] = [
-	{ title: "Waiting", statuses: ["queued", "needs_approval"] },
-	{ title: "Running", statuses: ["running"] },
-	{ title: "Needs you", statuses: ["needs_human"] },
-	{ title: "Failed", statuses: ["failed"] },
-	{ title: "Blocked", statuses: ["blocked"] },
-	{ title: "Done", statuses: ["completed"] },
-	{ title: "Cancelled", statuses: ["cancelled"] },
-];
+interface BoardColumn {
+	id: string;
+	title: string;
+	statuses?: string[];
+	catchAll?: boolean;
+}
 
-/** Application-record columns — mirror the console apply board (ApplyTab.tsx). */
-const APP_COLUMNS: { title: string; statuses: string[] }[] = [
-	{ title: "Queued", statuses: ["queued"] },
-	{ title: "Pending", statuses: ["pending"] },
-	{ title: "Submitted", statuses: ["submitted"] },
-	{ title: "Interview", statuses: ["interview"] },
-	{ title: "Rejected", statuses: ["rejected"] },
-	{ title: "Accepted", statuses: ["accepted"] },
+/** Fallback columns when an instance has no configured board (generic runtime agent). */
+const DEFAULT_BOARD_COLUMNS: BoardColumn[] = [
+	{ id: "waiting", title: "Waiting", statuses: ["queued", "needs_approval"] },
+	{ id: "running", title: "Running", statuses: ["running"] },
+	{ id: "needs_human", title: "Needs you", statuses: ["needs_human"] },
+	{ id: "failed", title: "Failed", statuses: ["failed"] },
+	{ id: "blocked", title: "Blocked", statuses: ["blocked"] },
+	{ id: "done", title: "Done", statuses: ["completed"] },
+	{ id: "cancelled", title: "Cancelled", statuses: ["cancelled"] },
 ];
 
 /**
- * A readable label for a runtime ticket. Apply tickets carry type "job.apply_agent"
- * and no title, so fall back to the job URL: prettify the last path segment (job
- * slug) and keep the ATS host — same derivation the console board uses.
+ * A readable label for a job. Apply tasks carry type "job.apply_agent" and no
+ * title, so fall back to the job URL: prettify the last path segment (job slug)
+ * and keep the ATS host — same derivation the console board uses.
  */
 function ticketLabel(task: RawTask): string {
 	if (task.title) return task.title;
@@ -1026,42 +1026,62 @@ function ticketLabel(task: RawTask): string {
 	return task.type || "task";
 }
 
-/** Group runtime tasks + application records into the console's kanban columns. */
-function buildBoard(tasksData: unknown, appsData: unknown): unknown {
+/** A stable per-job key: the normalized job URL, else the task id (own card). */
+function jobKey(t: RawTask): string {
+	const url = typeof t.input?.url === "string" ? t.input.url : "";
+	if (url) {
+		try {
+			const u = new URL(url);
+			return `${u.hostname.replace(/^www\./, "")}${u.pathname.replace(/\/+$/, "")}`.toLowerCase();
+		} catch { /* not a URL */ }
+	}
+	return t.id;
+}
+
+function stamp(t: RawTask): number {
+	const n = Date.parse(t.updatedAt || t.createdAt || "");
+	return Number.isNaN(n) ? 0 : n;
+}
+
+function columnFor(cols: BoardColumn[], status: string): string | null {
+	for (const c of cols) if (c.statuses?.includes(status)) return c.id;
+	const catchAll = cols.find((c) => c.catchAll);
+	return catchAll ? catchAll.id : null;
+}
+
+/** Group runtime tasks into ONE card per job and place them into configured columns. */
+function buildBoard(tasksData: unknown, cols: BoardColumn[]): unknown {
 	const tasks = (isRec(tasksData) && Array.isArray(tasksData.tasks) ? tasksData.tasks : []) as RawTask[];
-	const apps = (isRec(appsData) && Array.isArray(appsData.records) ? appsData.records : []) as Record<string, unknown>[];
+
+	// One card per job — newest attempt represents the card.
+	const byKey = new Map<string, RawTask[]>();
+	for (const t of tasks) {
+		const k = jobKey(t);
+		const arr = byKey.get(k);
+		if (arr) arr.push(t); else byKey.set(k, [t]);
+	}
+	const items = [...byKey.values()].map((arr) => {
+		arr.sort((a, b) => stamp(b) - stamp(a));
+		const rep = arr[0];
+		const detail = isRec(rep.output) && typeof rep.output.detail === "string" ? rep.output.detail : "";
+		return { id: rep.id, label: ticketLabel(rep), status: rep.status, attempts: arr.length, url: rep.input?.url, detail, updatedAt: rep.updatedAt || rep.createdAt };
+	});
+	items.sort((a, b) => Date.parse(String(b.updatedAt || "")) - Date.parse(String(a.updatedAt || "")));
 
 	const board: Record<string, unknown[]> = {};
-	for (const col of BOARD_COLUMNS) {
-		const items = tasks
-			.filter((t) => col.statuses.includes(String(t.status ?? "")))
-			.map((t) => ({ id: t.id, label: ticketLabel(t), status: t.status, url: t.input?.url, createdAt: t.createdAt }));
-		if (items.length) board[col.title] = items;
-	}
-
-	const applications: Record<string, unknown[]> = {};
-	for (const col of APP_COLUMNS) {
-		const items = apps
-			.filter((a) => col.statuses.includes(String((a.status as string) ?? (isRec(a.data) ? a.data.status : "") ?? "queued")))
-			.map((a) => {
-				const d = (isRec(a.data) ? a.data : {}) as Record<string, unknown>;
-				return {
-					id: a.id,
-					company: a.company ?? d.company ?? "",
-					role: a.role ?? d.role ?? "",
-					url: a.url ?? d.url ?? "",
-					status: a.status ?? d.status ?? "queued",
-				};
-			});
-		if (items.length) applications[col.title] = items;
+	for (const item of items) {
+		const colId = columnFor(cols, String(item.status ?? ""));
+		if (!colId) continue;
+		const title = cols.find((c) => c.id === colId)?.title ?? colId;
+		(board[title] ||= []).push(item);
 	}
 
 	return {
-		tickets: board,
-		ticketCount: tasks.length,
-		applications,
-		applicationCount: apps.length,
-		note: "tickets = runtime run board (Failed = run couldn't finish; Blocked = stopped needing you). applications = logged application records. A run that never reached submit has a Failed ticket but no application record.",
+		columns: cols.map((c) => c.title),
+		board,
+		jobCount: items.length,
+		runCount: tasks.length,
+		note: "One card per job (retries of the same URL collapse into one; `attempts` counts runs). Columns are the agent's configured board. Failed = the run couldn't finish; Blocked = the agent stopped needing you.",
 	};
 }
 

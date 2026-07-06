@@ -5,6 +5,7 @@ import BoardTab from "../tabs/BoardTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
+import type { BoardColumn } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Surface registry — the console "shell" loads agent UIs from here.
@@ -26,6 +27,8 @@ export interface SurfaceContext {
 	instanceId: string;
 	isApply: boolean;
 	sessionId?: string;
+	/** The agent's declared board columns (server resolves a per-surface default). */
+	boardColumns?: BoardColumn[];
 	setChildHeader: (node: ReactNode | null) => void;
 	onUnsubscribe: () => void;
 }
@@ -51,19 +54,20 @@ export const SURFACES: SurfaceDef[] = [
 		id: "apply",
 		label: "Apply",
 		icon: "📮",
-		// The job-application agent's dedicated surface (applications + the shared board).
+		// The job-application agent's board surface (one work board; a deep link to a
+		// single application record still opens its rich detail via ApplyTab).
 		show: (s) => s.includes("apply"),
 		scroll: true,
-		render: ({ instanceId, sessionId }) => <ApplyTab instanceId={instanceId} recordId={sessionId} />,
+		render: ({ instanceId, sessionId, boardColumns }) => <ApplyTab instanceId={instanceId} recordId={sessionId} columns={boardColumns} />,
 	},
 	{
 		id: "board",
 		label: "Board",
 		icon: "📋",
-		// Generic runtime board for agents without their own dedicated surface.
+		// Generic work board for agents without their own dedicated surface.
 		show: (s) => !s.includes("coding") && !s.includes("apply") && !s.includes("repo"),
 		scroll: true,
-		render: ({ instanceId }) => <BoardTab instanceId={instanceId} />,
+		render: ({ instanceId, boardColumns }) => <BoardTab instanceId={instanceId} columns={boardColumns} />,
 	},
 	{
 		id: "repo",
