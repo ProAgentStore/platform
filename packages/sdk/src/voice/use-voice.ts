@@ -97,7 +97,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// stream, so we open our own there.
 			const shared = sttRef.current?.stream ?? null;
 			const ownsStream = !shared;
-			const stream = shared ?? (await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }));
+			const stream = shared ?? (await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } }));
 			const ctx = new AudioContext();
 			const source = ctx.createMediaStreamSource(stream);
 			const analyser = ctx.createAnalyser();
@@ -114,15 +114,24 @@ export function useVoice(instanceId: string | undefined, opts: {
 				setAudioLevel(level);
 				// Whisper VAD (push-to-talk AND conversation): Whisper has no streaming
 				// results — unlike dictation it can't auto-send on a pause — so we detect
-				// the end of a turn from the mic level ourselves. Once we've heard voice, a
-				// sustained quiet of silenceMs stops recording → transcribe → send. The
-				// monitor only runs while listening, so this is correct in BOTH modes.
-				if (sttIsWhisperRef.current && !pausedForThinkingRef.current) {
+				// the end of a turn from the mic level ourselves. ADAPTIVE: trigger on the
+				// DROP from your speaking level rather than an absolute floor — a fixed
+				// threshold (the old > 0.05) leaves you "stuck listening" when the mic idles
+				// at or above it, so the pause is never seen. The monitor only runs while
+				// listening, so this is correct in BOTH modes.
+				if (sttIsWhisperRef.current && !pausedForThinkingRef.current && !mutedRef.current) {
 					const now = Date.now();
-					if (level > 0.05) { vadLastLoudRef.current = now; vadVoiceSeenRef.current = true; }
-					else if (vadVoiceSeenRef.current && now - vadLastLoudRef.current > silenceMsRef.current) {
-						vadVoiceSeenRef.current = false;
-						sttRef.current?.stop();
+					vadPeakRef.current = Math.max(level, vadPeakRef.current * 0.995); // slow-decaying speech peak
+					const heardVoice = vadPeakRef.current > 0.08; // genuine speech, not room noise
+					const loud = level >= Math.max(0.04, vadPeakRef.current * 0.4); // still speaking?
+					const endTurn = () => { vadVoiceSeenRef.current = false; vadPeakRef.current = 0; sttRef.current?.stop(); };
+					if (heardVoice && loud) {
+						vadLastLoudRef.current = now;
+						if (!vadVoiceSeenRef.current) { vadVoiceSeenRef.current = true; vadTurnStartRef.current = now; }
+					} else if (vadVoiceSeenRef.current && now - vadLastLoudRef.current > silenceMsRef.current) {
+						endTurn(); // real pause → transcribe + send
+					} else if (vadVoiceSeenRef.current && now - vadTurnStartRef.current > 25_000) {
+						endTurn(); // safety cap: a turn can never hang forever
 					}
 				}
 				analyserRef.current.raf = requestAnimationFrame(tick);
@@ -151,6 +160,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const sttIsWhisperRef = useRef(false);
 	const vadVoiceSeenRef = useRef(false);
 	const vadLastLoudRef = useRef(0);
+	// Adaptive VAD: a slow-decaying peak of your speaking level + when the current
+	// turn started. Silence = the mic dropping well BELOW your recent speech, not an
+	// absolute floor (some mics idle above a fixed threshold, pinning it "loud").
+	const vadPeakRef = useRef(0);
+	const vadTurnStartRef = useRef(0);
 	// When the agent last finished speaking — used to ignore the speaker echo tail.
 	const speakEndedAtRef = useRef(0);
 	useEffect(() => {
