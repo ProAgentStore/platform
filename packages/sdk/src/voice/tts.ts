@@ -7,7 +7,7 @@ import { API, getToken, reportClientError } from "../client.js";
  * Paths, URLs, filenames, code blocks, hashes, stack traces — all removed.
  * This is a vibecoding platform: speak the intent, not the internals.
  */
-function cleanForSpeech(raw: string): string {
+export function cleanForSpeech(raw: string): string {
 	let s = raw;
 	// Remove fenced code blocks entirely
 	s = s.replace(/```[\s\S]*?```/g, " (code) ");

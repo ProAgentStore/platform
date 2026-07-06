@@ -1,12 +1,41 @@
 /** Speech-to-Text abstraction — browser Web Speech API or OpenAI Whisper */
 
 import { API, getToken } from "../client.js";
+import { parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+// Minimal typings for the (non-standard) Web Speech API — enough for our use, so we
+// avoid `any`. The DOM lib doesn't ship these.
+interface SpeechRecognitionAlternative {
+	readonly transcript: string;
+}
+interface SpeechRecognitionResultLike {
+	readonly isFinal: boolean;
+	readonly length: number;
+	readonly [index: number]: SpeechRecognitionAlternative;
+}
+interface SpeechRecognitionEventLike {
+	readonly resultIndex: number;
+	readonly results: { readonly length: number; readonly [index: number]: SpeechRecognitionResultLike };
+}
+interface SpeechRecognitionErrorEventLike {
+	readonly error: string;
+}
+interface SpeechRecognitionLike {
+	continuous: boolean;
+	interimResults: boolean;
+	lang: string;
+	onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+	onerror: ((e: SpeechRecognitionErrorEventLike) => void) | null;
+	onend: (() => void) | null;
+	start(): void;
+	stop(): void;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
 declare global {
 	interface Window {
-		SpeechRecognition: any;
-		webkitSpeechRecognition: any;
+		SpeechRecognition?: SpeechRecognitionCtor;
+		webkitSpeechRecognition?: SpeechRecognitionCtor;
 	}
 }
 
@@ -27,7 +56,7 @@ export class VoiceStt {
 	onEnd: () => void;
 	listening = false;
 
-	private _rec: any = null;
+	private _rec: SpeechRecognitionLike | null = null;
 	private _mediaRec: MediaRecorder | null = null;
 	private _stream: MediaStream | null = null;
 	/** Set by stopDiscard(): the pending recording is dropped instead of transcribed. */
@@ -112,7 +141,7 @@ export class VoiceStt {
 		rec.continuous = true;
 		rec.interimResults = true;
 		rec.lang = this.language;
-		rec.onresult = (e: any) => {
+		rec.onresult = (e: SpeechRecognitionEventLike) => {
 			let interim = "",
 				final = "";
 			for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -123,7 +152,7 @@ export class VoiceStt {
 			if (final) this.onResult(final.trim(), true);
 			else if (interim) this.onResult(interim.trim(), false);
 		};
-		rec.onerror = (e: any) => {
+		rec.onerror = (e: SpeechRecognitionErrorEventLike) => {
 			if (e.error !== "no-speech") this.onError(e.error);
 		};
 		let restartFails = 0;
@@ -160,13 +189,7 @@ export class VoiceStt {
 				audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
 			});
 			const chunks: Blob[] = [];
-			const mimeType =
-				[
-					"audio/webm;codecs=opus",
-					"audio/webm",
-					"audio/mp4",
-					"audio/ogg",
-				].find((t) => MediaRecorder.isTypeSupported(t)) || "";
+			const mimeType = pickRecorderMimeType((t) => MediaRecorder.isTypeSupported(t));
 			const mediaRec = new MediaRecorder(
 				this._stream,
 				mimeType ? { mimeType } : undefined,
@@ -205,11 +228,9 @@ export class VoiceStt {
 		// the key server-side; the browser never holds it. (provider==="openai" is only
 		// chosen when the key is confirmed present via /status.)
 		const form = new FormData();
-		// Whisper picks the format from the filename extension, so it MUST match the
-		// recorded mimeType — Safari records audio/mp4, which under "audio.webm" gets
-		// rejected with a 400.
-		const ext = blob.type.includes("mp4") ? "mp4" : blob.type.includes("ogg") ? "ogg" : "webm";
-		form.append("file", blob, `audio.${ext}`);
+		// Whisper infers the format from the filename extension, so it MUST match the
+		// recorded container (Safari records mp4 — see whisperFilename).
+		form.append("file", blob, whisperFilename(blob.type));
 		form.append("model", "whisper-1");
 		form.append("language", this.language.slice(0, 2));
 		try {
@@ -227,17 +248,8 @@ export class VoiceStt {
 			);
 			if (!res.ok) {
 				// Surface OpenAI's actual reason (e.g. "audio file is too short") — never
-				// throw it away behind a bare status. The upstream body is JSON with
-				// { error: { message } }; fall back to raw text if it isn't.
-				let detail = "";
-				try {
-					const raw = await res.text();
-					try {
-						detail = (JSON.parse(raw) as { error?: { message?: string } })?.error?.message || raw;
-					} catch {
-						detail = raw;
-					}
-				} catch {}
+				// throw it away behind a bare status.
+				const detail = parseUpstreamErrorDetail(await res.text().catch(() => ""));
 				this.onError(`Whisper error ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
 				return;
 			}

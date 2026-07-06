@@ -3,8 +3,18 @@ import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
 import { reportClientError } from "../client.js";
 import { initVad, vadStep } from "./vad.js";
+import { computeRmsLevel } from "./audio.js";
+import { decideRestart } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
+
+// ── Tunables (named, not scattered literals) ─────────────────────────────────
+/** Throttle mic-level React updates to ~15fps — 60fps re-renders the chat + lags. */
+const LEVEL_THROTTLE_MS = 66;
+/** Pause before reopening the mic between conversation turns. */
+const RESTART_DELAY_MS = 350;
+/** Ignore the mic for this long after TTS ends — the speaker echo/reverb tail. */
+const ECHO_GUARD_MS = 800;
 
 // Short tones via Web Audio — no external files
 let _audioCtx: AudioContext | null = null;
@@ -76,7 +86,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// Stop the mic tracks only if WE opened the stream. In Whisper mode we reuse
 			// the recorder's stream — stopping it here would kill the recording.
 			if (analyserRef.current.ownsStream) {
-				analyserRef.current.stream.getTracks().forEach((t) => t.stop());
+				for (const t of analyserRef.current.stream.getTracks()) t.stop();
 			}
 			analyserRef.current.ctx.close().catch(() => {});
 			analyserRef.current = null;
@@ -110,14 +120,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const tick = () => {
 				if (!analyserRef.current) return; // monitor was stopped between frames
 				analyser.getByteFrequencyData(data);
-				// RMS level normalized to 0-1
-				let sum = 0;
-				for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
-				const level = Math.min(1, Math.sqrt(sum / data.length) / 128);
+				const level = computeRmsLevel(data);
 				const now = Date.now();
-				// Throttle the React state update to ~15fps — updating every animation frame
-				// (60fps) re-renders the whole chat page and makes it lag/"hang".
-				if (now - lastLevelSetRef.current > 66) { lastLevelSetRef.current = now; setAudioLevel(level); }
+				// Throttle the React state update — 60fps re-renders the whole chat and lags.
+				if (now - lastLevelSetRef.current > LEVEL_THROTTLE_MS) { lastLevelSetRef.current = now; setAudioLevel(level); }
 				// Whisper VAD: Whisper has no streaming results, so we detect end-of-turn
 				// from the mic level (pure logic + tests in ./vad.ts). On a real pause it
 				// stops recording → transcribe → send.
@@ -233,7 +239,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// speaking OR within ~0.8s after (the speaker echo/reverb tail) — it's the
 		// agent's own voice, not you. Push-to-talk is hard-stopped during speech in
 		// speakAndResume, so it doesn't need (and isn't blocked by) this guard.
-		if (convoOnRef.current && (ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < 800)) return;
+		if (convoOnRef.current && (ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < ECHO_GUARD_MS)) return;
 		// Swallow late results while paused — e.g. a Whisper transcription that lands
 		// AFTER conversation mode was turned off would otherwise fall through to the
 		// push-to-talk path and send the turn the user just abandoned. (Cleared whenever
@@ -323,23 +329,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 			},
 			onEnd: () => {
 				if (convoOnRef.current && !pausedForThinkingRef.current) {
-					// If the recognizer just ended almost immediately after starting, we're
-					// in a failing restart loop (mic blocked / instant abort). Back off, and
-					// after a few rapid ends bail out of convo mode so the page never freezes.
-					if (Date.now() - lastListenStartRef.current < 800) {
-						rapidEndsRef.current += 1;
-						if (rapidEndsRef.current >= 4) {
-							rapidEndsRef.current = 0;
-							setConvoOn(false);
-							setMicOn(false);
-							return;
-						}
-					} else {
-						rapidEndsRef.current = 0;
-					}
+					// Recognizer ended mid-conversation. If it keeps ending instantly we're in
+					// a failing restart loop (mic blocked / abort) — decideRestart counts those
+					// and bails after a few so the page never freezes. (Pure + unit-tested.)
+					const { bail, nextRapidEnds } = decideRestart(Date.now() - lastListenStartRef.current, rapidEndsRef.current);
+					rapidEndsRef.current = nextRapidEnds;
+					if (bail) { setConvoOn(false); setMicOn(false); return; }
 					setTimeout(() => {
 						if (convoOnRef.current && !pausedForThinkingRef.current) startListening();
-					}, 350);
+					}, RESTART_DELAY_MS);
 				} else if (!convoOnRef.current) {
 					setMicOn(false);
 				}
