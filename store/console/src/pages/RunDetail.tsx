@@ -11,8 +11,10 @@ import { ArrowLeft, Play, Pause, ChevronLeft, ChevronRight, Trash2 } from "lucid
  * — one shot per action, scrub/step/auto-play through the whole run and see the
  * page the agent saw at each step. Standard detail view for browser agents.
  */
-const fmtTime = (t?: string) => (t ? new Date(t).toLocaleTimeString() : "");
 const fmtClock = (t?: string) => (t ? new Date(t).toLocaleString() : "");
+/** Date + time for the activity log — a run can span days (retries, overnight handoffs). */
+const fmtStamp = (t?: string) =>
+	t ? new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
 
 /** Plain-language line for a raw event (hides empty-accessible-name noise). */
 function humanEvent(ev: RuntimeEvent): string {
@@ -176,6 +178,9 @@ export default function RunDetail() {
 	const [playing, setPlaying] = useState(false);
 	const [inputVal, setInputVal] = useState("");
 	const [takeoverOpen, setTakeoverOpen] = useState(false);
+	// Which attempt of the job this run is (JSW-style: each retry is a separate,
+	// numbered run with its own activity log). Resolved from the board's grouping.
+	const [attempt, setAttempt] = useState<{ num: number; total: number } | null>(null);
 	const urlsRef = useRef<Record<number, string>>({});
 
 	const load = useCallback(async () => {
@@ -185,6 +190,15 @@ export default function RunDetail() {
 			const mine = (d.events || []).filter((e) => String(e.taskId ?? (e.data as Record<string, unknown>)?.taskId ?? "") === taskId);
 			mine.sort((a, b) => new Date(a.createdAt ?? a.timestamp ?? 0).getTime() - new Date(b.createdAt ?? b.timestamp ?? 0).getTime());
 			setEvents(mine);
+		} catch { /* keep */ }
+		try {
+			// Find this run's attempt number within its job (attempts are newest-first).
+			const b = await api<{ items?: { attempts?: { id: string }[] }[] }>(`/v1/instances/${instanceId}/board`);
+			const item = (b.items || []).find((it) => it.attempts?.some((a) => a.id === taskId));
+			if (item?.attempts) {
+				const i = item.attempts.findIndex((a) => a.id === taskId);
+				if (i >= 0) setAttempt({ num: item.attempts.length - i, total: item.attempts.length });
+			}
 		} catch { /* keep */ }
 	}, [instanceId, taskId]);
 
@@ -278,6 +292,11 @@ export default function RunDetail() {
 				<h1 className="text-xl font-bold break-words">Run detail</h1>
 				<div className="flex items-center gap-2 flex-wrap mt-1 text-xs">
 					{status && <span className="px-2 py-0.5 rounded-full font-semibold bg-panel border border-line">{status === "needs_human" ? "Waiting for you" : status}</span>}
+					{attempt && attempt.total > 1 && (
+						<span className="px-2 py-0.5 rounded-full font-semibold bg-accent-soft text-accent border border-accent/30" title="Each retry is a separate run with its own activity log">
+							Attempt {attempt.num} of {attempt.total}
+						</span>
+					)}
 					{task?.createdAt && <span className="text-muted-soft">started {fmtClock(task.createdAt)}</span>}
 				</div>
 				{url && <a href={url} target="_blank" rel="noreferrer" className="text-xs text-accent break-all hover:underline">{url}</a>}
@@ -346,7 +365,7 @@ export default function RunDetail() {
 							<div className="text-sm text-ink">
 								<span className="font-semibold">Step {cur.seq}:</span> {cur.msg || humanEvent({ type: "agent.decision", message: cur.action } as RuntimeEvent)}
 							</div>
-							<span className="text-xs text-muted-soft font-mono shrink-0">{fmtTime(cur.at)}</span>
+							<span className="text-xs text-muted-soft font-mono shrink-0">{fmtStamp(cur.at)}</span>
 						</div>
 					)}
 				</div>
@@ -371,7 +390,7 @@ export default function RunDetail() {
 							const emailFrom = typeof data.from === "string" ? data.from : "";
 							return (
 								<div key={ev.id} className="flex gap-3 py-1.5 border-b border-line last:border-0 text-sm">
-									<span className="text-xs font-mono text-muted-soft shrink-0 w-[68px] pt-0.5">{fmtTime(ev.createdAt ?? ev.timestamp)}</span>
+									<span className="text-xs font-mono text-muted-soft shrink-0 w-[124px] pt-0.5">{fmtStamp(ev.createdAt ?? ev.timestamp)}</span>
 									<div className="min-w-0 flex-1">
 										<div className={levelClass(ev.type)}>{humanEvent(ev)}</div>
 										{gmailUrl && (
