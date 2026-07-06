@@ -1,9 +1,11 @@
 import { api } from "../client.js";
-import { VoiceStt, type SttOptions } from "./stt.js";
+import { DEFAULT_STT_MODEL, VoiceStt, type SttOptions } from "./stt.js";
 import { VoiceTts } from "./tts.js";
 
 interface VoiceConfig {
 	sttProvider: string;
+	/** Transcription model for the OpenAI provider (real-time gpt-4o-transcribe by default). */
+	sttModel: string;
 	ttsProvider: string;
 	apiKey: string;
 	voice: string;
@@ -45,6 +47,9 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		// "openai" records and transcribes with Whisper — far more accurate, but needs
 		// the user's OpenAI key (falls back to browser if it's missing).
 		sttProvider: wantsWhisperStt && hasOpenAiKey ? "openai" : "browser",
+		// Real-time model by default; a saved sttModel (e.g. gpt-4o-mini-transcribe for
+		// lower cost/latency) overrides it. Legacy whisper-1 is still selectable.
+		sttModel: (typeof vs.sttModel === "string" && vs.sttModel) || DEFAULT_STT_MODEL,
 		ttsProvider: wantsOpenAiTts && hasOpenAiKey ? "openai" : "browser",
 		// The key never reaches the browser — the proxy injects it server-side.
 		apiKey: "",
@@ -109,6 +114,7 @@ export async function createStt(
 	return new VoiceStt(cfg.sttProvider, {
 		apiKey: cfg.apiKey,
 		language: cfg.language,
+		model: cfg.sttModel,
 		...opts,
 	});
 }

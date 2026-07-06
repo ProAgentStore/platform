@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { computeRmsLevel, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
+import { computeRmsLevel, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
+
+describe("isTooShortToTranscribe", () => {
+	it("drops a sub-threshold clip (the 'audio too short' 400 case)", () => {
+		expect(isTooShortToTranscribe(4000, MIN_TRANSCRIBE_MS - 50)).toBe(true);
+		expect(isTooShortToTranscribe(50, 3000)).toBe(true); // header-only capture
+	});
+	it("keeps a real utterance", () => {
+		expect(isTooShortToTranscribe(8000, 700)).toBe(false);
+		expect(isTooShortToTranscribe(2000, MIN_TRANSCRIBE_MS)).toBe(false);
+	});
+});
 
 describe("computeRmsLevel", () => {
 	it("is 0 for silence and an empty frame", () => {

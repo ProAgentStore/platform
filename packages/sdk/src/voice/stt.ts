@@ -1,7 +1,11 @@
 /** Speech-to-Text abstraction — browser Web Speech API or OpenAI Whisper */
 
 import { API, getToken } from "../client.js";
-import { parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
+import { isTooShortToTranscribe, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
+
+/** OpenAI's real-time transcription model — replaces the legacy batch `whisper-1`.
+ *  Same upload endpoint, far better accuracy/latency, no verbose_json (we use json). */
+export const DEFAULT_STT_MODEL = "gpt-4o-transcribe";
 
 // Minimal typings for the (non-standard) Web Speech API — enough for our use, so we
 // avoid `any`. The DOM lib doesn't ship these.
@@ -42,6 +46,8 @@ declare global {
 export interface SttOptions {
 	apiKey?: string;
 	language?: string;
+	/** Transcription model for the OpenAI provider. Defaults to {@link DEFAULT_STT_MODEL}. */
+	model?: string;
 	onResult?: (text: string, isFinal: boolean) => void;
 	onError?: (error: string) => void;
 	onEnd?: () => void;
@@ -54,6 +60,7 @@ export class VoiceStt {
 	provider: string;
 	apiKey: string;
 	language: string;
+	model: string;
 	onResult: (text: string, isFinal: boolean) => void;
 	onError: (error: string) => void;
 	onEnd: () => void;
@@ -65,6 +72,8 @@ export class VoiceStt {
 	private _stream: MediaStream | null = null;
 	/** Set by stopDiscard(): the pending recording is dropped instead of transcribed. */
 	private _discard = false;
+	/** When the current recording started — used to drop sub-threshold captures. */
+	private _recStartedAt = 0;
 
 	/** The recorder's mic stream (Whisper mode) so the audio meter can reuse it
 	 *  instead of opening a SECOND getUserMedia — a second capture mutes the recorder
@@ -77,6 +86,7 @@ export class VoiceStt {
 		this.provider = provider;
 		this.apiKey = opts.apiKey || "";
 		this.language = opts.language || "en-US";
+		this.model = opts.model || DEFAULT_STT_MODEL;
 		this.onResult = opts.onResult || (() => {});
 		this.onError = opts.onError || (() => {});
 		this.onEnd = opts.onEnd || (() => {});
@@ -205,19 +215,21 @@ export class VoiceStt {
 			mediaRec.onstop = async () => {
 				for (const t of this._stream?.getTracks() ?? []) t.stop();
 				this._stream = null;
-				// Idle recycle (stopDiscard) or an empty capture → drop it, don't transcribe.
-				if (this._discard || !chunks.length) {
+				const durationMs = this._recStartedAt ? Date.now() - this._recStartedAt : 0;
+				const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+				// Drop when: idle-recycled (stopDiscard), empty, OR too short to be real
+				// speech. Uploading a sub-0.1s clip only ever returns a 400 `audio_too_short`
+				// — the dominant Whisper error in the log — so never send it.
+				if (this._discard || !chunks.length || isTooShortToTranscribe(blob.size, durationMs)) {
 					this._discard = false;
 					this.onEnd();
 					return;
 				}
-				const blob = new Blob(chunks, {
-					type: mimeType || "audio/webm",
-				});
 				await this._transcribeWhisper(blob);
 				this.onEnd();
 			};
 			this._mediaRec = mediaRec;
+			this._recStartedAt = Date.now();
 			mediaRec.start();
 		} catch (e) {
 			this.onError(
@@ -236,7 +248,7 @@ export class VoiceStt {
 		// Whisper infers the format from the filename extension, so it MUST match the
 		// recorded container (Safari records mp4 — see whisperFilename).
 		form.append("file", blob, whisperFilename(blob.type));
-		form.append("model", "whisper-1");
+		form.append("model", this.model);
 		form.append("language", this.language.slice(0, 2));
 		try {
 			// Route via the platform proxy — it injects the user's key server-side.

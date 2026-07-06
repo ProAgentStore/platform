@@ -61,4 +61,11 @@ describe("resolveVoiceConfig — clamping", () => {
 	it("reads a nested openai voice", () => {
 		expect(resolveVoiceConfig({ openai: { voice: "shimmer" } }, true).voice).toBe("shimmer");
 	});
+
+	it("defaults STT to the real-time model, and honours a saved override", () => {
+		expect(resolveVoiceConfig({}, true).sttModel).toBe("gpt-4o-transcribe");
+		expect(resolveVoiceConfig({ sttModel: "gpt-4o-mini-transcribe" }, true).sttModel).toBe("gpt-4o-mini-transcribe");
+		// A non-string junk value falls back to the default rather than leaking through.
+		expect(resolveVoiceConfig({ sttModel: 42 }, true).sttModel).toBe("gpt-4o-transcribe");
+	});
 });

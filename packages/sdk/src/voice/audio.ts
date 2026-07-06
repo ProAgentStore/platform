@@ -44,6 +44,19 @@ export function whisperFilename(blobType: string): string {
 }
 
 /**
+ * OpenAI rejects clips under 0.1s with a 400 `audio_too_short`, and the VAD can fire
+ * on a cough or a click that records almost nothing. Anything below this floor is
+ * never real speech — dropping it BEFORE upload stops the error-log spam (and a
+ * pointless round-trip). Duration is the reliable signal; the byte floor only catches
+ * a header-only capture when the duration is unknown.
+ */
+export const MIN_TRANSCRIBE_MS = 250;
+export const MIN_TRANSCRIBE_BYTES = 512;
+export function isTooShortToTranscribe(byteLength: number, durationMs: number): boolean {
+	return durationMs < MIN_TRANSCRIBE_MS || byteLength < MIN_TRANSCRIBE_BYTES;
+}
+
+/**
  * Pull a human reason out of an upstream (OpenAI) error body. It's usually JSON
  * `{ error: { message } }`; fall back to the raw text when it isn't. Never throws.
  */
