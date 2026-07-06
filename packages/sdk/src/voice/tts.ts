@@ -1,6 +1,6 @@
 /** Text-to-Speech abstraction — browser SpeechSynthesis or OpenAI TTS */
 
-import { API, getToken } from "../client.js";
+import { API, getToken, reportClientError } from "../client.js";
 
 /**
  * Strip technical noise so TTS reads a clean, human summary.
@@ -102,6 +102,9 @@ export class VoiceTts {
 	private _speakBrowser(text: string): Promise<void> {
 		return new Promise((resolve) => {
 			if (!window.speechSynthesis) {
+				// No TTS at all in this browser — surface it so a silent "no voice reply"
+				// is visible in the log rather than a mystery.
+				reportClientError("voice-tts", "no speech synthesis available in this browser");
 				resolve();
 				return;
 			}
@@ -146,19 +149,27 @@ export class VoiceTts {
 			});
 			if (!res.ok) {
 				// Log WHY OpenAI TTS failed before degrading to the browser voice —
-				// don't silently swallow it.
+				// don't silently swallow it (now to the durable log, not just console).
 				const detail = await res.text().catch(() => "");
-				console.warn(`[tts] OpenAI TTS ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""} — falling back to browser voice`);
+				reportClientError("voice-tts", `OpenAI TTS ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""} — using browser voice`, {}, res.status);
 				return this._speakBrowser(text);
 			}
 			const arrayBuf = await res.arrayBuffer();
 			if (!arrayBuf.byteLength) {
-				console.warn("[tts] OpenAI TTS returned an empty audio body — falling back to browser voice");
+				reportClientError("voice-tts", "OpenAI TTS returned an empty audio body — using browser voice");
 				return this._speakBrowser(text);
 			}
 			if (!this._audioCtx) this._audioCtx = new AudioContext();
 			if (this._audioCtx.state === "suspended")
 				await this._audioCtx.resume();
+			// Safari/iOS won't resume a Web Audio context without a FRESH user gesture, so
+			// playing OpenAI TTS through it produces NO sound — silently. That is the most
+			// likely "replied in text but not voice". Detect it and use the browser voice
+			// (SpeechSynthesis needs no AudioContext), and surface it so it's diagnosable.
+			if (this._audioCtx.state !== "running") {
+				reportClientError("voice-tts", `AudioContext is "${this._audioCtx.state}" (Web Audio blocked) — using browser voice`);
+				return this._speakBrowser(text);
+			}
 			const audioBuf = await this._audioCtx.decodeAudioData(
 				arrayBuf.slice(0),
 			);
@@ -175,7 +186,7 @@ export class VoiceTts {
 			});
 			this._currentSource = null;
 		} catch (e) {
-			console.warn(`[tts] OpenAI TTS failed: ${e instanceof Error ? e.message : String(e)} — falling back to browser voice`);
+			reportClientError("voice-tts", `OpenAI TTS failed: ${e instanceof Error ? e.message : String(e)} — using browser voice`);
 			return this._speakBrowser(text);
 		}
 	}
