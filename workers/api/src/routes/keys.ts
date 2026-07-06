@@ -309,11 +309,18 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 			dek_wrapped: ArrayBuffer;
 			iv: ArrayBuffer;
 		}>();
-	if (!row)
-		throw new HttpError(
-			400,
-			`No ${providerId} key stored. Add it in your profile.`,
-		);
+	if (!row) {
+		// Log pre-upstream rejections too (not just upstream 4xx) so a Whisper/voice
+		// failure is visible in the error log, not only in the caller's browser.
+		await logError(c.env, {
+			source: "keys-proxy",
+			userId: session.uid,
+			status: 400,
+			message: `No ${providerId} key stored (${host}${upstreamPath})`,
+			context: { provider: providerId, host, path: upstreamPath, method: c.req.method },
+		}).catch(() => undefined);
+		throw new HttpError(400, `No ${providerId} key stored. Add it in your profile.`);
+	}
 
 	const apiKey = await decryptKey(
 		new Uint8Array(row.key_ciphertext),

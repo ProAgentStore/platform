@@ -111,25 +111,24 @@ export function useVoice(instanceId: string | undefined, opts: {
 				let sum = 0;
 				for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
 				const level = Math.min(1, Math.sqrt(sum / data.length) / 128);
-				setAudioLevel(level);
-				// Whisper VAD (push-to-talk AND conversation): Whisper has no streaming
-				// results — unlike dictation it can't auto-send on a pause — so we detect
-				// the end of a turn from the mic level ourselves. ADAPTIVE: trigger on the
-				// DROP from your speaking level rather than an absolute floor — a fixed
-				// threshold (the old > 0.05) leaves you "stuck listening" when the mic idles
-				// at or above it, so the pause is never seen. The monitor only runs while
-				// listening, so this is correct in BOTH modes.
+				const now = Date.now();
+				// Throttle the React state update to ~15fps — updating every animation frame
+				// (60fps) re-renders the whole chat page and makes it lag/"hang".
+				if (now - lastLevelSetRef.current > 66) { lastLevelSetRef.current = now; setAudioLevel(level); }
+				// Whisper VAD: Whisper has no streaming results, so we detect end-of-turn from
+				// the mic level. RELATIVE to YOUR speech (this turn's peak, no decay) — silence
+				// = the level dropping to a fraction of how loud you were. This both LISTENS
+				// (any speech clearly above the peak-fraction registers) and STOPS (a pause
+				// falls below it), independent of the mic's absolute noise floor.
 				if (sttIsWhisperRef.current && !pausedForThinkingRef.current && !mutedRef.current) {
-					const now = Date.now();
-					// Track the noise floor: instantly follow anything quieter, rise slowly
-					// (~0.018/s) so sustained speech never drags it up within a turn.
-					vadFloorRef.current = vadFloorRef.current === 0 ? level : Math.min(level, vadFloorRef.current + 0.0003);
-					// Speech = clearly above the floor. vadSensitivity (0.5–2) scales the gap:
-					// higher = more sensitive (smaller gap needed), for quiet mics.
-					const gap = 0.05 / Math.max(0.4, vadSensitivityRef.current);
-					const speakGate = Math.max(0.05, vadFloorRef.current + gap);
-					const endTurn = () => { vadVoiceSeenRef.current = false; vadFloorRef.current = 0; sttRef.current?.stop(); };
-					if (level > speakGate) {
+					vadPeakRef.current = Math.max(vadPeakRef.current, level); // loudest this turn (no decay)
+					const heardVoice = vadPeakRef.current > 0.05; // real speech, not room noise
+					// sensitivity scales the "still speaking" fraction: higher = smaller (keeps
+					// soft tails / quiet mics), lower = larger (cuts sooner in a noisy room).
+					const speakFrac = 0.35 / Math.max(0.4, vadSensitivityRef.current);
+					const speaking = level > vadPeakRef.current * speakFrac;
+					const endTurn = () => { vadVoiceSeenRef.current = false; vadPeakRef.current = 0; sttRef.current?.stop(); };
+					if (heardVoice && speaking) {
 						vadLastLoudRef.current = now;
 						if (!vadVoiceSeenRef.current) { vadVoiceSeenRef.current = true; vadTurnStartRef.current = now; }
 					} else if (vadVoiceSeenRef.current && now - vadLastLoudRef.current > silenceMsRef.current) {
@@ -164,13 +163,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const sttIsWhisperRef = useRef(false);
 	const vadVoiceSeenRef = useRef(false);
 	const vadLastLoudRef = useRef(0);
-	// Adaptive VAD: an estimate of the mic's NOISE FLOOR (drops to any quieter level
-	// instantly, rises slowly) + when the current turn started. Speech = clearly above
-	// the floor; silence = back near it. This adapts to any mic baseline — unlike a
-	// fixed threshold, which leaves a noisy mic "stuck listening".
-	const vadFloorRef = useRef(0);
+	// Adaptive VAD: the loudest level of the CURRENT turn (your speech, no decay) +
+	// when the turn started. Silence = the mic dropping to a fraction of that peak,
+	// so it works at any absolute volume/noise floor. Reset to 0 at end of turn.
+	const vadPeakRef = useRef(0);
 	const vadTurnStartRef = useRef(0);
 	const vadSensitivityRef = useRef(1);
+	const lastLevelSetRef = useRef(0);
 	// When the agent last finished speaking — used to ignore the speaker echo tail.
 	const speakEndedAtRef = useRef(0);
 	useEffect(() => {
