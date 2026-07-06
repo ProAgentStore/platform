@@ -270,7 +270,12 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 						if (!row || !env.KEY_ENCRYPTION_KEY) return true; // Gmail gone — stop polling
 						const refresh = await decryptKey(new Uint8Array(row.key_ciphertext), new Uint8Array(row.dek_wrapped), new Uint8Array(row.iv), env.KEY_ENCRYPTION_KEY);
 						const token = await mintGmailAccessToken(env, refresh);
-						const match = await findMatchingMessage(token, buildQuery({ from: fromDomain, withinDays: 1 }));
+						// Prefer a recent email FROM the ATS domain; fall back to a confirmation
+						// SUBJECT match (some ATS, e.g. Dover, relay the confirmation from the
+						// employer's own domain, so a from-only search would miss it).
+						const match =
+							(await findMatchingMessage(token, buildQuery({ from: fromDomain, withinDays: 1 }))) ??
+							(await findMatchingMessage(token, buildQuery({ subject: "application received OR application submitted OR thank you for applying OR we received your application OR your application to", withinDays: 1 })));
 						if (!match) return false;
 						await callRunner(conn, "/browser/event", { taskId, type: "job.confirmation_email", message: match.subject, data: { gmailUrl: gmailMessageUrl(match.id), subject: match.subject, from: match.from, date: match.date } }).catch(() => undefined);
 						return true;
