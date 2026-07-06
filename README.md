@@ -190,9 +190,9 @@ Public discovery pages:
 
 ### Other capabilities
 
-- **Voice hands-off** — Whisper STT (via the key proxy) with adaptive VAD + Mic Sensitivity / pause settings, plus auto-speak, in the Chat and Coding surfaces.
-- **First-class Markdown documents** in Knowledge — create/read/edit; the agent reads and updates them via chat.
-- **Observability** — browser + server errors flow to a durable log, surfaced through the MCP `list_errors` tool.
+- **Two-way voice** in the **Assistant** chat and the **Coder Co-pilot** (shared `useVoice` hook) — pick **Dictation** (browser, real-time live words) or **Whisper** (OpenAI via the key proxy, most accurate) STT; browser or OpenAI TTS with a voice/speed picker; labeled **Talk / Speak / Hands-free / Mute** controls (icon-only on mobile); a spoken **"repeat"** command; and **double-tap any voice message to replay its saved recording** (R2, per-turn). Adaptive VAD + pause/sensitivity/language settings; iOS gesture handling.
+- **First-class Markdown documents** in Knowledge — create/read/edit; the agent reads and updates them via the Assistant.
+- **Observability** — browser + server errors flow to a durable log (`client:voice*`, `keys-proxy`, `job-apply`, …) surfaced via MCP `list_errors`; a unified per-run timeline via `agent_events` + MCP `agent_trace`.
 - **Agent-configurable work board** — one board per instance; columns are declared per agent (`capabilities.boardColumns`), one card per job, with move / retry / attempts. Driven from MCP via `instance_board`. (Replaces the old two-board / "runtime board" design.)
 
 ## Part of the FreeStore ecosystem
