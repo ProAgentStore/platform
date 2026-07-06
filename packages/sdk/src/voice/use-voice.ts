@@ -126,6 +126,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 					if (decision === "end") {
 						vadStateRef.current = initVad();
 						sttRef.current?.stop();
+					} else if (decision === "idle") {
+						// Mic sat open with nothing said — recycle the silent recording (no
+						// Whisper upload, no buffer growth). Reopens via onEnd; skip the chime.
+						vadStateRef.current = initVad();
+						idleRecycleRef.current = true;
+						sttRef.current?.stopDiscard();
 					}
 				}
 				analyserRef.current.raf = requestAnimationFrame(tick);
@@ -155,6 +161,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Adaptive end-of-turn detection (pure logic in ./vad.ts — unit-tested there).
 	const vadStateRef = useRef(initVad());
 	const vadSensitivityRef = useRef(1);
+	// True while reopening the mic after an idle recycle — suppresses the "your turn"
+	// chime (there was no agent turn, so a chime every idle window would be confusing).
+	const idleRecycleRef = useRef(false);
 	const lastLevelSetRef = useRef(0);
 	// When the agent last finished speaking — used to ignore the speaker echo tail.
 	const speakEndedAtRef = useRef(0);
@@ -179,7 +188,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 			lastListenStartRef.current = Date.now();
 			startAudioMonitor();
 			setMicOn(true);
-			if (convoOnRef.current) playListeningChime();
+			if (convoOnRef.current && !idleRecycleRef.current) playListeningChime();
+			idleRecycleRef.current = false;
 		} catch {}
 	}, [startAudioMonitor]);
 
@@ -206,7 +216,6 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [ensureTts, startListening]);
 
 	const maybeSpeakResponse = useCallback((text: string) => {
-		console.log("[voice] maybeSpeakResponse, speakOn:", speakOnRef.current, "convoOn:", convoOnRef.current);
 		if (speakOnRef.current || convoOnRef.current) {
 			speakAndResume(text);
 		} else {
@@ -226,7 +235,6 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// push-to-talk path and send the turn the user just abandoned. (Cleared whenever
 		// a fresh mic session starts via toggleMic/toggleConvo.)
 		if (pausedForThinkingRef.current) return;
-		console.log("[voice]", isFinal ? "FINAL:" : "interim:", text);
 
 		// Conversation mode.
 		if (convoOnRef.current) {
@@ -279,7 +287,6 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [stopAudioMonitor]);
 
 	const makeStt = useCallback(async () => {
-		console.log("[voice] creating STT, provider will be resolved...");
 		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page
 		// reload: invalidate the SDK cache, re-read, and refresh the refs the VAD and
 		// debounce use. makeStt runs on every mic/conversation start.
@@ -311,7 +318,6 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (!convoOnRef.current) setMicOn(false);
 			},
 			onEnd: () => {
-				console.log("[voice] STT onEnd, convo:", convoOnRef.current, "paused:", pausedForThinkingRef.current);
 				if (convoOnRef.current && !pausedForThinkingRef.current) {
 					// If the recognizer just ended almost immediately after starting, we're
 					// in a failing restart loop (mic blocked / instant abort). Back off, and
@@ -335,12 +341,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 				}
 			},
 		});
-		console.log("[voice] STT created, provider:", stt.provider);
 		return stt;
 	}, [instanceId, handleResult, startListening]);
 
 	const toggleMic = useCallback(async () => {
-		console.log("[voice] toggleMic, currently:", micOn);
 		if (micOn) {
 			sttRef.current?.stop();
 			stopAudioMonitor();
@@ -360,7 +364,6 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const toggleSpeak = useCallback(() => setSpeakOn((v) => !v), []);
 
 	const toggleConvo = useCallback(async () => {
-		console.log("[voice] toggleConvo, currently:", convoOn);
 		if (convoOn) {
 			// Turn OFF synchronously: flip the ref NOW so any in-flight onEnd handler or
 			// queued restart timer sees convo is off and does NOT re-open the mic. (State

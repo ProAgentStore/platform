@@ -30,6 +30,8 @@ export class VoiceStt {
 	private _rec: any = null;
 	private _mediaRec: MediaRecorder | null = null;
 	private _stream: MediaStream | null = null;
+	/** Set by stopDiscard(): the pending recording is dropped instead of transcribed. */
+	private _discard = false;
 
 	/** The recorder's mic stream (Whisper mode) so the audio meter can reuse it
 	 *  instead of opening a SECOND getUserMedia — a second capture mutes the recorder
@@ -75,6 +77,16 @@ export class VoiceStt {
 			for (const t of this._stream.getTracks()) t.stop();
 			this._stream = null;
 		}
+	}
+
+	/** Stop the Whisper recorder but DROP the audio (no transcription). Used to
+	 *  recycle a silent recording when the mic has sat open with no speech — avoids
+	 *  uploading a long, mostly-silent blob to Whisper. Still fires onEnd so
+	 *  conversation mode reopens the mic. No-op for browser dictation. */
+	stopDiscard() {
+		if (this.provider === "browser") return this.stop();
+		this._discard = true;
+		this.stop();
 	}
 
 	private _startBrowser() {
@@ -140,6 +152,7 @@ export class VoiceStt {
 	}
 
 	private async _startRecording() {
+		this._discard = false;
 		try {
 			this._stream = await navigator.mediaDevices.getUserMedia({
 				// noiseSuppression keeps the silence floor low (so the VAD can detect a
@@ -164,7 +177,9 @@ export class VoiceStt {
 			mediaRec.onstop = async () => {
 				for (const t of this._stream?.getTracks() ?? []) t.stop();
 				this._stream = null;
-				if (!chunks.length) {
+				// Idle recycle (stopDiscard) or an empty capture → drop it, don't transcribe.
+				if (this._discard || !chunks.length) {
+					this._discard = false;
 					this.onEnd();
 					return;
 				}

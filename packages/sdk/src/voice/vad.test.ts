@@ -13,6 +13,15 @@ function feed(s: ReturnType<typeof initVad>, level: number, from: number, frames
 	return { end: false, last: now };
 }
 
+/** Like `feed` but reports which terminal decision (if any) fired. */
+function feedFor(s: ReturnType<typeof initVad>, level: number, from: number, frames: number, c: VadConfig): "end" | "idle" | null {
+	for (let i = 0; i < frames; i++) {
+		const d = vadStep(s, level, from + i * 100, c);
+		if (d) return d;
+	}
+	return null;
+}
+
 describe("vadStep", () => {
 	it("registers speech and does not end while you're talking", () => {
 		const s = initVad();
@@ -52,6 +61,31 @@ describe("vadStep", () => {
 		expect(r.end).toBe(true);
 		expect(r.last).toBeGreaterThan(5000);
 		expect(r.last).toBeLessThan(5300);
+	});
+
+	it("recycles (idle) when the mic sits open with no speech past idleMs", () => {
+		const s = initVad();
+		// 30s of near-silence (0.03, below the voice floor) → nothing said. With the idle
+		// cap it returns "idle" (recycle the silent recorder), NOT "end" (which would
+		// upload silence to Whisper).
+		const d = feedFor(s, 0.03, 0, 300, cfg({ idleMs: 15_000 }));
+		expect(d).toBe("idle");
+		expect(s.seen).toBe(false);
+	});
+
+	it("does not idle-recycle before idleMs elapses", () => {
+		const s = initVad();
+		const d = feedFor(s, 0.03, 0, 100, cfg({ idleMs: 15_000 })); // 10s of silence < 15s
+		expect(d).toBe(null);
+	});
+
+	it("prefers a real end over idle once speech has been heard", () => {
+		const s = initVad();
+		feed(s, 0.3, 0, 6, cfg({ silenceMs: 1000, idleMs: 2000 })); // speak → seen
+		// Now go quiet. Even though idleMs is short, `seen` routes us through the
+		// speech-pause path → "end", never "idle".
+		expect(vadStep(s, 0.02, 700, cfg({ silenceMs: 1000, idleMs: 2000 }))).toBe(null);
+		expect(vadStep(s, 0.02, 1700, cfg({ silenceMs: 1000, idleMs: 2000 }))).toBe("end");
 	});
 
 	it("sensitivity keeps a soft tail alive that lower sensitivity would cut", () => {

@@ -14,14 +14,14 @@ export interface VadState {
 	peak: number;
 	/** Timestamp (ms) speech was last heard. */
 	lastLoud: number;
-	/** Timestamp (ms) the current turn started. */
+	/** Timestamp (ms) the current turn started (first frame). `-1` until set. */
 	turnStart: number;
 	/** Has genuine speech (not room noise) been heard this turn? */
 	seen: boolean;
 }
 
 export function initVad(): VadState {
-	return { peak: 0, lastLoud: 0, turnStart: 0, seen: false };
+	return { peak: 0, lastLoud: 0, turnStart: -1, seen: false };
 }
 
 export interface VadConfig {
@@ -30,18 +30,26 @@ export interface VadConfig {
 	/** Mic sensitivity (0.4–2): higher keeps softer tails / quiet mics; lower cuts
 	 *  sooner (noisy rooms). */
 	sensitivity: number;
-	/** Hard cap (ms) so a turn can never hang forever. Default 25s. */
+	/** Hard cap (ms) so a spoken turn can never hang forever. Default 25s. */
 	maxTurnMs?: number;
+	/** No-speech cap (ms): if the mic sits open and NOTHING is said, recycle the
+	 *  (silent) recording after this long so its buffer can't grow unbounded while
+	 *  you think — otherwise a long pause before replying uploads a huge mostly-silent
+	 *  blob to Whisper (slow). Default 15s. */
+	idleMs?: number;
 }
 
 /** Minimum peak to count as real speech rather than room noise. */
 const VOICE_FLOOR = 0.05;
 
 /**
- * Advance the VAD by one audio frame (mutates `s`). Returns `"end"` when the turn
- * should stop (→ transcribe + send), else `null`.
+ * Advance the VAD by one audio frame (mutates `s`). Returns:
+ *  - `"end"`  — real speech finished (→ stop, transcribe, send)
+ *  - `"idle"` — mic open but nothing said for `idleMs` (→ discard + recycle)
+ *  - `null`   — keep listening
  */
-export function vadStep(s: VadState, level: number, now: number, cfg: VadConfig): "end" | null {
+export function vadStep(s: VadState, level: number, now: number, cfg: VadConfig): "end" | "idle" | null {
+	if (s.turnStart < 0) s.turnStart = now; // first frame of this listen
 	s.peak = Math.max(s.peak, level);
 	const heardVoice = s.peak > VOICE_FLOOR;
 	// Fraction of your peak that still counts as "speaking" — smaller = more forgiving.
@@ -49,9 +57,14 @@ export function vadStep(s: VadState, level: number, now: number, cfg: VadConfig)
 	const speaking = level > s.peak * speakFrac;
 	if (heardVoice && speaking) {
 		s.lastLoud = now;
-		if (!s.seen) { s.seen = true; s.turnStart = now; }
+		if (!s.seen) s.seen = true;
 	}
-	if (!s.seen) return null; // no real speech yet — nothing to end
+	if (!s.seen) {
+		// Nothing said yet — recycle the silent recorder after idleMs (no Whisper
+		// upload) so a long think before replying can't grow the buffer without bound.
+		if (now - s.turnStart > (cfg.idleMs ?? 15_000)) return "idle";
+		return null;
+	}
 	if (now - s.lastLoud > cfg.silenceMs) return "end"; // a real pause
 	// Safety cap — applies even while still "speaking", so a stuck-loud mic (or a
 	// very long monologue) can never hang the turn forever.
