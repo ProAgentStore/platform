@@ -526,8 +526,15 @@ export function registerInstanceTools(
 			if (!sessionToken) return authRequired();
 			// The API (lib/board.ts) is the single source of the board shape — one card
 			// per job, configured columns, human status overrides. Fetch it and group
-			// the flat items by column for a readable answer.
-			const data = await authedCall(`/v1/instances/${instance_id}/board`, sessionToken, {}, env).catch(() => ({}));
+			// the flat items by column for a readable answer. Surface a real failure
+			// instead of returning an empty board (which reads as "no jobs").
+			let data: unknown;
+			try {
+				data = await authedCall(`/v1/instances/${instance_id}/board`, sessionToken, {}, env);
+			} catch (e) {
+				return jsonText({ error: `board unavailable: ${e instanceof Error ? e.message : String(e)}` });
+			}
+			if (isRec(data) && data.error) return jsonText({ error: data.error });
 			return jsonText(groupBoard(data));
 		},
 	);
@@ -973,7 +980,7 @@ interface BoardColumn { id: string; title: string; statuses?: string[]; catchAll
 interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string }
 
 function columnFor(cols: BoardColumn[], status: string): string | null {
-	for (const c of cols) if (c.statuses?.includes(status)) return c.id;
+	for (const c of cols) if (c.statuses?.includes(status) || c.id === status) return c.id;
 	const catchAll = cols.find((c) => c.catchAll);
 	return catchAll ? catchAll.id : null;
 }
@@ -1006,10 +1013,12 @@ function groupBoard(data: unknown): unknown {
 		(board[title] ||= []).push(card);
 	}
 	if (other.length) board.Other = other;
+	const truncated = isRec(data) && data.truncated === true;
 	return {
 		columns: cols.map((c) => c.title),
 		board,
 		jobCount: items.length,
+		...(truncated ? { truncated: true, truncatedNote: "Only the most recent runtime tasks were read — some older jobs may be missing." } : {}),
 		note: "One card per job (retries of the same job collapse into one; `attempts` = run count). `moved:true` means a human set the status. Failed = the run couldn't finish; Blocked = the agent stopped needing you.",
 	};
 }

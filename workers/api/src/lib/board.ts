@@ -38,7 +38,12 @@ export interface BoardItemView {
 export interface InstanceBoard {
 	columns: BoardColumn[];
 	items: BoardItemView[];
+	/** True when the runtime-task window was hit — older jobs may be missing. */
+	truncated: boolean;
 }
+
+/** How many recent runtime tasks the board reads before grouping into jobs. */
+const BOARD_TASK_LIMIT = 1000;
 
 interface RawTask {
 	id?: string;
@@ -83,13 +88,30 @@ export function deriveFromUrl(url: string): { title: string; subtitle: string } 
 	return { title: pretty || host, subtitle: pretty ? host : "" };
 }
 
+// Marketing/tracking query params that don't identify the job — dropped from the
+// job key so two retries of the SAME job (differing only by tracking) collapse
+// into one card. Everything else in the query is KEPT, because some ATS put the
+// job identity in the query (LinkedIn currentJobId, Greenhouse gh_jid, …) and
+// dropping it wholesale would merge DISTINCT jobs into one card.
+const TRACKING_PARAMS = new Set([
+	"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+	"source", "src", "ref", "referrer", "applysourceoverride", "gh_src",
+	"trk", "trackingid", "recommendedflavor", "lipi", "originalsubdomain",
+]);
+
 /** A stable per-job key: the normalized job URL, else the task id (its own card). */
 export function jobKeyForTask(task: RawTask): string {
 	const url = typeof task.input?.url === "string" ? task.input.url : "";
 	if (url) {
 		try {
 			const u = new URL(url);
-			return `${u.hostname.replace(/^www\./, "")}${u.pathname.replace(/\/+$/, "")}`.toLowerCase();
+			// Keep identifying query params (sorted for stability); drop tracking noise.
+			const kept = [...u.searchParams.entries()]
+				.filter(([k]) => !TRACKING_PARAMS.has(k.toLowerCase()))
+				.map(([k, v]) => `${k.toLowerCase()}=${v}`)
+				.sort();
+			const path = `${u.hostname.replace(/^www\./, "")}${u.pathname.replace(/\/+$/, "")}`.toLowerCase();
+			return kept.length ? `${path}?${kept.join("&")}` : path;
 		} catch { /* not a URL */ }
 	}
 	return String(task.id ?? "");
@@ -126,7 +148,7 @@ function stamp(task: RawTask): number {
 }
 
 /** Resolve the agent's declared board columns for an instance (per-surface default). */
-async function columnsForInstance(env: Env, instanceId: string, userId: string): Promise<BoardColumn[]> {
+export async function columnsForInstance(env: Env, instanceId: string, userId: string): Promise<BoardColumn[]> {
 	const row = await env.DB.prepare(
 		`SELECT a.slug AS slug, a.category AS category, a.config AS config
      FROM agent_instances i JOIN agents a ON a.id = i.agent_id
@@ -138,7 +160,7 @@ async function columnsForInstance(env: Env, instanceId: string, userId: string):
 /** Build the instance's single work board: configured columns + one card per job. */
 export async function buildInstanceBoard(env: Env, instanceId: string, userId: string): Promise<InstanceBoard> {
 	const [tasks, overlayRows, columns] = await Promise.all([
-		mirroredRuntimeTasks(env, instanceId, userId),
+		mirroredRuntimeTasks(env, instanceId, userId, BOARD_TASK_LIMIT),
 		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
 			.all<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>(),
@@ -202,7 +224,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 
 	items.sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
 
-	return { columns, items };
+	return { columns, items, truncated: tasks.length >= BOARD_TASK_LIMIT };
 }
 
 /** Snapshot fields so a moved card can stand alone once its runs are gone. */
@@ -237,7 +259,7 @@ export async function setBoardItemStatus(
        url = excluded.url,
        updated_at = excluded.updated_at`,
 	)
-		.bind(instanceId, userId, jobKey, status.slice(0, 80), (meta.title ?? "").slice(0, 300), (meta.subtitle ?? "").slice(0, 300), (meta.url ?? "").slice(0, 1000))
+		.bind(instanceId, userId, jobKey.slice(0, 400), status.slice(0, 80), (meta.title ?? "").slice(0, 300), (meta.subtitle ?? "").slice(0, 300), (meta.url ?? "").slice(0, 1000))
 		.run();
 }
 
@@ -248,11 +270,20 @@ export async function deleteBoardItem(env: Env, instanceId: string, userId: stri
 		.run();
 }
 
+/**
+ * The one terminal-status set shared across the clear-finished path. Deliberately
+ * EXCLUDES `blocked` (needs-you, kept active) and the human pipeline stages
+ * `interview`/`offer`/`accepted`/`rejected` (a card the user is tracking must not
+ * be wiped by a bulk clear). Keep this in sync with the console's finished set.
+ */
+export const FINISHED_STATUSES = ["completed", "submitted", "failed", "cancelled", "expired"];
+
 /** Remove durable board-item rows whose human status is terminal (Clear finished). */
 export async function clearFinishedBoardItems(env: Env, instanceId: string, userId: string): Promise<void> {
+	const placeholders = FINISHED_STATUSES.map((_, i) => `?${i + 3}`).join(", ");
 	await env.DB.prepare(
-		"DELETE FROM board_items WHERE instance_id = ?1 AND user_id = ?2 AND user_status IN ('failed','blocked','completed','submitted','rejected','cancelled','expired')",
+		`DELETE FROM board_items WHERE instance_id = ?1 AND user_id = ?2 AND user_status IN (${placeholders})`,
 	)
-		.bind(instanceId, userId)
+		.bind(instanceId, userId, ...FINISHED_STATUSES)
 		.run();
 }

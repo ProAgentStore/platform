@@ -41,21 +41,31 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	const [items, setItems] = useState<BoardItem[]>([]);
 	const [serverCols, setServerCols] = useState<BoardColumn[] | null>(null);
 	const [expanded, setExpanded] = useState<string | null>(null);
+	const [truncated, setTruncated] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+	const [retrying, setRetrying] = useState<Set<string>>(new Set());
 
 	const cols = serverCols && serverCols.length ? serverCols : (columns && columns.length ? columns : GENERIC_COLUMNS);
 
 	const loadBoard = useCallback(async () => {
 		try {
-			const data = await api<{ columns?: BoardColumn[]; items?: BoardItem[] }>(`/v1/instances/${instanceId}/board`);
+			const data = await api<{ columns?: BoardColumn[]; items?: BoardItem[]; truncated?: boolean }>(`/v1/instances/${instanceId}/board`);
 			setItems(data.items || []);
 			if (data.columns?.length) setServerCols(data.columns);
-		} catch {}
+			setTruncated(data.truncated === true);
+			setError(null);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "Couldn't load the board");
+		}
 	}, [instanceId]);
 
 	useEffect(() => { loadBoard(); }, [loadBoard]);
 	usePolling(loadBoard, 2500);
 
-	const finishedStatuses = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"];
+	// Bulk-clearable = terminal automation outcomes. Deliberately excludes `blocked`
+	// (needs you) and human pipeline stages (interview/offer/rejected) — mirrors the
+	// server's FINISHED_STATUSES so the count matches what Clear finished removes.
+	const finishedStatuses = ["completed", "submitted", "failed", "cancelled", "expired"];
 	const finishedCount = items.filter((it) => finishedStatuses.includes(it.status)).length;
 
 	// Assign each job to exactly one column; unmatched jobs fall into a trailing
@@ -85,7 +95,8 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	// Re-run a job (apply agents): kick off a fresh application for the same URL.
 	// The new run shows up as this job's newest attempt on the next poll.
 	const handleRetry = async (item: BoardItem) => {
-		if (!item.url) return;
+		if (!item.url || retrying.has(item.jobKey)) return; // guard double-fire (single-flight)
+		setRetrying((s) => new Set(s).add(item.jobKey));
 		try {
 			await api(`/v1/instances/${instanceId}/apply`, { method: "POST", body: JSON.stringify({ url: item.url }) });
 			loadBoard();
@@ -93,6 +104,8 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 			// startJobApply rejects with a clear message: single-flight (409), no runner,
 			// no résumé/profile — surface it so the user knows what to fix.
 			alert(e instanceof Error ? e.message : String(e));
+		} finally {
+			setRetrying((s) => { const n = new Set(s); n.delete(item.jobKey); return n; });
 		}
 	};
 
@@ -146,6 +159,17 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 				</div>
 			</div>
 
+			{error && (
+				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-red/10 border border-red/30 text-red">
+					Couldn't refresh the board: {error}
+				</div>
+			)}
+			{truncated && (
+				<div className="mb-3 text-xs px-3 py-2 rounded-lg bg-yellow/10 border border-yellow/30 text-yellow">
+					Showing your most recent jobs — some older jobs are hidden.
+				</div>
+			)}
+
 			<div className="grid grid-cols-[repeat(auto-fit,minmax(210px,1fr))] gap-3 items-start mb-4">
 				{renderCols.map((col) => {
 					const colItems = col.id === "__other" ? other : (byColumn.get(col.id) ?? []);
@@ -172,6 +196,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 											onOpen={(taskId) => taskId && navigate(`/instances/${instanceId}/tasks/${taskId}`)}
 											onMove={(status) => setStatus(item, status)}
 											onRetry={apply && item.url && ["failed", "blocked"].includes(item.status) ? () => handleRetry(item) : undefined}
+											retrying={retrying.has(item.jobKey)}
 											onDelete={() => handleDeleteItem(item)}
 										/>
 									))
@@ -185,7 +210,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRetry, onDelete }: {
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRetry, retrying, onDelete }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -193,6 +218,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRe
 	onOpen: (taskId: string) => void;
 	onMove: (status: string) => void;
 	onRetry?: () => void;
+	retrying?: boolean;
 	onDelete: () => void;
 }) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
@@ -228,11 +254,12 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRe
 				{onRetry && (
 					<button
 						type="button"
+						disabled={retrying}
 						onClick={(e) => { e.stopPropagation(); onRetry(); }}
-						className="text-[0.7rem] px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold"
+						className="text-[0.7rem] px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold disabled:opacity-40"
 						title="Re-run this application"
 					>
-						↻ Retry
+						{retrying ? "↻ Retrying…" : "↻ Retry"}
 					</button>
 				)}
 				{/* Move to any column (pipeline stages the automation never sets). */}
@@ -280,7 +307,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRe
 
 /** Which column an item's status belongs to: first matching `statuses`, else catchAll. */
 function columnFor(cols: BoardColumn[], status: string): string | null {
-	for (const c of cols) if (c.statuses?.includes(status)) return c.id;
+	for (const c of cols) if (c.statuses?.includes(status) || c.id === status) return c.id;
 	const catchAll = cols.find((c) => c.catchAll);
 	return catchAll ? catchAll.id : null;
 }

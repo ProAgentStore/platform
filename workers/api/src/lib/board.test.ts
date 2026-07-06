@@ -20,6 +20,18 @@ describe("jobKeyForTask", () => {
 		expect(a).not.toBe(b);
 	});
 
+	it("keeps distinct jobs whose identity lives in the query string (LinkedIn currentJobId)", () => {
+		const a = jobKeyForTask({ id: "t1", input: { url: "https://www.linkedin.com/jobs/view/?currentJobId=111" } });
+		const b = jobKeyForTask({ id: "t2", input: { url: "https://www.linkedin.com/jobs/view/?currentJobId=222" } });
+		expect(a).not.toBe(b);
+	});
+
+	it("still collapses the same query-identified job across tracking params", () => {
+		const a = jobKeyForTask({ id: "t1", input: { url: "https://boards.greenhouse.io/x?gh_jid=9&utm_source=linkedin" } });
+		const b = jobKeyForTask({ id: "t2", input: { url: "https://boards.greenhouse.io/x?gh_jid=9&utm_source=indeed&ref=foo" } });
+		expect(a).toBe(b);
+	});
+
 	it("falls back to the task id when there is no URL", () => {
 		expect(jobKeyForTask({ id: "t9" })).toBe("t9");
 		expect(jobKeyForTask({ id: "t9", input: { url: "not a url" } })).toBe("t9");

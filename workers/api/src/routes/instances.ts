@@ -3,7 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
-import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems } from "../lib/board.js";
+import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, columnsForInstance } from "../lib/board.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
@@ -490,9 +490,17 @@ instanceRoutes.post("/:instanceId/board/status", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-	const jobKey = typeof body.jobKey === "string" ? body.jobKey : "";
+	const jobKey = (typeof body.jobKey === "string" ? body.jobKey : "").slice(0, 400);
 	if (!jobKey) return c.json({ error: "jobKey required" }, 400);
 	const status = typeof body.status === "string" ? body.status.trim() : "";
+	// Validate a move against the agent's actual columns — reject an unknown status
+	// instead of silently parking the card in "Other". Empty = reset to automation.
+	if (status) {
+		const cols = await columnsForInstance(c.env, instanceId, session.uid);
+		const valid = new Set<string>();
+		for (const col of cols) { valid.add(col.id); for (const s of col.statuses ?? []) valid.add(s); }
+		if (!valid.has(status)) return c.json({ error: `unknown board status: ${status}` }, 400);
+	}
 	// Snapshot the display fields so a moved card survives its runs being cleared.
 	const meta = {
 		title: typeof body.title === "string" ? body.title : "",
@@ -581,8 +589,8 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/hint", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const hint = String(body.hint ?? "").trim().slice(0, 2000);
 	if (!hint) return c.json({ error: "hint required" }, 400);
-	await c.env.DB.prepare("UPDATE instance_runtime_tasks SET user_hint = ?1 WHERE id = ?2 AND user_id = ?3")
-		.bind(hint, taskId, session.uid)
+	await c.env.DB.prepare("UPDATE instance_runtime_tasks SET user_hint = ?1 WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4")
+		.bind(hint, taskId, instanceId, session.uid)
 		.run();
 	return c.json({ ok: true });
 });

@@ -41,4 +41,17 @@ describe("RunnerStore.expireInFlightTasks", () => {
 		// A brand-new store reading the same file sees the failed state.
 		expect(new RunnerStore(dir).getTask("a")?.status).toBe("failed");
 	});
+
+	it("never expires a live job.apply_agent task (durable workflow owns it)", () => {
+		const store = new RunnerStore(dir);
+		const apply: RunnerTask = { id: "j", type: "job.apply_agent", status: "running", input: {}, requiresApproval: false, createdAt: "", updatedAt: "" };
+		store.putTask(apply);
+		store.putTask(task("b", "running"));
+
+		const expired = store.expireInFlightTasks();
+
+		expect(expired).toBe(1); // only the generic task
+		expect(store.getTask("j")?.status).toBe("running"); // apply survives a runner restart
+		expect(store.getTask("b")?.status).toBe("failed");
+	});
 });

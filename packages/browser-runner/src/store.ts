@@ -59,6 +59,13 @@ export class RunnerStore {
 		const now = new Date().toISOString();
 		let expired = 0;
 		for (const task of data.tasks) {
+			// Job-application tasks are driven by a DURABLE Cloudflare Workflow, not this
+			// runner process — they survive a runner restart (relay reconnect / crash) and
+			// the workflow owns their lifecycle. Expiring them here would flip a LIVE apply
+			// to "failed", which re-mirrors to the board, resurrects the Retry button, and
+			// slips past the API single-flight guard → a second concurrent apply on the one
+			// browser page. Mirrors the API carve-out in expireOrphanedRuntimeTasks.
+			if (task.type === "job.apply_agent") continue;
 			if (task.status === "needs_human" || task.status === "running") {
 				task.status = "failed";
 				task.error =
