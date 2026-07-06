@@ -465,24 +465,30 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("Mock assistant reply")).toBeVisible();
 	});
 
-	test("instance chat has voice controls with correct tooltips", async ({
+	test("instance chat has labeled voice controls with descriptive tooltips", async ({
 		page,
 	}) => {
 		await mockSignedInConsole(page);
 		await page.goto("/console/instances/inst-1");
 
-		// All three voice buttons should be present with descriptive tooltips
-		const mic = page.getByTitle("Push to talk");
-		const speak = page.getByTitle("Auto-speak");
-		const convo = page.getByTitle(/Hands-free voice/);
+		// The three voice buttons carry VISIBLE labels (icon-only was ambiguous — two
+		// mic-like glyphs) plus a plain-language tooltip explaining each.
+		const talk = page.getByTitle(/^Talk:/);
+		const speak = page.getByTitle(/^Speak replies:/);
+		const convo = page.getByTitle(/^Hands-free:/);
 		const copy = page.getByTitle("Copy JSON");
 		const clear = page.getByTitle("Clear");
 
-		await expect(mic).toBeVisible();
+		await expect(talk).toBeVisible();
 		await expect(speak).toBeVisible();
 		await expect(convo).toBeVisible();
 		await expect(copy).toBeVisible();
 		await expect(clear).toBeVisible();
+
+		// Labels are the whole point of the fix — assert they're rendered.
+		await expect(talk).toContainText("Talk");
+		await expect(speak).toContainText("Speak");
+		await expect(convo).toContainText("Hands-free");
 	});
 
 	test("instance chat load more button appears with many messages", async ({
