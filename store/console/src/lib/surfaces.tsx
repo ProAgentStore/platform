@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { CodingTab } from "@proagentstore/coder-web";
-import ApplyTab from "../tabs/ApplyTab";
 import BoardTab from "../tabs/BoardTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
@@ -54,11 +53,11 @@ export const SURFACES: SurfaceDef[] = [
 		id: "apply",
 		label: "Apply",
 		icon: "📮",
-		// The job-application agent's board surface (one work board; a deep link to a
-		// single application record still opens its rich detail via ApplyTab).
+		// The job-application agent's single work board (one card per job, Retry, move,
+		// attempts drill-down). The old applications-records detail page was retired.
 		show: (s) => s.includes("apply"),
 		scroll: true,
-		render: ({ instanceId, sessionId, boardColumns }) => <ApplyTab instanceId={instanceId} recordId={sessionId} columns={boardColumns} />,
+		render: ({ instanceId, boardColumns }) => <BoardTab instanceId={instanceId} columns={boardColumns} apply />,
 	},
 	{
 		id: "board",

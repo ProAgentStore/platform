@@ -118,17 +118,6 @@ export interface Credential {
 	createdAt?: string;
 }
 
-export interface AppRecord {
-	id: string;
-	company?: string;
-	role?: string;
-	status?: string;
-	url?: string;
-	data?: Record<string, unknown>;
-	createdAt?: string;
-	updatedAt?: string;
-}
-
 export interface Notification {
 	id: string;
 	type: string;
