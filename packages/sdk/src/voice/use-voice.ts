@@ -125,6 +125,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 					const decision = vadStep(vadStateRef.current, level, now, { silenceMs: silenceMsRef.current, sensitivity: vadSensitivityRef.current });
 					if (decision === "end") {
 						vadStateRef.current = initVad();
+						// Whisper has no streaming results, so nothing shows between your pause
+						// and the transcript landing (~1-2s). Fill that gap so it's clearly
+						// working, not stuck. Cleared when the result/onError arrives.
+						setInterim("Transcribing…");
 						sttRef.current?.stop();
 					} else if (decision === "idle") {
 						// Mic sat open with nothing said — recycle the silent recording (no
