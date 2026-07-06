@@ -50,20 +50,20 @@ export default function CopilotView({
 			{voice.interim && (
 				<div className="px-3 py-1.5 shrink-0 text-sm text-accent font-semibold border-b border-line bg-accent-soft/40 truncate">🎙 {voice.interim}</div>
 			)}
-			{/* Controls bar — larger tap targets */}
-			<div className="flex gap-1.5 px-2 py-1.5 shrink-0 items-center">
-				<button type="button" onClick={voice.toggleMic} title="Push to talk" className={`px-2.5 py-2 border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-					<Mic size={17} />
+			{/* Controls bar — labeled voice buttons (icon-only was ambiguous: two mic-like glyphs) */}
+			<div className="flex flex-wrap gap-1.5 px-2 py-1.5 shrink-0 items-center">
+				<button type="button" onClick={voice.toggleMic} title="Talk: tap once, speak, and it sends when you pause (one at a time)" className={`flex items-center gap-1.5 px-2.5 py-2 border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+					<Mic size={16} /><span className="text-xs font-semibold">Talk</span>
 				</button>
-				<button type="button" onClick={voice.toggleSpeak} title="Auto-speak" className={`px-2.5 py-2 border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-					<Volume2 size={17} />
+				<button type="button" onClick={voice.toggleSpeak} title="Speak replies: read every agent reply aloud (doesn't listen)" className={`flex items-center gap-1.5 px-2.5 py-2 border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+					<Volume2 size={16} /><span className="text-xs font-semibold">Speak</span>
 				</button>
-				<button type="button" onClick={voice.toggleConvo} title="Hands-free voice" className={`px-2.5 py-2 border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green/15 text-green" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-					<AudioLines size={17} />
+				<button type="button" onClick={voice.toggleConvo} title="Hands-free: continuous conversation — you talk, it replies aloud, then listens again" className={`flex items-center gap-1.5 px-2.5 py-2 border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+					<AudioLines size={16} /><span className="text-xs font-semibold">Hands-free</span>
 				</button>
 				{voice.convoOn && (
-					<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute" : "Mute"} className={`px-2.5 py-2 border rounded-lg transition-colors ${voice.muted ? "border-red bg-red/15 text-red" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-						<MicOff size={17} />
+					<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-2 border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+						<MicOff size={16} /><span className="text-xs font-semibold">{voice.muted ? "Muted" : "Mute"}</span>
 					</button>
 				)}
 				{loop.loopOn ? (

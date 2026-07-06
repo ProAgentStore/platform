@@ -48,7 +48,7 @@ export interface SurfaceDef {
 }
 
 export const SURFACES: SurfaceDef[] = [
-	{ id: "chat", label: "Chat", icon: "💬", show: () => true },
+	{ id: "chat", label: "Assistant", icon: "💬", show: () => true },
 	{
 		id: "apply",
 		label: "Apply",

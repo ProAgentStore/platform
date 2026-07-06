@@ -496,7 +496,7 @@ export default function InstanceDetail() {
 									>
 										<button type="button" onClick={(e) => { e.stopPropagation(); copyMsgText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
 										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatTime(m.createdAt)}</span>}</div>}
-										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Chat</span>{m.createdAt && <span className="font-normal text-muted">{formatTime(m.createdAt)}</span>}</div>}
+										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Assistant</span>{m.createdAt && <span className="font-normal text-muted">{formatTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 										) : (
