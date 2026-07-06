@@ -16,5 +16,5 @@ export default function ApplyTab({ instanceId, recordId, columns }: { instanceId
 		return <ApplicationDetail instanceId={instanceId} recordId={recordId} onBack={() => navigate(`/instances/${instanceId}/apply`)} />;
 	}
 
-	return <BoardTab instanceId={instanceId} columns={columns} />;
+	return <BoardTab instanceId={instanceId} columns={columns} apply />;
 }

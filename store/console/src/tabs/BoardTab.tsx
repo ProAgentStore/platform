@@ -36,7 +36,7 @@ interface BoardItem {
 	updatedAt: string;
 }
 
-export default function BoardTab({ instanceId, columns }: { instanceId: string; columns?: BoardColumn[] }) {
+export default function BoardTab({ instanceId, columns, apply }: { instanceId: string; columns?: BoardColumn[]; apply?: boolean }) {
 	const navigate = useNavigate();
 	const [items, setItems] = useState<BoardItem[]>([]);
 	const [serverCols, setServerCols] = useState<BoardColumn[] | null>(null);
@@ -78,6 +78,20 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 			});
 			loadBoard();
 		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	// Re-run a job (apply agents): kick off a fresh application for the same URL.
+	// The new run shows up as this job's newest attempt on the next poll.
+	const handleRetry = async (item: BoardItem) => {
+		if (!item.url) return;
+		try {
+			await api(`/v1/instances/${instanceId}/apply`, { method: "POST", body: JSON.stringify({ url: item.url }) });
+			loadBoard();
+		} catch (e) {
+			// startJobApply rejects with a clear message: single-flight (409), no runner,
+			// no résumé/profile — surface it so the user knows what to fix.
 			alert(e instanceof Error ? e.message : String(e));
 		}
 	};
@@ -157,6 +171,7 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 											onToggleAttempts={() => setExpanded(expanded === item.jobKey ? null : item.jobKey)}
 											onOpen={(taskId) => taskId && navigate(`/instances/${instanceId}/tasks/${taskId}`)}
 											onMove={(status) => setStatus(item, status)}
+											onRetry={apply && item.url && ["failed", "blocked"].includes(item.status) ? () => handleRetry(item) : undefined}
 											onDelete={() => handleDeleteItem(item)}
 										/>
 									))
@@ -170,13 +185,14 @@ export default function BoardTab({ instanceId, columns }: { instanceId: string; 
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onDelete }: {
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRetry, onDelete }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
 	onToggleAttempts: () => void;
 	onOpen: (taskId: string) => void;
 	onMove: (status: string) => void;
+	onRetry?: () => void;
 	onDelete: () => void;
 }) {
 	const isFinished = ["completed", "cancelled", "failed", "blocked", "expired", "rejected"].includes(item.status);
@@ -209,6 +225,16 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onDe
 			</button>
 
 			<div className="flex items-center gap-2 mt-2 pt-2 border-t border-line/60">
+				{onRetry && (
+					<button
+						type="button"
+						onClick={(e) => { e.stopPropagation(); onRetry(); }}
+						className="text-[0.7rem] px-2 py-1 rounded border border-line text-accent hover:bg-accent/10 font-bold"
+						title="Re-run this application"
+					>
+						↻ Retry
+					</button>
+				)}
 				{/* Move to any column (pipeline stages the automation never sets). */}
 				<select
 					value={selectValue}
