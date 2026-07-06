@@ -161,6 +161,7 @@ Creator tools:
 - `scaffold_agent`
 - `update_agent`
 - `my_agents`
+- `list_agent_repo_files`
 - `list_agent_files`
 - `read_agent_file`
 - `write_agent_file`
@@ -200,8 +201,32 @@ Browser/runtime tools:
 - `approve_instance_task`
 - `cancel_instance_task`
 - `instance_task_events`
+- `instance_board`
 
-Browser-capable agents use PAGS as the control-plane brain and FAGS as the browser runtime/tool executor. Current shipped local mode is `pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless`, which starts the FAGS runtime, opens a Cloudflare Tunnel endpoint, registers it with PAGS, and keeps it alive. The cheapest best-practice target is outbound FAGS polling to PAGS so the user's machine does not expose a public endpoint; tunnel mode should remain fallback/debug.
+Job-apply tools:
+
+- `apply_to_job`
+- `upload_resume`
+- `get_profile`
+
+Repo Chat tools:
+
+- `ingest_repo`
+- `ingest_repo_status`
+- `remove_repo`
+
+Coding (Coder) tools:
+
+- `coding_loop_start`
+- `coding_loop_status`
+- `coding_loop_stop`
+
+Observability tools:
+
+- `list_errors`
+- `mcp_audit_log`
+
+Browser-capable agents split into a control-plane brain and local hands. The brain is a durable Cloudflare Workflow that runs on PAGS using the caller's BYOK Claude; the hands are the local ProAgentStore browser runtime — real Chrome via Playwright, driven by an ARIA snapshot + act loop (act by role and accessible name, no CSS selectors). Start the runtime with `pags up`: it connects outbound over a WebSocket relay by default (no tunnel binary, nothing public exposed) and multiplexes every one of your agents through one runner. Cloudflare Tunnel (`pags up --tunnel quick|named`) is a legacy/optional connectivity path. The job-apply brain fills and submits real applications and pauses for exactly one of three human handoffs — captcha, stuck, or needs_input — all resolved in a single live browser takeover, backed by a per-ATS learned-tips cache and "Open in Gmail" confirmation-email links.
 
 ## Capability Manifest
 

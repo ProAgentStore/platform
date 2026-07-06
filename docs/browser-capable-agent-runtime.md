@@ -1,3 +1,5 @@
+> **Historical planning doc — superseded; see the internal KB `docs/stores/pags.md` for the shipped state.**
+
 # FAGS Browser Runtime For PAGS Agents
 
 ProAgentStore needs a runtime model for agents that can drive a real browser. That browser runtime is FAGS/FreeAgentStore, not PAGS. PAGS remains the marketplace, account, MCP, and orchestration control plane. FAGS owns the browser execution substrate.

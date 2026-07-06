@@ -1,3 +1,5 @@
+> **Historical planning doc — superseded; see the internal KB `docs/stores/pags.md` for the shipped state.**
+
 # PAGS Stop Point - 2026-06-29
 
 ## Current State

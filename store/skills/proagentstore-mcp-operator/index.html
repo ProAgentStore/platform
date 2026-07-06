@@ -128,9 +128,9 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
     <pre>list_agents -> chat_with_agent</pre>
     <p>Use private instance chat for durable user work:</p>
     <pre>list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages</pre>
-    <p>Use FAGS runtime tools for browser-capable private instances:</p>
+    <p>Use browser-runtime tools for browser-capable private instances:</p>
     <pre>subscribe_agent -> register_instance_runtime -> instance_runtime_status -> run_instance_task -> approve_instance_task -> instance_task_events</pre>
-    <p>PAGS is the MCP/account control plane. FAGS is the browser runtime for Playwright, local file uploads, screenshots, and approval-gated browser actions.</p>
+    <p>The ProAgentStore browser runtime (your local runner via `pags up`) handles Playwright, local file uploads, screenshots, and approval-gated browser actions; PAGS is the MCP/account control plane.</p>
 
     <h2>Required MCP tools</h2>
     <ul>

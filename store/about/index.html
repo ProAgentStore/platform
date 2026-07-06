@@ -86,7 +86,7 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
     <h1>About ProAgentStore</h1>
 
     <p class="highlight" style="font-size:1.15rem;line-height:1.6">
-      ProAgentStore is a <strong>marketplace for server-powered AI agents</strong>. Creators build agent templates — identity, knowledge base, guardrails, tools. Clients subscribe and run them on their own documents and data. Every agent runs on Cloudflare's edge: Workers AI for inference, Durable Objects for state, D1 for databases, R2 for storage.
+      ProAgentStore is a <strong>marketplace for server-powered AI agents that do real work</strong> — apply to jobs in a real browser, code in your GitHub repos, chat with any codebase, monitor sites. Creators build agent templates — identity, knowledge base, guardrails, tools. Clients subscribe and run them on their own documents and data. Every agent runs on Cloudflare's edge: Workers AI for inference, Durable Objects for state, D1 for databases, R2 for storage.
     </p>
 
     <h2>How it works</h2>
@@ -109,7 +109,7 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
     <div class="grid3">
       <div class="card">
         <h3 style="color:#a78bfa">Agents</h3>
-        <p>Full AI with conversation, memory, knowledge base, 10 tools, Workers AI backbone. The flagship type.</p>
+        <p>Full AI with conversation, memory, knowledge base, core tools, Workers AI backbone. The flagship type.</p>
       </div>
       <div class="card">
         <h3 style="color:#f59e0b">Workers</h3>
@@ -121,6 +121,22 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
       </div>
     </div>
 
+    <h2>Agents that do real work</h2>
+    <div class="grid3">
+      <div class="card">
+        <h3 style="color:#a78bfa">Job Apply</h3>
+        <p>Give it a job URL — an LLM drives a real browser to fill and submit the application. Retries, one card per job with attempts, human takeover for captchas, per-ATS learned tips, and it logs the employer's confirmation email as an "Open in Gmail" link.</p>
+      </div>
+      <div class="card">
+        <h3 style="color:#3b82f6">Coder</h3>
+        <p>An AI coding agent that runs a coding CLI — Claude Code, Codex, or Grok — on your own machine via <code style="background:var(--paper);padding:0.1rem 0.35rem;border-radius:4px;font-size:0.8rem">pags up</code>, driving any GitHub repo.</p>
+      </div>
+      <div class="card">
+        <h3 style="color:#22c55e">Repo Chat</h3>
+        <p>Point it at any GitHub repo — it indexes the whole codebase into a vector store and you chat with it. Read-only by construction.</p>
+      </div>
+    </div>
+
     <h2>What each agent gets</h2>
     <div class="grid3">
       <div class="card">
@@ -129,15 +145,15 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
       </div>
       <div class="card">
         <h3>Knowledge Base</h3>
-        <p>Upload docs, paste text, import URLs. Agent answers from your documents.</p>
+        <p>First-class Markdown documents the agent can create, read, and edit — plus paste text, import URLs, upload files.</p>
       </div>
       <div class="card">
         <h3>Guardrails</h3>
         <p>Topic restrictions, blocked terms, response style, citations. Keep the agent on track.</p>
       </div>
       <div class="card">
-        <h3>10 Tools</h3>
-        <p>Memory, tasks, fetch URLs, store/read files. Agents act, not just chat.</p>
+        <h3>Core Tools</h3>
+        <p>Memory, tasks, collections, files, search, fetch URLs. Agents act, not just chat.</p>
       </div>
       <div class="card">
         <h3>Conversation</h3>
@@ -153,8 +169,8 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
     <p class="highlight">Creators and clients never see each other's data. Each subscription creates an isolated Durable Object with its own knowledge base, conversations, and memory. The creator defines the template; the client owns their instance.</p>
 
     <h2>Developer tools</h2>
-    <p><strong>CLI</strong> — <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags init</code>, <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags check</code>, <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags publish</code>. Scaffold, validate, deploy in minutes.</p>
-    <p><strong>MCP Server</strong> — manage agents from Claude Code, Cursor, or VS Code. 26 tools across creator operations, public trials, and private instance runtime.</p>
+    <p><strong>CLI</strong> — <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">npm i -g @proagentstore/cli</code> then <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags up</code>: one runner serves ALL your agents over a WebSocket relay — no tunnel binary, no config. Plus <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags login</code>, <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags init</code>, <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags check</code>, <code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">pags publish</code>.</p>
+    <p><strong>MCP Server</strong> — manage agents from Claude Code, Cursor, or VS Code. ~67 tools across creator operations, public trials, private instance runtime, coding, and error observability (<code style="background:var(--panel);padding:0.1rem 0.4rem;border-radius:4px;font-size:0.85rem">list_errors</code>).</p>
     <p><strong>Skills</strong> — install the same ProAgentStore MCP workflow in Codex and Claude Code from <a href="/skills/">the skills catalog</a>.</p>
     <p><strong>Webhook ingestion</strong> — Zapier, Make, n8n can POST documents directly into an instance's knowledge base.</p>
     <p><strong>API key vault</strong> — store your OpenAI, Anthropic, Google AI keys once. Encrypted AES-256-GCM. Agents access via proxy.</p>

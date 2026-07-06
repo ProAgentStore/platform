@@ -89,13 +89,63 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
     <h1>Changelog</h1>
 
     <div class="entry">
-      <div class="date">June 6, 2026</div>
-      <h2>Launch + 11 Agents</h2>
-      <span class="tag tag-new">Launch</span>
-      <p>ProAgentStore goes live with a full marketplace platform and 11 server-powered AI agents.</p>
+      <div class="date">July 6, 2026</div>
+      <h2>LLM-driven job-application agent</h2>
+      <span class="tag tag-feat">Feature</span>
+      <p>Give the job-application agent a job URL and an LLM drives a real browser to fill and <strong>submit</strong> the application — no selectors, it acts on what it sees.</p>
       <ul>
-        <li><strong>Platform:</strong> Store with search + sort, Console (creator + client), Admin dashboard, MCP server (26 tools), skill marketplace publishing, CLI (init/check/publish)</li>
-        <li><strong>11 Agents:</strong> chatbot, site-monitor, lead-qualifier, content-pipeline, competitor-intel, support-escalator, data-analyst, meeting-notes, seo-auditor, invoice-parser, email-drafter</li>
+        <li><strong>Submit for real:</strong> the brain fills the ATS form and clicks Submit (with a dry-run guard for testing)</li>
+        <li><strong>Retry + attempts:</strong> one card per job on the work board, each attempt tracked and re-runnable</li>
+        <li><strong>Human takeover:</strong> captcha / needs-input handoffs pause the run, you resolve it, the agent resumes</li>
+        <li><strong>Per-ATS learned tips:</strong> every run saves what worked and failed, keyed by ATS host, fed back next time</li>
+        <li><strong>Confirmation email:</strong> the employer's confirmation is recorded as an "Open in Gmail" link</li>
+        <li><strong>Profile + Job Preferences:</strong> structured, reusable candidate details answer application questions — the agent never invents values</li>
+      </ul>
+    </div>
+
+    <div class="entry">
+      <div class="date">July 6, 2026</div>
+      <h2>Coder + Repo Chat</h2>
+      <span class="tag tag-new">New Agents</span>
+      <p>Two new first-party agents that work with your code.</p>
+      <ul>
+        <li><strong>Coder:</strong> an AI coding agent that runs a coding CLI — Claude Code, Codex, or Grok — on your own machine via <code>pags up</code>, driving any GitHub repo. Live terminal, Co-pilot summaries, autonomous Loop, and a cross-repo Overseer.</li>
+        <li><strong>Repo Chat:</strong> point it at any GitHub repo — it indexes the whole codebase into a vector store and you chat with it. Read-only by construction.</li>
+      </ul>
+    </div>
+
+    <div class="entry">
+      <div class="date">July 6, 2026</div>
+      <h2>Work board, Markdown docs, voice, observability</h2>
+      <span class="tag tag-feat">Feature</span>
+      <ul>
+        <li><strong>Agent-configurable work board:</strong> one kanban board per instance, columns declared by the agent, one card per job — move cards, retry, and drill into attempts</li>
+        <li><strong>First-class Markdown documents:</strong> create, read, edit, and render docs in the Knowledge base; the agent can read and update them from chat</li>
+        <li><strong>Voice hands-off mode:</strong> Whisper AI transcription with adjustable Mic Sensitivity and pause length — push-to-talk, auto-speak, or full conversation</li>
+        <li><strong>Error observability:</strong> browser and server failures land in a durable log, readable via MCP <code>list_errors</code></li>
+      </ul>
+    </div>
+
+    <div class="entry">
+      <div class="date">July 6, 2026</div>
+      <h2>pags up + WebSocket relay CLI</h2>
+      <span class="tag tag-feat">Feature</span>
+      <ul>
+        <li><strong>One runner for all your agents:</strong> <code>npm i -g @proagentstore/cli</code> then <code>pags up</code> — a single runner serves every active instance</li>
+        <li><strong>WebSocket relay:</strong> the runner connects outbound over a relay, so there's no tunnel binary and no config; short-lived, instance-scoped relay tokens per connection</li>
+        <li><strong>Multi-CLI engines:</strong> each coding session launches your chosen engine (Claude Code / Codex / Grok)</li>
+        <li><strong>Machine takeover:</strong> one machine per instance, with <code>pags up --force</code> to take over; suspended sessions resume on reconnect</li>
+      </ul>
+    </div>
+
+    <div class="entry">
+      <div class="date">June 6, 2026</div>
+      <h2>Launch</h2>
+      <span class="tag tag-new">Launch</span>
+      <p>ProAgentStore goes live with a full marketplace platform and a catalog of server-powered AI agents.</p>
+      <ul>
+        <li><strong>Platform:</strong> Store with search + sort, Console (creator + client), Admin dashboard, MCP server, skill marketplace publishing, CLI (init/check/publish)</li>
+        <li><strong>Flagship agents:</strong> site-monitor, lead-qualifier, content-pipeline, competitor-intel, support-escalator, data-analyst, meeting-notes, seo-auditor, invoice-parser, email-drafter</li>
         <li><strong>Marketplace:</strong> Subscribe to agents, get isolated instances with your own data</li>
         <li><strong>Knowledge Base:</strong> Paste text, import URLs, upload files, Google Docs integration</li>
         <li><strong>Guardrails:</strong> Topic restrictions, blocked terms, response style, max length, citations</li>

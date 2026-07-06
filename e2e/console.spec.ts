@@ -10,6 +10,7 @@ interface OpsMockOptions {
 	runtime?: Record<string, unknown> | null;
 	runtimeTasks?: Array<Record<string, unknown>>;
 	runtimeEvents?: Array<Record<string, unknown>>;
+	board?: Record<string, unknown>;
 	appRecords?: Array<Record<string, unknown>>;
 	instanceChatStatus?: number;
 	instanceChatBody?: Record<string, unknown>;
@@ -245,6 +246,20 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				],
 			});
 		}
+		if (path === "/v1/instances/inst-1/board") {
+			return json(options.board ?? {
+				columns: [
+					{ id: "waiting", title: "Waiting", color: "#eab308", statuses: ["queued", "needs_approval"] },
+					{ id: "applying", title: "Applying", color: "#3b82f6", statuses: ["running"] },
+					{ id: "submitted", title: "Submitted", color: "#22c55e", statuses: ["completed"] },
+				],
+				items: [
+					{ jobKey: "job-approval", latestTaskId: "task-approval", title: "Job application", subtitle: "", description: "", url: "", runStatus: "needs_approval", userStatus: null, status: "needs_approval", attempts: [{ id: "task-approval", status: "needs_approval", updatedAt: "2026-06-20T01:01:00Z" }], updatedAt: "2026-06-20T01:01:00Z" },
+					{ jobKey: "job-done", latestTaskId: "task-done", title: "Job application", subtitle: "", description: "", url: "", runStatus: "completed", userStatus: null, status: "completed", attempts: [{ id: "task-done", status: "completed", updatedAt: "2026-06-20T00:02:00Z" }], updatedAt: "2026-06-20T00:02:00Z" },
+				],
+				truncated: false,
+			});
+		}
 		if (path === "/v1/instances/inst-1/task-events") {
 			return json({
 				events: options.runtimeEvents ?? [
@@ -399,14 +414,13 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.getByRole("link", { name: "Instances" }).click();
 		await page.getByText("Job Application Assistant").click();
 
-		// Apply agents get their own Apply tab (which embeds the runtime board).
+		// Apply agents get their own Apply tab (the single agent-configurable work board).
 		await page.getByRole("button", { name: "Apply", exact: true }).click();
 
-		// Should show task count (from the embedded board)
-		await expect(page.getByText(/2 task/)).toBeVisible();
-		// Should show the approval task
+		// The board shows one card per job (2 jobs from the mock /board).
+		await expect(page.getByText(/2 jobs/)).toBeVisible();
 		await expect(page.getByText("Job application").first()).toBeVisible();
-		// Approve button should work
+		// The waiting-for-approval job's card has an Approve button.
 		await page.getByRole("button", { name: "Approve" }).click();
 		expect(mock.approvedTaskId).toBe("task-approval");
 	});
@@ -719,18 +733,15 @@ test.describe("ProAgentStore agent detail pages", () => {
 });
 
 test.describe("ProAgentStore architecture docs", () => {
-	test("browser runtime docs show the FAGS runtime target architecture", async ({ page }) => {
+	test("browser runtime docs show the ProAgentStore runtime architecture", async ({ page }) => {
 		await page.goto("/docs/browser-runtime/");
 
 		await expect(
-			page.getByRole("heading", { name: "FAGS Browser Runtime For PAGS Agents" }),
+			page.getByRole("heading", { name: "ProAgentStore Browser Runtime" }),
 		).toBeVisible();
-		await expect(page.getByText("PAS precedent: our loop")).toBeVisible();
-		await expect(page.getByText("Managed FAGS Runtime").first()).toBeVisible();
-		await expect(page.getByText("Local FAGS Runtime").first()).toBeVisible();
-		await expect(page.getByText("Target: outbound polling")).toBeVisible();
-		await expect(page.getByText("Runtime: FAGS")).toBeVisible();
-		await expect(page.getByText("Cheapest best-practice recommendation")).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Connectivity Modes" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Brain vs Hands" })).toBeVisible();
+		await expect(page.getByText("WebSocket relay").first()).toBeVisible();
 	});
 });
 

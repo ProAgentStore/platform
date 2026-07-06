@@ -1,3 +1,5 @@
+> **Historical planning doc — superseded; see the internal KB `docs/stores/pags.md` for the shipped state.**
+
 # PLAN: PAGS Agent-OS — per-agent UI + SDK
 
 **Status:** Approved direction, not yet started. Builds on `docs/agent-platform-strategy.md` and `docs/platform-runtime-agent-plan.md`.

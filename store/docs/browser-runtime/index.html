@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FAGS Browser Runtime Architecture — ProAgentStore Docs</title>
-  <meta name="description" content="Architecture for ProAgentStore browser-capable agents using FAGS browser runtimes, outbound polling, Cloudflare Tunnel fallback, managed FAGS runners, and PAGS brain placement.">
+  <title>ProAgentStore Browser Runtime Architecture — ProAgentStore Docs</title>
+  <meta name="description" content="Architecture for ProAgentStore browser-capable agents: a durable Cloudflare Workflow brain (BYOK Claude) drives the local ProAgentStore browser runtime (real Chrome via Playwright) over a WebSocket relay, with three human handoffs, per-ATS learned tips, and Gmail confirmation links.">
   <link rel="canonical" href="https://proagentstore.online/docs/browser-runtime/">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <meta name="theme-color" content="#7c3aed">
@@ -109,141 +109,141 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
   <div class="container layout">
     <aside>
       <h2>Architecture</h2>
-      <a href="#decision">Decision Status</a>
+      <a href="#decision">Status</a>
       <a href="#diagram">System Diagram</a>
-      <a href="#runtimes">Runtime Modes</a>
-      <a href="#brain">Brain Placement</a>
-      <a href="#tasks">Task Lifecycle</a>
-      <a href="#protocol">Protocol</a>
-      <a href="#plan">Implementation Plan</a>
+      <a href="#runtimes">Connectivity Modes</a>
+      <a href="#brain">Brain vs Hands</a>
+      <a href="#tasks">Apply Loop &amp; Handoffs</a>
+      <a href="#protocol">Runtime Protocol</a>
+      <a href="#plan">Roadmap</a>
     </aside>
 
     <main>
       <div class="eyebrow">Architecture docs</div>
-      <h1>FAGS Browser Runtime For PAGS Agents</h1>
-      <p class="lead">Runtime model for agents that need to drive a real browser: PAGS owns the control-plane brain, FAGS owns the browser runtime, and the cheapest best-practice target is outbound polling from FAGS to PAGS. Cloudflare Tunnel is the current shipped bootstrap path; managed FAGS runtimes are the later paid reliability path.</p>
+      <h1>ProAgentStore Browser Runtime</h1>
+      <p class="lead">Runtime model for agents that need to drive a real browser: a durable Cloudflare Workflow on PAGS is the <strong>brain</strong> (using the caller's BYOK Claude), and the local ProAgentStore browser runtime is the <strong>hands</strong> — real Chrome via Playwright, driven by an ARIA snapshot &rarr; act loop. The runtime connects outbound over a WebSocket relay by default (<code>pags up</code>); Cloudflare Tunnel is a legacy/optional path. The flagship user is the LLM-driven job-apply agent.</p>
       <div class="status">
-        <span class="pill proposed">Status: implemented tunnel mode</span>
-        <span class="pill">Target: outbound polling</span>
-        <span class="pill">Runtime: FAGS</span>
-        <span class="pill">PAS precedent: our loop</span>
-        <span class="pill">Reference agent: job applications</span>
+        <span class="pill">Brain: JobApplyWorkflow (BYOK Claude)</span>
+        <span class="pill">Hands: local browser runtime</span>
+        <span class="pill">Default: WebSocket relay</span>
+        <span class="pill">Legacy: Cloudflare Tunnel</span>
+        <span class="pill">Flagship: job applications</span>
       </div>
 
       <section id="decision">
-        <h2>Decision Status</h2>
+        <h2>Status</h2>
         <div class="decision">
-          <p><strong>Current code:</strong> PAGS stores an instance-scoped FAGS runtime endpoint and proxies task/status/event calls to the FAGS Playwright runtime exposed through Cloudflare Tunnel.</p>
-          <p><strong>Cheapest best-practice target:</strong> FAGS connects outbound to PAGS, polls for approved tasks, executes them locally, and posts events/results back. Managed FAGS runtimes remain the paid reliability path.</p>
+          <p><strong>Shipped:</strong> the job-apply brain is a durable Cloudflare Workflow (<code>JobApplyWorkflow</code>) that runs on PAGS using the caller's BYOK Claude. Being durable and resumable, it escapes the 30s Durable Object request limit. The brain never touches the browser directly — it drives the local ProAgentStore browser runtime (real Chrome via Playwright) through an ARIA snapshot &rarr; act loop: snapshot the accessible tree, let Claude pick one action, act by role + accessible name (no CSS selectors), repeat.</p>
+          <p><strong>Connectivity:</strong> <code>pags up</code> connects the runtime outbound over a WebSocket relay by default — no tunnel binary, nothing public exposed, and one runner multiplexes every one of your agents. Cloudflare Tunnel (<code>--tunnel quick|named</code>) remains as a legacy/optional path.</p>
         </div>
       </section>
 
       <section id="diagram">
         <h2>System Diagram</h2>
-        <div class="diagram" aria-label="PAGS and FAGS browser runtime system diagram">
+        <div class="diagram" aria-label="ProAgentStore brain and local browser runtime system diagram">
           <div class="flow">
             <div class="node control">
-              <h3>PAGS Control Plane</h3>
-              <p>Marketplace, MCP, subscriptions, runtime assignment, task summaries, auth, billing, audit events.</p>
+              <h3>PAGS Brain</h3>
+              <p><code>JobApplyWorkflow</code> — durable Cloudflare Workflow on BYOK Claude. Snapshots the page, picks one action, and orchestrates handoffs, tips, and confirmation-email reads.</p>
             </div>
             <div class="arrow">-></div>
             <div class="node runner">
-              <h3>FAGS Browser Runtime</h3>
-              <p>Playwright, browser profile, local files, screenshots, uploads, approvals, events, and task results.</p>
+              <h3>Browser Runtime (Hands)</h3>
+              <p>Local ProAgentStore runtime. Exposes <code>/browser/snapshot</code> (ARIA tree) and <code>/browser/act</code> (act by role + accessible name). Connected outbound via WebSocket relay.</p>
             </div>
             <div class="arrow">-></div>
             <div class="node browser">
               <h3>Real Browser</h3>
-              <p>Logged-in job boards, DOM, screenshots, file uploads, downloads, manual handoff.</p>
+              <p>Real-profile Chrome via Playwright: logged-in job boards, DOM, file uploads, downloads, and live human takeover.</p>
             </div>
           </div>
         </div>
-        <p>PAGS starts and observes work. FAGS executes browser actions. Current code reaches FAGS through a tunnel; target local mode uses outbound polling so the user's machine does not expose a public endpoint.</p>
-        <h3>Current Tunnel Flow</h3>
-        <div class="codeblock">PAGS API/MCP -> Cloudflare Tunnel endpoint -> FAGS browser runtime -> Playwright browser
-PAGS API/MCP &lt;- task events/status/results &lt;- FAGS browser runtime</div>
-        <h3>Target Polling Flow</h3>
-        <div class="codeblock">PAGS task queue &lt;- poll for work &lt;- FAGS browser runtime -> Playwright browser
-PAGS task queue -> task events/results -> FAGS browser runtime</div>
+        <p>The brain reasons and decides; the local runtime is the only thing that touches the browser. Nothing on the user's machine is exposed publicly — the runtime dials out to the relay.</p>
+        <h3>Default Relay Flow</h3>
+        <div class="codeblock">JobApplyWorkflow (brain) -> RelayDO -> WebSocket -> browser runtime -> Playwright browser
+JobApplyWorkflow (brain) &lt;- ARIA snapshot / act result &lt;- browser runtime</div>
+        <h3>Legacy Tunnel Flow</h3>
+        <div class="codeblock">PAGS API/MCP -> Cloudflare Tunnel endpoint -> browser runtime -> Playwright browser
+PAGS API/MCP &lt;- events / results &lt;- browser runtime</div>
       </section>
 
       <section id="runtimes">
-        <h2>Runtime Modes</h2>
+        <h2>Connectivity Modes</h2>
         <div class="grid">
           <div class="card">
+            <strong>WebSocket Relay (default)</strong>
+            <p><code>pags up</code>. No tunnel binary and nothing public exposed — the runtime dials out to <code>RelayDO</code> with a short-lived, instance-scoped relay token. One runner serves all your agents.</p>
+          </div>
+          <div class="card">
+            <strong>Cloudflare Tunnel (legacy)</strong>
+            <p><code>pags up --tunnel quick|named</code>. Quick tunnels are ephemeral and rate-limited; named tunnels give a stable hostname. Kept for compatibility/debug.</p>
+          </div>
+          <div class="card">
             <strong>Hosted Worker</strong>
-            <p>Good for text-only/server-only agents. No Playwright. No real browser session.</p>
-          </div>
-          <div class="card">
-            <strong>Managed FAGS Runtime</strong>
-            <p>Later paid path. Managed FAGS VM/container with Playwright and persistent browser state.</p>
-          </div>
-          <div class="card">
-            <strong>Local FAGS Runtime</strong>
-            <p>Cheapest default target. Node plus Playwright on the user's machine, connected outbound to PAGS. Tunnel mode is shipped today as fallback/bootstrap.</p>
+            <p>For text-only/server-only agents that need no browser. No Playwright, no local runtime, no <code>pags up</code>.</p>
           </div>
         </div>
       </section>
 
       <section id="brain">
-        <h2>Brain Placement</h2>
+        <h2>Brain vs Hands</h2>
         <table class="compare">
           <thead>
-            <tr><th>Option</th><th>Upside</th><th>Problem</th><th>Recommendation</th></tr>
+            <tr><th>Piece</th><th>Where it runs</th><th>What it does</th><th>Why there</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td>Brain in PAGS Worker</td>
-              <td>Centralized orchestration.</td>
-              <td>Browser screenshots, DOM, cookies, and forms must travel through PAGS; high-latency observe/act loop.</td>
-              <td>Use for text-only agents, not browser agents.</td>
+              <td>Brain — <code>JobApplyWorkflow</code></td>
+              <td>PAGS, as a durable Cloudflare Workflow (<code>[[workflows]] JOB_APPLY</code>) on the caller's BYOK Claude.</td>
+              <td>Reads the ARIA snapshot, picks one action per step, decides handoffs, applies per-ATS tips, reads confirmation emails.</td>
+              <td>Durable + resumable, so it survives the 30s DO request limit and long applications. The apply loop (<code>lib/apply-loop.ts</code>) is pure and tested.</td>
             </tr>
             <tr>
-              <td>Brain in PAGS, runtime in FAGS</td>
-              <td>Cheapest, user-owned browser/files, platform-owned control plane.</td>
-              <td>User machine must be online; polling endpoints still need to be built.</td>
-              <td>Cheapest best-practice recommendation.</td>
+              <td>Hands — browser runtime</td>
+              <td>The user's own machine, launched by <code>pags up</code>.</td>
+              <td>Runs real-profile Chrome via Playwright; exposes <code>/browser/snapshot</code> + <code>/browser/act</code> and the takeover endpoints.</td>
+              <td>The browser session, cookies, and files stay on the user's machine; only the accessible tree and actions cross the wire.</td>
             </tr>
             <tr>
-              <td>Brain in managed FAGS runtime</td>
-              <td>Always-on, managed, supportable, billable, same browser protocol.</td>
-              <td>Costs more and needs stronger isolation/retention policy.</td>
-              <td>Paid reliability path.</td>
+              <td>Guard — dry run</td>
+              <td>Inside the Workflow.</td>
+              <td>When <code>dryRun:true</code>, a runtime guard blocks the final submit click; the brain cannot override it.</td>
+              <td>Lets you fill an entire application safely without submitting for real.</td>
             </tr>
           </tbody>
         </table>
       </section>
 
       <section id="tasks">
-        <h2>Task Lifecycle</h2>
+        <h2>Apply Loop &amp; Handoffs</h2>
+        <p>Trigger with <code>POST /v1/instances/:id/apply { url, resumePath, dryRun? }</code>. The brain loops snapshot &rarr; decide &rarr; act until the application is submitted (or blocked). It reads the structured Profile + Special Instructions + the per-ATS learned-tips cache, and is hard-locked to use a known value or ask — never to invent one.</p>
         <div class="diagram">
           <div class="swimlane">
             <div class="lane">
-              <h3>PAGS / MCP</h3>
-              <div class="step">Create subscribed instance</div>
-              <div class="step">Queue task for FAGS or register tunnel fallback</div>
-              <div class="step">Start task with job URL</div>
-              <div class="step">Receive events and status</div>
-              <div class="step">Approve final submit</div>
+              <h3>Brain — JobApplyWorkflow</h3>
+              <div class="step">Snapshot the ARIA tree</div>
+              <div class="step">Claude picks ONE action (act by role + accessible name)</div>
+              <div class="step">Read Profile / credentials vault / special instructions</div>
+              <div class="step">Raise a handoff when it can't proceed</div>
+              <div class="step">Submit for real (unless <code>dryRun</code>) &amp; save a per-ATS tips transcript</div>
             </div>
             <div class="lane">
-              <h3>FAGS Browser Runtime</h3>
-              <div class="step">Open browser context</div>
-              <div class="step">Observe page and detect job board</div>
-              <div class="step">Plan and fill application</div>
-              <div class="step">Pause for login/captcha/missing answers</div>
-              <div class="step">Submit only after approval</div>
+              <h3>Human handoffs (one takeover machine)</h3>
+              <div class="step"><strong>captcha</strong> — solve it in the live takeover; auto-resumes when the token appears</div>
+              <div class="step"><strong>stuck</strong> — after repeated fails on a widget, you do that one step and Resume</div>
+              <div class="step"><strong>needs_input</strong> — a required value the agent lacks; console shows an input box, value is saved to the Profile, run resumes</div>
+              <div class="step">Confirmation emails surface as "Open in Gmail" links</div>
             </div>
           </div>
         </div>
       </section>
 
       <section id="protocol">
-        <h2>Protocol Sketch</h2>
-        <p>Agents that need browser automation should declare it in their manifest.</p>
+        <h2>Runtime Protocol</h2>
+        <p>Agents that need browser automation declare a browser runtime in their manifest. The runtime identifies itself as ProAgentStore on its <code>/health</code> (<code>service: "proagentstore-browser-runtime"</code>) and <code>/capabilities</code> (<code>runtime: "pags-browser-runtime"</code>, <code>runtimePlane: "pags"</code>).</p>
         <div class="codeblock">{
   "runtime": {
-    "kind": "fags-browser-runtime",
+    "kind": "pags-browser-runtime",
     "brain": "pags",
     "browser": {
       "engine": "playwright",
@@ -251,33 +251,29 @@ PAGS task queue -> task events/results -> FAGS browser runtime</div>
       "manualHandoff": true,
       "fileUploads": true
     },
-    "deployment": {
-      "localPolling": true,
-      "localTunnel": true,
-      "managedVm": true,
+    "connectivity": {
+      "relay": true,
+      "tunnel": "legacy",
       "hostedWorker": false
     }
   }
 }</div>
-        <p>Current tunnel runtime endpoints should be signed/tokenized and instance-scoped, not open public tunnel URLs. Target polling mode should use PAGS task queues instead of public local FAGS endpoints.</p>
-        <div class="codeblock">GET  /health
-GET  /capabilities
-POST /tasks
-GET  /tasks/:id
-POST /tasks/:id/approve
-POST /tasks/:id/cancel
-GET  /events</div>
+        <p>The runtime exposes an act-by-accessibility surface (no CSS selectors) plus health/capability probes and the live takeover endpoints. The relay connection is authenticated with a short-lived, instance-scoped relay token — never the long-lived account JWT.</p>
+        <div class="codeblock">GET  /health              # service: proagentstore-browser-runtime
+GET  /capabilities        # runtime: pags-browser-runtime, runtimePlane: pags
+POST /browser/snapshot    # ARIA accessibility tree
+POST /browser/act         # act by role + accessible name (type/select/check/click)
+GET  /takeover*           # live remote-control takeover (captcha / stuck / needs_input)</div>
       </section>
 
       <section id="plan">
-        <h2>Implementation Plan</h2>
+        <h2>Roadmap</h2>
         <ul>
-          <li>Current: FAGS browser runtime, tunnel registration, task/event proxying, and runtime board.</li>
-          <li>Next: add cloud task queue endpoints for outbound FAGS polling.</li>
-          <li>Make <code>pags runner connect</code> default to polling and expose tunnel mode as fallback/debug.</li>
-          <li>Add MCP tools for registering runtimes, starting tasks, approvals, and event reads.</li>
-          <li>Expand the job application agent beyond <code>job.apply_basic</code>.</li>
-          <li>Add VM/container provisioning and managed FAGS assignment in PAGS after local polling proves out.</li>
+          <li>Shipped: <code>JobApplyWorkflow</code> brain on BYOK Claude, the ARIA snapshot/act runtime, WebSocket relay as the default connectivity, the three human handoffs, the per-ATS learned-tips cache, and "Open in Gmail" confirmation links.</li>
+          <li>Shipped: <code>pags up</code> multiplexes all of a user's agents through one runner and one relay; Cloudflare Tunnel kept as a legacy/optional path.</li>
+          <li>Next: remove the remaining tunnel code paths (CLI + API) now that relay is the default.</li>
+          <li>Next: harden the credentials/Profile vault (zero-knowledge / KMS / audit log) and add per-instance consent over private Profile fields.</li>
+          <li>Next: application rate-limit + dedup, and auto-search/discovery so the agent can find postings rather than only applying to a URL you give it.</li>
         </ul>
       </section>
     </main>

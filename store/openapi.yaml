@@ -239,14 +239,14 @@ components:
         hasToken:
           type: boolean
 
-    FagsRuntimeTask:
+    RuntimeSetupTask:
       type: object
       properties:
         id:
           type: string
         type:
           type: string
-          example: job.apply_basic
+          example: setup.browser_runtime
         status:
           type: string
           enum: [queued, running, needs_user_input, needs_approval, blocked, completed, failed, cancelled]
@@ -1957,9 +1957,9 @@ paths:
 
   /v1/instances/{instanceId}/runtime:
     post:
-      summary: Register FAGS browser runtime
+      summary: Register ProAgentStore browser runtime
       description: |
-        Register or update the FreeAgentStore browser runtime endpoint used by
+        Register or update the ProAgentStore browser runtime endpoint used by
         this PAGS instance. PAGS remains the control plane and stores the runtime
         token without exposing it in responses.
       operationId: registerInstanceRuntime
@@ -1985,7 +1985,7 @@ paths:
                   description: HTTPS URL for managed runtimes, or localhost HTTP for development.
                 token:
                   type: string
-                  description: Bearer token configured on the FAGS runtime.
+                  description: Bearer token configured on the ProAgentStore runtime.
                 placement:
                   type: string
                   enum: [local, managed]
@@ -2020,7 +2020,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
     get:
-      summary: Get registered FAGS browser runtime
+      summary: Get registered ProAgentStore browser runtime
       operationId: getInstanceRuntime
       tags: [Instances]
       parameters:
@@ -2049,7 +2049,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
     delete:
-      summary: Remove registered FAGS browser runtime
+      summary: Remove registered ProAgentStore browser runtime
       operationId: deleteInstanceRuntime
       tags: [Instances]
       parameters:
@@ -2075,7 +2075,7 @@ paths:
 
   /v1/instances/{instanceId}/runtime/heartbeat:
     post:
-      summary: Mark FAGS browser runtime online
+      summary: Mark ProAgentStore browser runtime online
       operationId: heartbeatInstanceRuntime
       tags: [Instances]
       parameters:
@@ -2107,7 +2107,7 @@ paths:
 
   /v1/instances/{instanceId}/runtime/status:
     get:
-      summary: Probe FAGS browser runtime status
+      summary: Probe ProAgentStore browser runtime status
       description: Calls the registered runtime's `/health` and `/capabilities` endpoints through PAGS.
       operationId: getInstanceRuntimeStatus
       tags: [Instances]
@@ -2154,7 +2154,7 @@ paths:
 
   /v1/instances/{instanceId}/tasks:
     get:
-      summary: List FAGS runtime tasks
+      summary: List ProAgentStore runtime tasks
       operationId: listInstanceRuntimeTasks
       tags: [Instances]
       parameters:
@@ -2166,7 +2166,7 @@ paths:
             format: uuid
       responses:
         "200":
-          description: Tasks from the registered FAGS runtime
+          description: Tasks from the registered ProAgentStore runtime
           content:
             application/json:
               schema:
@@ -2175,7 +2175,7 @@ paths:
                   tasks:
                     type: array
                     items:
-                      $ref: "#/components/schemas/FagsRuntimeTask"
+                      $ref: "#/components/schemas/RuntimeSetupTask"
         "404":
           description: Instance or runtime not found
           content:
@@ -2183,11 +2183,11 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
     post:
-      summary: Create FAGS runtime task
+      summary: Create ProAgentStore runtime task
       description: |
-        Create a browser/file task on the registered FAGS runtime. PAGS forces
+        Create a browser/file task on the registered ProAgentStore runtime. PAGS forces
         human approval for sensitive task types such as `browser.open` and
-        `job.apply_basic`.
+        `setup.browser_runtime`.
       operationId: createInstanceRuntimeTask
       tags: [Instances]
       parameters:
@@ -2207,7 +2207,7 @@ paths:
               properties:
                 type:
                   type: string
-                  example: job.apply_basic
+                  example: setup.browser_runtime
                 input:
                   type: object
                   additionalProperties: true
@@ -2217,11 +2217,11 @@ paths:
                   type: string
       responses:
         "202":
-          description: Task accepted by FAGS runtime
+          description: Task accepted by ProAgentStore runtime
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/FagsRuntimeTask"
+                $ref: "#/components/schemas/RuntimeSetupTask"
         "400":
           description: Invalid task request
           content:
@@ -2237,7 +2237,7 @@ paths:
 
   /v1/instances/{instanceId}/tasks/{taskId}:
     get:
-      summary: Get FAGS runtime task
+      summary: Get ProAgentStore runtime task
       operationId: getInstanceRuntimeTask
       tags: [Instances]
       parameters:
@@ -2254,11 +2254,11 @@ paths:
             type: string
       responses:
         "200":
-          description: Task from the registered FAGS runtime
+          description: Task from the registered ProAgentStore runtime
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/FagsRuntimeTask"
+                $ref: "#/components/schemas/RuntimeSetupTask"
         "404":
           description: Instance, runtime, or task not found
           content:
@@ -2268,7 +2268,7 @@ paths:
 
   /v1/instances/{instanceId}/tasks/{taskId}/approve:
     post:
-      summary: Approve FAGS runtime task
+      summary: Approve ProAgentStore runtime task
       operationId: approveInstanceRuntimeTask
       tags: [Instances]
       parameters:
@@ -2289,7 +2289,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/FagsRuntimeTask"
+                $ref: "#/components/schemas/RuntimeSetupTask"
         "404":
           description: Instance, runtime, or task not found
           content:
@@ -2299,7 +2299,7 @@ paths:
 
   /v1/instances/{instanceId}/tasks/{taskId}/cancel:
     post:
-      summary: Cancel FAGS runtime task
+      summary: Cancel ProAgentStore runtime task
       operationId: cancelInstanceRuntimeTask
       tags: [Instances]
       parameters:
@@ -2320,7 +2320,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/FagsRuntimeTask"
+                $ref: "#/components/schemas/RuntimeSetupTask"
         "404":
           description: Instance, runtime, or task not found
           content:
@@ -2330,7 +2330,7 @@ paths:
 
   /v1/instances/{instanceId}/task-events:
     get:
-      summary: List FAGS runtime task events
+      summary: List ProAgentStore runtime task events
       operationId: listInstanceRuntimeTaskEvents
       tags: [Instances]
       parameters:

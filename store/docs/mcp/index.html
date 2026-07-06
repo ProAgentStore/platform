@@ -143,6 +143,7 @@ Confirm before destructive actions.</code></pre>
 
     <section>
       <h2>Tool Groups</h2>
+      <p>Roughly 67 tools, grouped below.</p>
       <div class="grid">
         <div class="card">
           <h3>Discovery</h3>
@@ -153,12 +154,36 @@ Confirm before destructive actions.</code></pre>
           <ul><li><code>subscribe_agent</code></li><li><code>my_instances</code></li><li><code>chat_with_instance</code></li><li><code>instance_messages</code></li><li><code>add_instance_knowledge</code></li></ul>
         </div>
         <div class="card">
-          <h3>FAGS Browser Runtime</h3>
+          <h3>Browser Runtime</h3>
           <ul><li><code>register_instance_runtime</code></li><li><code>instance_runtime_status</code></li><li><code>run_instance_task</code></li><li><code>approve_instance_task</code></li><li><code>instance_task_events</code></li></ul>
         </div>
         <div class="card">
+          <h3>Apply</h3>
+          <ul><li><code>apply_to_job</code></li><li><code>upload_resume</code></li><li><code>get_profile</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Board</h3>
+          <ul><li><code>instance_board</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Knowledge</h3>
+          <ul><li><code>add_instance_knowledge</code></li><li><code>list_instance_knowledge</code></li><li><code>search_instance_knowledge</code></li><li><code>delete_instance_knowledge</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Repo Chat</h3>
+          <ul><li><code>ingest_repo</code></li><li><code>ingest_repo_status</code></li><li><code>remove_repo</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Coding (Coder)</h3>
+          <ul><li><code>coding_loop_start</code></li><li><code>coding_loop_status</code></li><li><code>coding_loop_stop</code></li></ul>
+        </div>
+        <div class="card">
           <h3>Creator Ops</h3>
-          <ul><li><code>create_agent</code></li><li><code>scaffold_agent</code></li><li><code>read_agent_file</code></li><li><code>write_agent_file</code></li><li><code>trigger_agent_deploy</code></li></ul>
+          <ul><li><code>create_agent</code></li><li><code>update_agent</code></li><li><code>scaffold_agent</code></li><li><code>list_agent_repo_files</code></li><li><code>read_agent_file</code></li><li><code>write_agent_file</code></li><li><code>batch_write_agent_files</code></li><li><code>get_agent_board_config</code></li><li><code>update_agent_board_config</code></li><li><code>trigger_agent_deploy</code></li><li><code>agent_deploy_status</code></li></ul>
+        </div>
+        <div class="card">
+          <h3>Observability</h3>
+          <ul><li><code>list_errors</code></li><li><code>mcp_audit_log</code></li></ul>
         </div>
         <div class="card">
           <h3>Safety</h3>
@@ -178,9 +203,9 @@ Expected tool flow:
 4. add_instance_knowledge
 5. chat_with_instance</code></pre>
 
-      <h3>Connect the FAGS browser runtime</h3>
+      <h3>Connect the ProAgentStore browser runtime</h3>
       <pre><code>npm i -g @proagentstore/cli
-pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
+pags up
 
 Expected MCP flow:
 1. subscribe_agent
@@ -189,8 +214,8 @@ Expected MCP flow:
 4. run_instance_task
 5. approve_instance_task
 6. instance_task_events</code></pre>
-      <p>Current CLI mode uses Cloudflare Tunnel to register a FAGS runtime endpoint. The target cheapest best-practice mode is outbound polling from FAGS to PAGS, with tunnel mode kept as fallback/debug.</p>
-      <pre><code>PAGS MCP/API control plane -> FAGS browser runtime -> Playwright browser</code></pre>
+      <p><code>pags up</code> connects outbound over a WebSocket relay by default (no tunnel binary, nothing public exposed) and multiplexes every one of your agents through one runner. Cloudflare Tunnel (<code>pags up --tunnel quick|named</code>) is a legacy/optional connectivity path.</p>
+      <pre><code>PAGS MCP/API control plane (brain) -> ProAgentStore browser runtime (hands) -> Playwright browser</code></pre>
     </section>
 
     <section>

@@ -80,7 +80,9 @@ list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat
 
 If `chat_with_instance` says it needs a Cloudflare Workers AI account ID and API token, the private runtime is working and correctly waiting for caller-owned AI credentials.
 
-Browser-capable agents use PAGS as the control-plane brain and FAGS as the browser runtime/tool executor. Current CLI mode is `pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless`, which starts the FAGS runtime and registers a Cloudflare Tunnel endpoint. Target cheapest best-practice mode is outbound FAGS polling to PAGS, with tunnel mode retained as fallback/debug.
+Browser-capable agents split the work: PAGS runs the control-plane brain (a durable Cloudflare Workflow using the caller's BYOK Claude) and the local ProAgentStore browser runtime is the hands (real Chrome via Playwright, driven by ARIA snapshot + act — act by role and accessible name, no CSS selectors). Start it with `pags up`, which connects outbound over a WebSocket relay by default (no tunnel binary) and multiplexes ALL of your agents through one runner; Cloudflare Tunnel (`--tunnel quick|named`) is a legacy/optional path. The job-apply brain fills and submits real applications, pausing for one of three human handoffs — captcha, stuck, or needs_input — resolved in a single live takeover, with a per-ATS learned-tips cache and "Open in Gmail" confirmation-email links.
+
+Platform features: a single unified work board per instance (runtime tasks + application records), the LLM-driven job-apply agent, Coder (drive Claude Code / Codex / Grok on any GitHub repo via a local runner), Repo Chat (read-only server-side repo ingest + RAG), voice chat (speech in/out), and observability via the `list_errors` MCP tool.
 
 ## Docs
 

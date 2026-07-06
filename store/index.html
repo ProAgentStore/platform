@@ -143,11 +143,13 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
   <main class="container">
     <section class="hero">
       <h1>Pro<span>Agent</span>Store</h1>
-      <p>Server-powered AI agents. Create a knowledge-base chatbot, configure its identity and guardrails, deploy it in minutes.</p>
+      <p>Autonomous, server-powered AI agents that do real work. Apply to jobs in a real browser, code in your GitHub repos, chat with any codebase, monitor sites — running on Cloudflare's edge.</p>
       <div class="badges">
+        <span class="badge">Job Apply</span>
+        <span class="badge">Coder</span>
+        <span class="badge">Repo Chat</span>
         <span class="badge">Workers AI</span>
         <span class="badge">Knowledge Base</span>
-        <span class="badge">Custom Identity</span>
         <span class="badge">Guardrails</span>
         <span class="badge">API Access</span>
       </div>
@@ -160,7 +162,7 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
         onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--line)'">
     </div>
 
-    <!-- Type tabs (matches FAGS: Libraries | Models | Agents) -->
+    <!-- Agent-type tabs -->
     <div class="toolbar" style="border-bottom:1px solid var(--line);padding-bottom:0.75rem">
       <button type="button" class="filter-btn type-btn active" data-type="all" onclick="filterType('all')">All</button>
       <button type="button" class="filter-btn type-btn" data-type="agent" onclick="filterType('agent')">Agents</button>

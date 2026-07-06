@@ -15,14 +15,14 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 platform/
 ├── packages/sdk/     Internal TypeScript SDK for agents
 ├── packages/cli/     @proagentstore/cli — init, check, publish, MCP proxy, local runtime
-├── packages/browser-runner/ FAGS Playwright browser runtime bundled into the CLI
-├── workers/api/      Hono API worker (auth, agents, instances, keys, analytics)
+├── packages/browser-runner/ ProAgentStore Playwright + tmux runtime bundled into the CLI
+├── workers/api/      Hono API worker (auth, agents, instances, coding, apply, keys, analytics)
 ├── workers/host/     Marketing site + console + widget
 ├── workers/mcp/      MCP server for Codex, Claude Code, Cursor, and VS Code
 ├── store/            Source HTML for all pages
 ├── skills/           Open Agent Skills source files
 ├── plugins/          Codex and Claude plugin wrappers
-├── agents/           5 flagship agents (site-monitor, lead-qualifier, etc.)
+├── agents/           13 catalog agents (10 flagship + job-application-assistant, coder, repo-chat)
 └── templates/        Agent scaffolding (worker, cron, api)
 ```
 
@@ -30,7 +30,7 @@ platform/
 
 | Type | Template | What it does |
 |---|---|---|
-| **Agent** | `worker` | Full AI: conversation, memory, knowledge base, 10 tools, Workers AI |
+| **Agent** | `worker` | Full AI: conversation, memory, knowledge base, core tools, Workers AI |
 | **Worker** | `cron` | Scheduled tasks: daily digests, monitoring, batch processing |
 | **Tool** | `api` | Stateless endpoint: transform, generate, analyze |
 
@@ -109,61 +109,36 @@ The full MCP-first developer surface is documented at:
 
 MCP safety is enforced server-side. OAuth supports `read`, `write`, `runtime`, and `destructive` scopes; `MCP_READ_ONLY=1` forces read-only mode; mutating tools support `dry_run` where useful; overwrite/destructive tools require exact `confirm` values; and `mcp_audit_log` exposes recent MCP write, runtime, dry-run, denied, and destructive events.
 
-### FAGS browser runtime
+### Browser runtime (`pags up`)
 
-Browser-capable agents use PAGS as the control-plane brain and FAGS as the browser runtime/tool executor. Users install one public package, `@proagentstore/cli`; the FAGS Playwright runtime is bundled into it.
-
-```text
-PAGS control plane / MCP
-  -> task, auth, approval, audit
-FAGS browser runtime
-  -> Playwright, local files, browser profile
-Real browser
-  -> job boards, uploads, receipts
-```
-
-```bash
-npm install -g @proagentstore/cli
-pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
-pags runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
-pags runner task --type echo --input '{"ok":true}' --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
-```
-
-Current local runtime mode uses a registered HTTPS endpoint. `runner connect` starts the FAGS runtime with a token and instance binding, opens a Cloudflare quick tunnel, and registers only the tunnel URL plus token with PAGS. Runtime registration is instance-scoped: PAGS stores the endpoint and encrypted runner token, then MCP/API proxy task calls to the runtime with `X-PAGS-Instance-Id`.
-
-```bash
-pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
-```
-
-`runner connect` is the current shipped local mode. It is the cheapest usable path today, but the target cheapest best-practice mode is outbound polling from the FAGS runtime to PAGS so the user's machine does not need a public tunnel. Manual setup is still available when you want to use a stable named tunnel:
-
-```bash
-pags runner register "$PAGS_INSTANCE_ID" \
-  --endpoint-url "$PAGS_RUNNER_ENDPOINT" \
-  --runner-token "$PAGS_RUNNER_TOKEN" \
-  --pags-token "$PAGS_TOKEN" \
-  --probe
-pags runner runtime "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --probe
-pags runner run "$PAGS_INSTANCE_ID" --type echo --input '{"ok":true}' --pags-token "$PAGS_TOKEN"
-```
-
-The rentable job application agent uses the `job.apply_basic` runner task for basic resume-upload forms. The task is approval-gated and runs on the user's FAGS browser runtime:
-
-```bash
-pags runner run "$PAGS_INSTANCE_ID" \
-  --type job.apply_basic \
-  --input '{"url":"https://example.com/jobs/123","resumePath":"/path/to/resume.pdf","candidate":{"fullName":"Test Candidate","email":"candidate@example.com"},"coverNote":"I am interested in this role."}' \
-  --pags-token "$PAGS_TOKEN"
-pags runner approve-task "$PAGS_INSTANCE_ID" "$TASK_ID" --pags-token "$PAGS_TOKEN"
-```
+Browser- and coding-capable agents use PAGS as the control-plane brain and a local **ProAgentStore browser runtime** (`runtimePlane: "pags"`, Playwright + tmux, bundled into the CLI) as the hands. One public package, one command — no monorepo, no tunnel binary in the default path.
 
 ```text
-subscribe_agent -> register_instance_runtime -> instance_runtime_status(probe: true) -> run_instance_task -> approve_instance_task -> instance_task_events
+PAGS control plane / MCP / Workflows
+  -> task, auth, approval, audit, the LLM brain
+ProAgentStore browser runtime (pags up)
+  -> Playwright, local files, real browser profile, tmux CLIs
+Real browser / real repo
+  -> job boards, uploads, receipts, coding sessions
 ```
 
-The browser runtime MCP tools are `register_instance_runtime`, `instance_runtime_status`, `unregister_instance_runtime`, `run_instance_task`, `approve_instance_task`, `cancel_instance_task`, and `instance_task_events`.
+```bash
+npm i -g @proagentstore/cli
+pags login
+pags up            # one multiplexed runner for ALL your instances (apply, Coder, …)
+```
 
-The Console also shows FAGS runtime work as a kanban-style runtime board: open `Console -> My Instances -> <instance> -> Runtime` to see queued, running, approval-gated, blocked, completed, and cancelled tasks plus recent runtime events.
+`pags up` is the canonical runner: **one process + one connection serves every active instance**. It defaults to a **WebSocket relay** (the runner connects outbound to a per-instance `RelayDO` — no cloudflared, no public server, no inbound tunnel). Cloud → `callRunner()` → `RelayDO` → WebSocket → runner. Cloudflared tunnels remain only as a legacy `--tunnel quick|named` option.
+
+- `pags up --force` — take over from another machine (old machine's sessions suspend, resume on reconnect)
+- `pags up --instance <id>` — pin to one agent (debug)
+- `pags up --headless` — headless mode
+
+The job-application agent runs on this runtime via the LLM-driven apply pipeline below (not a fixed `job.apply_basic` task): `POST /v1/instances/:id/apply { url, resumePath }` starts `JobApplyWorkflow`, which drives the runtime's `/browser/snapshot` + `/browser/act` endpoints. The **Coder** agent runs its chosen CLI (Claude Code / Codex / Grok) in a tmux pane on the same runtime.
+
+### Job application agent (LLM-driven apply)
+
+The flagship apply flow: a **Brain** (Cloudflare Workflow `JobApplyWorkflow`, using the user's BYOK Claude) drives the **Hands** (the local browser runtime) to fill and submit a real application — snapshot the ARIA tree → pick one action → act → repeat. Durable + resumable (escapes the 30s Worker limit). Retry + attempt tracking per job. Three human-in-the-loop handoffs share one pause/resume machine: **captcha** (solve in a live takeover, auto-resumes), **stuck** (do one step + Resume), **needs_input** (supply a value → saved to Profile → resumes). Per-ATS tips are cached and fed back next run; "Open in Gmail" surfaces confirmation links. `dryRun:true` fills everything but a workflow-level guard blocks the final Submit click.
 
 ### Skills and plugins
 
@@ -193,7 +168,9 @@ Public discovery pages:
 - https://proagentstore.online/llms-full.txt
 - https://proagentstore.online/skills.json
 
-## Flagship agents
+## Catalog agents
+
+13 first-party agents ship in the catalog: 10 flagship + three headliners (job-application-assistant, Coder, Repo Chat).
 
 | Agent | Type | Description |
 |---|---|---|
@@ -202,6 +179,21 @@ Public discovery pages:
 | content-pipeline | Worker | Daily AI content generation to R2 |
 | competitor-intel | Worker | Daily competitor tracking + AI briefings |
 | support-escalator | Agent | Ticket triage + auto-response + daily summary |
+| data-analyst | Agent | CSV upload → natural-language SQL queries |
+| meeting-notes | Agent | Transcript → summary + action items + daily digest |
+| seo-auditor | Worker | Daily page crawl → AI scores 0-100 + regressions |
+| invoice-parser | Tool | POST text → structured JSON extraction |
+| email-drafter | Agent | Brand-voice KB → AI email drafts |
+| **job-application-assistant** | Agent | LLM-driven apply: Brain (`JobApplyWorkflow`) drives the local browser runtime to fill + submit real applications |
+| **Coder** (`coder`) | Agent | Multi-CLI coding agent — runs Claude Code / Codex / Grok in tmux via `pags up`; Engine · Pilot · Co-pilot · Loop · Overseer · Chat |
+| **Repo Chat** (`repo-chat`) | Agent | Read-only chat with any GitHub repo(s) — server-side ingest + RAG, no local runner |
+
+### Other capabilities
+
+- **Voice hands-off** — Whisper STT (via the key proxy) with adaptive VAD + Mic Sensitivity / pause settings, plus auto-speak, in the Chat and Coding surfaces.
+- **First-class Markdown documents** in Knowledge — create/read/edit; the agent reads and updates them via chat.
+- **Observability** — browser + server errors flow to a durable log, surfaced through the MCP `list_errors` tool.
+- **Agent-configurable work board** — one board per instance; columns are declared per agent (`capabilities.boardColumns`), one card per job, with move / retry / attempts. Driven from MCP via `instance_board`. (Replaces the old two-board / "runtime board" design.)
 
 ## Part of the FreeStore ecosystem
 

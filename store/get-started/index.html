@@ -150,6 +150,63 @@ const agent = initPro({
 const { response } = await agent.chat('Summarize my Q3 report')
 console.log(response)</pre>
 
+    <h2>Run the job-application agent</h2>
+    <p>Give it a job URL and it drives a real browser to fill and submit the application for you.</p>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h3>Subscribe + upload your résumé</h3>
+        <p>Get the job-application agent from the store, then upload your résumé into its Knowledge base.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>Fill your Profile</h3>
+        <p>In <a href="/console/">Console</a> → Profile, add your candidate details and Job Preferences (target roles, locations, work type). The agent uses these to answer application questions — it never invents values.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h3>Give it a job URL</h3>
+        <p>Paste a job posting URL. The agent opens the ATS, fills the form, and submits — retrying and learning per-ATS tips. One card per job on the work board tracks each attempt. When it hits a captcha or needs a value it doesn't have, it hands off to you for a takeover, then resumes. It records the employer's confirmation email as an "Open in Gmail" link.</p>
+      </div>
+    </div>
+
+    <h2>Code with the Coder agent</h2>
+    <p>An AI coding agent that runs a coding CLI on your own machine and drives any GitHub repo.</p>
+
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <h3>Start the runner</h3>
+        <p>Install the CLI and start the runner. One runner serves all your agents over a WebSocket relay — no tunnel binary, no config.</p>
+      </div>
+    </div>
+
+    <pre>npm i -g @proagentstore/cli
+pags up</pre>
+
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <h3>Add a repo</h3>
+        <p>In the Coder's Coding tab, add a repo — a local path (<code>~/dev/my-repo</code>), <code>owner/repo</code>, or a clone URL.</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <h3>Start a session</h3>
+        <p>Pick an engine — Claude Code, Codex, or Grok — and start a session. Watch the live terminal, let the Co-pilot summarize, or hand it an objective and let the Loop drive autonomously.</p>
+      </div>
+    </div>
+
     <h2>Build your own agent</h2>
 
     <div class="step">
@@ -164,7 +221,7 @@ console.log(response)</pre>
 
     <p>Three templates:</p>
     <ul style="color:var(--muted);font-size:0.88rem;padding-left:1.5rem;margin-bottom:1rem">
-      <li><strong style="color:var(--ink)">worker</strong> — Durable Object with conversation, memory, knowledge base, 10 tools</li>
+      <li><strong style="color:var(--ink)">worker</strong> — Durable Object with conversation, memory, knowledge base, core tools</li>
       <li><strong style="color:var(--ink)">cron</strong> — Scheduled worker (daily digests, monitoring, batch processing)</li>
       <li><strong style="color:var(--ink)">api</strong> — Stateless endpoint (transform, generate, analyze)</li>
     </ul>

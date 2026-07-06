@@ -92,6 +92,18 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 		}
 	};
 
+	// Approve a task waiting for approval (generic runner tasks that require a human
+	// OK before they run, e.g. browser.open). Acts on the job's latest task.
+	const handleApprove = async (item: BoardItem) => {
+		if (!item.latestTaskId) return;
+		try {
+			await api(`/v1/instances/${instanceId}/tasks/${item.latestTaskId}/approve`, { method: "POST" });
+			loadBoard();
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	// Re-run a job (apply agents): kick off a fresh application for the same URL.
 	// The new run shows up as this job's newest attempt on the next poll.
 	const handleRetry = async (item: BoardItem) => {
@@ -196,6 +208,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 											onOpen={(taskId) => taskId && navigate(`/instances/${instanceId}/tasks/${taskId}`)}
 											onMove={(status) => setStatus(item, status)}
 											onRetry={apply && item.url && ["failed", "blocked"].includes(item.status) ? () => handleRetry(item) : undefined}
+											onApprove={item.status === "needs_approval" ? () => handleApprove(item) : undefined}
 											retrying={retrying.has(item.jobKey)}
 											onDelete={() => handleDeleteItem(item)}
 										/>
@@ -210,7 +223,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRetry, retrying, onDelete }: {
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRetry, onApprove, retrying, onDelete }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
@@ -218,6 +231,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRe
 	onOpen: (taskId: string) => void;
 	onMove: (status: string) => void;
 	onRetry?: () => void;
+	onApprove?: () => void;
 	retrying?: boolean;
 	onDelete: () => void;
 }) {
@@ -251,6 +265,16 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRe
 			</button>
 
 			<div className="flex items-center gap-2 mt-2 pt-2 border-t border-line/60">
+				{onApprove && (
+					<button
+						type="button"
+						onClick={(e) => { e.stopPropagation(); onApprove(); }}
+						className="text-[0.7rem] px-2 py-1 rounded border border-green/40 text-green hover:bg-green/10 font-bold"
+						title="Approve this task to run"
+					>
+						Approve
+					</button>
+				)}
 				{onRetry && (
 					<button
 						type="button"

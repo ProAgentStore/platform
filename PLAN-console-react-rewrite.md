@@ -1,3 +1,5 @@
+> **Historical planning doc — superseded; see the internal KB `docs/stores/pags.md` for the shipped state.**
+
 # Console Rewrite: React + TypeScript + Tailwind
 
 ## Current State
