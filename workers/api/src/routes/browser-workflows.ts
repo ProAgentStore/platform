@@ -4,6 +4,10 @@ import { callRuntime, isRecord, mirrorRuntimeTasks, requireRuntime, runtimeJson 
 export interface BrowserRuntimeTaskRequest {
 	type: string;
 	input: Record<string, unknown>;
+	/** Optional card presentation for the console kanban. */
+	title?: string;
+	subtitle?: string;
+	description?: string;
 }
 
 export interface BrowserRuntimeTaskResult {
@@ -25,7 +29,13 @@ export async function createBrowserRuntimeTask(
 	const runtime = await requireRuntime(env, instanceId, userId);
 	const taskRes = await callRuntime(env, runtime, "/tasks", {
 		method: "POST",
-		body: JSON.stringify({ type: request.type, input: request.input }),
+		body: JSON.stringify({
+			type: request.type,
+			input: request.input,
+			title: request.title,
+			subtitle: request.subtitle,
+			description: request.description,
+		}),
 	});
 	const payload = await runtimeJson(taskRes);
 	if (!taskRes.ok) throw new Error("the runner rejected the task");

@@ -64,6 +64,10 @@ export const UPSERT_INSTANCE_RUNTIME_SQL = `INSERT INTO instance_runtimes (
 export interface RunnerTaskBody {
 	type: string;
 	input?: Record<string, unknown>;
+	/** Optional card presentation for the console kanban. */
+	title?: string;
+	subtitle?: string;
+	description?: string;
 	requiresApproval?: boolean;
 	approvalPrompt?: string;
 }
@@ -535,9 +539,13 @@ export function normalizeRunnerTaskBody(value: unknown): RunnerTaskBody {
 	const type = value.type.trim().slice(0, 120);
 	const requiresApproval =
 		value.requiresApproval === true || APPROVAL_REQUIRED_RUNNER_TASKS.has(type);
+	const str = (v: unknown, max: number) => (typeof v === "string" && v.trim() ? v.trim().slice(0, max) : undefined);
 	return {
 		type,
 		input: isRecord(value.input) ? value.input : {},
+		title: str(value.title, 200),
+		subtitle: str(value.subtitle, 200),
+		description: str(value.description, 500),
 		requiresApproval,
 		approvalPrompt: typeof value.approvalPrompt === "string"
 			? value.approvalPrompt.slice(0, 500)

@@ -45,12 +45,42 @@ interface RawTask {
 	type?: string;
 	status?: string;
 	title?: string;
+	subtitle?: string;
 	description?: string;
 	result?: string;
 	input?: Record<string, unknown>;
 	output?: Record<string, unknown>;
 	createdAt?: string;
 	updatedAt?: string;
+}
+
+/** Friendly names for the platform's own task types, so a card never shows a raw
+ *  machine string like "job.apply_agent". */
+const FRIENDLY_TYPES: Record<string, string> = {
+	"job.apply_agent": "Job application",
+	"setup.fags_browser_runtime": "Runner setup",
+};
+
+/** Title-case a machine type ("some_task.kind" → "Some Task Kind"). */
+function prettifyType(type: string): string {
+	return (
+		FRIENDLY_TYPES[type] ||
+		type.replace(/[._-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()).trim() ||
+		"Task"
+	);
+}
+
+/** Derive a human card title + subtitle from a job URL (company/role slug + host). */
+export function deriveFromUrl(url: string): { title: string; subtitle: string } {
+	let host = "";
+	try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { return { title: "", subtitle: "" }; }
+	const slug = url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() || "";
+	const pretty = slug
+		.replace(/-([a-z0-9]{4,8})$/i, (m, g: string) => (/\d/.test(g) ? "" : m))
+		.replace(/[-_]+/g, " ")
+		.replace(/\b\w/g, (c) => c.toUpperCase())
+		.trim();
+	return { title: pretty || host, subtitle: pretty ? host : "" };
 }
 
 /** A stable per-job key: the normalized job URL, else the task id (its own card). */
@@ -65,22 +95,21 @@ export function jobKeyForTask(task: RawTask): string {
 	return String(task.id ?? "");
 }
 
-/** A readable card label — the task title, else derived from the job URL slug. */
+/**
+ * A card label that is ALWAYS human-friendly and non-empty. Priority:
+ *   1. the agent-set title/subtitle (the task-creation contract),
+ *   2. derived from the job URL (company/role slug + host),
+ *   3. a friendly-cased task type ("job.apply_agent" → "Job application").
+ * A raw machine type or an empty title is never surfaced.
+ */
 function taskLabel(task: RawTask): { title: string; subtitle: string } {
-	if (task.title) return { title: task.title, subtitle: "" };
+	const agentTitle = typeof task.title === "string" ? task.title.trim() : "";
+	const agentSubtitle = typeof task.subtitle === "string" ? task.subtitle.trim() : "";
 	const url = typeof task.input?.url === "string" ? task.input.url : "";
-	if (url) {
-		let host = "";
-		try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { /* not a URL */ }
-		const slug = url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() || "";
-		const pretty = slug
-			.replace(/-([a-z0-9]{4,8})$/i, (m, g: string) => (/\d/.test(g) ? "" : m))
-			.replace(/[-_]+/g, " ")
-			.replace(/\b\w/g, (c) => c.toUpperCase())
-			.trim();
-		if (pretty || host) return { title: pretty || host, subtitle: pretty ? host : "" };
-	}
-	return { title: task.type || "Task", subtitle: "" };
+	const derived = url ? deriveFromUrl(url) : { title: "", subtitle: "" };
+	const title = agentTitle || derived.title || prettifyType(task.type || "");
+	const subtitle = agentSubtitle || (agentTitle ? "" : derived.subtitle);
+	return { title, subtitle };
 }
 
 /** A one-line description: the task's own, else the failure/outcome detail. */

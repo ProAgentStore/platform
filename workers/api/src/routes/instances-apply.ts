@@ -8,6 +8,7 @@ import { timingSafeEqualStr } from "../lib/crypto.js";
 import { runShotKey } from "../lib/run-shots.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
+import { deriveFromUrl } from "../lib/board.js";
 import { callRuntime, requireOwnedInstance, requireRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
 
 /** An apply failure with an HTTP-ish status so callers can map it. */
@@ -119,9 +120,15 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 
 	let taskId: string;
 	try {
+		// Give the board card a real title up front (best-effort from the job URL),
+		// so it reads e.g. "Business Ai Group… Head Of Engineering / employmenthero.com"
+		// instead of a derived-at-render guess.
+		const card = deriveFromUrl(url);
 		({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
 			type: "job.apply_agent",
 			input: { url, resumePath },
+			title: card.title || undefined,
+			subtitle: card.subtitle || undefined,
 		}));
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);

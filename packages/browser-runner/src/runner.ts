@@ -108,6 +108,11 @@ export class LocalRunner {
 		const normalized = normalizeCreateTaskRequest(request);
 		validateTaskInput(normalized.type, normalized.input);
 		const now = new Date().toISOString();
+		// Optional card presentation for the console kanban (only set when provided).
+		const card: Pick<RunnerTask, "title" | "subtitle" | "description"> = {};
+		if (normalized.title) card.title = normalized.title;
+		if (normalized.subtitle) card.subtitle = normalized.subtitle;
+		if (normalized.description) card.description = normalized.description;
 		// Agent-driven applications are steered by the remote Workflow brain via the
 		// /browser/* endpoints — the runner never auto-executes them. The task exists
 		// for the console board, the activity trace, and takeover keying.
@@ -117,6 +122,7 @@ export class LocalRunner {
 				type: normalized.type,
 				status: "running",
 				input: normalized.input,
+				...card,
 				requiresApproval: false,
 				createdAt: now,
 				updatedAt: now,
@@ -132,6 +138,7 @@ export class LocalRunner {
 			type: normalized.type,
 			status: requiresApproval ? "needs_approval" : "queued",
 			input: normalized.input,
+			...card,
 			requiresApproval,
 			approval: requiresApproval
 				? {
@@ -1088,9 +1095,13 @@ function normalizeCreateTaskRequest(request: CreateTaskRequest): Required<Create
 	if (!isRecord(request) || typeof request.type !== "string" || !request.type.trim()) {
 		throw new RunnerInputError("task type required");
 	}
+	const str = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
 	return {
 		type: request.type.trim().slice(0, 120),
 		input: isRecord(request.input) ? request.input : {},
+		title: str(request.title, 200),
+		subtitle: str(request.subtitle, 200),
+		description: str(request.description, 500),
 		requiresApproval: request.requiresApproval === true,
 		approvalPrompt: typeof request.approvalPrompt === "string"
 			? request.approvalPrompt.trim().slice(0, 500)

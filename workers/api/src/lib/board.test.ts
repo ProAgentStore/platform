@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { jobKeyForTask } from "./board.js";
+import { jobKeyForTask, deriveFromUrl } from "./board.js";
 
 describe("jobKeyForTask", () => {
 	it("collapses the same job URL across query strings / tracking params", () => {
@@ -23,5 +23,17 @@ describe("jobKeyForTask", () => {
 	it("falls back to the task id when there is no URL", () => {
 		expect(jobKeyForTask({ id: "t9" })).toBe("t9");
 		expect(jobKeyForTask({ id: "t9", input: { url: "not a url" } })).toBe("t9");
+	});
+});
+
+describe("deriveFromUrl", () => {
+	it("prettifies the job slug and keeps the host as subtitle", () => {
+		const r = deriveFromUrl("https://employmenthero.com/jobs/position/business-ai-group-pty-ltd-head-of-engineering-a8f4j/");
+		expect(r.title).toBe("Business Ai Group Pty Ltd Head Of Engineering");
+		expect(r.subtitle).toBe("employmenthero.com");
+	});
+
+	it("returns empty for a non-URL so the caller can fall back", () => {
+		expect(deriveFromUrl("not a url")).toEqual({ title: "", subtitle: "" });
 	});
 });

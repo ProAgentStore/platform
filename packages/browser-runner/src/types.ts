@@ -36,6 +36,11 @@ export interface RunnerTask {
 	type: string;
 	status: TaskStatus;
 	input: Record<string, unknown>;
+	/** Optional card presentation for the console kanban (title always shown; the
+	 *  platform derives a human-friendly fallback when these are absent). */
+	title?: string;
+	subtitle?: string;
+	description?: string;
 	output?: unknown;
 	error?: string;
 	requiresApproval: boolean;
@@ -60,6 +65,10 @@ export interface RunnerEvent {
 export interface CreateTaskRequest {
 	type: string;
 	input?: Record<string, unknown>;
+	/** Optional card presentation for the console kanban. */
+	title?: string;
+	subtitle?: string;
+	description?: string;
 	requiresApproval?: boolean;
 	approvalPrompt?: string;
 }
