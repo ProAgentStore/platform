@@ -84,6 +84,17 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		.first();
 	if (existing) throw new HttpError(409, "Already subscribed to this agent");
 
+	// Cap total instances per user. Subscribe is expensive (template DO fetch + instance
+	// DO init + KB copy + creator notification), so bound how many a single account can
+	// stand up to blunt resource-exhaustion / notification-spam abuse.
+	const count = await c.env.DB.prepare(
+		"SELECT COUNT(*) AS n FROM agent_instances WHERE user_id = ?1",
+	)
+		.bind(session.uid)
+		.first<{ n: number }>();
+	if ((count?.n ?? 0) >= 100)
+		throw new HttpError(429, "Subscription limit reached (100 agents). Cancel one to add another.");
+
 	const instanceId = crypto.randomUUID();
 
 	// Create instance row

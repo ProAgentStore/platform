@@ -73,6 +73,7 @@ app.use("/v1/instances/*/coding/sessions/*/explain", rateLimitStrict()); // LLM:
 app.use("/v1/instances/*/coding/overseer", rateLimitStrict()); // LLM: cross-repo
 app.use("/v1/instances/*/apply", rateLimitStrict()); // workflow + LLM + browser
 app.use("/v1/push/test", rateLimitStrict());
+app.use("/v1/errors/client", rateLimitStrict()); // browser-driven writes to the durable log — throttle hard
 app.use("/v1/keys/*/reveal", rateLimitStrict()); // hands out a raw decrypted key — throttle hard
 
 // ── Routes ─────────────────────────────────────────────────────────────────

@@ -35,6 +35,14 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 				e.context ? JSON.stringify(e.context).slice(0, 4000) : null,
 			)
 			.run();
+		// Opportunistic retention: there is no cron, so ~2% of writes prune rows older
+		// than 30 days (indexed on created_at). Keeps the log from growing unbounded
+		// even if a client hammers /v1/errors/client. Best-effort — never blocks.
+		if (Math.random() < 0.02) {
+			await env.DB.prepare("DELETE FROM error_log WHERE created_at < datetime('now', '-30 days')")
+				.run()
+				.catch(() => undefined);
+		}
 	} catch (err) {
 		// Last resort — the logger itself must not throw.
 		console.error("[error-log] failed to persist:", err instanceof Error ? err.message : String(err));

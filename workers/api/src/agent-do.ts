@@ -718,7 +718,7 @@ export class AgentDO extends DurableObject<Env> {
 
 		const doc: KnowledgeDoc = {
 			id: crypto.randomUUID(),
-			title: body.title,
+			title: body.title.slice(0, 500),
 			content,
 			source: body.source || "paste",
 			sourceUrl: body.sourceUrl,
@@ -771,7 +771,7 @@ export class AgentDO extends DurableObject<Env> {
 			return json({ error: "Document too large (max 100KB)" }, 400);
 		const updated: KnowledgeDoc = {
 			...existing,
-			title: typeof body.title === "string" && body.title.trim() ? body.title.trim() : existing.title,
+			title: (typeof body.title === "string" && body.title.trim() ? body.title.trim() : existing.title).slice(0, 500),
 			content: typeof body.content === "string" ? body.content : existing.content,
 			updatedAt: new Date().toISOString(),
 		};

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { listErrors, logError } from "./error-log.js";
 import type { Env } from "../types.js";
 
@@ -9,6 +9,8 @@ function mockDb(rows: unknown[] = []) {
 		prepare(sql: string) {
 			queries.push(sql);
 			return {
+				// Bind-less .run() (used by the retention DELETE).
+				run: async () => ({}),
 				bind(...args: unknown[]) {
 					return {
 						run: async () => { if (sql.startsWith("INSERT")) inserts.push({ sql, args }); return {}; },
@@ -45,6 +47,28 @@ describe("logError", () => {
 		await logError(env, { source: "s", message: "m".repeat(5000), context: { big: "c".repeat(9000) } });
 		expect((inserts[0].args[4] as string).length).toBe(2000);
 		expect((inserts[0].args[5] as string).length).toBe(4000);
+	});
+
+	it("opportunistically prunes old rows (retention)", async () => {
+		const { env, queries } = mockDb();
+		const rnd = vi.spyOn(Math, "random").mockReturnValue(0); // force the 2% prune branch
+		try {
+			await logError(env, { source: "s", message: "m" });
+		} finally {
+			rnd.mockRestore();
+		}
+		expect(queries.some((q) => q.startsWith("DELETE FROM error_log") && q.includes("-30 days"))).toBe(true);
+	});
+
+	it("does NOT prune on the common path", async () => {
+		const { env, queries } = mockDb();
+		const rnd = vi.spyOn(Math, "random").mockReturnValue(0.5); // above the 0.02 threshold
+		try {
+			await logError(env, { source: "s", message: "m" });
+		} finally {
+			rnd.mockRestore();
+		}
+		expect(queries.some((q) => q.startsWith("DELETE FROM error_log"))).toBe(false);
 	});
 });
 
