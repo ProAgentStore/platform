@@ -75,11 +75,41 @@ function prettifyType(type: string): string {
 	);
 }
 
-/** Derive a human card title + subtitle from a job URL (company/role slug + host). */
+// Generic route words that don't name the job — skipped when picking the title
+// segment so e.g. Ashby /xero/<uuid>/application → "Xero", not "Application".
+const GENERIC_PATH_SEGMENTS = new Set([
+	"apply", "application", "applications", "job", "jobs", "career", "careers",
+	"position", "positions", "opening", "openings", "listing", "listings",
+	"vacancy", "vacancies", "role", "roles", "posting", "postings", "p", "en", "us",
+]);
+
+/** True for opaque id-ish path segments (UUID, long hex, or no letters at all). */
+function isOpaqueSegment(seg: string): boolean {
+	if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg)) return true; // UUID
+	if (/^[0-9a-f]{12,}$/i.test(seg)) return true; // long hex blob
+	if (!/[a-z]/i.test(seg)) return true; // pure numeric / hyphen / symbols
+	return false;
+}
+
+/**
+ * Derive a human card title + subtitle from a job URL. Walks the path from the end
+ * and picks the segment that actually names the job/company — skipping opaque ids
+ * (Dover /apply/<company>/<uuid>) and generic route words (…/jobs/<id>) that would
+ * otherwise surface a UUID or "Jobs" as the card title.
+ */
 export function deriveFromUrl(url: string): { title: string; subtitle: string } {
 	let host = "";
-	try { host = new URL(url).hostname.replace(/^www\./, ""); } catch { return { title: "", subtitle: "" }; }
-	const slug = url.replace(/[?#].*$/, "").replace(/\/+$/, "").split("/").pop() || "";
+	let pathname = "";
+	try { const u = new URL(url); host = u.hostname.replace(/^www\./, ""); pathname = u.pathname; }
+	catch { return { title: "", subtitle: "" }; }
+	const segs = pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+	let slug = "";
+	for (let i = segs.length - 1; i >= 0; i--) {
+		const s = segs[i];
+		if (isOpaqueSegment(s) || GENERIC_PATH_SEGMENTS.has(s.toLowerCase())) continue;
+		slug = s;
+		break;
+	}
 	const pretty = slug
 		.replace(/-([a-z0-9]{4,8})$/i, (m, g: string) => (/\d/.test(g) ? "" : m))
 		.replace(/[-_]+/g, " ")

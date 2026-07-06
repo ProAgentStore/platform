@@ -48,4 +48,18 @@ describe("deriveFromUrl", () => {
 	it("returns empty for a non-URL so the caller can fall back", () => {
 		expect(deriveFromUrl("not a url")).toEqual({ title: "", subtitle: "" });
 	});
+
+	it("skips a trailing UUID and uses the company segment (Dover)", () => {
+		const r = deriveFromUrl("https://app.dover.com/apply/pentanasolutions/fd3dae1c-8855-4308-9d50-27db48218d7a");
+		expect(r.title).toBe("Pentanasolutions");
+		expect(r.subtitle).toBe("app.dover.com");
+	});
+
+	it("skips generic route words + opaque id (Ashby → company)", () => {
+		expect(deriveFromUrl("https://jobs.ashbyhq.com/xero/a547298d-33a5-45bc-ba01-d0787ac3e51b/application").title).toBe("Xero");
+	});
+
+	it("skips a numeric id and generic 'jobs' to reach the company (Greenhouse)", () => {
+		expect(deriveFromUrl("https://job-boards.greenhouse.io/iconiq/jobs/8030553").title).toBe("Iconiq");
+	});
 });
