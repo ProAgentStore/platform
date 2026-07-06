@@ -367,13 +367,20 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 		headers.set("Authorization", `Bearer ${apiKey}`);
 	}
 
+	// BUFFER the request body rather than streaming `c.req.raw.body`. A streamed body
+	// becomes chunked transfer-encoding with no Content-Length, which OpenAI's gateway
+	// rejects for multipart uploads — the Whisper transcription was 404'ing with
+	// "Invalid URL (POST /v1/audio/transcriptions)" even though the URL was correct.
+	// Proxy request bodies are always small (chat JSON, or audio < 5MB), so buffering is
+	// safe; the RESPONSE is still streamed untouched below.
+	const reqBody =
+		c.req.method !== "GET" && c.req.method !== "HEAD"
+			? await c.req.arrayBuffer()
+			: undefined;
 	const upstream = await fetch(upstreamUrl, {
 		method: c.req.method,
 		headers,
-		body:
-			c.req.method !== "GET" && c.req.method !== "HEAD"
-				? c.req.raw.body
-				: undefined,
+		body: reqBody,
 	});
 
 	// Forward response with CORS

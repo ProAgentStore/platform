@@ -59,9 +59,15 @@ export async function api<T = Record<string, unknown>>(
 	try {
 		res = await fetch(`${API}${path}`, { ...opts, headers });
 	} catch (e) {
-		// Network/CORS failure — the request never reached the server, so only the
-		// browser knows. Report it (skip the report endpoint itself).
-		if (!path.startsWith("/v1/errors")) reportClientError("api", `${opts.method || "GET"} ${path} → network error`, { error: e instanceof Error ? e.message : String(e) });
+		// A thrown fetch is almost always transient CONNECTIVITY (offline / flaky wifi /
+		// CORS), not a platform bug — and on every blip it fires one report per in-flight
+		// request, flooding the durable log and burying real errors. Skip the common
+		// connectivity messages; still surface anything genuinely unusual.
+		const msg = e instanceof Error ? e.message : String(e);
+		const connectivity = /load failed|failed to fetch|networkerror|network connection was lost|the request timed out|timed? ?out|cancelled|canceled|aborted/i.test(msg);
+		if (!connectivity && !path.startsWith("/v1/errors")) {
+			reportClientError("api", `${opts.method || "GET"} ${path} → network error`, { error: msg });
+		}
 		throw e;
 	}
 	// Session expired/invalid mid-use: clear the dead token and signal the app so it
