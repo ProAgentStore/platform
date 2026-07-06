@@ -46,4 +46,11 @@ describe("renderMd YouTube embeds", () => {
 		expect(out).not.toContain("iframe");
 		expect(out).toContain("<a href=");
 	});
+
+	it("does not break markdown-style YouTube links — renders them as normal links", () => {
+		const out = renderMd("[Fable 5 demo](https://www.youtube.com/watch?v=0WkCQZd113Y)");
+		expect(out).toContain('<a href="https://www.youtube.com/watch?v=0WkCQZd113Y"');
+		expect(out).toContain("Fable 5 demo");
+		expect(out).not.toContain("@@YT_EMBED");
+	});
 });
