@@ -15,6 +15,8 @@ interface VoiceConfig {
 	/** Mic sensitivity for silence detection (0.4–2): higher = more sensitive
 	 *  (needs a smaller gap above the noise floor to count as speech). Default 1. */
 	sensitivity: number;
+	/** Whether hands-free voice commands (e.g. "repeat") are honored. Default true. */
+	commandsEnabled: boolean;
 }
 
 let _cache: VoiceConfig | null = null;
@@ -51,6 +53,7 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		language: (vs.language as string) || "en-US",
 		silenceMs: clamp(vs.silenceMs, 500, 6000, 1500),
 		sensitivity: clamp(vs.sensitivity, 0.4, 2, 1),
+		commandsEnabled: vs.commandsEnabled !== false,
 	};
 }
 

@@ -9,7 +9,7 @@ import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
 import RepoSettingsModal from "./RepoSettingsModal";
-import { ArrowLeft, Copy, Settings, ChevronDown } from "lucide-react";
+import { ArrowLeft, Copy, Settings, ChevronDown, Eye, SquareTerminal } from "lucide-react";
 
 interface Props {
 	instanceId: string;
@@ -475,9 +475,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						</>
 					)}
 				</div>
+				{/* Icon-only on mobile (saves space); icon + label from sm up. */}
 				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
-					<button type="button" onClick={() => setView("summary")} className={`px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}>Co-pilot</button>
-					<button type="button" onClick={() => setView("terminal")} className={`px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}>Terminal</button>
+					<button type="button" onClick={() => setView("summary")} title="Co-pilot" aria-label="Co-pilot" aria-pressed={view === "summary"} className={`flex items-center gap-1 px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}><Eye size={14} /><span className="hidden sm:inline">Co-pilot</span></button>
+					<button type="button" onClick={() => setView("terminal")} title="Terminal" aria-label="Terminal" aria-pressed={view === "terminal"} className={`flex items-center gap-1 px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}><SquareTerminal size={14} /><span className="hidden sm:inline">Terminal</span></button>
 				</div>
 				<div className="ml-auto flex gap-1 shrink-0">
 					<button type="button" onClick={() => setSettingsRepoId(openRepo?.id || openSession.repoId)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={13} /></button>

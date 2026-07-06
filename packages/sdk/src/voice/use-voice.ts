@@ -216,6 +216,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Adaptive end-of-turn detection (pure logic in ./vad.ts — unit-tested there).
 	const vadStateRef = useRef(initVad());
 	const vadSensitivityRef = useRef(1);
+	// Whether hands-free voice commands (e.g. "repeat") are honored (from settings).
+	const commandsEnabledRef = useRef(true);
 	// True while reopening the mic after an idle recycle — suppresses the "your turn"
 	// chime (there was no agent turn, so a chime every idle window would be confusing).
 	const idleRecycleRef = useRef(false);
@@ -231,6 +233,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			silenceMsRef.current = c.silenceMs;
 			sttIsWhisperRef.current = c.sttProvider === "openai";
 			vadSensitivityRef.current = c.sensitivity;
+			commandsEnabledRef.current = c.commandsEnabled;
 		}).catch(() => {});
 	}, [instanceId]);
 
@@ -320,7 +323,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			if (sttIsWhisperRef.current) {
 				if (isFinal && text.trim()) {
 					const t = text.trim();
-					if (matchVoiceCommand(t) === "repeat") {
+					if (commandsEnabledRef.current && matchVoiceCommand(t) === "repeat") {
 						flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); });
 						repeatLastRef.current();
 						return;
@@ -343,7 +346,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				const msg = pendingTextRef.current.trim();
 				pendingTextRef.current = "";
 				if (!msg) return;
-				if (matchVoiceCommand(msg) === "repeat") {
+				if (commandsEnabledRef.current && matchVoiceCommand(msg) === "repeat") {
 					flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
 					repeatLastRef.current();
 					return;
@@ -368,7 +371,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				stopAudioMonitor();
 				setMicOn(false);
 			});
-			if (matchVoiceCommand(text.trim()) === "repeat") { repeatLastRef.current(); return; }
+			if (commandsEnabledRef.current && matchVoiceCommand(text.trim()) === "repeat") { repeatLastRef.current(); return; }
 			emitSendRef.current(text);
 		} else {
 			flushSync(() => setInterim(text));
@@ -385,6 +388,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			silenceMsRef.current = c.silenceMs;
 			sttIsWhisperRef.current = c.sttProvider === "openai";
 			vadSensitivityRef.current = c.sensitivity;
+			commandsEnabledRef.current = c.commandsEnabled;
 		} catch {}
 		const stt = await createStt(instanceId, {
 			onResult: handleResult,

@@ -413,6 +413,8 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		openai: body.openai && typeof body.openai === "object" ? body.openai : undefined,
 		gemini: body.gemini && typeof body.gemini === "object" ? body.gemini : undefined,
 		language: typeof body.language === "string" ? body.language.slice(0, 10) : "en-US",
+		// Hands-free voice commands (e.g. "repeat") — on unless explicitly disabled.
+		commandsEnabled: body.commandsEnabled !== false,
 	};
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	cfg.voiceSettings = settings;

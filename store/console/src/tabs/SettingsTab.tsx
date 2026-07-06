@@ -14,6 +14,11 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 	const [silenceMs, setSilenceMs] = useState(1500);
 	const [sensitivity, setSensitivity] = useState(1);
 	const [sttMode, setSttMode] = useState("browser");
+	const [ttsProvider, setTtsProvider] = useState("browser");
+	const [ttsVoice, setTtsVoice] = useState("alloy");
+	const [speed, setSpeed] = useState(100);
+	const [language, setLanguage] = useState("en-US");
+	const [commandsEnabled, setCommandsEnabled] = useState(true);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
@@ -33,6 +38,12 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 				if (typeof vs.silenceMs === "number") setSilenceMs(vs.silenceMs);
 				if (typeof vs.sensitivity === "number") setSensitivity(vs.sensitivity);
 				if (typeof vs.sttMode === "string") setSttMode(vs.sttMode);
+				if (typeof vs.provider === "string") setTtsProvider(vs.provider);
+				if (typeof vs.speed === "number") setSpeed(vs.speed);
+				if (typeof vs.language === "string") setLanguage(vs.language);
+				if (typeof vs.commandsEnabled === "boolean") setCommandsEnabled(vs.commandsEnabled);
+				const oa = vs.openai as Record<string, unknown> | undefined;
+				if (oa && typeof oa.voice === "string") setTtsVoice(oa.voice);
 			} catch {}
 			// Is there an OpenAI key? Smart (AI) recognition silently falls back to
 			// browser dictation without one, so surface it explicitly.
@@ -226,17 +237,17 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Voice</h3>
 
-				<label className="block text-sm font-semibold mb-1">Recognition</label>
+				<label className="block text-sm font-semibold mb-1">Speech recognition (how it hears you)</label>
 				<p className="text-xs text-muted mb-2">
-					<b>Dictation</b> is instant but error-prone with accents. <b>Smart (AI)</b> records and transcribes with OpenAI Whisper — far more accurate (needs your OpenAI key in Knowledge → Credentials; falls back to dictation without it).
+					<b>Dictation</b> shows words <b>live as you speak</b> (real-time) — on-device, instant, but error-prone with accents. <b>Smart (AI)</b> records your whole turn and transcribes it with OpenAI Whisper — far more accurate, but the text only appears <b>at the end</b> (no live words). Whisper needs your OpenAI key (Knowledge → Credentials; falls back to Dictation without it).
 				</p>
 				<select
 					value={sttMode}
 					onChange={(e) => { setSttMode(e.target.value); saveVoice({ sttMode: e.target.value }); }}
 					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
 				>
-					<option value="browser">Dictation — fast, on-device</option>
-					<option value="openai">Smart (AI) — Whisper, most accurate</option>
+					<option value="browser">Dictation — real-time, words as you speak</option>
+					<option value="openai">Smart (AI) — Whisper, most accurate (appears at end)</option>
 				</select>
 				{sttMode === "openai" && hasOpenAiKey !== null && (
 					hasOpenAiKey ? (
@@ -245,6 +256,51 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 						<p className="text-xs text-red mb-4">⚠ No OpenAI key found — Smart (AI) can't run, so it's still using plain dictation. Add your key in <b>Knowledge → Credentials</b> to enable Whisper.</p>
 					)
 				)}
+
+				<label className="block text-sm font-semibold mb-1 mt-4">Voice output (how it speaks back)</label>
+				<p className="text-xs text-muted mb-2">
+					<b>Browser voice</b> is built-in and free. <b>Natural (OpenAI)</b> uses OpenAI TTS for a far more human voice (needs your OpenAI key; falls back to the browser voice without it).
+				</p>
+				<select
+					value={ttsProvider}
+					onChange={(e) => { setTtsProvider(e.target.value); saveVoice({ provider: e.target.value }); }}
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
+				>
+					<option value="browser">Browser voice — free, on-device</option>
+					<option value="openai-realtime">Natural (OpenAI) — human-sounding</option>
+				</select>
+				{ttsProvider.includes("openai") && hasOpenAiKey === false && (
+					<p className="text-xs text-red mb-2">⚠ No OpenAI key — using the browser voice. Add your key in <b>Knowledge → Credentials</b>.</p>
+				)}
+				{ttsProvider.includes("openai") && (
+					<div className="mb-2">
+						<label className="block text-xs font-semibold mb-1">Voice</label>
+						<select
+							value={ttsVoice}
+							onChange={(e) => { setTtsVoice(e.target.value); saveVoice({ openai: { ...((voiceSettings?.openai as Record<string, unknown>) || {}), voice: e.target.value } }); }}
+							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+						>
+							{["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
+								<option key={v} value={v}>{v[0].toUpperCase() + v.slice(1)}</option>
+							))}
+						</select>
+					</div>
+				)}
+				<div className="mb-1">
+					<label className="block text-xs font-semibold mb-1">Speaking speed</label>
+					<select
+						value={speed}
+						onChange={(e) => { setSpeed(Number(e.target.value)); saveVoice({ speed: Number(e.target.value) }); }}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+					>
+						<option value={75}>Slow — 0.75×</option>
+						<option value={100}>Normal — 1×</option>
+						<option value={125}>Fast — 1.25×</option>
+						<option value={150}>Faster — 1.5×</option>
+					</select>
+				</div>
+
+				<div className="border-t border-line my-3" />
 
 				<label className="block text-sm font-semibold mb-1">Conversation — pause before sending</label>
 				<p className="text-xs text-muted mb-2">
@@ -282,6 +338,40 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 						</select>
 					</div>
 				)}
+
+				<div className="border-t border-line my-3" />
+
+				<label className="block text-sm font-semibold mb-1">Language</label>
+				<p className="text-xs text-muted mb-2">Language for both speech recognition and the spoken voice.</p>
+				<select
+					value={language}
+					onChange={(e) => { setLanguage(e.target.value); saveVoice({ language: e.target.value }); }}
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-1 block w-full sm:w-auto"
+				>
+					{[["en-US", "English (US)"], ["en-GB", "English (UK)"], ["en-AU", "English (Australia)"], ["es-ES", "Spanish"], ["fr-FR", "French"], ["de-DE", "German"], ["it-IT", "Italian"], ["pt-BR", "Portuguese (Brazil)"], ["hi-IN", "Hindi"], ["zh-CN", "Chinese (Mandarin)"], ["ja-JP", "Japanese"], ["ko-KR", "Korean"]].map(([code, label]) => (
+						<option key={code} value={code}>{label}</option>
+					))}
+				</select>
+
+				<div className="border-t border-line my-3" />
+
+				<label className="block text-sm font-semibold mb-1">Voice commands</label>
+				<p className="text-xs text-muted mb-2">
+					In hands-free mode, speak a command instead of a message and it acts locally:
+				</p>
+				<ul className="text-xs text-muted mb-2 space-y-1">
+					<li>• <b>"Repeat"</b> (or "say again", "pardon", "what did you say") — re-speaks the agent's last reply.</li>
+				</ul>
+				<label className="flex items-center gap-2 text-sm cursor-pointer">
+					<input
+						type="checkbox"
+						checked={commandsEnabled}
+						onChange={(e) => { setCommandsEnabled(e.target.checked); saveVoice({ commandsEnabled: e.target.checked }); }}
+						className="w-4 h-4 accent-accent"
+					/>
+					Enable voice commands
+				</label>
+				<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat" is sent as a normal message.</p>
 			</div>
 
 			{/* Danger zone */}
