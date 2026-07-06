@@ -4,6 +4,7 @@ import { HeaderProvider } from "./lib/HeaderContext";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
+import Browse from "./pages/Browse";
 import AgentDetail from "./pages/AgentDetail";
 import InstanceDetail from "./pages/InstanceDetail";
 import Profile from "./pages/Profile";
@@ -28,6 +29,7 @@ function AuthGate() {
 			<Route element={<Layout />}>
 				<Route index element={<Navigate to="agents" replace />} />
 				<Route path="agents" element={<Dashboard />} />
+				<Route path="browse" element={<Browse />} />
 				<Route path="agents/new" element={<AgentDetail />} />
 				<Route path="agents/:id" element={<AgentDetail />} />
 				<Route path="agents/:id/:tab" element={<AgentDetail />} />

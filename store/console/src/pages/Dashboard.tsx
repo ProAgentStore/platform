@@ -91,12 +91,12 @@ export default function Dashboard() {
 				<div>
 					<div className="flex justify-between items-center mb-4">
 						<h2 className="text-[1.1rem] font-semibold">Agents you've subscribed to</h2>
-						<a href="/" className="text-sm px-3 py-1.5 rounded-xl border border-line text-muted hover:border-accent hover:text-accent no-underline font-semibold transition-all">Browse Store</a>
+						<button type="button" onClick={() => navigate("/browse")} className="text-sm px-3 py-1.5 rounded-xl border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-all">Browse agents</button>
 					</div>
 					{loading ? (
 						<p className="text-center py-8 text-muted">Loading instances...</p>
 					) : instances.length === 0 ? (
-						<p className="text-center py-8 text-muted-soft">No subscriptions yet. Browse the <a href="/">store</a> to find agents.</p>
+						<p className="text-center py-8 text-muted-soft">No subscriptions yet. <button type="button" onClick={() => navigate("/browse")} className="text-accent underline">Browse agents</button> to subscribe.</p>
 					) : (
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
 							{instances.map((inst) => (

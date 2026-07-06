@@ -72,6 +72,9 @@ export default function Layout() {
 							<NavLink to="/agents" className={({ isActive }) => `text-[0.82rem] px-2.5 py-1.5 rounded-md no-underline whitespace-nowrap transition-all ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}>
 								Agents
 							</NavLink>
+							<NavLink to="/browse" className={({ isActive }) => `text-[0.82rem] px-2.5 py-1.5 rounded-md no-underline whitespace-nowrap transition-all ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}>
+								Browse
+							</NavLink>
 							<NavLink to="/instances" className={({ isActive }) => `text-[0.82rem] px-2.5 py-1.5 rounded-md no-underline whitespace-nowrap transition-all ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}>
 								Instances
 							</NavLink>
