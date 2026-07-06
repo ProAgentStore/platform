@@ -24,6 +24,7 @@ interface TimelineEntry {
 	text?: string;
 	seq?: number;
 	createdAt?: string;
+	audioKey?: string;
 }
 
 export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride }: Props) {
@@ -39,7 +40,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [view, setView] = useState<"summary" | "terminal">("summary");
 	const [terminalText, setTerminalText] = useState("(waiting...)");
 	const [termAutoScroll, setTermAutoScroll] = useState(true);
-	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string; time?: string }[]>([]);
+	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string; time?: string; audioKey?: string }[]>([]);
 
 	// Loop (extracted hook)
 	const loop = useCodingLoop({
@@ -65,10 +66,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const threadRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<HTMLPreElement>(null);
 
-	// Voice: wire to Co-pilot sendInstruction
-	const sendInstructionRef = useRef<(text: string) => void>(() => {});
+	// Voice: wire to Co-pilot sendInstruction (meta.audioKey = saved recording for replay)
+	const sendInstructionRef = useRef<(text: string, audioKey?: string) => void>(() => {});
 	const voice = useVoice(instanceId, {
-		onSend: (text) => sendInstructionRef.current(text),
+		onSend: (text, meta) => sendInstructionRef.current(text, meta?.audioKey),
 	});
 
 	const loadCoding = useCallback(async () => {
@@ -163,6 +164,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
 					content: e.content || e.text || "",
 					time: e.createdAt,
+					audioKey: e.audioKey,
 				}));
 			if (entries.length > 0) setSummaryHistory(entries);
 		} catch {}
@@ -203,6 +205,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					role: e.type === "chat_user" || e.type === "command" ? "user" : e.type === "chat_system" || e.type === "system" ? "system" : "assistant",
 					content: e.content || e.text || "",
 					time: e.createdAt,
+					audioKey: e.audioKey,
 				}));
 			setSummaryHistory(entries);
 		} catch (e) {
@@ -258,14 +261,14 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// Cleanup watcher on unmount
 	useEffect(() => () => { if (watcherRef.current) clearTimeout(watcherRef.current); }, []);
 
-	const doSendInstruction = async (msg: string) => {
+	const doSendInstruction = async (msg: string, audioKey?: string) => {
 		if (!msg.trim() || !openSession) return;
-		setSummaryHistory((prev) => [...prev, { role: "user", content: msg }]);
+		setSummaryHistory((prev) => [...prev, { role: "user", content: msg, time: new Date().toISOString(), audioKey }]);
 		setSummaryBusy(true);
 		try {
 			const d = await api<{ reply?: string; response?: string; delegated?: boolean }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/agent`, {
 				method: "POST",
-				body: JSON.stringify({ message: msg }),
+				body: JSON.stringify({ message: msg, audioKey }),
 			});
 			const reply = d.reply || d.response;
 			if (reply) {
@@ -510,6 +513,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			<div className="flex flex-col h-full">
 				{view === "summary" && (
 					<CopilotView
+						instanceId={instanceId}
 						voice={voice}
 						loop={loop}
 						chatInput={chatInput}

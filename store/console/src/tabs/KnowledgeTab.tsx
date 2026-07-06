@@ -3,7 +3,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { KnowledgeDoc, MemoryEntry, Credential } from "../lib/types";
 import { formatTime, renderMd } from "@proagentstore/sdk/ui";
 
-type KbSubTab = "docs" | "memory" | "files" | "credentials" | "rules" | "chat";
+type KbSubTab = "docs" | "memory" | "files" | "credentials" | "rules";
 
 interface Props {
 	instanceId: string;
@@ -194,7 +194,6 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		{ id: "files", label: "Files" },
 		{ id: "credentials", label: "Credentials" },
 		{ id: "rules", label: "Rules & Tips" },
-		{ id: "chat", label: "Chat" },
 	];
 
 	return (
@@ -218,7 +217,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 			</div>
 
 			{/* Documents — first-class Markdown docs: create, read (rendered), edit. The
-			    agent reads/writes these too, so you can ask it to update one in Chat. */}
+			    agent reads/writes these too, so you can ask the Assistant to update one. */}
 			{subTab === "docs" && (() => {
 				const openDoc = openId && openId !== "__new__" ? docs.find((d) => d.id === openId) : null;
 
@@ -250,7 +249,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 									className="w-full min-h-[320px] bg-panel border border-line rounded-xl px-3 py-2.5 text-sm font-mono leading-relaxed"
 								/>
 							)}
-							<p className="text-xs text-muted-soft mt-2">Markdown. The agent can read and update this document too — ask it in Chat.</p>
+							<p className="text-xs text-muted-soft mt-2">Markdown. The agent can read and update this document too — ask the Assistant.</p>
 						</div>
 					);
 				}
@@ -412,11 +411,6 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 			)}
 
 			{/* Chat */}
-			{subTab === "chat" && (
-				<div className="text-center py-8 text-muted text-sm">
-					KB Chat — coming soon
-				</div>
-			)}
 		</div>
 	);
 }

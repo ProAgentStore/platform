@@ -1,17 +1,41 @@
 import { type RefObject } from "react";
 import { renderMd, formatTime } from "@proagentstore/sdk/ui";
-import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench } from "lucide-react";
+import { API, getToken } from "@proagentstore/sdk/client";
+import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench, Eye } from "lucide-react";
+
+/** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
+ *  the text via TTS. Owner-scoped fetch of the R2 blob. */
+async function playMessage(instanceId: string, m: { content: string; audioKey?: string }, speak: (t: string) => void) {
+	if (instanceId && m.audioKey) {
+		try {
+			const res = await fetch(`${API}/v1/instances/${instanceId}/voice-audio/${m.audioKey}`, {
+				headers: { Authorization: `Bearer ${getToken() ?? ""}` },
+			});
+			if (res.ok) {
+				const url = URL.createObjectURL(await res.blob());
+				const audio = new Audio(url);
+				const cleanup = () => URL.revokeObjectURL(url);
+				audio.onended = cleanup;
+				audio.onerror = cleanup;
+				await audio.play();
+				return;
+			}
+		} catch { /* fall through to TTS */ }
+	}
+	speak(m.content);
+}
 
 type Voice = ReturnType<typeof import("@proagentstore/sdk/hooks").useVoice>;
 type Loop = ReturnType<typeof import("./use-coding-loop").useCodingLoop>;
-type Message = { role: string; content: string; time?: string };
+type Message = { role: string; content: string; time?: string; audioKey?: string };
 type LoopPreset = { id: string; label: string; objective: string };
 
 /** Co-pilot view: voice + loop controls, the instruction input, and the message thread. */
 export default function CopilotView({
-	voice, loop, chatInput, setChatInput, sendInstruction,
+	instanceId, voice, loop, chatInput, setChatInput, sendInstruction,
 	summaryHistory, summaryBusy, threadRef, loopPresets, onClearChat,
 }: {
+	instanceId: string;
 	voice: Voice;
 	loop: Loop;
 	chatInput: string;
@@ -80,6 +104,10 @@ export default function CopilotView({
 					<Trash2 size={17} />
 				</button>
 			</div>
+			{/* Scope hint — this is NOT the general Assistant chat; it's tied to THIS session. */}
+			<div className="px-3 pb-1.5 shrink-0 text-[0.7rem] text-muted-soft flex items-center gap-1">
+				<Eye size={11} className="shrink-0" /> Co-pilot — watching this coding session
+			</div>
 			{/* Loop form with presets */}
 			{loop.showLoopForm && !loop.loopOn && (
 				<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
@@ -134,14 +162,14 @@ export default function CopilotView({
 						<div
 							key={i}
 							onClick={() => voice.cancelSpeak()}
-							onDoubleClick={() => voice.maybeSpeakResponse(m.content)}
+							onDoubleClick={() => playMessage(instanceId, m, voice.maybeSpeakResponse)}
 							className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
 								m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 									: "bg-panel border border-line self-start rounded-bl-sm"
 							}`}
 						>
 							<button type="button" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
-							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span>You</span>{m.time && <span className="font-normal opacity-80">{formatTime(m.time)}</span>}</div>}
+							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.maybeSpeakResponse); }} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatTime(m.time)}</span>}</div>}
 							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Co-pilot</span>{m.time && <span className="font-normal text-muted">{formatTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (
 								<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />

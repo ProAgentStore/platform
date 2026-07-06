@@ -564,10 +564,12 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	const sessionId = c.req.param("sessionId");
 	// Verify the session belongs to this instance/user before touching its timeline.
 	if (!(await getSession(c.env, instanceId, uid, sessionId))) throw new HttpError(404, "Session not found");
-	const body = (await c.req.json().catch(() => ({}))) as { message?: string };
+	const body = (await c.req.json().catch(() => ({}))) as { message?: string; audioKey?: string };
 	const raw = String(body.message ?? "").trim();
 	if (!raw) return c.json({ error: "message is required" }, 400);
-	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_user", content: raw }).catch(() => undefined);
+	// A voice-dictated turn carries the R2 id of its saved recording so it can be
+	// replayed (double-tap). Persisted with the turn.
+	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_user", content: raw, audioKey: body.audioKey }).catch(() => undefined);
 
 	// Explicit force-delegate.
 	if (/^(@claude|\/run)\b/i.test(raw)) {

@@ -24,6 +24,8 @@ export interface TimelineEntry {
 	type: TimelineType;
 	content: string;
 	createdAt: string;
+	/** R2 turn id of this turn's saved voice recording (chat_user dictated by voice). */
+	audioKey?: string;
 }
 
 interface Row {
@@ -31,27 +33,29 @@ interface Row {
 	type: string;
 	content: string;
 	created_at: string;
+	audio_key?: string | null;
 }
 
-const toEntry = (r: Row): TimelineEntry => ({ seq: r.seq, type: r.type as TimelineType, content: r.content, createdAt: r.created_at });
+const toEntry = (r: Row): TimelineEntry => ({ seq: r.seq, type: r.type as TimelineType, content: r.content, createdAt: r.created_at, audioKey: r.audio_key ?? undefined });
 
 /** Append one entry to a session's timeline. */
 export async function appendTimeline(
 	env: Env,
-	args: { sessionId: string; instanceId: string; userId: string; type: TimelineType; content: string },
+	args: { sessionId: string; instanceId: string; userId: string; type: TimelineType; content: string; audioKey?: string },
 ): Promise<void> {
 	if (!args.content) return;
+	const audioKey = typeof args.audioKey === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(args.audioKey) ? args.audioKey : null;
 	await env.DB.prepare(
-		"INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content) VALUES (?1, ?2, ?3, ?4, ?5)",
+		"INSERT INTO coding_timeline (session_id, instance_id, user_id, type, content, audio_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
 	)
-		.bind(args.sessionId, args.instanceId, args.userId, args.type, args.content.slice(0, 100_000))
+		.bind(args.sessionId, args.instanceId, args.userId, args.type, args.content.slice(0, 100_000), audioKey)
 		.run();
 }
 
 /** The full timeline for a session, oldest→newest (capped). */
 export async function loadTimeline(env: Env, sessionId: string, limit = 500): Promise<TimelineEntry[]> {
 	const { results } = await env.DB.prepare(
-		"SELECT seq, type, content, created_at FROM coding_timeline WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2",
+		"SELECT seq, type, content, created_at, audio_key FROM coding_timeline WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2",
 	)
 		.bind(sessionId, limit)
 		.all<Row>();
@@ -62,7 +66,7 @@ export async function loadTimeline(env: Env, sessionId: string, limit = 500): Pr
  * (things you sent the CLI manually) so they show as your turns, not vanish. */
 export async function loadChat(env: Env, sessionId: string, limit = 200): Promise<TimelineEntry[]> {
 	const { results } = await env.DB.prepare(
-		"SELECT seq, type, content, created_at FROM coding_timeline WHERE session_id = ?1 AND type IN ('chat_user','chat_assistant','command') ORDER BY seq DESC LIMIT ?2",
+		"SELECT seq, type, content, created_at, audio_key FROM coding_timeline WHERE session_id = ?1 AND type IN ('chat_user','chat_assistant','command') ORDER BY seq DESC LIMIT ?2",
 	)
 		.bind(sessionId, limit)
 		.all<Row>();
