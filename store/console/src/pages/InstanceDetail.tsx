@@ -58,6 +58,9 @@ export default function InstanceDetail() {
 	const loopPausedRef = useRef(false);
 	loopOnRef.current = loopOn;
 	loopPausedRef.current = loopPaused;
+	// Stop the self-continuing loop on unmount — otherwise a mid-loop navigation keeps
+	// the continueLoop chain firing chat rounds + setState on a dead component.
+	useEffect(() => () => { loopOnRef.current = false; loopPausedRef.current = true; }, []);
 
 	// Voice: both push-to-talk and conversation mode auto-send via this ref
 	const doSendRef = useRef<(text: string, audioKey?: string) => void>(() => {});
@@ -269,8 +272,9 @@ export default function InstanceDetail() {
 					const cleanup = () => URL.revokeObjectURL(url);
 					audio.onended = cleanup;
 					audio.onerror = cleanup;
-					await audio.play();
-					return;
+					// play() rejection (autoplay blocked) fires NEITHER onended nor onerror,
+					// so revoke here too or the blob URL leaks. Then fall through to TTS.
+					try { await audio.play(); return; } catch { cleanup(); }
 				}
 			} catch { /* fall through to TTS */ }
 		}
@@ -419,10 +423,10 @@ export default function InstanceDetail() {
 						</div>
 						{/* Controls bar — labeled voice buttons (icon-only was ambiguous: two mic-like glyphs) */}
 						<div className="flex flex-wrap gap-1.5 px-2 py-1.5 shrink-0 items-center">
-							<button type="button" onClick={voice.toggleMic} title="Talk: tap once, speak, and it sends your message when you pause (one at a time)" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Mic size={16} /><span className="text-xs font-semibold">Talk</span></button>
-							<button type="button" onClick={voice.toggleSpeak} title="Speak replies: read every agent reply aloud (doesn't listen)" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Volume2 size={16} /><span className="text-xs font-semibold">Speak</span></button>
-							<button type="button" onClick={voice.toggleConvo} title="Hands-free: continuous conversation — you talk, it replies aloud, then listens again" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><AudioLines size={16} /><span className="text-xs font-semibold">Hands-free</span></button>
-							{voice.convoOn && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold">{voice.muted ? "Muted" : "Mute"}</span></button>}
+							<button type="button" onClick={voice.toggleMic} title="Talk: tap once, speak, and it sends your message when you pause (one at a time)" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Mic size={16} /><span className="text-xs font-semibold hidden sm:inline">Talk</span></button>
+							<button type="button" onClick={voice.toggleSpeak} title="Speak replies: read every agent reply aloud (doesn't listen)" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Volume2 size={16} /><span className="text-xs font-semibold hidden sm:inline">Speak</span></button>
+							<button type="button" onClick={voice.toggleConvo} title="Hands-free: continuous conversation — you talk, it replies aloud, then listens again" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><AudioLines size={16} /><span className="text-xs font-semibold hidden sm:inline">Hands-free</span></button>
+							{voice.convoOn && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
 							{loopOn ? (
 								<button type="button" onClick={stopLoop} title={`Loop ${loopIteration}/${loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative"><Square size={13} /><span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span></button>
 							) : (

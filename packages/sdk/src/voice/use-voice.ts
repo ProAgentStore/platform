@@ -77,16 +77,27 @@ function playThinkingChime() {
 /** Save a voice turn's audio to R2 so it can be replayed (double-tap the message).
  *  Fire-and-forget; a failure just means that turn has no replay, not a broken send. */
 async function uploadVoiceAudio(instanceId: string, turnId: string, blob: Blob): Promise<void> {
-	try {
-		await fetch(`${API}/v1/instances/${instanceId}/voice-audio/${turnId}`, {
-			method: "PUT",
-			headers: { Authorization: `Bearer ${getToken() ?? ""}`, "Content-Type": blob.type || "audio/webm" },
-			body: blob,
-			keepalive: true,
-		});
-	} catch (e) {
-		reportClientError("voice-audio", `save failed: ${e instanceof Error ? e.message : String(e)}`);
+	// NOTE: no `keepalive` — it caps the body at 64KB, but a voice recording is far
+	// bigger, so keepalive made the PUT fail outright. Retry a few times so a transient
+	// connection drop (common on mobile) doesn't lose the recording.
+	const url = `${API}/v1/instances/${instanceId}/voice-audio/${turnId}`;
+	let lastErr = "";
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			const res = await fetch(url, {
+				method: "PUT",
+				headers: { Authorization: `Bearer ${getToken() ?? ""}`, "Content-Type": blob.type || "audio/webm" },
+				body: blob,
+			});
+			if (res.ok) return;
+			lastErr = `HTTP ${res.status}`;
+			if (res.status < 500) break; // 4xx won't succeed on retry
+		} catch (e) {
+			lastErr = e instanceof Error ? e.message : String(e);
+		}
+		await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
 	}
+	reportClientError("voice-audio", `save failed after retries: ${lastErr}`);
 }
 
 export function useVoice(instanceId: string | undefined, opts: {
@@ -513,7 +524,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		pausedForThinkingRef.current = true;
 		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 		sttRef.current?.stop();
-		ttsRef.current?.cancel();
+		ttsRef.current?.dispose(); // close the TTS AudioContext, not just cancel — else it leaks
 		stopAudioMonitor();
 	}, [stopAudioMonitor]);
 

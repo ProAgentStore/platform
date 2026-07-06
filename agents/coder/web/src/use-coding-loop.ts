@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 
 interface CodingLoopOpts {
@@ -42,6 +42,15 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 		summaryRef.current = history;
 	};
 
+	// The loop self-schedules via setTimeout. Track the pending id so we can cancel it
+	// on unmount — otherwise navigating away mid-loop keeps firing runStep on a dead
+	// component (network calls + setState + the whole closure graph pinned alive).
+	const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	useEffect(() => () => {
+		loopOnRef.current = false;
+		if (timerRef.current) clearTimeout(timerRef.current);
+	}, []);
+
 	const runStepRef = useRef<() => Promise<void>>(async () => {});
 	runStepRef.current = async () => {
 		if (!loopOnRef.current || !sessionId) return;
@@ -53,7 +62,7 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 			const runState = capture.runState || "idle";
 
 			if (runState === "thinking" || runState === "working") {
-				setTimeout(() => runStepRef.current?.(), 3000);
+				timerRef.current = setTimeout(() => runStepRef.current?.(), 3000);
 				return;
 			}
 
@@ -86,7 +95,7 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 					body: JSON.stringify({ text: decision.nextInstruction }),
 				});
 
-				setTimeout(() => runStepRef.current?.(), 5000);
+				timerRef.current = setTimeout(() => runStepRef.current?.(), 5000);
 			} else if (decision.decision === "done") {
 				setLoopOn(false);
 				emitSystem(`Loop complete: ${decision.reason || "Objective met."}`);
@@ -110,7 +119,7 @@ export function useCodingLoop({ instanceId, sessionId, onMessage }: CodingLoopOp
 			method: "POST",
 			body: JSON.stringify({ text: loopObjective.trim() }),
 		}).then(() => {
-			setTimeout(() => runStepRef.current?.(), 5000);
+			timerRef.current = setTimeout(() => runStepRef.current?.(), 5000);
 		});
 	};
 

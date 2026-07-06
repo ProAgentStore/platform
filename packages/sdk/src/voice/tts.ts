@@ -99,6 +99,17 @@ export class VoiceTts {
 		if (window.speechSynthesis) speechSynthesis.cancel();
 	}
 
+	/** Release the Web Audio context — call on teardown (unmount). Without this, each
+	 *  mounted VoiceTts leaks an AudioContext, and browsers cap how many can exist
+	 *  before `new AudioContext()` throws and TTS stops working entirely. */
+	dispose() {
+		this.cancel();
+		if (this._audioCtx) {
+			this._audioCtx.close().catch(() => {});
+			this._audioCtx = null;
+		}
+	}
+
 	private _speakBrowser(text: string): Promise<void> {
 		return new Promise((resolve) => {
 			if (!window.speechSynthesis) {
