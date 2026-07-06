@@ -9,6 +9,7 @@ import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
 import { suspendActiveSessions, resumeSuspendedSessions } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
+import { logEvent, listEvents } from "../lib/events.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import type { Env } from "../types.js";
 import {
@@ -322,6 +323,28 @@ instanceRoutes.get("/:instanceId/voice-settings", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	return c.json({ voiceSettings: cfg.voiceSettings || { provider: "browser" } });
+});
+
+/**
+ * Unified run trace — the complete time-ordered timeline of what this agent DID
+ * (chat turns, tool calls, apply steps/handoffs/outcomes, and bridged failures),
+ * so a run can be reconstructed and debugged from one place. Filter by `trace_id`
+ * (one run/turn), `source`, or `level`; `limit` caps how many recent events.
+ */
+instanceRoutes.get("/:instanceId/trace", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const level = c.req.query("level");
+	const events = await listEvents(c.env, {
+		userId: session.uid,
+		instanceId,
+		traceId: c.req.query("trace_id") || c.req.query("traceId") || undefined,
+		source: c.req.query("source") || undefined,
+		level: level === "debug" || level === "info" || level === "warn" || level === "error" ? level : undefined,
+		limit: Number(c.req.query("limit")) || 200,
+	});
+	return c.json({ instanceId, count: events.length, events });
 });
 
 /** Update voice settings for hands-off mode. */
@@ -740,6 +763,15 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 
 	const data = await doRes.json();
 	if (doRes.ok) {
+		// Trace the turn (in → tools → out) grouped by one turn id so agent_trace
+		// shows what the agent was asked, which tools it ran, and what it replied.
+		const turnId = crypto.randomUUID();
+		const reply = isRecord(data) && isRecord(data.message) ? String(data.message.content ?? "") : "";
+		const tools = isRecord(data) && isRecord(data.toolMessage) ? String(data.toolMessage.content ?? "") : "";
+		const now = Date.now();
+		await logEvent(c.env, { source: "chat", event: "chat.in", message: message.slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now });
+		if (tools) await logEvent(c.env, { source: "chat", event: "tool.call", message: tools.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 1 });
+		await logEvent(c.env, { source: "chat", event: "chat.out", message: reply.replace(/\s+/g, " ").slice(0, 200), userId: session.uid, instanceId, traceId: turnId, ts: now + 2 });
 		await deleteMirroredRuntimeTask(
 			c.env,
 			instanceId,

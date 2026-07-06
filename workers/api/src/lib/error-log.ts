@@ -3,6 +3,7 @@
  * a reason is never thrown away — readable via GET /v1/errors. See migration 0034.
  */
 import type { Env } from "../types.js";
+import { logEvent } from "./events.js";
 
 export interface ErrorLogInput {
 	/** Where it failed: 'keys-proxy' | 'auth' | 'job-apply' | 'coding' | 'chat' | … */
@@ -35,6 +36,20 @@ export async function logError(env: Env, e: ErrorLogInput): Promise<void> {
 				e.context ? JSON.stringify(e.context).slice(0, 4000) : null,
 			)
 			.run();
+		// Mirror into the unified trace so failures appear inline in agent_trace next to
+		// the steps that led to them — mapping the well-known context keys onto the
+		// trace's instance/run scoping. Best-effort; a bridge failure must not surface.
+		const ctx = e.context ?? {};
+		await logEvent(env, {
+			source: String(e.source).split(":")[0] || "error",
+			event: "error",
+			level: "error",
+			message: e.message,
+			userId: e.userId ?? null,
+			instanceId: (ctx.instanceId as string) ?? (ctx.instance_id as string) ?? null,
+			traceId: (ctx.taskId as string) ?? (ctx.task_id as string) ?? null,
+			context: e.context,
+		}).catch(() => undefined);
 		// Opportunistic retention: there is no cron, so ~2% of writes prune rows older
 		// than 30 days (indexed on created_at). Keeps the log from growing unbounded
 		// even if a client hammers /v1/errors/client. Best-effort — never blocks.

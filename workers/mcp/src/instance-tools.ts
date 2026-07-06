@@ -582,6 +582,30 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"agent_trace",
+		"Reconstruct the complete, time-ordered timeline of what an agent instance DID — chat turns (chat.in/tool.call/chat.out), apply steps/handoffs/outcomes (apply.*), and failures (level=error), interleaved. This is the primary tool for debugging or improving an agent: see exactly what happened, in order, not just errors. Filter by trace_id (one run/turn), source (chat|apply|coding|voice), or level; limit caps recent events.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("The instance (agent) to trace."),
+			trace_id: z.string().optional().describe("Narrow to one run/turn (e.g. an apply taskId or a chat turn id)."),
+			source: z.string().optional().describe("Filter by subsystem: chat | apply | coding | voice | tool."),
+			level: z.enum(["debug", "info", "warn", "error"]).optional().describe("Minimum-interest filter — e.g. \"error\" for just failures."),
+			limit: z.number().int().min(1).max(1000).optional().describe("Most-recent events to return (default 200), shown oldest→newest."),
+		},
+		async ({ token, instance_id, trace_id, source, level, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams();
+			if (trace_id) qs.set("trace_id", trace_id);
+			if (source) qs.set("source", source);
+			if (level) qs.set("level", level);
+			if (limit) qs.set("limit", String(limit));
+			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/trace${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"add_instance_knowledge",
 		"Add user-specific knowledge to your private subscribed instance. This does not alter the creator's template agent.",
 		{

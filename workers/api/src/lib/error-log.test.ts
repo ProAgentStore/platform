@@ -28,8 +28,10 @@ describe("logError", () => {
 	it("persists source, status, message, and JSON context", async () => {
 		const { env, inserts } = mockDb();
 		await logError(env, { source: "keys-proxy", userId: "u1", status: 400, message: "boom", context: { host: "api.openai.com" } });
-		expect(inserts).toHaveLength(1);
-		const [, userId, source, status, message, context] = inserts[0].args;
+		// logError writes error_log AND bridges a mirror row into agent_events.
+		const errRow = inserts.find((i) => i.sql.includes("error_log"));
+		expect(errRow).toBeDefined();
+		const [, userId, source, status, message, context] = errRow!.args;
 		expect(userId).toBe("u1");
 		expect(source).toBe("keys-proxy");
 		expect(status).toBe(400);

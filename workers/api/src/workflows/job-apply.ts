@@ -5,6 +5,7 @@ import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
+import { logEvent } from "../lib/events.js";
 import { runShotKey } from "../lib/run-shots.js";
 import { notifyUser } from "../routes/push.js";
 import { buildQuery, extractCode, findMatchingMessage, gmailMessageUrl, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
@@ -141,6 +142,9 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}) as Promise<{ url: string; challenge: string | null; error?: string }>; },
 			onEvent: (type, message, data) => step.do(`s${n++}-event`, async () => {
 				await callRunner(conn, "/browser/event", { taskId, type, message, data }).catch(() => undefined);
+				// Bridge the same step into the unified trace so agent_trace shows the
+				// apply play-by-play (nav → snapshot → act → stuck …), not just failures.
+				await logEvent(env, { source: "apply", event: type, message, userId, instanceId, traceId: taskId, context: data as Record<string, unknown> | undefined }).catch(() => undefined);
 				return null;
 			}).then(() => undefined),
 			// Mid-flight steering: read + clear any message the user sent to this task so
@@ -186,6 +190,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		let solvedChallengeUrl: string | undefined; // page where a captcha was just solved
 		const tokens = { input: 0, output: 0 }; // running total across ALL rounds (handoffs re-enter the loop)
 		let filled = false; // did any field get typed in a prior round? carries the dry-run submit guard across handoffs
+		await step.do("trace-start", async () => { await logEvent(env, { source: "apply", event: "apply.start", message: `Apply → ${host}${job.dryRun ? " (dry run)" : ""}`, userId, instanceId, traceId: taskId, context: { url: job.url, dryRun: !!job.dryRun } }).catch(() => undefined); return null; });
 		for (let round = 0; round < 12; round++) {
 			result = await runApplyLoop(deps, job, { maxSteps: 60, solvedChallengeUrl, tokens, filled });
 			solvedChallengeUrl = undefined;
@@ -255,6 +260,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// confirmation-email lookup below runs AFTER, adding its link to the (already
 		// completed) run's activity log a little later.
 		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
+		await step.do("trace-end", async () => { await logEvent(env, { source: "apply", event: "apply.end", level: result.outcome === "submitted" ? "info" : "warn", message: `Outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`, userId, instanceId, traceId: taskId, context: { outcome: result.outcome, steps: result.steps, url: job.url } }).catch(() => undefined); return null; });
 
 		// On a successful submit, look up the employer's confirmation email in the
 		// user's connected Gmail and record it in the activity log as a click-through
