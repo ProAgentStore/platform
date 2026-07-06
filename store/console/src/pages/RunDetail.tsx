@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, getToken, API } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -27,6 +27,18 @@ function humanEvent(ev: RuntimeEvent): string {
 	if (ev.type === "job.email") return `📧 ${ev.message || "Read an email"}`;
 	const m = (ev.message || ev.type || "").replace(/\s*(?:in|into textbox|into)\s*""/gi, "").replace(/\s+/g, " ").trim();
 	return m || ev.type;
+}
+
+/** Render text with any http(s) URL turned into a clickable new-tab link. Only
+ *  http/https is linkified (never javascript:/data:), so it's XSS-safe. */
+function linkify(text: string): ReactNode {
+	if (!text) return text;
+	const parts = text.split(/(https?:\/\/[^\s"'<>)\]]+)/g);
+	return parts.map((p, i) =>
+		/^https?:\/\//.test(p)
+			? <a key={i} href={p} target="_blank" rel="noreferrer" className="text-accent hover:underline break-all">{p}</a>
+			: p,
+	);
 }
 
 function levelClass(type: string): string {
@@ -392,14 +404,14 @@ export default function RunDetail() {
 								<div key={ev.id} className="flex gap-3 py-1.5 border-b border-line last:border-0 text-sm">
 									<span className="text-xs font-mono text-muted-soft shrink-0 w-[124px] pt-0.5">{fmtStamp(ev.createdAt ?? ev.timestamp)}</span>
 									<div className="min-w-0 flex-1">
-										<div className={levelClass(ev.type)}>{humanEvent(ev)}</div>
+										<div className={levelClass(ev.type)}>{linkify(humanEvent(ev))}</div>
 										{gmailUrl && (
 											<div className="text-xs mt-0.5">
 												{emailFrom && <span className="text-muted-soft">from {emailFrom} · </span>}
 												<a href={gmailUrl} target="_blank" rel="noreferrer" className="text-accent font-semibold hover:underline">Open in Gmail →</a>
 											</div>
 										)}
-										{thought && <div className="text-xs text-muted-soft mt-0.5 line-clamp-2">{thought}</div>}
+										{thought && <div className="text-xs text-muted-soft mt-0.5 line-clamp-2">{linkify(thought)}</div>}
 									</div>
 								</div>
 							);

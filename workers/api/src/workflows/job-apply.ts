@@ -251,19 +251,28 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// next loop step (same channel as mid-flight steering) — no special-casing here.
 		}
 
+		// Complete the task FIRST so the board flips to Submitted immediately — the
+		// confirmation-email lookup below runs AFTER, adding its link to the (already
+		// completed) run's activity log a little later.
+		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
+
 		// On a successful submit, look up the employer's confirmation email in the
 		// user's connected Gmail and record it in the activity log as a click-through
 		// (they open the actual confirmation from the console). Best-effort: the email
 		// may not have arrived yet (poll a little); Gmail may be off — never fail the
-		// application over it. Search recent mail FROM the ATS domain, newest first.
+		// application over it.
 		if (result.outcome === "submitted" && job.emailEnabled) {
 			// The confirmation is sent from the ATS registrable domain (e.g. Xero via
 			// ashbyhq.com), so hint on that rather than the full job host.
 			const fromDomain = host.split(".").slice(-2).join(".");
-			for (let attempt = 0; attempt < 2; attempt++) {
-				// Give the email a moment to arrive (Ashby/Greenhouse are near-instant;
-				// some ATS take longer) — poll at ~8s then ~23s.
-				await step.sleep(`confirm-wait-${attempt}`, attempt === 0 ? "8 seconds" : "15 seconds");
+			// Broad subject net — different ATS phrase it differently ("Thanks for
+			// applying!", "Application received", "We received your application", …).
+			const confirmSubjects = "application received OR application submitted OR thanks for applying OR thank you for applying OR thanks for your application OR we received your application OR we've received your application OR your application to OR application confirmation";
+			const waits = ["8 seconds", "15 seconds", "25 seconds"] as const;
+			for (let attempt = 0; attempt < waits.length; attempt++) {
+				// Poll at ~8s, ~23s, ~48s — the email is usually near-instant but some
+				// ATS (Dover/Workday) take up to a minute.
+				await step.sleep(`confirm-wait-${attempt}`, waits[attempt]);
 				const found = await step.do(`confirm-email-${attempt}`, async () => {
 					try {
 						const row = await env.DB.prepare("SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = 'gmail'").bind(userId).first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
@@ -275,7 +284,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 						// employer's own domain, so a from-only search would miss it).
 						const match =
 							(await findMatchingMessage(token, buildQuery({ from: fromDomain, withinDays: 1 }))) ??
-							(await findMatchingMessage(token, buildQuery({ subject: "application received OR application submitted OR thank you for applying OR we received your application OR your application to", withinDays: 1 })));
+							(await findMatchingMessage(token, buildQuery({ subject: confirmSubjects, withinDays: 1 })));
 						if (!match) return false;
 						await callRunner(conn, "/browser/event", { taskId, type: "job.confirmation_email", message: match.subject, data: { gmailUrl: gmailMessageUrl(match.id), subject: match.subject, from: match.from, date: match.date } }).catch(() => undefined);
 						return true;
@@ -284,8 +293,6 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				if (found) break;
 			}
 		}
-
-		await step.do("complete", () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: result.outcome, detail: result.detail }));
 
 		// Persist a non-success terminal outcome so an apply failure isn't only in events.
 		// These run AFTER /browser/complete — they must be best-effort. If a D1 hiccup here
