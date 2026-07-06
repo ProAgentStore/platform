@@ -107,7 +107,9 @@ export async function createRepo(
 		method: "POST",
 		body: JSON.stringify({
 			name: repo,
-			description,
+			// GitHub hard-limits repo descriptions to 350 chars and 422s past it — which
+			// otherwise orphans the agent (row created, repo create fails). Cap it.
+			description: description.length > 350 ? `${description.slice(0, 347)}…` : description,
 			private: false,
 			auto_init: false,
 		}),
