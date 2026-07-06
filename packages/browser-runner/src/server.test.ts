@@ -33,7 +33,7 @@ describe("runner server", () => {
 		expect(res.status).toBe(401);
 	});
 
-	it("reports FAGS runtime identity when healthy", async () => {
+	it("reports PAGS runtime identity when healthy", async () => {
 		const res = await fetch(`${url}/health`, {
 			headers: {
 				Authorization: "Bearer secret",
@@ -42,9 +42,9 @@ describe("runner server", () => {
 		});
 		expect(res.status).toBe(200);
 		await expect(res.json()).resolves.toMatchObject({
-			service: "freeagentstore-browser-runtime",
+			service: "proagentstore-browser-runtime",
 			controlPlane: "pags",
-			runtimePlane: "fags",
+			runtimePlane: "pags",
 			brainPlacement: "pags",
 		});
 	});

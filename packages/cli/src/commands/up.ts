@@ -133,7 +133,7 @@ export const upCommand = new Command("up")
 					continue;
 				}
 
-				if (trimmed.includes("FAGS browser runtime listening")) {
+				if (trimmed.includes("browser runtime listening")) {
 					state.runner = "online";
 					state.lastEvent = "Runner started";
 					printStatus(state);

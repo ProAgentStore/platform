@@ -63,7 +63,7 @@ interface RawTask {
  *  machine string like "job.apply_agent". */
 const FRIENDLY_TYPES: Record<string, string> = {
 	"job.apply_agent": "Job application",
-	"setup.fags_browser_runtime": "Runner setup",
+	"setup.pags_browser_runtime": "Runner setup",
 };
 
 /** Title-case a machine type ("some_task.kind" → "Some Task Kind"). */

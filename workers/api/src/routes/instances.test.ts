@@ -3,8 +3,8 @@ import { HttpError } from "../lib/auth.js";
 import {
 	cloudflareAiSetupTask,
 	cloudflareAiSetupTaskId,
-	fagsRuntimeSetupTask,
-	fagsRuntimeSetupTaskId,
+	runtimeSetupTask,
+	runtimeSetupTaskId,
 	isCloudflareAiCredentialsError,
 	normalizeRunnerTaskBody,
 	runtimeEventsFromPayload,
@@ -171,7 +171,7 @@ describe("runtime task protocol shape", () => {
 		expect(UPSERT_INSTANCE_RUNTIME_SQL).toContain("user_id = excluded.user_id");
 	});
 
-	it("creates PAGS-brain FAGS-runtime task request shape", () => {
+	it("creates PAGS-brain runtime task request shape", () => {
 		const request = {
 			type: "browser.open",
 			input: { url: "https://example.com/jobs/1" },
@@ -263,15 +263,15 @@ describe("runtime task protocol shape", () => {
 		});
 	});
 
-	it("builds a durable setup task when no FAGS browser runtime is connected", () => {
-		const task = fagsRuntimeSetupTask("inst-1", "2026-06-22T00:00:00.000Z");
+	it("builds a durable setup task when no browser runtime is connected", () => {
+		const task = runtimeSetupTask("inst-1", "2026-06-22T00:00:00.000Z");
 
 		expect(task).toMatchObject({
-			id: fagsRuntimeSetupTaskId("inst-1"),
-			type: "setup.fags_browser_runtime",
+			id: runtimeSetupTaskId("inst-1"),
+			type: "setup.pags_browser_runtime",
 			status: "blocked",
 			synthetic: true,
-			error: "No FAGS browser runtime is registered for this instance.",
+			error: "No ProAgentStore browser runtime is registered for this instance.",
 		});
 		expect(task.input).toMatchObject({
 			install: "npm i -g @proagentstore/cli",

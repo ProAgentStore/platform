@@ -151,12 +151,12 @@ export function registerInstanceTools(
 
 	server.tool(
 		"register_instance_runtime",
-		"Register a local or managed FAGS browser runtime for one of your private instances. Use this before run_instance_task for browser-capable agents.",
+		"Register a local or managed ProAgentStore browser runtime for one of your private instances. Use this before run_instance_task for browser-capable agents.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			endpoint_url: z.string().describe("HTTPS tunnel URL for the FAGS runtime, or localhost URL for development."),
-			runner_token: z.string().optional().describe("Bearer token configured on the FAGS runtime."),
+			endpoint_url: z.string().describe("HTTPS tunnel URL for the browser runtime, or localhost URL for development."),
+			runner_token: z.string().optional().describe("Bearer token configured on the browser runtime."),
 			placement: z.enum(["local", "managed"]).optional(),
 			capabilities: z.array(z.string()).optional(),
 			runner_version: z.string().optional(),
@@ -215,11 +215,11 @@ export function registerInstanceTools(
 
 	server.tool(
 		"instance_runtime_status",
-		"Check the registered local or managed FAGS runtime for one of your private instances.",
+		"Check the registered local or managed browser runtime for one of your private instances.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			probe: z.boolean().optional().describe("When true, PAGS calls the FAGS runtime /health and /capabilities endpoints."),
+			probe: z.boolean().optional().describe("When true, PAGS calls the browser runtime /health and /capabilities endpoints."),
 		},
 		async ({ token, instance_id, probe }) => {
 			const sessionToken = tokenFor(token);
@@ -268,7 +268,7 @@ export function registerInstanceTools(
 
 	server.tool(
 		"run_instance_task",
-		"Create a task on the registered local or managed FAGS runtime for a private instance. The PAGS brain stays in control; FAGS executes browser capabilities.",
+		"Create a task on the registered local or managed browser runtime for a private instance. The PAGS brain stays in control; FAGS executes browser capabilities.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -285,7 +285,7 @@ export function registerInstanceTools(
 			const denied = await requirePermission(safetyFor(token), "runtime", "run_instance_task", toolInput);
 			if (denied) return denied;
 			if (dry_run) {
-				return dryRun(safetyFor(token), "run_instance_task", "create FAGS runtime task", toolInput, {
+				return dryRun(safetyFor(token), "run_instance_task", "create browser runtime task", toolInput, {
 					endpoint: `/v1/instances/${instance_id}/tasks`,
 					method: "POST",
 					type,
@@ -428,7 +428,7 @@ export function registerInstanceTools(
 
 	server.tool(
 		"approve_instance_task",
-		"Approve a FAGS runtime task waiting for human approval.",
+		"Approve a browser runtime task waiting for human approval.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
@@ -442,7 +442,7 @@ export function registerInstanceTools(
 			const denied = await requirePermission(safetyFor(token), "runtime", "approve_instance_task", input);
 			if (denied) return denied;
 			if (dry_run) {
-				return dryRun(safetyFor(token), "approve_instance_task", "approve FAGS runtime task", input, {
+				return dryRun(safetyFor(token), "approve_instance_task", "approve browser runtime task", input, {
 					endpoint: `/v1/instances/${instance_id}/tasks/${task_id}/approve`,
 					method: "POST",
 				});
@@ -460,12 +460,12 @@ export function registerInstanceTools(
 
 	server.tool(
 		"cancel_instance_task",
-		"Cancel a task on the registered local or managed FAGS runtime for a private instance.",
+		"Cancel a task on the registered local or managed browser runtime for a private instance.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
 			task_id: z.string(),
-			confirm: z.string().optional().describe('Must be "cancel_instance_task" to cancel a FAGS runtime task.'),
+			confirm: z.string().optional().describe('Must be "cancel_instance_task" to cancel a browser runtime task.'),
 			dry_run: z.boolean().optional(),
 		},
 		async ({ token, instance_id, task_id, confirm, dry_run }) => {
@@ -475,7 +475,7 @@ export function registerInstanceTools(
 			const denied = await requirePermission(safetyFor(token), "destructive", "cancel_instance_task", input);
 			if (denied) return denied;
 			if (dry_run) {
-				return dryRun(safetyFor(token), "cancel_instance_task", "cancel FAGS runtime task", input, {
+				return dryRun(safetyFor(token), "cancel_instance_task", "cancel browser runtime task", input, {
 					endpoint: `/v1/instances/${instance_id}/tasks/${task_id}/cancel`,
 					method: "POST",
 				});
@@ -495,7 +495,7 @@ export function registerInstanceTools(
 
 	server.tool(
 		"instance_task_events",
-		"Read recent events from a private instance's registered FAGS runtime.",
+		"Read recent events from a private instance's registered browser runtime.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

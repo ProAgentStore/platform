@@ -93,10 +93,10 @@ export class LocalRunner {
 
 	capabilities() {
 		return {
-			runtime: "fags-browser-runtime",
+			runtime: "pags-browser-runtime",
 			brainPlacement: "pags",
 			controlPlane: "pags",
-			runtimePlane: "fags",
+			runtimePlane: "pags",
 			runnerRole: "tool-executor",
 			capabilities: [...CAPABILITIES, ...CodingRuntime.capabilities()],
 			taskTypes: ["echo", "browser.open", "job.apply_agent", ...CodingRuntime.taskTypes()],

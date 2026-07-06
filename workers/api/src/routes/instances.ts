@@ -18,8 +18,8 @@ import {
 	clearFinishedRuntimeTasks,
 	deleteMirroredRuntimeTask,
 	encodeRuntimeToken,
-	fagsRuntimeSetupTask,
-	fagsRuntimeSetupTaskId,
+	runtimeSetupTask,
+	runtimeSetupTaskId,
 	expireOrphanedRuntimeTasks,
 	getRuntime,
 	isCloudflareAiCredentialsError,
@@ -51,8 +51,8 @@ import {
 export {
 	cloudflareAiSetupTask,
 	cloudflareAiSetupTaskId,
-	fagsRuntimeSetupTask,
-	fagsRuntimeSetupTaskId,
+	runtimeSetupTask,
+	runtimeSetupTaskId,
 	isCloudflareAiCredentialsError,
 	normalizeRunnerTaskBody,
 	runtimeEventsFromPayload,
@@ -294,7 +294,7 @@ instanceRoutes.get("/:instanceId/runtime", async (c) => {
 	return c.json({ runtime: runtime ? runtimeResponse(runtime) : null });
 });
 
-/** Heartbeat from user/CLI after checking the FAGS runtime is online. */
+/** Heartbeat from user/CLI after checking the browser runtime is online. */
 instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
@@ -433,9 +433,9 @@ instanceRoutes.get("/:instanceId/tasks", async (c) => {
 	if (!runtime) {
 		const tasks = await mirroredRuntimeTasks(c.env, instanceId, session.uid);
 		const hasRuntimeSetupTask = tasks.some(
-			(task) => isRecord(task) && task.id === fagsRuntimeSetupTaskId(instanceId),
+			(task) => isRecord(task) && task.id === runtimeSetupTaskId(instanceId),
 		);
-		if (!hasRuntimeSetupTask) tasks.unshift(fagsRuntimeSetupTask(instanceId));
+		if (!hasRuntimeSetupTask) tasks.unshift(runtimeSetupTask(instanceId));
 		return c.json({
 			tasks,
 			runtimeUnavailable: true,
@@ -654,7 +654,7 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 		const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
 		const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
 		return c.json({
-			events: events.length ? events : syntheticEventsFromTasks(tasks.length ? tasks : [fagsRuntimeSetupTask(instanceId)]),
+			events: events.length ? events : syntheticEventsFromTasks(tasks.length ? tasks : [runtimeSetupTask(instanceId)]),
 			runtimeUnavailable: true,
 			error: "Runtime not registered",
 		});

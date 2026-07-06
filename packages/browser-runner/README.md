@@ -1,11 +1,11 @@
-# FAGS Browser Runtime
+# ProAgentStore Browser Runtime
 
-Internal FreeAgentStore browser runtime for ProAgentStore agents.
+Internal ProAgentStore browser runtime for ProAgentStore agents.
 
-The PAGS brain stays in the hosted control plane. The FAGS runtime runs on the user's machine and exposes local capabilities such as Playwright, screenshots, downloads, file upload paths, and approval-gated actions.
+The PAGS brain stays in the hosted control plane. The browser runtime runs on the user's machine and exposes local capabilities such as Playwright, screenshots, downloads, file upload paths, and approval-gated actions.
 
 ```text
-PAGS control plane -> FAGS browser runtime -> local Playwright browser
+PAGS control plane -> ProAgentStore browser runtime -> local Playwright browser
 ```
 
 This package is private in the monorepo. Users install `@proagentstore/cli`; the CLI bundles this runtime and starts it with `pags runner start`.
@@ -20,7 +20,7 @@ The runtime listens on `127.0.0.1` by default. Use `--token` and `--instance-id`
 pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 ```
 
-`runner connect` currently starts the FAGS runtime, opens a Cloudflare quick tunnel, registers the tunnel with PAGS, and keeps both processes alive. This is the shipped bootstrap path. The target cheapest best-practice local mode is outbound polling from FAGS to PAGS, with tunnel mode kept as fallback/debug. Manual mode is still useful for named tunnels:
+`runner connect` currently starts the browser runtime, opens a Cloudflare quick tunnel, registers the tunnel with PAGS, and keeps both processes alive. This is the shipped bootstrap path. The target cheapest best-practice local mode is outbound polling from FAGS to PAGS, with tunnel mode kept as fallback/debug. Manual mode is still useful for named tunnels:
 
 ```bash
 pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
@@ -32,7 +32,7 @@ Local CLI calls to an instance-bound runtime need the same instance id:
 pags runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 ```
 
-Register the FAGS runtime with PAGS after exposing it through a stable tunnel:
+Register the browser runtime with PAGS after exposing it through a stable tunnel:
 
 ```bash
 pags runner register "$PAGS_INSTANCE_ID" \

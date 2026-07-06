@@ -424,12 +424,12 @@ function openRelaySocket(
 
 export function createRunnerCommand(): Command {
 	const command = new Command("runner").description(
-		"Manage the local FAGS browser runtime for ProAgentStore agents",
+		"Manage the local ProAgentStore browser runtime for ProAgentStore agents",
 	);
 
 	command
 		.command("start")
-		.description("Start the local FAGS browser runtime in the foreground")
+		.description("Start the local ProAgentStore browser runtime in the foreground")
 	.option("--host <host>", "Host to bind", "127.0.0.1")
 	.option("--port <port>", "Port to bind", "49171")
 	.option("--data-dir <path>", "Runner data directory")
@@ -477,7 +477,7 @@ export function createRunnerCommand(): Command {
 
 			try {
 				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId: primary });
-				writeLine(`Local FAGS runtime healthy at ${localUrl}`);
+				writeLine(`Local browser runtime healthy at ${localUrl}`);
 				await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean(opts.force));
 				await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
 			} catch (error) {
@@ -488,7 +488,7 @@ export function createRunnerCommand(): Command {
 
 	command
 		.command("status")
-	.description("Check local FAGS runtime health and capabilities")
+	.description("Check local browser runtime health and capabilities")
 	.option("--url <url>", "Runner URL")
 	.option("--token <token>", "Runner bearer token")
 	.option("--instance-id <id>", "PAGS instance id header")
@@ -500,7 +500,7 @@ export function createRunnerCommand(): Command {
 
 	command
 	.command("task")
-	.description("Create a local FAGS runtime task")
+	.description("Create a local browser runtime task")
 	.requiredOption("--type <type>", "Task type, e.g. echo or browser.open")
 	.option("--url <url>", "Runner URL")
 	.option("--token <token>", "Runner bearer token")
@@ -541,18 +541,18 @@ export function createRunnerCommand(): Command {
 
 	command
 	.command("register <instanceId>")
-	.description("Register a local or managed FAGS runtime endpoint with a PAGS instance")
-	.requiredOption("--endpoint-url <url>", "FAGS runtime endpoint URL to store in PAGS")
+	.description("Register a local or managed browser runtime endpoint with a PAGS instance")
+	.requiredOption("--endpoint-url <url>", "browser runtime endpoint URL to store in PAGS")
 	.option("--api-base <url>", "PAGS API base URL")
 	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
-	.option("--runner-token <token>", "FAGS runtime bearer token to store in PAGS")
-	.option("--url <url>", "Local FAGS runtime URL to probe for capabilities")
-	.option("--token <token>", "Local FAGS runtime bearer token for capability probe")
+	.option("--runner-token <token>", "browser runtime bearer token to store in PAGS")
+	.option("--url <url>", "Local browser runtime URL to probe for capabilities")
+	.option("--token <token>", "Local browser runtime bearer token for capability probe")
 	.option("--instance-id <id>", "PAGS instance id header for capability probe")
 	.option("--placement <placement>", "Runtime placement: local or managed", "local")
 	.option("--runner-version <version>", "Runner version")
 	.option("--capability <name>", "Runtime capability; repeatable", collectCapability, [])
-	.option("--probe", "Read capabilities from the FAGS runtime before registering")
+	.option("--probe", "Read capabilities from the browser runtime before registering")
 	.action(async (instanceId: string, opts: RuntimeRegisterOptions) => {
 		let capabilities = opts.capability || [];
 		if (opts.probe) {
@@ -575,7 +575,7 @@ export function createRunnerCommand(): Command {
 	.description("Read the PAGS runtime registration for an instance")
 	.option("--api-base <url>", "PAGS API base URL")
 	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
-	.option("--probe", "Ask PAGS to probe /health and /capabilities on the FAGS runtime")
+	.option("--probe", "Ask PAGS to probe /health and /capabilities on the browser runtime")
 	.action(async (instanceId: string, opts: PagsRequestOptions & { probe?: boolean }) => {
 		const path = opts.probe
 			? `/v1/instances/${apiPathSegment(instanceId)}/runtime/status`
@@ -596,7 +596,7 @@ export function createRunnerCommand(): Command {
 
 	command
 	.command("run <instanceId>")
-	.description("Create a task through PAGS on an instance's registered FAGS runtime")
+	.description("Create a task through PAGS on an instance's registered browser runtime")
 	.requiredOption("--type <type>", "Task type, e.g. echo or browser.open")
 	.option("--api-base <url>", "PAGS API base URL")
 	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
@@ -637,7 +637,7 @@ export function createRunnerCommand(): Command {
 
 	command
 	.command("approve-task <instanceId> <taskId>")
-	.description("Approve a registered FAGS runtime task through PAGS")
+	.description("Approve a registered browser runtime task through PAGS")
 	.option("--api-base <url>", "PAGS API base URL")
 	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
 	.action(async (instanceId: string, taskId: string, opts: PagsRequestOptions) => {
@@ -651,7 +651,7 @@ export function createRunnerCommand(): Command {
 
 	command
 	.command("cancel-task <instanceId> <taskId>")
-	.description("Cancel a registered FAGS runtime task through PAGS")
+	.description("Cancel a registered browser runtime task through PAGS")
 	.option("--api-base <url>", "PAGS API base URL")
 	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
 	.action(async (instanceId: string, taskId: string, opts: PagsRequestOptions) => {
@@ -665,7 +665,7 @@ export function createRunnerCommand(): Command {
 
 	command
 	.command("task-events <instanceId>")
-	.description("Read registered FAGS runtime task events through PAGS")
+	.description("Read registered browser runtime task events through PAGS")
 	.option("--api-base <url>", "PAGS API base URL")
 	.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
 	.option("--limit <n>", "Number of events", "50")
@@ -691,7 +691,7 @@ export function createRunnerCommand(): Command {
 
 	command
 	.command("cancel <taskId>")
-	.description("Cancel a local FAGS runtime task")
+	.description("Cancel a local browser runtime task")
 	.option("--url <url>", "Runner URL")
 	.option("--token <token>", "Runner bearer token")
 	.option("--instance-id <id>", "PAGS instance id header")
@@ -702,7 +702,7 @@ export function createRunnerCommand(): Command {
 
 	command
 	.command("events")
-	.description("List recent FAGS runtime events")
+	.description("List recent browser runtime events")
 	.option("--url <url>", "Runner URL")
 	.option("--token <token>", "Runner bearer token")
 	.option("--instance-id <id>", "PAGS instance id header")

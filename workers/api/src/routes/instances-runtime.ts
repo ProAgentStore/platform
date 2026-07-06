@@ -82,7 +82,7 @@ export interface RuntimeTaskEventMirrorRow {
 
 const APPROVAL_REQUIRED_RUNNER_TASKS = new Set(["browser.open"]);
 const CLOUDFLARE_AI_SETUP_TASK_TYPE = "setup.cloudflare_workers_ai";
-const FAGS_RUNTIME_SETUP_TASK_TYPE = "setup.fags_browser_runtime";
+const RUNTIME_SETUP_TASK_TYPE = "setup.pags_browser_runtime";
 
 export function validateRuntimeEndpointUrl(value: string): string {
 	let url: URL;
@@ -171,8 +171,8 @@ export function cloudflareAiSetupTaskId(instanceId: string): string {
 	return `${instanceId}:setup:cloudflare-workers-ai`;
 }
 
-export function fagsRuntimeSetupTaskId(instanceId: string): string {
-	return `${instanceId}:setup:fags-browser-runtime`;
+export function runtimeSetupTaskId(instanceId: string): string {
+	return `${instanceId}:setup:pags-browser-runtime`;
 }
 
 export function isCloudflareAiCredentialsError(value: unknown): boolean {
@@ -205,24 +205,24 @@ export function cloudflareAiSetupTask(
 	};
 }
 
-export function fagsRuntimeSetupTask(
+export function runtimeSetupTask(
 	instanceId: string,
 	now = new Date().toISOString(),
 ): Record<string, unknown> {
 	return {
-		id: fagsRuntimeSetupTaskId(instanceId),
-		type: FAGS_RUNTIME_SETUP_TASK_TYPE,
+		id: runtimeSetupTaskId(instanceId),
+		type: RUNTIME_SETUP_TASK_TYPE,
 		status: "blocked",
 		requiresApproval: false,
 		approval: {
-			prompt: "Connect the local FAGS browser runtime before creating browser tasks.",
+			prompt: "Connect the local ProAgentStore browser runtime before creating browser tasks.",
 		},
 		input: {
 			install: "npm i -g @proagentstore/cli",
 			// Canonical command: one runner serves ALL your agents (coding + browser).
 			connect: "pags up",
 		},
-		error: "No FAGS browser runtime is registered for this instance.",
+		error: "No ProAgentStore browser runtime is registered for this instance.",
 		createdAt: now,
 		updatedAt: now,
 		synthetic: true,
