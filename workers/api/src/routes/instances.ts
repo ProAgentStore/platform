@@ -906,6 +906,30 @@ instanceRoutes.delete("/:instanceId/knowledge/:docId", async (c) => {
 	return c.json(await doRes.json());
 });
 
+/** Read one document's full content (console viewer/editor). */
+instanceRoutes.get("/:instanceId/knowledge/:docId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
+	const doRes = await stub.fetch(new Request(`https://agent/knowledge/${encodeURIComponent(c.req.param("docId"))}`));
+	return c.json(await doRes.json(), doRes.status as ContentfulStatusCode);
+});
+
+/** Edit a document's title/content (console editor). */
+instanceRoutes.put("/:instanceId/knowledge/:docId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
+	const doRes = await stub.fetch(new Request(`https://agent/knowledge/${encodeURIComponent(c.req.param("docId"))}`, {
+		method: "PUT",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(await c.req.json()),
+	}));
+	return c.json(await doRes.json(), doRes.status as ContentfulStatusCode);
+});
+
 /** Import URL into my instance's knowledge base. */
 instanceRoutes.post("/:instanceId/knowledge/ingest-url", async (c) => {
 	const session = await requireUser(c);

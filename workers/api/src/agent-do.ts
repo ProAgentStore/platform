@@ -187,6 +187,10 @@ export class AgentDO extends DurableObject<Env> {
 			}
 			if (path === "/knowledge/ingest-url" && request.method === "POST")
 				return this.handleIngestUrl(request);
+			if (path.startsWith("/knowledge/") && request.method === "GET")
+				return this.handleReadKnowledge(path.slice("/knowledge/".length));
+			if (path.startsWith("/knowledge/") && request.method === "PUT")
+				return this.handleUpdateKnowledge(path.slice("/knowledge/".length), request);
 
 			// Repo ingestion (read-only "chat with a repository" agent)
 			if (path === "/ingest-repo" && request.method === "POST")
@@ -745,6 +749,49 @@ export class AgentDO extends DurableObject<Env> {
 		}
 
 		return json({ ...doc, vectorized }, 201);
+	}
+
+	/** Read one document's full content (for the console viewer/editor). */
+	private async handleReadKnowledge(id: string): Promise<Response> {
+		const doc = await this.ctx.storage.get<KnowledgeDoc>(`kb:${decodeURIComponent(id)}`);
+		if (!doc) return json({ error: "not found" }, 404);
+		return json({ document: doc });
+	}
+
+	/** Amend a document's title/content from the console editor, re-vectorizing it. */
+	private async handleUpdateKnowledge(id: string, request: Request): Promise<Response> {
+		const decodedId = decodeURIComponent(id);
+		const existing = await this.ctx.storage.get<KnowledgeDoc>(`kb:${decodedId}`);
+		if (!existing) return json({ error: "not found" }, 404);
+		const body = await request.json<{ title?: string; content?: string }>();
+		if (typeof body.content === "string" && body.content.length > 100_000)
+			return json({ error: "Document too large (max 100KB)" }, 400);
+		const updated: KnowledgeDoc = {
+			...existing,
+			title: typeof body.title === "string" && body.title.trim() ? body.title.trim() : existing.title,
+			content: typeof body.content === "string" ? body.content : existing.content,
+			updatedAt: new Date().toISOString(),
+		};
+		await this.ctx.storage.put(`kb:${decodedId}`, updated);
+
+		let vectorized = true;
+		const state = await this.getState();
+		if (state) {
+			const engine = this.getStorageEngine(state.agentId);
+			try {
+				await engine.vectorDelete("knowledge", decodedId).catch(() => undefined);
+				await engine.vectorizeStore("knowledge", decodedId, `${updated.title}\n\n${updated.content}`);
+			} catch (err) {
+				vectorized = false;
+				await logError(this.env, {
+					source: "knowledge-vectorize",
+					message: `knowledge doc updated but not searchable: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+					context: { agentId: state.agentId, docId: decodedId },
+				}).catch(() => undefined);
+			}
+			await engine.logEvent("knowledge.updated", undefined, { docId: decodedId, title: updated.title, vectorized }).catch(() => undefined);
+		}
+		return json({ ...updated, vectorized });
 	}
 
 	private async handleDeleteKnowledge(id: string): Promise<Response> {

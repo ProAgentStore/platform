@@ -54,6 +54,7 @@ export interface KnowledgeDoc {
 	source: "upload" | "url" | "paste" | "google-docs" | "webhook";
 	sourceUrl?: string;
 	addedAt: string;
+	updatedAt?: string;
 }
 
 export interface AgentState {
