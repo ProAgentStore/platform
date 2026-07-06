@@ -12,6 +12,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 	const [runtimeInfo, setRuntimeInfo] = useState<Record<string, unknown> | null>(null);
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
+	const [sensitivity, setSensitivity] = useState(1);
 	const [sttMode, setSttMode] = useState("browser");
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
@@ -30,6 +31,7 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 				const vs = d.voiceSettings || {};
 				setVoiceSettings(vs);
 				if (typeof vs.silenceMs === "number") setSilenceMs(vs.silenceMs);
+				if (typeof vs.sensitivity === "number") setSensitivity(vs.sensitivity);
 				if (typeof vs.sttMode === "string") setSttMode(vs.sttMode);
 			} catch {}
 			// Is there an OpenAI key? Smart (AI) recognition silently falls back to
@@ -261,6 +263,25 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 					</select>
 					{voiceMsg && <span className="text-sm text-muted">{voiceMsg}</span>}
 				</div>
+
+				{/* Mic sensitivity — only Whisper (AI) uses the mic-level pause detector. */}
+				{sttMode === "openai" && (
+					<div className="mt-4">
+						<label className="block text-sm font-semibold mb-1">Mic sensitivity</label>
+						<p className="text-xs text-muted mb-2">
+							If it keeps listening and never sends, your mic is noisy — lower this. If it cuts you off too soon, raise it.
+						</p>
+						<select
+							value={sensitivity}
+							onChange={(e) => { setSensitivity(Number(e.target.value)); saveVoice({ sensitivity: Number(e.target.value) }); }}
+							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+						>
+							<option value={0.6}>Low — noisy mic / room</option>
+							<option value={1}>Normal</option>
+							<option value={1.5}>High — quiet mic / soft voice</option>
+						</select>
+					</div>
+				)}
 			</div>
 
 			{/* Danger zone */}

@@ -329,11 +329,15 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 	const silenceMs = typeof body.silenceMs === "number" ? Math.max(500, Math.min(6000, Math.round(body.silenceMs))) : 1500;
 	// Speech recognition: "browser" dictation (default) or "openai" Whisper (AI).
 	const sttMode = body.sttMode === "openai" ? "openai" : "browser";
+	// Mic sensitivity for Whisper silence detection (0.4–2): higher = more sensitive
+	// (quiet mics); lower = needs louder speech (noisy environments).
+	const sensitivity = typeof body.sensitivity === "number" ? Math.max(0.4, Math.min(2, body.sensitivity)) : 1;
 	const settings = {
 		provider,
 		speed,
 		silenceMs,
 		sttMode,
+		sensitivity,
 		openai: body.openai && typeof body.openai === "object" ? body.openai : undefined,
 		gemini: body.gemini && typeof body.gemini === "object" ? body.gemini : undefined,
 		language: typeof body.language === "string" ? body.language.slice(0, 10) : "en-US",

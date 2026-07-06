@@ -121,11 +121,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// listening, so this is correct in BOTH modes.
 				if (sttIsWhisperRef.current && !pausedForThinkingRef.current && !mutedRef.current) {
 					const now = Date.now();
-					vadPeakRef.current = Math.max(level, vadPeakRef.current * 0.995); // slow-decaying speech peak
-					const heardVoice = vadPeakRef.current > 0.08; // genuine speech, not room noise
-					const loud = level >= Math.max(0.04, vadPeakRef.current * 0.4); // still speaking?
-					const endTurn = () => { vadVoiceSeenRef.current = false; vadPeakRef.current = 0; sttRef.current?.stop(); };
-					if (heardVoice && loud) {
+					// Track the noise floor: instantly follow anything quieter, rise slowly
+					// (~0.018/s) so sustained speech never drags it up within a turn.
+					vadFloorRef.current = vadFloorRef.current === 0 ? level : Math.min(level, vadFloorRef.current + 0.0003);
+					// Speech = clearly above the floor. vadSensitivity (0.5–2) scales the gap:
+					// higher = more sensitive (smaller gap needed), for quiet mics.
+					const gap = 0.05 / Math.max(0.4, vadSensitivityRef.current);
+					const speakGate = Math.max(0.05, vadFloorRef.current + gap);
+					const endTurn = () => { vadVoiceSeenRef.current = false; vadFloorRef.current = 0; sttRef.current?.stop(); };
+					if (level > speakGate) {
 						vadLastLoudRef.current = now;
 						if (!vadVoiceSeenRef.current) { vadVoiceSeenRef.current = true; vadTurnStartRef.current = now; }
 					} else if (vadVoiceSeenRef.current && now - vadLastLoudRef.current > silenceMsRef.current) {
@@ -160,17 +164,20 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const sttIsWhisperRef = useRef(false);
 	const vadVoiceSeenRef = useRef(false);
 	const vadLastLoudRef = useRef(0);
-	// Adaptive VAD: a slow-decaying peak of your speaking level + when the current
-	// turn started. Silence = the mic dropping well BELOW your recent speech, not an
-	// absolute floor (some mics idle above a fixed threshold, pinning it "loud").
-	const vadPeakRef = useRef(0);
+	// Adaptive VAD: an estimate of the mic's NOISE FLOOR (drops to any quieter level
+	// instantly, rises slowly) + when the current turn started. Speech = clearly above
+	// the floor; silence = back near it. This adapts to any mic baseline — unlike a
+	// fixed threshold, which leaves a noisy mic "stuck listening".
+	const vadFloorRef = useRef(0);
 	const vadTurnStartRef = useRef(0);
+	const vadSensitivityRef = useRef(1);
 	// When the agent last finished speaking — used to ignore the speaker echo tail.
 	const speakEndedAtRef = useRef(0);
 	useEffect(() => {
 		getVoiceConfig(instanceId).then((c) => {
 			silenceMsRef.current = c.silenceMs;
 			sttIsWhisperRef.current = c.sttProvider === "openai";
+			vadSensitivityRef.current = c.sensitivity;
 		}).catch(() => {});
 	}, [instanceId]);
 
@@ -296,6 +303,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const c = await getVoiceConfig(instanceId);
 			silenceMsRef.current = c.silenceMs;
 			sttIsWhisperRef.current = c.sttProvider === "openai";
+			vadSensitivityRef.current = c.sensitivity;
 		} catch {}
 		const stt = await createStt(instanceId, {
 			onResult: handleResult,
