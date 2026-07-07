@@ -13,7 +13,7 @@ beforeEach(() => {
 	(globalThis as unknown as { fetch: unknown }).fetch = vi.fn().mockResolvedValue({ ok: true });
 });
 
-import { reportClientError, setToken } from "./client.js";
+import { isConnectivityError, reportClientError, setToken } from "./client.js";
 
 const mockFetch = () => (globalThis as unknown as { fetch: ReturnType<typeof vi.fn> }).fetch;
 
@@ -47,5 +47,37 @@ describe("reportClientError", () => {
 		reportClientError("api", "distinct-C-1");
 		reportClientError("api", "distinct-C-2");
 		expect(mockFetch()).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("isConnectivityError", () => {
+	it("matches transient network failures across browsers", () => {
+		// The exact strings Safari/Chrome/Firefox throw on a dropped fetch — these
+		// flooded the log via unhandledrejection before being suppressed.
+		for (const m of [
+			"Load failed",
+			"TypeError: Load failed",
+			"Failed to fetch",
+			"NetworkError when attempting to fetch resource.",
+			"The network connection was lost.",
+			"Network request failed",
+			"The request timed out",
+			"The operation was aborted",
+			"The operation was canceled",
+		]) {
+			expect(isConnectivityError(m)).toBe(true);
+		}
+	});
+
+	it("does NOT match real application errors (they must still be reported)", () => {
+		for (const m of [
+			"HTTP 500",
+			"Cannot read properties of undefined (reading 'map')",
+			"Whisper error 400: Audio file is too short",
+			"Unexpected token < in JSON",
+			"is not a function",
+		]) {
+			expect(isConnectivityError(m)).toBe(false);
+		}
 	});
 });

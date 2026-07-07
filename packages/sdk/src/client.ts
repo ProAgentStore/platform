@@ -12,6 +12,18 @@ export function getToken(): string | null {
 	return localStorage.getItem(SESSION_KEY);
 }
 
+/**
+ * True when an error message is transient CONNECTIVITY (offline / flaky wifi / aborted
+ * navigation / CORS preflight), not a platform bug. Safari says "Load failed", Chrome
+ * "Failed to fetch", Firefox "NetworkError". These fire once per in-flight request on
+ * every network blip, so reporting them floods the durable log and buries real errors —
+ * suppress at every reporting boundary (api() below AND the global handlers in main.tsx)
+ * from this ONE definition so the two can't drift.
+ */
+export function isConnectivityError(message: string): boolean {
+	return /load failed|failed to fetch|networkerror|network connection was lost|network request failed|the request timed out|timed? ?out|cancelled|canceled|aborted/i.test(message);
+}
+
 export function setToken(t: string | null) {
 	if (t) localStorage.setItem(SESSION_KEY, t);
 	else localStorage.removeItem(SESSION_KEY);
@@ -64,8 +76,7 @@ export async function api<T = Record<string, unknown>>(
 		// request, flooding the durable log and burying real errors. Skip the common
 		// connectivity messages; still surface anything genuinely unusual.
 		const msg = e instanceof Error ? e.message : String(e);
-		const connectivity = /load failed|failed to fetch|networkerror|network connection was lost|the request timed out|timed? ?out|cancelled|canceled|aborted/i.test(msg);
-		if (!connectivity && !path.startsWith("/v1/errors")) {
+		if (!isConnectivityError(msg) && !path.startsWith("/v1/errors")) {
 			reportClientError("api", `${opts.method || "GET"} ${path} → network error`, { error: msg });
 		}
 		throw e;

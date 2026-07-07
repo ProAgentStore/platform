@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { reportClientError } from "@proagentstore/sdk/client";
+import { isConnectivityError, reportClientError } from "@proagentstore/sdk/client";
 import App from "./App";
 import "./index.css";
 
@@ -9,11 +9,17 @@ import "./index.css";
 // in the user's DevTools. Best-effort + deduped inside reportClientError.
 window.addEventListener("error", (e) => {
 	const msg = e.error instanceof Error ? `${e.error.name}: ${e.error.message}` : String(e.message || "error");
+	// An uncaught fetch that hit a network blip surfaces here as "TypeError: Load failed";
+	// it's transient connectivity, not a bug — suppress it so it can't flood the log
+	// (the same class api() already skips, via the shared predicate).
+	if (isConnectivityError(msg)) return;
 	reportClientError("window", msg, { file: e.filename, line: e.lineno, col: e.colno, stack: e.error instanceof Error ? String(e.error.stack || "").slice(0, 600) : undefined });
 });
 window.addEventListener("unhandledrejection", (e) => {
 	const r = e.reason;
-	reportClientError("unhandledrejection", r instanceof Error ? `${r.name}: ${r.message}` : String(r), { stack: r instanceof Error ? String(r.stack || "").slice(0, 600) : undefined });
+	const msg = r instanceof Error ? `${r.name}: ${r.message}` : String(r);
+	if (isConnectivityError(msg)) return;
+	reportClientError("unhandledrejection", msg, { stack: r instanceof Error ? String(r.stack || "").slice(0, 600) : undefined });
 });
 
 // Apply saved text scale before paint
