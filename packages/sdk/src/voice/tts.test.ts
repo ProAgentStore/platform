@@ -125,3 +125,67 @@ describe("VoiceTts.unlock", () => {
 		await expect(new VoiceTts("openai").unlock()).resolves.toBeUndefined();
 	});
 });
+
+describe("VoiceTts OpenAI playback — iOS AudioContext recovery", () => {
+	afterEach(() => { vi.unstubAllGlobals(); });
+
+	/** A fetch that returns audio bytes for the TTS proxy and OK for the error log. */
+	const stubAudioFetch = () =>
+		vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+			String(url).includes("/v1/errors")
+				? ({ ok: true } as unknown as Response)
+				: ({ ok: true, arrayBuffer: async () => new ArrayBuffer(32) } as unknown as Response),
+		));
+
+	const bufferSource = () => ({ buffer: null as unknown, connect() {}, onended: null as null | (() => void), start() { this.onended?.(); } });
+
+	it("revives an 'interrupted' context (iOS) and plays via Web Audio — no browser fallback", async () => {
+		vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+		stubAudioFetch();
+		const resume = vi.fn(async function (this: { state: string }) { this.state = "running"; });
+		const decodeAudioData = vi.fn(async () => ({}));
+		vi.stubGlobal("AudioContext", class {
+			state = "interrupted"; // the state the OLD code gave up on
+			resume = resume;
+			decodeAudioData = decodeAudioData;
+			destination = {};
+			createBufferSource() { return bufferSource(); }
+		});
+		// If it wrongly fell back, this would be used — assert it ISN'T.
+		const synthSpeak = vi.fn();
+		vi.stubGlobal("speechSynthesis", { cancel() {}, resume() {}, speak: synthSpeak });
+		vi.stubGlobal("window", { speechSynthesis: { cancel() {}, resume() {}, speak: synthSpeak } });
+
+		await new VoiceTts("openai").speak("hello there");
+
+		expect(resume).toHaveBeenCalled();
+		expect(decodeAudioData).toHaveBeenCalled(); // played through Web Audio
+		expect(synthSpeak).not.toHaveBeenCalled(); // did NOT drop to the browser voice
+	});
+
+	it("falls back to the browser voice only when resume() still can't revive it", async () => {
+		vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+		stubAudioFetch();
+		const resume = vi.fn(async () => {}); // stays "interrupted"
+		const decodeAudioData = vi.fn(async () => ({}));
+		vi.stubGlobal("AudioContext", class {
+			state = "interrupted";
+			resume = resume;
+			decodeAudioData = decodeAudioData;
+			destination = {};
+			createBufferSource() { return bufferSource(); }
+		});
+		// Resolve _speakBrowser immediately by firing onend from within speak().
+		const synthSpeak = vi.fn((u: { onend?: () => void }) => u.onend?.());
+		const synth = { cancel() {}, resume() {}, speak: synthSpeak };
+		vi.stubGlobal("speechSynthesis", synth);
+		vi.stubGlobal("window", { speechSynthesis: synth });
+		vi.stubGlobal("SpeechSynthesisUtterance", class { rate = 1; onend: (() => void) | null = null; onerror: (() => void) | null = null; constructor(public text: string) {} });
+
+		await new VoiceTts("openai").speak("hello");
+
+		expect(resume).toHaveBeenCalled();
+		expect(decodeAudioData).not.toHaveBeenCalled(); // never got a running context
+		expect(synthSpeak).toHaveBeenCalled(); // used the browser voice
+	});
+});

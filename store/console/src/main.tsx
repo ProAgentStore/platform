@@ -13,6 +13,9 @@ window.addEventListener("error", (e) => {
 	// it's transient connectivity, not a bug — suppress it so it can't flood the log
 	// (the same class api() already skips, via the shared predicate).
 	if (isConnectivityError(msg)) return;
+	// "Script error." is the browser's OPAQUE cross-origin script error — no file, line,
+	// or stack is exposed by design, so it's never actionable. Reporting it is pure noise.
+	if (/^Script error\.?$/.test(msg) && !e.filename) return;
 	reportClientError("window", msg, { file: e.filename, line: e.lineno, col: e.colno, stack: e.error instanceof Error ? String(e.error.stack || "").slice(0, 600) : undefined });
 });
 window.addEventListener("unhandledrejection", (e) => {

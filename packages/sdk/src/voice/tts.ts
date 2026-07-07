@@ -219,12 +219,16 @@ export class VoiceTts {
 				return this._speakBrowser(text);
 			}
 			if (!this._audioCtx) this._audioCtx = new AudioContext();
-			if (this._audioCtx.state === "suspended")
-				await this._audioCtx.resume();
-			// Safari/iOS won't resume a Web Audio context without a FRESH user gesture, so
-			// playing OpenAI TTS through it produces NO sound — silently. That is the most
-			// likely "replied in text but not voice". Detect it and use the browser voice
-			// (SpeechSynthesis needs no AudioContext), and surface it so it's diagnosable.
+			// iOS/Safari parks the context in "suspended" (no gesture yet) or "interrupted"
+			// (Siri, a call, or another app grabbed the audio session). BOTH can be revived
+			// with resume() — the old code only tried "suspended", so a transient iOS
+			// interruption dropped every reply to the browser voice AND logged a false error.
+			if (this._audioCtx.state !== "running") {
+				try { await this._audioCtx.resume(); } catch { /* recovers below, or falls back */ }
+			}
+			// Still not running (needs a fresh user gesture): playing OpenAI TTS would produce
+			// NO sound, silently. Fall back to the browser voice (needs no AudioContext) and
+			// surface it — but only now that resume() genuinely failed, not on every blip.
 			if (this._audioCtx.state !== "running") {
 				reportClientError("voice-tts", `AudioContext is "${this._audioCtx.state}" (Web Audio blocked) — using browser voice`);
 				return this._speakBrowser(text);

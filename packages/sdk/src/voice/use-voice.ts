@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
-import { API, getToken, reportClientError } from "../client.js";
+import { API, getToken, isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { decideRestart, matchVoiceCommand, resolveVoiceMode, type VoiceMode } from "./convo.js";
@@ -458,8 +458,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 				console.warn("[voice] STT error:", err);
 				if (err && err !== "no-speech") {
 					// Surface into the durable log so voice failures (Whisper 400 etc.) are
-					// visible server-side, not just in the user's browser console.
-					reportClientError("voice", String(err), { sttWhisper: sttIsWhisperRef.current });
+					// visible server-side — EXCEPT transient connectivity ("Whisper failed:
+					// Load failed"), which floods the log on every mobile network blip and is
+					// not a platform bug (same class api() already skips).
+					if (!isConnectivityError(String(err))) {
+						reportClientError("voice", String(err), { sttWhisper: sttIsWhisperRef.current });
+					}
 					// Surface real errors (Whisper 401/400, mic denied) in the input —
 					// otherwise a swallowed failure is indistinguishable from "nothing
 					// happened", which is exactly how Whisper looked broken.
