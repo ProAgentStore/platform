@@ -39,6 +39,19 @@ export function decideRestart(elapsedMs: number, rapidEnds: number, cfg: Restart
 	return { bail: false, nextRapidEnds: 0 };
 }
 
+/**
+ * The active interaction mode, derived from the two primitives so there is ONE source
+ * of truth (no contradictory Talk+Speak+Hands-free combos): continuous conversation ⇒
+ * `"handsfree"`; replies-aloud without continuous listen ⇒ `"ptt"` (push-to-talk);
+ * neither ⇒ `"text"`.
+ */
+export type VoiceMode = "text" | "ptt" | "handsfree";
+export function resolveVoiceMode(convoOn: boolean, speakOn: boolean): VoiceMode {
+	if (convoOn) return "handsfree";
+	if (speakOn) return "ptt";
+	return "text";
+}
+
 /** A spoken command the hook acts on locally instead of sending as a chat message. */
 export type VoiceCommand = "repeat";
 

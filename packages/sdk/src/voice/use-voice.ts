@@ -4,7 +4,7 @@ import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./c
 import { API, getToken, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
-import { decideRestart, matchVoiceCommand } from "./convo.js";
+import { decideRestart, matchVoiceCommand, resolveVoiceMode, type VoiceMode } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -105,6 +105,8 @@ async function uploadVoiceAudio(instanceId: string, turnId: string, blob: Blob):
 	}
 	reportClientError("voice-audio", `save failed after retries: ${lastErr}`);
 }
+
+export type { VoiceMode };
 
 export function useVoice(instanceId: string | undefined, opts: {
 	/** Send a transcript. `meta.audioKey` is set for voice turns whose audio was saved. */
@@ -655,7 +657,47 @@ export function useVoice(instanceId: string | undefined, opts: {
 		}
 	}, [muted, startListening, stopAudioMonitor]);
 
+	// The three modes are derived from the primitives so there's ONE source of truth:
+	// hands-free ⇒ continuous convo; ptt ⇒ replies aloud but no continuous listen; text
+	// ⇒ silent. setVoiceMode is the only thing the UI needs to call.
+	const mode = resolveVoiceMode(convoOn, speakOn);
+	const setVoiceMode = useCallback(async (next: VoiceMode) => {
+		const cur = resolveVoiceMode(convoOnRef.current, speakOnRef.current);
+		if (next === cur) return;
+		// End any open manual talk turn first.
+		manualTalkRef.current = false;
+		setTalking(false);
+		if (next === "handsfree") {
+			// toggleConvo does the full hands-free setup (mic + VAD + TTS unlock, in-gesture).
+			setSpeakOn(true);
+			if (!convoOnRef.current) await toggleConvo();
+			return;
+		}
+		// Leaving hands-free (if we were in it) tears the continuous loop down cleanly.
+		if (convoOnRef.current) await toggleConvo();
+		// Stop any mic + speech so the mode switch is a clean slate.
+		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+		pendingTextRef.current = "";
+		pausedForThinkingRef.current = false;
+		sttRef.current?.stop();
+		ttsRef.current?.cancel();
+		stopAudioMonitor();
+		setMicOn(false);
+		setInterim("");
+		if (next === "text") {
+			setSpeakOn(false);
+		} else {
+			// ptt: replies read aloud; each turn starts on a tap (beginTalk). Prime TTS in
+			// this gesture so the first reply can actually speak on iOS/Safari.
+			setSpeakOn(true);
+			unlockSpeechSynthesis();
+			void ensureTts().then((t) => t.unlock()).catch(() => {});
+		}
+	}, [toggleConvo, ensureTts, stopAudioMonitor]);
+
 	return {
+		/** The active interaction mode + the ONLY setter the UI needs. */
+		mode, setVoiceMode,
 		micOn, speakOn, convoOn, muted, interim,
 		/** 0-1 audio level from mic — use to render waveform */
 		audioLevel,

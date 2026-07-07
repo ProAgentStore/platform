@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideRestart, matchVoiceCommand } from "./convo.js";
+import { decideRestart, matchVoiceCommand, resolveVoiceMode } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -59,5 +59,20 @@ describe("matchVoiceCommand", () => {
 	it("returns null for empty / unrelated input", () => {
 		expect(matchVoiceCommand("")).toBeNull();
 		expect(matchVoiceCommand("hello there")).toBeNull();
+	});
+});
+
+describe("resolveVoiceMode", () => {
+	it("hands-free wins whenever continuous conversation is on", () => {
+		expect(resolveVoiceMode(true, true)).toBe("handsfree");
+		expect(resolveVoiceMode(true, false)).toBe("handsfree");
+	});
+
+	it("replies-aloud without continuous listen is push-to-talk", () => {
+		expect(resolveVoiceMode(false, true)).toBe("ptt");
+	});
+
+	it("neither is plain text chat", () => {
+		expect(resolveVoiceMode(false, false)).toBe("text");
 	});
 });
