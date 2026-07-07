@@ -6,6 +6,7 @@ import { saveAskAndHoldAnswer } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
+import { isTransientInfraError } from "../lib/transient-error.js";
 import { runShotKey } from "../lib/run-shots.js";
 import { notifyUser } from "../routes/push.js";
 import { buildQuery, extractCode, findMatchingMessage, gmailMessageUrl, mintGmailAccessToken, rankConfirmationLinks } from "../lib/gmail.js";
@@ -49,6 +50,14 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		} catch (err) {
 			const { instanceId, userId, taskId, job } = event.payload;
 			const msg = err instanceof Error ? err.message : String(err);
+			// A DO/isolate reset from a code deploy is TRANSIENT, not a crash. Re-throw so
+			// the durable workflow retries + resumes from its last completed step (the whole
+			// point of Workflows surviving deploys), and record it as an event — never a 500
+			// error, which would manufacture a fake "crashed" entry on every deploy.
+			if (isTransientInfraError(msg)) {
+				await logEvent(this.env, { source: "apply", event: "apply.interrupted", message: `apply interrupted by a deploy, resuming: ${msg}`.slice(0, 200), userId, instanceId, traceId: taskId }).catch(() => undefined);
+				throw err;
+			}
 			await logError(this.env, { source: "job-apply", userId, status: 500, message: `apply workflow crashed: ${msg}`, context: { instanceId, taskId, url: job?.url } });
 			// Best-effort: don't leave the task stuck "running" after a crash.
 			try {
@@ -236,7 +245,10 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			}
 			if (!solved) {
 				await step.do(`complete-timeout-${round}`, () => callRunner<{ ok: boolean }>(conn, "/browser/complete", { taskId, outcome: "failed", detail: `${reason} not resolved in time` }));
-				await step.do(`log-timeout-${round}`, async () => { await logError(env, { source: "job-apply", userId, message: `apply timed out: ${reason} not resolved in time`, context: { instanceId, taskId, url: job.url, reason, steps: result.steps } }).catch(() => undefined); return null; });
+				// A 15-min handoff wait elapsing is an EXPECTED outcome (the user was notified
+				// + can Retry from the board), not a system error — record it as a trace event
+				// so it stops polluting /v1/errors and burying real bugs.
+				await step.do(`log-timeout-${round}`, async () => { await logEvent(env, { source: "apply", event: "apply.handoff_timeout", message: `apply timed out: ${reason} not resolved in time`, userId, instanceId, traceId: taskId, context: { url: job.url, reason, steps: result.steps } }).catch(() => undefined); return null; });
 				// Save the partial run's learnings (incl. what got stuck) before bailing (best-effort).
 				if (transcript.length) await step.do(`save-cache-timeout-${round}`, async () => { await saveAtsCache(env, userId, host, transcript, result.outcome).catch(() => undefined); return null; });
 				return { outcome: "failed", detail: `${reason} not resolved in time`, steps: result.steps };
