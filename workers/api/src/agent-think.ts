@@ -152,14 +152,14 @@ export async function runAgentThink(opts: {
 						// signal — what the engine is doing right now in that repo.
 						const tail = await lastTerminal(env, s.id).catch(() => null);
 						const snippet = tail?.replace(/\s+/g, " ").trim().slice(-400);
-						if (snippet) systemPrompt += `  Latest terminal: ${snippet}\n`;
+						if (snippet) systemPrompt += `  Last terminal snapshot (as of ${s.updatedAt ?? "unknown"}): ${snippet}\n`;
 					}
 				} else {
 					systemPrompt +=
 						"\nNo active coding session right now. To work on a repo, start a session in the Coding tab (the local runner must be online — `pags up`).\n";
 				}
 				systemPrompt +=
-					"\nAnswer questions about these repositories and sessions concretely. If asked what's happening, summarize the latest terminal/session state above. You can explain and summarize from here, but actual coding runs in the Coding tab — you don't drive the engine or run shell commands from this chat.";
+					"\nAnswer questions about these repositories and sessions concretely. If asked what's happening, summarize the latest terminal/session state above WITH its timestamp. These snapshots are the LAST KNOWN state of each session, so they can be stale and the local runner may be offline right now; describe them as what your last session showed, and NEVER claim you just ran commands, found or fixed bugs, or made commits yourself — the engine in the Coding tab does that work, not you. You can explain and summarize from here, but actual coding runs in the Coding tab — you don't drive the engine or run shell commands from this chat.";
 			}
 		} catch {}
 	}
@@ -204,7 +204,7 @@ export async function runAgentThink(opts: {
 			// hallucinated failure seen on a real Coder loop run. Give it an accurate model.
 			systemPrompt +=
 				"\n\nSTYLE: You are a precise code explainer helping a developer understand their repositories." +
-				"\n- You do NOT have a searchable code index. Do not use knowledge search to look for source code, and never say the code 'isn't indexed' or 'hasn't been populated' — that is not how this agent works." +
+				"\n- You do NOT have a searchable code index. Do not fabricate code findings. You read live coding sessions, not a vector code index (that is the Repo Chat agent) — so if the user asks about indexing, just explain that plainly; never invent an indexing status, and never retract a correct summary you already gave as if it were fabricated." +
 				"\n- Base answers on the Attached Repositories and live terminal snapshots above. To read, search, edit, or fix code, the developer works in the Coding tab (a session with the engine; the local runner must be online via `pags up`) — from this chat you explain and summarize, you do not drive the engine or run commands." +
 				"\n- If asked to find or fix something in the code from this chat, say that work runs in the Coding tab and offer to summarize what the current session is doing." +
 				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
