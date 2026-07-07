@@ -495,7 +495,19 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
 	const repoInstructions = repo?.instructions;
 	const combined = [instanceInstructions, repoInstructions].filter(Boolean).join("\n\n") || undefined;
-	const reply = (await copilotSummary(c.env, uid, { question, memory, pane, finished, specialInstructions: combined })) || "(no response)";
+	// Pass the runner connection + workDir so a substantive question can READ the real code
+	// (read_file/git_diff/…) to ground its answer. Omitted for the auto-summary path (no
+	// question) and when the runner is offline (conn null) → cheap terminal-only single shot.
+	const reply = (await copilotSummary(c.env, uid, {
+		question,
+		memory,
+		pane,
+		finished,
+		specialInstructions: combined,
+		conn: conn ?? undefined,
+		sessionId,
+		workDir: repo?.workdir ?? undefined,
+	})) || "(no response)";
 	// Don't persist a transient "runner offline / session hasn't started" auto-summary
 	// — it's only true at this moment, and once the runner attaches it lingers at the
 	// top of the thread as stale, confusing history. Show it live, but only save real

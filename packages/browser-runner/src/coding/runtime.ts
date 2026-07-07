@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 import type { ClientType } from "./handlers.js";
+import { type GitCmd, InspectError, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
 import { ensureRepo, sanitizeSessionName } from "./tmux.js";
 
 /**
@@ -64,9 +65,41 @@ export class CodingRuntime {
 	/** Base directory under which repos are cloned (one subdir per repo). */
 	constructor(private readonly reposBaseDir: string = join(homedir(), ".config", "proagentstore", "repos")) {}
 
-	/** Capabilities advertised to PAGS at registration. */
+	/** Capabilities advertised to PAGS at registration. `coding.inspect` signals the
+	 *  read-only code-inspection endpoints exist, so the cloud offers the grounding tools
+	 *  (older runners omit it → the cloud degrades to terminal-only). */
 	static capabilities(): string[] {
-		return ["coding.sessions", "coding.stream", "human.takeover"];
+		return ["coding.sessions", "coding.stream", "human.takeover", "coding.inspect"];
+	}
+
+	/**
+	 * Resolve the workDir for a read-only inspection. Prefer the tracked session's real
+	 * workDir (authoritative even for managed clone dirs); fall back to an explicit path
+	 * (the cloud passes the D1 `repo.workdir` when the session map is empty after a runner
+	 * restart). Expands a leading `~` the same way start() does.
+	 */
+	private resolveWorkDir(input: { sessionId?: string; workDir?: string }): string {
+		if (input.sessionId) {
+			const s = this.sessions.get(input.sessionId);
+			if (s) return s.config.workDir;
+		}
+		if (input.workDir) return resolve(input.workDir.replace(/^~(?=$|\/)/, homedir()));
+		throw new InspectError("no session or workDir to inspect");
+	}
+
+	/** Read one file inside the session's repo (traversal-guarded, size-capped). */
+	readFile(input: { sessionId?: string; workDir?: string; path: string; maxBytes?: number }) {
+		return readRepoFile(this.resolveWorkDir(input), input.path, input.maxBytes);
+	}
+
+	/** Run a whitelisted read-only git command in the session's repo. */
+	git(input: { sessionId?: string; workDir?: string; cmd: GitCmd; path?: string; n?: number }) {
+		return runRepoGit(this.resolveWorkDir(input), input.cmd, { path: input.path, n: input.n });
+	}
+
+	/** Bounded recursive file tree of the session's repo (names/type/size only). */
+	tree(input: { sessionId?: string; workDir?: string; path?: string; maxDepth?: number; maxEntries?: number }) {
+		return repoTree(this.resolveWorkDir(input), input.path, input.maxDepth, input.maxEntries);
 	}
 
 	static taskTypes(): string[] {

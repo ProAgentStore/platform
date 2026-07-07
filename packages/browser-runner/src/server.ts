@@ -241,6 +241,32 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		for (const name of targets) { if (tmuxKill(name)) killed++; }
 		return json(res, 200, { killed, sessions: targets });
 	}
+	// ── Read-only code inspection (the Co-pilot/Chat's "eyes" — no CLI driving) ──
+	// Confined to the session's workDir by inspect.ts; errors surface as 400.
+	if (req.method === "POST" && path === "/coding/read-file") {
+		const b = await readJson<{ sessionId?: string; workDir?: string; path: string; maxBytes?: number }>(req);
+		try {
+			return json(res, 200, runner.coding.readFile(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
+	if (req.method === "POST" && path === "/coding/git") {
+		const b = await readJson<{ sessionId?: string; workDir?: string; cmd: "status" | "diff" | "diff-stat" | "log" | "ls-files"; path?: string; n?: number }>(req);
+		try {
+			return json(res, 200, runner.coding.git(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
+	if (req.method === "POST" && path === "/coding/tree") {
+		const b = await readJson<{ sessionId?: string; workDir?: string; path?: string; maxDepth?: number; maxEntries?: number }>(req);
+		try {
+			return json(res, 200, runner.coding.tree(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
 	if (req.method === "POST" && path === "/coding/event") {
 		// Brain progress events — recorded by PAGS, ignored locally. Accept + ack.
 		return json(res, 200, { ok: true });
