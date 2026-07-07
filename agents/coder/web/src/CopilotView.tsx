@@ -1,7 +1,8 @@
-import { type RefObject } from "react";
+import { type RefObject, useState } from "react";
 import { renderMd, formatTime } from "@proagentstore/sdk/ui";
+import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
-import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, AudioLines, Send, Wrench, Eye } from "lucide-react";
+import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Eye, Settings, Loader2 } from "lucide-react";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
  *  the text via TTS. Owner-scoped fetch of the R2 blob. */
@@ -48,16 +49,17 @@ export default function CopilotView({
 	loopPresets: LoopPreset[];
 	onClearChat: () => void;
 }) {
+	const [showChatMenu, setShowChatMenu] = useState(false);
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
 			{/* Input bar — top, always visible. Compact input, big controls. */}
-			<div className="flex gap-1.5 px-2 py-1.5 shrink-0 items-center border-b border-line">
+			<div className="flex gap-1.5 px-2 pt-2 pb-1 shrink-0 items-center">
 				<div className="flex-1 min-w-0 relative">
 					<input
 						value={voice.interim || chatInput}
 						onChange={(e) => { if (!voice.interim) setChatInput(e.target.value); }}
 						onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendInstruction(); }}
-						placeholder={voice.micOn ? "Listening — speak now…" : voice.convoOn ? "Conversation mode — just talk" : "Ask or tell the agent…"}
+						placeholder={voice.mode === "handsfree" ? "Hands-free — just talk" : voice.mode === "ptt" ? "Tap the chat to talk" : "Ask or tell the agent…"}
 						readOnly={!!voice.interim}
 						className={`w-full bg-panel border rounded-lg px-2.5 py-1.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent font-semibold" : voice.micOn ? "border-green" : "border-line"}`}
 					/>
@@ -75,35 +77,56 @@ export default function CopilotView({
 			{voice.interim && (
 				<div className="px-3 py-1.5 shrink-0 text-sm text-accent font-semibold border-b border-line bg-accent-soft/40 truncate">🎙 {voice.interim}</div>
 			)}
-			{/* Controls bar — labeled voice buttons (icon-only was ambiguous: two mic-like glyphs) */}
-			<div className="flex flex-wrap gap-1.5 px-2 py-1.5 shrink-0 items-center">
-				<button type="button" onClick={voice.toggleMic} title="Talk: tap once, speak, and it sends when you pause (one at a time)" className={`flex items-center gap-1.5 px-2.5 py-2 border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-					<Mic size={16} /><span className="text-xs font-semibold hidden sm:inline">Talk</span>
-				</button>
-				<button type="button" onClick={voice.toggleSpeak} title="Speak replies: read every agent reply aloud (doesn't listen)" className={`flex items-center gap-1.5 px-2.5 py-2 border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-					<Volume2 size={16} /><span className="text-xs font-semibold hidden sm:inline">Speak</span>
-				</button>
-				<button type="button" onClick={voice.toggleConvo} title="Hands-free: continuous conversation — you talk, it replies aloud, then listens again" className={`flex items-center gap-1.5 px-2.5 py-2 border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-					<AudioLines size={16} /><span className="text-xs font-semibold hidden sm:inline">Hands-free</span>
-				</button>
-				{voice.convoOn && (
-					<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-2 border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+			{/* Controls bar — mode selector + actions (matches the Assistant tab). */}
+			<div className="flex flex-wrap gap-1.5 px-2 pt-0.5 pb-1.5 shrink-0 items-center">
+				{/* Three distinct interaction modes — one segmented control (was four
+				    overlapping toggles). Chat · Tap-to-talk · Hands-free. */}
+				<div className="flex border border-line rounded-lg overflow-hidden shrink-0" role="radiogroup" aria-label="Interaction mode">
+					{([
+						{ id: "text", label: "Chat", icon: <MessageSquare size={15} />, title: "Chat: type and read replies — no voice", on: "border-accent bg-accent text-white" },
+						{ id: "ptt", label: "Tap to talk", icon: <Mic size={15} />, title: "Tap to talk: tap the chat to record, tap again to send. Replies are read aloud.", on: "border-accent bg-accent text-white" },
+						{ id: "handsfree", label: "Hands-free", icon: <Headphones size={15} />, title: "Hands-free: fully automatic — it listens, detects when you stop, replies aloud, and listens again.", on: "border-green bg-green text-white" },
+					] as const).map((m) => (
+						<button
+							key={m.id}
+							type="button"
+							role="radio"
+							aria-checked={voice.mode === m.id}
+							title={m.title}
+							onClick={() => voice.setVoiceMode(m.id)}
+							className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : "text-muted hover:bg-panel-hover hover:text-accent"}`}
+						>
+							{m.icon}<span className="hidden sm:inline">{m.label}</span>
+						</button>
+					))}
+				</div>
+				{voice.mode === "handsfree" && (
+					<button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
 						<MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span>
 					</button>
 				)}
 				{loop.loopOn ? (
-					<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-2.5 py-2 border border-green bg-green/15 text-green rounded-lg relative">
-						<Square size={17} />
+					<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative">
+						<Square size={13} />
 						<span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
 					</button>
 				) : (
-					<button type="button" onClick={() => loop.setShowLoopForm(!loop.showLoopForm)} title="Loop" className={`px-2.5 py-2 border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
-						<Repeat size={17} />
+					<button type="button" onClick={() => loop.setShowLoopForm(!loop.showLoopForm)} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+						<Repeat size={13} />
 					</button>
 				)}
-				<button type="button" onClick={onClearChat} title="Clear chat" className="px-2.5 py-2 border border-line rounded-lg text-red hover:bg-red/10 transition-colors">
-					<Trash2 size={17} />
-				</button>
+				{/* Clear chat is tucked into a Settings menu (was a bare trash icon). */}
+				<div className="relative">
+					<button type="button" onClick={() => setShowChatMenu((v) => !v)} title="Chat options" aria-label="Chat options" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}><Settings size={13} /></button>
+					{showChatMenu && (
+						<>
+							<div className="fixed inset-0 z-10" onClick={() => setShowChatMenu(false)} />
+							<div className="absolute right-0 top-full mt-1 z-20 bg-panel border border-line rounded-xl shadow-lg py-1 min-w-[10rem]">
+								<button type="button" onClick={() => { setShowChatMenu(false); onClearChat(); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"><Trash2 size={13} /> Clear messages</button>
+							</div>
+						</>
+					)}
+				</div>
 			</div>
 			{/* Scope hint — this is NOT the general Assistant chat; it's tied to THIS session. */}
 			<div className="px-3 pb-1.5 shrink-0 text-[0.7rem] text-muted-soft flex items-center gap-1">
@@ -134,8 +157,18 @@ export default function CopilotView({
 					</div>
 				</div>
 			)}
-			{/* Messages */}
-			<div ref={threadRef} className="flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll">
+			{/* Messages. In Tap-to-talk a tap here (not on a bubble/button) starts/stops a
+			    recording turn; in Hands-free a tap interrupts the agent so you can talk. */}
+			<div className="relative flex-1 min-h-0 flex flex-col">
+			<div
+				ref={threadRef}
+				onClick={(e) => {
+					if ((e.target as HTMLElement).closest("button, a, summary, input, textarea")) return;
+					if (voice.mode === "ptt") voice.toggleTalk();
+					else if (voice.mode === "handsfree") voice.cancelSpeak();
+				}}
+				className={`flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll transition-shadow ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
+			>
 				{summaryHistory.map((m, i) => {
 					// Tool calls: collapsed chip
 					const isToolCall = m.role === "system" && /^[✅❌]/.test(m.content);
@@ -162,15 +195,17 @@ export default function CopilotView({
 					return (
 						<div
 							key={i}
-							onClick={() => voice.cancelSpeak()}
+							// Keep a bubble tap from bubbling to the thread tap handler (which would
+							// churn the mic on a double-tap-to-replay); double-tap still replays.
+							onClick={(e) => e.stopPropagation()}
 							onDoubleClick={() => playMessage(instanceId, m, voice.maybeSpeakResponse)}
 							className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
 								m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 									: "bg-panel border border-line self-start rounded-bl-sm"
 							}`}
 						>
-							<button type="button" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.content); }} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
-							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.maybeSpeakResponse); }} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatTime(m.time)}</span>}</div>}
+							<button type="button" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.content); }} onDoubleClick={(e) => e.stopPropagation()} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
+							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.maybeSpeakResponse); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatTime(m.time)}</span>}</div>}
 							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Co-pilot</span>{m.time && <span className="font-normal text-muted">{formatTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (
 								<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
@@ -180,7 +215,31 @@ export default function CopilotView({
 						</div>
 					);
 				})}
-				{summaryBusy && <div className="text-muted text-sm flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" />Thinking...</div>}
+			</div>
+			{/* Live voice status — the OBVIOUS "it heard you / is working" signal. Walks
+			    Listening → Transcribing → Working, and is the tap target in Tap-to-talk. */}
+			{(() => {
+				const s = resolveVoiceStatus({
+					mode: voice.mode,
+					thinking: summaryBusy,
+					transcribing: voice.interim === "Transcribing…",
+					talking: voice.talking,
+					listening: voice.micOn,
+					muted: voice.muted,
+				});
+				if (!s) return null;
+				const cls = s.tone === "work" ? "bg-accent text-white ring-4 ring-accent/25 animate-pulse"
+					: s.tone === "live" ? "bg-green text-white ring-4 ring-green/30 animate-pulse scale-105"
+					: "bg-panel border border-line text-muted hover:text-accent hover:border-accent";
+				return (
+					<div className="absolute left-0 right-0 bottom-3 flex justify-center px-4 pointer-events-none z-20">
+						<button type="button" onClick={s.tap ? voice.toggleTalk : undefined} disabled={!s.tap} aria-live="polite" className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm shadow-lg transition-all ${cls} ${s.tap ? "cursor-pointer" : "cursor-default"}`}>
+							{s.spin ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} />}
+							{s.label}
+						</button>
+					</div>
+				);
+			})()}
 			</div>
 		</div>
 	);
