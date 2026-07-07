@@ -48,6 +48,8 @@ export interface SttOptions {
 	language?: string;
 	/** Transcription model for the OpenAI provider. Defaults to {@link DEFAULT_STT_MODEL}. */
 	model?: string;
+	/** Vocabulary-bias prompt (see ./prompt.ts) so domain words aren't mis-heard. */
+	transcribePrompt?: string;
 	onResult?: (text: string, isFinal: boolean) => void;
 	onError?: (error: string) => void;
 	onEnd?: () => void;
@@ -61,6 +63,7 @@ export class VoiceStt {
 	apiKey: string;
 	language: string;
 	model: string;
+	transcribePrompt: string;
 	onResult: (text: string, isFinal: boolean) => void;
 	onError: (error: string) => void;
 	onEnd: () => void;
@@ -87,6 +90,7 @@ export class VoiceStt {
 		this.apiKey = opts.apiKey || "";
 		this.language = opts.language || "en-US";
 		this.model = opts.model || DEFAULT_STT_MODEL;
+		this.transcribePrompt = opts.transcribePrompt || "";
 		this.onResult = opts.onResult || (() => {});
 		this.onError = opts.onError || (() => {});
 		this.onEnd = opts.onEnd || (() => {});
@@ -250,6 +254,9 @@ export class VoiceStt {
 		form.append("file", blob, whisperFilename(blob.type));
 		form.append("model", this.model);
 		form.append("language", this.language.slice(0, 2));
+		// Vocabulary bias — nudges the model toward domain words (a developer's "bugs"
+		// isn't "bars"). Only sent when non-empty so generic chat stays unbiased.
+		if (this.transcribePrompt) form.append("prompt", this.transcribePrompt);
 		try {
 			// Route via the platform proxy — it injects the user's key server-side.
 			// Calling api.openai.com directly from the browser is blocked by CORS (the

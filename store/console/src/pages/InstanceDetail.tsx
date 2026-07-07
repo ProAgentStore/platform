@@ -4,7 +4,7 @@ import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
 import { renderMd, formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { useVoice } from "@proagentstore/sdk/hooks";
+import { useVoice, buildTranscribePrompt } from "@proagentstore/sdk/hooks";
 import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
@@ -66,6 +66,9 @@ export default function InstanceDetail() {
 	const doSendRef = useRef<(text: string, audioKey?: string) => void>(() => {});
 	const voice = useVoice(id, {
 		onSend: (text, meta) => doSendRef.current(text, meta?.audioKey),
+		// Bias transcription toward this agent's vocabulary so domain words aren't
+		// mis-heard (a coding agent should expect "bugs", not "bars").
+		transcribePrompt: buildTranscribePrompt(surfaces, instance?.name ? [instance.name] : []),
 	});
 
 	useEffect(() => {

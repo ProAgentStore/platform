@@ -109,6 +109,9 @@ async function uploadVoiceAudio(instanceId: string, turnId: string, blob: Blob):
 export function useVoice(instanceId: string | undefined, opts: {
 	/** Send a transcript. `meta.audioKey` is set for voice turns whose audio was saved. */
 	onSend: (text: string, meta?: { audioKey?: string }) => void;
+	/** Vocabulary-bias prompt for transcription (see voice/prompt.ts) so domain words
+	 *  aren't mis-heard (a developer's "bugs" shouldn't transcribe as "bars"). */
+	transcribePrompt?: string;
 }) {
 	const [micOn, setMicOn] = useState(false);
 	const [speakOn, setSpeakOn] = useState(false);
@@ -199,6 +202,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
+	// Ref so a changing prompt (e.g. repos attach later) is picked up on the next mic start.
+	const transcribePromptRef = useRef(opts.transcribePrompt);
+	transcribePromptRef.current = opts.transcribePrompt;
 	// Send a transcript, attaching a saved-audio turn id when this turn had recorded
 	// audio (Whisper). The upload is fire-and-forget; the message sends immediately.
 	const emitSend = (text: string) => {
@@ -425,6 +431,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			commandsEnabledRef.current = c.commandsEnabled;
 		} catch {}
 		const stt = await createStt(instanceId, {
+			transcribePrompt: transcribePromptRef.current,
 			onResult: handleResult,
 			// Stash the turn's recorded audio so emitSend can save it for replay.
 			onAudio: (blob) => { lastAudioBlobRef.current = blob; },

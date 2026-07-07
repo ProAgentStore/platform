@@ -9,6 +9,7 @@
 import { useEffect, useRef } from "react";
 
 export { useVoice } from "./voice/use-voice.js";
+export { buildTranscribePrompt } from "./voice/prompt.js";
 
 /** Call `fn` every `ms` milliseconds while the component is mounted (and `enabled`). */
 export function usePolling(fn: () => void, ms: number, enabled = true): void {
