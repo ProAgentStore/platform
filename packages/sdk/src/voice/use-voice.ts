@@ -646,7 +646,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	const toggleMute = useCallback(() => {
 		if (muted) {
-			// Unmute: resume listening
+			// Unmute: resume listening. Flip the REF now, not just the state — startListening
+			// bails on `mutedRef.current`, which React only refreshes on the next render. So
+			// calling it synchronously here read the stale `true` and the mic never reopened
+			// (unmute did nothing). beginTalk sets the ref directly for the same reason.
+			mutedRef.current = false;
 			setMuted(false);
 			if (convoOnRef.current && !pausedForThinkingRef.current) {
 				startListening();

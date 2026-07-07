@@ -122,6 +122,45 @@ describe("AgentStorageEngine", () => {
 			expect(bob.data.email).toBe("bob@example.com");
 		});
 
+		it("enforces unique constraints on UPDATE too (not just insert)", async () => {
+			const storage = mockDoStorage();
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			await engine.collectionCreate("users", [
+				{ name: "email", type: "string", required: true, unique: true, indexed: true },
+			]);
+			await engine.recordInsert("users", { email: "alice@example.com" });
+			const bob = await engine.recordInsert("users", { email: "bob@example.com" });
+
+			// Updating Bob to Alice's email must be rejected (was silently allowed).
+			await expect(
+				engine.recordUpdate("users", bob.id, { email: "alice@example.com" }),
+			).rejects.toThrow("Duplicate value for unique field");
+
+			// Updating a record to its OWN current value is fine (self not counted).
+			const ok = await engine.recordUpdate("users", bob.id, { email: "bob@example.com" });
+			expect(ok?.data.email).toBe("bob@example.com");
+		});
+
+		it("maintains the index for unique-ONLY fields across update + delete (no orphan)", async () => {
+			const storage = mockDoStorage();
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			// `sku` is unique but NOT indexed — the case whose index used to be orphaned.
+			await engine.collectionCreate("items", [
+				{ name: "sku", type: "string", required: true, unique: true },
+			]);
+
+			// Update: old value must free up for reuse by another record.
+			const a = await engine.recordInsert("items", { sku: "ABC" });
+			await engine.recordUpdate("items", a.id, { sku: "XYZ" });
+			const b = await engine.recordInsert("items", { sku: "ABC" }); // ABC is free again
+			expect(b.data.sku).toBe("ABC");
+
+			// Delete: the deleted value must be re-insertable (was blocked forever).
+			await engine.recordDelete("items", b.id);
+			const c = await engine.recordInsert("items", { sku: "ABC" });
+			expect(c.data.sku).toBe("ABC");
+		});
+
 		it("handles index values with colons correctly", async () => {
 			const storage = mockDoStorage();
 			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");

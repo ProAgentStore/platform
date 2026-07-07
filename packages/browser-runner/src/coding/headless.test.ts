@@ -186,6 +186,15 @@ describe("buildClaudeArgs", () => {
 		expect(a).toContain("ourId");
 		expect(a).not.toContain("userId");
 	});
+	it("preserves a REPEATED user flag and both its values (no dedup-drop)", () => {
+		// Regression: a `!args.includes(a)` dedup dropped the 2nd --add-dir, orphaning /b.
+		const a = buildClaudeArgs(["--add-dir", "/a", "--add-dir", "/b"], null);
+		expect(a.filter((x) => x === "--add-dir").length).toBe(2);
+		// Each --add-dir is immediately followed by its own value (no stray positional).
+		const idxs = a.map((x, i) => (x === "--add-dir" ? i : -1)).filter((i) => i >= 0);
+		expect(a[idxs[0] + 1]).toBe("/a");
+		expect(a[idxs[1] + 1]).toBe("/b");
+	});
 });
 
 function readState(path: string, id: string): string | null {

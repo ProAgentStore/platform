@@ -90,9 +90,14 @@ export class HeadlessSession {
 		this.binName = (this.cmdBin.split("/").pop() || this.cmdBin) || "cli";
 	}
 
-	/** True while the agent process is running. */
+	/** True while the agent process is running. NOTE: do NOT use `proc.killed` — Node sets
+	 *  it true the instant a signal is DELIVERED, not when the process exits. interrupt()
+	 *  SIGINTs to abort a turn while the process keeps running, so `killed` gave a false
+	 *  "dead" → input() then spawned a SECOND process (orphaning the first). exitCode is
+	 *  null while running and set on normal exit; signalCode is set when a signal actually
+	 *  terminated it — together they're the real liveness signal. */
 	get alive(): boolean {
-		return this.proc !== null && this.proc.exitCode === null && !this.proc.killed;
+		return this.proc !== null && this.proc.exitCode === null && this.proc.signalCode === null;
 	}
 
 	/** Idle = ready for the next instruction. */
@@ -325,7 +330,12 @@ export function buildClaudeArgs(userArgs: string[], resumeId: string | null): st
 			if (i + 1 < userArgs.length && !userArgs[i + 1].startsWith("-")) i++;
 			continue;
 		}
-		if (!args.includes(a)) args.push(a);
+		// Push every user token as-is. A previous `!args.includes(a)` dedup silently
+		// dropped a REPEATED flag token (e.g. the 2nd `--add-dir` in `--add-dir /a
+		// --add-dir /b`), which orphaned its value (`/b` became a stray positional).
+		// Our own structural flags are already protected via RESERVED_CLAUDE_FLAGS, so
+		// no dedup is needed here.
+		args.push(a);
 	}
 	if (!args.includes("--dangerously-skip-permissions")) args.push("--dangerously-skip-permissions");
 	if (resumeId) args.push("--resume", resumeId);

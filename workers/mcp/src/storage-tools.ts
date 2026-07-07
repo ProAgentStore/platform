@@ -57,7 +57,7 @@ export function registerStorageTools(
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ name, fields: parsedFields }),
 			}, env);
-			audit(safetyFor(token), { tool: "create_collection", action: "write", input: { agent_id, name } });
+			await audit(safetyFor(token), { tool: "create_collection", action: "write", input: { agent_id, name } });
 			return jsonText(data);
 		},
 	);
@@ -107,7 +107,7 @@ export function registerStorageTools(
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ data: parsed }),
 			}, env);
-			audit(safetyFor(token), { tool: "insert_record", action: "write", input: { agent_id, collection } });
+			await audit(safetyFor(token), { tool: "insert_record", action: "write", input: { agent_id, collection } });
 			return jsonText(result);
 		},
 	);
@@ -134,7 +134,7 @@ export function registerStorageTools(
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ data: parsed }),
 			}, env);
-			audit(safetyFor(token), { tool: "update_record", action: "write", input: { agent_id, collection, record_id } });
+			await audit(safetyFor(token), { tool: "update_record", action: "write", input: { agent_id, collection, record_id } });
 			return jsonText(result);
 		},
 	);
@@ -186,7 +186,7 @@ export function registerStorageTools(
 					tags: tags?.split(",").map((s) => s.trim()).filter(Boolean),
 				}),
 			}, env);
-			audit(safetyFor(token), { tool: "upload_agent_file", action: "write", input: { agent_id, name } });
+			await audit(safetyFor(token), { tool: "upload_agent_file", action: "write", input: { agent_id, name } });
 			return jsonText(result);
 		},
 	);

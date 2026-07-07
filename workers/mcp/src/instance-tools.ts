@@ -360,6 +360,14 @@ export function registerInstanceTools(
 				if (ct && !/application\/pdf|application\/octet-stream|binary/i.test(ct)) return text(`Error: URL did not return a PDF (content-type: ${ct}).`);
 				bytes = await r.arrayBuffer();
 				if (bytes.byteLength > MAX_RESUME) return text("Error: résumé too large (max 8MB).");
+				// Authoritative check by MAGIC BYTES ("%PDF-"). A missing content-type used to
+				// skip validation entirely (the `ct &&` short-circuit), so non-PDF bytes got
+				// stored + labeled application/pdf and fed to the parser. Content-type is
+				// spoofable/absent; the header is not.
+				const head = new Uint8Array(bytes.slice(0, 5));
+				if (!(head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46 && head[4] === 0x2d)) {
+					return text("Error: URL did not return a PDF (missing %PDF header).");
+				}
 			} else {
 				// No source given → re-parse the résumé already on file.
 				const res = (await authedCall(`/v1/instances/${instance_id}/apply-resume/parse`, sessionToken, { method: "POST" }, env)) as { error?: string };

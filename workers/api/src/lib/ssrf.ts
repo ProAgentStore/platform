@@ -44,7 +44,10 @@ export function checkPublicHttpsUrl(raw: string): UrlCheck {
 		return { ok: false, reason: "Cannot fetch internal/private URLs" };
 	}
 
-	// Dotted IPv4
+	// Dotted IPv4. NOTE: `host` is `parsed.hostname`, which the WHATWG URL parser has
+	// ALREADY canonicalised — shorthand (127.1), octal (0177.0.0.1), hex (0x7f.0.0.1),
+	// and integer (2130706433) IPv4 forms are all normalised to dotted-decimal before
+	// they reach here, so this single check covers every encoding.
 	const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
 	if (v4) {
 		const octets = v4.slice(1).map(Number);
@@ -53,8 +56,7 @@ export function checkPublicHttpsUrl(raw: string): UrlCheck {
 		return { ok: true, url: parsed };
 	}
 
-	// Integer- or hex-encoded IPv4 (e.g. 2130706433, 0x7f000001) — real public
-	// sites use DNS names, so refuse anything the URL parser left as a bare number.
+	// Integer- or hex-encoded IPv4 the URL parser somehow left un-normalised (defensive).
 	if (/^\d+$/.test(host) || /^0x[0-9a-f]+$/.test(host)) {
 		return { ok: false, reason: "Numeric-IP URLs are not allowed" };
 	}

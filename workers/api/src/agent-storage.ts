@@ -595,24 +595,41 @@ export class AgentStorageEngine {
 		const schema = await this.collectionGet(collection);
 		if (!schema) return null;
 
-		// Remove old indexes for fields being updated
+		const merged = { ...existing.data, ...data };
+		const validated = validateRecord(schema, merged);
+
+		// Enforce unique constraints on the NEW values — recordInsert does this, but the
+		// update path skipped it entirely, so a PUT could set a duplicate value on a
+		// `unique` field. Exclude THIS record's own index entry (key ends in `:${id}`).
 		for (const field of schema.fields) {
-			if (field.indexed && existing.data[field.name] !== undefined) {
+			if (field.unique && validated[field.name] !== undefined) {
+				const encoded = encodeIndexValue(String(validated[field.name]));
+				const matches = await this.doStorage.list({ prefix: `idx:${collection}:${field.name}:${encoded}:` });
+				for (const key of matches.keys()) {
+					if (!key.endsWith(`:${id}`)) {
+						throw new Error(`Duplicate value for unique field "${field.name}": ${String(validated[field.name])}`);
+					}
+				}
+			}
+		}
+
+		// Remove old indexes for indexed OR unique fields. Must match recordInsert's
+		// predicate (`indexed || unique`): a `unique`-only field's index was created on
+		// insert but never cleaned up here, orphaning it (blocking re-insert forever).
+		for (const field of schema.fields) {
+			if ((field.indexed || field.unique) && existing.data[field.name] !== undefined) {
 				const oldValue = encodeIndexValue(String(existing.data[field.name]));
 				await this.doStorage.delete(`idx:${collection}:${field.name}:${oldValue}:${id}`);
 			}
 		}
 
-		const merged = { ...existing.data, ...data };
-		const validated = validateRecord(schema, merged);
-
 		existing.data = validated;
 		existing.updatedAt = new Date().toISOString();
 		await this.doStorage.put(`col:${collection}:${id}`, existing);
 
-		// Rebuild indexes
+		// Rebuild indexes for indexed OR unique fields.
 		for (const field of schema.fields) {
-			if (field.indexed && validated[field.name] !== undefined) {
+			if ((field.indexed || field.unique) && validated[field.name] !== undefined) {
 				const value = encodeIndexValue(String(validated[field.name]));
 				await this.doStorage.put(`idx:${collection}:${field.name}:${value}:${id}`, id);
 			}
@@ -635,10 +652,12 @@ export class AgentStorageEngine {
 
 		const schema = await this.collectionGet(collection);
 
-		// Remove indexes
+		// Remove indexes for indexed OR unique fields (match recordInsert's predicate —
+		// a `unique`-only field's index was orphaned on delete, permanently blocking
+		// re-insert of that value with a phantom "Duplicate value" error).
 		if (schema) {
 			for (const field of schema.fields) {
-				if (field.indexed && existing.data[field.name] !== undefined) {
+				if ((field.indexed || field.unique) && existing.data[field.name] !== undefined) {
 					const value = encodeIndexValue(String(existing.data[field.name]));
 					await this.doStorage.delete(`idx:${collection}:${field.name}:${value}:${id}`);
 				}

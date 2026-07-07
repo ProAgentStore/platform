@@ -103,7 +103,11 @@ export class CodingRuntime {
 	snapshot(sessionId: string): CodingSnapshot {
 		const session = this.require(sessionId);
 		const alive = session.alive;
-		const pane = alive ? clip(session.snapshot()) : "";
+		// ALWAYS return the transcript — it holds the produced output AND the
+		// `[exited with code N]` / `[error]` lines recorded on exit. Blanking it when the
+		// process is dead lost exactly the output + failure reason the brain/console needs
+		// to diagnose a crash or read a one-shot CLI's final result.
+		const pane = clip(session.snapshot());
 		return {
 			sessionId,
 			pane,

@@ -16,11 +16,23 @@ import { renderMd, mdLite, esc, escAttr, formatTime } from "@proagentstore/sdk/u
 // React-version conflict (a creator may use vanilla JS or bundle their own
 // framework inside that subtree). See ../../../PLAN-agent-os.md.
 //
-// SECURITY: a bundle runs in the console origin with the user's session (via
-// ctx.sdk.api). That's fine for first-party / trusted creators; untrusted bundles
-// should later be isolated in a sandboxed iframe. Surfaces are declared in an
-// instance's capabilities.customSurfaces by the platform, not user-supplied URLs.
+// SECURITY: a bundle runs in the console origin with the user's session token (via
+// ctx.sdk.getToken/api). A creator-supplied cross-origin URL would therefore be
+// arbitrary JS executing AS the viewing user → account/BYOK-key takeover. So we load
+// ONLY same-origin bundles (surfaces ship from the platform itself, e.g.
+// /console/surfaces/notes.js). Until bundles are isolated in a sandboxed iframe, this
+// same-origin gate is the security boundary — do not loosen it to accept creator URLs.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** A surface bundle runs with the user's session token, so it must be served from the
+ *  platform's own origin — never a creator-controlled host. */
+function isSameOriginBundle(bundleUrl: string): boolean {
+	try {
+		return new URL(bundleUrl, window.location.href).origin === window.location.origin;
+	} catch {
+		return false;
+	}
+}
 
 export interface SurfaceSdk {
 	api: typeof api;
@@ -61,6 +73,13 @@ export default function DynamicSurface({ bundleUrl, instanceId, sessionId }: {
 		let unmount: void | (() => void);
 		setError("");
 		setLoading(true);
+		// Refuse a cross-origin bundle BEFORE importing it — a creator-hosted script would
+		// run with the viewer's session token (account takeover). See the SECURITY note above.
+		if (!isSameOriginBundle(bundleUrl)) {
+			setError("This surface can't be loaded — its bundle isn't hosted on the platform.");
+			setLoading(false);
+			return;
+		}
 		(async () => {
 			try {
 				const mod = (await import(/* @vite-ignore */ bundleUrl)) as SurfaceModule;
