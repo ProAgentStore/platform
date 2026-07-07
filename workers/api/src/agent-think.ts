@@ -154,16 +154,27 @@ export async function runAgentThink(opts: {
 		: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.";
 
 	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'.";
-	if (technical) {
-		systemPrompt +=
-			"\n\nSTYLE: You are a precise code explainer helping a developer understand a repository." +
-			"\n- Be accurate and concrete. Reference real file paths, functions, and types from the indexed code above when relevant." +
-			"\n- Ground every claim about how the code works in the retrieved context. If something isn't in your indexed knowledge, say you didn't find it rather than guessing." +
-			(repoChatStyle
-				? "\n- You are READ-ONLY: you explain and analyze the repository, you never modify it and you have no ability to change code."
-				: "\n- From this chat you explain, summarize, and answer — you do not edit code or run commands here; the coding engine in the Coding tab does that.") +
-			"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
-	} else {
+		if (technical && repoChatStyle) {
+			// Repo Chat genuinely HAS a vector index of the code (RAG context injected
+			// above), so grounding answers in "the indexed code" is correct here.
+			systemPrompt +=
+				"\n\nSTYLE: You are a precise code explainer helping a developer understand a repository." +
+				"\n- Be accurate and concrete. Reference real file paths, functions, and types from the indexed code above when relevant." +
+				"\n- Ground every claim about how the code works in the retrieved context. If something isn't in your indexed knowledge, say you didn't find it (suggest adding the repo in the Repo tab) rather than guessing." +
+				"\n- You are READ-ONLY: you explain and analyze the repository, you never modify it and you have no ability to change code." +
+				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
+		} else if (technical) {
+			// Coder has NO vector index — its code lives in live tmux sessions, not RAG.
+			// Telling it to reference "the indexed code" made it search an empty knowledge
+			// base and report the code "isn't indexed / hasn't been populated" — a
+			// hallucinated failure seen on a real Coder loop run. Give it an accurate model.
+			systemPrompt +=
+				"\n\nSTYLE: You are a precise code explainer helping a developer understand their repositories." +
+				"\n- You do NOT have a searchable code index. Do not use knowledge search to look for source code, and never say the code 'isn't indexed' or 'hasn't been populated' — that is not how this agent works." +
+				"\n- Base answers on the Attached Repositories and live terminal snapshots above. To read, search, edit, or fix code, the developer works in the Coding tab (a session with the engine; the local runner must be online via `pags up`) — from this chat you explain and summarize, you do not drive the engine or run commands." +
+				"\n- If asked to find or fix something in the code from this chat, say that work runs in the Coding tab and offer to summarize what the current session is doing." +
+				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
+		} else {
 		systemPrompt +=
 			"\n\nSTYLE: You are speaking to a NON-TECHNICAL person. Your response will be READ ALOUD to them." +
 			"\nRULES:" +
