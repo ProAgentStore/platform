@@ -112,6 +112,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	/** Vocabulary-bias prompt for transcription (see voice/prompt.ts) so domain words
 	 *  aren't mis-heard (a developer's "bugs" shouldn't transcribe as "bars"). */
 	transcribePrompt?: string;
+	/** Technical agent (code explainer / coding): keep identifiers + file basenames in
+	 *  SPOKEN output instead of stripping them to "a file". Default false. */
+	technical?: boolean;
 }) {
 	const [micOn, setMicOn] = useState(false);
 	const [speakOn, setSpeakOn] = useState(false);
@@ -205,6 +208,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Ref so a changing prompt (e.g. repos attach later) is picked up on the next mic start.
 	const transcribePromptRef = useRef(opts.transcribePrompt);
 	transcribePromptRef.current = opts.transcribePrompt;
+	// Ref so the technical flag is read lazily at TTS-create time (surfaces can resolve
+	// after mount) — the TTS is created once, so re-create it if the flag flips.
+	const technicalRef = useRef(opts.technical);
+	technicalRef.current = opts.technical;
 	// Send a transcript, attaching a saved-audio turn id when this turn had recorded
 	// audio (Whisper). The upload is fire-and-forget; the message sends immediately.
 	const emitSend = (text: string) => {
@@ -264,7 +271,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [instanceId]);
 
 	const ensureTts = useCallback(async () => {
-		if (!ttsRef.current) ttsRef.current = await createTts(instanceId);
+		if (!ttsRef.current) ttsRef.current = await createTts(instanceId, { technical: technicalRef.current });
+		// Keep in sync if surfaces resolved after the TTS was created (single instance reused).
+		else ttsRef.current.technical = technicalRef.current === true;
 		return ttsRef.current;
 	}, [instanceId]);
 

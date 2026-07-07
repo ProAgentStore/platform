@@ -3,37 +3,49 @@
 import { API, getToken, reportClientError } from "../client.js";
 
 /**
- * Strip technical noise so TTS reads a clean, human summary.
- * Paths, URLs, filenames, code blocks, hashes, stack traces — all removed.
- * This is a vibecoding platform: speak the intent, not the internals.
+ * Prepare text for TTS. Two modes:
+ *
+ * - **consumer** (default): strip ALL technical noise — paths, URLs, filenames, code,
+ *   hashes — so a plain-speech agent reads a clean human summary.
+ * - **technical** (`opts.technical`): a code explainer's answer is ABOUT the code, so
+ *   gutting it to "a file … a file" makes the spoken reply useless. Keep identifiers and
+ *   file basenames (drop only the long directory chain), and condense only what is
+ *   genuinely unspeakable aloud (fenced code, URLs, git hashes).
  */
-export function cleanForSpeech(raw: string): string {
+export function cleanForSpeech(raw: string, opts: { technical?: boolean } = {}): string {
 	let s = raw;
-	// Remove fenced code blocks entirely
+	// Fenced code blocks are noise read aloud in either mode — summarize.
 	s = s.replace(/```[\s\S]*?```/g, " (code) ");
-	// Remove inline code
-	s = s.replace(/`[^`]+`/g, (m) => {
-		// Keep short human words, strip paths/technical tokens
-		const inner = m.slice(1, -1);
-		if (inner.length < 20 && /^[a-zA-Z ]+$/.test(inner)) return inner;
-		return "";
-	});
-	// Remove URLs
+	// URLs are unspeakable in either mode — condense BEFORE path handling so the path
+	// rules don't chew a URL into "a file".
 	s = s.replace(/https?:\/\/[^\s)]+/g, " a link ");
-	// Remove file paths (~/..., /..., ./..., C:\...)
-	s = s.replace(/[~.]?\/[\w./-]+/g, " a file ");
-	s = s.replace(/[A-Z]:\\[\w.\\-]+/g, " a file ");
-	// Remove filenames with extensions (foo.ts, bar.json, etc.)
-	s = s.replace(/\b[\w.-]+\.(ts|tsx|js|jsx|json|css|html|md|yml|yaml|toml|py|rs|go|sh|sql|env|lock|txt|csv|xml|svg|png|jpg|wasm)\b/gi, " a file ");
-	// Remove git hashes
+
+	if (opts.technical) {
+		// Inline `code` → spoken as its contents (usually an identifier the dev wants).
+		s = s.replace(/`([^`]+)`/g, " $1 ");
+		// Long file paths → just the basename: say "agent-think.ts", not the slash chain.
+		// Requires an extension so ordinary "read/write" prose isn't mangled.
+		s = s.replace(/(?:[~.]?\/)?(?:[\w.-]+\/)+([\w.-]+\.\w+)/g, " $1 ");
+		s = s.replace(/[A-Za-z]:\\(?:[\w.-]+\\)*([\w.-]+\.\w+)/g, " $1 ");
+	} else {
+		// Inline code: keep short human words, strip paths/technical tokens.
+		s = s.replace(/`[^`]+`/g, (m) => {
+			const inner = m.slice(1, -1);
+			if (inner.length < 20 && /^[a-zA-Z ]+$/.test(inner)) return inner;
+			return "";
+		});
+		// File paths + bare filenames → "a file".
+		s = s.replace(/[~.]?\/[\w./-]+/g, " a file ");
+		s = s.replace(/[A-Z]:\\[\w.\\-]+/g, " a file ");
+		s = s.replace(/\b[\w.-]+\.(ts|tsx|js|jsx|json|css|html|md|yml|yaml|toml|py|rs|go|sh|sql|env|lock|txt|csv|xml|svg|png|jpg|wasm)\b/gi, " a file ");
+	}
+
+	// Both modes: git hashes are unspeakable; drop markdown + emoji.
 	s = s.replace(/\b[0-9a-f]{7,40}\b/g, "");
-	// Remove markdown formatting
 	s = s.replace(/[*_#>]/g, "");
-	// Remove emoji
 	s = s.replace(/[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{27BF}]|[\u{FE00}-\u{FEFF}]/gu, "");
-	// Collapse whitespace
+	// Collapse whitespace + cap length.
 	s = s.replace(/\s+/g, " ").trim();
-	// Limit length
 	return s.slice(0, 1500);
 }
 
@@ -41,6 +53,9 @@ export interface TtsOptions {
 	apiKey?: string;
 	voice?: string;
 	speed?: number;
+	/** Technical agent (code explainer / coding): keep identifiers + file basenames in
+	 *  spoken output instead of gutting them to "a file". Default false (plain speech). */
+	technical?: boolean;
 }
 
 export class VoiceTts {
@@ -48,6 +63,7 @@ export class VoiceTts {
 	apiKey: string;
 	voice: string;
 	speed: number;
+	technical: boolean;
 	speaking = false;
 	private _audioCtx: AudioContext | null = null;
 	private _queue: string[] = [];
@@ -60,6 +76,7 @@ export class VoiceTts {
 		this.apiKey = opts.apiKey || "";
 		this.voice = opts.voice || "alloy";
 		this.speed = opts.speed || 100;
+		this.technical = opts.technical === true;
 	}
 
 	/**
@@ -69,7 +86,7 @@ export class VoiceTts {
 	 */
 	async speak(text: string) {
 		if (!text?.trim()) return;
-		const clean = cleanForSpeech(String(text));
+		const clean = cleanForSpeech(String(text), { technical: this.technical });
 		if (!clean) return;
 		this._queue.push(clean);
 		if (this._processing) return; // a turn is already draining the queue

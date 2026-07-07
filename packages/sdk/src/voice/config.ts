@@ -97,12 +97,16 @@ export function invalidateVoiceConfig() {
 	_cache = null;
 }
 
-export async function createTts(instanceId?: string): Promise<VoiceTts> {
+export async function createTts(
+	instanceId?: string,
+	opts: { technical?: boolean } = {},
+): Promise<VoiceTts> {
 	const cfg = await getVoiceConfig(instanceId);
 	return new VoiceTts(cfg.ttsProvider, {
 		apiKey: cfg.apiKey,
 		voice: cfg.voice,
 		speed: cfg.speed,
+		technical: opts.technical,
 	});
 }
 

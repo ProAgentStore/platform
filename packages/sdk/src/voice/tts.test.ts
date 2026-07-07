@@ -51,6 +51,33 @@ describe("cleanForSpeech", () => {
 	});
 });
 
+describe("cleanForSpeech (technical mode)", () => {
+	const tech = (s: string) => cleanForSpeech(s, { technical: true });
+
+	it("keeps the file basename but drops the long directory chain", () => {
+		expect(tech("the change is in ~/dev/stores/pags/workers/api/src/agent-think.ts now"))
+			.toBe("the change is in agent-think.ts now");
+		expect(tech("edit src/App.tsx here")).toBe("edit App.tsx here");
+	});
+
+	it("keeps bare filenames (a dev wants to hear the file named)", () => {
+		expect(tech("the config.json file")).toBe("the config.json file");
+	});
+
+	it("speaks inline code as its contents instead of dropping it", () => {
+		expect(tech("call `resolveAgentCapabilities` first")).toBe("call resolveAgentCapabilities first");
+	});
+
+	it("does not mangle ordinary slashed prose like read/write", () => {
+		expect(tech("it is a read/write conflict")).toBe("it is a read/write conflict");
+	});
+
+	it("still summarizes fenced code blocks and condenses URLs + hashes", () => {
+		expect(tech("here ```\nconst x = 1\n``` see https://x.com/y at deadbeef1 done"))
+			.toBe("here (code) see a link at done");
+	});
+});
+
 describe("VoiceTts.unlock", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();

@@ -69,6 +69,9 @@ export default function InstanceDetail() {
 		// Bias transcription toward this agent's vocabulary so domain words aren't
 		// mis-heard (a coding agent should expect "bugs", not "bars").
 		transcribePrompt: buildTranscribePrompt(surfaces, instance?.name ? [instance.name] : []),
+		// A code explainer (repo/coding) speaks ABOUT code — keep identifiers + file
+		// basenames in the spoken reply instead of gutting them to "a file … a file".
+		technical: surfaces.includes("repo") || surfaces.includes("coding"),
 	});
 
 	useEffect(() => {
