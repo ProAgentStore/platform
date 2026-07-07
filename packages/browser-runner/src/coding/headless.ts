@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ClientType } from "./handlers.js";
+import { type ClientType, handlerFor } from "./handlers.js";
 
 /**
  * The coding engine — Claude Code driven through its structured **stream-json**
@@ -84,9 +84,15 @@ export class HeadlessSession {
 		// Claude is the structured engine; everything else is a raw CLI.
 		this.mode = config.clientType === "claude" ? "stream-json" : "raw";
 		const { bin, args } = parseCommand(config.command);
+		// When no explicit command is configured, fall back to THIS engine's default
+		// command (codex/gemini/grok/…) — not a hard-coded "claude", which would drive a
+		// non-Claude session with the wrong CLI (and mode is already "raw" for it).
+		const fallback = parseCommand(handlerFor(config.clientType).cliCommand);
 		// A test/override bin wins for the binary only; the command's args are kept.
-		this.cmdBin = config.bin ?? (bin || "claude");
-		this.cmdArgs = args;
+		this.cmdBin = config.bin ?? (bin || fallback.bin || "claude");
+		// Use the configured command's args when a command was given (bin set), else the
+		// engine default's args.
+		this.cmdArgs = bin ? args : fallback.args;
 		this.binName = (this.cmdBin.split("/").pop() || this.cmdBin) || "cli";
 	}
 
@@ -138,30 +144,36 @@ export class HeadlessSession {
 		// run exactly what the user configured and capture stdout.
 		const args = this.mode === "stream-json" ? buildClaudeArgs(this.cmdArgs, this.claudeSessionId) : [...this.cmdArgs];
 
-		this.proc = spawn(this.cmdBin, args, {
+		const proc = spawn(this.cmdBin, args, {
 			cwd: this.config.workDir,
 			env: { ...process.env, ...this.config.env },
 			stdio: ["pipe", "pipe", "pipe"],
 		});
+		this.proc = proc;
 		this.run = "idle";
 		this.lastOutputAt = Date.now();
 		// MUST handle 'error' — without a listener, a spawn failure (e.g. the binary
 		// not on PATH) is thrown as an uncaught exception and crashes the runner.
-		this.proc.on("error", (err: Error) => {
+		proc.on("error", (err: Error) => {
+			if (this.proc !== proc) return; // a newer process replaced this one — ignore the stale event
 			this.run = "idle";
 			this.push(`[cannot run \`${this.cmdBin}\`: ${err.message} — is ${this.binName} installed and on your PATH?]`);
 			this.proc = null;
 		});
 		// Swallow EPIPE when writing to a process that just exited (one-shot turn).
-		this.proc.stdin?.on("error", () => {});
-		this.proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString("utf8")));
-		this.proc.stderr?.on("data", (d: Buffer) => {
+		proc.stdin?.on("error", () => {});
+		proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString("utf8")));
+		proc.stderr?.on("data", (d: Buffer) => {
 			this.lastOutputAt = Date.now();
 			this.sawOutputSinceInput = true;
 			const text = d.toString("utf8").trim();
 			if (text) this.push(`[${this.binName}] ${stripAnsi(text)}`);
 		});
-		this.proc.on("exit", (code) => {
+		proc.on("exit", (code) => {
+			// A stop() + re-start() on the SAME session object can leave this old process's
+			// async exit to fire AFTER the fresh start — capturing `proc` and bailing when it
+			// no longer matches stops the stale handler from resetting the new turn to idle.
+			if (this.proc !== proc) return;
 			this.run = "idle";
 			if (code && code !== 0) this.push(`[${this.binName} exited with code ${code}]`);
 			// A bad --resume can kill the process instantly; drop it so the next
@@ -237,9 +249,14 @@ export class HeadlessSession {
 			if (this.mode === "stream-json") this.handle(line);
 			else this.pushRaw(line); // raw engine — the line IS the terminal output
 		}
-		// A TUI/raw engine may render without newlines; don't let `buf` grow unbounded
-		// (and surface the partial output so the pane isn't blank). 16KB is generous.
-		if (this.buf.length > 16 * 1024) {
+		// A TUI/raw engine may render without newlines; surface the partial output and cap
+		// growth at 16KB. Claude's stream-json, though, emits ONE JSON object per line and a
+		// single event (a large tool_result / the final `result`) can legitimately exceed
+		// 16KB — truncating mid-line there corrupts the event, and losing a `result` line
+		// wedges the turn "thinking" forever (stream-json has no idle backstop). So give the
+		// structured path a far larger ceiling; only a pathologically huge line resets it.
+		const cap = this.mode === "raw" ? 16 * 1024 : 4 * 1024 * 1024;
+		if (this.buf.length > cap) {
 			if (this.mode === "raw") this.pushRaw(this.buf);
 			this.buf = "";
 		}

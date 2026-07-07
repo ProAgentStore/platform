@@ -298,7 +298,11 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 		} else {
 			repeatFails = 0;
 			lastActionKey = "";
-			if (decision.action.action === "type") filledSomething = true;
+			// Arm the dry-run submit block on ANY field-mutating action — not just `type`.
+			// A form that's all dropdowns/checkboxes + a résumé upload (name/email pre-filled
+			// from the account) never fires a `type`, so a `type`-only flag left the guard
+			// disarmed and a test-mode run could really click the final Submit.
+			if (["type", "select", "check", "upload"].includes(decision.action.action)) filledSomething = true;
 			// Track arrow-key nav so a following Enter is an autocomplete accept
 			// (allowed in dry-run), not a form submit.
 			lastActionWasArrow = decision.action.action === "key" && /^arrow/i.test(decision.action.key ?? "");

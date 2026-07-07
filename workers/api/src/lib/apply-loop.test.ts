@@ -161,6 +161,26 @@ describe("runApplyLoop", () => {
 		expect(acted.map((a) => a.action)).toEqual(["type"]); // the Send submit was NOT acted
 	});
 
+	it("dry-run BLOCKS submit on a form filled only by select/check/upload (no `type`)", async () => {
+		// Regression: `filledSomething` was armed only by `type`, so an all-dropdown/checkbox
+		// form + résumé upload (name/email pre-filled from the account) left the guard
+		// disarmed and a test-mode run could really click Submit. Any field-mutating action
+		// must now arm it.
+		for (const first of [
+			{ action: "select", role: "combobox", name: "Country", text: "Australia" },
+			{ action: "check", role: "checkbox", name: "I agree" },
+			{ action: "upload", name: "Resume", file: "/tmp/resume.pdf" },
+		] as BrowserAction[]) {
+			const { deps, acted } = scriptedDeps(
+				[page(`- ${first.action} "${first.name}"`), page('- button "Submit application"')],
+				[{ action: first }, { action: { action: "click", role: "button", name: "Submit application" } }],
+			);
+			const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 5 });
+			expect(result.outcome, first.action).toBe("ready");
+			expect(acted.map((a) => a.action), first.action).toEqual([first.action]); // submit NOT acted
+		}
+	});
+
 	it("dry-run BLOCKS a one-page 'Apply' as the FIRST action after a handoff (filled carried via opts)", async () => {
 		// Regression: filledSomething is per-call, so round ≥2 after a captcha/input handoff
 		// used to start "empty" — a one-page Apply=submit as the first action would slip past

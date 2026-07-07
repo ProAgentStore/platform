@@ -150,6 +150,20 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await until(() => s.snapshot().includes("late: go"), 3000);
 		s.stop();
 	});
+
+	it("with NO command/bin, a non-Claude engine spawns ITS OWN binary (not `claude`)", async () => {
+		// Regression: the constructor fell back to a hard-coded "claude" when no command was
+		// configured, so a codex/grok session was silently driven by the wrong CLI. Whether
+		// codex is installed (→ "[codex] …" output / exit) or not (→ "cannot run `codex`"),
+		// the transcript must reference codex and NEVER claude.
+		const s = new HeadlessSession({ id: "raw-default", workDir: dir, clientType: "codex" });
+		expect(() => s.start()).not.toThrow();
+		await until(() => s.snapshot().toLowerCase().includes("codex"), 4000);
+		const snap = s.snapshot().toLowerCase();
+		expect(snap).toContain("codex");
+		expect(snap).not.toContain("claude");
+		s.stop();
+	});
 });
 
 describe("parseCommand", () => {

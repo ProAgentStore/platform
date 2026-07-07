@@ -777,6 +777,26 @@ export class LocalRunner {
 		return `"${name}" now reads "${shown}"`;
 	}
 
+	/** Read a checkbox/radio's checked state via the standard evaluate tool so `check`
+	 *  can be made idempotent (a raw click would toggle). Returns true/false, or null when
+	 *  the state can't be determined (then we fall back to clicking). Never throws. */
+	private async isChecked(mcp: McpRuntime, ref: string, label: string): Promise<boolean | null> {
+		const fn =
+			"el => { if (el.checked !== undefined && el.checked !== null) return !!el.checked; " +
+			"const a = el.getAttribute('aria-checked'); return a === 'true' ? true : a === 'false' ? false : null; }";
+		const res = await mcp.callTool("browser_evaluate", { element: label, target: ref, function: fn }).catch(() => null);
+		if (!res || res.isError) return null;
+		const txt = mcp.textOf(res);
+		const i = txt.indexOf("### Result");
+		if (i < 0) return null;
+		const after = txt.slice(i + "### Result".length).trim();
+		const end = after.indexOf("\n###");
+		const block = (end >= 0 ? after.slice(0, end) : after).trim().replace(/^["']|["']$/g, "");
+		if (/^true$/i.test(block)) return true;
+		if (/^false$/i.test(block)) return false;
+		return null;
+	}
+
 	/** The snapshot ref the brain must target the element by (standard-tool `target`). */
 	private refOf(action: BrowserAction): string {
 		const ref = (action.ref || "").trim();
@@ -792,10 +812,19 @@ export class LocalRunner {
 				return mcp.callTool("browser_navigate", { url: a.url });
 			case "type":
 				return mcp.callTool("browser_type", { element: label, target: this.refOf(a), text: a.text ?? "" });
-			// A checkbox/radio is just a click at the standard-tool level.
 			case "click":
-			case "check":
 				return mcp.callTool("browser_click", { element: label, target: this.refOf(a) });
+			case "check": {
+				const ref = this.refOf(a);
+				// A checkbox/radio click is a TOGGLE at the standard-tool level — clicking an
+				// ALREADY-checked control unchecks it, silently reversing a pre-ticked consent
+				// or a default-selected radio before submit. Make `check` idempotent
+				// (ensure-checked): read the current state and only click when it isn't set.
+				if ((await this.isChecked(mcp, ref, label)) === true) {
+					return { isError: false, content: [{ type: "text", text: `"${label}" already checked` }] };
+				}
+				return mcp.callTool("browser_click", { element: label, target: ref });
+			}
 			case "upload": {
 				if (!this.applyResumePath) throw new RunnerInputError("no résumé file available to upload");
 				// Standard two-step FIRST (respects the brain's target): clicking the upload

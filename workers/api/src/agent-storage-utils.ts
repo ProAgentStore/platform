@@ -25,12 +25,18 @@ export function chunkText(text: string, size: number): string[] {
 			result.push(chunk);
 		} else {
 			for (let i = 0; i < chunk.length; i += size) {
-				result.push(chunk.slice(i, i + size));
+				const piece = chunk.slice(i, i + size);
+				// A hard split can leave a short trailing remainder (e.g. a 1044-char run at
+				// size 512 → 512/512/20). The `> 20` filter below is meant to drop trivial
+				// SENTENCE fragments, but it would also silently discard this real tail — so
+				// fold a tiny remainder back into the previous piece instead of losing content.
+				if (piece.length <= 20 && result.length > 0) result[result.length - 1] += piece;
+				else result.push(piece);
 			}
 		}
 	}
 
-	return result.filter((c) => c.length > 20); // Skip tiny fragments
+	return result.filter((c) => c.length > 20); // Skip tiny (sentence-split) fragments
 }
 
 export function validateRecord(

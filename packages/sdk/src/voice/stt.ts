@@ -311,8 +311,10 @@ export class VoiceStt {
 		const reader = body.getReader();
 		const decoder = new TextDecoder();
 		let buffer = "";
+		let raw = ""; // every decoded byte, so a non-SSE JSON body can still be salvaged
 		let acc = "";
 		let final = "";
+		let streamErr = ""; // an SSE `error` event carries a reason, not text
 		const handle = (payload: string) => {
 			const ev = parseTranscriptionEvent(payload);
 			if (!ev) return;
@@ -321,23 +323,41 @@ export class VoiceStt {
 				this.onResult(acc.trim(), false); // live partial
 			} else if (ev.type === "transcript.text.done" && typeof ev.text === "string") {
 				final = ev.text;
+			} else if (ev.type === "error" || ev.type.endsWith(".error")) {
+				// OpenAI can end a 200 stream with an error event (e.g. mid-transcription
+				// failure) — capture it so the turn surfaces a reason instead of silence.
+				streamErr = ev.text || ev.delta || "transcription error";
 			}
 		};
 		try {
 			for (;;) {
 				const { value, done } = await reader.read();
 				if (done) break;
-				buffer += decoder.decode(value, { stream: true });
+				const chunk = decoder.decode(value, { stream: true });
+				raw += chunk;
+				buffer += chunk;
 				const { data, rest } = drainSseData(buffer);
 				buffer = rest;
 				for (const payload of data) handle(payload);
 			}
 			// Flush a trailing line with no final newline (e.g. the done event).
 			if (buffer.trim().startsWith("data:")) handle(buffer.trim().slice(5).trim());
-			const result = (final || acc).trim();
+			let result = (final || acc).trim();
+			// Fallback: some responses aren't SSE at all (a plain `{ text }` JSON body when
+			// the model/proxy ignored `stream:true`). Salvage the text so the turn isn't lost.
+			if (!result && !streamErr) {
+				try {
+					const j = JSON.parse(raw.trim()) as { text?: string };
+					if (typeof j.text === "string") result = j.text.trim();
+				} catch {}
+			}
 			if (result) {
 				this.onAudio(blob);
 				this.onResult(result, true);
+			} else {
+				// Never drop a turn silently — a 200 that yielded no text still needs a
+				// visible reason (and an entry in the durable log) so voice doesn't feel dead.
+				this.onError(streamErr ? `Whisper error: ${streamErr.slice(0, 300)}` : "No transcription returned (empty audio?)");
 			}
 		} catch (e) {
 			// Salvage whatever we streamed; only surface a hard error if we got nothing.

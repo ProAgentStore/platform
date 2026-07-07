@@ -78,15 +78,25 @@ describeGit("ensureRepo", () => {
 		rmSync(src, { recursive: true, force: true });
 	});
 
-	it("re-clones when the dir exists but has no .git (stale/empty)", () => {
+	it("clones into an EMPTY existing dir (no .git)", () => {
 		const src = makeSrc();
 		const dir = join(base, "repo2");
-		mkdirSync(dir, { recursive: true });
-		execFileSync("bash", ["-c", "echo junk > junk.txt"], { cwd: dir });
+		mkdirSync(dir, { recursive: true }); // exists but empty — safe to clone into
 		ensureRepo(dir, { cloneUrl: src });
 		expect(existsSync(join(dir, ".git"))).toBe(true);
 		expect(existsSync(join(dir, "f.txt"))).toBe(true);
-		expect(existsSync(join(dir, "junk.txt"))).toBe(false);
+		rmSync(src, { recursive: true, force: true });
+	});
+
+	it("REFUSES to clobber a NON-EMPTY non-git dir (data-loss guard)", () => {
+		const src = makeSrc();
+		const dir = join(base, "repo3");
+		mkdirSync(dir, { recursive: true });
+		execFileSync("bash", ["-c", "echo important > mydata.txt"], { cwd: dir });
+		// A real user directory passed as workDir must never be recursively deleted.
+		expect(() => ensureRepo(dir, { cloneUrl: src })).toThrow(/non-empty/i);
+		expect(existsSync(join(dir, "mydata.txt"))).toBe(true); // preserved
+		expect(existsSync(join(dir, ".git"))).toBe(false);
 		rmSync(src, { recursive: true, force: true });
 	});
 });

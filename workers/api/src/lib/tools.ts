@@ -4,7 +4,7 @@
  */
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { AgentTask, MemoryEntry } from "../agent-types.js";
-import { checkPublicHttpsUrl } from "./ssrf.js";
+import { safeFetch, SsrfError } from "./ssrf.js";
 
 export interface ToolDef {
 	name: string;
@@ -275,17 +275,17 @@ export async function executeTool(
 				const body = call.input.body as string | undefined;
 				if (!url)
 					return { name: call.name, content: "url required", success: false };
-				// SSRF protection: https-only + reject non-public hosts (shared guard).
-				const check = checkPublicHttpsUrl(url);
-				if (!check.ok) return { name: call.name, content: check.reason, success: false };
 				const headers: Record<string, string> = { "User-Agent": "ProAgentStore-Agent" };
 				const hasBody = body !== undefined && method !== "GET" && method !== "HEAD";
 				if (hasBody) headers["Content-Type"] = (call.input.contentType as string) || "application/json";
-				const res = await fetch(url, {
-					method,
-					headers,
-					body: hasBody ? body : undefined,
-				});
+				// SSRF protection: https-only + reject non-public hosts, re-validated on EVERY
+				// redirect hop (a public host can 302 you to 127.0.0.1 / metadata otherwise).
+				let res: Response;
+				try {
+					res = await safeFetch(url, { method, headers, body: hasBody ? body : undefined });
+				} catch (e) {
+					return { name: call.name, content: e instanceof SsrfError ? e.message : `fetch failed: ${e instanceof Error ? e.message : String(e)}`, success: false };
+				}
 				const text = await res.text();
 				const truncated =
 					text.length > 4000 ? `${text.slice(0, 4000)}...[truncated]` : text;

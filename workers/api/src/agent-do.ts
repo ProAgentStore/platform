@@ -47,7 +47,7 @@ import {
 	UserAiCredentialsError,
 	UserAiProviderError,
 } from "./lib/user-ai.js";
-import { checkPublicHttpsUrl } from "./lib/ssrf.js";
+import { safeFetch, SsrfError } from "./lib/ssrf.js";
 import { logError } from "./lib/error-log.js";
 import type { Env } from "./types.js";
 
@@ -823,14 +823,15 @@ export class AgentDO extends DurableObject<Env> {
 		}>();
 		if (!url) return json({ error: "url required" }, 400);
 
-		// SSRF protection: https-only + reject non-public hosts (shared guard).
-		const check = checkPublicHttpsUrl(url);
-		if (!check.ok) return json({ error: check.reason }, 400);
-
 		try {
-			const res = await fetch(url, {
-				headers: { "User-Agent": "ProAgentStore-Ingest" },
-			});
+			// SSRF protection: https-only + reject non-public hosts, re-validated on EVERY
+			// redirect hop (default follow would let a public host 302 us to a private one).
+			let res: Response;
+			try {
+				res = await safeFetch(url, { headers: { "User-Agent": "ProAgentStore-Ingest" } });
+			} catch (e) {
+				return json({ error: e instanceof SsrfError ? e.message : `Failed to fetch: ${e instanceof Error ? e.message : String(e)}` }, 400);
+			}
 			if (!res.ok)
 				return json({ error: `Failed to fetch: ${res.status}` }, 400);
 

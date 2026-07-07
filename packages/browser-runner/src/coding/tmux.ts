@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 /**
@@ -116,9 +116,18 @@ export function ensureRepo(dir: string, opts: { cloneUrl?: string; branch?: stri
 		if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
 		return dir;
 	}
-	// A stale/empty/half-cloned dir (exists but no .git) would make `git clone`
-	// fail on a non-empty target — clear it first so the clone is clean.
-	if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+	// The dir exists but has no `.git`. It could be a half-cloned/empty managed dir
+	// (safe to clear) OR a real user directory the caller passed as an explicit workDir
+	// (deleting it = data loss). NEVER recursively delete a non-empty non-git dir — refuse
+	// instead, so a mis-wired workDir+cloneUrl can't nuke a user's files. An empty dir is
+	// fine to remove (git clone needs an empty/absent target).
+	if (existsSync(dir)) {
+		const entries = readdirSync(dir);
+		if (entries.length > 0) {
+			throw new Error(`Refusing to clone into non-empty directory "${dir}" (no .git found) — move it aside or point at an empty path.`);
+		}
+		rmSync(dir, { recursive: true, force: true });
+	}
 	let url = opts.cloneUrl;
 	if (opts.token && /^https:\/\//.test(url)) {
 		url = url.replace(/^https:\/\//, `https://x-access-token:${opts.token}@`);

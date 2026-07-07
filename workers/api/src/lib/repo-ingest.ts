@@ -123,8 +123,32 @@ export async function fetchRepoTarball(ref: RepoRef, branch?: string, token?: st
 		throw new Error(`Could not download repository (${res.status}). Check the URL is a public repo, or connect GitHub for private repos.`);
 	}
 	const gunzipped = res.body.pipeThrough(new DecompressionStream("gzip"));
-	const buf = await new Response(gunzipped).arrayBuffer();
-	return new Uint8Array(buf);
+	// Read the decompressed stream incrementally with a hard ceiling. `.arrayBuffer()`
+	// buffers the WHOLE inflated tarball first, so a gzip bomb (or just a very large repo)
+	// could blow the Worker isolate's memory BEFORE any per-file/total cap in
+	// extractTextFiles applies — the caps gave a false sense of protection. Abort early.
+	const MAX_TAR_BYTES = 128 * 1024 * 1024; // generous vs the ~4MB extract cap; guards the isolate
+	const reader = gunzipped.getReader();
+	const parts: Uint8Array[] = [];
+	let total = 0;
+	for (;;) {
+		const { value, done } = await reader.read();
+		if (done) break;
+		if (!value) continue;
+		total += value.byteLength;
+		if (total > MAX_TAR_BYTES) {
+			await reader.cancel().catch(() => undefined);
+			throw new Error("Repository is too large to index (its decompressed archive exceeds the size limit).");
+		}
+		parts.push(value);
+	}
+	const out = new Uint8Array(total);
+	let off = 0;
+	for (const p of parts) {
+		out.set(p, off);
+		off += p.byteLength;
+	}
+	return out;
 }
 
 interface TarEntry {

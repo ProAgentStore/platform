@@ -213,9 +213,16 @@ export const upCommand = new Command("up")
 			if (key === "r") {
 				if (childDead) {
 					writeLine("  Restarting runner...");
-					const { execSync } = await import("node:child_process");
+					const { execFileSync } = await import("node:child_process");
+					// Preserve the ORIGINAL flags on restart — dropping `--instance` here made a
+					// scoped `pags up --instance X` silently fan back out to every instance. Use
+					// execFileSync (argv, no shell) so an instance id/slug can't be mis-quoted.
+					const restartArgs = [process.argv[1], "up"];
+					if (opts.headless) restartArgs.push("--headless");
+					if (opts.force) restartArgs.push("--force");
+					if (opts.instance) restartArgs.push("--instance", opts.instance);
 					try {
-						execSync(`${process.execPath} ${process.argv[1]} up${opts.headless ? " --headless" : ""}${opts.force ? " --force" : ""}`, {
+						execFileSync(process.execPath, restartArgs, {
 							stdio: "inherit",
 							env: process.env,
 						});

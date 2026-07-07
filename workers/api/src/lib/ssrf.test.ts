@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { checkPublicHttpsUrl } from "./ssrf.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { checkPublicHttpsUrl, safeFetch, SsrfError } from "./ssrf.js";
 
 describe("checkPublicHttpsUrl", () => {
 	it("allows normal public https URLs", () => {
@@ -61,5 +61,52 @@ describe("checkPublicHttpsUrl", () => {
 		for (const u of ["https://[::1]/", "https://[fe80::1]/", "https://[fc00::1]/", "https://[::ffff:127.0.0.1]/"]) {
 			expect(checkPublicHttpsUrl(u).ok, u).toBe(false);
 		}
+	});
+});
+
+describe("safeFetch (redirect re-validation)", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	/** A 3xx Response with a Location header (Response can't be built with a 302 body-status,
+	 *  so stub the shape the code reads: status + headers.get('location')). */
+	function redirect(location: string) {
+		return { status: 302, headers: { get: (h: string) => (h.toLowerCase() === "location" ? location : null) } } as unknown as Response;
+	}
+
+	it("follows a redirect to another PUBLIC https host", async () => {
+		const calls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+			calls.push(url);
+			expect(init.redirect).toBe("manual"); // never auto-follow
+			if (url === "https://a.example/start") return redirect("https://b.example/end");
+			return new Response("ok", { status: 200 });
+		}));
+		const res = await safeFetch("https://a.example/start");
+		expect(res.status).toBe(200);
+		expect(calls).toEqual(["https://a.example/start", "https://b.example/end"]);
+	});
+
+	it("REFUSES a redirect to a private host (the SSRF hole)", async () => {
+		vi.stubGlobal("fetch", vi.fn(async (url: string) =>
+			url === "https://public.example/redir" ? redirect("http://169.254.169.254/latest/meta-data/") : new Response("secret", { status: 200 }),
+		));
+		await expect(safeFetch("https://public.example/redir")).rejects.toBeInstanceOf(SsrfError);
+	});
+
+	it("REFUSES a redirect that downgrades to http on a public host", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => redirect("http://public.example/")));
+		await expect(safeFetch("https://public.example/")).rejects.toThrow(/https/i);
+	});
+
+	it("rejects the initial URL when it's private (before any fetch)", async () => {
+		const f = vi.fn();
+		vi.stubGlobal("fetch", f);
+		await expect(safeFetch("https://127.0.0.1/")).rejects.toBeInstanceOf(SsrfError);
+		expect(f).not.toHaveBeenCalled();
+	});
+
+	it("gives up after too many redirects", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () => redirect("https://public.example/loop")));
+		await expect(safeFetch("https://public.example/loop", {}, 3)).rejects.toThrow(/too many redirects/i);
 	});
 });

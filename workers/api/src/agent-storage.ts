@@ -690,8 +690,11 @@ export class AgentStorageEngine {
 		const limit = Math.min(opts?.limit || 50, 200);
 		const offset = opts?.offset || 0;
 
-		// If filtering on an indexed field, use the index
-		if (opts?.where && Object.keys(opts.where).length === 1) {
+		// If filtering on an indexed field, use the index — but ONLY when no explicit
+		// ordering is asked for. The index returns ids in UUID order; honouring `orderBy`
+		// needs the full result set sorted before the page slice, so fall through to the
+		// scanning path (which sorts) rather than silently returning UUID order.
+		if (opts?.where && Object.keys(opts.where).length === 1 && !opts?.orderBy) {
 			const [field, value] = Object.entries(opts.where)[0];
 			const fieldDef = schema.fields.find((f) => f.name === field);
 			if (fieldDef?.indexed) {

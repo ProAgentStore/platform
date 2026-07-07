@@ -77,3 +77,38 @@ export function checkPublicHttpsUrl(raw: string): UrlCheck {
 
 	return { ok: true, url: parsed };
 }
+
+/** Thrown by {@link safeFetch} when a URL (or a redirect hop) fails the SSRF guard. */
+export class SsrfError extends Error {
+	constructor(reason: string) {
+		super(reason);
+		this.name = "SsrfError";
+	}
+}
+
+/**
+ * SSRF-safe fetch. `checkPublicHttpsUrl` only validates the URL we pass to `fetch`,
+ * but the default `redirect: "follow"` lets a public host 3xx-redirect us straight to
+ * `http://169.254.169.254/…` or `http://127.0.0.1/…` — re-opening the exact holes the
+ * guard closes. So follow redirects MANUALLY and re-validate every hop (which also
+ * re-enforces https-only, blocking an http downgrade). Throws {@link SsrfError} when a
+ * hop is rejected or the redirect budget is exhausted.
+ */
+export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> {
+	let current = raw;
+	for (let hop = 0; hop <= maxRedirects; hop++) {
+		const check = checkPublicHttpsUrl(current);
+		if (!check.ok) throw new SsrfError(check.reason);
+		const res = await fetch(current, { ...init, redirect: "manual" });
+		if (res.status < 300 || res.status >= 400) return res;
+		const location = res.headers.get("location");
+		if (!location) return res; // a 3xx with no Location — nothing to follow
+		// Resolve relative redirects against the current URL, then re-validate at the top.
+		try {
+			current = new URL(location, current).toString();
+		} catch {
+			throw new SsrfError("Invalid redirect target");
+		}
+	}
+	throw new SsrfError("Too many redirects");
+}

@@ -40,13 +40,22 @@ describe("agent storage utility helpers", () => {
 		]);
 	});
 
-	it("hard-splits oversized text chunks and drops tiny tail fragments", () => {
+	it("hard-splits oversized text and folds a tiny trailing remainder into the previous piece (no content loss)", () => {
 		const text = "x".repeat(75);
 
+		// 75 @ size 30 → 30 / 30 / 15; the 15-char tail is REAL content, so it's merged into
+		// the previous piece rather than dropped by the >20 sentence-fragment filter.
 		expect(chunkText(text, 30)).toEqual([
 			"x".repeat(30),
-			"x".repeat(30),
+			"x".repeat(45),
 		]);
+	});
+
+	it("still drops a trivial standalone sentence fragment", () => {
+		// "Hi." is forced into its own chunk (the next 30-char run overflows size 25) and,
+		// standing alone at ≤20 chars, is filtered as noise — while the 30-char run's 5-char
+		// hard-split tail is folded back in (so that content survives).
+		expect(chunkText(`Hi. ${"y".repeat(30)}`, 25)).toEqual(["y".repeat(30)]);
 	});
 
 	it("coerces schema fields, applies defaults, and preserves extra data", () => {
