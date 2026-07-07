@@ -10,7 +10,7 @@ import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-cal
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
-import { isRunnerOnline } from "./lib/runner-client.js";
+import { callRunner, getRunnerConn, isRunnerOnline } from "./lib/runner-client.js";
 import type { Env } from "./types.js";
 
 /**
@@ -152,22 +152,35 @@ export async function runAgentThink(opts: {
 				const sessions = await listSessions(env, state.agentId, userId);
 				const active = sessions.filter((s) => s.status === "active");
 				if (active.length > 0) {
+					// When the runner is online, pull a FRESH capture of each session pane (in
+					// parallel) so the chat reflects the LIVE terminal, not a persisted snapshot that
+					// only refreshes while the console Coding tab is polling. Fall back to the last
+					// saved snapshot on any miss — never block the chat on a runner round-trip.
+					const conn = runnerOnline ? await getRunnerConn(env, state.agentId, userId).catch(() => null) : null;
+					const terminals = await Promise.all(active.map(async (s) => {
+						if (conn) {
+							const snap = await callRunner<{ pane?: string }>(conn, "/coding/capture", { sessionId: s.id }).catch(() => null);
+							const pane = snap?.pane?.replace(/\s+/g, " ").trim();
+							if (pane) return { live: true, text: pane.slice(-400) };
+						}
+						const tail = await lastTerminal(env, s.id).catch(() => null);
+						return { live: false, text: tail?.replace(/\s+/g, " ").trim().slice(-400) || "" };
+					}));
 					systemPrompt += "\n## Active Coding Sessions\n";
-					for (const s of active) {
+					active.forEach((s, idx) => {
 						const repo = repos.find((r) => r.id === s.repoId);
 						systemPrompt += `- ${repo?.name || s.repoId} — engine: ${s.launchCommand || s.clientType || "claude"}\n`;
-						// The latest terminal snapshot is the cheapest "what's happening"
-						// signal — what the engine is doing right now in that repo.
-						const tail = await lastTerminal(env, s.id).catch(() => null);
-						const snippet = tail?.replace(/\s+/g, " ").trim().slice(-400);
-						if (snippet) systemPrompt += `  Last terminal snapshot (as of ${s.updatedAt ?? "unknown"}): ${snippet}\n`;
-					}
+						const t = terminals[idx];
+						if (t.text) systemPrompt += t.live
+							? `  LIVE terminal (captured just now): ${t.text}\n`
+							: `  Last terminal snapshot (as of ${s.updatedAt ?? "unknown"}): ${t.text}\n`;
+					});
 				} else {
 					systemPrompt +=
 						"\nNo active coding session right now. To work on a repo, start a session in the Coding tab (the local runner must be online — `pags up`).\n";
 				}
 				systemPrompt +=
-					"\nAnswer questions about these repositories and sessions concretely. If asked what's happening, summarize the latest terminal/session state above WITH its timestamp. These snapshots are the LAST KNOWN state of each session, so they can be stale and the local runner may be offline right now; describe them as what your last session showed, and NEVER claim you just ran commands, found or fixed bugs, or made commits yourself — the engine in the Coding tab does that work, not you. You can explain and summarize from here, but actual coding runs in the Coding tab — you don't drive the engine or run shell commands from this chat.";
+					"\nAnswer questions about these repositories and sessions concretely. Lines marked 'LIVE terminal (captured just now)' are the real CURRENT pane; lines marked 'Last terminal snapshot' are the last saved state and may be stale — cite which one you are using. NEVER claim you personally ran commands, found or fixed bugs, or made commits: the coding engine in the Coding tab does that work, not you. From this chat you explain and summarize; you do not drive the engine or run shell commands.";
 			}
 		} catch {}
 	}
