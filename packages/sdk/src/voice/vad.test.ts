@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { initVad, vadStep, type VadConfig } from "./vad.js";
+import { initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig } from "./vad.js";
 
 const cfg = (o: Partial<VadConfig> = {}): VadConfig => ({ silenceMs: 1000, sensitivity: 1, ...o });
 
@@ -97,5 +97,28 @@ describe("vadStep", () => {
 
 		const hi = initVad(); feed(hi, 0.3, 0, 6, cfg({ silenceMs: 300, sensitivity: 2 }));
 		expect(vadStep(hi, 0.06, 900, cfg({ silenceMs: 300, sensitivity: 2 }))).toBe(null);
+	});
+});
+
+describe("shouldAutoDetectEndOfTurn", () => {
+	const base = { isWhisper: true, paused: false, muted: false, manualTalk: false };
+
+	it("runs only in Whisper hands-free with nothing blocking", () => {
+		expect(shouldAutoDetectEndOfTurn(base)).toBe(true);
+	});
+
+	it("is off for browser dictation (it has streaming results, no mic-level VAD)", () => {
+		expect(shouldAutoDetectEndOfTurn({ ...base, isWhisper: false })).toBe(false);
+	});
+
+	it("is off while the agent is thinking/speaking or the mic is muted", () => {
+		expect(shouldAutoDetectEndOfTurn({ ...base, paused: true })).toBe(false);
+		expect(shouldAutoDetectEndOfTurn({ ...base, muted: true })).toBe(false);
+	});
+
+	it("is off during a manual push-to-talk turn — the user owns the boundary", () => {
+		// The regression this guards: the auto-VAD cutting off a manual turn mid-sentence
+		// and sending a half-formed message (e.g. "Debugging the function.").
+		expect(shouldAutoDetectEndOfTurn({ ...base, manualTalk: true })).toBe(false);
 	});
 });

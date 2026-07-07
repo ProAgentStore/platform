@@ -43,6 +43,22 @@ export interface VadConfig {
 const VOICE_FLOOR = 0.05;
 
 /**
+ * Should the automatic end-of-turn VAD run this frame? Only in Whisper hands-free, and
+ * NOT while the agent is thinking, the mic is muted, or the user is holding the floor
+ * via a manual push-to-talk turn (they control that boundary — the VAD must not cut
+ * them off mid-sentence, which is exactly the failure that sent a half-formed turn).
+ * Pure so the guard can't silently regress (it gates a delicate, high-blast-radius path).
+ */
+export function shouldAutoDetectEndOfTurn(f: {
+	isWhisper: boolean;
+	paused: boolean;
+	muted: boolean;
+	manualTalk: boolean;
+}): boolean {
+	return f.isWhisper && !f.paused && !f.muted && !f.manualTalk;
+}
+
+/**
  * Advance the VAD by one audio frame (mutates `s`). Returns:
  *  - `"end"`  — real speech finished (→ stop, transcribe, send)
  *  - `"idle"` — mic open but nothing said for `idleMs` (→ discard + recycle)

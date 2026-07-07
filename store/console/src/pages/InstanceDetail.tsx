@@ -5,7 +5,7 @@ import type { Instance, Message } from "../lib/types";
 import { renderMd, formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt } from "@proagentstore/sdk/hooks";
-import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench } from "lucide-react";
+import { Copy, Trash2, Mic, MicOff, Volume2, AudioLines, Send, ArrowLeft, Repeat, Square, Wrench, Settings } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
 import DynamicSurface from "../components/DynamicSurface";
@@ -54,6 +54,9 @@ export default function InstanceDetail() {
 	const [loopMax, setLoopMax] = useState(10);
 	const [loopPaused, setLoopPaused] = useState(false);
 	const [showLoopForm, setShowLoopForm] = useState(false);
+	// Overflow menu for the less-frequent chat actions (Copy JSON, Clear) — keeps the
+	// controls bar focused on voice, and moves the destructive Clear behind a tap.
+	const [showChatMenu, setShowChatMenu] = useState(false);
 	const loopOnRef = useRef(false);
 	const loopPausedRef = useRef(false);
 	loopOnRef.current = loopOn;
@@ -411,7 +414,7 @@ export default function InstanceDetail() {
 			{/* Tab content */}
 			<div className="flex-1 overflow-hidden flex flex-col min-h-0">
 				{tab === "chat" && (
-					<div className="flex flex-col flex-1 min-h-0">
+					<div className="flex flex-col flex-1 min-h-0 relative">
 						{/* Input bar — top */}
 						<div className="flex gap-1 sm:gap-1.5 px-2 py-2 shrink-0 items-center border-b border-line">
 							<div className="flex-1 min-w-0 relative">
@@ -419,7 +422,7 @@ export default function InstanceDetail() {
 									value={voice.interim || input}
 									onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
 									onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
-									placeholder={voice.micOn ? "Listening..." : voice.convoOn ? "Conversation mode — just talk" : isCoding ? "Ask about your repos..." : "Send a message..."}
+									placeholder={voice.talking ? "Listening — tap to send" : voice.convoOn ? "Hands-free — tap the chat to talk" : voice.micOn ? "Listening..." : isCoding ? "Ask about your repos..." : "Send a message..."}
 									readOnly={!!voice.interim}
 									className={`w-full bg-panel border rounded-xl px-4 py-2.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
 								/>
@@ -437,15 +440,25 @@ export default function InstanceDetail() {
 						<div className="flex flex-wrap gap-1.5 px-2 py-1.5 shrink-0 items-center">
 							<button type="button" onClick={voice.toggleMic} title="Talk: tap once, speak, and it sends your message when you pause (one at a time)" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.micOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Mic size={16} /><span className="text-xs font-semibold hidden sm:inline">Talk</span></button>
 							<button type="button" onClick={voice.toggleSpeak} title="Speak replies: read every agent reply aloud (doesn't listen)" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.speakOn ? "border-accent bg-accent text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Volume2 size={16} /><span className="text-xs font-semibold hidden sm:inline">Speak</span></button>
-							<button type="button" onClick={voice.toggleConvo} title="Hands-free: continuous conversation — you talk, it replies aloud, then listens again" className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><AudioLines size={16} /><span className="text-xs font-semibold hidden sm:inline">Hands-free</span></button>
+							<button type="button" onClick={voice.toggleConvo} title="Hands-free: it replies aloud, then listens. Tap the chat to talk on demand — tap again to send." className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.convoOn ? "border-green bg-green text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><AudioLines size={16} /><span className="text-xs font-semibold hidden sm:inline">Hands-free</span></button>
 							{voice.convoOn && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
 							{loopOn ? (
 								<button type="button" onClick={stopLoop} title={`Loop ${loopIteration}/${loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative"><Square size={13} /><span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span></button>
 							) : (
 								<button type="button" onClick={() => setShowLoopForm(!showLoopForm)} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
 							)}
-							<button type="button" onClick={copyChat} title="Copy JSON" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-muted hover:text-accent hover:border-accent transition-colors"><Copy size={13} /></button>
-							<button type="button" onClick={clearChat} title="Clear" className="px-1.5 py-1.5 text-sm border border-line rounded-lg text-red hover:bg-red/10 transition-colors"><Trash2 size={13} /></button>
+							<div className="relative">
+								<button type="button" onClick={() => setShowChatMenu((v) => !v)} title="Chat options" aria-label="Chat options" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}><Settings size={13} /></button>
+								{showChatMenu && (
+									<>
+										<div className="fixed inset-0 z-10" onClick={() => setShowChatMenu(false)} />
+										<div className="absolute right-0 top-full mt-1 z-20 bg-panel border border-line rounded-xl shadow-lg py-1 min-w-[10rem]">
+											<button type="button" onClick={() => { setShowChatMenu(false); copyChat(); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted hover:bg-panel-hover hover:text-accent transition-colors"><Copy size={13} /> Copy JSON</button>
+											<button type="button" onClick={() => { setShowChatMenu(false); clearChat(); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"><Trash2 size={13} /> Clear messages</button>
+										</div>
+									</>
+								)}
+							</div>
 						</div>
 						{/* Loop form with presets */}
 						{showLoopForm && !loopOn && (
@@ -468,8 +481,17 @@ export default function InstanceDetail() {
 								</div>
 							</div>
 						)}
-						{/* Messages */}
-						<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll">
+						{/* Messages — in hands-free, a tap anywhere here (not on a button) starts/
+						    stops a manual talk turn: tap to interrupt + listen, tap to send. */}
+						<div
+							ref={chatRef}
+							onClick={(e) => {
+								if (!voice.convoOn) return;
+								if ((e.target as HTMLElement).closest("button, a, summary, input, textarea")) return;
+								voice.toggleTalk();
+							}}
+							className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voice.talking ? "ring-2 ring-inset ring-green" : voice.convoOn ? "cursor-pointer" : ""}`}
+						>
 							{hasMore && (
 								<button type="button" onClick={loadMore} disabled={loadingMore} className="self-center text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-colors mb-2">
 									{loadingMore ? "Loading..." : "Load earlier messages"}
@@ -503,7 +525,7 @@ export default function InstanceDetail() {
 								return (
 									<div
 										key={m.id || m.createdAt || i}
-										onClick={() => voice.cancelSpeak()}
+										onClick={() => { if (!voice.convoOn) voice.cancelSpeak(); }}
 										onDoubleClick={() => playMessage(m)}
 										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
 											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
@@ -528,6 +550,25 @@ export default function InstanceDetail() {
 								</div>
 							)}
 						</div>
+						{/* Hands-free tap-to-talk pill — the state indicator + a big tap target.
+						    Pulses green while listening; tap to send. */}
+						{voice.convoOn && (
+							<div className="absolute left-0 right-0 bottom-3 flex justify-center px-4 pointer-events-none z-10">
+								<button
+									type="button"
+									onClick={voice.toggleTalk}
+									aria-pressed={voice.talking}
+									className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm shadow-lg transition-all ${
+										voice.talking
+											? "bg-green text-white ring-4 ring-green/30 animate-pulse scale-105"
+											: "bg-panel border border-line text-muted hover:text-accent hover:border-accent"
+									}`}
+								>
+									<Mic size={16} />
+									{voice.talking ? "Listening — tap to send" : "Tap to talk"}
+								</button>
+							</div>
+						)}
 					</div>
 				)}
 

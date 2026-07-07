@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
 import { API, getToken, reportClientError } from "../client.js";
-import { initVad, vadStep } from "./vad.js";
+import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { decideRestart, matchVoiceCommand } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
@@ -122,6 +122,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [muted, setMuted] = useState(false);
 	const mutedRef = useRef(false);
 	mutedRef.current = muted;
+	// Push-to-talk WITHIN hands-free: the user is holding the floor via a manual tap, so
+	// the automatic end-of-turn VAD is suppressed and only their tap-off sends the turn.
+	const [talking, setTalking] = useState(false);
+	const manualTalkRef = useRef(false);
 	const [interim, setInterim] = useState("");
 	/** 0-1 audio level from mic — drives the waveform visualizer */
 	const [audioLevel, setAudioLevel] = useState(0);
@@ -180,7 +184,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// Whisper VAD: Whisper has no streaming results, so we detect end-of-turn
 				// from the mic level (pure logic + tests in ./vad.ts). On a real pause it
 				// stops recording → transcribe → send.
-				if (sttIsWhisperRef.current && !pausedForThinkingRef.current && !mutedRef.current) {
+				if (shouldAutoDetectEndOfTurn({ isWhisper: sttIsWhisperRef.current, paused: pausedForThinkingRef.current, muted: mutedRef.current, manualTalk: manualTalkRef.current })) {
 					const decision = vadStep(vadStateRef.current, level, now, { silenceMs: silenceMsRef.current, sensitivity: vadSensitivityRef.current });
 					if (decision === "end") {
 						vadStateRef.current = initVad();
@@ -518,6 +522,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// queued restart timer sees convo is off and does NOT re-open the mic. (State
 			// updates the ref only on the next render — too late, the mic restarts.)
 			convoOnRef.current = false;
+			manualTalkRef.current = false;
 			pausedForThinkingRef.current = true;
 			if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 			pendingTextRef.current = "";
@@ -525,6 +530,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			ttsRef.current?.cancel();
 			stopAudioMonitor();
 			setConvoOn(false);
+			setTalking(false);
 			setMicOn(false);
 			setInterim("");
 			return;
@@ -555,6 +561,62 @@ export function useVoice(instanceId: string | undefined, opts: {
 			startListening();
 		}
 	}, [startListening]);
+
+	// ── Push-to-talk within hands-free (tap the chat to talk, tap again to send) ──
+	// The automatic VAD guesses when you've stopped — and gets it wrong (it once sent a
+	// half-formed "Debugging the function."). This gives you the turn boundary: tap to
+	// interrupt the agent + open the mic, tap again to transcribe + send.
+	const beginTalk = useCallback(async () => {
+		manualTalkRef.current = true;
+		setTalking(true);
+		ttsRef.current?.cancel();               // stop the agent mid-sentence
+		pausedForThinkingRef.current = false;
+		mutedRef.current = false;               // a manual talk implies "listen to me now"
+		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+		pendingTextRef.current = "";
+		vadStateRef.current = initVad();
+		// We just cancelled TTS, so there's no speaker echo to guard against — clearing
+		// this stops the echo guard from swallowing the START of the user's turn.
+		speakEndedAtRef.current = 0;
+		try {
+			if (!sttRef.current) sttRef.current = await makeStt();
+			if (!sttRef.current.listening) await sttRef.current.start();
+			lastListenStartRef.current = Date.now();
+			await startAudioMonitor();
+			setMicOn(true);
+			setMuted(false);
+		} catch { manualTalkRef.current = false; setTalking(false); }
+	}, [makeStt, startAudioMonitor]);
+
+	const endTalk = useCallback(() => {
+		if (!manualTalkRef.current) return;
+		manualTalkRef.current = false;
+		setTalking(false);
+		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+		if (sttIsWhisperRef.current) {
+			// Whisper: stop → onstop transcribes → handleResult (convo path) emits the send
+			// and sets pausedForThinking, so the mic won't reopen until the reply returns.
+			vadStateRef.current = initVad();
+			setInterim("Transcribing…");
+			sttRef.current?.stop();
+			return;
+		}
+		// Browser dictation: the transcript is already accumulated — flush + send it now
+		// instead of waiting on the silence debounce.
+		const msg = pendingTextRef.current.trim();
+		pendingTextRef.current = "";
+		pausedForThinkingRef.current = true;
+		flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); });
+		if (sttRef.current?.listening) sttRef.current.stop();
+		if (msg) emitSendRef.current(msg);
+		else pausedForThinkingRef.current = false;
+	}, [stopAudioMonitor]);
+
+	/** One tap toggles a manual talk turn (start listening ↔ stop + send). */
+	const toggleTalk = useCallback(() => {
+		if (manualTalkRef.current) endTalk();
+		else void beginTalk();
+	}, [beginTalk, endTalk]);
 
 	// Esc stops speech immediately, anywhere in the app.
 	useEffect(() => {
@@ -597,7 +659,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		micOn, speakOn, convoOn, muted, interim,
 		/** 0-1 audio level from mic — use to render waveform */
 		audioLevel,
+		/** True while a manual push-to-talk turn is open (hands-free tap-to-talk). */
+		talking,
 		toggleMic, toggleSpeak, toggleConvo, toggleMute, cancelSpeak,
+		/** Push-to-talk within hands-free: start/stop a manual turn, or toggle it. */
+		beginTalk, endTalk, toggleTalk,
 		maybeSpeakResponse,
 		/** Speak text on demand (message replay), independent of auto-speak mode. */
 		speak,
