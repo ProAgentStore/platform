@@ -52,6 +52,44 @@ export function resolveVoiceMode(convoOn: boolean, speakOn: boolean): VoiceMode 
 	return "text";
 }
 
+/** Presentational state for the single "voice status" pill in the chat UI. */
+export interface VoiceStatus {
+	label: string;
+	/** `work` = transcribing/generating (accent, spinner); `live` = mic hot (green);
+	 *  `idle` = waiting for the user (neutral). */
+	tone: "work" | "live" | "idle";
+	/** Show a spinner (vs a mic glyph). */
+	spin: boolean;
+	/** Tappable — toggles a manual talk turn (Tap-to-talk). */
+	tap: boolean;
+}
+
+/**
+ * Resolve the single, always-visible voice-status pill so the user ALWAYS knows what's
+ * happening after they finish speaking — Listening → Transcribing → Working — instead
+ * of silence until the reply lands. Pure so this branchy presentation logic is tested.
+ * `null` means show nothing (idle text chat). `thinking` (agent generating) wins in
+ * every mode, so even text chat shows "Working on it…".
+ */
+export function resolveVoiceStatus(input: {
+	mode: VoiceMode;
+	thinking: boolean;
+	transcribing: boolean;
+	talking: boolean;
+	listening: boolean;
+}): VoiceStatus | null {
+	const { mode, thinking, transcribing, talking, listening } = input;
+	if (thinking) return { label: "Working on it…", tone: "work", spin: true, tap: false };
+	if (mode === "text") return null;
+	if (transcribing) return { label: "Transcribing…", tone: "work", spin: true, tap: false };
+	if (talking) return { label: "Listening — tap to send", tone: "live", spin: false, tap: true };
+	if (mode === "ptt") return { label: "Tap to talk", tone: "idle", spin: false, tap: true };
+	// hands-free
+	return listening
+		? { label: "Listening…", tone: "live", spin: false, tap: false }
+		: { label: "Hands-free — just talk", tone: "idle", spin: false, tap: false };
+}
+
 /** A spoken command the hook acts on locally instead of sending as a chat message. */
 export type VoiceCommand = "repeat";
 

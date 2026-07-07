@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideRestart, matchVoiceCommand, resolveVoiceMode } from "./convo.js";
+import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -74,5 +74,39 @@ describe("resolveVoiceMode", () => {
 
 	it("neither is plain text chat", () => {
 		expect(resolveVoiceMode(false, false)).toBe("text");
+	});
+});
+
+describe("resolveVoiceStatus", () => {
+	const base = { mode: "ptt" as const, thinking: false, transcribing: false, talking: false, listening: false };
+
+	it("shows nothing in idle text chat", () => {
+		expect(resolveVoiceStatus({ ...base, mode: "text" })).toBeNull();
+	});
+
+	it("'Working on it…' wins in EVERY mode while the agent generates (incl. text)", () => {
+		for (const mode of ["text", "ptt", "handsfree"] as const) {
+			const s = resolveVoiceStatus({ ...base, mode, thinking: true });
+			expect(s).toMatchObject({ label: "Working on it…", tone: "work", spin: true, tap: false });
+		}
+	});
+
+	it("shows a spinning 'Transcribing…' after you stop, before the reply", () => {
+		expect(resolveVoiceStatus({ ...base, transcribing: true })).toMatchObject({ label: "Transcribing…", tone: "work", spin: true });
+	});
+
+	it("a recording turn is a tappable green 'Listening — tap to send'", () => {
+		expect(resolveVoiceStatus({ ...base, talking: true })).toMatchObject({ label: "Listening — tap to send", tone: "live", tap: true });
+	});
+
+	it("idle Tap-to-talk invites a tap; hands-free reflects mic state", () => {
+		expect(resolveVoiceStatus({ ...base, mode: "ptt" })).toMatchObject({ label: "Tap to talk", tap: true });
+		expect(resolveVoiceStatus({ ...base, mode: "handsfree", listening: true })).toMatchObject({ label: "Listening…", tone: "live", tap: false });
+		expect(resolveVoiceStatus({ ...base, mode: "handsfree", listening: false })).toMatchObject({ label: "Hands-free — just talk", tone: "idle" });
+	});
+
+	it("prioritizes thinking over an in-flight transcribing/talking state", () => {
+		expect(resolveVoiceStatus({ ...base, thinking: true, transcribing: true, talking: true }))
+			.toMatchObject({ label: "Working on it…" });
 	});
 });

@@ -4,8 +4,8 @@ import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
 import { renderMd, formatTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { useVoice, buildTranscribePrompt } from "@proagentstore/sdk/hooks";
-import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, Settings } from "lucide-react";
+import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
+import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, Settings, Loader2 } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
 import DynamicSurface from "../components/DynamicSurface";
@@ -416,7 +416,7 @@ export default function InstanceDetail() {
 				{tab === "chat" && (
 					<div className="flex flex-col flex-1 min-h-0 relative">
 						{/* Input bar — top */}
-						<div className="flex gap-1 sm:gap-1.5 px-2 py-2 shrink-0 items-center border-b border-line">
+						<div className="flex gap-1 sm:gap-1.5 px-2 pt-2 pb-1 shrink-0 items-center">
 							<div className="flex-1 min-w-0 relative">
 								<input
 									value={voice.interim || input}
@@ -436,8 +436,8 @@ export default function InstanceDetail() {
 								<Send size={14} />
 							</button>
 						</div>
-						{/* Controls bar — labeled voice buttons (icon-only was ambiguous: two mic-like glyphs) */}
-						<div className="flex flex-wrap gap-1.5 px-2 py-1.5 shrink-0 items-center">
+						{/* Controls bar — mode selector + actions (tight under the input, no divider) */}
+						<div className="flex flex-wrap gap-1.5 px-2 pt-0.5 pb-1.5 shrink-0 items-center">
 							{/* Three distinct interaction modes — a single segmented control (was four
 							    overlapping toggles). Chat · Tap-to-talk · Hands-free. */}
 							<div className="flex border border-line rounded-lg overflow-hidden shrink-0" role="radiogroup" aria-label="Interaction mode">
@@ -560,33 +560,38 @@ export default function InstanceDetail() {
 									</div>
 								);
 							})}
-							{thinking && (
-								<div className="text-muted text-sm flex items-center gap-2">
-									<span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-									Thinking...
-								</div>
-							)}
 						</div>
-						{/* Tap-to-talk pill — the state indicator + a big tap target. Pulses green
-						    while recording; tap to send. Only in Tap-to-talk mode (Hands-free is
-						    fully automatic — no tapping). */}
-						{voice.mode === "ptt" && (
-							<div className="absolute left-0 right-0 bottom-3 flex justify-center px-4 pointer-events-none z-10">
-								<button
-									type="button"
-									onClick={voice.toggleTalk}
-									aria-pressed={voice.talking}
-									className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm shadow-lg transition-all ${
-										voice.talking
-											? "bg-green text-white ring-4 ring-green/30 animate-pulse scale-105"
-											: "bg-panel border border-line text-muted hover:text-accent hover:border-accent"
-									}`}
-								>
-									<Mic size={16} />
-									{voice.talking ? "Listening — tap to send" : "Tap to talk"}
-								</button>
-							</div>
-						)}
+						{/* Live voice status — the OBVIOUS "it took over and is working" signal.
+						    Walks Listening → Transcribing → Working so there's never a silent gap
+						    between you finishing and the reply arriving. Doubles as the tap target
+						    in Tap-to-talk. */}
+						{(() => {
+							const s = resolveVoiceStatus({
+								mode: voice.mode,
+								thinking,
+								transcribing: voice.interim === "Transcribing…",
+								talking: voice.talking,
+								listening: voice.micOn,
+							});
+							if (!s) return null;
+							const cls = s.tone === "work" ? "bg-accent text-white ring-4 ring-accent/25 animate-pulse"
+								: s.tone === "live" ? "bg-green text-white ring-4 ring-green/30 animate-pulse scale-105"
+								: "bg-panel border border-line text-muted hover:text-accent hover:border-accent";
+							return (
+								<div className="absolute left-0 right-0 bottom-3 flex justify-center px-4 pointer-events-none z-20">
+									<button
+										type="button"
+										onClick={s.tap ? voice.toggleTalk : undefined}
+										disabled={!s.tap}
+										aria-live="polite"
+										className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm shadow-lg transition-all ${cls} ${s.tap ? "cursor-pointer" : "cursor-default"}`}
+									>
+										{s.spin ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} />}
+										{s.label}
+									</button>
+								</div>
+							);
+						})()}
 					</div>
 				)}
 
