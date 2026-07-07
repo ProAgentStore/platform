@@ -467,11 +467,18 @@ export function createRunnerCommand(): Command {
 			});
 			runner.stdout?.on("data", (data) => process.stdout.write(data));
 			runner.stderr?.on("data", (data) => process.stderr.write(data));
+			let shuttingDown = false;
 			runner.on("exit", (code) => {
-				if (code && code !== 0) writeError(`runner exited with code ${code}`);
+				if (shuttingDown) return; // we asked it to stop (SIGINT/SIGTERM below)
+				// The local runner died on its own (crash / OOM / Playwright fault). The relay
+				// WS would otherwise keep this process alive and keep forwarding commands to a
+				// now-dead local HTTP server — every task returns 500 while the agent still shows
+				// "connected". Fail loudly and exit so the user (or a supervisor) restarts.
+				writeError(`Local browser runtime exited unexpectedly${code ? ` (code ${code})` : ""}. Run \`pags up\` again to reconnect.`);
+				process.exit(code ?? 1);
 			});
 
-			const shutdown = () => { if (!runner.killed) runner.kill("SIGTERM"); };
+			const shutdown = () => { shuttingDown = true; if (!runner.killed) runner.kill("SIGTERM"); };
 			process.once("SIGINT", () => { shutdown(); process.exit(0); });
 			process.once("SIGTERM", () => { shutdown(); process.exit(0); });
 
