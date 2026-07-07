@@ -2,7 +2,8 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { AgentStorageEngine } from "./agent-storage.js";
 import type { AgentMessage, AgentState, AgentTask, MemoryEntry } from "./agent-types.js";
 import { TOOL_CAPABLE_MODELS } from "./agent-do-prompt.js";
-import { buildAgentToolDefinitions, storageToolNameSet } from "./agent-do-tools.js";
+import { buildAgentToolDefinitions, storageToolNameSet, toolNamesFor } from "./agent-do-tools.js";
+import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
@@ -10,6 +11,29 @@ import { runUserWorkersAi } from "./lib/user-ai.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
 import type { Env } from "./types.js";
+
+/**
+ * Resolve an agent's capabilities from the registry so tools can be gated to what the
+ * agent type can actually use. Inside the DO, `id` is the INSTANCE id for instances
+ * (see `/init` at subscribe) — join to its template agent; fall back to the agent row
+ * for a template preview DO. Any failure returns the default (full toolset), never
+ * fewer — a lookup miss must not silently strip an agent's tools.
+ */
+async function resolveAgentCapabilities(env: Env, id: string): Promise<AgentCapabilities> {
+	try {
+		const inst = await env.DB.prepare(
+			"SELECT a.slug AS slug, a.category AS category, a.config AS config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1",
+		).bind(id).first<{ slug: string | null; category: string | null; config: string | null }>();
+		if (inst) return agentCapabilities(inst);
+		const agent = await env.DB.prepare(
+			"SELECT slug, category, config FROM agents WHERE id = ?1",
+		).bind(id).first<{ slug: string | null; category: string | null; config: string | null }>();
+		if (agent) return agentCapabilities(agent);
+	} catch {
+		/* fall through to the permissive default */
+	}
+	return agentCapabilities({});
+}
 
 export async function runAgentThink(opts: {
 	state: AgentState;
@@ -24,6 +48,10 @@ export async function runAgentThink(opts: {
 }): Promise<{ response: string; toolCalls: string[] }> {
 	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast } = opts;
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
+
+	// Authoritative capabilities → gate tools to what this agent type can actually use
+	// (e.g. a Coder never gets search_knowledge, so it can't hallucinate an empty index).
+	const capabilities = await resolveAgentCapabilities(env, state.agentId);
 
 	let systemPrompt = state.systemPrompt;
 
@@ -138,8 +166,14 @@ export async function runAgentThink(opts: {
 
 	const useTools = TOOL_CAPABLE_MODELS.has(state.model);
 	if (useTools) {
-		systemPrompt +=
-			"\n\nYou have tools available. Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
+		// Describe the tools this agent ACTUALLY has (they are capability-gated below), so
+		// a Coder isn’t told to "search your knowledge" when it has no index to search.
+		const toolBlurb = capabilities.surfaces.includes("repo")
+			? "Use them to search your indexed repositories and manage your memory."
+			: capabilities.surfaces.includes("coding")
+				? "Use them to check your repositories, read the live terminal, and manage your memory and tasks."
+				: "Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
+		systemPrompt += "\n\nYou have tools available. " + toolBlurb;
 	}
 
 	// A "technical" response style needs the opposite of the default plain-speech
@@ -203,7 +237,13 @@ export async function runAgentThink(opts: {
 
 	const tools = buildAgentToolDefinitions({
 		emailEnabled: state.permissions?.email === true,
+		capabilities,
 	});
+	// The same allow-list, enforced at EXECUTION too: a non-tool model can emit a
+	// withheld tool as text (parseToolCallsFromText), which would otherwise bypass the
+	// definition-level gate. Belt and suspenders.
+	const allowedToolNames = toolNamesFor(capabilities);
+	if (state.permissions?.email === true) allowedToolNames.add("find_confirmation_link");
 	const allToolLog: string[] = [];
 	const storageToolNames = storageToolNameSet();
 	// Multi-step tasks (e.g. read goal + list files + fetch job page, THEN
@@ -233,6 +273,13 @@ export async function runAgentThink(opts: {
 		const toolResults: string[] = [];
 		let executedThisRound = 0;
 		for (const tc of toolCalls) {
+			// Enforce the capability allow-list. A withheld tool (e.g. search_knowledge on a
+			// Coder) is refused with feedback so the model answers directly instead — it is
+			// never executed. Not counted as work, so a run of only-refused calls ends the loop.
+			if (!allowedToolNames.has(tc.name)) {
+				toolResults.push(`[${tc.name}]: This tool isn't available to this agent — do not call it; answer directly or use an available tool.`);
+				continue;
+			}
 			const signature = `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`;
 			if (executedCalls.has(signature)) {
 				toolResults.push(
