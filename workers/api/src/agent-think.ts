@@ -10,6 +10,7 @@ import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-cal
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
+import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
 import { callRunner, getRunnerConn, isRunnerOnline } from "./lib/runner-client.js";
 import type { Env } from "./types.js";
 
@@ -158,29 +159,37 @@ export async function runAgentThink(opts: {
 					// saved snapshot on any miss — never block the chat on a runner round-trip.
 					const conn = runnerOnline ? await getRunnerConn(env, state.agentId, userId).catch(() => null) : null;
 					const terminals = await Promise.all(active.map(async (s) => {
-						if (conn) {
-							const snap = await callRunner<{ pane?: string }>(conn, "/coding/capture", { sessionId: s.id }).catch(() => null);
-							const pane = snap?.pane?.replace(/\s+/g, " ").trim();
-							if (pane) return { live: true, text: pane.slice(-400) };
-						}
+						// Keep the FULL snapshot (pane + alive + runState), not just pane — those
+						// fields are what let describeTerminal tell live activity from idle scrollback.
+						const snap = conn
+							? await callRunner<{ pane?: string; alive?: boolean; runState?: string }>(conn, "/coding/capture", { sessionId: s.id }).catch(() => null)
+							: null;
 						const tail = await lastTerminal(env, s.id).catch(() => null);
-						return { live: false, text: tail?.replace(/\s+/g, " ").trim().slice(-400) || "" };
+						return describeTerminal({
+							runnerOnline,
+							captureOk: snap !== null,
+							pane: snap?.pane?.replace(/\s+/g, " ").trim().slice(-1200) ?? null,
+							alive: snap?.alive ?? null,
+							runState: snap?.runState ?? null,
+							lastSnapshot: tail?.replace(/\s+/g, " ").trim().slice(-1200) ?? null,
+							updatedAt: s.updatedAt ?? null,
+						});
 					}));
 					systemPrompt += "\n## Active Coding Sessions\n";
 					active.forEach((s, idx) => {
 						const repo = repos.find((r) => r.id === s.repoId);
 						systemPrompt += `- ${repo?.name || s.repoId} — engine: ${s.launchCommand || s.clientType || "claude"}\n`;
-						const t = terminals[idx];
-						if (t.text) systemPrompt += t.live
-							? `  LIVE terminal (captured just now): ${t.text}\n`
-							: `  Last terminal snapshot (as of ${s.updatedAt ?? "unknown"}): ${t.text}\n`;
+						const line = renderTerminalLine(terminals[idx]);
+						if (line) systemPrompt += `${line}\n`;
 					});
 				} else {
 					systemPrompt +=
 						"\nNo active coding session right now. To work on a repo, start a session in the Coding tab (the local runner must be online — `pags up`).\n";
 				}
 				systemPrompt +=
-					"\nAnswer questions about these repositories and sessions concretely. Lines marked 'LIVE terminal (captured just now)' are the real CURRENT pane; lines marked 'Last terminal snapshot' are the last saved state and may be stale — cite which one you are using. NEVER claim you personally ran commands, found or fixed bugs, or made commits: the coding engine in the Coding tab does that work, not you. From this chat you explain and summarize; you do not drive the engine or run shell commands.";
+					"\nTrust each terminal line's label literally: 'CURRENT terminal … actively running' is live; 'session IDLE … existing scrollback' means the text on screen may be OLD and does NOT prove anything just happened; 'UNAVAILABLE this turn' means you could not read it — do NOT guess what it says; 'Runner OFFLINE' means nothing is running. Never upgrade a stale, idle, or unavailable terminal into a claim about the current code." +
+					"\nGROUNDING: only state something about the code or the session if a terminal line above actually shows it. Never assert that code 'already exists', 'is already implemented', 'wasn't changed', or 'nothing happened' unless you can see the evidence — a negative claim is a claim too. If you cannot see current state (idle/unavailable/empty/offline), say so plainly and offer to check it in the Coding tab, rather than guessing." +
+					"\nNEVER claim you personally ran commands, found or fixed bugs, or made commits: the coding engine in the Coding tab does that work, not you. From this chat you explain and summarize; you do not drive the engine or run shell commands.";
 			}
 		} catch {}
 	}
