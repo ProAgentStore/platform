@@ -10,6 +10,7 @@ import { getProfile, profileToCandidate, profileToPreferences } from "../lib/pro
 import { suspendActiveSessions, resumeSuspendedSessions } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
+import { parseLoopDecision } from "../lib/loop-decide.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import type { Env } from "../types.js";
 import {
@@ -886,19 +887,9 @@ Reply ONLY with JSON: { "decision": "continue"|"done"|"escalate"|"failed", "next
 			maxTokens: 300,
 		})) as { response?: string };
 
-		const raw = res.response || "";
-		const jsonMatch = raw.match(/\{[\s\S]*\}/);
-		if (jsonMatch) {
-			try {
-				const parsed = JSON.parse(jsonMatch[0]);
-				return c.json({
-					decision: parsed.decision || "escalate",
-					nextInstruction: parsed.nextInstruction || "",
-					reason: parsed.reason || "",
-				});
-			} catch {}
-		}
-		return c.json({ decision: "escalate", nextInstruction: "", reason: "Could not parse LLM response" });
+		// Robust parse: handles ```fences```, trailing prose, an example object first, or a
+		// pure-prose reply — instead of dead-ending the loop on anything but clean JSON.
+		return c.json(parseLoopDecision(res.response || ""));
 	} catch (e) {
 		const msg = e instanceof Error ? e.message : String(e);
 		if (msg.includes("API key") || msg.includes("credentials")) {
