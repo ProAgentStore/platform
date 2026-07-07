@@ -10,6 +10,7 @@ import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-cal
 import { runUserWorkersAi } from "./lib/user-ai.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
+import { isRunnerOnline } from "./lib/runner-client.js";
 import type { Env } from "./types.js";
 
 /**
@@ -129,6 +130,13 @@ export async function runAgentThink(opts: {
 			const repos = await listRepos(env, state.agentId, userId);
 			if (repos.length > 0) {
 				hasCodingContext = true;
+				// Authoritative LIVE check: is the runner WS actually connected right now? The
+				// DB session status can read "active" after an unclean disconnect, so ask the
+				// RelayDO. This lets the chat say "run `pags up`" instead of implying live work.
+				const runnerOnline = await isRunnerOnline(env, state.agentId);
+				systemPrompt += runnerOnline
+					? "\n\n## Runner status: ONLINE — the local runner is connected, so the sessions below can reflect live activity."
+					: "\n\n## Runner status: OFFLINE — the local runner is NOT connected right now. Nothing is running; the sessions below show only their LAST captured state. If the user wants to run, search, or fix code, tell them to start the runner first with `pags up` (then use the Coding tab). Do not imply anything is happening live.";
 				systemPrompt += "\n\n## Attached Repositories\n";
 				for (const r of repos) {
 					const status =

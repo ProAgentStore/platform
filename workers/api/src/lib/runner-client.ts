@@ -44,6 +44,25 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
 	return { endpointUrl: row.endpoint_url.replace(/\/$/, ""), token, instanceId, userId, env };
 }
 
+/**
+ * Live check: is a runner WebSocket actually connected for this instance right now?
+ * Queries the RelayDO (authoritative — it holds the socket), NOT the DB `status`
+ * column, which can read "active"/"online" after an unclean disconnect. Cheap: the DO
+ * is hibernated when idle. Returns false on any error (treat unknown as offline).
+ */
+export async function isRunnerOnline(env: Env, instanceId: string): Promise<boolean> {
+	try {
+		if (!env.RELAY) return false;
+		const stub = env.RELAY.get(env.RELAY.idFromName(instanceId));
+		const res = await stub.fetch(new Request("https://relay/status"));
+		if (!res.ok) return false;
+		const data = (await res.json()) as { connected?: boolean };
+		return data.connected === true;
+	} catch {
+		return false;
+	}
+}
+
 /** Send a command to the runner via the WebSocket relay DO. */
 export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown): Promise<T> {
 	if (!conn.env.RELAY) throw new Error("RELAY binding not configured");

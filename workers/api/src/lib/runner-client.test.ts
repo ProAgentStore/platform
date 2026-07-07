@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { callRunner, type RunnerConn } from "./runner-client.js";
+import { callRunner, isRunnerOnline, type RunnerConn } from "./runner-client.js";
 import type { Env } from "../types.js";
 
 /** Build a mock RELAY namespace. */
@@ -23,6 +23,29 @@ function mockConn(overrides: Partial<RunnerConn & { RELAY?: any }> = {}): Runner
 		...overrides,
 	};
 }
+
+describe("isRunnerOnline", () => {
+	const envWith = (RELAY: unknown) => ({ RELAY }) as unknown as Env;
+
+	it("true when the RelayDO reports a connected runner", async () => {
+		const relay = mockRelay(async (req) => {
+			expect(new URL(req.url).pathname).toBe("/status");
+			return Response.json({ connected: true });
+		});
+		expect(await isRunnerOnline(envWith(relay), "inst-1")).toBe(true);
+	});
+
+	it("false when the RelayDO reports no runner", async () => {
+		const relay = mockRelay(async () => Response.json({ connected: false }));
+		expect(await isRunnerOnline(envWith(relay), "inst-1")).toBe(false);
+	});
+
+	it("false (never throws) with no RELAY binding or on a DO error", async () => {
+		expect(await isRunnerOnline(envWith(undefined), "inst-1")).toBe(false);
+		const boom = mockRelay(async () => { throw new Error("DO down"); });
+		expect(await isRunnerOnline(envWith(boom), "inst-1")).toBe(false);
+	});
+});
 
 describe("callRunner (relay-only)", () => {
 	afterEach(() => { vi.restoreAllMocks(); });
