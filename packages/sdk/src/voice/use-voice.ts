@@ -371,6 +371,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 					pausedForThinkingRef.current = true;
 					flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); playThinkingChime(); });
 					emitSendRef.current(t);
+				} else if (!isFinal && text.trim()) {
+					// Streaming partial (gpt-4o-transcribe) — show the words landing live in
+					// place of the static "Transcribing…" the VAD set on end-of-turn.
+					flushSync(() => setInterim(text));
 				}
 				return;
 			}

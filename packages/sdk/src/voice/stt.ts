@@ -1,7 +1,7 @@
 /** Speech-to-Text abstraction — browser Web Speech API or OpenAI Whisper */
 
 import { API, getToken } from "../client.js";
-import { isTooShortToTranscribe, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
+import { drainSseData, isTooShortToTranscribe, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
 
 /** OpenAI's real-time transcription model — replaces the legacy batch `whisper-1`.
  *  Same upload endpoint, far better accuracy/latency, no verbose_json (we use json). */
@@ -257,6 +257,11 @@ export class VoiceStt {
 		// Vocabulary bias — nudges the model toward domain words (a developer's "bugs"
 		// isn't "bars"). Only sent when non-empty so generic chat stays unbiased.
 		if (this.transcribePrompt) form.append("prompt", this.transcribePrompt);
+		// Stream the transcript for a "live" feel — words land as they're recognised
+		// instead of one blob after a pause. whisper-1 ignores streaming, so only the
+		// gpt-4o-transcribe models get it; everything else takes the plain json path.
+		const streaming = this.model !== "whisper-1";
+		if (streaming) form.append("stream", "true");
 		try {
 			// Route via the platform proxy — it injects the user's key server-side.
 			// Calling api.openai.com directly from the browser is blocked by CORS (the
@@ -277,6 +282,10 @@ export class VoiceStt {
 				this.onError(`Whisper error ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`);
 				return;
 			}
+			if (streaming && res.body) {
+				await this._readTranscriptionStream(res.body, blob);
+				return;
+			}
 			const data = await res.json();
 			if (data.text?.trim()) {
 				// Hand the raw audio to the caller (to save for replay) BEFORE the result,
@@ -289,6 +298,56 @@ export class VoiceStt {
 				"Whisper failed: " +
 					(e instanceof Error ? e.message : String(e)),
 			);
+		}
+	}
+
+	/**
+	 * Read the streaming-transcription SSE: fire interim `onResult(partial, false)` on
+	 * each delta (live words in the input) and a single `onResult(final, true)` at the
+	 * end. If the stream breaks after some text, we still emit what we have rather than
+	 * losing the turn.
+	 */
+	private async _readTranscriptionStream(body: ReadableStream<Uint8Array>, blob: Blob) {
+		const reader = body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+		let acc = "";
+		let final = "";
+		const handle = (payload: string) => {
+			const ev = parseTranscriptionEvent(payload);
+			if (!ev) return;
+			if (ev.type === "transcript.text.delta" && ev.delta) {
+				acc += ev.delta;
+				this.onResult(acc.trim(), false); // live partial
+			} else if (ev.type === "transcript.text.done" && typeof ev.text === "string") {
+				final = ev.text;
+			}
+		};
+		try {
+			for (;;) {
+				const { value, done } = await reader.read();
+				if (done) break;
+				buffer += decoder.decode(value, { stream: true });
+				const { data, rest } = drainSseData(buffer);
+				buffer = rest;
+				for (const payload of data) handle(payload);
+			}
+			// Flush a trailing line with no final newline (e.g. the done event).
+			if (buffer.trim().startsWith("data:")) handle(buffer.trim().slice(5).trim());
+			const result = (final || acc).trim();
+			if (result) {
+				this.onAudio(blob);
+				this.onResult(result, true);
+			}
+		} catch (e) {
+			// Salvage whatever we streamed; only surface a hard error if we got nothing.
+			const partial = (final || acc).trim();
+			if (partial) {
+				this.onAudio(blob);
+				this.onResult(partial, true);
+			} else {
+				this.onError("Transcription stream failed: " + (e instanceof Error ? e.message : String(e)));
+			}
 		}
 	}
 }

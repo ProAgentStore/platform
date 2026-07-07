@@ -56,6 +56,49 @@ export function isTooShortToTranscribe(byteLength: number, durationMs: number): 
 	return durationMs < MIN_TRANSCRIBE_MS || byteLength < MIN_TRANSCRIBE_BYTES;
 }
 
+/** One decoded event from the streaming-transcription SSE (gpt-4o-transcribe). */
+export interface TranscriptionStreamEvent {
+	type: string;
+	delta?: string;
+	text?: string;
+}
+
+/**
+ * Parse one SSE `data:` payload from a streaming transcription. Returns null for junk,
+ * heartbeats, or the `[DONE]` sentinel. Pure so the (fiddly) event handling is tested
+ * without a real network stream. Event shapes (per the OpenAI API reference):
+ *   { type: "transcript.text.delta", delta: "He" }   — incremental
+ *   { type: "transcript.text.done",  text: "Hello" } — final
+ */
+export function parseTranscriptionEvent(dataPayload: string): TranscriptionStreamEvent | null {
+	const s = dataPayload.trim();
+	if (!s || s === "[DONE]") return null;
+	try {
+		const o = JSON.parse(s) as TranscriptionStreamEvent;
+		return o && typeof o.type === "string" ? o : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Pull complete `data:` payloads out of an SSE text buffer, returning the leftover
+ * partial line to carry into the next chunk (SSE events can split across network
+ * chunks). Pure so chunk-boundary handling is unit-tested. Only `data:` lines are
+ * returned; `event:`/comment/blank lines are dropped.
+ */
+export function drainSseData(buffer: string): { data: string[]; rest: string } {
+	const parts = buffer.split("\n");
+	// The final segment may be an incomplete line (no trailing newline yet) — hold it.
+	const rest = parts.pop() ?? "";
+	const data: string[] = [];
+	for (const line of parts) {
+		const t = line.trim();
+		if (t.startsWith("data:")) data.push(t.slice(5).trim());
+	}
+	return { data, rest };
+}
+
 /**
  * Pull a human reason out of an upstream (OpenAI) error body. It's usually JSON
  * `{ error: { message } }`; fall back to the raw text when it isn't. Never throws.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeRmsLevel, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
+import { computeRmsLevel, drainSseData, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
 
 describe("isTooShortToTranscribe", () => {
 	it("drops a sub-threshold clip (the 'audio too short' 400 case)", () => {
@@ -9,6 +9,41 @@ describe("isTooShortToTranscribe", () => {
 	it("keeps a real utterance", () => {
 		expect(isTooShortToTranscribe(8000, 700)).toBe(false);
 		expect(isTooShortToTranscribe(2000, MIN_TRANSCRIBE_MS)).toBe(false);
+	});
+});
+
+describe("parseTranscriptionEvent", () => {
+	it("decodes a delta event", () => {
+		expect(parseTranscriptionEvent('{"type":"transcript.text.delta","delta":"He"}'))
+			.toEqual({ type: "transcript.text.delta", delta: "He" });
+	});
+	it("decodes a done event", () => {
+		expect(parseTranscriptionEvent('{"type":"transcript.text.done","text":"Hello world"}'))
+			.toEqual({ type: "transcript.text.done", text: "Hello world" });
+	});
+	it("ignores [DONE], blanks, and malformed json", () => {
+		expect(parseTranscriptionEvent("[DONE]")).toBeNull();
+		expect(parseTranscriptionEvent("   ")).toBeNull();
+		expect(parseTranscriptionEvent("{not json")).toBeNull();
+		expect(parseTranscriptionEvent('{"no":"type"}')).toBeNull();
+	});
+});
+
+describe("drainSseData", () => {
+	it("extracts complete data: lines and holds the partial remainder", () => {
+		const { data, rest } = drainSseData('data: {"a":1}\ndata: {"b":2}\ndata: {"c":');
+		expect(data).toEqual(['{"a":1}', '{"b":2}']);
+		expect(rest).toBe('data: {"c":'); // incomplete — carried to the next chunk
+	});
+	it("drops event:/comment/blank lines", () => {
+		const { data } = drainSseData("event: transcript.text.delta\ndata: {\"delta\":\"hi\"}\n\n");
+		expect(data).toEqual(['{"delta":"hi"}']);
+	});
+	it("reassembles across chunk boundaries", () => {
+		const first = drainSseData('data: {"x":');
+		expect(first.data).toEqual([]);
+		const second = drainSseData(first.rest + '1}\n');
+		expect(second.data).toEqual(['{"x":1}']);
 	});
 });
 
