@@ -89,4 +89,27 @@ describe("normalizeToolCalls", () => {
 		]);
 		expect(calls[0].arguments.key).toBe("value");
 	});
+
+	it("skips ONE call with malformed JSON args without dropping the whole batch", () => {
+		// Regression: a bare JSON.parse on the bad `arguments` used to throw and fail the
+		// entire chat turn — losing the valid calls too.
+		const calls = normalizeToolCalls([
+			{ function: { name: "good_one", arguments: '{"a":1}' } },
+			{ function: { name: "broken", arguments: "{not valid json" } },
+			{ name: "flat_ok", arguments: { b: 2 } },
+		]);
+		expect(calls.map((c) => c.name)).toEqual(["good_one", "flat_ok"]);
+		expect(calls[0].arguments.a).toBe(1);
+		expect(calls[1].arguments.b).toBe(2);
+	});
+
+	it("collapses non-object args (null / primitive) to {}", () => {
+		const calls = normalizeToolCalls([
+			{ name: "n1", arguments: null },
+			{ function: { name: "n2", arguments: "42" } },
+		]);
+		expect(calls).toHaveLength(2);
+		expect(calls[0].arguments).toEqual({});
+		expect(calls[1].arguments).toEqual({});
+	});
 });

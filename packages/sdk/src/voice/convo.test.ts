@@ -105,6 +105,15 @@ describe("resolveVoiceStatus", () => {
 		expect(resolveVoiceStatus({ ...base, mode: "handsfree", listening: false })).toMatchObject({ label: "Hands-free — just talk", tone: "idle" });
 	});
 
+	it("a muted hands-free mic reads 'Muted', never a false 'Listening'", () => {
+		// Guards the lie where the pill claimed it was listening while the mic was paused.
+		expect(resolveVoiceStatus({ ...base, mode: "handsfree", muted: true, listening: false }))
+			.toMatchObject({ label: "Muted", tone: "idle", tap: false });
+		// Mute doesn't override the active-work states (thinking/transcribing still win).
+		expect(resolveVoiceStatus({ ...base, mode: "handsfree", muted: true, thinking: true }))
+			.toMatchObject({ label: "Working on it…" });
+	});
+
 	it("prioritizes thinking over an in-flight transcribing/talking state", () => {
 		expect(resolveVoiceStatus({ ...base, thinking: true, transcribing: true, talking: true }))
 			.toMatchObject({ label: "Working on it…" });

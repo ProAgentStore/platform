@@ -53,13 +53,30 @@ function findMatchingBrace(text: string, start: number): number {
 export function normalizeToolCalls(
 	rawCalls: unknown[],
 ): Array<{ name: string; arguments: Record<string, unknown> }> {
-	return rawCalls.map((tc: unknown) => {
-		const call = tc as Record<string, unknown>;
-		if (call.function && typeof call.function === "object") {
-			const fn = call.function as Record<string, unknown>;
-			const args = typeof fn.arguments === "string" ? JSON.parse(fn.arguments as string) : fn.arguments || {};
-			return { name: fn.name as string, arguments: args as Record<string, unknown> };
+	const out: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+	for (const tc of rawCalls) {
+		try {
+			const call = tc as Record<string, unknown>;
+			let name: unknown;
+			let rawArgs: unknown;
+			if (call.function && typeof call.function === "object") {
+				const fn = call.function as Record<string, unknown>;
+				name = fn.name;
+				rawArgs = fn.arguments;
+			} else {
+				name = call.name;
+				rawArgs = call.arguments;
+			}
+			if (typeof name !== "string" || !name) continue;
+			// A model can emit malformed JSON in `arguments`. Parse defensively: skip just
+			// THIS call rather than letting a bare JSON.parse throw and drop the whole batch
+			// (which failed the entire chat turn). Non-object results collapse to {}.
+			const parsed = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
+			const args = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : {};
+			out.push({ name, arguments: args });
+		} catch {
+			// malformed arguments for this call — skip it, keep the rest
 		}
-		return { name: call.name as string, arguments: (call.arguments || {}) as Record<string, unknown> };
-	}).filter((tc) => tc.name);
+	}
+	return out;
 }

@@ -668,22 +668,28 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const setVoiceMode = useCallback(async (next: VoiceMode) => {
 		const cur = resolveVoiceMode(convoOnRef.current, speakOnRef.current);
 		if (next === cur) return;
-		// End any open manual talk turn first.
+		// ABANDON any in-flight turn cleanly BEFORE switching. Two bugs this prevents:
+		//  - a phantom send: a recording left mid-turn would transcribe → the push-to-talk
+		//    path would send a message the user never meant to send;
+		//  - a leaked mic stream: on ptt→handsfree, toggleConvo opens a SECOND getUserMedia
+		//    while the old recorder's stream is still live.
+		// stopDiscard drops the audio (no transcription, no send) and stops the tracks;
+		// paused swallows any late browser-dictation result.
 		manualTalkRef.current = false;
 		setTalking(false);
+		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+		pendingTextRef.current = "";
+		pausedForThinkingRef.current = true;
+		if (sttRef.current?.listening) sttRef.current.stopDiscard();
 		if (next === "handsfree") {
-			// toggleConvo does the full hands-free setup (mic + VAD + TTS unlock, in-gesture).
+			// toggleConvo does the full hands-free setup (mic + VAD + TTS unlock, in-gesture)
+			// and resets pausedForThinking as it starts listening.
 			setSpeakOn(true);
 			if (!convoOnRef.current) await toggleConvo();
 			return;
 		}
 		// Leaving hands-free (if we were in it) tears the continuous loop down cleanly.
 		if (convoOnRef.current) await toggleConvo();
-		// Stop any mic + speech so the mode switch is a clean slate.
-		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-		pendingTextRef.current = "";
-		pausedForThinkingRef.current = false;
-		sttRef.current?.stop();
 		ttsRef.current?.cancel();
 		stopAudioMonitor();
 		setMicOn(false);

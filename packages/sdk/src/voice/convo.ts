@@ -77,14 +77,17 @@ export function resolveVoiceStatus(input: {
 	transcribing: boolean;
 	talking: boolean;
 	listening: boolean;
+	/** Hands-free mic paused via Mute — the pill must not claim it's listening. */
+	muted?: boolean;
 }): VoiceStatus | null {
-	const { mode, thinking, transcribing, talking, listening } = input;
+	const { mode, thinking, transcribing, talking, listening, muted } = input;
 	if (thinking) return { label: "Working on it…", tone: "work", spin: true, tap: false };
 	if (mode === "text") return null;
 	if (transcribing) return { label: "Transcribing…", tone: "work", spin: true, tap: false };
 	if (talking) return { label: "Listening — tap to send", tone: "live", spin: false, tap: true };
 	if (mode === "ptt") return { label: "Tap to talk", tone: "idle", spin: false, tap: true };
 	// hands-free
+	if (muted) return { label: "Muted", tone: "idle", spin: false, tap: false };
 	return listening
 		? { label: "Listening…", tone: "live", spin: false, tap: false }
 		: { label: "Hands-free — just talk", tone: "idle", spin: false, tap: false };

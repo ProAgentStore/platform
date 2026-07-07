@@ -572,6 +572,7 @@ export default function InstanceDetail() {
 								transcribing: voice.interim === "Transcribing…",
 								talking: voice.talking,
 								listening: voice.micOn,
+								muted: voice.muted,
 							});
 							if (!s) return null;
 							const cls = s.tone === "work" ? "bg-accent text-white ring-4 ring-accent/25 animate-pulse"
