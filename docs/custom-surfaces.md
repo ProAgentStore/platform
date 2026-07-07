@@ -64,14 +64,16 @@ In your agent's `config`:
     "surfaces": [],
     "customSurfaces": [
       { "id": "dashboard", "label": "Dashboard", "icon": "📊",
-        "bundleUrl": "https://cdn.example.com/my-agent/surface.js" }
+        "bundleUrl": "/console/surfaces/my-agent-dashboard.js" }
     ]
   }
 }
 ```
 
-`bundleUrl` **must be https**. The console deep-links it at
-`/instances/<id>/<surface-id>`.
+`bundleUrl` **must be same-origin** — the bundle has to be served from the platform
+itself (e.g. `/console/surfaces/*.js`, or an absolute `https://proagentstore.online/…`
+URL). A cross-origin bundle is **refused by the console** (see Security note). The
+console deep-links the surface at `/instances/<id>/<surface-id>`.
 
 ## Framework
 
@@ -81,8 +83,10 @@ and import the platform SDK from `ctx.sdk` rather than shipping your own client.
 
 ## Security note
 
-Today a surface bundle runs in the console origin with the user's session (via
-`ctx.sdk.api`). That's appropriate for first-party and trusted creators. Untrusted
-third-party bundles should be isolated in a sandboxed iframe — that hardening is
-tracked separately. Bundle URLs come only from an agent's validated capabilities
-(https-only), never from arbitrary user input.
+A surface bundle runs in the console origin with the user's session token (via
+`ctx.sdk.getToken`/`api`), so a creator-hosted script would execute **as the viewing
+user** (account / BYOK-key takeover). Because of that, `DynamicSurface` loads **only
+same-origin bundles** — a cross-origin `bundleUrl` is refused before it is imported.
+That is the current security boundary; fuller isolation in a sandboxed iframe (which
+would allow trusted cross-origin bundles) is tracked separately. Until then, ship your
+surface from the platform origin.
