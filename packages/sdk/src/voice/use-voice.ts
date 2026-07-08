@@ -5,6 +5,7 @@ import { API, getToken, isConnectivityError, reportClientError } from "../client
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
+import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult } from "./machine.js";
 import { decideRestart, matchVoiceCommand, resolveVoiceMode, type VoiceMode } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
@@ -14,8 +15,8 @@ import type { VoiceTts } from "./tts.js";
 const LEVEL_THROTTLE_MS = 66;
 /** Pause before reopening the mic between conversation turns. */
 const RESTART_DELAY_MS = 350;
-/** Ignore the mic for this long after TTS ends — the speaker echo/reverb tail. */
-const ECHO_GUARD_MS = 800;
+// ECHO_GUARD_MS + all input guards now live in ./machine.ts (the pure, tested interaction
+// model) so the decisions are made ONE way instead of re-derived inline at every call site.
 
 /**
  * Unlock browser Text-to-Speech synchronously inside a user gesture. iOS/Safari
@@ -180,7 +181,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				gateRef.current = createSpeechGate({
 					onInterim: (text) => {
 						// Ignore the agent's own voice (echo tail), and paused/muted windows.
-						if (ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < ECHO_GUARD_MS || pausedForThinkingRef.current || mutedRef.current) return;
+						if (mutedRef.current || shouldIgnoreResult({ ttsSpeaking: !!ttsRef.current?.speaking, speakEndedAt: speakEndedAtRef.current, paused: pausedForThinkingRef.current, muted: mutedRef.current }, Date.now())) return;
 						setInterim(text);
 					},
 				});
@@ -213,7 +214,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// talking OR during the ~0.8s echo tail after — otherwise the recorder would
 				// capture the agent's own TTS and transcribe it. Belt-and-braces with the
 				// echo guard in handleResult (which drops the result if one slips through).
-				const echoing = !!ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < ECHO_GUARD_MS;
+				const echoing = isEchoing({ ttsSpeaking: !!ttsRef.current?.speaking, speakEndedAt: speakEndedAtRef.current }, Date.now());
 				// Whisper VAD: Whisper has no streaming results, so we detect end-of-turn
 				// from the mic level (pure logic + tests in ./vad.ts). On a real pause it
 				// stops recording → transcribe → send.
@@ -227,8 +228,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 						// Whisper (which would hallucinate a phrase), no "Transcribing/Working".
 						// Only trust a gate that's proven alive, so a dead recognizer can't
 						// black-hole real speech (then we fall back to sending + the noise filter).
-						const gate = gateRef.current;
-						if (gate?.isAlive() && !gate.heardSpeech()) {
+						const g = gateRef.current;
+						if (endOfTurnAction(g ? { isAlive: g.isAlive(), heardSpeech: g.heardSpeech() } : null) === "discard") {
 							idleRecycleRef.current = true;
 							setInterim("");
 							sttRef.current?.stopDiscard();
@@ -357,7 +358,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// Open mic with chime
 	const startListening = useCallback(async () => {
-		if (!sttRef.current || pausedForThinkingRef.current || mutedRef.current) return;
+		if (!sttRef.current || !canOpenMic({ paused: pausedForThinkingRef.current, muted: mutedRef.current })) return;
 		try {
 			await sttRef.current.start();
 			lastListenStartRef.current = Date.now();
@@ -420,17 +421,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 	repeatLastRef.current = repeatLast;
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
-		// Echo guard (ALL MODES): ignore anything captured while the agent is speaking OR
-		// within ~0.8s after (the speaker echo/reverb tail) — it's the agent's own voice,
-		// not you. This is the fix for "it starts transcribing what it's saying": the mic
-		// must never turn the agent's TTS into a transcript (and reply to itself). A manual
-		// tap-to-talk clears speakEndedAtRef in beginTalk, so it isn't blocked by this.
-		if (ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < ECHO_GUARD_MS) return;
-		// Swallow late results while paused — e.g. a Whisper transcription that lands
-		// AFTER conversation mode was turned off would otherwise fall through to the
-		// push-to-talk path and send the turn the user just abandoned. (Cleared whenever
-		// a fresh mic session starts via toggleMic/toggleConvo.)
-		if (pausedForThinkingRef.current) return;
+		// Ignore results the interaction model says we can't act on right now:
+		//  - ECHO (ALL MODES): while the agent speaks OR within its ~0.8s echo tail — it's
+		//    the agent's own voice, not you (the "it transcribes what it's saying" fix). A
+		//    manual tap-to-talk clears speakEndedAtRef in beginTalk, so it isn't blocked.
+		//  - PAUSED: a late result (e.g. a Whisper transcript that lands after the mode was
+		//    turned off) must not fall through and send a turn the user already abandoned.
+		if (shouldIgnoreResult({ ttsSpeaking: !!ttsRef.current?.speaking, speakEndedAt: speakEndedAtRef.current, paused: pausedForThinkingRef.current, muted: mutedRef.current }, Date.now())) return;
 
 		// Conversation mode.
 		if (convoOnRef.current) {
@@ -748,6 +745,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// hands-free ⇒ continuous convo; ptt ⇒ replies aloud but no continuous listen; text
 	// ⇒ silent. setVoiceMode is the only thing the UI needs to call.
 	const mode = resolveVoiceMode(convoOn, speakOn);
+	// The voice hook's own interaction phase (single model in machine.ts). `thinking`
+	// (the agent generating a reply) is the CONSUMER's concern, so it's false here — the
+	// consumer folds it in via resolveVoiceStatus. Exposed for debugging/telemetry/tests.
+	const phase = derivePhase({ mode, thinking: false, speaking, transcribing: interim === "Transcribing…", micOn, muted });
 	const setVoiceMode = useCallback(async (next: VoiceMode) => {
 		const cur = resolveVoiceMode(convoOnRef.current, speakOnRef.current);
 		if (next === cur) return;
@@ -791,6 +792,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	return {
 		/** The active interaction mode + the ONLY setter the UI needs. */
 		mode, setVoiceMode,
+		/** The voice interaction phase (idle/listening/transcribing/speaking/muted). */
+		phase,
 		micOn, speakOn, convoOn, muted, interim,
 		/** 0-1 audio level from mic — use to render waveform */
 		audioLevel,
