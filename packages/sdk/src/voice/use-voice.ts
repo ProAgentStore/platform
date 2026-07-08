@@ -244,6 +244,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 						// Whisper upload, no buffer growth). Reopens via onEnd; skip the chime.
 						vadStateRef.current = initVad();
 						idleRecycleRef.current = true;
+						setInterim("");
 						sttRef.current?.stopDiscard();
 					}
 				}
@@ -275,7 +276,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 		}
 		const blob = lastAudioBlobRef.current;
 		lastAudioBlobRef.current = null;
-		if (blob && instanceId) {
+		// Only attach a replay audioKey when there's ACTUAL audio bytes. A zero-byte blob
+		// would mint an audioKey whose upload 400s ("empty audio") and whose replay 404s —
+		// so send the text alone in that case.
+		if (blob && blob.size > 0 && instanceId) {
 			const turnId = crypto.randomUUID();
 			onSendRef.current(text, { audioKey: turnId });
 			void uploadVoiceAudio(instanceId, turnId, blob);
