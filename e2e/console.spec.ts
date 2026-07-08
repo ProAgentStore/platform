@@ -471,24 +471,27 @@ test.describe("ProAgentStore Console smoke", () => {
 		await mockSignedInConsole(page);
 		await page.goto("/console/instances/inst-1");
 
-		// The three voice buttons carry VISIBLE labels (icon-only was ambiguous — two
-		// mic-like glyphs) plus a plain-language tooltip explaining each.
-		const talk = page.getByTitle(/^Talk:/);
-		const speak = page.getByTitle(/^Speak replies:/);
-		const convo = page.getByTitle(/^Hands-free:/);
-		const copy = page.getByTitle("Copy JSON");
-		const clear = page.getByTitle("Clear");
+		// A single segmented control with three interaction modes (replaced the four
+		// overlapping toggles), each carrying a VISIBLE label + a plain-language tooltip.
+		const chat = page.getByTitle(/^Chat:/);
+		const ptt = page.getByTitle(/^Tap to talk:/);
+		const handsfree = page.getByTitle(/^Hands-free:/);
 
-		await expect(talk).toBeVisible();
-		await expect(speak).toBeVisible();
-		await expect(convo).toBeVisible();
-		await expect(copy).toBeVisible();
-		await expect(clear).toBeVisible();
+		await expect(chat).toBeVisible();
+		await expect(ptt).toBeVisible();
+		await expect(handsfree).toBeVisible();
 
 		// Labels are the whole point of the fix — assert they're rendered.
-		await expect(talk).toContainText("Talk");
-		await expect(speak).toContainText("Speak");
-		await expect(convo).toContainText("Hands-free");
+		await expect(chat).toContainText("Chat");
+		await expect(ptt).toContainText("Tap to talk");
+		await expect(handsfree).toContainText("Hands-free");
+
+		// Copy JSON + Clear moved into the "Chat options" overflow menu.
+		const menu = page.getByTitle("Chat options");
+		await expect(menu).toBeVisible();
+		await menu.click();
+		await expect(page.getByRole("button", { name: "Copy JSON" })).toBeVisible();
+		await expect(page.getByRole("button", { name: "Clear messages" })).toBeVisible();
 	});
 
 	test("instance chat load more button appears with many messages", async ({
