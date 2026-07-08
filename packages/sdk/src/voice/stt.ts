@@ -292,6 +292,11 @@ export class VoiceStt {
 				// so the turn id can be minted + uploaded alongside the sent message.
 				this.onAudio(blob);
 				this.onResult(data.text.trim(), true);
+			} else {
+				// A 200 with no text = silence / echo / the agent's own voice tail. Not an
+				// error — emit the soft "no-speech" sentinel so the caller quietly recycles
+				// the mic instead of flashing a scary "empty transcription" message.
+				this.onError("no-speech");
 			}
 		} catch (e) {
 			this.onError(
@@ -355,9 +360,11 @@ export class VoiceStt {
 				this.onAudio(blob);
 				this.onResult(result, true);
 			} else {
-				// Never drop a turn silently — a 200 that yielded no text still needs a
-				// visible reason (and an entry in the durable log) so voice doesn't feel dead.
-				this.onError(streamErr ? `Whisper error: ${streamErr.slice(0, 300)}` : "No transcription returned (empty audio?)");
+				// A real mid-stream error gets surfaced + logged; a plain empty result
+				// (silence / echo / the agent's own voice tail) is NOT an error — emit the
+				// soft "no-speech" sentinel so the caller quietly recycles the mic rather
+				// than flashing "No transcription returned" at the user.
+				this.onError(streamErr ? `Whisper error: ${streamErr.slice(0, 300)}` : "no-speech");
 			}
 		} catch (e) {
 			// Salvage whatever we streamed; only surface a hard error if we got nothing.

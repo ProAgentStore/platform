@@ -124,6 +124,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [muted, setMuted] = useState(false);
 	const mutedRef = useRef(false);
 	mutedRef.current = muted;
+	// True while the agent is talking aloud (TTS) — drives the "Speaking…" status pill and
+	// tells the user the mic is NOT listening to them right now.
+	const [speaking, setSpeaking] = useState(false);
 	// Push-to-talk WITHIN hands-free: the user is holding the floor via a manual tap, so
 	// the automatic end-of-turn VAD is suppressed and only their tap-off sends the turn.
 	const [talking, setTalking] = useState(false);
@@ -183,10 +186,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 				const now = Date.now();
 				// Throttle the React state update — 60fps re-renders the whole chat and lags.
 				if (now - lastLevelSetRef.current > LEVEL_THROTTLE_MS) { lastLevelSetRef.current = now; setAudioLevel(level); }
+				// Never let the mic-level VAD end (and transcribe) a turn while the agent is
+				// talking OR during the ~0.8s echo tail after — otherwise the recorder would
+				// capture the agent's own TTS and transcribe it. Belt-and-braces with the
+				// echo guard in handleResult (which drops the result if one slips through).
+				const echoing = !!ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < ECHO_GUARD_MS;
 				// Whisper VAD: Whisper has no streaming results, so we detect end-of-turn
 				// from the mic level (pure logic + tests in ./vad.ts). On a real pause it
 				// stops recording → transcribe → send.
-				if (shouldAutoDetectEndOfTurn({ isWhisper: sttIsWhisperRef.current, paused: pausedForThinkingRef.current, muted: mutedRef.current, manualTalk: manualTalkRef.current })) {
+				if (!echoing && shouldAutoDetectEndOfTurn({ isWhisper: sttIsWhisperRef.current, paused: pausedForThinkingRef.current, muted: mutedRef.current, manualTalk: manualTalkRef.current })) {
 					const decision = vadStep(vadStateRef.current, level, now, { silenceMs: silenceMsRef.current, sensitivity: vadSensitivityRef.current });
 					if (decision === "end") {
 						vadStateRef.current = initVad();
@@ -290,11 +298,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const speak = useCallback(async (text: string) => {
 		if (!text?.trim()) return;
 		unlockSpeechSynthesis();
+		setSpeaking(true);
 		try {
 			const tts = await ensureTts();
 			await tts.unlock();
 			await tts.speak(text);
 		} catch {}
+		setSpeaking(false);
 	}, [ensureTts]);
 
 	// Open mic with chime
@@ -319,10 +329,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 		pausedForThinkingRef.current = true;
 		if (sttRef.current?.listening) sttRef.current.stop();
 		setMicOn(false);
+		setSpeaking(true);
 		try {
 			const tts = await ensureTts();
 			await tts.speak(text);
 		} catch {}
+		setSpeaking(false);
 		speakEndedAtRef.current = Date.now();
 		// Now the agent is done — allow the mic to reopen. Only auto-resume in
 		// conversation mode; push-to-talk waits for the next tap (so it can't self-trigger).
@@ -360,11 +372,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 	repeatLastRef.current = repeatLast;
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
-		// Echo guard (CONVERSATION MODE): ignore anything captured while the agent is
-		// speaking OR within ~0.8s after (the speaker echo/reverb tail) — it's the
-		// agent's own voice, not you. Push-to-talk is hard-stopped during speech in
-		// speakAndResume, so it doesn't need (and isn't blocked by) this guard.
-		if (convoOnRef.current && (ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < ECHO_GUARD_MS)) return;
+		// Echo guard (ALL MODES): ignore anything captured while the agent is speaking OR
+		// within ~0.8s after (the speaker echo/reverb tail) — it's the agent's own voice,
+		// not you. This is the fix for "it starts transcribing what it's saying": the mic
+		// must never turn the agent's TTS into a transcript (and reply to itself). A manual
+		// tap-to-talk clears speakEndedAtRef in beginTalk, so it isn't blocked by this.
+		if (ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < ECHO_GUARD_MS) return;
 		// Swallow late results while paused — e.g. a Whisper transcription that lands
 		// AFTER conversation mode was turned off would otherwise fall through to the
 		// push-to-talk path and send the turn the user just abandoned. (Cleared whenever
@@ -456,7 +469,17 @@ export function useVoice(instanceId: string | undefined, opts: {
 			onAudio: (blob) => { lastAudioBlobRef.current = blob; },
 			onError: (err) => {
 				console.warn("[voice] STT error:", err);
-				if (err && err !== "no-speech") {
+				// Soft "no-speech" = empty transcription (silence, echo, or the agent's own
+				// voice tail). NOT an error: clear the "Transcribing…" placeholder so it
+				// doesn't hang, unpause, and let the mic recycle (hands-free reopens via
+				// onEnd; other modes just go idle). No scary message, no durable-log entry.
+				if (!err || err === "no-speech") {
+					flushSync(() => setInterim((cur) => (cur === "Transcribing…" ? "" : cur)));
+					pausedForThinkingRef.current = false;
+					if (!convoOnRef.current) setMicOn(false);
+					return;
+				}
+				if (err) {
 					// Surface into the durable log so voice failures (Whisper 400 etc.) are
 					// visible server-side — EXCEPT transient connectivity ("Whisper failed:
 					// Load failed"), which floods the log on every mobile network blip and is
@@ -534,6 +557,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			pendingTextRef.current = "";
 			sttRef.current?.stop();
 			ttsRef.current?.cancel();
+			setSpeaking(false);
 			stopAudioMonitor();
 			setConvoOn(false);
 			setTalking(false);
@@ -561,6 +585,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	/** Stop speaking immediately (tap a message to interrupt). */
 	const cancelSpeak = useCallback(() => {
 		ttsRef.current?.cancel();
+		setSpeaking(false);
 		// If in convo mode and not muted, re-open mic so user can talk
 		pausedForThinkingRef.current = false;
 		if (convoOnRef.current && !mutedRef.current) {
@@ -576,6 +601,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		manualTalkRef.current = true;
 		setTalking(true);
 		ttsRef.current?.cancel();               // stop the agent mid-sentence
+		setSpeaking(false);
 		pausedForThinkingRef.current = false;
 		mutedRef.current = false;               // a manual talk implies "listen to me now"
 		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
@@ -715,6 +741,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		micOn, speakOn, convoOn, muted, interim,
 		/** 0-1 audio level from mic — use to render waveform */
 		audioLevel,
+		/** True while the agent is talking aloud (TTS) — drives the "Speaking…" status. */
+		speaking,
 		/** True while a manual push-to-talk turn is open (hands-free tap-to-talk). */
 		talking,
 		toggleMic, toggleSpeak, toggleConvo, toggleMute, cancelSpeak,

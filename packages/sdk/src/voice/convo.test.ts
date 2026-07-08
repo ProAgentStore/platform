@@ -118,4 +118,20 @@ describe("resolveVoiceStatus", () => {
 		expect(resolveVoiceStatus({ ...base, thinking: true, transcribing: true, talking: true }))
 			.toMatchObject({ label: "Working on it…" });
 	});
+
+	it("shows 'Speaking…' while the agent talks — in EVERY mode, so the mic clearly isn't hot", () => {
+		for (const mode of ["text", "ptt", "handsfree"] as const) {
+			expect(resolveVoiceStatus({ ...base, mode, speaking: true }))
+				.toMatchObject({ label: "Speaking…", tone: "speak", spin: false, tap: false, icon: "speak" });
+		}
+	});
+
+	it("thinking beats speaking, but speaking beats listening/transcribing", () => {
+		// A reply is generated (thinking) THEN spoken (speaking) — thinking wins first.
+		expect(resolveVoiceStatus({ ...base, thinking: true, speaking: true }))
+			.toMatchObject({ label: "Working on it…" });
+		// While speaking, the mic is off — must not read "Transcribing…"/"Listening…".
+		expect(resolveVoiceStatus({ ...base, mode: "handsfree", speaking: true, transcribing: true, listening: true }))
+			.toMatchObject({ label: "Speaking…", tone: "speak" });
+	});
 });

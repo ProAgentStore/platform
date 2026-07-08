@@ -577,12 +577,15 @@ export default function InstanceDetail() {
 								transcribing: voice.interim === "Transcribing…",
 								talking: voice.talking,
 								listening: voice.micOn,
+								speaking: voice.speaking,
 								muted: voice.muted,
 							});
 							if (!s) return null;
 							const cls = s.tone === "work" ? "bg-accent text-white ring-4 ring-accent/25 animate-pulse"
+								: s.tone === "speak" ? "bg-accent text-white ring-4 ring-accent/25"
 								: s.tone === "live" ? "bg-green text-white ring-4 ring-green/30 animate-pulse scale-105"
 								: "bg-panel border border-line text-muted hover:text-accent hover:border-accent";
+							const StatusIcon = s.icon === "spin" ? Loader2 : s.icon === "speak" ? Volume2 : Mic;
 							return (
 								<div className="absolute left-0 right-0 bottom-3 flex justify-center px-4 pointer-events-none z-20">
 									<button
@@ -592,7 +595,7 @@ export default function InstanceDetail() {
 										aria-live="polite"
 										className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm shadow-lg transition-all ${cls} ${s.tap ? "cursor-pointer" : "cursor-default"}`}
 									>
-										{s.spin ? <Loader2 size={16} className="animate-spin" /> : <Mic size={16} />}
+										<StatusIcon size={16} className={s.icon === "spin" ? "animate-spin" : ""} />
 										{s.label}
 									</button>
 								</div>

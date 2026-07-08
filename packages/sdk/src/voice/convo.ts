@@ -56,20 +56,22 @@ export function resolveVoiceMode(convoOn: boolean, speakOn: boolean): VoiceMode 
 export interface VoiceStatus {
 	label: string;
 	/** `work` = transcribing/generating (accent, spinner); `live` = mic hot (green);
-	 *  `idle` = waiting for the user (neutral). */
-	tone: "work" | "live" | "idle";
+	 *  `speak` = agent talking back (accent); `idle` = waiting for the user (neutral). */
+	tone: "work" | "live" | "idle" | "speak";
 	/** Show a spinner (vs a mic glyph). */
 	spin: boolean;
 	/** Tappable — toggles a manual talk turn (Tap-to-talk). */
 	tap: boolean;
+	/** Which glyph the pill shows, so both call sites render consistently. */
+	icon: "mic" | "spin" | "speak";
 }
 
 /**
  * Resolve the single, always-visible voice-status pill so the user ALWAYS knows what's
- * happening after they finish speaking — Listening → Transcribing → Working — instead
- * of silence until the reply lands. Pure so this branchy presentation logic is tested.
- * `null` means show nothing (idle text chat). `thinking` (agent generating) wins in
- * every mode, so even text chat shows "Working on it…".
+ * happening — Listening → Transcribing → Working → Speaking — instead of silence until
+ * the reply lands. Pure so this branchy presentation logic is tested. `null` means show
+ * nothing (idle text chat). `thinking` (agent generating) wins in every mode, then
+ * `speaking` (agent talking aloud) — both show even in text chat (e.g. a manual replay).
  */
 export function resolveVoiceStatus(input: {
 	mode: VoiceMode;
@@ -77,20 +79,25 @@ export function resolveVoiceStatus(input: {
 	transcribing: boolean;
 	talking: boolean;
 	listening: boolean;
+	/** The agent is talking aloud (TTS). Shown in every mode so the mic clearly isn't hot. */
+	speaking?: boolean;
 	/** Hands-free mic paused via Mute — the pill must not claim it's listening. */
 	muted?: boolean;
 }): VoiceStatus | null {
-	const { mode, thinking, transcribing, talking, listening, muted } = input;
-	if (thinking) return { label: "Working on it…", tone: "work", spin: true, tap: false };
+	const { mode, thinking, transcribing, talking, listening, speaking, muted } = input;
+	if (thinking) return { label: "Working on it…", tone: "work", spin: true, tap: false, icon: "spin" };
+	// Agent talking back — surface in EVERY mode (incl. a manual replay in text chat) so
+	// it's obvious the mic is not listening to you right now (the self-transcription worry).
+	if (speaking) return { label: "Speaking…", tone: "speak", spin: false, tap: false, icon: "speak" };
 	if (mode === "text") return null;
-	if (transcribing) return { label: "Transcribing…", tone: "work", spin: true, tap: false };
-	if (talking) return { label: "Listening — tap to send", tone: "live", spin: false, tap: true };
-	if (mode === "ptt") return { label: "Tap to talk", tone: "idle", spin: false, tap: true };
+	if (transcribing) return { label: "Transcribing…", tone: "work", spin: true, tap: false, icon: "spin" };
+	if (talking) return { label: "Listening — tap to send", tone: "live", spin: false, tap: true, icon: "mic" };
+	if (mode === "ptt") return { label: "Tap to talk", tone: "idle", spin: false, tap: true, icon: "mic" };
 	// hands-free
-	if (muted) return { label: "Muted", tone: "idle", spin: false, tap: false };
+	if (muted) return { label: "Muted", tone: "idle", spin: false, tap: false, icon: "mic" };
 	return listening
-		? { label: "Listening…", tone: "live", spin: false, tap: false }
-		: { label: "Hands-free — just talk", tone: "idle", spin: false, tap: false };
+		? { label: "Listening…", tone: "live", spin: false, tap: false, icon: "mic" }
+		: { label: "Hands-free — just talk", tone: "idle", spin: false, tap: false, icon: "mic" };
 }
 
 /** A spoken command the hook acts on locally instead of sending as a chat message. */
