@@ -823,6 +823,12 @@ export class AgentDO extends DurableObject<Env> {
 		}>();
 		if (!url) return json({ error: "url required" }, 400);
 
+		// Same 20-doc ceiling as handleAddKnowledge — Import URL must not be a backdoor
+		// past the cap (a prompt-injected agent could otherwise ingest-url in a loop).
+		const existingUrlDocs = await this.ctx.storage.list({ prefix: "kb:" });
+		if (existingUrlDocs.size >= 20)
+			return json({ error: "Knowledge base full (max 20 documents)" }, 400);
+
 		try {
 			// SSRF protection: https-only + reject non-public hosts, re-validated on EVERY
 			// redirect hop (default follow would let a public host 302 us to a private one).
@@ -861,7 +867,28 @@ export class AgentDO extends DurableObject<Env> {
 				addedAt: new Date().toISOString(),
 			};
 			await this.ctx.storage.put(`kb:${doc.id}`, doc);
-			return json(doc, 201);
+
+			// Vectorize so the imported page is actually RETRIEVABLE. The agent only surfaces
+			// knowledge via RAG (buildRAGContext → vectorSearch) — a doc with no vectors is
+			// invisible forever. handleAddKnowledge/handleUpdateKnowledge already do this; without
+			// it, Import URL silently succeeded but the agent could never answer about the page.
+			let vectorized = true;
+			const state = await this.getState();
+			if (state) {
+				const engine = this.getStorageEngine(state.agentId);
+				try {
+					await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${text}`);
+				} catch (e) {
+					vectorized = false;
+					await logError(this.env, {
+						source: "knowledge-vectorize",
+						message: `ingested URL saved but not searchable: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300),
+						context: { agentId: state.agentId, docId: doc.id, url },
+					}).catch(() => undefined);
+				}
+				await engine.logEvent("knowledge.added", undefined, { docId: doc.id, title: doc.title, size: text.length, source: "url", vectorized }).catch(() => {});
+			}
+			return json({ ...doc, vectorized }, 201);
 		} catch (err) {
 			return json(
 				{

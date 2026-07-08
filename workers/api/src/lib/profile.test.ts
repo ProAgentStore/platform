@@ -69,6 +69,25 @@ describe("user profile", () => {
 		expect(Object.values(profileCustomAnswers(p))).toContain("role-specific@corp.com");
 	});
 
+	it("profileCustomAnswers reuses stable eligibility facts but NOT job-specific free-text", async () => {
+		const env = mockEnv();
+		// A reusable eligibility fact (short, factual) → surfaced for next time.
+		await saveAskAndHoldAnswer(env, "u1", "Australian working rights", "Australian citizen");
+		await saveAskAndHoldAnswer(env, "u1", "Notice period", "4 weeks");
+		// Company-specific free-text answers → must NOT bleed onto a DIFFERENT company's form.
+		await saveAskAndHoldAnswer(env, "u1", "Why do you want to work here?", "Because Acme's mission to reinvent widgets excites me.");
+		await saveAskAndHoldAnswer(env, "u1", "Cover letter", "Dear Acme, I am thrilled to apply…");
+		// A very long answer is an essay, not a fact — excluded even without a giveaway label.
+		await saveAskAndHoldAnswer(env, "u1", "Anything else", "x".repeat(250));
+		const answers = profileCustomAnswers(await getProfile(env, "u1"));
+		const vals = Object.values(answers);
+		expect(vals).toContain("Australian citizen");
+		expect(vals).toContain("4 weeks");
+		expect(vals).not.toContain("Because Acme's mission to reinvent widgets excites me.");
+		expect(vals.some((v) => v.startsWith("Dear Acme"))).toBe(false);
+		expect(vals.some((v) => v.length > 200)).toBe(false);
+	});
+
 	it("profileToCandidate derives fullName + location", () => {
 		const c = profileToCandidate({ firstName: "Sergey", lastName: "Ivochkin", email: "x@y.com", city: "Melbourne", state: "VIC", country: "Australia", phone: "123" });
 		expect(c.fullName).toBe("Sergey Ivochkin");

@@ -76,11 +76,24 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 
 	// Single-flight: the runner drives ONE browser page, so a second concurrent
 	// application on the same instance would clobber the first (interleaved fills +
-	// submits). Reject while one is still active.
+	// submits). Reject while one is still active — BUT only if it's been touched recently.
+	// The orphan reaper deliberately exempts apply tasks (the workflow owns their lifecycle),
+	// so a workflow that dies without completing (permanent error, lost instance) would leave
+	// a task 'running'/'needs_human' forever and 409 every future apply with no way to clear
+	// it. A staleness cutoff (no update within the workflow's max lifetime) lets a new apply
+	// through instead of wedging the agent permanently.
+	const STALE_APPLY_MS = 30 * 60 * 1000; // > the apply workflow's realistic max runtime
 	const active = await env.DB.prepare(
-		"SELECT id FROM instance_runtime_tasks WHERE instance_id = ?1 AND user_id = ?2 AND type = 'job.apply_agent' AND status IN ('queued','running','needs_human') AND hidden = 0 LIMIT 1",
-	).bind(instanceId, userId).first<{ id: string }>();
-	if (active) throw new ApplyError("An application is already in progress on this agent — finish or cancel it before starting another.", 409);
+		"SELECT id, updated_at FROM instance_runtime_tasks WHERE instance_id = ?1 AND user_id = ?2 AND type = 'job.apply_agent' AND status IN ('queued','running','needs_human') AND hidden = 0 ORDER BY updated_at DESC LIMIT 1",
+	).bind(instanceId, userId).first<{ id: string; updated_at: string | null }>();
+	if (active) {
+		const lastTouch = active.updated_at ? Date.parse(active.updated_at) : NaN;
+		const stale = Number.isNaN(lastTouch) ? false : Date.now() - lastTouch > STALE_APPLY_MS;
+		if (!stale) throw new ApplyError("An application is already in progress on this agent — finish or cancel it before starting another.", 409);
+		// Stale/orphaned: retire it so it can't linger, then let the new apply proceed.
+		await env.DB.prepare("UPDATE instance_runtime_tasks SET status = 'failed', hidden = 1, updated_at = ?3 WHERE id = ?1 AND instance_id = ?2")
+			.bind(active.id, instanceId, new Date().toISOString()).run();
+	}
 
 	const cand = input.candidate ?? {};
 	const rawProfile = await getProfile(env, userId);

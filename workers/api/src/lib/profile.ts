@@ -136,9 +136,25 @@ export function profileCustomAnswers(p: Profile): Record<string, string> {
 	const out: Record<string, string> = {};
 	for (const [k, v] of Object.entries(p)) {
 		if (STD_PROFILE_KEYS.has(k) || typeof v !== "string" || !v.trim()) continue;
+		// Only REUSE stable identity/eligibility facts (working rights, notice period, visa,
+		// clearance…). A job-specific free-text answer ("why do you want to work here?",
+		// a cover-letter paragraph) must NOT be asserted onto a DIFFERENT company's form as
+		// an authoritative "use this, don't ask again" value — that submits company-A's
+		// motivation on company-B's application. Bias toward re-asking (safe) over reusing a
+		// possibly-wrong answer (wrong data on a real application): skip anything that reads
+		// as an open-ended prompt, or whose answer is long enough to be an essay, not a fact.
+		if (isJobSpecificQuestion(k) || v.trim().length > 200) continue;
 		out[k.replace(/_/g, " ")] = v;
 	}
 	return out;
+}
+
+/** Does this saved custom-answer key read as an open-ended, per-company question (its answer
+ *  is not a reusable identity/eligibility fact)? Keys are sanitized labels like
+ *  `why_do_you_want_to_work_here` / `cover_letter` / `describe_a_time`. */
+export function isJobSpecificQuestion(key: string): boolean {
+	const k = key.replace(/_/g, " ");
+	return /\bwhy\b|interest|motivat|cover letter|describe|tell us|what makes you|reason|passionate|excites|attract|fit for (this|the) role|join (us|our|the)|about (us|the (company|role|team))/i.test(k);
 }
 
 /**

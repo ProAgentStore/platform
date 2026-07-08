@@ -40,6 +40,16 @@ const rl = require("node:readline").createInterface({ input: process.stdin });
 rl.on("line", (line) => { setTimeout(() => process.stdout.write("late: " + line + "\\n"), 1800); });
 `;
 
+/** A raw CLI that emits, PAUSES > 1.5s (e.g. a compile/test run), then resumes — to prove
+ *  the settle heuristic doesn't LATCH idle: resumed output must restore "thinking". */
+const FAKE_PAUSER = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  process.stdout.write("part 1: " + line + "\\n");
+  setTimeout(() => process.stdout.write("part 2: " + line + "\\n"), 2000);
+});
+`;
+
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function until(cond: () => boolean, timeoutMs = 4000): Promise<void> {
 	const start = Date.now();
@@ -111,15 +121,19 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let dir: string;
 	let codexBin: string;
 	let slowBin: string;
+	let pauserBin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-raw-"));
 		codexBin = join(dir, "fake-codex.js");
 		slowBin = join(dir, "fake-slow.js");
+		pauserBin = join(dir, "fake-pauser.js");
 		writeFileSync(codexBin, FAKE_CODEX);
 		writeFileSync(slowBin, FAKE_SLOW);
+		writeFileSync(pauserBin, FAKE_PAUSER);
 		chmodSync(codexBin, 0o755);
 		chmodSync(slowBin, 0o755);
+		chmodSync(pauserBin, 0o755);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -148,6 +162,24 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await wait(1000); // 1s in, no output yet — old heuristic would have flipped idle at 1.5s of silence
 		expect(s.runState()).toBe("thinking");
 		await until(() => s.snapshot().includes("late: go"), 3000);
+		s.stop();
+	});
+
+	it("does NOT latch idle: resumed output after a >1.5s pause restores thinking", async () => {
+		const s = new HeadlessSession({ id: "raw-pause", workDir: dir, clientType: "codex", bin: pauserBin });
+		s.start();
+		s.input("build");
+		// First chunk lands, then a >1.5s pause → the settle heuristic reads idle...
+		await until(() => s.snapshot().includes("part 1: build"), 3000);
+		await until(() => s.runState() === "idle", 3000);
+		expect(s.runState()).toBe("idle");
+		// ...but when the turn RESUMES (part 2), state must return to thinking, not stay
+		// latched idle (the bug that made the brain act on a half-finished turn).
+		await until(() => s.snapshot().includes("part 2: build"), 3000);
+		expect(s.runState()).toBe("thinking");
+		// And it settles to idle again once truly quiet.
+		await until(() => s.runState() === "idle", 3000);
+		expect(s.runState()).toBe("idle");
 		s.stop();
 	});
 

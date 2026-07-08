@@ -120,13 +120,22 @@ export class HeadlessSession {
 		//     that keeps refreshing lastOutputAt). The user can also Restart from diagnostics.
 		// Rule 1 deliberately waits for first output so a slow first token can't flip us
 		// to idle mid-turn (which would make the brain proceed against a half-done turn).
+		//
+		// This is derived PURELY from timers each call — it does NOT latch `this.run` to
+		// "idle". Latching was a one-way trap: once a >1.5s pause (slow compile / test run /
+		// network) flipped us idle, resumed output couldn't restore "thinking" (onStdout only
+		// bumps lastOutputAt), so the brain proceeded against a still-running turn and
+		// double-sent or falsely called done. Recomputing means fresh output → quiet resets →
+		// "thinking" again, all on its own.
 		if (this.mode === "raw" && this.run === "thinking") {
 			const now = Date.now();
 			const quiet = now - this.lastOutputAt;
 			const elapsed = now - this.turnStartedAt;
-			if (this.sawOutputSinceInput && quiet > 1500) this.run = "idle";
-			else if (!this.sawOutputSinceInput && elapsed > 8000) this.run = "idle";
-			else if (elapsed > 15 * 60 * 1000) this.run = "idle";
+			const settled =
+				(this.sawOutputSinceInput && quiet > 1500) ||
+				(!this.sawOutputSinceInput && elapsed > 8000) ||
+				elapsed > 15 * 60 * 1000;
+			return settled ? "idle" : "thinking";
 		}
 		return this.run === "thinking" ? "thinking" : "idle";
 	}

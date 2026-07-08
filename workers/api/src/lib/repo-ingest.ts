@@ -127,7 +127,11 @@ export async function fetchRepoTarball(ref: RepoRef, branch?: string, token?: st
 	// buffers the WHOLE inflated tarball first, so a gzip bomb (or just a very large repo)
 	// could blow the Worker isolate's memory BEFORE any per-file/total cap in
 	// extractTextFiles applies — the caps gave a false sense of protection. Abort early.
-	const MAX_TAR_BYTES = 128 * 1024 * 1024; // generous vs the ~4MB extract cap; guards the isolate
+	// Well under the Worker isolate's ~128MB budget: we accumulate chunks in `parts` AND
+	// then copy into `out`, so peak memory is ~2× this. 128MB would OOM-crash the isolate
+	// (60–128MB band) BEFORE this guard could return the clean error — defeating its purpose.
+	// 48MB (≈96MB peak) is still generous vs the ~4MB extract cap.
+	const MAX_TAR_BYTES = 48 * 1024 * 1024;
 	const reader = gunzipped.getReader();
 	const parts: Uint8Array[] = [];
 	let total = 0;

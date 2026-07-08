@@ -173,26 +173,22 @@ export async function updateRepo(
 }
 
 export async function deleteRepo(env: Env, instanceId: string, userId: string, repoId: string): Promise<boolean> {
-	// Cascade: timeline → sessions → repo (FK constraints).
+	// Cascade: timeline → sessions → repo (FK constraints). Run as ONE atomic batch so a
+	// failure partway can't orphan coding_sessions/coding_timeline rows (repo gone, children
+	// stranded). D1 batch() wraps the statements in a single implicit transaction.
 	const sessionIds = await env.DB.prepare(
 		"SELECT id FROM coding_sessions WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3",
 	)
 		.bind(repoId, instanceId, userId)
 		.all<{ id: string }>();
-	for (const row of sessionIds.results) {
-		await env.DB.prepare("DELETE FROM coding_timeline WHERE session_id = ?1").bind(row.id).run();
-	}
-	await env.DB.prepare(
-		"DELETE FROM coding_sessions WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3",
-	)
-		.bind(repoId, instanceId, userId)
-		.run();
-	const res = await env.DB.prepare(
-		"DELETE FROM coding_repos WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
-	)
-		.bind(repoId, instanceId, userId)
-		.run();
-	return (res.meta.changes ?? 0) > 0;
+	const stmts = [
+		...sessionIds.results.map((row) => env.DB.prepare("DELETE FROM coding_timeline WHERE session_id = ?1").bind(row.id)),
+		env.DB.prepare("DELETE FROM coding_sessions WHERE repo_id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(repoId, instanceId, userId),
+		env.DB.prepare("DELETE FROM coding_repos WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(repoId, instanceId, userId),
+	];
+	const results = await env.DB.batch(stmts);
+	const repoDelete = results[results.length - 1];
+	return (repoDelete.meta.changes ?? 0) > 0;
 }
 
 // ── Sessions ───────────────────────────────────────────────────────────────

@@ -23,6 +23,18 @@ import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
 
+/** Parse a stored JSON column, falling back on corrupt/missing data instead of throwing —
+ *  a malformed row must never 500 a whole route (esp. the diagnostics page users open to
+ *  self-diagnose a broken runner). */
+function parseJsonOr<T>(raw: string | null | undefined, fallback: T): T {
+	if (!raw) return fallback;
+	try {
+		return JSON.parse(raw) as T;
+	} catch {
+		return fallback;
+	}
+}
+
 /**
  * Ensure a session is live on the user's runner: clone the repo (idempotent on
  * the runner) and launch the CLI. Returns false if no runner is connected. Used
@@ -959,7 +971,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 		status: runtimeRow?.status ?? "unregistered",
 		endpointUrl: runtimeRow?.endpoint_url ?? null,
 		placement: runtimeRow?.placement ?? null,
-		capabilities: runtimeRow?.capabilities ? JSON.parse(runtimeRow.capabilities) : [],
+		capabilities: parseJsonOr(runtimeRow?.capabilities, [] as unknown),
 		runnerVersion: runtimeRow?.runner_version ?? null,
 		runnerNode: runtimeRow?.runner_node ?? null,
 		lastSeenAt: runtimeRow?.last_seen_at ?? null,

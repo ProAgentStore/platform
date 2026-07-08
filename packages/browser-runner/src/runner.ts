@@ -1056,6 +1056,12 @@ export class LocalRunner {
 		// delivered. Don't discard it silently AND resurrect the already-terminal task as
 		// "running" — report failure so the console can say "session expired, re-run".
 		if (!session) return { ok: false };
+		// Reject an empty value: browserHandoffStatus reports needs_input as solved only when
+		// inputValue is a real string, so accepting "" would flip the task to "running" yet
+		// never resolve → the workflow polls until it times out (15-min wedge, "failed").
+		// Report failure so the caller (API/MCP) learns it wasn't accepted, like the
+		// no-session branch. (The console already blocks empty; this closes the API path.)
+		if (!value || !value.trim()) return { ok: false };
 		session.inputValue = value;
 		const task = this.store.getTask(taskId);
 		if (task) {
