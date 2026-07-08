@@ -214,3 +214,17 @@ export function formatTime(iso: string): string {
 	if (diff < 604800000) return `${Math.floor(diff / 86400000)}d ago`;
 	return d.toLocaleDateString();
 }
+
+/**
+ * Absolute date + time for a message stamp — e.g. "Jul 8, 2026, 9:01 PM". Unlike
+ * {@link formatTime} (relative "5m ago"), this always shows the full calendar date AND
+ * clock time, for when you need to know exactly when each message happened. Same
+ * SQLite-UTC normalization as formatTime.
+ */
+export function formatDateTime(iso: string): string {
+	if (!iso) return "";
+	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(iso) ? `${iso.replace(" ", "T")}Z` : iso;
+	const d = new Date(normalized);
+	if (Number.isNaN(d.getTime())) return "";
+	return d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+}

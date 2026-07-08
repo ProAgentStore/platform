@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { computeRmsLevel, drainSseData, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
+import { computeRmsLevel, drainSseData, isNoiseTranscript, isTooShortToTranscribe, MIN_TRANSCRIBE_MS, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename, RECORDER_MIME_CANDIDATES } from "./audio.js";
+
+describe("isNoiseTranscript", () => {
+	it("drops the exact Whisper silence hallucinations seen in the wild", () => {
+		// These were submitted as real turns when the user wasn't talking (all had audio).
+		for (const junk of ["you", "You", "...", "…", '"', ".", "Thank you.", "thanks for watching", "so", "um"]) {
+			expect(isNoiseTranscript(junk)).toBe(true);
+		}
+	});
+
+	it("drops empty / whitespace / single-glyph transcripts", () => {
+		for (const junk of ["", "   ", "-", "’", "u"]) expect(isNoiseTranscript(junk)).toBe(true);
+	});
+
+	it("KEEPS genuine short commands and real sentences", () => {
+		for (const real of ["yes", "no", "go", "stop", "do it", "next", "fix bugs", "what's the latest?", "you should refactor this"]) {
+			expect(isNoiseTranscript(real)).toBe(false);
+		}
+	});
+});
 
 describe("isTooShortToTranscribe", () => {
 	it("drops a sub-threshold clip (the 'audio too short' 400 case)", () => {

@@ -1,5 +1,5 @@
 import { type RefObject, useState } from "react";
-import { renderMd, formatTime } from "@proagentstore/sdk/ui";
+import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Eye, Settings, Loader2 } from "lucide-react";
@@ -205,8 +205,8 @@ export default function CopilotView({
 							}`}
 						>
 							<button type="button" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.content); }} onDoubleClick={(e) => e.stopPropagation()} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
-							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.maybeSpeakResponse); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatTime(m.time)}</span>}</div>}
-							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Co-pilot</span>{m.time && <span className="font-normal text-muted">{formatTime(m.time)}</span>}</div>}
+							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.maybeSpeakResponse); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatDateTime(m.time)}</span>}</div>}
+							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Co-pilot</span>{m.time && <span className="font-normal text-muted">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (
 								<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 							) : (

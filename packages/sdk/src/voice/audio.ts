@@ -56,6 +56,41 @@ export function isTooShortToTranscribe(byteLength: number, durationMs: number): 
 	return durationMs < MIN_TRANSCRIBE_MS || byteLength < MIN_TRANSCRIBE_BYTES;
 }
 
+/**
+ * Whisper (esp. gpt-4o-transcribe) HALLUCINATES filler on silence, background noise, or
+ * the agent's own voice echo — it emits tokens like "you", ".", "…", "Thank you.", or
+ * "Thanks for watching." for audio with no real speech. Those got submitted as real chat
+ * turns ("I didn't even say anything → it replied to nothing"). This drops a transcript
+ * that is only punctuation/whitespace OR a known silence-hallucination phrase.
+ *
+ * Deliberately NARROW so genuine short commands survive: "yes", "no", "go", "stop",
+ * "do it", "next" are NOT in the set and pass through. Whole-utterance match only
+ * (punctuation stripped, lower-cased) — a real sentence that merely contains "you" is fine.
+ */
+const SILENCE_HALLUCINATIONS = new Set([
+	"you",
+	"thank you",
+	"thanks for watching",
+	"thanks for watching!",
+	"please subscribe",
+	"bye",
+	"so",
+	"uh",
+	"um",
+]);
+export function isNoiseTranscript(text: string): boolean {
+	if (!text) return true;
+	// Strip punctuation + collapse whitespace, then judge.
+	const t = text
+		.toLowerCase()
+		.replace(/[.,!?"'’“”…·•\-–—:;()\[\]]/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (!t) return true; // was only punctuation/whitespace (".", "…", "\"", …)
+	if (t.replace(/[^a-z0-9]/g, "").length < 2) return true; // a single stray letter/glyph
+	return SILENCE_HALLUCINATIONS.has(t);
+}
+
 /** One decoded event from the streaming-transcription SSE (gpt-4o-transcribe). */
 export interface TranscriptionStreamEvent {
 	type: string;

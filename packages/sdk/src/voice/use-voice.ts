@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
 import { API, getToken, isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
-import { computeRmsLevel } from "./audio.js";
+import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { decideRestart, matchVoiceCommand, resolveVoiceMode, type VoiceMode } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
@@ -229,6 +229,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Send a transcript, attaching a saved-audio turn id when this turn had recorded
 	// audio (Whisper). The upload is fire-and-forget; the message sends immediately.
 	const emitSend = (text: string) => {
+		// Universal gate: never submit a noise/hallucination transcript ("you", ".", "\"",
+		// "Thank you." on silence/echo). The user "didn't say anything" — drop it, ditch the
+		// recording, and let the mic recycle instead of sending a phantom turn.
+		if (isNoiseTranscript(text)) {
+			lastAudioBlobRef.current = null;
+			pausedForThinkingRef.current = false;
+			return;
+		}
 		const blob = lastAudioBlobRef.current;
 		lastAudioBlobRef.current = null;
 		if (blob && instanceId) {
@@ -391,6 +399,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 			if (sttIsWhisperRef.current) {
 				if (isFinal && text.trim()) {
 					const t = text.trim();
+					// Silence/echo hallucination ("you", ".", "\"") — you weren't talking. Don't
+					// send, don't chime; clear the placeholder and let the mic keep listening
+					// (onEnd reopens it). This is the "I'm not talking, don't submit" fix.
+					if (isNoiseTranscript(t)) { flushSync(() => setInterim("")); return; }
 					if (commandsEnabledRef.current && matchVoiceCommand(t) === "repeat") {
 						flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); });
 						repeatLastRef.current();

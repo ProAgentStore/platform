@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } fro
 import { useParams, useNavigate } from "react-router-dom";
 import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
-import { renderMd, formatTime } from "@proagentstore/sdk/ui";
+import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, Settings, Loader2 } from "lucide-react";
@@ -555,8 +555,8 @@ export default function InstanceDetail() {
 										}`}
 									>
 										<button type="button" onClick={(e) => { e.stopPropagation(); copyMsgText(m.content); }} onDoubleClick={(e) => e.stopPropagation()} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
-										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatTime(m.createdAt)}</span>}</div>}
-										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Assistant</span>{m.createdAt && <span className="font-normal text-muted">{formatTime(m.createdAt)}</span>}</div>}
+										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
+										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Assistant</span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 										) : (
