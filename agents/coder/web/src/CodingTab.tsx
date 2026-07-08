@@ -9,7 +9,7 @@ import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
 import RepoSettingsModal from "./RepoSettingsModal";
-import { ArrowLeft, Copy, Settings, ChevronDown, Eye, SquareTerminal } from "lucide-react";
+import { ArrowLeft, Copy, Settings, ChevronDown, Eye, SquareTerminal, Plus } from "lucide-react";
 
 interface Props {
 	instanceId: string;
@@ -468,7 +468,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		if (!openSession || !onHeaderOverride) return;
 		onHeaderOverride(
 			<div className="flex items-center gap-2 min-w-0">
-				<button type="button" onClick={closeTerminal} title="All repos" className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
+				{/* Labeled on mobile so the way back to the repos list (where "+ Add repo"
+				    lives) is obvious — a bare arrow was too easy to miss in the crowded bar. */}
+				<button type="button" onClick={closeTerminal} title="All repos" className="flex items-center gap-1 text-muted hover:text-ink shrink-0 -ml-1 px-1 py-1"><ArrowLeft size={16} /><span className="text-xs font-semibold sm:hidden">Repos</span></button>
 				<div className="relative shrink-0">
 					<button type="button" onClick={() => setRepoMenuOpen((v) => !v)} title="Switch repo" className="flex items-center gap-1 text-sm font-semibold hover:text-accent max-w-[11rem]">
 						<span className="truncate">{openRepo?.name || openSession.repoId}</span>
@@ -490,6 +492,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 										</button>
 									);
 								})}
+								<div className="border-t border-line my-1" />
+								{/* One-tap path to the add-repo form from inside a session (esp. mobile,
+								    where the repos-list "+ Add" was hard to reach). */}
+								<button type="button" onClick={() => { setRepoMenuOpen(false); closeTerminal(); setShowAddRepo(true); }} className="w-full text-left px-3 py-1.5 text-sm text-accent font-semibold hover:bg-panel-hover flex items-center gap-1.5"><Plus size={13} /> Add a repo</button>
 							</div>
 						</>
 					)}
