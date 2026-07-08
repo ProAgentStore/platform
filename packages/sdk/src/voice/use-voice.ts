@@ -5,7 +5,7 @@ import { API, getToken, isConnectivityError, reportClientError } from "../client
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult } from "./machine.js";
+import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
 import { decideRestart, matchVoiceCommand, resolveVoiceMode, type VoiceMode } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
@@ -181,7 +181,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				gateRef.current = createSpeechGate({
 					onInterim: (text) => {
 						// Ignore the agent's own voice (echo tail), and paused/muted windows.
-						if (mutedRef.current || shouldIgnoreResult({ ttsSpeaking: !!ttsRef.current?.speaking, speakEndedAt: speakEndedAtRef.current, paused: pausedForThinkingRef.current, muted: mutedRef.current }, Date.now())) return;
+						if (mutedRef.current || shouldIgnoreResult(readGuard(), Date.now())) return;
 						setInterim(text);
 					},
 				});
@@ -214,7 +214,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// talking OR during the ~0.8s echo tail after — otherwise the recorder would
 				// capture the agent's own TTS and transcribe it. Belt-and-braces with the
 				// echo guard in handleResult (which drops the result if one slips through).
-				const echoing = isEchoing({ ttsSpeaking: !!ttsRef.current?.speaking, speakEndedAt: speakEndedAtRef.current }, Date.now());
+				const echoing = isEchoing(readGuard(), Date.now());
 				// Whisper VAD: Whisper has no streaming results, so we detect end-of-turn
 				// from the mic level (pure logic + tests in ./vad.ts). On a real pause it
 				// stops recording → transcribe → send.
@@ -324,6 +324,20 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const lastSpokenTextRef = useRef("");
 	// The raw audio of the just-transcribed Whisper turn — saved for replay on send.
 	const lastAudioBlobRef = useRef<Blob | null>(null);
+
+	// Assemble the guard snapshot ONE way from its live sources — the agent's TTS-speaking
+	// flag, the echo-tail timestamp, the paused-for-reply flag, and mute — so every decision
+	// (open the mic? ignore this result? was that echo?) is fed IDENTICAL inputs. This is the
+	// state half of the interaction model: Phase 1 made the verdicts pure + single (machine.ts);
+	// this makes the inputs single, killing the drift risk of the three duplicated inline
+	// literals it replaces (add a guard input here and every decision picks it up at once).
+	const readGuard = useCallback((): VoiceGuardState => ({
+		ttsSpeaking: !!ttsRef.current?.speaking,
+		speakEndedAt: speakEndedAtRef.current,
+		paused: pausedForThinkingRef.current,
+		muted: mutedRef.current,
+	}), []);
+
 	useEffect(() => {
 		getVoiceConfig(instanceId).then((c) => {
 			silenceMsRef.current = c.silenceMs;
@@ -358,7 +372,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// Open mic with chime
 	const startListening = useCallback(async () => {
-		if (!sttRef.current || !canOpenMic({ paused: pausedForThinkingRef.current, muted: mutedRef.current })) return;
+		if (!sttRef.current || !canOpenMic(readGuard())) return;
 		try {
 			await sttRef.current.start();
 			lastListenStartRef.current = Date.now();
@@ -427,7 +441,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		//    manual tap-to-talk clears speakEndedAtRef in beginTalk, so it isn't blocked.
 		//  - PAUSED: a late result (e.g. a Whisper transcript that lands after the mode was
 		//    turned off) must not fall through and send a turn the user already abandoned.
-		if (shouldIgnoreResult({ ttsSpeaking: !!ttsRef.current?.speaking, speakEndedAt: speakEndedAtRef.current, paused: pausedForThinkingRef.current, muted: mutedRef.current }, Date.now())) return;
+		if (shouldIgnoreResult(readGuard(), Date.now())) return;
 
 		// Conversation mode.
 		if (convoOnRef.current) {
