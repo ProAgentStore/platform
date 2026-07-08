@@ -1,7 +1,8 @@
 /** Speech-to-Text abstraction — browser Web Speech API or OpenAI Whisper */
 
 import { API, getToken } from "../client.js";
-import { drainSseData, isTooShortToTranscribe, parseTranscriptionEvent, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
+import { drainSseData, isTooShortToTranscribe, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
+import { finalizeTranscript, initialTranscriptState, reduceTranscriptPayload } from "./transcript.js";
 
 /** OpenAI's real-time transcription model — replaces the legacy batch `whisper-1`.
  *  Same upload endpoint, far better accuracy/latency, no verbose_json (we use json). */
@@ -317,22 +318,11 @@ export class VoiceStt {
 		const decoder = new TextDecoder();
 		let buffer = "";
 		let raw = ""; // every decoded byte, so a non-SSE JSON body can still be salvaged
-		let acc = "";
-		let final = "";
-		let streamErr = ""; // an SSE `error` event carries a reason, not text
+		let state = initialTranscriptState();
 		const handle = (payload: string) => {
-			const ev = parseTranscriptionEvent(payload);
-			if (!ev) return;
-			if (ev.type === "transcript.text.delta" && ev.delta) {
-				acc += ev.delta;
-				this.onResult(acc.trim(), false); // live partial
-			} else if (ev.type === "transcript.text.done" && typeof ev.text === "string") {
-				final = ev.text;
-			} else if (ev.type === "error" || ev.type.endsWith(".error")) {
-				// OpenAI can end a 200 stream with an error event (e.g. mid-transcription
-				// failure) — capture it so the turn surfaces a reason instead of silence.
-				streamErr = ev.text || ev.delta || "transcription error";
-			}
+			const step = reduceTranscriptPayload(state, payload);
+			state = step.state;
+			if (step.interim !== null) this.onResult(step.interim, false); // live partial
 		};
 		try {
 			for (;;) {
@@ -347,28 +337,20 @@ export class VoiceStt {
 			}
 			// Flush a trailing line with no final newline (e.g. the done event).
 			if (buffer.trim().startsWith("data:")) handle(buffer.trim().slice(5).trim());
-			let result = (final || acc).trim();
-			// Fallback: some responses aren't SSE at all (a plain `{ text }` JSON body when
-			// the model/proxy ignored `stream:true`). Salvage the text so the turn isn't lost.
-			if (!result && !streamErr) {
-				try {
-					const j = JSON.parse(raw.trim()) as { text?: string };
-					if (typeof j.text === "string") result = j.text.trim();
-				} catch {}
-			}
-			if (result) {
+			const outcome = finalizeTranscript(state, raw);
+			if (outcome.kind === "result") {
 				this.onAudio(blob);
-				this.onResult(result, true);
+				this.onResult(outcome.text, true);
 			} else {
 				// A real mid-stream error gets surfaced + logged; a plain empty result
-				// (silence / echo / the agent's own voice tail) is NOT an error — emit the
-				// soft "no-speech" sentinel so the caller quietly recycles the mic rather
-				// than flashing "No transcription returned" at the user.
-				this.onError(streamErr ? `Whisper error: ${streamErr.slice(0, 300)}` : "no-speech");
+				// (silence / echo / the agent's own voice tail) is NOT an error — the soft
+				// "no-speech" sentinel lets the caller quietly recycle the mic rather than
+				// flashing "No transcription returned" at the user.
+				this.onError(outcome.kind === "error" ? outcome.message : "no-speech");
 			}
 		} catch (e) {
 			// Salvage whatever we streamed; only surface a hard error if we got nothing.
-			const partial = (final || acc).trim();
+			const partial = (state.final || state.acc).trim();
 			if (partial) {
 				this.onAudio(blob);
 				this.onResult(partial, true);
