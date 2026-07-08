@@ -426,6 +426,22 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	const getActiveSession = (repoId: string) => sessions.find((s) => s.repoId === repoId && s.status === "active");
 
+	// "Work on this" (Issues panel): pre-fill an objective from the issue, open the repo's
+	// session, and let the user review + send. Never auto-runs (approve-first). Fetch the
+	// issue body so the objective carries the full context to the Engine.
+	const workOnIssue = async (repo: CodingRepo, issue: { number: number; title: string }) => {
+		let body = "";
+		try {
+			const d = await api<{ issue?: { body?: string } }>(`/v1/instances/${instanceId}/coding/repos/${repo.id}/issues/${issue.number}`);
+			body = d.issue?.body ? `\n\n${d.issue.body}` : "";
+		} catch {}
+		const objective = `Fix issue #${issue.number}: ${issue.title}${body}`;
+		const active = getActiveSession(repo.id);
+		if (active) await openTerminal(active);
+		else await startSession(repo.id);
+		setChatInput(objective);
+	};
+
 	const repoLabel = (r: CodingRepo) => {
 		const active = getActiveSession(r.id);
 		const st = repoStatuses[r.id];
@@ -546,6 +562,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	return (
 		<>
 			<ReposList
+				instanceId={instanceId}
 				repos={repos}
 				sessions={sessions}
 				repoStatuses={repoStatuses}
@@ -561,6 +578,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				setSettingsRepoId={setSettingsRepoId}
 				repoLabel={repoLabel}
 				getActiveSession={getActiveSession}
+				onWorkOnIssue={workOnIssue}
 			/>
 			{settingsModal}
 		</>

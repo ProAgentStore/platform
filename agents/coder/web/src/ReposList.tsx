@@ -1,13 +1,16 @@
 import type { CodingRepo, CodingSession } from "./types";
 import { Trash2, Settings } from "lucide-react";
+import RepoIssues from "./RepoIssues";
 
 /** The all-repos landing view: add-repo form, runner CTA, and one row per repo. */
 export default function ReposList({
+	instanceId,
 	repos, sessions, repoStatuses, runnerOnline,
 	showAddRepo, setShowAddRepo, addRepoInput, setAddRepoInput, addRepo,
 	openTerminal, startSession, deleteRepo, setSettingsRepoId,
-	repoLabel, getActiveSession,
+	repoLabel, getActiveSession, onWorkOnIssue,
 }: {
+	instanceId: string;
 	repos: CodingRepo[];
 	sessions: CodingSession[];
 	repoStatuses: Record<string, string>;
@@ -23,6 +26,7 @@ export default function ReposList({
 	setSettingsRepoId: (id: string) => void;
 	repoLabel: (r: CodingRepo) => string;
 	getActiveSession: (repoId: string) => CodingSession | undefined;
+	onWorkOnIssue: (repo: CodingRepo, issue: { number: number; title: string }) => void;
 }) {
 	const activeCount = sessions.filter((s) => s.status === "active").length;
 	return (
@@ -103,6 +107,7 @@ export default function ReposList({
 											<button type="button" onClick={() => deleteRepo(r.id)} title="Delete repo" className="text-xs px-1.5 py-1 text-red"><Trash2 size={14} /></button>
 										</div>
 									</div>
+									{r.githubRepo && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}
 								</div>
 							);
 						})

@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { callRunner, getRunnerConn } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
+import { listIssues, readIssue } from "../lib/github-issues.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
@@ -305,6 +306,41 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployment", async (c) => {
 	}
 });
 
+/**
+ * GitHub issues for a repo (read-only, cloud→GitHub — works on any runner). Public
+ * repos work unauthenticated; private repos need the GitHub App installed for the owner.
+ * 400 for local-only repos (no `github_repo`); the Issues panel hides in that case.
+ */
+codingRoutes.get("/:instanceId/coding/repos/:repoId/issues", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	if (!repo) throw new HttpError(404, "Repo not found");
+	if (!repo.githubRepo || !repo.githubRepo.includes("/")) {
+		return c.json({ error: "This repo isn't connected to GitHub — add it by owner/repo or a GitHub URL to use issues." }, 400);
+	}
+	const state = c.req.query("state");
+	const labels = c.req.query("labels") || undefined;
+	const issues = await listIssues(c.env, uid, repo.githubRepo, {
+		state: state === "closed" || state === "all" ? state : "open",
+		labels,
+	});
+	return c.json({ repo: repo.githubRepo, issues });
+});
+
+codingRoutes.get("/:instanceId/coding/repos/:repoId/issues/:number", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	if (!repo) throw new HttpError(404, "Repo not found");
+	if (!repo.githubRepo || !repo.githubRepo.includes("/")) {
+		return c.json({ error: "This repo isn't connected to GitHub." }, 400);
+	}
+	const number = Number.parseInt(c.req.param("number"), 10);
+	if (!Number.isFinite(number)) return c.json({ error: "Invalid issue number" }, 400);
+	const issue = await readIssue(c.env, uid, repo.githubRepo, number);
+	if (!issue) throw new HttpError(404, "Issue not found");
+	return c.json({ issue });
+});
+
 /** Update a repo/project: rename and/or set its launch URLs (dev/staging/prod). */
 codingRoutes.put("/:instanceId/coding/repos/:repoId", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
@@ -507,6 +543,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 		conn: conn ?? undefined,
 		sessionId,
 		workDir: repo?.workdir ?? undefined,
+		githubRepo: repo?.githubRepo ?? undefined,
 	})) || "(no response)";
 	// Don't persist a transient "runner offline / session hasn't started" auto-summary
 	// — it's only true at this moment, and once the runner attaches it lingers at the
