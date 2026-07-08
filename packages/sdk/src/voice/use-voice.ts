@@ -4,6 +4,7 @@ import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./c
 import { API, getToken, isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
+import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { decideRestart, matchVoiceCommand, resolveVoiceMode, type VoiceMode } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
@@ -136,12 +137,18 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [audioLevel, setAudioLevel] = useState(0);
 	const sttRef = useRef<VoiceStt | null>(null);
 	const ttsRef = useRef<VoiceTts | null>(null);
+	// Browser-dictation SPEECH GATE (Whisper mode only). Runs alongside the recorder to
+	// (a) show live words as you speak and (b) confirm real speech happened this turn — so
+	// silence / keyboard clicks / background noise never get uploaded to Whisper (which
+	// would hallucinate a phrase and send a phantom turn). Null on iOS Safari (no Web Speech).
+	const gateRef = useRef<SpeechGate | null>(null);
 	const analyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; source: MediaStreamAudioSourceNode; stream: MediaStream; ownsStream: boolean; raf: number } | null>(null);
 
 	// Flag: true while the agent is processing (mic should stay off)
 	const pausedForThinkingRef = useRef(false);
 
 	const stopAudioMonitor = useCallback(() => {
+		gateRef.current?.stop();
 		if (analyserRef.current) {
 			cancelAnimationFrame(analyserRef.current.raf);
 			analyserRef.current.source.disconnect();
@@ -165,6 +172,22 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// real, growing leak.
 		stopAudioMonitor();
 		vadStateRef.current = initVad(); // fresh turn — don't carry a stale peak over
+		// Start the dictation gate for THIS turn (Whisper "Smart AI" mode + Web Speech
+		// available). It shows live words as you speak and — at end-of-turn — tells us
+		// whether real speech actually happened, so silence/keyboard/noise never uploads.
+		if (sttIsWhisperRef.current && speechGateAvailable()) {
+			if (!gateRef.current) {
+				gateRef.current = createSpeechGate({
+					onInterim: (text) => {
+						// Ignore the agent's own voice (echo tail), and paused/muted windows.
+						if (ttsRef.current?.speaking || Date.now() - speakEndedAtRef.current < ECHO_GUARD_MS || pausedForThinkingRef.current || mutedRef.current) return;
+						setInterim(text);
+					},
+				});
+			}
+			gateRef.current?.reset();
+			gateRef.current?.start();
+		}
 		try {
 			// Reuse the recognizer's existing mic stream if it has one (Whisper records
 			// via getUserMedia). Opening a SECOND getUserMedia mutes the recorder on iOS
@@ -198,11 +221,24 @@ export function useVoice(instanceId: string | undefined, opts: {
 					const decision = vadStep(vadStateRef.current, level, now, { silenceMs: silenceMsRef.current, sensitivity: vadSensitivityRef.current });
 					if (decision === "end") {
 						vadStateRef.current = initVad();
-						// Whisper has no streaming results, so nothing shows between your pause
-						// and the transcript landing (~1-2s). Fill that gap so it's clearly
-						// working, not stuck. Cleared when the result/onError arrives.
-						setInterim("Transcribing…");
-						sttRef.current?.stop();
+						// DICTATION GATE: if a live browser-dictation gate is running and heard
+						// NO real words this turn, the "end" was silence / keyboard / background
+						// noise (the amplitude VAD can't tell). Discard it — never upload to
+						// Whisper (which would hallucinate a phrase), no "Transcribing/Working".
+						// Only trust a gate that's proven alive, so a dead recognizer can't
+						// black-hole real speech (then we fall back to sending + the noise filter).
+						const gate = gateRef.current;
+						if (gate?.isAlive() && !gate.heardSpeech()) {
+							idleRecycleRef.current = true;
+							setInterim("");
+							sttRef.current?.stopDiscard();
+						} else {
+							// Whisper has no streaming results, so nothing shows between your pause
+							// and the transcript landing (~1-2s). Fill that gap so it's clearly
+							// working, not stuck. Cleared when the result/onError arrives.
+							setInterim("Transcribing…");
+							sttRef.current?.stop();
+						}
 					} else if (decision === "idle") {
 						// Mic sat open with nothing said — recycle the silent recording (no
 						// Whisper upload, no buffer growth). Reopens via onEnd; skip the chime.
@@ -678,6 +714,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		pausedForThinkingRef.current = true;
 		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 		sttRef.current?.stop();
+		gateRef.current?.stop();
 		ttsRef.current?.dispose(); // close the TTS AudioContext, not just cancel — else it leaks
 		stopAudioMonitor();
 	}, [stopAudioMonitor]);
