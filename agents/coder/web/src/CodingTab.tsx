@@ -546,10 +546,23 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			})()
 		: null;
 
+	// Claude Code signed-out CTA — the headless engine surfaces a login error in its
+	// transcript when the runner machine has no (or expired) Claude credentials.
+	const claudeSignedOut =
+		openSession?.clientType === "claude" &&
+		/not logged in|please run \/login|invalid api key|oauth token (is |has )?(expired|revoked)/i.test(terminalText);
+
 	// ── Session open: full-screen terminal/co-pilot ──
 	if (openSession) {
 		return (
 			<div className="flex flex-col h-full">
+				{claudeSignedOut && (
+					<div className="bg-orange-50 border border-amber-500 rounded-lg p-2.5 m-2 text-sm text-orange-900">
+						<b>Claude Code is signed out on your runner.</b> Run <code>claude setup-token</code> on any machine (it opens a browser),
+						save the token under <button type="button" onClick={() => navigate("/profile")} className="underline font-semibold">Profile → API keys → Claude Code</button>,
+						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
+					</div>
+				)}
 				{view === "summary" && (
 					<CopilotView
 						instanceId={instanceId}

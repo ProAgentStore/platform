@@ -3,7 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
-import { runUserWorkersAi } from "../lib/user-ai.js";
+import { getUserProviderKey, runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import {
@@ -53,6 +53,11 @@ async function startSessionOnRunner(
 	if (!conn) return false;
 	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
 	const token = owner ? await installationTokenForOwner(env, uid, owner) : null;
+	// Remote Claude sign-in: a stored `claude setup-token` (provider "claude-code")
+	// is injected as CLAUDE_CODE_OAUTH_TOKEN so the headless engine works even when
+	// the runner machine's own `claude` login is absent/expired.
+	const claudeToken =
+		session.clientType === "claude" ? await getUserProviderKey(env, uid, "claude-code") : null;
 	try {
 		await callRunner(conn, "/coding/start", {
 			sessionId: session.id,
@@ -66,6 +71,7 @@ async function startSessionOnRunner(
 			// The exact CLI command for this session's engine (Claude default, or a
 			// user-configured Codex/Grok/custom). The runner spawns it.
 			command: session.launchCommand || undefined,
+			env: claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : undefined,
 		});
 		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
 		return true;

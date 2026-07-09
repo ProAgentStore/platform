@@ -215,7 +215,7 @@ async function runCloudflareAi(
 	return data;
 }
 
-async function getUserProviderKey(
+export async function getUserProviderKey(
 	env: Env,
 	userId: string | undefined,
 	provider: string,

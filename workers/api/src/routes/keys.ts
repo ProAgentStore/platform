@@ -91,6 +91,17 @@ const PROVIDERS: Provider[] = [
 		keyPrefix: "",
 		docsUrl: "https://dash.cloudflare.com/profile/api-tokens",
 	},
+	{
+		// Claude Code sign-in for the Coder engine: a long-lived OAuth token from
+		// `claude setup-token` (works with a Pro/Max subscription). host:null — this is
+		// NOT proxyable; it's injected as CLAUDE_CODE_OAUTH_TOKEN into the runner's
+		// headless `claude` process so the engine works signed-in on any machine.
+		id: "claude-code",
+		name: "Claude Code (Coder engine sign-in)",
+		host: null,
+		keyPrefix: "sk-ant-oat",
+		docsUrl: "https://code.claude.com/docs/en/authentication",
+	},
 ];
 
 const PROVIDER_BY_ID = new Map(PROVIDERS.map((p) => [p.id, p]));

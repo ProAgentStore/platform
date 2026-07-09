@@ -60,6 +60,13 @@ const PROVIDERS: Provider[] = [
 		keyPrefix: "",
 		docsUrl: "https://dash.cloudflare.com/profile/api-tokens",
 	},
+	{
+		id: "claude-code",
+		name: "Claude Code (Coder engine sign-in)",
+		host: null,
+		keyPrefix: "sk-ant-oat",
+		docsUrl: "https://code.claude.com/docs/en/authentication",
+	},
 ];
 
 const PROVIDER_BY_ID = new Map(PROVIDERS.map((p) => [p.id, p]));
@@ -72,8 +79,8 @@ function validateKey(provider: Provider, key: string): boolean {
 }
 
 describe("provider list", () => {
-	it("contains exactly 7 providers", () => {
-		expect(PROVIDERS).toHaveLength(7);
+	it("contains exactly 8 providers", () => {
+		expect(PROVIDERS).toHaveLength(8);
 	});
 
 	it("includes openai", () => {
@@ -111,11 +118,25 @@ describe("provider list", () => {
 		expect(ids).toContain("cloudflare");
 	});
 
+	it("includes claude-code (Coder engine sign-in — not proxyable)", () => {
+		const ids = PROVIDERS.map((p) => p.id);
+		expect(ids).toContain("claude-code");
+		// host:null keeps the setup-token OUT of the key-proxy allowlist — it is only
+		// injected as CLAUDE_CODE_OAUTH_TOKEN into the runner's headless engine.
+		expect(PROVIDER_BY_ID.get("claude-code")?.host).toBeNull();
+	});
+
+	it("claude-code token must start with 'sk-ant-oat' (a setup-token, not an API key)", () => {
+		const p = PROVIDER_BY_ID.get("claude-code")!;
+		expect(validateKey(p, "sk-ant-oat01-abc123")).toBe(true);
+		expect(validateKey(p, "sk-ant-api03-abc123")).toBe(false); // a normal Anthropic API key
+	});
+
 	it("all providers have id, name, host, keyPrefix, docsUrl", () => {
 		for (const p of PROVIDERS) {
 			expect(p.id).toBeTruthy();
 			expect(p.name).toBeTruthy();
-			if (p.id === "cloudflare") {
+			if (p.id === "cloudflare" || p.id === "claude-code") {
 				expect(p.host).toBeNull();
 			} else {
 				expect(p.host).toBeTruthy();
@@ -144,7 +165,7 @@ describe("provider ID validation", () => {
 		expect(p).toBeUndefined();
 	});
 
-	it("all 7 IDs are resolvable", () => {
+	it("all 8 IDs are resolvable", () => {
 		for (const p of PROVIDERS) {
 			expect(PROVIDER_BY_ID.get(p.id)).toBeDefined();
 		}
