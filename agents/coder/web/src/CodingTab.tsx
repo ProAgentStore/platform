@@ -42,10 +42,27 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [termAutoScroll, setTermAutoScroll] = useState(true);
 	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string; time?: string; audioKey?: string }[]>([]);
 
+	// Work mode (instance-wide): "direct" (type each Loop objective) or "issues" (source it
+	// from the next open GitHub issue, approve-per-issue). Persisted server-side.
+	const [workMode, setWorkModeState] = useState<"direct" | "issues">("direct");
+	useEffect(() => {
+		let live = true;
+		api<{ workMode?: "direct" | "issues" }>(`/v1/instances/${instanceId}/coding/work-mode`)
+			.then((d) => { if (live && (d.workMode === "issues" || d.workMode === "direct")) setWorkModeState(d.workMode); })
+			.catch(() => {});
+		return () => { live = false; };
+	}, [instanceId]);
+	const setWorkMode = (mode: "direct" | "issues") => {
+		setWorkModeState(mode);
+		api(`/v1/instances/${instanceId}/coding/work-mode`, { method: "PUT", body: JSON.stringify({ workMode: mode }) }).catch(() => {});
+	};
+
 	// Loop (extracted hook)
 	const loop = useCodingLoop({
 		instanceId,
 		sessionId: openSession?.id ?? null,
+		repoId: openSession?.repoId ?? null,
+		workMode,
 		onMessage: (msg) => setSummaryHistory((prev) => [...prev, msg]),
 	});
 	loop.syncHistory(summaryHistory);
@@ -538,6 +555,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						instanceId={instanceId}
 						voice={voice}
 						loop={loop}
+						workMode={workMode}
+						onSetWorkMode={setWorkMode}
 						chatInput={chatInput}
 						setChatInput={setChatInput}
 						sendInstruction={sendInstruction}

@@ -36,6 +36,7 @@ type LoopPreset = { id: string; label: string; objective: string };
 export default function CopilotView({
 	instanceId, voice, loop, chatInput, setChatInput, sendInstruction,
 	summaryHistory, summaryBusy, threadRef, loopPresets, onClearChat,
+	workMode, onSetWorkMode,
 }: {
 	instanceId: string;
 	voice: Voice;
@@ -48,6 +49,9 @@ export default function CopilotView({
 	threadRef: RefObject<HTMLDivElement | null>;
 	loopPresets: LoopPreset[];
 	onClearChat: () => void;
+	/** Loop objective source: "direct" (type it) or "issues" (next open GitHub issue). */
+	workMode: "direct" | "issues";
+	onSetWorkMode: (mode: "direct" | "issues") => void;
 }) {
 	const [showChatMenu, setShowChatMenu] = useState(false);
 	return (
@@ -105,13 +109,27 @@ export default function CopilotView({
 						<MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span>
 					</button>
 				)}
+				{/* Work-mode: Direct (type each objective) vs Issues (work the GitHub backlog,
+				    approve-per-issue). Sits next to the Loop it configures. */}
+				<div className="flex border border-line rounded-lg overflow-hidden shrink-0" role="radiogroup" aria-label="Loop work mode">
+					{([
+						{ id: "direct", label: "Direct", title: "Direct: you type each Loop objective" },
+						{ id: "issues", label: "Issues", title: "Issues: the Loop works your GitHub backlog, approving one issue at a time" },
+					] as const).map((m) => (
+						<button key={m.id} type="button" role="radio" aria-checked={workMode === m.id} title={m.title} disabled={loop.loopOn}
+							onClick={() => onSetWorkMode(m.id)}
+							className={`px-2 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${workMode === m.id ? "bg-accent text-white" : "text-muted hover:bg-panel-hover hover:text-accent"}`}>
+							{m.label}
+						</button>
+					))}
+				</div>
 				{loop.loopOn ? (
 					<button type="button" onClick={loop.stop} title={`Loop ${loop.loopIteration}/${loop.loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative">
 						<Square size={13} />
 						<span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loop.loopIteration}</span>
 					</button>
 				) : (
-					<button type="button" onClick={() => loop.setShowLoopForm(!loop.showLoopForm)} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
+					<button type="button" onClick={() => { const next = !loop.showLoopForm; loop.setShowLoopForm(next); if (next && workMode === "issues" && !loop.proposedIssue) loop.proposeNextIssue(); }} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${loop.showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}>
 						<Repeat size={13} />
 					</button>
 				)}
@@ -132,8 +150,8 @@ export default function CopilotView({
 			<div className="px-3 pb-1.5 shrink-0 text-[0.7rem] text-muted-soft flex items-center gap-1">
 				<Eye size={11} className="shrink-0" /> Co-pilot — watching this coding session
 			</div>
-			{/* Loop form with presets */}
-			{loop.showLoopForm && !loop.loopOn && (
+			{/* Loop form — DIRECT mode: presets + a custom objective. */}
+			{loop.showLoopForm && !loop.loopOn && workMode === "direct" && (
 				<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
 					<div className="flex flex-wrap gap-1.5">
 						{loopPresets.map((p) => (
@@ -155,6 +173,41 @@ export default function CopilotView({
 							<button type="button" onClick={loop.start} disabled={!loop.loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
 						</div>
 					</div>
+				</div>
+			)}
+			{/* Loop form — ISSUES mode: approve-per-issue against the GitHub backlog. */}
+			{loop.showLoopForm && !loop.loopOn && workMode === "issues" && (
+				<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
+					{loop.issueBusy ? (
+						<div className="text-xs text-muted flex items-center gap-2"><Loader2 size={13} className="animate-spin" /> Finding the next open issue…</div>
+					) : loop.proposedIssue ? (
+						<>
+							<div className="text-[0.7rem] uppercase tracking-wide text-muted-soft">Next issue — approve to work it, or skip</div>
+							<div className="flex items-start gap-2">
+								<span className="text-xs font-mono text-accent shrink-0 mt-0.5">#{loop.proposedIssue.number}</span>
+								<div className="min-w-0 flex-1">
+									<div className="text-sm font-semibold break-words">{loop.proposedIssue.title}</div>
+									{loop.proposedIssue.body && <div className="text-xs text-muted mt-0.5 whitespace-pre-wrap line-clamp-4">{loop.proposedIssue.body.slice(0, 400)}</div>}
+									{loop.proposedIssue.url && <a href={loop.proposedIssue.url} target="_blank" rel="noreferrer" className="text-[0.7rem] text-accent hover:underline inline-block mt-0.5">View on GitHub ↗</a>}
+								</div>
+							</div>
+							<div className="flex items-center gap-2 justify-between">
+								<label className="text-xs text-muted flex items-center gap-1.5">Max iterations: <input type="number" value={loop.loopMax} onChange={(e) => loop.setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
+								<div className="flex gap-1.5">
+									<button type="button" onClick={loop.skipProposedIssue} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Skip</button>
+									<button type="button" onClick={loop.approveProposedIssue} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Approve &amp; run #{loop.proposedIssue.number}</button>
+								</div>
+							</div>
+						</>
+					) : (
+						<div className="flex items-center justify-between gap-2">
+							<div className="text-xs text-muted">No open issue to work — the backlog looks clear.</div>
+							<div className="flex gap-1.5 shrink-0">
+								<button type="button" onClick={() => loop.setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Close</button>
+								<button type="button" onClick={loop.proposeNextIssue} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Check again</button>
+							</div>
+						</div>
+					)}
 				</div>
 			)}
 			{/* Messages. In Tap-to-talk a tap here (not on a bubble/button) starts/stops a
