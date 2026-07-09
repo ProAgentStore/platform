@@ -85,6 +85,13 @@ const PROVIDERS: Provider[] = [
 		docsUrl: "https://api.together.xyz/settings/api-keys",
 	},
 	{
+		id: "xai",
+		name: "xAI (Grok)",
+		host: "api.x.ai",
+		keyPrefix: "xai-",
+		docsUrl: "https://console.x.ai",
+	},
+	{
 		id: "cloudflare",
 		name: "Cloudflare Workers AI",
 		host: null,

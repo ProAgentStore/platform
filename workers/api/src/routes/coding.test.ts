@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveClientType, pickNextIssue } from "./coding.js";
+import { type CodingEngine, deriveClientType, engineAuthFor, pickNextIssue } from "./coding.js";
 
 describe("pickNextIssue (issues-mode Loop objective source)", () => {
 	const issues = [{ number: 7 }, { number: 3 }, { number: 12 }];
@@ -18,6 +18,33 @@ describe("pickNextIssue (issues-mode Loop objective source)", () => {
 		const input = [{ number: 5 }, { number: 1 }];
 		pickNextIssue(input, new Set());
 		expect(input).toEqual([{ number: 5 }, { number: 1 }]);
+	});
+});
+
+describe("engineAuthFor (per-engine sign-in method)", () => {
+	const engines: CodingEngine[] = [
+		{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions", auth: "subscription" },
+		{ id: "claude-api", label: "Claude (API)", command: "claude --model opus", auth: "api-key" },
+		{ id: "codex", label: "Codex", command: "codex", auth: "machine" },
+		{ id: "gemini", label: "Gemini CLI", command: "gemini" },
+	];
+
+	it("matches a session's launch command back to its preset's auth", () => {
+		expect(engineAuthFor(engines, "claude --dangerously-skip-permissions")).toBe("subscription");
+		expect(engineAuthFor(engines, "claude --model opus")).toBe("api-key");
+		expect(engineAuthFor(engines, "codex")).toBe("machine");
+	});
+
+	it("defaults to auto when the preset has no auth or the command matches nothing", () => {
+		expect(engineAuthFor(engines, "gemini")).toBe("auto"); // preset without auth
+		expect(engineAuthFor(engines, "claude --some-edited-command")).toBe("auto"); // edited/legacy session
+		expect(engineAuthFor(engines, null)).toBe("auto");
+		expect(engineAuthFor(engines, undefined)).toBe("auto");
+	});
+
+	it("ignores an invalid auth value from a hand-edited config", () => {
+		const bad = [{ id: "x", label: "X", command: "claude", auth: "steal-keys" as CodingEngine["auth"] }];
+		expect(engineAuthFor(bad, "claude")).toBe("auto");
 	});
 });
 

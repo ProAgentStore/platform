@@ -54,6 +54,13 @@ const PROVIDERS: Provider[] = [
 		docsUrl: "https://api.together.xyz/settings/api-keys",
 	},
 	{
+		id: "xai",
+		name: "xAI (Grok)",
+		host: "api.x.ai",
+		keyPrefix: "xai-",
+		docsUrl: "https://console.x.ai",
+	},
+	{
 		id: "cloudflare",
 		name: "Cloudflare Workers AI",
 		host: null,
@@ -79,8 +86,8 @@ function validateKey(provider: Provider, key: string): boolean {
 }
 
 describe("provider list", () => {
-	it("contains exactly 8 providers", () => {
-		expect(PROVIDERS).toHaveLength(8);
+	it("contains exactly 9 providers", () => {
+		expect(PROVIDERS).toHaveLength(9);
 	});
 
 	it("includes openai", () => {
@@ -111,6 +118,12 @@ describe("provider list", () => {
 	it("includes together", () => {
 		const ids = PROVIDERS.map((p) => p.id);
 		expect(ids).toContain("together");
+	});
+
+	it("includes xai (Grok engine api-key mode)", () => {
+		const ids = PROVIDERS.map((p) => p.id);
+		expect(ids).toContain("xai");
+		expect(HOST_TO_PROVIDER.get("api.x.ai")).toBe("xai");
 	});
 
 	it("includes cloudflare", () => {
@@ -165,7 +178,7 @@ describe("provider ID validation", () => {
 		expect(p).toBeUndefined();
 	});
 
-	it("all 8 IDs are resolvable", () => {
+	it("all 9 IDs are resolvable", () => {
 		for (const p of PROVIDERS) {
 			expect(PROVIDER_BY_ID.get(p.id)).toBeDefined();
 		}

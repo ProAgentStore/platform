@@ -20,8 +20,11 @@ export interface CodingSession {
 	createdAt?: string;
 }
 
+export type EngineAuth = "auto" | "machine" | "subscription" | "api-key";
+
 export interface CodingEngine {
 	id: string;
 	label: string;
 	command: string;
+	auth?: EngineAuth;
 }

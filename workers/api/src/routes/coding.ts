@@ -53,11 +53,7 @@ async function startSessionOnRunner(
 	if (!conn) return false;
 	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
 	const token = owner ? await installationTokenForOwner(env, uid, owner) : null;
-	// Remote Claude sign-in: a stored `claude setup-token` (provider "claude-code")
-	// is injected as CLAUDE_CODE_OAUTH_TOKEN so the headless engine works even when
-	// the runner machine's own `claude` login is absent/expired.
-	const claudeToken =
-		session.clientType === "claude" ? await getUserProviderKey(env, uid, "claude-code") : null;
+	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
 	try {
 		await callRunner(conn, "/coding/start", {
 			sessionId: session.id,
@@ -71,7 +67,7 @@ async function startSessionOnRunner(
 			// The exact CLI command for this session's engine (Claude default, or a
 			// user-configured Codex/Grok/custom). The runner spawns it.
 			command: session.launchCommand || undefined,
-			env: claudeToken ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken } : undefined,
+			env: engineEnv,
 		});
 		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
 		return true;
@@ -80,6 +76,33 @@ async function startSessionOnRunner(
 		await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
 		return false;
 	}
+}
+
+/**
+ * Build the env the runner injects into the engine process from the preset's
+ * sign-in method (see {@link EngineAuth}). "auto" NEVER injects an API key — a
+ * key stored for other features (e.g. the openai key powering Whisper voice)
+ * must not silently switch an engine from subscription to per-token billing.
+ */
+async function resolveEngineEnv(
+	env: Env,
+	instanceId: string,
+	uid: string,
+	session: CodingSessionRecord,
+): Promise<Record<string, string> | undefined> {
+	const { engines } = await readEngines(env, instanceId, uid);
+	const auth = engineAuthFor(engines, session.launchCommand);
+	if (auth === "machine") return undefined;
+	if (auth === "api-key") {
+		const spec = ENGINE_API_KEYS[session.clientType];
+		const key = spec ? await getUserProviderKey(env, uid, spec.provider) : null;
+		return key ? { [spec.envVar]: key } : undefined;
+	}
+	// "subscription" | "auto" — the stored `claude setup-token`. Only Claude has a
+	// subscription token env; for other engines these modes mean the machine login.
+	if (session.clientType !== "claude") return undefined;
+	const token = await getUserProviderKey(env, uid, "claude-code");
+	return token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : undefined;
 }
 
 /**
@@ -117,11 +140,40 @@ export function deriveClientType(command: string): CodingClientType {
 	return "claude";
 }
 
+/**
+ * How a session's engine signs in, chosen per engine preset:
+ *  - "auto"         — the stored `claude setup-token` when saved (Claude only), else the machine's own login
+ *  - "machine"      — never inject anything; the CLI uses the runner machine's login
+ *  - "subscription" — the stored `claude setup-token` (CLAUDE_CODE_OAUTH_TOKEN; Claude only)
+ *  - "api-key"      — the engine's provider API key from the vault (ANTHROPIC/OPENAI/GEMINI/XAI_API_KEY)
+ */
+export type EngineAuth = "auto" | "machine" | "subscription" | "api-key";
+const ENGINE_AUTHS = new Set<EngineAuth>(["auto", "machine", "subscription", "api-key"]);
+
 /** An engine preset = a named CLI launch command the user can pick per session. */
 export interface CodingEngine {
 	id: string;
 	label: string;
 	command: string;
+	auth?: EngineAuth;
+}
+
+/** The env var + vault provider an engine's "api-key" auth mode injects. */
+const ENGINE_API_KEYS: Record<CodingClientType, { envVar: string; provider: string }> = {
+	claude: { envVar: "ANTHROPIC_API_KEY", provider: "anthropic" },
+	gemini: { envVar: "GEMINI_API_KEY", provider: "google" },
+	codex: { envVar: "OPENAI_API_KEY", provider: "openai" },
+	grok: { envVar: "XAI_API_KEY", provider: "xai" },
+};
+
+/**
+ * The sign-in method for a session — sessions persist the launch command, not the
+ * preset id, so match it back to a preset. An edited preset applies on the next
+ * start/Restart; a command with no matching preset falls back to "auto".
+ */
+export function engineAuthFor(engines: CodingEngine[], launchCommand: string | null | undefined): EngineAuth {
+	const eng = launchCommand ? engines.find((e) => e.command === launchCommand) : undefined;
+	return eng?.auth && ENGINE_AUTHS.has(eng.auth) ? eng.auth : "auto";
 }
 
 /**
@@ -479,7 +531,7 @@ codingRoutes.get("/:instanceId/coding/engines", async (c) => {
 	return c.json(await readEngines(c.env, instanceId, uid));
 });
 
-/** Save the engine presets + default. Each = { id, label, command }. */
+/** Save the engine presets + default. Each = { id, label, command, auth? }. */
 codingRoutes.put("/:instanceId/coding/engines", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const body = (await c.req.json().catch(() => ({}))) as { engines?: unknown; defaultEngineId?: unknown };
@@ -495,7 +547,8 @@ codingRoutes.put("/:instanceId/coding/engines", async (c) => {
 		if (!id) id = label.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "engine";
 		while (seen.has(id)) id = `${id}-2`;
 		seen.add(id);
-		engines.push({ id, label, command });
+		const auth = ENGINE_AUTHS.has(e.auth as EngineAuth) ? (e.auth as EngineAuth) : undefined;
+		engines.push(auth && auth !== "auto" ? { id, label, command, auth } : { id, label, command });
 	}
 	if (!engines.length) throw new HttpError(400, "At least one engine with a label and command is required.");
 	const defaultEngineId = engines.some((e) => e.id === body.defaultEngineId) ? String(body.defaultEngineId) : engines[0].id;

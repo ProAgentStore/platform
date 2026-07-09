@@ -9,6 +9,7 @@ import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
 import RepoSettingsModal from "./RepoSettingsModal";
+import EnginesModal from "./EnginesModal";
 import { ArrowLeft, Copy, Settings, ChevronDown, Eye, SquareTerminal, Plus } from "lucide-react";
 
 interface Props {
@@ -72,6 +73,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [addRepoInput, setAddRepoInput] = useState("");
 	const [showAddRepo, setShowAddRepo] = useState(false);
 	const [settingsRepoId, setSettingsRepoId] = useState<string | null>(null);
+	const [showEngines, setShowEngines] = useState(false);
 	const [loopPresets] = useState([
 		{ id: "bugs", label: "Fix bugs", objective: "Find and fix all bugs. Run tests after each fix. Commit when all pass." },
 		{ id: "quality", label: "Quality check", objective: "Run a full code quality audit: type check, lint, find code smells, dead code, and fix issues found. Commit improvements." },
@@ -617,8 +619,18 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				repoLabel={repoLabel}
 				getActiveSession={getActiveSession}
 				onWorkOnIssue={workOnIssue}
+				onOpenEngines={() => setShowEngines(true)}
 			/>
 			{settingsModal}
+			{showEngines && (
+				<EnginesModal
+					instanceId={instanceId}
+					engines={engines}
+					defaultEngineId={defaultEngine}
+					onClose={() => setShowEngines(false)}
+					onSaved={loadCoding}
+				/>
+			)}
 		</>
 	);
 }

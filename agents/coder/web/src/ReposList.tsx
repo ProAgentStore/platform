@@ -1,5 +1,5 @@
 import type { CodingRepo, CodingSession } from "./types";
-import { Trash2, Settings } from "lucide-react";
+import { Trash2, Settings, Cpu } from "lucide-react";
 import RepoIssues from "./RepoIssues";
 
 /** The all-repos landing view: add-repo form, runner CTA, and one row per repo. */
@@ -8,7 +8,7 @@ export default function ReposList({
 	repos, sessions, repoStatuses, runnerOnline,
 	showAddRepo, setShowAddRepo, addRepoInput, setAddRepoInput, addRepo,
 	openTerminal, startSession, deleteRepo, setSettingsRepoId,
-	repoLabel, getActiveSession, onWorkOnIssue,
+	repoLabel, getActiveSession, onWorkOnIssue, onOpenEngines,
 }: {
 	instanceId: string;
 	repos: CodingRepo[];
@@ -27,6 +27,7 @@ export default function ReposList({
 	repoLabel: (r: CodingRepo) => string;
 	getActiveSession: (repoId: string) => CodingSession | undefined;
 	onWorkOnIssue: (repo: CodingRepo, issue: { number: number; title: string }) => void;
+	onOpenEngines: () => void;
 }) {
 	const activeCount = sessions.filter((s) => s.status === "active").length;
 	return (
@@ -35,7 +36,10 @@ export default function ReposList({
 			<div className="bg-panel border border-line rounded-xl p-3">
 				<div className="flex justify-between items-center gap-2">
 					<span className="text-ink font-bold text-[0.95rem]">Repositories</span>
-					<button type="button" onClick={() => setShowAddRepo(!showAddRepo)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add</button>
+					<div className="flex gap-1.5">
+						<button type="button" onClick={onOpenEngines} title="CLI engines & sign-in" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold flex items-center gap-1"><Cpu size={13} /><span className="hidden sm:inline">Engines</span></button>
+						<button type="button" onClick={() => setShowAddRepo(!showAddRepo)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add</button>
+					</div>
 				</div>
 
 				{/* Activity strip */}
