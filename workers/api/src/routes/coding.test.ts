@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { deriveClientType } from "./coding.js";
+import { deriveClientType, pickNextIssue } from "./coding.js";
+
+describe("pickNextIssue (issues-mode Loop objective source)", () => {
+	const issues = [{ number: 7 }, { number: 3 }, { number: 12 }];
+	it("picks the lowest-numbered open issue (deterministic order)", () => {
+		expect(pickNextIssue(issues, new Set())).toEqual({ number: 3 });
+	});
+	it("skips excluded issues (declined this run + the active one)", () => {
+		expect(pickNextIssue(issues, new Set([3]))).toEqual({ number: 7 });
+		expect(pickNextIssue(issues, new Set([3, 7]))).toEqual({ number: 12 });
+	});
+	it("returns null when every issue is excluded or the backlog is empty", () => {
+		expect(pickNextIssue(issues, new Set([3, 7, 12]))).toBeNull();
+		expect(pickNextIssue([], new Set())).toBeNull();
+	});
+	it("does not mutate the input array", () => {
+		const input = [{ number: 5 }, { number: 1 }];
+		pickNextIssue(input, new Set());
+		expect(input).toEqual([{ number: 5 }, { number: 1 }]);
+	});
+});
 
 describe("deriveClientType", () => {
 	it("classifies bare engine binaries", () => {

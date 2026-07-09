@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
-import { listIssues, readIssue } from "../lib/github-issues.js";
+import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
@@ -190,6 +190,41 @@ async function readSpecialInstructions(env: Env, instanceId: string, userId: str
 	}
 }
 
+/** How the Loop sources its objective: `direct` (you type each objective) or `issues`
+ *  (the backlog IS the GitHub issue tracker — the Loop proposes the next open issue and you
+ *  approve it). Instance-wide for v1. Stored in the instance's JSON config (no migration). */
+export type WorkMode = "direct" | "issues";
+
+async function readWorkMode(env: Env, instanceId: string, userId: string): Promise<WorkMode> {
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+		.bind(instanceId, userId)
+		.first<{ config: string }>();
+	try {
+		const cfg = JSON.parse(row?.config || "{}") as { workMode?: string };
+		return cfg.workMode === "issues" ? "issues" : "direct";
+	} catch {
+		return "direct";
+	}
+}
+
+/**
+ * The next open GitHub issue to work on a repo, for issues-mode: lowest number first,
+ * skipping any the caller excludes (declined this Loop run) and the one already in an active
+ * session. Returns the full detail (body included) so the console can pre-fill the objective,
+ * or null when the backlog is empty. Never throws (listIssues/readIssue degrade to []/null).
+ */
+/** Pure selection: lowest-numbered issue not excluded (deterministic ordering). Exported for
+ *  tests — the ordering/skip rule is the part worth pinning. */
+export function pickNextIssue<T extends { number: number }>(issues: T[], exclude: Set<number>): T | null {
+	return [...issues].sort((a, b) => a.number - b.number).find((i) => !exclude.has(i.number)) ?? null;
+}
+
+async function nextOpenIssue(env: Env, userId: string, githubRepo: string, opts: { labels?: string; exclude: Set<number> }): Promise<IssueDetail | null> {
+	const issues = await listIssues(env, userId, githubRepo, { state: "open", labels: opts.labels });
+	const next = pickNextIssue(issues, opts.exclude);
+	return next ? readIssue(env, userId, githubRepo, next.number) : null;
+}
+
 // ── Repos ────────────────────────────────────────────────────────────────
 
 codingRoutes.get("/:instanceId/coding/repos", async (c) => {
@@ -351,6 +386,59 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/issues/:number", async (c) =
 	if (!Number.isFinite(number)) return c.json({ error: "Invalid issue number" }, 400);
 	const issue = await readIssue(c.env, uid, repo.githubRepo, number);
 	if (!issue) throw new HttpError(404, "Issue not found");
+	return c.json({ issue });
+});
+
+/**
+ * Work mode (instance-wide): `direct` = you type each Loop objective; `issues` = the Loop
+ * sources its objective from the next open GitHub issue (approve-per-issue). Read-merge-write
+ * on the instance config JSON — no migration.
+ */
+codingRoutes.get("/:instanceId/coding/work-mode", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	return c.json({ workMode: await readWorkMode(c.env, instanceId, uid) });
+});
+
+codingRoutes.put("/:instanceId/coding/work-mode", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const body = (await c.req.json().catch(() => ({}))) as { workMode?: unknown };
+	const workMode: WorkMode = body.workMode === "issues" ? "issues" : "direct";
+	const row = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, uid).first<{ config: string }>();
+	let cfg: Record<string, unknown> = {};
+	try {
+		cfg = JSON.parse(row?.config || "{}");
+	} catch {
+		/* overwrite a corrupt config */
+	}
+	cfg.workMode = workMode;
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, uid)
+		.run();
+	return c.json({ workMode });
+});
+
+/**
+ * The next open issue to work on this repo (issues-mode Loop sources its objective from
+ * here). Lowest-numbered open issue, skipping `?exclude=1,2` (declined this run) and the one
+ * already in an active session. `?labels=` narrows/orders by label. Returns `{ issue: null }`
+ * when the backlog is empty. 400 for local-only repos (no GitHub connection).
+ */
+codingRoutes.get("/:instanceId/coding/repos/:repoId/next-issue", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	if (!repo) throw new HttpError(404, "Repo not found");
+	if (!repo.githubRepo || !repo.githubRepo.includes("/")) {
+		return c.json({ error: "This repo isn't connected to GitHub — add it by owner/repo or a GitHub URL to use issues." }, 400);
+	}
+	const exclude = new Set<number>();
+	for (const n of (c.req.query("exclude") || "").split(",")) {
+		const v = Number.parseInt(n, 10);
+		if (Number.isFinite(v)) exclude.add(v);
+	}
+	// Don't re-propose the issue already being worked in an active session on this repo.
+	const active = await getActiveSessionForRepo(c.env, instanceId, uid, repo.id);
+	if (active?.issueNumber) exclude.add(active.issueNumber);
+	const issue = await nextOpenIssue(c.env, uid, repo.githubRepo, { labels: c.req.query("labels") || undefined, exclude });
 	return c.json({ issue });
 });
 
