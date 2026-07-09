@@ -30,6 +30,8 @@ export interface MemoryEntry {
 	type: "identity" | "knowledge" | "preference" | "skill" | "context";
 	content: string;
 	updatedAt: string;
+	/** Who wrote this entry. Absent on legacy entries (treated as agent-written). */
+	source?: "agent" | "user" | "summary";
 }
 
 export interface AgentTask {

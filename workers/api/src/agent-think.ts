@@ -72,8 +72,12 @@ export async function runAgentThink(opts: {
 
 	if (memory.length > 0) {
 		systemPrompt += "\n\n## Your Memory\n";
+		systemPrompt +=
+			"To change a fact below, write_memory to its EXACT key; never add a new key for a fact that already has one. " +
+			"Entries marked (user-set) were set directly by the user — never overwrite or delete them unless the user explicitly asks.\n";
 		for (const m of memory) {
-			systemPrompt += `- [${m.type}] ${m.key}: ${m.content}\n`;
+			const userSet = m.source === "user" ? " (user-set)" : "";
+			systemPrompt += `- [${m.type}] ${m.key}${userSet}: ${m.content}\n`;
 		}
 	}
 

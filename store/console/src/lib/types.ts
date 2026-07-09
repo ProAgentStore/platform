@@ -108,6 +108,7 @@ export interface MemoryEntry {
 	type: string;
 	content: string;
 	updatedAt?: string;
+	source?: string;
 }
 
 export interface Credential {

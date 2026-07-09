@@ -503,12 +503,14 @@ export class AgentDO extends DurableObject<Env> {
 		key: string,
 		type: string,
 		content: string,
+		source?: MemoryEntry["source"],
 	): Promise<void> {
 		const entry: MemoryEntry = {
 			key,
 			type: type as MemoryEntry["type"],
 			content,
 			updatedAt: new Date().toISOString(),
+			...(source ? { source } : {}),
 		};
 		await this.ctx.storage.put(`mem:${key}`, entry);
 	}
@@ -523,14 +525,15 @@ export class AgentDO extends DurableObject<Env> {
 	}
 
 	private async handleSetMemory(request: Request): Promise<Response> {
-		const { key, type, content } = await request.json<{
+		const { key, type, content, source } = await request.json<{
 			key: string;
 			type: string;
 			content: string;
+			source?: MemoryEntry["source"];
 		}>();
 		if (!key || !type || content === undefined)
 			return json({ error: "key, type, content required" }, 400);
-		await this.setMemory(key, type, content);
+		await this.setMemory(key, type, content, source);
 		return json({ success: true });
 	}
 

@@ -891,6 +891,7 @@ Extract key facts about the user, their preferences, decisions made, and informa
 						type: "knowledge",
 						content: `${fact.subject} ${fact.predicate} ${fact.object}`,
 						updatedAt: new Date().toISOString(),
+						source: "summary",
 					};
 					await this.doStorage.put(`mem:${key}`, entry);
 				}

@@ -43,7 +43,7 @@ export const AGENT_TOOLS: ToolDef[] = [
 	{
 		name: "write_memory",
 		description:
-			"Write a key-value pair to your persistent memory. Survives across conversations.",
+			"Store or update a fact in persistent memory (survives across conversations). Writing to an existing key OVERWRITES it. Check your current memory keys first: if one already covers this fact, write to that exact key — NEVER create a second key for the same fact (e.g. do not add user_language when language exists).",
 		parameters: {
 			key: { type: "string", description: "Memory key", required: true },
 			type: {
@@ -60,7 +60,8 @@ export const AGENT_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "delete_memory",
-		description: "Delete a memory entry by key.",
+		description:
+			"Delete a memory entry by its exact key. Only claim a memory was deleted after this returns success.",
 		parameters: {
 			key: {
 				type: "string",
@@ -135,6 +136,16 @@ export const AGENT_TOOLS: ToolDef[] = [
 	},
 ];
 
+/** One-line snapshot of all memory keys, appended to write/delete results so the
+ *  model immediately sees duplicates it just created (e.g. `language` AND `user_language`). */
+async function memoryKeyList(storage: DurableObjectStorage): Promise<string> {
+	const all = await storage.list<MemoryEntry>({ prefix: "mem:" });
+	const keys = [...all.keys()].map((k) => k.slice("mem:".length)).sort();
+	return keys.length === 0
+		? "Memory is now empty."
+		: `All memory keys: ${keys.join(", ")}`;
+}
+
 /** Execute a tool call against DO storage + R2. */
 export async function executeTool(
 	call: ToolCallRequest,
@@ -174,11 +185,12 @@ export async function executeTool(
 					type: type as MemoryEntry["type"],
 					content,
 					updatedAt: new Date().toISOString(),
+					source: "agent",
 				};
 				await storage.put(`mem:${key}`, entry);
 				return {
 					name: call.name,
-					content: `Stored memory: ${key}`,
+					content: `Stored memory: ${key}. ${await memoryKeyList(storage)}`,
 					success: true,
 				};
 			}
@@ -187,10 +199,16 @@ export async function executeTool(
 				const key = call.input.key as string;
 				if (!key)
 					return { name: call.name, content: "key required", success: false };
-				await storage.delete(`mem:${key}`);
+				const existed = await storage.delete(`mem:${key}`);
+				if (!existed)
+					return {
+						name: call.name,
+						content: `No memory with key: ${key}. ${await memoryKeyList(storage)}`,
+						success: false,
+					};
 				return {
 					name: call.name,
-					content: `Deleted memory: ${key}`,
+					content: `Deleted memory: ${key}. ${await memoryKeyList(storage)}`,
 					success: true,
 				};
 			}
