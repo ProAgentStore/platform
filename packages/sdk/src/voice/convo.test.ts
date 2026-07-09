@@ -60,6 +60,17 @@ describe("matchVoiceCommand", () => {
 		expect(matchVoiceCommand("")).toBeNull();
 		expect(matchVoiceCommand("hello there")).toBeNull();
 	});
+
+	it("matches repeat phrasings in the supported voice languages (native punctuation)", () => {
+		for (const phrase of ["再说一遍。", "重复一遍", "もう一度。", "다시 말해줘", "¿Qué dijiste?", "Répète.", "Wie bitte?", "De novo!"]) {
+			expect(matchVoiceCommand(phrase)).toBe("repeat");
+		}
+	});
+
+	it("does NOT hijack a real sentence in another language", () => {
+		expect(matchVoiceCommand("我想再说一遍这个故事给你听")).toBeNull();
+		expect(matchVoiceCommand("repite conmigo la frase completa")).toBeNull();
+	});
 });
 
 describe("resolveVoiceMode", () => {

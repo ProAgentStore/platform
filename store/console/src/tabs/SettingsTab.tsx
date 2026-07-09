@@ -96,6 +96,14 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				body: JSON.stringify({ settings: { [id]: value } }),
 			});
 			if (d.settings) setAgentSettings(d.settings);
+			// A voiceLanguage field also updated the server's voice-settings language —
+			// mirror it locally so the Voice section's Language select (same page)
+			// doesn't show a stale value until reload.
+			const field = agentFields.find((f) => f.id === id);
+			if (field?.voiceLanguage && typeof value === "string") {
+				setLanguage(value);
+				setVoiceSettings((s) => ({ ...(s || {}), language: value }));
+			}
 			setSettingsMsg("Saved — applies on your next turn");
 			setTimeout(() => setSettingsMsg(""), 2500);
 		} catch (e) {

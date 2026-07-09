@@ -104,17 +104,49 @@ export function resolveVoiceStatus(input: {
 export type VoiceCommand = "repeat";
 
 /**
+ * "Repeat" phrasings in the languages the platform's voice stack supports (the
+ * voice-settings Language list). Whole-utterance matches only — high precision,
+ * so a real sentence containing the word is never hijacked. Kept as plain lists
+ * (not regex) so adding a language is data, not syntax.
+ */
+const REPEAT_PHRASES = new Set([
+	// English
+	"repeat", "repeat that", "repeat it", "repeat again", "repeat please",
+	"say again", "say that again", "say it again", "again please", "come again",
+	"pardon", "what did you say",
+	// Chinese (Mandarin)
+	"再说一遍", "再说一次", "重复一遍", "再来一遍",
+	// Spanish (¿? stripped below)
+	"repite", "repítelo", "otra vez", "qué dijiste",
+	// French
+	"répète", "répétez", "encore une fois",
+	// German
+	"wiederhole", "nochmal", "wie bitte",
+	// Italian
+	"ripeti", "un'altra volta",
+	// Portuguese
+	"repita", "de novo",
+	// Japanese
+	"もう一度", "もう一回",
+	// Korean
+	"다시", "다시 말해줘", "다시 말해 줘",
+	// Hindi
+	"फिर से कहो", "दोबारा कहो",
+]);
+
+/**
  * Detect a hands-free voice COMMAND in a finished transcript. Right now just
- * "repeat" (+ common phrasings) → re-speak the agent's last reply. Matches only when
- * the whole utterance IS the command (trailing punctuation ignored), so a normal
- * sentence that merely contains the word isn't hijacked.
+ * "repeat" (+ common phrasings, in every supported voice language) → re-speak the
+ * agent's last reply. Matches only when the whole utterance IS the command
+ * (punctuation ignored), so a normal sentence that merely contains it isn't hijacked.
  */
 export function matchVoiceCommand(text: string): VoiceCommand | null {
-	// Whisper punctuates transcripts, so strip punctuation + collapse spaces before
-	// matching (e.g. "Repeat, please." → "repeat please").
-	const t = text.toLowerCase().replace(/[.,!?]/g, "").replace(/\s+/g, " ").trim();
-	if (/^(repeat|repeat (that|it|again|please)|say (that |it )?again|again please|come again|pardon|what did you say)$/.test(t)) {
-		return "repeat";
-	}
-	return null;
+	// Whisper punctuates transcripts, so strip punctuation (Latin + CJK + inverted
+	// Spanish marks) + collapse spaces before matching ("Repeat, please." / "再说一遍。").
+	const t = text
+		.toLowerCase()
+		.replace(/[.,!?¿¡。，！？、]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+	return REPEAT_PHRASES.has(t) ? "repeat" : null;
 }
