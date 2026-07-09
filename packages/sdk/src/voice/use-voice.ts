@@ -88,6 +88,16 @@ async function uploadVoiceAudio(instanceId: string, turnId: string, blob: Blob):
 	// NOTE: no `keepalive` — it caps the body at 64KB, but a voice recording is far
 	// bigger, so keepalive made the PUT fail outright. Retry a few times so a transient
 	// connection drop (common on mobile) doesn't lose the recording.
+	// Mirror the server's guards so a doomed upload is skipped with a SPECIFIC log line
+	// instead of a bare 400 (the log's "HTTP 400" entries were undiagnosable).
+	if (!blob.size) {
+		reportClientError("voice-audio", "not saved: empty recording blob");
+		return;
+	}
+	if (blob.size > 5 * 1024 * 1024) {
+		reportClientError("voice-audio", `not saved: recording too large (${(blob.size / 1024 / 1024).toFixed(1)}MB > 5MB cap)`);
+		return;
+	}
 	const url = `${API}/v1/instances/${instanceId}/voice-audio/${turnId}`;
 	let lastErr = "";
 	for (let attempt = 0; attempt < 3; attempt++) {
@@ -98,7 +108,9 @@ async function uploadVoiceAudio(instanceId: string, turnId: string, blob: Blob):
 				body: blob,
 			});
 			if (res.ok) return;
-			lastErr = `HTTP ${res.status}`;
+			// Keep the server's reason — "HTTP 400" alone is undiagnosable in the log.
+			const detail = await res.text().catch(() => "");
+			lastErr = `HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`;
 			if (res.status < 500) break; // 4xx won't succeed on retry
 		} catch (e) {
 			lastErr = e instanceof Error ? e.message : String(e);
@@ -362,9 +374,19 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [instanceId]);
 
 	const ensureTts = useCallback(async () => {
-		if (!ttsRef.current) ttsRef.current = await createTts(instanceId, { technical: technicalRef.current });
-		// Keep in sync if surfaces resolved after the TTS was created (single instance reused).
-		else ttsRef.current.technical = technicalRef.current === true;
+		if (!ttsRef.current) {
+			ttsRef.current = await createTts(instanceId, { technical: technicalRef.current });
+		} else {
+			// The single TTS instance lives for the whole page session — keep it in sync
+			// with current settings (provider/voice/speed/language can all change in
+			// Settings mid-session; getVoiceConfig is cached so this is cheap).
+			const cfg = await getVoiceConfig(instanceId);
+			ttsRef.current.provider = cfg.ttsProvider;
+			ttsRef.current.voice = cfg.voice;
+			ttsRef.current.speed = cfg.speed;
+			ttsRef.current.language = cfg.language;
+			ttsRef.current.technical = technicalRef.current === true;
+		}
 		return ttsRef.current;
 	}, [instanceId]);
 

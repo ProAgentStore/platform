@@ -83,6 +83,37 @@ describe("VoiceTts.unlock", () => {
 		vi.unstubAllGlobals();
 	});
 
+	it("browser voice speaks in the configured language with a matching voice", async () => {
+		const zhVoice = { lang: "zh-CN", name: "Tingting" };
+		const spoken: Array<{ lang: string; voice: unknown }> = [];
+		const synth = {
+			cancel() {},
+			resume() {},
+			getVoices: () => [{ lang: "en-US", name: "Samantha" }, zhVoice],
+			speak: vi.fn((u: { lang: string; voice: unknown; onend?: (() => void) | null }) => {
+				spoken.push({ lang: u.lang, voice: u.voice });
+				u.onend?.();
+			}),
+		};
+		vi.stubGlobal("window", { speechSynthesis: synth });
+		vi.stubGlobal("speechSynthesis", synth);
+		vi.stubGlobal("SpeechSynthesisUtterance", class {
+			text: string;
+			lang = "";
+			voice: unknown = null;
+			rate = 1;
+			onend: (() => void) | null = null;
+			onerror: (() => void) | null = null;
+			constructor(t: string) { this.text = t; }
+		});
+
+		await new VoiceTts("browser", { language: "zh-CN" }).speak("你好");
+
+		expect(spoken).toHaveLength(1);
+		expect(spoken[0].lang).toBe("zh-CN");
+		expect(spoken[0].voice).toBe(zhVoice);
+	});
+
 	it("resumes a suspended SpeechSynthesis + speaks a silent priming utterance", async () => {
 		const speak = vi.fn();
 		const resume = vi.fn();

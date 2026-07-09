@@ -256,8 +256,11 @@ export class VoiceStt {
 		form.append("model", this.model);
 		form.append("language", this.language.slice(0, 2));
 		// Vocabulary bias — nudges the model toward domain words (a developer's "bugs"
-		// isn't "bars"). Only sent when non-empty so generic chat stays unbiased.
-		if (this.transcribePrompt) form.append("prompt", this.transcribePrompt);
+		// isn't "bars"). Only sent when non-empty AND transcribing English: the term list
+		// is English prose, and Whisper's prompt hints the output language — pairing it
+		// with e.g. language=zh pulls a Chinese speaker's words toward English.
+		if (this.transcribePrompt && this.language.toLowerCase().startsWith("en"))
+			form.append("prompt", this.transcribePrompt);
 		// Stream the transcript for a "live" feel — words land as they're recognised
 		// instead of one blob after a pause. whisper-1 ignores streaming, so only the
 		// gpt-4o-transcribe models get it; everything else takes the plain json path.

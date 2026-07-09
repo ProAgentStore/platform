@@ -106,6 +106,7 @@ export async function createTts(
 		apiKey: cfg.apiKey,
 		voice: cfg.voice,
 		speed: cfg.speed,
+		language: cfg.language,
 		technical: opts.technical,
 	});
 }

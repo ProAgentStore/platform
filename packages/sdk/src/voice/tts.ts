@@ -53,6 +53,10 @@ export interface TtsOptions {
 	apiKey?: string;
 	voice?: string;
 	speed?: number;
+	/** BCP-47 language for the browser voice (Settings → Voice → Language). Without it
+	 *  SpeechSynthesis picks the system-default (usually English) voice, which mangles
+	 *  replies in any other language. OpenAI TTS is multilingual and ignores it. */
+	language?: string;
 	/** Technical agent (code explainer / coding): keep identifiers + file basenames in
 	 *  spoken output instead of gutting them to "a file". Default false (plain speech). */
 	technical?: boolean;
@@ -63,6 +67,7 @@ export class VoiceTts {
 	apiKey: string;
 	voice: string;
 	speed: number;
+	language: string;
 	technical: boolean;
 	speaking = false;
 	private _audioCtx: AudioContext | null = null;
@@ -76,6 +81,7 @@ export class VoiceTts {
 		this.apiKey = opts.apiKey || "";
 		this.voice = opts.voice || "alloy";
 		this.speed = opts.speed || 100;
+		this.language = opts.language || "en-US";
 		this.technical = opts.technical === true;
 	}
 
@@ -170,6 +176,19 @@ export class VoiceTts {
 				// thinks they must tap to "unmute". resume() before speaking un-pauses it.
 				speechSynthesis.resume();
 				const u = new SpeechSynthesisUtterance(text);
+				// Speak in the configured language — without lang (and ideally a matching
+				// voice) the engine uses the system-default voice, which reads e.g. a
+				// Chinese reply as garbled English. Exact tag match first (zh-CN), then any
+				// voice of the same language (zh-*).
+				u.lang = this.language;
+				// getVoices is missing on some minimal implementations — lang alone still
+				// steers engines that support it.
+				const voices = typeof speechSynthesis.getVoices === "function" ? speechSynthesis.getVoices() : [];
+				const primary = this.language.split("-")[0].toLowerCase();
+				const match =
+					voices.find((v) => v.lang === this.language) ||
+					voices.find((v) => v.lang.toLowerCase().startsWith(`${primary}-`) || v.lang.toLowerCase() === primary);
+				if (match) u.voice = match;
 				u.rate = Math.max(0.5, Math.min(3, this.speed / 100));
 				// Some browsers (Chrome, intermittently) never fire onend — without a
 				// fallback the promise hangs, `speaking` stays true forever, and the
