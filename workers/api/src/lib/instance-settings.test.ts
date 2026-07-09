@@ -89,6 +89,8 @@ describe("settingsPromptBlock", () => {
 		expect(block).toContain("## Settings");
 		expect(block).toContain("They are authoritative");
 		expect(block).toContain("never store them in\nmemory");
+		// Settings changed mid-conversation must beat conversational momentum.
+		expect(block).toContain("CHANGED mid-conversation");
 		expect(block).toContain("- Target language: Chinese (Mandarin) (zh-CN)");
 		expect(block).toContain("- Level: Beginner (beginner)");
 		expect(block).toContain("- Corrections: on");

@@ -98,7 +98,9 @@ export function settingsPromptBlock(
 		"## Settings\n" +
 		"The subscriber configured these for you in the console Settings tab. They are authoritative:\n" +
 		"follow them exactly, never ask the user to provide or confirm them, and never store them in\n" +
-		"memory — the user changes them in Settings, not in chat.\n" +
+		"memory — the user changes them in Settings, not in chat. If the conversation history\n" +
+		"contradicts these values (e.g. you were using a different language earlier), the settings\n" +
+		"were CHANGED mid-conversation: follow the settings below, not the history, starting now.\n" +
 		lines.join("\n")
 	);
 }
