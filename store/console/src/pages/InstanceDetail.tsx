@@ -618,6 +618,7 @@ export default function InstanceDetail() {
 						isApply,
 						sessionId: urlSessionId,
 						boardColumns: instance?.capabilities?.boardColumns,
+						settingsSchema: instance?.capabilities?.settingsSchema,
 						setChildHeader,
 						onUnsubscribe: () => navigate("/instances"),
 					});

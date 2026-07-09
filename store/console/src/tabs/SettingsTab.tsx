@@ -1,14 +1,22 @@
 import { useState, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
+import type { SettingsField } from "../lib/types";
 
 interface Props {
 	instanceId: string;
 	isApply: boolean;
+	/** The agent's declared subscriber settings (from capabilities). */
+	settingsSchema?: SettingsField[];
 	onUnsubscribe: () => void;
 }
 
-export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Props) {
+export default function SettingsTab({ instanceId, isApply, settingsSchema, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
+	// Agent-declared settings: the schema prop is the fast path; the GET also returns
+	// `fields` so the form never depends on a stale instance-list cache.
+	const [agentFields, setAgentFields] = useState<SettingsField[]>(settingsSchema ?? []);
+	const [agentSettings, setAgentSettings] = useState<Record<string, string | number | boolean>>({});
+	const [settingsMsg, setSettingsMsg] = useState("");
 	const [runtimeInfo, setRuntimeInfo] = useState<Record<string, unknown> | null>(null);
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
@@ -27,6 +35,11 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 
 	useEffect(() => {
 		(async () => {
+			try {
+				const d = await api<{ settings?: Record<string, string | number | boolean>; fields?: SettingsField[] }>(`/v1/instances/${instanceId}/settings`);
+				setAgentSettings(d.settings || {});
+				if (d.fields?.length) setAgentFields(d.fields);
+			} catch {}
 			try {
 				const d = await api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`);
 				setRuntimeInfo(d);
@@ -73,6 +86,22 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
 	}, []);
+
+	// Agent settings save (patch semantics — only the changed field is sent).
+	const saveSetting = async (id: string, value: string | number | boolean) => {
+		setAgentSettings((s) => ({ ...s, [id]: value }));
+		try {
+			const d = await api<{ settings?: Record<string, string | number | boolean> }>(`/v1/instances/${instanceId}/settings`, {
+				method: "PUT",
+				body: JSON.stringify({ settings: { [id]: value } }),
+			});
+			if (d.settings) setAgentSettings(d.settings);
+			setSettingsMsg("Saved — applies on your next turn");
+			setTimeout(() => setSettingsMsg(""), 2500);
+		} catch (e) {
+			setSettingsMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
 
 	// Merge so a PUT (which replaces the whole object) doesn't wipe other settings.
 	const saveVoice = async (patch: Record<string, unknown>) => {
@@ -141,6 +170,66 @@ export default function SettingsTab({ instanceId, isApply, onUnsubscribe }: Prop
 
 	return (
 		<div>
+			{/* Agent settings — typed fields the agent declares (settingsSchema) */}
+			{agentFields.length > 0 && (
+				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+					<h3 className="text-base font-bold mb-1">Agent settings</h3>
+					<p className="text-sm text-muted mb-3">
+						Settings this agent understands. They apply to every conversation with it.
+					</p>
+					{agentFields.map((f) => (
+						<div key={f.id} className="mb-3">
+							<label className="block text-sm font-semibold mb-1">{f.label}</label>
+							{f.description && <p className="text-xs text-muted mb-1">{f.description}</p>}
+							{f.type === "select" && (
+								<select
+									value={String(agentSettings[f.id] ?? "")}
+									onChange={(e) => saveSetting(f.id, e.target.value)}
+									className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"
+								>
+									{agentSettings[f.id] === undefined && <option value="">Choose…</option>}
+									{(f.options || []).map((o) => (
+										<option key={o.value} value={o.value}>{o.label}</option>
+									))}
+								</select>
+							)}
+							{f.type === "toggle" && (
+								<label className="flex items-center gap-2 text-sm cursor-pointer">
+									<input
+										type="checkbox"
+										checked={agentSettings[f.id] === true}
+										onChange={(e) => saveSetting(f.id, e.target.checked)}
+										className="w-4 h-4 accent-accent"
+									/>
+									<span className="text-muted">Enabled</span>
+								</label>
+							)}
+							{f.type === "text" && (
+								<input
+									value={String(agentSettings[f.id] ?? "")}
+									onChange={(e) => setAgentSettings((s) => ({ ...s, [f.id]: e.target.value }))}
+									onBlur={(e) => saveSetting(f.id, e.target.value)}
+									className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-96"
+								/>
+							)}
+							{f.type === "number" && (
+								<input
+									type="number"
+									value={agentSettings[f.id] === undefined ? "" : Number(agentSettings[f.id])}
+									onChange={(e) => setAgentSettings((s) => ({ ...s, [f.id]: Number(e.target.value) }))}
+									onBlur={(e) => { const n = Number(e.target.value); if (Number.isFinite(n)) saveSetting(f.id, n); }}
+									className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-40"
+								/>
+							)}
+							{f.voiceLanguage && (
+								<p className="text-xs text-muted mt-1">Also sets the voice language for speech recognition and speaking.</p>
+							)}
+						</div>
+					))}
+					{settingsMsg && <div className="text-sm text-muted mt-1">{settingsMsg}</div>}
+				</div>
+			)}
+
 			{/* Board maintenance */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Board maintenance</h3>

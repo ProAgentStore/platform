@@ -4,6 +4,7 @@ import type { AgentMessage, AgentState, AgentTask, MemoryEntry } from "./agent-t
 import { TOOL_CAPABLE_MODELS } from "./agent-do-prompt.js";
 import { buildAgentToolDefinitions, storageToolNameSet, toolNamesFor } from "./agent-do-tools.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
+import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
@@ -55,7 +56,27 @@ export async function runAgentThink(opts: {
 	// (e.g. a Coder never gets search_knowledge, so it can't hallucinate an empty index).
 	const capabilities = await resolveAgentCapabilities(env, state.agentId);
 
+	// Subscriber instance config (typed settings values + Rules & Tips). state.agentId
+	// is the INSTANCE id for instance DOs; a template/preview DO has no row → stays
+	// empty. Best-effort: a failed read must never block the turn.
+	let instanceCfg: Record<string, unknown> = {};
+	try {
+		const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1")
+			.bind(state.agentId)
+			.first<{ config: string | null }>();
+		if (row?.config) instanceCfg = JSON.parse(row.config) as Record<string, unknown>;
+	} catch { /* skip silently */ }
+
 	let systemPrompt = state.systemPrompt;
+
+	// Rules & Tips (specialInstructions) — the subscriber's standing free-text rules.
+	// Injected right after the base prompt so they take precedence; previously these
+	// only reached the workflow brains (apply/coding), never the Assistant chat.
+	const subscriberRules =
+		typeof instanceCfg.specialInstructions === "string" ? instanceCfg.specialInstructions.trim() : "";
+	if (subscriberRules) {
+		systemPrompt += `\n\n## Subscriber Rules\nStanding rules your subscriber set for you — follow them:\n${subscriberRules}`;
+	}
 
 	// Retrieved RAG content is UNTRUSTED — it comes from documents, ingested URLs,
 	// repo files, and public webhook payloads, any of which an attacker can author.
@@ -98,6 +119,18 @@ export async function runAgentThink(opts: {
 				systemPrompt += `- ${key}: ${value}\n`;
 			}
 		}
+	}
+
+	// Typed agent settings (declared settingsSchema + subscriber's values) — the
+	// deterministic home for durable config like a tutor's target language, so it
+	// never depends on the model remembering (or memorizing) it.
+	const settingsSchema = capabilities.settingsSchema ?? [];
+	if (settingsSchema.length) {
+		const settingsBlock = settingsPromptBlock(
+			settingsSchema,
+			resolveSettingsValues(settingsSchema, instanceCfg.settings),
+		);
+		if (settingsBlock) systemPrompt += `\n\n${settingsBlock}`;
 	}
 
 	// Repo-chat: list the repositories actually indexed, read live from the DO so

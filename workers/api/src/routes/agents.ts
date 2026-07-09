@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { HttpError, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
@@ -450,6 +451,49 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 		.bind(JSON.stringify(config), id)
 		.run();
 	return c.json({ customSurfaces });
+});
+
+/** Read the agent's declared subscriber-settings schema (owner only). */
+agentRoutes.get("/:id/settings-schema", async (c) => {
+	const session = await requireUser(c);
+	const id = c.req.param("id");
+	const row = await c.env.DB.prepare("SELECT owner_id, config FROM agents WHERE (id = ?1 OR slug = ?1)")
+		.bind(id)
+		.first<{ owner_id: string; config: string | null }>();
+	if (!row) throw new HttpError(404, "Agent not found");
+	if (row.owner_id !== session.uid && !session.roles.includes("admin")) {
+		throw new HttpError(403, "Not your agent");
+	}
+	let settingsSchema: unknown = [];
+	try {
+		const config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {};
+		settingsSchema = sanitizeSettingsSchema(config.settingsSchema) ?? [];
+	} catch { /* malformed config */ }
+	return c.json({ settingsSchema });
+});
+
+/** Declare the agent's subscriber-settings schema — owner only. Stored at TOP-LEVEL
+ *  config.settingsSchema (sibling of capabilities); subscribers set values on their
+ *  instance's Settings tab and the chat prompt reads them as a `## Settings` block. */
+agentRoutes.put("/:id/settings-schema", async (c) => {
+	const session = await requireUser(c);
+	const id = c.req.param("id");
+	const row = await c.env.DB.prepare("SELECT owner_id, config FROM agents WHERE id = ?1")
+		.bind(id)
+		.first<{ owner_id: string; config: string | null }>();
+	if (!row) throw new HttpError(404, "Agent not found");
+	if (row.owner_id !== session.uid && !session.roles.includes("admin")) {
+		throw new HttpError(403, "Not your agent");
+	}
+	const body = (await c.req.json().catch(() => ({}))) as { settingsSchema?: unknown };
+	const settingsSchema = sanitizeSettingsSchema(body.settingsSchema) ?? [];
+	let config: Record<string, unknown> = {};
+	try { config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {}; } catch { config = {}; }
+	config.settingsSchema = settingsSchema;
+	await c.env.DB.prepare("UPDATE agents SET config = ?1, updated_at = datetime('now') WHERE id = ?2")
+		.bind(JSON.stringify(config), id)
+		.run();
+	return c.json({ settingsSchema });
 });
 
 /** Clone/fork a published agent as your own draft. */

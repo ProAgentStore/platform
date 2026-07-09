@@ -69,6 +69,48 @@ export default function AgentDetail() {
 		}
 	};
 
+	// Subscriber settings schema — typed fields subscribers set on their instance's
+	// Settings tab; values are injected into the chat prompt. Options edited as one
+	// `value | Label` per line.
+	type SField = { id: string; label: string; type: string; description: string; optionsText: string; defaultValue: string; voiceLanguage: boolean };
+	const [sFields, setSFields] = useState<SField[]>([]);
+	const loadSettingsSchema = useCallback(async () => {
+		try {
+			const d = await api<{ settingsSchema?: Array<{ id: string; label: string; type: string; description?: string; options?: Array<{ value: string; label: string }>; default?: string | number | boolean; voiceLanguage?: boolean }> }>(`/v1/agents/${id}/settings-schema`);
+			setSFields((d.settingsSchema || []).map((f) => ({
+				id: f.id,
+				label: f.label,
+				type: f.type,
+				description: f.description || "",
+				optionsText: (f.options || []).map((o) => (o.label === o.value ? o.value : `${o.value} | ${o.label}`)).join("\n"),
+				defaultValue: f.default === undefined ? "" : String(f.default),
+				voiceLanguage: f.voiceLanguage === true,
+			})));
+		} catch { /* none */ }
+	}, [id]);
+	const saveSettingsSchema = async () => {
+		const wire = sFields.map((f) => {
+			const options = f.optionsText.split("\n").flatMap((line) => {
+				const [value, label] = line.split("|").map((s) => s.trim());
+				return value ? [{ value, label: label || value }] : [];
+			});
+			let def: string | number | boolean | undefined;
+			if (f.defaultValue.trim()) {
+				if (f.type === "number") def = Number(f.defaultValue);
+				else if (f.type === "toggle") def = f.defaultValue.trim() === "true";
+				else def = f.defaultValue.trim();
+			}
+			return { id: f.id.trim(), label: f.label.trim(), type: f.type, description: f.description.trim() || undefined, options: f.type === "select" ? options : undefined, default: def, voiceLanguage: f.type === "select" && f.voiceLanguage ? true : undefined };
+		});
+		try {
+			await api(`/v1/agents/${id}/settings-schema`, { method: "PUT", body: JSON.stringify({ settingsSchema: wire }) });
+			await loadSettingsSchema(); // re-set from the server so the creator sees exactly what was kept
+			alert("Subscriber settings saved.");
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	const loadAgent = useCallback(async () => {
 		if (!id) return;
 		try {
@@ -148,8 +190,8 @@ export default function AgentDetail() {
 		else if (tab === "memory") loadMemory();
 		else if (tab === "tasks") loadTasks();
 		else if (tab === "analytics") loadAnalytics();
-		else if (tab === "settings") { loadVersions(); loadSurfaces(); }
-	}, [tab, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions]);
+		else if (tab === "settings") { loadVersions(); loadSurfaces(); loadSettingsSchema(); }
+	}, [tab, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions, loadSettingsSchema]);
 
 	const saveSettings = async () => {
 		if (!id) return;
@@ -342,6 +384,47 @@ export default function AgentDetail() {
 						<div className="flex gap-2 mt-3">
 							<button type="button" onClick={() => setSurfaces(cs => [...cs, { id: "", label: "", bundleUrl: "" }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add surface</button>
 							<button type="button" onClick={saveSurfaces} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save surfaces</button>
+						</div>
+					</div>
+
+					{/* Subscriber settings (typed per-instance settings schema) */}
+					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
+						<h3 className="text-base font-semibold mb-1">Subscriber settings</h3>
+						<p className="text-xs text-muted mb-3">Typed settings each subscriber sets on their instance's Settings tab — injected into every chat as authoritative configuration (e.g. a tutor's target language). For selects, one option per line as <code>value | Label</code>.</p>
+						<div className="flex flex-col gap-3">
+							{sFields.map((f, i) => (
+								<div key={i} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
+									<div className="flex gap-2 flex-wrap">
+										<input value={f.id} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. target_language)" className="flex-1 min-w-32 bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
+										<input value={f.label} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 min-w-32 bg-paper border border-line rounded px-2 py-1 text-sm" />
+										<select value={f.type} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, type: e.target.value } : x))} className="bg-paper border border-line rounded px-2 py-1 text-sm">
+											<option value="select">select</option>
+											<option value="text">text</option>
+											<option value="number">number</option>
+											<option value="toggle">toggle</option>
+										</select>
+										<button type="button" onClick={() => setSFields(fs => fs.filter((_, j) => j !== i))} className="text-red text-xs px-1.5">Remove</button>
+									</div>
+									<input value={f.description} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} placeholder="Description shown under the label (optional)" className="bg-paper border border-line rounded px-2 py-1 text-sm" />
+									<div className="flex gap-2 flex-wrap items-start">
+										{f.type === "select" && (
+											<textarea value={f.optionsText} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, optionsText: e.target.value } : x))} placeholder={"zh-CN | Chinese (Mandarin)\nes-ES | Spanish"} className="flex-1 min-w-48 min-h-[64px] bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
+										)}
+										<input value={f.defaultValue} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, defaultValue: e.target.value } : x))} placeholder={f.type === "toggle" ? "default: true / false" : "default (optional)"} className="w-44 bg-paper border border-line rounded px-2 py-1 text-sm" />
+										{f.type === "select" && (
+											<label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer mt-1">
+												<input type="checkbox" checked={f.voiceLanguage} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, voiceLanguage: e.target.checked } : x))} className="w-3.5 h-3.5 accent-accent" />
+												Drives voice language (option values must be BCP-47 tags like zh-CN)
+											</label>
+										)}
+									</div>
+								</div>
+							))}
+							{sFields.length === 0 && <div className="text-xs text-muted-soft">No subscriber settings yet — add a field to give subscribers typed configuration.</div>}
+						</div>
+						<div className="flex gap-2 mt-3">
+							<button type="button" onClick={() => setSFields(fs => [...fs, { id: "", label: "", type: "select", description: "", optionsText: "", defaultValue: "", voiceLanguage: false }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add field</button>
+							<button type="button" onClick={saveSettingsSchema} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save settings</button>
 						</div>
 					</div>
 

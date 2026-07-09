@@ -3,6 +3,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
+import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
 import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, columnsForInstance } from "../lib/board.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
@@ -425,6 +426,52 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		.bind(JSON.stringify(cfg), instanceId, session.uid)
 		.run();
 	return c.json({ voiceSettings: settings });
+});
+
+/** Resolve the agent's declared settings schema for an OWNED instance (404 if not yours). */
+async function settingsSchemaForInstance(env: Env, instanceId: string, userId: string) {
+	const row = await env.DB.prepare(
+		`SELECT a.slug, a.category, a.config FROM agent_instances i
+		 JOIN agents a ON a.id = i.agent_id
+		 WHERE i.id = ?1 AND i.user_id = ?2`,
+	)
+		.bind(instanceId, userId)
+		.first<{ slug: string | null; category: string | null; config: string | null }>();
+	if (!row) throw new HttpError(404, "Instance not found");
+	return agentCapabilities(row).settingsSchema ?? [];
+}
+
+/** Read this instance's typed agent settings (values merged over schema defaults).
+ *  `fields` is included so the Settings tab never depends on a stale instance cache. */
+instanceRoutes.get("/:instanceId/settings", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const schema = await settingsSchemaForInstance(c.env, instanceId, session.uid);
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	return c.json({ settings: resolveSettingsValues(schema, cfg.settings), fields: schema });
+});
+
+/** Save typed agent settings (patch semantics — only sent fields change). A field
+ *  declared `voiceLanguage: true` also updates the instance's voice-settings
+ *  language, so STT/TTS follow the chosen language automatically. */
+instanceRoutes.put("/:instanceId/settings", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const schema = await settingsSchemaForInstance(c.env, instanceId, session.uid);
+	if (!schema.length) throw new HttpError(400, "This agent has no settings");
+	const body = (await c.req.json().catch(() => ({}))) as { settings?: unknown };
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	const result = applySettingsPatch(schema, cfg.settings, body.settings);
+	cfg.settings = result.settings;
+	if (result.voiceLanguageValue) {
+		const voice = (cfg.voiceSettings && typeof cfg.voiceSettings === "object" ? cfg.voiceSettings : { provider: "browser" }) as Record<string, unknown>;
+		voice.language = result.voiceLanguageValue.slice(0, 10);
+		cfg.voiceSettings = voice;
+	}
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, session.uid)
+		.run();
+	return c.json({ settings: resolveSettingsValues(schema, cfg.settings) });
 });
 
 /** Probe a registered runtime's health and capabilities through PAGS. */

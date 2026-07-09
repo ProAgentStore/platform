@@ -43,7 +43,27 @@ export interface Instance {
 		customSurfaces?: CustomSurface[];
 		/** The agent's single work-board columns (server always resolves a default). */
 		boardColumns?: BoardColumn[];
+		/** Typed per-instance settings the agent declares (rendered on Settings). */
+		settingsSchema?: SettingsField[];
 	};
+}
+
+/** One option of a select settings field (mirrors the server type). */
+export interface SettingsFieldOption {
+	value: string;
+	label: string;
+}
+
+/** One typed setting a subscriber configures per-instance (mirrors the server type). */
+export interface SettingsField {
+	id: string;
+	label: string;
+	description?: string;
+	type: "select" | "text" | "number" | "toggle";
+	options?: SettingsFieldOption[];
+	default?: string | number | boolean;
+	/** Saving this field also sets the voice language (option values are BCP-47 tags). */
+	voiceLanguage?: boolean;
 }
 
 /** One kanban column on an agent's single work board (mirrors the server type). */

@@ -4,7 +4,7 @@ import BoardTab from "../tabs/BoardTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
-import type { BoardColumn } from "./types";
+import type { BoardColumn, SettingsField } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Surface registry — the console "shell" loads agent UIs from here.
@@ -28,6 +28,8 @@ export interface SurfaceContext {
 	sessionId?: string;
 	/** The agent's declared board columns (server resolves a per-surface default). */
 	boardColumns?: BoardColumn[];
+	/** The agent's declared subscriber settings (rendered on the Settings tab). */
+	settingsSchema?: SettingsField[];
 	setChildHeader: (node: ReactNode | null) => void;
 	onUnsubscribe: () => void;
 }
@@ -100,8 +102,8 @@ export const SURFACES: SurfaceDef[] = [
 		icon: "⚙",
 		show: () => true,
 		scroll: true,
-		render: ({ instanceId, isApply, onUnsubscribe }) => (
-			<SettingsTab instanceId={instanceId} isApply={isApply} onUnsubscribe={onUnsubscribe} />
+		render: ({ instanceId, isApply, settingsSchema, onUnsubscribe }) => (
+			<SettingsTab instanceId={instanceId} isApply={isApply} settingsSchema={settingsSchema} onUnsubscribe={onUnsubscribe} />
 		),
 	},
 ];
