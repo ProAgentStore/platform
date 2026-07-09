@@ -77,17 +77,31 @@ const SILENCE_HALLUCINATIONS = new Set([
 	"so",
 	"uh",
 	"um",
+	// Whisper's classic Chinese silence hallucinations (subtitle-corpus artifacts).
+	// NOT "谢谢" (thank you) — that's a real thing a language learner says.
+	"谢谢观看",
+	"请订阅",
 ]);
 export function isNoiseTranscript(text: string): boolean {
 	if (!text) return true;
-	// Strip punctuation + collapse whitespace, then judge.
+	// Strip punctuation (Latin + CJK) + collapse whitespace, then judge.
 	const t = text
 		.toLowerCase()
-		.replace(/[.,!?"'’“”…·•\-–—:;()\[\]]/g, " ")
+		.replace(/[.,!?"'’“”…·•\-–—:;()\[\]。，！？、：；「」『』（）《》]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
 	if (!t) return true; // was only punctuation/whitespace (".", "…", "\"", …)
-	if (t.replace(/[^a-z0-9]/g, "").length < 2) return true; // a single stray letter/glyph
+	// Count letters/digits in ANY script — the old [^a-z0-9] strip deleted every CJK
+	// character, so a whole Chinese sentence counted as noise and the turn was
+	// silently discarded before it was ever sent.
+	const glyphs = t.replace(/[^\p{L}\p{N}]/gu, "");
+	if (!glyphs) return true;
+	// One Latin letter is a stray glyph; one CJK/Kana/Hangul char is a word ("好" = OK).
+	if (
+		glyphs.length < 2 &&
+		!/\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(glyphs)
+	)
+		return true;
 	return SILENCE_HALLUCINATIONS.has(t);
 }
 

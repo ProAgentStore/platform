@@ -18,6 +18,22 @@ describe("isNoiseTranscript", () => {
 			expect(isNoiseTranscript(real)).toBe(false);
 		}
 	});
+
+	it("KEEPS non-Latin speech — a Chinese sentence is not 'a stray glyph'", () => {
+		// The old [^a-z0-9] strip deleted every CJK character, so real Chinese turns
+		// were classified as noise and silently discarded before upload.
+		for (const real of ["你好，我叫小明。", "我想练习中文", "好", "はい、そうです", "안녕하세요"]) {
+			expect(isNoiseTranscript(real)).toBe(false);
+		}
+	});
+
+	it("still drops Chinese Whisper silence hallucinations and CJK-punctuation-only junk", () => {
+		for (const junk of ["谢谢观看", "请订阅", "。", "、…。"]) {
+			expect(isNoiseTranscript(junk)).toBe(true);
+		}
+		// "谢谢" (thank you) is a real learner utterance — must NOT be dropped.
+		expect(isNoiseTranscript("谢谢")).toBe(false);
+	});
 });
 
 describe("isTooShortToTranscribe", () => {
