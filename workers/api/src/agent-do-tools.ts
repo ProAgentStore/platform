@@ -13,6 +13,7 @@ import type { AgentCapabilities } from "./lib/agent-capabilities.js";
 const BASE = [
 	"read_memory",
 	"write_memory",
+	"delete_memory",
 	"get_tasks",
 	"create_task",
 	"update_task",
@@ -35,8 +36,9 @@ const APPLY = ["submit_job_application"] as const;
 /** Live coding-session awareness: list repos + read/drive the engine's terminal. */
 const CODING = ["list_coding_repos", "read_terminal", "send_to_cli"] as const;
 
-/** The full set — union of every group. Equals the historical CORE_TOOLS exactly, so a
- *  generic agent's tools are unchanged (no regression); only coding/repo agents prune. */
+/** The full set — union of every group. Equals the historical CORE_TOOLS plus
+ *  delete_memory (added so agents can consolidate stale/duplicate memory keys —
+ *  without it they could overwrite but never remove); only coding/repo agents prune. */
 const FULL: readonly string[] = [
 	...BASE,
 	...KB_READ,

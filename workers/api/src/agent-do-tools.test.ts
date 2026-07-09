@@ -67,6 +67,12 @@ describe("agent tool definition helpers", () => {
 		expect(names.has("fetch_url")).toBe(true);
 	});
 
+	it("every agent type can delete memory (needed to consolidate duplicate keys)", () => {
+		for (const c of [caps([]), caps(["coding"]), caps(["repo"]), caps(["apply"]), undefined]) {
+			expect(toolNamesFor(c).has("delete_memory")).toBe(true);
+		}
+	});
+
 	it("gives Repo Chat (repo surface) read-only knowledge, no writes/coding", () => {
 		const names = toolNamesFor(caps(["repo"]));
 		expect(names.has("search_knowledge")).toBe(true);
