@@ -63,14 +63,23 @@ export async function isRunnerOnline(env: Env, instanceId: string): Promise<bool
 	}
 }
 
-/** Send a command to the runner via the WebSocket relay DO. */
-export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown): Promise<T> {
+/** Short timeout for READ-type runner commands (terminal capture, snapshots, status). A
+ *  connected-but-hung runner (process wedged without closing the WS) would otherwise hold the
+ *  request for the full DEFAULT_TIMEOUT_MS (120s) — a ~1.5-3s capture poll must fail fast and
+ *  free the socket instead of stacking 2-minute waits in the RelayDO. Mutating commands
+ *  (act/clone/start) keep the long default. */
+export const READ_TIMEOUT_MS = 10_000;
+
+/** Send a command to the runner via the WebSocket relay DO. `opts.timeoutMs` caps how long
+ *  the relay waits for the runner's reply (defaults to the DO's 120s); pass READ_TIMEOUT_MS
+ *  for reads so a hung runner can't wedge the UI. */
+export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
 	if (!conn.env.RELAY) throw new Error("RELAY binding not configured");
 	const stub = conn.env.RELAY.get(conn.env.RELAY.idFromName(conn.instanceId));
 	const res = await stub.fetch(new Request("https://relay/command", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ method: "POST", path, body }),
+		body: JSON.stringify({ method: "POST", path, body, timeoutMs: opts?.timeoutMs }),
 	}));
 	if (res.status === 503) throw new Error("No runner connected — run `pags up`");
 	if (!res.ok) {

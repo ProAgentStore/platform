@@ -234,6 +234,9 @@ export interface NewSessionInput {
 	launchCommand?: string;
 	issueNumber?: number;
 	issueTitle?: string;
+	/** The machine that owns this session (instance_runtimes.runner_node), so a machine
+	 *  switch can suspend/resume by ownership. Null when no runner is registered. */
+	runnerNode?: string | null;
 }
 
 export async function listSessions(env: Env, instanceId: string, userId: string): Promise<CodingSessionRecord[]> {
@@ -270,8 +273,8 @@ export async function getSession(env: Env, instanceId: string, userId: string, s
 export async function createSession(env: Env, instanceId: string, userId: string, input: NewSessionInput): Promise<CodingSessionRecord> {
 	const id = `csess_${crypto.randomUUID()}`;
 	await env.DB.prepare(
-		`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status, tmux_session, launch_command, issue_number, issue_title)
-		 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9)`,
+		`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status, tmux_session, launch_command, issue_number, issue_title, runner_node)
+		 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10)`,
 	)
 		.bind(
 			id,
@@ -283,6 +286,7 @@ export async function createSession(env: Env, instanceId: string, userId: string
 			input.launchCommand ?? null,
 			input.issueNumber ?? null,
 			input.issueTitle ?? null,
+			input.runnerNode ?? null,
 		)
 		.run();
 	const session = await getSession(env, instanceId, userId, id);
@@ -295,28 +299,43 @@ export async function createSession(env: Env, instanceId: string, userId: string
  * takes over. The sessions aren't deleted (timeline/history preserved), just
  * marked suspended so the UI shows them as belonging to the old machine.
  */
-export async function suspendActiveSessions(env: Env, instanceId: string, userId: string): Promise<number> {
+export async function suspendSessionsFromOtherNodes(env: Env, instanceId: string, userId: string, runnerNode: string): Promise<number> {
+	// Suspend active sessions that DON'T belong to the machine now registering — they're
+	// the old machine's (or legacy NULL-owner) sessions, kept as history until their owner
+	// returns. The registering node's own active sessions are left untouched (a heartbeat /
+	// reconnect from the same machine must not suspend its live work).
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions
 		 SET status = 'suspended', updated_at = datetime('now')
-		 WHERE instance_id = ?1 AND user_id = ?2 AND status = 'active'`,
+		 WHERE instance_id = ?1 AND user_id = ?2 AND status = 'active'
+		   AND (runner_node IS NULL OR runner_node != ?3)`,
 	)
-		.bind(instanceId, userId)
+		.bind(instanceId, userId, runnerNode)
 		.run();
 	return res.meta.changes ?? 0;
 }
 
 /**
- * Reactivate suspended sessions — called when the original machine reconnects.
- * The runner will reattach to the tmux sessions on the next /start call.
+ * Reactivate the reconnecting machine's OWN suspended sessions. The runner reattaches to the
+ * tmux sessions on the next /start. Index-safe: resumes at most the newest suspended session
+ * per repo, and ONLY for repos with no active session already, so it can never violate
+ * idx_coding_sessions_one_active (which an unconditional bulk resume would).
  */
-export async function resumeSuspendedSessions(env: Env, instanceId: string, userId: string): Promise<number> {
+export async function resumeSessionsForNode(env: Env, instanceId: string, userId: string, runnerNode: string): Promise<number> {
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions
 		 SET status = 'active', ended_at = NULL, updated_at = datetime('now')
-		 WHERE instance_id = ?1 AND user_id = ?2 AND status = 'suspended'`,
+		 WHERE rowid IN (
+		   SELECT MAX(rowid) FROM coding_sessions
+		   WHERE instance_id = ?1 AND user_id = ?2 AND status = 'suspended' AND runner_node = ?3
+		   GROUP BY repo_id
+		 )
+		 AND repo_id NOT IN (
+		   SELECT repo_id FROM coding_sessions
+		   WHERE instance_id = ?1 AND user_id = ?2 AND status = 'active'
+		 )`,
 	)
-		.bind(instanceId, userId)
+		.bind(instanceId, userId, runnerNode)
 		.run();
 	return res.meta.changes ?? 0;
 }

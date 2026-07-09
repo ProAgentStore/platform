@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { callRunner, isRunnerOnline, type RunnerConn } from "./runner-client.js";
+import { callRunner, isRunnerOnline, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
 import type { Env } from "../types.js";
 
 /** Build a mock RELAY namespace. */
@@ -77,6 +77,28 @@ describe("callRunner (relay-only)", () => {
 		const relay = mockRelay(async () => Response.json({ error: "Internal" }, { status: 500 }));
 		const conn = mockConn({ RELAY: relay });
 		await expect(callRunner(conn, "/test")).rejects.toThrow("Runner /test");
+	});
+
+	it("forwards a short read timeout so a hung runner can't wedge a capture poll", async () => {
+		let seen: number | undefined = -1;
+		const relay = mockRelay(async (req) => {
+			seen = ((await req.json()) as { timeoutMs?: number }).timeoutMs;
+			return Response.json({ pane: "…" });
+		});
+		const conn = mockConn({ RELAY: relay });
+		await callRunner(conn, "/coding/capture", { sessionId: "s1" }, { timeoutMs: READ_TIMEOUT_MS });
+		expect(seen).toBe(READ_TIMEOUT_MS);
+	});
+
+	it("omits timeoutMs by default (relay keeps its long default for mutating commands)", async () => {
+		let seen: number | undefined = -1;
+		const relay = mockRelay(async (req) => {
+			seen = ((await req.json()) as { timeoutMs?: number }).timeoutMs;
+			return Response.json({ ok: true });
+		});
+		const conn = mockConn({ RELAY: relay });
+		await callRunner(conn, "/coding/act", { sessionId: "s1" });
+		expect(seen).toBeUndefined();
 	});
 
 	it("handles null JSON response from relay", async () => {

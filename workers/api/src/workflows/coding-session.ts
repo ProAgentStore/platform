@@ -9,7 +9,7 @@ import {
 	type CodingPaneSnapshot,
 	type CodingResult,
 } from "../lib/coding-loop.js";
-import { callRunner, getRunnerConn } from "../lib/runner-client.js";
+import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
@@ -63,7 +63,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		// waitIdle polls internally for minutes, so it needs a longer step budget than `retry`.
 		const idleRetry = { retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "10 minutes" as const };
 		let n = 0;
-		const capture = () => callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId });
+		const capture = () => callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS });
 
 		const deps: CodingDeps = {
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, capture) as Promise<CodingPaneSnapshot>,
@@ -186,7 +186,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			"watch-idle",
 			{ retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "15 minutes" as const },
 			async () => {
-				const capture = () => callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId });
+				const capture = () => callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS });
 				await sleep(2500); // let the CLI receive the input
 				let snap = await capture();
 				// Phase 1: wait for Claude to actually START on it (go non-idle), up to ~24s.

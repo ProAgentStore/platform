@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { callRunner, getRunnerConn } from "../lib/runner-client.js";
+import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { listIssues, readIssue } from "../lib/github-issues.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
@@ -19,6 +19,7 @@ import {
 	updateRepo,
 	updateRepoClone,
 } from "../lib/coding-store.js";
+import { getRuntime } from "./instances-runtime.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
@@ -438,6 +439,8 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	// Resolve which engine to launch: the chosen preset (engineId), else the repo's
 	// remembered default, else the instance default engine.
 	const { command, clientType } = await resolveEngine(c.env, instanceId, uid, body.engineId ?? body.clientType ?? repo.defaultClient);
+	// Stamp the owning machine so a later machine switch can suspend/resume by ownership.
+	const runtimeNow = await getRuntime(c.env, instanceId, uid);
 	let session: CodingSessionRecord;
 	try {
 		session = await createSession(c.env, instanceId, uid, {
@@ -446,6 +449,7 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 			launchCommand: command,
 			issueNumber: typeof body.issueNumber === "number" ? body.issueNumber : undefined,
 			issueTitle: typeof body.issueTitle === "string" ? body.issueTitle : undefined,
+			runnerNode: runtimeNow?.runner_node ?? null,
 		});
 	} catch {
 		// Lost a create race against the one-active-session-per-repo index — reuse
@@ -482,7 +486,7 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	const sessionId = c.req.param("sessionId");
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	if (!conn) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: false });
-	const snap = await callRunner(conn, "/coding/capture", { sessionId }).catch(() => null);
+	const snap = await callRunner(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
 	if (!snap) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: true });
 	return c.json({ ...(snap as object), runnerConnected: true });
 });
@@ -520,7 +524,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	let pane = "";
 	if (conn) {
-		const snap = (await callRunner(conn, "/coding/capture", { sessionId }).catch(() => null)) as { pane?: string } | null;
+		const snap = (await callRunner(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null)) as { pane?: string } | null;
 		pane = snap?.pane ?? "";
 	}
 
@@ -642,7 +646,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	const conn = await getRunnerConn(c.env, instanceId, uid);
 	let pane = "";
 	if (conn) {
-		const snap = (await callRunner(conn, "/coding/capture", { sessionId }).catch(() => null)) as { pane?: string } | null;
+		const snap = (await callRunner(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null)) as { pane?: string } | null;
 		pane = snap?.pane ?? "";
 	}
 	const memory = await contextForCopilot(c.env, sessionId);

@@ -11,7 +11,7 @@ import { runUserWorkersAi } from "./lib/user-ai.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
-import { callRunner, getRunnerConn, isRunnerOnline } from "./lib/runner-client.js";
+import { callRunner, getRunnerConn, isRunnerOnline, READ_TIMEOUT_MS } from "./lib/runner-client.js";
 import type { Env } from "./types.js";
 
 /**
@@ -162,7 +162,7 @@ export async function runAgentThink(opts: {
 						// Keep the FULL snapshot (pane + alive + runState), not just pane — those
 						// fields are what let describeTerminal tell live activity from idle scrollback.
 						const snap = conn
-							? await callRunner<{ pane?: string; alive?: boolean; runState?: string }>(conn, "/coding/capture", { sessionId: s.id }).catch(() => null)
+							? await callRunner<{ pane?: string; alive?: boolean; runState?: string }>(conn, "/coding/capture", { sessionId: s.id }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null)
 							: null;
 						const tail = await lastTerminal(env, s.id).catch(() => null);
 						return describeTerminal({

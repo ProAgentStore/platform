@@ -7,7 +7,7 @@ import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, column
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
-import { suspendActiveSessions, resumeSuspendedSessions } from "../lib/coding-store.js";
+import { suspendSessionsFromOtherNodes, resumeSessionsForNode } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
 import { parseLoopDecision } from "../lib/loop-decide.js";
@@ -257,18 +257,20 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		}
 	}
 
-	// Machine-switch session lifecycle:
-	// - Different machine → suspend active sessions (they belong to the old machine)
-	// - Same machine reconnecting → resume suspended sessions (they're back home)
+	// Machine-switch session lifecycle, driven by per-session OWNERSHIP (runner_node) rather
+	// than the last-registered node (the old comparison never matched on the reconnect path,
+	// so resume was dead and sessions stranded 'suspended' forever):
+	// - On a real node change → suspend sessions owned by the OTHER (departing) machine.
+	// - Always → resume THIS machine's OWN suspended sessions (index-safe, per-repo where free).
 	const prevRuntime = await getRuntime(c.env, instanceId, session.uid);
-	if (prevRuntime && prevRuntime.runner_node && runnerNode) {
-		if (prevRuntime.runner_node !== runnerNode) {
-			const suspended = await suspendActiveSessions(c.env, instanceId, session.uid).catch(() => 0);
-			if (suspended) console.log(`Suspended ${suspended} session(s) from ${prevRuntime.runner_node} → ${runnerNode}`);
-		} else {
-			const resumed = await resumeSuspendedSessions(c.env, instanceId, session.uid).catch(() => 0);
-			if (resumed) console.log(`Resumed ${resumed} suspended session(s) on ${runnerNode}`);
+	if (runnerNode) {
+		const nodeChanged = !!prevRuntime?.runner_node && prevRuntime.runner_node !== runnerNode;
+		if (nodeChanged) {
+			const suspended = await suspendSessionsFromOtherNodes(c.env, instanceId, session.uid, runnerNode).catch(() => 0);
+			if (suspended) console.log(`Suspended ${suspended} session(s) from ${prevRuntime?.runner_node} → ${runnerNode}`);
 		}
+		const resumed = await resumeSessionsForNode(c.env, instanceId, session.uid, runnerNode).catch(() => 0);
+		if (resumed) console.log(`Resumed ${resumed} suspended session(s) on ${runnerNode}`);
 	}
 
 	await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)

@@ -1,0 +1,13 @@
+-- Per-session ownership: which machine (runner_node) created/owns a coding session.
+--
+-- Machine-switch suspend/resume was driven by comparing the reconnecting node against the
+-- LAST-registered node (instance_runtimes.runner_node), which never matches on the path that
+-- matters: a session is suspended only when a DIFFERENT machine registers (so the stored node
+-- becomes that other machine), so when the ORIGINAL machine later reconnects it still differs
+-- → it hit the suspend branch again and resume never fired. Sessions stranded 'suspended'
+-- forever, breaking the documented "old machine's sessions resume when it reconnects".
+--
+-- With per-session ownership we can suspend sessions owned by OTHER nodes and resume the
+-- reconnecting node's OWN suspended sessions (per-repo, only where no active session already
+-- exists, so we never violate idx_coding_sessions_one_active). NULL = legacy/pre-stamp session.
+ALTER TABLE coding_sessions ADD COLUMN runner_node TEXT;
