@@ -43,6 +43,15 @@ describe("speechGateAvailable / createSpeechGate feature-detection", () => {
 });
 
 describe("speech gate", () => {
+	it("listens in the configured language (defaults to en-US)", () => {
+		const { instances, restore } = withFakeSR();
+		createSpeechGate({ lang: "zh-CN", onInterim: () => {} })!.start();
+		expect(instances[0].lang).toBe("zh-CN");
+		createSpeechGate({ onInterim: () => {} })!.start();
+		expect(instances[1].lang).toBe("en-US");
+		restore();
+	});
+
 	it("shows interim words and flags real speech, but NOT noise", () => {
 		const { instances, restore } = withFakeSR();
 		const interims: string[] = [];

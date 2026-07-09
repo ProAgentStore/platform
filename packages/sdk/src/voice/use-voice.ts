@@ -143,6 +143,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// silence / keyboard clicks / background noise never get uploaded to Whisper (which
 	// would hallucinate a phrase and send a phantom turn). Null on iOS Safari (no Web Speech).
 	const gateRef = useRef<SpeechGate | null>(null);
+	// The configured STT language (Settings → Voice → Language). The gate recognizer must
+	// hear the SAME language as the transcriber — an en-US gate listening to Chinese sees
+	// "no real words" and discards the turn before Whisper ever gets it.
+	const voiceLangRef = useRef("en-US");
+	const gateLangRef = useRef<string | null>(null);
 	const analyserRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode; source: MediaStreamAudioSourceNode; stream: MediaStream; ownsStream: boolean; raf: number } | null>(null);
 
 	// Flag: true while the agent is processing (mic should stay off)
@@ -177,8 +182,17 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// available). It shows live words as you speak and — at end-of-turn — tells us
 		// whether real speech actually happened, so silence/keyboard/noise never uploads.
 		if (sttIsWhisperRef.current && speechGateAvailable()) {
+			// Rebuild the gate when the configured language changed — SpeechRecognition's
+			// lang is fixed at construction, and a stale-language gate mis-hears (or
+			// discards) every turn in the new language.
+			if (gateRef.current && gateLangRef.current !== voiceLangRef.current) {
+				gateRef.current.stop();
+				gateRef.current = null;
+			}
 			if (!gateRef.current) {
+				gateLangRef.current = voiceLangRef.current;
 				gateRef.current = createSpeechGate({
+					lang: voiceLangRef.current,
 					onInterim: (text) => {
 						// Ignore the agent's own voice (echo tail), and paused/muted windows.
 						if (mutedRef.current || shouldIgnoreResult(readGuard(), Date.now())) return;
@@ -524,6 +538,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			sttIsWhisperRef.current = c.sttProvider === "openai";
 			vadSensitivityRef.current = c.sensitivity;
 			commandsEnabledRef.current = c.commandsEnabled;
+			voiceLangRef.current = c.language;
 		} catch {}
 		const stt = await createStt(instanceId, {
 			transcribePrompt: transcribePromptRef.current,
