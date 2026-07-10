@@ -225,9 +225,14 @@ export default function InstanceDetail() {
 		Dutch: "nl-NL", Turkish: "tr-TR",
 	};
 
+	// Only agents with a local runner (capabilities.runtime: browser/coding) have a
+	// meaningful connection status — for chat-only agents the dot was permanent grey
+	// noise, so it's hidden and its 4s polling skipped entirely.
+	const hasRuntime = !!instance?.capabilities?.runtime;
+
 	// Poll runtime status
 	const checkRuntime = useCallback(async () => {
-		if (!id) return;
+		if (!id || !hasRuntime) return;
 		try {
 			const d = await api<{ connected?: boolean; node?: string; runtime?: Record<string, unknown> }>(`/v1/instances/${id}/runtime/status`);
 			setRunnerOnline(d.connected ?? !!(d.runtime as Record<string, unknown>));
@@ -235,7 +240,7 @@ export default function InstanceDetail() {
 		} catch {
 			setRunnerOnline(false);
 		}
-	}, [id]);
+	}, [id, hasRuntime]);
 
 	useEffect(() => { checkRuntime(); }, [checkRuntime]);
 	usePolling(checkRuntime, 4000);
@@ -552,13 +557,17 @@ export default function InstanceDetail() {
 		<div className="flex items-center gap-2 min-w-0">
 			<button type="button" onClick={() => navigate("/instances")} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
 			{instance && <span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>}
-			<span
-				className="text-[0.7rem] font-bold px-1.5 py-0.5 rounded-full shrink-0"
-				style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-green)" : "var(--color-muted)" }}
-				title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
-			>
-				{runnerOnline ? "●" : "○"}
-			</span>
+			{/* Runner dot only for agents that USE a runner — chat-only agents showed a
+			    permanently grey dot that just ate navbar space (worst on mobile). */}
+			{hasRuntime && (
+				<span
+					className="text-[0.7rem] font-bold px-1.5 py-0.5 rounded-full shrink-0"
+					style={{ background: "var(--color-line)", color: runnerOnline ? "var(--color-green)" : "var(--color-muted)" }}
+					title={runnerOnline ? `Runner online${runnerNode ? ` · ${runnerNode}` : ""}` : "Runner offline"}
+				>
+					{runnerOnline ? "●" : "○"}
+				</span>
+			)}
 			<div className="flex border border-line rounded-lg overflow-x-auto overflow-y-hidden shrink min-w-0 scrollbar-none">
 				{tabDefs.map((t) => (
 					<button
@@ -573,7 +582,7 @@ export default function InstanceDetail() {
 				))}
 			</div>
 		</div>
-	), [instance, runnerOnline, runnerNode, tab, tabDefs, navigate]);
+	), [instance, hasRuntime, runnerOnline, runnerNode, tab, tabDefs, navigate]);
 
 	// Child tabs (CodingTab) can override the header when they have their own controls
 	const [childHeader, setChildHeader] = useState<ReactNode | null>(null);
