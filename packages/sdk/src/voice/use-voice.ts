@@ -407,27 +407,40 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// whether an auto-speak/hands-free mode is active. maybeSpeakResponse is gated on
 	// speakOn/convoOn — the wrong tool for a manual replay, which is why double-tap was
 	// silent outside a voice mode. Unlock inside the caller's gesture so iOS plays it.
+	// Manual-speak bookkeeping: a NEWER tap supersedes the current one (cancel, don't
+	// queue), and the mic-resume intent must survive superseding taps — the FIRST tap
+	// stopped the mic, so later taps see listening=false.
+	const speakGenRef = useRef(0);
+	const speakResumeRef = useRef(false);
 	const speak = useCallback(async (text: string, lang?: string) => {
 		if (!text?.trim()) return;
 		unlockSpeechSynthesis();
+		const myGen = ++speakGenRef.current;
 		// Same mic protection as speakAndResume: a manual tap-to-hear can happen while
 		// hands-free is LISTENING — without pausing, the recorder captures the TTS voice
 		// (plus its echo tail) and sends the agent's own words back as a phantom turn.
-		const resume = convoOnRef.current && !!sttRef.current?.listening;
+		if (convoOnRef.current && sttRef.current?.listening) speakResumeRef.current = true;
 		pausedForThinkingRef.current = true;
 		if (sttRef.current?.listening) sttRef.current.stopDiscard(); // drop the partial capture
 		setMicOn(false);
 		setSpeaking(true);
 		try {
 			const tts = await ensureTts();
+			// A tap means "say THIS, now" — cut off whatever is playing/queued instead of
+			// queueing behind it (rapid word taps used to play back-to-back in a line).
+			tts.cancel();
 			await tts.unlock();
 			// Optional per-utterance language (e.g. a translation spoken in ITS language).
 			await tts.speak(text, lang ? { lang } : {});
 		} catch {}
+		if (speakGenRef.current !== myGen) return; // superseded — the newer tap owns the state
 		setSpeaking(false);
 		speakEndedAtRef.current = Date.now(); // arm the echo-tail guard, like speakAndResume
 		pausedForThinkingRef.current = false;
-		if (resume) await startListening();
+		if (speakResumeRef.current) {
+			speakResumeRef.current = false;
+			await startListening();
+		}
 	}, [ensureTts, startListening]);
 
 	// Speak response, then re-open mic
@@ -696,6 +709,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	/** Stop speaking immediately (tap a message to interrupt). */
 	const cancelSpeak = useCallback(() => {
 		ttsRef.current?.cancel();
+		speakResumeRef.current = false; // we reopen the mic ourselves below
 		setSpeaking(false);
 		// If in convo mode and not muted, re-open mic so user can talk
 		pausedForThinkingRef.current = false;

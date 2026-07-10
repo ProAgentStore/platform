@@ -98,6 +98,9 @@ export class VoiceTts {
 		if (this._processing) return; // a turn is already draining the queue
 		this._processing = true;
 		this.speaking = true;
+		// cancel() bumps _gen: a canceled drain loop must NOT clobber the state a
+		// newer speak() now owns (rapid tap-to-pronounce cancels + restarts).
+		const gen = this._gen;
 		try {
 			while (this._processing && this._queue.length) {
 				const next = this._queue.shift() as { text: string; lang?: string };
@@ -105,8 +108,10 @@ export class VoiceTts {
 				else await this._speakBrowser(next.text, next.lang);
 			}
 		} finally {
-			this._processing = false;
-			this.speaking = false;
+			if (gen === this._gen) {
+				this._processing = false;
+				this.speaking = false;
+			}
 		}
 	}
 

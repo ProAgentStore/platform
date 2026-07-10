@@ -448,9 +448,27 @@ export default function InstanceDetail() {
 		if (pillVisible && chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
 	}, [pillVisible]);
 
+	// Only ONE replay at a time: a new double-tap (or word tap) cuts off the previous
+	// recording instead of layering Audio elements on top of each other.
+	const replayAudioRef = useRef<HTMLAudioElement | null>(null);
+	const stopReplay = useCallback(() => {
+		const a = replayAudioRef.current;
+		if (a) {
+			try { a.pause(); } catch { /* already stopped */ }
+			replayAudioRef.current = null;
+		}
+	}, []);
+	// Tap-to-pronounce entry point: cut off any playing recording, then speak (the
+	// voice hook itself cancels any previous TTS utterance).
+	const speakTap = useCallback((text: string, lang?: string) => {
+		stopReplay();
+		voice.speak(text, lang);
+	}, [stopReplay, voice.speak]); // eslint-disable-line react-hooks/exhaustive-deps
+
 	// Double-tap a message: play its SAVED voice recording if we have one (voice turns),
 	// else fall back to speaking the text via TTS. Owner-scoped fetch of the R2 blob.
 	const playMessage = useCallback(async (m: Message) => {
+		stopReplay();
 		if (id && m.audioKey) {
 			try {
 				const res = await fetch(`${API}/v1/instances/${id}/voice-audio/${m.audioKey}`, {
@@ -459,19 +477,22 @@ export default function InstanceDetail() {
 				if (res.ok) {
 					const url = URL.createObjectURL(await res.blob());
 					const audio = new Audio(url);
-					const cleanup = () => URL.revokeObjectURL(url);
+					const cleanup = () => {
+						URL.revokeObjectURL(url);
+						if (replayAudioRef.current === audio) replayAudioRef.current = null;
+					};
 					audio.onended = cleanup;
 					audio.onerror = cleanup;
 					// play() rejection (autoplay blocked) fires NEITHER onended nor onerror,
 					// so revoke here too or the blob URL leaks. Then fall through to TTS.
-					try { await audio.play(); return; } catch { cleanup(); }
+					try { replayAudioRef.current = audio; await audio.play(); return; } catch { cleanup(); }
 				}
 			} catch { /* fall through to TTS */ }
 		}
 		// No saved recording (or it failed to load) — re-speak the text. Direct, not the
 		// auto-speak-gated path, so replay works even when no voice mode is active.
 		directSpeakRef.current(m.content);
-	}, [id]);
+	}, [id, stopReplay]);
 
 	const sendMessage = () => {
 		if (!input.trim()) return;
@@ -757,7 +778,7 @@ export default function InstanceDetail() {
 															if (window.getSelection()?.toString()) return; // long-press selected text
 															e.stopPropagation();
 															const word = wordAtPoint(e.clientX, e.clientY);
-															if (word) voice.speak(word);
+															if (word) speakTap(word);
 														} : undefined}
 														dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
 													/>
@@ -774,7 +795,7 @@ export default function InstanceDetail() {
 																		key={`${pi}-${word}`}
 																		className="inline-flex flex-col items-center cursor-pointer hover:text-accent transition-colors"
 																		title="Tap to hear this word"
-																		onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); voice.speak(word); }}
+																		onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); speakTap(word); }}
 																	>
 																		<span className={`${trSize.word} leading-tight`}>{word}</span>
 																		<span className={`${trSize.gloss} text-muted leading-tight min-h-[1em]`}>{roman}</span>
@@ -785,7 +806,7 @@ export default function InstanceDetail() {
 															<div
 																className={`${trSize.gloss} text-muted whitespace-pre-wrap cursor-pointer`}
 																title="Tap to hear the original spoken"
-																onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); voice.speak(m.content); }}
+																onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); speakTap(m.content); }}
 															>
 																{translations[m.content].transliteration}
 															</div>
@@ -800,7 +821,7 @@ export default function InstanceDetail() {
 																if (window.getSelection()?.toString()) return;
 																e.stopPropagation();
 																const word = trWordTap ? wordAtPoint(e.clientX, e.clientY) : null;
-																voice.speak(word || translations[m.content].translation, TR_LANG_TAGS[trTarget]);
+																speakTap(word || translations[m.content].translation, TR_LANG_TAGS[trTarget]);
 															}}
 														>
 															{translations[m.content].translation}
