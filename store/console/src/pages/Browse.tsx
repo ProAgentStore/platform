@@ -44,21 +44,18 @@ export default function Browse() {
 
 	const instanceFor = (agentId: string) => instances.find((i) => i.agent_id === agentId);
 
-	const subscribe = async (a: CatalogAgent) => {
+	const subscribe = async (a: CatalogAgent, { fresh = false }: { fresh?: boolean } = {}) => {
+		// Multiple instances of one agent are supported — "Open" goes to the existing
+		// one; "+ New" (fresh) subscribes again (auto-named "Agent 2", renameable in
+		// its Settings).
 		const existing = instanceFor(a.id);
-		if (existing) { navigate(`/instances/${existing.id}`); return; }
+		if (existing && !fresh) { navigate(`/instances/${existing.id}`); return; }
 		setBusy(a.id);
 		try {
 			const r = await api<{ instanceId: string }>(`/v1/instances/${a.id}/subscribe`, { method: "POST" });
 			navigate(`/instances/${r.instanceId}`);
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
-			// Race / stale list: already subscribed → find it and open instead of erroring.
-			if (/already subscribed/i.test(msg)) {
-				const mine = await api<{ instances: Instance[] }>("/v1/instances/my/instances").catch(() => ({ instances: [] as Instance[] }));
-				const inst = (mine.instances || []).find((i) => i.agent_id === a.id);
-				if (inst) { navigate(`/instances/${inst.id}`); return; }
-			}
 			// Free-tier cap / Pro-only feature: offer the one-tap path to Billing.
 			if (/Pro|\$9/.test(msg)) {
 				if (confirm(`${msg}\n\nOpen billing?`)) navigate("/profile");
@@ -93,14 +90,27 @@ export default function Browse() {
 									{a.creator_login && <span className="px-1.5 py-0.5 rounded font-medium bg-muted/15 text-muted">@{a.creator_login}</span>}
 									{typeof a.subscriber_count === "number" && <span className="px-1.5 py-0.5 rounded font-medium bg-muted/15 text-muted">{a.subscriber_count} subscriber{a.subscriber_count === 1 ? "" : "s"}</span>}
 								</div>
-								<button
-									type="button"
-									onClick={() => subscribe(a)}
-									disabled={busy === a.id}
-									className={`text-sm px-3 py-1.5 rounded-xl font-semibold transition-all disabled:opacity-50 ${sub ? "border border-line text-accent hover:bg-accent/10" : "bg-accent text-white hover:bg-accent-hover active:scale-[0.97]"}`}
-								>
-									{busy === a.id ? "Subscribing…" : sub ? "Open →" : "Subscribe"}
-								</button>
+								<div className="flex gap-2">
+									<button
+										type="button"
+										onClick={() => subscribe(a)}
+										disabled={busy === a.id}
+										className={`flex-1 text-sm px-3 py-1.5 rounded-xl font-semibold transition-all disabled:opacity-50 ${sub ? "border border-line text-accent hover:bg-accent/10" : "bg-accent text-white hover:bg-accent-hover active:scale-[0.97]"}`}
+									>
+										{busy === a.id ? "Subscribing…" : sub ? "Open →" : "Subscribe"}
+									</button>
+									{sub && (
+										<button
+											type="button"
+											onClick={() => subscribe(a, { fresh: true })}
+											disabled={busy === a.id}
+											title="Create another instance of this agent (own documents, settings, memory)"
+											className="text-sm px-3 py-1.5 rounded-xl font-semibold border border-line text-muted hover:border-accent hover:text-accent transition-all disabled:opacity-50"
+										>
+											+ New
+										</button>
+									)}
+								</div>
 							</div>
 						);
 					})}

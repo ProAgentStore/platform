@@ -227,9 +227,12 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 				reader.onload = () => resolve((reader.result as string).split(",")[1]);
 				reader.readAsDataURL(file);
 			});
+			// The DO expects contentBase64 + mime_type (NOT data/contentType) — the old
+			// field names made EVERY binary upload 400 with "name and content or
+			// contentBase64 required".
 			await api(`/v1/instances/${instanceId}/files`, {
 				method: "POST",
-				body: JSON.stringify({ name: file.name, data: base64, contentType: file.type }),
+				body: JSON.stringify({ name: file.name, contentBase64: base64, mime_type: file.type || "application/octet-stream" }),
 			});
 			loadFiles();
 		} catch (e) {

@@ -81,13 +81,15 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		.first<{ id: string; name: string; model: string; config: string | null }>();
 	if (!agent) throw new HttpError(404, "Agent not found or not published");
 
-	// Check if already subscribed
-	const existing = await c.env.DB.prepare(
-		"SELECT id FROM agent_instances WHERE agent_id = ?1 AND user_id = ?2",
+	// Multiple instances of the same agent are allowed (e.g. two Doc Chat libraries
+	// with different documents). Later ones get a numbered display name so they're
+	// distinguishable on the dashboard; rename via PUT /:instanceId/name.
+	const sameAgent = await c.env.DB.prepare(
+		"SELECT COUNT(*) AS n FROM agent_instances WHERE agent_id = ?1 AND user_id = ?2",
 	)
 		.bind(agent.id, session.uid)
-		.first();
-	if (existing) throw new HttpError(409, "Already subscribed to this agent");
+		.first<{ n: number }>();
+	const nth = (sameAgent?.n ?? 0) + 1;
 
 	// Cap total instances per user: free tier 2, Pro the 100 fair-use cap (which also
 	// bounds resource-exhaustion / notification-spam abuse — subscribe is expensive:
@@ -110,12 +112,14 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 
 	const instanceId = crypto.randomUUID();
 
-	// Create instance row
+	// Create instance row. Second+ instances of the same agent get a numbered
+	// display name (stored in config.displayName; user-renameable).
+	const initialConfig = nth > 1 ? JSON.stringify({ displayName: `${agent.name} ${nth}` }) : "{}";
 	await c.env.DB.prepare(
-		`INSERT INTO agent_instances (id, agent_id, user_id, status, created_at, updated_at)
-     VALUES (?1, ?2, ?3, 'active', datetime('now'), datetime('now'))`,
+		`INSERT INTO agent_instances (id, agent_id, user_id, status, config, created_at, updated_at)
+     VALUES (?1, ?2, ?3, 'active', ?4, datetime('now'), datetime('now'))`,
 	)
-		.bind(instanceId, agent.id, session.uid)
+		.bind(instanceId, agent.id, session.uid, initialConfig)
 		.run();
 
 	// Create subscription row
@@ -216,7 +220,7 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 instanceRoutes.get("/my/instances", async (c) => {
 	const session = await requireUser(c);
 	const { results } = await c.env.DB.prepare(
-		`SELECT i.id, i.agent_id, i.status, i.created_at,
+		`SELECT i.id, i.agent_id, i.status, i.created_at, i.config AS instance_config,
             a.name, a.slug, a.description, a.category, a.icon, a.icon_bg, a.config
      FROM agent_instances i
      JOIN agents a ON a.id = i.agent_id
@@ -229,9 +233,17 @@ instanceRoutes.get("/my/instances", async (c) => {
 	// from a declared registry, not by branching on agent slug/category. `config`
 	// (which may hold secrets/internal settings) is dropped from the response.
 	const instances = (results ?? []).map((r) => {
-		const { config, ...rest } = r;
+		const { config, instance_config, ...rest } = r;
+		// A user-set (or auto-numbered) per-instance display name overrides the agent
+		// name — how two instances of the same agent stay distinguishable.
+		let displayName: string | undefined;
+		try {
+			const cfg = instance_config ? (JSON.parse(instance_config as string) as Record<string, unknown>) : {};
+			if (typeof cfg.displayName === "string" && cfg.displayName.trim()) displayName = cfg.displayName.trim();
+		} catch { /* malformed config — keep the agent name */ }
 		return {
 			...rest,
+			...(displayName ? { name: displayName, agentName: r.name } : {}),
 			capabilities: agentCapabilities({ slug: r.slug as string, category: r.category as string, config: config as string }),
 		};
 	});
@@ -438,6 +450,22 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		.bind(JSON.stringify(cfg), instanceId, session.uid)
 		.run();
 	return c.json({ voiceSettings: settings });
+});
+
+/** Rename this instance (per-instance display name — distinguishes multiple
+ *  instances of the same agent on the dashboard). Empty name = back to the agent's. */
+instanceRoutes.put("/:instanceId/name", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const body = (await c.req.json().catch(() => ({}))) as { name?: unknown };
+	const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	if (name) cfg.displayName = name;
+	else delete cfg.displayName;
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, session.uid)
+		.run();
+	return c.json({ name: name || null });
 });
 
 /** Resolve the agent's declared settings schema for an OWNED instance (404 if not yours). */

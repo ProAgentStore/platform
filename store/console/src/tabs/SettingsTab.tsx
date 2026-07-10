@@ -29,6 +29,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [commandsEnabled, setCommandsEnabled] = useState(true);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
+	// Per-instance display name (distinguishes multiple instances of one agent).
+	const [instName, setInstName] = useState("");
+	const [instNameMsg, setInstNameMsg] = useState("");
 	// Under-message translation (Assistant feature): translated text under each reply.
 	const [trEnabled, setTrEnabled] = useState(false);
 	const [trTarget, setTrTarget] = useState("English");
@@ -43,6 +46,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 	useEffect(() => {
 		(async () => {
+			try {
+				// Current display name — my/instances resolves displayName over the agent name.
+				const d = await api<{ instances?: Array<{ id: string; name: string }> }>("/v1/instances/my/instances");
+				const mine = (d.instances || []).find((i) => i.id === instanceId);
+				if (mine) setInstName(mine.name);
+			} catch {}
 			try {
 				const d = await api<{ settings?: Record<string, string | number | boolean>; fields?: SettingsField[] }>(`/v1/instances/${instanceId}/settings`);
 				setAgentSettings(d.settings || {});
@@ -208,8 +217,37 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
+	const saveInstName = async () => {
+		try {
+			await api(`/v1/instances/${instanceId}/name`, { method: "PUT", body: JSON.stringify({ name: instName }) });
+			setInstNameMsg("Saved — updating…");
+			// The header + instance lists read the name at load time — reload to reflect it everywhere.
+			setTimeout(() => window.location.reload(), 600);
+		} catch (e) {
+			setInstNameMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
 	return (
 		<div>
+			{/* Instance name — distinguishes multiple instances of the same agent */}
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Instance name</h3>
+				<p className="text-sm text-muted mb-3">
+					Shown on your dashboard and in the header — rename it to tell multiple instances of the same agent apart (e.g. "Legal PDFs" vs "Product Manuals").
+				</p>
+				<div className="flex gap-2 items-center flex-wrap">
+					<input
+						value={instName}
+						onChange={(e) => setInstName(e.target.value)}
+						maxLength={60}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 w-full sm:w-72"
+					/>
+					<button type="button" onClick={saveInstName} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
+					{instNameMsg && <span className="text-xs text-muted">{instNameMsg}</span>}
+				</div>
+			</div>
+
 			{/* Agent settings — typed fields the agent declares (settingsSchema) */}
 			{agentFields.length > 0 && (
 				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
