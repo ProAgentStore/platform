@@ -423,6 +423,26 @@ export default function InstanceDetail() {
 	// Wire the voice hook's auto-send to doSend
 	doSendRef.current = doSend;
 
+	// Computed once per render: the voice-status pill state. Also drives the chat
+	// area's bottom padding — the pill is absolutely positioned over the scroll area,
+	// and without reserved space it sat ON TOP of the last message (worst on mobile,
+	// where auto-scroll parks the newest bubble exactly under it).
+	const voiceStatus = resolveVoiceStatus({
+		mode: voice.mode,
+		thinking,
+		transcribing: voice.interim === "Transcribing…",
+		talking: voice.talking,
+		listening: voice.micOn,
+		speaking: voice.speaking,
+		muted: voice.muted,
+	});
+	// When the pill appears, its reserved padding is BELOW the current scroll position —
+	// nudge to the bottom so the last message rises clear of the pill immediately.
+	const pillVisible = !!voiceStatus;
+	useEffect(() => {
+		if (pillVisible && chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+	}, [pillVisible]);
+
 	// Double-tap a message: play its SAVED voice recording if we have one (voice turns),
 	// else fall back to speaking the text via TTS. Owner-scoped fetch of the R2 blob.
 	const playMessage = useCallback(async (m: Message) => {
@@ -663,7 +683,7 @@ export default function InstanceDetail() {
 								if (voice.mode === "ptt") voice.toggleTalk();
 								else if (voice.mode === "handsfree") voice.cancelSpeak();
 							}}
-							className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
+							className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
 						>
 							{hasMore && (
 								<button type="button" onClick={loadMore} disabled={loadingMore} className="self-center text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-colors mb-2">
@@ -791,15 +811,7 @@ export default function InstanceDetail() {
 						    between you finishing and the reply arriving. Doubles as the tap target
 						    in Tap-to-talk. */}
 						{(() => {
-							const s = resolveVoiceStatus({
-								mode: voice.mode,
-								thinking,
-								transcribing: voice.interim === "Transcribing…",
-								talking: voice.talking,
-								listening: voice.micOn,
-								speaking: voice.speaking,
-								muted: voice.muted,
-							});
+							const s = voiceStatus;
 							if (!s) return null;
 							const cls = s.tone === "work" ? "bg-accent text-white ring-4 ring-accent/25 animate-pulse"
 								: s.tone === "speak" ? "bg-accent text-white ring-4 ring-accent/25"
