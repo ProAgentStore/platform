@@ -34,6 +34,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [trTarget, setTrTarget] = useState("English");
 	const [trTranslit, setTrTranslit] = useState(false);
 	const [trWordTap, setTrWordTap] = useState(true);
+	const [trFontSize, setTrFontSize] = useState("medium");
 	const [trLanguages, setTrLanguages] = useState<string[]>([]);
 	const [trMsg, setTrMsg] = useState("");
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
@@ -52,11 +53,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setRuntimeInfo(d);
 			} catch {}
 			try {
-				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean }; languages?: string[] }>(`/v1/instances/${instanceId}/translation`);
+				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: string[] }>(`/v1/instances/${instanceId}/translation`);
 				setTrEnabled(d.translation?.enabled === true);
 				setTrTarget(d.translation?.target || "English");
 				setTrTranslit(d.translation?.transliterate === true);
 				setTrWordTap(d.translation?.wordTap !== false);
+				setTrFontSize(d.translation?.fontSize || "medium");
 				setTrLanguages(d.languages || []);
 			} catch {}
 			try {
@@ -171,13 +173,14 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
-	const saveTranslation = async (enabled: boolean, target: string, transliterate: boolean, wordTap: boolean) => {
+	const saveTranslation = async (enabled: boolean, target: string, transliterate: boolean, wordTap: boolean, fontSize: string) => {
 		setTrEnabled(enabled);
 		setTrTarget(target);
 		setTrTranslit(transliterate);
 		setTrWordTap(wordTap);
+		setTrFontSize(fontSize);
 		try {
-			await api(`/v1/instances/${instanceId}/translation`, { method: "PUT", body: JSON.stringify({ enabled, target, transliterate, wordTap }) });
+			await api(`/v1/instances/${instanceId}/translation`, { method: "PUT", body: JSON.stringify({ enabled, target, transliterate, wordTap, fontSize }) });
 			setTrMsg("Saved — applies on your next message");
 			setTimeout(() => setTrMsg(""), 2500);
 		} catch (e) {
@@ -510,7 +513,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					<input
 						type="checkbox"
 						checked={trEnabled}
-						onChange={(e) => saveTranslation(e.target.checked, trTarget, trTranslit, trWordTap)}
+						onChange={(e) => saveTranslation(e.target.checked, trTarget, trTranslit, trWordTap, trFontSize)}
 						className="w-4 h-4 accent-accent"
 					/>
 					<span className="text-muted">Show translation under replies</span>
@@ -520,7 +523,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						<label className="block text-xs font-semibold mb-1">Translate into</label>
 						<select
 							value={trTarget}
-							onChange={(e) => saveTranslation(true, e.target.value, trTranslit, trWordTap)}
+							onChange={(e) => saveTranslation(true, e.target.value, trTranslit, trWordTap, trFontSize)}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
 						>
 							{(trLanguages.length ? trLanguages : [trTarget]).map((l) => (
@@ -531,20 +534,30 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							<input
 								type="checkbox"
 								checked={trTranslit}
-								onChange={(e) => saveTranslation(true, trTarget, e.target.checked, trWordTap)}
+								onChange={(e) => saveTranslation(true, trTarget, e.target.checked, trWordTap, trFontSize)}
 								className="w-4 h-4 accent-accent"
 							/>
 							<span className="text-muted">Also show transliteration (pinyin / romaji / romanization)</span>
 						</label>
-						<label className="flex items-center gap-2 text-sm cursor-pointer">
+						<label className="flex items-center gap-2 text-sm cursor-pointer mb-2">
 							<input
 								type="checkbox"
 								checked={trWordTap}
-								onChange={(e) => saveTranslation(true, trTarget, trTranslit, e.target.checked)}
+								onChange={(e) => saveTranslation(true, trTarget, trTranslit, e.target.checked, trFontSize)}
 								className="w-4 h-4 accent-accent"
 							/>
 							<span className="text-muted">Tap a word to hear it pronounced (long-press still selects text)</span>
 						</label>
+						<label className="block text-xs font-semibold mb-1">Text size</label>
+						<select
+							value={trFontSize}
+							onChange={(e) => saveTranslation(true, trTarget, trTranslit, trWordTap, e.target.value)}
+							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"
+						>
+							<option value="small">Small</option>
+							<option value="medium">Medium</option>
+							<option value="large">Large</option>
+						</select>
 					</>
 				)}
 				{trMsg && <div className="text-sm text-muted mt-2">{trMsg}</div>}

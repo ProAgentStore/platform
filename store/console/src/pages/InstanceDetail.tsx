@@ -142,6 +142,7 @@ export default function InstanceDetail() {
 	const [trEnabled, setTrEnabled] = useState(false);
 	const [trTarget, setTrTarget] = useState("English");
 	const [trWordTap, setTrWordTap] = useState(true);
+	const [trFontSize, setTrFontSize] = useState("medium");
 	const [translations, setTranslations] = useState<Record<string, { translation: string; transliteration?: string; pairs?: Array<[string, string]> }>>({});
 	const trInFlight = useRef<Set<string>>(new Set());
 	useEffect(() => {
@@ -157,10 +158,11 @@ export default function InstanceDetail() {
 		if (!id || tab !== "chat") return;
 		(async () => {
 			try {
-				const d = await api<{ translation?: { enabled: boolean; target?: string; wordTap?: boolean } }>(`/v1/instances/${id}/translation`);
+				const d = await api<{ translation?: { enabled: boolean; target?: string; wordTap?: boolean; fontSize?: string } }>(`/v1/instances/${id}/translation`);
 				setTrEnabled(d.translation?.enabled === true);
 				setTrTarget(d.translation?.target || "English");
 				setTrWordTap(d.translation?.wordTap !== false);
+				setTrFontSize(d.translation?.fontSize || "medium");
 			} catch {}
 		})();
 	}, [id, tab]);
@@ -187,6 +189,16 @@ export default function InstanceDetail() {
 			}
 		})();
 	}, [trEnabled, id, messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// Learning-display sizes (Settings → Translation → Text size). The gloss size is
+	// shared by the transliteration AND the translation — equally visible, color is
+	// the only differentiator (pinyin muted, translation accent).
+	const TR_SIZES: Record<string, { word: string; gloss: string }> = {
+		small: { word: "text-[0.9rem]", gloss: "text-[0.72rem]" },
+		medium: { word: "text-[1.05rem]", gloss: "text-[0.85rem]" },
+		large: { word: "text-[1.25rem]", gloss: "text-[1rem]" },
+	};
+	const trSize = TR_SIZES[trFontSize] || TR_SIZES.medium;
 
 	/** BCP-47 tag for a translation-target language name, so the spoken translation
 	 *  uses a voice in ITS language (the conversation voice stays in the practice one). */
@@ -664,29 +676,32 @@ export default function InstanceDetail() {
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<>
-												{/* Word-tap pronunciation: tap a word to hear just that word (Segmenter
-												    handles Chinese word boundaries); long-press/drag selection is
-												    respected — a tap with an active selection does nothing. Whole-message
-												    playback lives on the bubble's speaker button. Links keep their behavior. */}
-												<div
-													className={`msg-md ${trEnabled && trWordTap ? "cursor-pointer" : ""}`}
-													title={trEnabled && trWordTap ? "Tap a word to hear it" : undefined}
-													onClick={trEnabled && trWordTap ? (e) => {
-														if ((e.target as HTMLElement).closest("a, button")) return;
-														if (window.getSelection()?.toString()) return; // long-press selected text
-														e.stopPropagation();
-														const word = wordAtPoint(e.clientX, e.clientY);
-														if (word) voice.speak(word);
-													} : undefined}
-													dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
-												/>
+												{/* The interlinear gloss REPLACES the plain original (showing both was a
+												    duplicate); the plain markdown renders until pairs arrive or when the
+												    gloss is off. Word-tap: tap a word to hear just it (Segmenter handles
+												    Chinese boundaries); long-press/drag selection is respected. Whole-
+												    message playback lives on the bubble's speaker button. */}
+												{!(trEnabled && translations[m.content]?.pairs?.length) && (
+													<div
+														className={`msg-md ${trEnabled && trWordTap ? "cursor-pointer" : ""}`}
+														title={trEnabled && trWordTap ? "Tap a word to hear it" : undefined}
+														onClick={trEnabled && trWordTap ? (e) => {
+															if ((e.target as HTMLElement).closest("a, button")) return;
+															if (window.getSelection()?.toString()) return; // long-press selected text
+															e.stopPropagation();
+															const word = wordAtPoint(e.clientX, e.clientY);
+															if (word) voice.speak(word);
+														} : undefined}
+														dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
+													/>
+												)}
 												{trEnabled && translations[m.content] && (
-													<div className="mt-1.5 pt-1.5 border-t border-line/60 flex flex-col gap-0.5">
-														{/* Interlinear gloss when word pairs are available: each original word
-														    with its romanization directly beneath (textbook-style), every
-														    column tappable to hear that word. Falls back to the flat line. */}
+													<div className={`flex flex-col gap-1 ${translations[m.content].pairs?.length ? "" : "mt-1.5 pt-1.5 border-t border-line/60"}`}>
+														{/* Interlinear gloss: each original word with its romanization
+														    directly beneath (textbook-style), every column tappable to hear
+														    that word. Falls back to the flat transliteration line. */}
 														{translations[m.content].pairs?.length ? (
-															<div className="flex flex-wrap gap-x-1.5 gap-y-1 items-end">
+															<div className="flex flex-wrap gap-x-2 gap-y-1.5 items-end">
 																{translations[m.content].pairs?.map(([word, roman], pi) => (
 																	<span
 																		key={`${pi}-${word}`}
@@ -694,24 +709,25 @@ export default function InstanceDetail() {
 																		title="Tap to hear this word"
 																		onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); voice.speak(word); }}
 																	>
-																		<span className="text-[0.9rem] leading-tight">{word}</span>
-																		<span className="text-[0.68rem] text-muted leading-tight min-h-[0.9em]">{roman}</span>
+																		<span className={`${trSize.word} leading-tight`}>{word}</span>
+																		<span className={`${trSize.gloss} text-muted leading-tight min-h-[1em]`}>{roman}</span>
 																	</span>
 																))}
 															</div>
 														) : translations[m.content].transliteration ? (
 															<div
-																className="text-[0.78rem] text-muted whitespace-pre-wrap cursor-pointer"
+																className={`${trSize.gloss} text-muted whitespace-pre-wrap cursor-pointer`}
 																title="Tap to hear the original spoken"
 																onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); voice.speak(m.content); }}
 															>
 																{translations[m.content].transliteration}
 															</div>
 														) : null}
-														{/* Translation — spoken in ITS OWN language: the tapped word when
-														    word-tap is on (whole line as fallback), else the whole line. */}
+														{/* Translation — SAME size as the transliteration (equally visible),
+														    color is the differentiator. Spoken in ITS OWN language: the tapped
+														    word when word-tap is on (whole line as fallback), else the line. */}
 														<div
-															className="text-[0.78rem] text-muted italic whitespace-pre-wrap cursor-pointer"
+															className={`${trSize.gloss} text-accent whitespace-pre-wrap cursor-pointer mt-0.5`}
 															title={trWordTap ? `Tap a word to hear it in ${trTarget}` : `Tap to hear it in ${trTarget}`}
 															onClick={(e) => {
 																if (window.getSelection()?.toString()) return;
