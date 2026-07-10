@@ -474,6 +474,89 @@ instanceRoutes.put("/:instanceId/settings", async (c) => {
 	return c.json({ settings: resolveSettingsValues(schema, cfg.settings) });
 });
 
+/** Languages the under-message translation can target (validated on save). */
+const TRANSLATION_LANGUAGES = [
+	"English", "Spanish", "French", "German", "Italian", "Portuguese",
+	"Chinese (Simplified)", "Japanese", "Korean", "Hindi", "Russian",
+	"Arabic", "Ukrainian", "Polish", "Dutch", "Turkish",
+];
+
+/** Read the under-message translation config (console Assistant feature). */
+instanceRoutes.get("/:instanceId/translation", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	const t = (cfg.translation && typeof cfg.translation === "object" ? cfg.translation : {}) as Record<string, unknown>;
+	return c.json({
+		translation: {
+			enabled: t.enabled === true,
+			target: typeof t.target === "string" && TRANSLATION_LANGUAGES.includes(t.target) ? t.target : "English",
+		},
+		languages: TRANSLATION_LANGUAGES,
+	});
+});
+
+/** Save the under-message translation config. */
+instanceRoutes.put("/:instanceId/translation", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown; target?: unknown };
+	const translation = {
+		enabled: body.enabled === true,
+		target: typeof body.target === "string" && TRANSLATION_LANGUAGES.includes(body.target) ? body.target : "English",
+	};
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	cfg.translation = translation;
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, session.uid)
+		.run();
+	return c.json({ translation });
+});
+
+/** Translate a chat message into the instance's configured target language — the
+ *  console renders the result beneath the original message. Platform Workers AI
+ *  when enabled (free), else the user's BYOK key. */
+instanceRoutes.post("/:instanceId/translate", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	const t = (cfg.translation && typeof cfg.translation === "object" ? cfg.translation : {}) as Record<string, unknown>;
+	if (t.enabled !== true) throw new HttpError(400, "Translation is not enabled for this instance");
+	const target = typeof t.target === "string" && TRANSLATION_LANGUAGES.includes(t.target) ? t.target : "English";
+	const body = (await c.req.json().catch(() => ({}))) as { text?: unknown };
+	const text = typeof body.text === "string" ? body.text.slice(0, 2000).trim() : "";
+	if (!text) throw new HttpError(400, "text required");
+	const messages = [
+		{
+			role: "system",
+			content: `You are a translator. Translate the user's message into ${target}. Output ONLY the translation — no quotes, no notes, no commentary.`,
+		},
+		{ role: "user", content: text },
+	];
+	let translation = "";
+	if (c.env.PLATFORM_AI_ENABLED === "true" && c.env.AI) {
+		try {
+			const r = (await c.env.AI.run(
+				"@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
+				{ messages },
+			)) as { response?: string };
+			translation = (r.response || "").trim();
+		} catch { /* fall through to BYOK */ }
+	}
+	if (!translation) {
+		const r = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
+			messages,
+			maxTokens: 1000,
+		})) as { response?: string };
+		translation = (r.response || "").trim();
+	}
+	if (!translation) throw new HttpError(502, "Translation failed");
+	return c.json({ translation });
+});
+
 /** Probe a registered runtime's health and capabilities through PAGS. */
 instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 	const session = await requireUser(c);

@@ -95,6 +95,47 @@ export default function InstanceDetail() {
 		})();
 	}, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+	// Under-message translation (Settings → Translation): when enabled, each assistant
+	// reply gets a lazily-fetched translation rendered beneath it. Keyed by message
+	// content; only the latest few history messages are auto-translated to keep the
+	// per-load request count small.
+	const [trEnabled, setTrEnabled] = useState(false);
+	const [translations, setTranslations] = useState<Record<string, string>>({});
+	const trInFlight = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		if (!id) return;
+		setTrEnabled(false);
+		setTranslations({});
+		trInFlight.current = new Set();
+		(async () => {
+			try {
+				const d = await api<{ translation?: { enabled: boolean } }>(`/v1/instances/${id}/translation`);
+				setTrEnabled(d.translation?.enabled === true);
+			} catch {}
+		})();
+	}, [id]);
+	useEffect(() => {
+		if (!trEnabled || !id) return;
+		const pending = messages
+			.filter((m) => m.role === "assistant" && m.content?.trim())
+			.slice(-6)
+			.filter((m) => !(m.content in translations) && !trInFlight.current.has(m.content));
+		for (const m of pending) trInFlight.current.add(m.content);
+		(async () => {
+			for (const m of pending) {
+				try {
+					const d = await api<{ translation?: string }>(`/v1/instances/${id}/translate`, {
+						method: "POST",
+						body: JSON.stringify({ text: m.content }),
+					});
+					if (d.translation) setTranslations((t) => ({ ...t, [m.content]: d.translation as string }));
+				} catch {
+					trInFlight.current.delete(m.content); // retry on a later render
+				}
+			}
+		})();
+	}, [trEnabled, id, messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
 	// Poll runtime status
 	const checkRuntime = useCallback(async () => {
 		if (!id) return;
@@ -558,7 +599,14 @@ export default function InstanceDetail() {
 										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Assistant</span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
-											<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+											<>
+												<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+												{trEnabled && translations[m.content] && (
+													<div className="mt-1.5 pt-1.5 border-t border-line/60 text-[0.78rem] text-muted italic whitespace-pre-wrap">
+														{translations[m.content]}
+													</div>
+												)}
+											</>
 										) : (
 											<span className="whitespace-pre-wrap">{m.content}</span>
 										)}

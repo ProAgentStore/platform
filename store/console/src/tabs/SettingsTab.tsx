@@ -29,6 +29,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [commandsEnabled, setCommandsEnabled] = useState(true);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
+	// Under-message translation (Assistant feature): translated text under each reply.
+	const [trEnabled, setTrEnabled] = useState(false);
+	const [trTarget, setTrTarget] = useState("English");
+	const [trLanguages, setTrLanguages] = useState<string[]>([]);
+	const [trMsg, setTrMsg] = useState("");
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
 	const [emailMsg, setEmailMsg] = useState("");
@@ -43,6 +48,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			try {
 				const d = await api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`);
 				setRuntimeInfo(d);
+			} catch {}
+			try {
+				const d = await api<{ translation?: { enabled: boolean; target: string }; languages?: string[] }>(`/v1/instances/${instanceId}/translation`);
+				setTrEnabled(d.translation?.enabled === true);
+				setTrTarget(d.translation?.target || "English");
+				setTrLanguages(d.languages || []);
 			} catch {}
 			try {
 				const d = await api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`);
@@ -153,6 +164,18 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		} catch (e) {
 			setEmailPermission(!on); // revert on failure
 			setEmailMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const saveTranslation = async (enabled: boolean, target: string) => {
+		setTrEnabled(enabled);
+		setTrTarget(target);
+		try {
+			await api(`/v1/instances/${instanceId}/translation`, { method: "PUT", body: JSON.stringify({ enabled, target }) });
+			setTrMsg("Saved — applies on your next message");
+			setTimeout(() => setTrMsg(""), 2500);
+		} catch (e) {
+			setTrMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -469,6 +492,38 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					Enable voice commands
 				</label>
 				<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat" is sent as a normal message.</p>
+			</div>
+
+			{/* Translation — translated text shown under each assistant reply */}
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Translation</h3>
+				<p className="text-sm text-muted mb-3">
+					Show a translation beneath each of the agent's replies — useful when it chats with you in a language you're learning. The agent stops translating inline; the platform does it instead.
+				</p>
+				<label className="flex items-center gap-2 text-sm cursor-pointer mb-2">
+					<input
+						type="checkbox"
+						checked={trEnabled}
+						onChange={(e) => saveTranslation(e.target.checked, trTarget)}
+						className="w-4 h-4 accent-accent"
+					/>
+					<span className="text-muted">Show translation under replies</span>
+				</label>
+				{trEnabled && (
+					<>
+						<label className="block text-xs font-semibold mb-1">Translate into</label>
+						<select
+							value={trTarget}
+							onChange={(e) => saveTranslation(true, e.target.value)}
+							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"
+						>
+							{(trLanguages.length ? trLanguages : [trTarget]).map((l) => (
+								<option key={l} value={l}>{l}</option>
+							))}
+						</select>
+					</>
+				)}
+				{trMsg && <div className="text-sm text-muted mt-2">{trMsg}</div>}
 			</div>
 
 			{/* Danger zone */}
