@@ -575,35 +575,14 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 		{ role: "system", content: system },
 		{ role: "user", content: text },
 	];
-	let raw = "";
-	if (c.env.PLATFORM_AI_ENABLED === "true" && c.env.AI) {
+	// Parse the JSON-mode reply defensively; null = unparseable (caller retries/salvages).
+	const parseGloss = (rawOut: string): { translation: string; transliteration: string; pairs?: Array<[string, string]> } | null => {
 		try {
-			const r = (await c.env.AI.run(
-				"@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
-				{ messages },
-			)) as { response?: string };
-			raw = (r.response || "").trim();
-		} catch { /* fall through to BYOK */ }
-	}
-	if (!raw) {
-		const r = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
-			messages,
-			maxTokens: 1000,
-		})) as { response?: string };
-		raw = (r.response || "").trim();
-	}
-	if (!raw) throw new HttpError(502, "Translation failed");
-	if (!transliterate) {
-		await saveGloss(raw);
-		return c.json({ translation: raw });
-	}
-	// JSON mode: parse defensively — a model that ignored the format still yields a
-	// usable translation instead of a failed request.
-	try {
-		const m = raw.match(/\{[\s\S]*\}/);
-		if (m) {
+			const m = rawOut.match(/\{[\s\S]*\}/);
+			if (!m) return null;
 			const parsed = JSON.parse(m[0]) as { translation?: unknown; pairs?: unknown };
 			const translation = typeof parsed.translation === "string" ? parsed.translation.trim() : "";
+			if (!translation) return null;
 			// Word-by-word [original, romanization] pairs for the interlinear display.
 			const pairs = (Array.isArray(parsed.pairs) ? parsed.pairs : [])
 				.flatMap((p): Array<[string, string]> => {
@@ -611,14 +590,62 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 					return [[p[0], typeof p[1] === "string" ? p[1] : ""]];
 				})
 				.slice(0, 400);
-			if (translation) {
-				// Flat transliteration derived from the pairs — the client's fallback line.
-				const transliteration = pairs.map((p) => p[1]).filter(Boolean).join(" ");
-				await saveGloss(translation, transliteration, pairs.length ? pairs : undefined);
-				return c.json({ translation, transliteration, pairs: pairs.length ? pairs : undefined });
-			}
+			// Flat transliteration derived from the pairs — the client's fallback line.
+			return { translation, transliteration: pairs.map((p) => p[1]).filter(Boolean).join(" "), pairs: pairs.length ? pairs : undefined };
+		} catch {
+			return null;
 		}
-	} catch { /* fall through */ }
+	};
+	const runByok = async (): Promise<string> => {
+		try {
+			const r = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
+				messages,
+				maxTokens: 2000,
+			})) as { response?: string };
+			return (r.response || "").trim();
+		} catch {
+			return ""; // no key / provider error — salvage whatever we already have
+		}
+	};
+
+	let raw = "";
+	let viaPlatform = false;
+	if (c.env.PLATFORM_AI_ENABLED === "true" && c.env.AI) {
+		try {
+			const r = (await c.env.AI.run(
+				"@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
+				// Explicit max_tokens: the Workers AI default is small enough to TRUNCATE
+				// a long pairs JSON mid-string → unparseable → gloss silently degraded.
+				{ messages, max_tokens: 2048 },
+			)) as { response?: string };
+			raw = (r.response || "").trim();
+			viaPlatform = !!raw;
+		} catch { /* fall through to BYOK */ }
+	}
+	if (!raw) {
+		raw = await runByok();
+		viaPlatform = false;
+	}
+	if (!raw) throw new HttpError(502, "Translation failed");
+	if (!transliterate) {
+		await saveGloss(raw);
+		return c.json({ translation: raw });
+	}
+	let gloss = parseGloss(raw);
+	// The platform model intermittently emits invalid JSON (unescaped quotes in
+	// quote-heavy replies) — retry ONCE through BYOK Claude, which is far more
+	// reliable at JSON, before degrading to a translation-only salvage.
+	if (!gloss && viaPlatform) {
+		const retry = await runByok();
+		if (retry) {
+			gloss = parseGloss(retry);
+			if (!gloss) raw = retry; // salvage from the better model's output
+		}
+	}
+	if (gloss) {
+		await saveGloss(gloss.translation, gloss.transliteration, gloss.pairs);
+		return c.json(gloss);
+	}
 	// Un-parseable model output: salvage the translation string if the reply LOOKS like
 	// our JSON (never show raw JSON to the user), else treat the whole reply as the
 	// translation. Deliberately NOT cached — a retry may parse cleanly next load.
