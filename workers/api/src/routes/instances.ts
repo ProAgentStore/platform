@@ -122,10 +122,13 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		.bind(instanceId, agent.id, session.uid, initialConfig)
 		.run();
 
-	// Create subscription row
+	// Upsert the subscription relationship row — it's UNIQUE(agent_id, user_id) and
+	// per-(user, agent), not per-instance: a second instance of the same agent
+	// reuses (and reactivates) it. The old one-instance-per-agent 409 masked this.
 	await c.env.DB.prepare(
 		`INSERT INTO subscriptions (id, user_id, agent_id, status, started_at)
-     VALUES (?1, ?2, ?3, 'active', datetime('now'))`,
+     VALUES (?1, ?2, ?3, 'active', datetime('now'))
+     ON CONFLICT(agent_id, user_id) DO UPDATE SET status = 'active', canceled_at = NULL`,
 	)
 		.bind(crypto.randomUUID(), session.uid, agent.id)
 		.run();
