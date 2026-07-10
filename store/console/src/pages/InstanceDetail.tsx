@@ -554,7 +554,7 @@ export default function InstanceDetail() {
 	// Inject instance controls into the Layout header (single bar)
 	useHideNav(true);
 	const headerContent = useMemo(() => (
-		<div className="flex items-center gap-2 min-w-0">
+		<div className="flex items-center gap-1.5 min-w-0">
 			<button type="button" onClick={() => navigate("/instances")} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
 			{instance && <span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>}
 			{/* Runner dot only for agents that USE a runner — chat-only agents showed a

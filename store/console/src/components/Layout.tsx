@@ -40,7 +40,9 @@ export default function Layout() {
 
 	return (
 		<div className="flex flex-col h-dvh overflow-hidden">
-			<header className="border-b border-line-strong bg-panel z-60 flex items-center gap-2 px-3 h-12 shrink-0" style={{ boxShadow: "0 1px 6px rgba(0,0,0,0.4)" }}>
+			{/* Denser in instance view (navHidden): every px of chrome is space the chat
+			    loses — tighter gaps, slimmer bar, icon-only logo. */}
+			<header className={`border-b border-line-strong bg-panel z-60 flex items-center shrink-0 ${navHidden ? "gap-1.5 px-2 h-10" : "gap-2 px-3 h-12"}`} style={{ boxShadow: "0 1px 6px rgba(0,0,0,0.4)" }}>
 				{/* Logo — always visible */}
 				<a
 					href="/console/"
@@ -50,12 +52,14 @@ export default function Layout() {
 					}}
 					className="flex items-center gap-1.5 no-underline text-ink shrink-0"
 				>
-					<span className="w-7 h-7 rounded-lg bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center text-sm">
-						<Zap size={16} />
+					<span className={`rounded-lg bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center text-sm ${navHidden ? "w-6 h-6" : "w-7 h-7"}`}>
+						<Zap size={navHidden ? 14 : 16} />
 					</span>
-					<span className="font-display font-bold text-[0.95rem] hidden sm:inline">
-						PAGS
-					</span>
+					{!navHidden && (
+						<span className="font-display font-bold text-[0.95rem] hidden sm:inline">
+							PAGS
+						</span>
+					)}
 				</a>
 
 				{/* Nav links — hidden when instance detail injects its controls */}
@@ -96,9 +100,9 @@ export default function Layout() {
 
 				{/* Right: notifications + avatar — always visible */}
 				{user && (
-					<span className="flex items-center gap-2.5 shrink-0">
+					<span className={`flex items-center shrink-0 ${navHidden ? "gap-1.5" : "gap-2.5"}`}>
 						<NavLink to="/notifications" className="relative no-underline text-muted" title="Notifications">
-							<Bell size={18} />
+							<Bell size={navHidden ? 16 : 18} />
 							{unreadCount > 0 && (
 								<span className="absolute -top-1 -right-1.5 bg-red text-white text-[0.55rem] w-4 h-4 rounded-full flex items-center justify-center font-bold leading-none">
 									{unreadCount > 9 ? "9+" : unreadCount}
@@ -106,7 +110,7 @@ export default function Layout() {
 							)}
 						</NavLink>
 						<NavLink to="/profile" className="flex items-center text-muted no-underline hover:text-ink">
-							<img src={user.avatar} alt="" className="w-[26px] h-[26px] rounded-full border-2 border-line" />
+							<img src={user.avatar} alt="" className={`rounded-full border-2 border-line ${navHidden ? "w-[22px] h-[22px]" : "w-[26px] h-[26px]"}`} />
 						</NavLink>
 					</span>
 				)}
