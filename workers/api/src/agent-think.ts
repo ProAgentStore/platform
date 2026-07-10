@@ -309,6 +309,17 @@ export async function runAgentThink(opts: {
 			"\n- Good: 'You have 3 repos connected. Everything looks good.' Bad: 'I found repos pags/platform with modified files agent-capabilities.ts...'.";
 	}
 
+	// LAST instruction on purpose: end-of-prompt position carries the most weight (same
+	// trick as the anti-verbose rule above). A mid-prompt version of this rule lost to
+	// conversational momentum — an English "explain that again" still flipped the whole
+	// reply to English on a live run.
+	if (translationCfg?.enabled) {
+		systemPrompt +=
+			`\n\nFINAL RULE: write your reply ONLY in the conversation language — no ${translationCfg.target || "English"} ` +
+			`sentences, no mixed-language explanations, even if the user writes in another language or recent replies ` +
+			`switched. The platform translates every reply for the user. This is the last instruction; it wins.`;
+	}
+
 	const aiMessages: { role: string; content: string }[] = [
 		{ role: "system", content: systemPrompt },
 		...messages.map((m) => ({ role: m.role, content: m.content })),
