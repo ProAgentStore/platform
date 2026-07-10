@@ -394,14 +394,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// whether an auto-speak/hands-free mode is active. maybeSpeakResponse is gated on
 	// speakOn/convoOn — the wrong tool for a manual replay, which is why double-tap was
 	// silent outside a voice mode. Unlock inside the caller's gesture so iOS plays it.
-	const speak = useCallback(async (text: string) => {
+	const speak = useCallback(async (text: string, lang?: string) => {
 		if (!text?.trim()) return;
 		unlockSpeechSynthesis();
 		setSpeaking(true);
 		try {
 			const tts = await ensureTts();
 			await tts.unlock();
-			await tts.speak(text);
+			// Optional per-utterance language (e.g. a translation spoken in ITS language).
+			await tts.speak(text, lang ? { lang } : {});
 		} catch {}
 		setSpeaking(false);
 	}, [ensureTts]);

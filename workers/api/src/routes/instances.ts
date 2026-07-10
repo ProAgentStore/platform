@@ -492,6 +492,7 @@ instanceRoutes.get("/:instanceId/translation", async (c) => {
 		translation: {
 			enabled: t.enabled === true,
 			target: typeof t.target === "string" && TRANSLATION_LANGUAGES.includes(t.target) ? t.target : "English",
+			transliterate: t.transliterate === true,
 		},
 		languages: TRANSLATION_LANGUAGES,
 	});
@@ -502,10 +503,11 @@ instanceRoutes.put("/:instanceId/translation", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown; target?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown; target?: unknown; transliterate?: unknown };
 	const translation = {
 		enabled: body.enabled === true,
 		target: typeof body.target === "string" && TRANSLATION_LANGUAGES.includes(body.target) ? body.target : "English",
+		transliterate: body.transliterate === true,
 	};
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	cfg.translation = translation;
@@ -526,35 +528,50 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 	const t = (cfg.translation && typeof cfg.translation === "object" ? cfg.translation : {}) as Record<string, unknown>;
 	if (t.enabled !== true) throw new HttpError(400, "Translation is not enabled for this instance");
 	const target = typeof t.target === "string" && TRANSLATION_LANGUAGES.includes(t.target) ? t.target : "English";
+	const transliterate = t.transliterate === true;
 	const body = (await c.req.json().catch(() => ({}))) as { text?: unknown };
 	const text = typeof body.text === "string" ? body.text.slice(0, 2000).trim() : "";
 	if (!text) throw new HttpError(400, "text required");
+	const system = transliterate
+		? `You are a translator. Reply with ONLY a JSON object, no other text:\n` +
+			`{"translation": "<the user's message translated into ${target}>", ` +
+			`"transliteration": "<the ORIGINAL message transliterated into Latin script — Hanyu Pinyin with tone marks for Chinese, Hepburn romaji for Japanese, Revised Romanization for Korean, standard romanization for other scripts; an empty string if the original is already in Latin script>"}`
+		: `You are a translator. Translate the user's message into ${target}. Output ONLY the translation — no quotes, no notes, no commentary.`;
 	const messages = [
-		{
-			role: "system",
-			content: `You are a translator. Translate the user's message into ${target}. Output ONLY the translation — no quotes, no notes, no commentary.`,
-		},
+		{ role: "system", content: system },
 		{ role: "user", content: text },
 	];
-	let translation = "";
+	let raw = "";
 	if (c.env.PLATFORM_AI_ENABLED === "true" && c.env.AI) {
 		try {
 			const r = (await c.env.AI.run(
 				"@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
 				{ messages },
 			)) as { response?: string };
-			translation = (r.response || "").trim();
+			raw = (r.response || "").trim();
 		} catch { /* fall through to BYOK */ }
 	}
-	if (!translation) {
+	if (!raw) {
 		const r = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
 			messages,
 			maxTokens: 1000,
 		})) as { response?: string };
-		translation = (r.response || "").trim();
+		raw = (r.response || "").trim();
 	}
-	if (!translation) throw new HttpError(502, "Translation failed");
-	return c.json({ translation });
+	if (!raw) throw new HttpError(502, "Translation failed");
+	if (!transliterate) return c.json({ translation: raw });
+	// JSON mode: parse defensively — a model that ignored the format still yields a
+	// usable translation instead of a failed request.
+	try {
+		const m = raw.match(/\{[\s\S]*\}/);
+		if (m) {
+			const parsed = JSON.parse(m[0]) as { translation?: unknown; transliteration?: unknown };
+			const translation = typeof parsed.translation === "string" ? parsed.translation.trim() : "";
+			const transliteration = typeof parsed.transliteration === "string" ? parsed.transliteration.trim() : "";
+			if (translation) return c.json({ translation, transliteration });
+		}
+	} catch { /* fall through */ }
+	return c.json({ translation: raw });
 });
 
 /** Probe a registered runtime's health and capabilities through PAGS. */

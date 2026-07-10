@@ -71,7 +71,7 @@ export class VoiceTts {
 	technical: boolean;
 	speaking = false;
 	private _audioCtx: AudioContext | null = null;
-	private _queue: string[] = [];
+	private _queue: Array<{ text: string; lang?: string }> = [];
 	private _processing = false;
 	private _currentSource: AudioBufferSourceNode | null = null;
 	private _gen = 0;
@@ -90,19 +90,19 @@ export class VoiceTts {
 	 * playing WAITS its turn — speech never overlaps. cancel() stops the current
 	 * utterance and drops anything queued behind it.
 	 */
-	async speak(text: string) {
+	async speak(text: string, opts: { lang?: string } = {}) {
 		if (!text?.trim()) return;
 		const clean = cleanForSpeech(String(text), { technical: this.technical });
 		if (!clean) return;
-		this._queue.push(clean);
+		this._queue.push({ text: clean, lang: opts.lang });
 		if (this._processing) return; // a turn is already draining the queue
 		this._processing = true;
 		this.speaking = true;
 		try {
 			while (this._processing && this._queue.length) {
-				const next = this._queue.shift() as string;
-				if (this.provider === "openai") await this._speakOpenAI(next);
-				else await this._speakBrowser(next);
+				const next = this._queue.shift() as { text: string; lang?: string };
+				if (this.provider === "openai") await this._speakOpenAI(next.text);
+				else await this._speakBrowser(next.text, next.lang);
 			}
 		} finally {
 			this._processing = false;
@@ -160,7 +160,7 @@ export class VoiceTts {
 		}
 	}
 
-	private _speakBrowser(text: string): Promise<void> {
+	private _speakBrowser(text: string, langOverride?: string): Promise<void> {
 		return new Promise((resolve) => {
 			if (!window.speechSynthesis) {
 				// No TTS at all in this browser — surface it so a silent "no voice reply"
@@ -180,13 +180,16 @@ export class VoiceTts {
 				// voice) the engine uses the system-default voice, which reads e.g. a
 				// Chinese reply as garbled English. Exact tag match first (zh-CN), then any
 				// voice of the same language (zh-*).
-				u.lang = this.language;
+				// Per-utterance override (e.g. speaking a translation in ITS language while
+				// the conversation voice stays in the practice language).
+				const lang = langOverride || this.language;
+				u.lang = lang;
 				// getVoices is missing on some minimal implementations — lang alone still
 				// steers engines that support it.
 				const voices = typeof speechSynthesis.getVoices === "function" ? speechSynthesis.getVoices() : [];
-				const primary = this.language.split("-")[0].toLowerCase();
+				const primary = lang.split("-")[0].toLowerCase();
 				const match =
-					voices.find((v) => v.lang === this.language) ||
+					voices.find((v) => v.lang === lang) ||
 					voices.find((v) => v.lang.toLowerCase().startsWith(`${primary}-`) || v.lang.toLowerCase() === primary);
 				if (match) u.voice = match;
 				u.rate = Math.max(0.5, Math.min(3, this.speed / 100));

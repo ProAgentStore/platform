@@ -96,11 +96,12 @@ export default function InstanceDetail() {
 	}, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Under-message translation (Settings → Translation): when enabled, each assistant
-	// reply gets a lazily-fetched translation rendered beneath it. Keyed by message
-	// content; only the latest few history messages are auto-translated to keep the
-	// per-load request count small.
+	// reply gets a lazily-fetched translation (and optional Latin transliteration —
+	// pinyin/romaji) rendered beneath it. Keyed by message content; only the latest few
+	// history messages are auto-translated to keep the per-load request count small.
 	const [trEnabled, setTrEnabled] = useState(false);
-	const [translations, setTranslations] = useState<Record<string, string>>({});
+	const [trTarget, setTrTarget] = useState("English");
+	const [translations, setTranslations] = useState<Record<string, { translation: string; transliteration?: string }>>({});
 	const trInFlight = useRef<Set<string>>(new Set());
 	useEffect(() => {
 		if (!id) return;
@@ -109,8 +110,9 @@ export default function InstanceDetail() {
 		trInFlight.current = new Set();
 		(async () => {
 			try {
-				const d = await api<{ translation?: { enabled: boolean } }>(`/v1/instances/${id}/translation`);
+				const d = await api<{ translation?: { enabled: boolean; target?: string } }>(`/v1/instances/${id}/translation`);
 				setTrEnabled(d.translation?.enabled === true);
+				setTrTarget(d.translation?.target || "English");
 			} catch {}
 		})();
 	}, [id]);
@@ -124,17 +126,28 @@ export default function InstanceDetail() {
 		(async () => {
 			for (const m of pending) {
 				try {
-					const d = await api<{ translation?: string }>(`/v1/instances/${id}/translate`, {
+					const d = await api<{ translation?: string; transliteration?: string }>(`/v1/instances/${id}/translate`, {
 						method: "POST",
 						body: JSON.stringify({ text: m.content }),
 					});
-					if (d.translation) setTranslations((t) => ({ ...t, [m.content]: d.translation as string }));
+					if (d.translation) {
+						setTranslations((t) => ({ ...t, [m.content]: { translation: d.translation as string, transliteration: d.transliteration } }));
+					}
 				} catch {
 					trInFlight.current.delete(m.content); // retry on a later render
 				}
 			}
 		})();
 	}, [trEnabled, id, messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	/** BCP-47 tag for a translation-target language name, so the spoken translation
+	 *  uses a voice in ITS language (the conversation voice stays in the practice one). */
+	const TR_LANG_TAGS: Record<string, string> = {
+		English: "en-US", Spanish: "es-ES", French: "fr-FR", German: "de-DE", Italian: "it-IT",
+		Portuguese: "pt-BR", "Chinese (Simplified)": "zh-CN", Japanese: "ja-JP", Korean: "ko-KR",
+		Hindi: "hi-IN", Russian: "ru-RU", Arabic: "ar-SA", Ukrainian: "uk-UA", Polish: "pl-PL",
+		Dutch: "nl-NL", Turkish: "tr-TR",
+	};
 
 	// Poll runtime status
 	const checkRuntime = useCallback(async () => {
@@ -603,10 +616,34 @@ export default function InstanceDetail() {
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Assistant</span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<>
-												<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+												{/* Tap the original to hear it in the conversation language. */}
+												<div
+													className={`msg-md ${trEnabled ? "cursor-pointer" : ""}`}
+													title={trEnabled ? "Tap to hear it spoken" : undefined}
+													onClick={trEnabled ? (e) => { e.stopPropagation(); voice.speak(m.content); } : undefined}
+													dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
+												/>
 												{trEnabled && translations[m.content] && (
-													<div className="mt-1.5 pt-1.5 border-t border-line/60 text-[0.78rem] text-muted italic whitespace-pre-wrap">
-														{translations[m.content]}
+													<div className="mt-1.5 pt-1.5 border-t border-line/60 flex flex-col gap-0.5">
+														{/* Transliteration (pinyin/romaji) — pronunciation of the ORIGINAL, so
+														    tapping it speaks the original text. */}
+														{translations[m.content].transliteration && (
+															<div
+																className="text-[0.78rem] text-muted whitespace-pre-wrap cursor-pointer"
+																title="Tap to hear the original spoken"
+																onClick={(e) => { e.stopPropagation(); voice.speak(m.content); }}
+															>
+																{translations[m.content].transliteration}
+															</div>
+														)}
+														{/* Translation — spoken in ITS OWN language on tap. */}
+														<div
+															className="text-[0.78rem] text-muted italic whitespace-pre-wrap cursor-pointer"
+															title={`Tap to hear it in ${trTarget}`}
+															onClick={(e) => { e.stopPropagation(); voice.speak(translations[m.content].translation, TR_LANG_TAGS[trTarget]); }}
+														>
+															{translations[m.content].translation}
+														</div>
 													</div>
 												)}
 											</>

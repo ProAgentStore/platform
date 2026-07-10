@@ -133,14 +133,18 @@ export async function runAgentThink(opts: {
 		if (settingsBlock) systemPrompt += `\n\n${settingsBlock}`;
 	}
 
-	// Under-message translation is on → the PLATFORM displays translations, so the
-	// agent must not duplicate them inline (glosses break immersion for learners).
-	const translationCfg = instanceCfg.translation as { enabled?: boolean; target?: string } | undefined;
+	// Under-message translation is on → the PLATFORM displays translations (and, when
+	// enabled, a Latin transliteration), so the agent must not duplicate either inline
+	// (glosses break immersion for learners).
+	const translationCfg = instanceCfg.translation as { enabled?: boolean; target?: string; transliterate?: boolean } | undefined;
 	if (translationCfg?.enabled) {
 		systemPrompt +=
-			`\n\n## Translation Display\nThe console automatically shows a ${translationCfg.target || "English"} translation beneath each of your replies. ` +
-			`NEVER include inline translations or parenthetical glosses in another language — write purely in the conversation language. ` +
-			`Pronunciation guides (e.g. pinyin) are still fine when they suit the learner's level.`;
+			`\n\n## Translation Display\nThe console automatically shows a ${translationCfg.target || "English"} translation` +
+			(translationCfg.transliterate ? " and a Latin transliteration (e.g. pinyin)" : "") +
+			` beneath each of your replies. NEVER include inline translations or parenthetical glosses in another language — write purely in the conversation language. ` +
+			(translationCfg.transliterate
+				? `Do not include pronunciation guides (pinyin/romaji) either — the platform displays them.`
+				: `Pronunciation guides (e.g. pinyin) are still fine when they suit the learner's level.`);
 	}
 
 	// Repo-chat: list the repositories actually indexed, read live from the DO so

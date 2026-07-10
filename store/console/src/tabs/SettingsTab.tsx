@@ -32,6 +32,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	// Under-message translation (Assistant feature): translated text under each reply.
 	const [trEnabled, setTrEnabled] = useState(false);
 	const [trTarget, setTrTarget] = useState("English");
+	const [trTranslit, setTrTranslit] = useState(false);
 	const [trLanguages, setTrLanguages] = useState<string[]>([]);
 	const [trMsg, setTrMsg] = useState("");
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
@@ -50,9 +51,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setRuntimeInfo(d);
 			} catch {}
 			try {
-				const d = await api<{ translation?: { enabled: boolean; target: string }; languages?: string[] }>(`/v1/instances/${instanceId}/translation`);
+				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean }; languages?: string[] }>(`/v1/instances/${instanceId}/translation`);
 				setTrEnabled(d.translation?.enabled === true);
 				setTrTarget(d.translation?.target || "English");
+				setTrTranslit(d.translation?.transliterate === true);
 				setTrLanguages(d.languages || []);
 			} catch {}
 			try {
@@ -167,11 +169,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
-	const saveTranslation = async (enabled: boolean, target: string) => {
+	const saveTranslation = async (enabled: boolean, target: string, transliterate: boolean) => {
 		setTrEnabled(enabled);
 		setTrTarget(target);
+		setTrTranslit(transliterate);
 		try {
-			await api(`/v1/instances/${instanceId}/translation`, { method: "PUT", body: JSON.stringify({ enabled, target }) });
+			await api(`/v1/instances/${instanceId}/translation`, { method: "PUT", body: JSON.stringify({ enabled, target, transliterate }) });
 			setTrMsg("Saved — applies on your next message");
 			setTimeout(() => setTrMsg(""), 2500);
 		} catch (e) {
@@ -504,7 +507,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					<input
 						type="checkbox"
 						checked={trEnabled}
-						onChange={(e) => saveTranslation(e.target.checked, trTarget)}
+						onChange={(e) => saveTranslation(e.target.checked, trTarget, trTranslit)}
 						className="w-4 h-4 accent-accent"
 					/>
 					<span className="text-muted">Show translation under replies</span>
@@ -514,13 +517,22 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						<label className="block text-xs font-semibold mb-1">Translate into</label>
 						<select
 							value={trTarget}
-							onChange={(e) => saveTranslation(true, e.target.value)}
-							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"
+							onChange={(e) => saveTranslation(true, e.target.value, trTranslit)}
+							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
 						>
 							{(trLanguages.length ? trLanguages : [trTarget]).map((l) => (
 								<option key={l} value={l}>{l}</option>
 							))}
 						</select>
+						<label className="flex items-center gap-2 text-sm cursor-pointer">
+							<input
+								type="checkbox"
+								checked={trTranslit}
+								onChange={(e) => saveTranslation(true, trTarget, e.target.checked)}
+								className="w-4 h-4 accent-accent"
+							/>
+							<span className="text-muted">Also show transliteration (pinyin / romaji / romanization)</span>
+						</label>
 					</>
 				)}
 				{trMsg && <div className="text-sm text-muted mt-2">{trMsg}</div>}
