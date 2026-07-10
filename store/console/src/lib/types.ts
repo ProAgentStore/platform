@@ -82,6 +82,9 @@ export interface Message {
 	createdAt?: string;
 	/** Per-turn id of this message's saved voice audio (R2); double-tap replays it. */
 	audioKey?: string;
+	/** Cached translation/transliteration attached server-side (renders in the same
+	 *  paint as the message — only uncached messages translate client-side). */
+	gloss?: { translation: string; transliteration?: string; pairs?: Array<[string, string]> };
 }
 
 export interface RuntimeTask {

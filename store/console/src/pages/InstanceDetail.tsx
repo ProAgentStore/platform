@@ -168,13 +168,21 @@ export default function InstanceDetail() {
 	}, [id, tab]);
 	useEffect(() => {
 		if (!trEnabled || !id) return;
-		// EVERY visible assistant message gets a gloss (newest first, so what you're
-		// reading fills in first) — the server caches each one permanently, so history
-		// costs one AI call per message EVER, then loads instantly.
+		// Cached glosses arrive EMBEDDED in the messages payload — seed them so history
+		// renders glossed in the same paint, with zero extra requests.
+		const seeded: Record<string, { translation: string; transliteration?: string; pairs?: Array<[string, string]> }> = {};
+		for (const m of messages) {
+			if (m.role === "assistant" && m.gloss?.translation && !(m.content in translations)) {
+				seeded[m.content] = m.gloss;
+			}
+		}
+		if (Object.keys(seeded).length) setTranslations((t) => ({ ...seeded, ...t }));
+		// Only genuinely uncached messages hit /translate (newest first, so what you're
+		// reading fills in first) — each is computed once EVER, then served embedded.
 		const pending = messages
 			.filter((m) => m.role === "assistant" && m.content?.trim())
 			.reverse()
-			.filter((m) => !(m.content in translations) && !trInFlight.current.has(m.content));
+			.filter((m) => !(m.content in translations) && !(m.content in seeded) && !trInFlight.current.has(m.content));
 		for (const m of pending) trInFlight.current.add(m.content);
 		(async () => {
 			for (const m of pending) {
@@ -196,10 +204,12 @@ export default function InstanceDetail() {
 	// Learning-display sizes (Settings → Translation → Text size). The gloss size is
 	// shared by the transliteration AND the translation — equally visible, color is
 	// the only differentiator (pinyin muted, translation accent).
+	// "medium" word size EQUALS the bubble's base text (text-sm = 0.875rem) so glossed
+	// and plain messages look like the same font — mixed sizes read as "different fonts".
 	const TR_SIZES: Record<string, { word: string; gloss: string }> = {
-		small: { word: "text-[0.9rem]", gloss: "text-[0.72rem]" },
-		medium: { word: "text-[1.05rem]", gloss: "text-[0.85rem]" },
-		large: { word: "text-[1.25rem]", gloss: "text-[1rem]" },
+		small: { word: "text-[0.8rem]", gloss: "text-[0.7rem]" },
+		medium: { word: "text-[0.875rem]", gloss: "text-[0.78rem]" },
+		large: { word: "text-[1.1rem]", gloss: "text-[0.95rem]" },
 	};
 	const trSize = TR_SIZES[trFontSize] || TR_SIZES.medium;
 

@@ -548,7 +548,10 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 	)
 		.bind(instanceId, contentHash, target, transliterate ? 1 : 0)
 		.first<{ translation: string; transliteration: string | null; pairs: string | null }>();
-	if (cached) {
+	// A transliterate-mode entry cached before the word-pairs feature has no pairs —
+	// treat it as a miss so it recomputes and UPGRADES in place (else old history
+	// would show the flat line forever).
+	if (cached && !(transliterate && !cached.pairs)) {
 		let cachedPairs: Array<[string, string]> | undefined;
 		try { cachedPairs = cached.pairs ? (JSON.parse(cached.pairs) as Array<[string, string]>) : undefined; } catch { /* re-serve without pairs */ }
 		return c.json({ translation: cached.translation, transliteration: cached.transliteration || undefined, pairs: cachedPairs });
@@ -1138,7 +1141,48 @@ instanceRoutes.get("/:instanceId/messages", async (c) => {
 	const doRes = await stub.fetch(
 		new Request(`https://agent/messages?limit=${limit}`),
 	);
-	return c.json(await doRes.json());
+	const payload = (await doRes.json()) as { messages?: Array<Record<string, unknown>> };
+
+	// Attach cached glosses to assistant messages so translated history renders in the
+	// SAME paint as the messages — no per-message fetch round trips, no pop-in. Only
+	// uncached (new) messages still translate client-side after arrival.
+	try {
+		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+		const t = (cfg.translation && typeof cfg.translation === "object" ? cfg.translation : {}) as Record<string, unknown>;
+		const msgs = payload.messages || [];
+		if (t.enabled === true && msgs.length) {
+			const target = typeof t.target === "string" && TRANSLATION_LANGUAGES.includes(t.target) ? t.target : "English";
+			const transliterate = t.transliterate === true ? 1 : 0;
+			const assistant = msgs.filter((m) => m.role === "assistant" && typeof m.content === "string" && (m.content as string).trim());
+			const hashes = new Map<string, string>(); // content → hash
+			for (const m of assistant) {
+				const content = (m.content as string).slice(0, 2000).trim();
+				const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(content));
+				hashes.set(m.content as string, [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join(""));
+			}
+			const unique = [...new Set(hashes.values())];
+			if (unique.length) {
+				const placeholders = unique.map((_, i) => `?${i + 4}`).join(", ");
+				const rows = await c.env.DB.prepare(
+					`SELECT content_hash, translation, transliteration, pairs FROM message_gloss
+					 WHERE instance_id = ?1 AND target = ?2 AND transliterate = ?3 AND content_hash IN (${placeholders})`,
+				)
+					.bind(instanceId, target, transliterate, ...unique)
+					.all<{ content_hash: string; translation: string; transliteration: string | null; pairs: string | null }>();
+				const byHash = new Map((rows.results || []).map((r) => [r.content_hash, r]));
+				for (const m of assistant) {
+					const row = byHash.get(hashes.get(m.content as string) || "");
+					// Skip stale pre-pairs entries in transliterate mode — the client
+					// re-fetches those, which recomputes + upgrades the cache.
+					if (!row || (transliterate && !row.pairs)) continue;
+					let pairs: Array<[string, string]> | undefined;
+					try { pairs = row.pairs ? (JSON.parse(row.pairs) as Array<[string, string]>) : undefined; } catch { /* flat */ }
+					m.gloss = { translation: row.translation, transliteration: row.transliteration || undefined, pairs };
+				}
+			}
+		}
+	} catch { /* glosses are an enhancement — never block messages */ }
+	return c.json(payload);
 });
 
 /** Add knowledge to my instance (client's own docs). */
