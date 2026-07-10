@@ -538,6 +538,30 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as { text?: unknown };
 	const text = typeof body.text === "string" ? body.text.slice(0, 2000).trim() : "";
 	if (!text) throw new HttpError(400, "text required");
+
+	// Persistent cache: each message is glossed ONCE, then served instantly on every
+	// later page load (no pop-in re-computation, no repeated AI spend).
+	const hashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+	const contentHash = [...new Uint8Array(hashBuf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+	const cached = await c.env.DB.prepare(
+		"SELECT translation, transliteration, pairs FROM message_gloss WHERE instance_id = ?1 AND content_hash = ?2 AND target = ?3 AND transliterate = ?4",
+	)
+		.bind(instanceId, contentHash, target, transliterate ? 1 : 0)
+		.first<{ translation: string; transliteration: string | null; pairs: string | null }>();
+	if (cached) {
+		let cachedPairs: Array<[string, string]> | undefined;
+		try { cachedPairs = cached.pairs ? (JSON.parse(cached.pairs) as Array<[string, string]>) : undefined; } catch { /* re-serve without pairs */ }
+		return c.json({ translation: cached.translation, transliteration: cached.transliteration || undefined, pairs: cachedPairs });
+	}
+	const saveGloss = async (translation: string, transliteration?: string, pairs?: Array<[string, string]>) => {
+		try {
+			await c.env.DB.prepare(
+				"INSERT OR REPLACE INTO message_gloss (instance_id, content_hash, target, transliterate, translation, transliteration, pairs) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+			)
+				.bind(instanceId, contentHash, target, transliterate ? 1 : 0, translation, transliteration ?? null, pairs ? JSON.stringify(pairs) : null)
+				.run();
+		} catch { /* cache write is best-effort */ }
+	};
 	const system = transliterate
 		? `You are a translator. Reply with ONLY a JSON object, no other text:\n` +
 			`{"translation": "<the user's message translated into ${target}>", ` +
@@ -566,7 +590,10 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 		raw = (r.response || "").trim();
 	}
 	if (!raw) throw new HttpError(502, "Translation failed");
-	if (!transliterate) return c.json({ translation: raw });
+	if (!transliterate) {
+		await saveGloss(raw);
+		return c.json({ translation: raw });
+	}
 	// JSON mode: parse defensively — a model that ignored the format still yields a
 	// usable translation instead of a failed request.
 	try {
@@ -584,13 +611,14 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 			if (translation) {
 				// Flat transliteration derived from the pairs — the client's fallback line.
 				const transliteration = pairs.map((p) => p[1]).filter(Boolean).join(" ");
+				await saveGloss(translation, transliteration, pairs.length ? pairs : undefined);
 				return c.json({ translation, transliteration, pairs: pairs.length ? pairs : undefined });
 			}
 		}
 	} catch { /* fall through */ }
 	// Un-parseable model output: salvage the translation string if the reply LOOKS like
 	// our JSON (never show raw JSON to the user), else treat the whole reply as the
-	// translation.
+	// translation. Deliberately NOT cached — a retry may parse cleanly next load.
 	const salvage = raw.match(/"translation"\s*:\s*"((?:[^"\\]|\\.)*)"/);
 	if (salvage) {
 		try { return c.json({ translation: JSON.parse(`"${salvage[1]}"`) as string }); } catch { /* fall through */ }

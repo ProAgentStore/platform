@@ -168,9 +168,12 @@ export default function InstanceDetail() {
 	}, [id, tab]);
 	useEffect(() => {
 		if (!trEnabled || !id) return;
+		// EVERY visible assistant message gets a gloss (newest first, so what you're
+		// reading fills in first) — the server caches each one permanently, so history
+		// costs one AI call per message EVER, then loads instantly.
 		const pending = messages
 			.filter((m) => m.role === "assistant" && m.content?.trim())
-			.slice(-6)
+			.reverse()
 			.filter((m) => !(m.content in translations) && !trInFlight.current.has(m.content));
 		for (const m of pending) trInFlight.current.add(m.content);
 		(async () => {
