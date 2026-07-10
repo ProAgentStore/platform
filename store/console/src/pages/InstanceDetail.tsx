@@ -104,10 +104,16 @@ export default function InstanceDetail() {
 	const [translations, setTranslations] = useState<Record<string, { translation: string; transliteration?: string }>>({});
 	const trInFlight = useRef<Set<string>>(new Set());
 	useEffect(() => {
-		if (!id) return;
+		// Reset the cache only when switching instances (not tabs).
 		setTrEnabled(false);
 		setTranslations({});
 		trInFlight.current = new Set();
+	}, [id]);
+	useEffect(() => {
+		// Re-read on every return to the chat tab too: Settings is a sibling tab on this
+		// SAME page (no remount), so enabling/changing Translation there must show up
+		// here without a reload.
+		if (!id || tab !== "chat") return;
 		(async () => {
 			try {
 				const d = await api<{ translation?: { enabled: boolean; target?: string } }>(`/v1/instances/${id}/translation`);
@@ -115,7 +121,7 @@ export default function InstanceDetail() {
 				setTrTarget(d.translation?.target || "English");
 			} catch {}
 		})();
-	}, [id]);
+	}, [id, tab]);
 	useEffect(() => {
 		if (!trEnabled || !id) return;
 		const pending = messages
@@ -616,11 +622,12 @@ export default function InstanceDetail() {
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Assistant</span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<>
-												{/* Tap the original to hear it in the conversation language. */}
+												{/* Tap the original to hear it in the conversation language.
+												    Links/buttons inside the markdown keep their own behavior. */}
 												<div
 													className={`msg-md ${trEnabled ? "cursor-pointer" : ""}`}
 													title={trEnabled ? "Tap to hear it spoken" : undefined}
-													onClick={trEnabled ? (e) => { e.stopPropagation(); voice.speak(m.content); } : undefined}
+													onClick={trEnabled ? (e) => { if ((e.target as HTMLElement).closest("a, button")) return; e.stopPropagation(); voice.speak(m.content); } : undefined}
 													dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
 												/>
 												{trEnabled && translations[m.content] && (

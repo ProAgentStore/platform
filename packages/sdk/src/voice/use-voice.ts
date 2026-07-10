@@ -390,23 +390,6 @@ export function useVoice(instanceId: string | undefined, opts: {
 		return ttsRef.current;
 	}, [instanceId]);
 
-	// Speak text on demand (e.g. double-tap a message to replay it), regardless of
-	// whether an auto-speak/hands-free mode is active. maybeSpeakResponse is gated on
-	// speakOn/convoOn — the wrong tool for a manual replay, which is why double-tap was
-	// silent outside a voice mode. Unlock inside the caller's gesture so iOS plays it.
-	const speak = useCallback(async (text: string, lang?: string) => {
-		if (!text?.trim()) return;
-		unlockSpeechSynthesis();
-		setSpeaking(true);
-		try {
-			const tts = await ensureTts();
-			await tts.unlock();
-			// Optional per-utterance language (e.g. a translation spoken in ITS language).
-			await tts.speak(text, lang ? { lang } : {});
-		} catch {}
-		setSpeaking(false);
-	}, [ensureTts]);
-
 	// Open mic with chime
 	const startListening = useCallback(async () => {
 		if (!sttRef.current || !canOpenMic(readGuard())) return;
@@ -419,6 +402,33 @@ export function useVoice(instanceId: string | undefined, opts: {
 			idleRecycleRef.current = false;
 		} catch {}
 	}, [startAudioMonitor]);
+
+	// Speak text on demand (e.g. tap a message/translation to hear it), regardless of
+	// whether an auto-speak/hands-free mode is active. maybeSpeakResponse is gated on
+	// speakOn/convoOn — the wrong tool for a manual replay, which is why double-tap was
+	// silent outside a voice mode. Unlock inside the caller's gesture so iOS plays it.
+	const speak = useCallback(async (text: string, lang?: string) => {
+		if (!text?.trim()) return;
+		unlockSpeechSynthesis();
+		// Same mic protection as speakAndResume: a manual tap-to-hear can happen while
+		// hands-free is LISTENING — without pausing, the recorder captures the TTS voice
+		// (plus its echo tail) and sends the agent's own words back as a phantom turn.
+		const resume = convoOnRef.current && !!sttRef.current?.listening;
+		pausedForThinkingRef.current = true;
+		if (sttRef.current?.listening) sttRef.current.stopDiscard(); // drop the partial capture
+		setMicOn(false);
+		setSpeaking(true);
+		try {
+			const tts = await ensureTts();
+			await tts.unlock();
+			// Optional per-utterance language (e.g. a translation spoken in ITS language).
+			await tts.speak(text, lang ? { lang } : {});
+		} catch {}
+		setSpeaking(false);
+		speakEndedAtRef.current = Date.now(); // arm the echo-tail guard, like speakAndResume
+		pausedForThinkingRef.current = false;
+		if (resume) await startListening();
+	}, [ensureTts, startListening]);
 
 	// Speak response, then re-open mic
 	const speakAndResume = useCallback(async (text: string) => {
