@@ -9,7 +9,10 @@
 -- coding timeline) have FKs referencing agent_instances(id) — deferring lets the
 -- drop+rename happen atomically within this migration without FK violations.
 
-PRAGMA defer_foreign_keys = on;
+-- NOTE: must be `true` — D1's PRAGMA allowlist does not accept `on` here, and a
+-- silently-ignored defer makes the DROP violate FKs at commit (seen live: the
+-- first deploy of this migration rolled back with code 7500).
+PRAGMA defer_foreign_keys = true;
 
 CREATE TABLE agent_instances_new (
   id TEXT PRIMARY KEY,
