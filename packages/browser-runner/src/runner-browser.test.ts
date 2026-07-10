@@ -76,7 +76,10 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(sub.resume?.filename).toContain("resume");
 		expect(sub.resume?.size).toBeGreaterThan(0);
 		expect(result.url).toContain("/success/");
-	}, 60_000);
+		// 120s, not the file's usual 60s: this is the heaviest test here (8 sequential
+		// real-browser actions, ~22s on a dev machine) and it repeatedly flaked at 60s
+		// on CI's slower runners while passing on every rerun.
+	}, 120_000);
 
 	it("snapshot reports a CAPTCHA challenge so the brain can hand off", async () => {
 		await runner.browserAct({ action: "navigate", url: `${server.jobUrl}?challenge=1` });
