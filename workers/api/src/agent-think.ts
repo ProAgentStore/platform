@@ -140,11 +140,12 @@ export async function runAgentThink(opts: {
 	if (translationCfg?.enabled) {
 		systemPrompt +=
 			`\n\n## Translation Display\nThe console automatically shows a ${translationCfg.target || "English"} translation` +
-			(translationCfg.transliterate ? " and a Latin transliteration (e.g. pinyin)" : "") +
+			(translationCfg.transliterate ? " and a word-by-word Latin transliteration (e.g. pinyin)" : "") +
 			` beneath each of your replies. NEVER include inline translations or parenthetical glosses in another language — write purely in the conversation language. ` +
 			(translationCfg.transliterate
-				? `Do not include pronunciation guides (pinyin/romaji) either — the platform displays them.`
-				: `Pronunciation guides (e.g. pinyin) are still fine when they suit the learner's level.`);
+				? `NEVER include pronunciation guides (pinyin/romaji/romanization) either — the platform displays them word-by-word. `
+				: `Pronunciation guides (e.g. pinyin) are still fine when they suit the learner's level. `) +
+			`This section OVERRIDES any earlier instruction (including your goal) to include translations or pronunciation in parentheses.`;
 	}
 
 	// Repo-chat: list the repositories actually indexed, read live from the DO so

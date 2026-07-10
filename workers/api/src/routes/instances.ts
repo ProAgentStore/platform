@@ -538,7 +538,8 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 	const system = transliterate
 		? `You are a translator. Reply with ONLY a JSON object, no other text:\n` +
 			`{"translation": "<the user's message translated into ${target}>", ` +
-			`"transliteration": "<the ORIGINAL message transliterated into Latin script — Hanyu Pinyin with tone marks for Chinese, Hepburn romaji for Japanese, Revised Romanization for Korean, standard romanization for other scripts; an empty string if the original is already in Latin script>"}`
+			`"pairs": [["<word from the ORIGINAL message>", "<its Latin transliteration — Hanyu Pinyin with tone marks for Chinese, Hepburn romaji for Japanese, Revised Romanization for Korean, standard romanization for other scripts; \\"\\" for punctuation or words already in Latin script>"], ...]}\n` +
+			`The pairs must cover the ENTIRE original message, in order, split into natural words (e.g. 名字 is one word).`
 		: `You are a translator. Translate the user's message into ${target}. Output ONLY the translation — no quotes, no notes, no commentary.`;
 	const messages = [
 		{ role: "system", content: system },
@@ -568,12 +569,30 @@ instanceRoutes.post("/:instanceId/translate", async (c) => {
 	try {
 		const m = raw.match(/\{[\s\S]*\}/);
 		if (m) {
-			const parsed = JSON.parse(m[0]) as { translation?: unknown; transliteration?: unknown };
+			const parsed = JSON.parse(m[0]) as { translation?: unknown; pairs?: unknown };
 			const translation = typeof parsed.translation === "string" ? parsed.translation.trim() : "";
-			const transliteration = typeof parsed.transliteration === "string" ? parsed.transliteration.trim() : "";
-			if (translation) return c.json({ translation, transliteration });
+			// Word-by-word [original, romanization] pairs for the interlinear display.
+			const pairs = (Array.isArray(parsed.pairs) ? parsed.pairs : [])
+				.flatMap((p): Array<[string, string]> => {
+					if (!Array.isArray(p) || typeof p[0] !== "string" || !p[0]) return [];
+					return [[p[0], typeof p[1] === "string" ? p[1] : ""]];
+				})
+				.slice(0, 400);
+			if (translation) {
+				// Flat transliteration derived from the pairs — the client's fallback line.
+				const transliteration = pairs.map((p) => p[1]).filter(Boolean).join(" ");
+				return c.json({ translation, transliteration, pairs: pairs.length ? pairs : undefined });
+			}
 		}
 	} catch { /* fall through */ }
+	// Un-parseable model output: salvage the translation string if the reply LOOKS like
+	// our JSON (never show raw JSON to the user), else treat the whole reply as the
+	// translation.
+	const salvage = raw.match(/"translation"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+	if (salvage) {
+		try { return c.json({ translation: JSON.parse(`"${salvage[1]}"`) as string }); } catch { /* fall through */ }
+	}
+	if (raw.trimStart().startsWith("{")) throw new HttpError(502, "Translation failed");
 	return c.json({ translation: raw });
 });
 

@@ -142,7 +142,7 @@ export default function InstanceDetail() {
 	const [trEnabled, setTrEnabled] = useState(false);
 	const [trTarget, setTrTarget] = useState("English");
 	const [trWordTap, setTrWordTap] = useState(true);
-	const [translations, setTranslations] = useState<Record<string, { translation: string; transliteration?: string }>>({});
+	const [translations, setTranslations] = useState<Record<string, { translation: string; transliteration?: string; pairs?: Array<[string, string]> }>>({});
 	const trInFlight = useRef<Set<string>>(new Set());
 	useEffect(() => {
 		// Reset the cache only when switching instances (not tabs).
@@ -174,12 +174,12 @@ export default function InstanceDetail() {
 		(async () => {
 			for (const m of pending) {
 				try {
-					const d = await api<{ translation?: string; transliteration?: string }>(`/v1/instances/${id}/translate`, {
+					const d = await api<{ translation?: string; transliteration?: string; pairs?: Array<[string, string]> }>(`/v1/instances/${id}/translate`, {
 						method: "POST",
 						body: JSON.stringify({ text: m.content }),
 					});
 					if (d.translation) {
-						setTranslations((t) => ({ ...t, [m.content]: { translation: d.translation as string, transliteration: d.transliteration } }));
+						setTranslations((t) => ({ ...t, [m.content]: { translation: d.translation as string, transliteration: d.transliteration, pairs: d.pairs } }));
 					}
 				} catch {
 					trInFlight.current.delete(m.content); // retry on a later render
@@ -682,9 +682,24 @@ export default function InstanceDetail() {
 												/>
 												{trEnabled && translations[m.content] && (
 													<div className="mt-1.5 pt-1.5 border-t border-line/60 flex flex-col gap-0.5">
-														{/* Transliteration (pinyin/romaji) — pronunciation of the ORIGINAL, so
-														    tapping it speaks the original text. */}
-														{translations[m.content].transliteration && (
+														{/* Interlinear gloss when word pairs are available: each original word
+														    with its romanization directly beneath (textbook-style), every
+														    column tappable to hear that word. Falls back to the flat line. */}
+														{translations[m.content].pairs?.length ? (
+															<div className="flex flex-wrap gap-x-1.5 gap-y-1 items-end">
+																{translations[m.content].pairs?.map(([word, roman], pi) => (
+																	<span
+																		key={`${pi}-${word}`}
+																		className="inline-flex flex-col items-center cursor-pointer hover:text-accent transition-colors"
+																		title="Tap to hear this word"
+																		onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); voice.speak(word); }}
+																	>
+																		<span className="text-[0.9rem] leading-tight">{word}</span>
+																		<span className="text-[0.68rem] text-muted leading-tight min-h-[0.9em]">{roman}</span>
+																	</span>
+																))}
+															</div>
+														) : translations[m.content].transliteration ? (
 															<div
 																className="text-[0.78rem] text-muted whitespace-pre-wrap cursor-pointer"
 																title="Tap to hear the original spoken"
@@ -692,7 +707,7 @@ export default function InstanceDetail() {
 															>
 																{translations[m.content].transliteration}
 															</div>
-														)}
+														) : null}
 														{/* Translation — spoken in ITS OWN language: the tapped word when
 														    word-tap is on (whole line as fallback), else the whole line. */}
 														<div
