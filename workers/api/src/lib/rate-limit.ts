@@ -67,7 +67,9 @@ export function rateLimitDefault() {
 	return async (c: Context<{ Bindings: Env }>, next: Next) => {
 		const who = await subject(c);
 		const path = c.req.path;
-		const isLivePoll = path.includes("/takeover") || path.endsWith("/capture");
+		// Multipart part uploads ride the live bucket too: a large file is hundreds
+		// of sequential 10MiB parts — the default 240/min would stall mid-upload.
+		const isLivePoll = path.includes("/takeover") || path.endsWith("/capture") || path.includes("/files/multipart/");
 		const isExplain = path.endsWith("/explain");
 		const limit = isLivePoll ? 3000 : isExplain ? 40 : 240;
 		const bucket = isLivePoll ? "live" : isExplain ? "explain" : "default";

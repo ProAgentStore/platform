@@ -1,7 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { KnowledgeDoc, MemoryEntry, Credential } from "../lib/types";
+import { useUploader } from "../lib/use-uploader";
 import { formatTime, renderMd } from "@proagentstore/sdk/ui";
+
+/** Above this, uploads go through the resumable multipart path (progress +
+ *  pause/resume + disconnect survival); below it, one small request is simpler. */
+const MULTIPART_THRESHOLD = 8 * 1024 * 1024;
+
+const fmtBytes = (n: number) =>
+	n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
 
 type KbSubTab = "docs" | "memory" | "files" | "credentials" | "rules";
 
@@ -230,7 +238,14 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		}
 	};
 
+	// Resumable multipart uploader for large files (progress, pause, survives disconnects).
+	const uploader = useUploader(instanceId, () => loadFiles());
+
 	const uploadFile = async (file: File) => {
+		if (file.size > MULTIPART_THRESHOLD) {
+			uploader.start(file);
+			return;
+		}
 		try {
 			const reader = new FileReader();
 			const base64 = await new Promise<string>((resolve) => {
@@ -450,6 +465,43 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 							<input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFile(f); e.target.value = ""; }} />
 						</label>
 					</div>
+
+					{/* In-flight resumable uploads: live progress + pause/resume/cancel. An
+					    interrupted upload (disconnect, closed tab) resumes from its last
+					    completed part when the same file is selected again. */}
+					{uploader.jobs.length > 0 && (
+						<div className="flex flex-col gap-2 mb-3">
+							{uploader.jobs.map((j) => (
+								<div key={j.localId} className="bg-panel border border-line rounded-lg p-3">
+									<div className="flex justify-between items-center gap-3 mb-1.5">
+										<div className="text-sm font-semibold truncate">{j.fileName}</div>
+										<div className="flex gap-1.5 shrink-0 items-center">
+											<span className="text-xs text-muted">
+												{j.status === "done" ? "Done ✓" : `${fmtBytes(j.uploaded)} / ${fmtBytes(j.size)}`}
+											</span>
+											{j.status === "uploading" && (
+												<button type="button" onClick={() => uploader.pause(j.localId)} className="text-xs px-2 py-1 rounded border border-line text-muted hover:border-accent hover:text-accent">Pause</button>
+											)}
+											{(j.status === "paused" || j.status === "error") && (
+												<button type="button" onClick={() => uploader.resume(j.localId)} className="text-xs px-2 py-1 rounded bg-accent text-white font-bold">Resume</button>
+											)}
+											{j.status !== "done" && (
+												<button type="button" onClick={() => uploader.cancel(j.localId)} className="text-xs px-2 py-1 rounded border border-line text-red hover:bg-red/10">Cancel</button>
+											)}
+										</div>
+									</div>
+									<div className="h-1.5 bg-line rounded-full overflow-hidden">
+										<div
+											className={`h-full rounded-full transition-all ${j.status === "error" ? "bg-red" : j.status === "paused" ? "bg-muted" : "bg-accent"}`}
+											style={{ width: `${Math.min(100, Math.round((j.uploaded / Math.max(1, j.size)) * 100))}%` }}
+										/>
+									</div>
+									{j.error && <div className="text-xs text-red mt-1">{j.error}</div>}
+								</div>
+							))}
+						</div>
+					)}
+
 					{files.length === 0 ? (
 						<p className="text-center py-4 text-muted-soft text-sm">No files uploaded yet.</p>
 					) : (

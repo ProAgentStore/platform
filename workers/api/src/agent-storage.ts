@@ -378,6 +378,80 @@ export class AgentStorageEngine {
 	}
 
 	/**
+	 * Register a file whose bytes are ALREADY in R2 — the resumable multipart
+	 * upload path puts the object directly (worker → R2 parts), then calls this to
+	 * create the metadata + extraction + vectorization the normal upload does
+	 * inline. Extraction reads the object back, bounded: very large files skip
+	 * extraction (the cap on extracted text is 100KB anyway).
+	 */
+	async fileRegister(opts: {
+		id: string;
+		name: string;
+		r2Key: string;
+		mimeType: string;
+		userId?: string;
+		tags?: string[];
+	}): Promise<FileMeta | null> {
+		if (!this.r2) throw new Error("R2 storage not available");
+		const head = await this.r2.head(opts.r2Key);
+		if (!head) return null; // multipart not completed / wrong key
+
+		// Bounded extraction read: PDFs/text under the cap get read fully (Workers
+		// memory comfortably handles this); bigger objects skip extraction.
+		const MAX_EXTRACT_BYTES = 32 * 1024 * 1024;
+		let extracted: { text: string; status: FileMeta["extractionStatus"]; error?: string } = { text: "", status: "unsupported" };
+		if (head.size <= MAX_EXTRACT_BYTES) {
+			const obj = await this.r2.get(opts.r2Key);
+			if (obj) {
+				extracted = await extractFileText({
+					name: opts.name,
+					mimeType: opts.mimeType,
+					data: await obj.arrayBuffer(),
+				});
+			}
+		}
+
+		const meta: FileMeta = {
+			id: opts.id,
+			agentId: this.agentId,
+			userId: opts.userId,
+			name: opts.name,
+			path: `/${opts.name}`,
+			mimeType: opts.mimeType,
+			size: head.size,
+			tags: opts.tags || [],
+			r2Key: opts.r2Key,
+			extractionStatus: extracted.status,
+			extractedTextLength: extracted.text.length,
+			extractionError: extracted.error,
+			createdAt: new Date().toISOString(),
+			updatedAt: new Date().toISOString(),
+		};
+		await this.doStorage.put(`file:${opts.id}`, meta);
+
+		if (extracted.text) {
+			await this.doStorage.put(`filetext:${opts.id}`, extracted.text.slice(0, 100_000));
+			try {
+				await this.vectorizeStore("file", opts.id, extracted.text.slice(0, 100_000));
+			} catch (err) {
+				console.error(`[storage] file ${opts.id} stored but not vectorized:`, err);
+			}
+		}
+
+		await this.logEvent("file.uploaded", undefined, {
+			fileId: opts.id,
+			name: opts.name,
+			size: meta.size,
+			mimeType: opts.mimeType,
+			extractionStatus: meta.extractionStatus,
+			extractedTextLength: meta.extractedTextLength,
+			multipart: true,
+		});
+
+		return meta;
+	}
+
+	/**
 	 * Read a file's contents from R2.
 	 */
 	async fileGet(id: string): Promise<{ meta: FileMeta; body: ReadableStream } | null> {

@@ -235,6 +235,8 @@ export class AgentDO extends DurableObject<Env> {
 				return this.handleListFiles(url);
 			if (path === "/files" && request.method === "POST")
 				return this.handleUploadFile(request);
+			if (path === "/files/register" && request.method === "POST")
+				return this.handleRegisterFile(request);
 			if (path.match(/^\/files\/[^/]+$/) && request.method === "GET")
 				return this.handleGetFile(path.slice("/files/".length));
 			if (path.match(/^\/files\/[^/]+$/) && request.method === "DELETE")
@@ -1086,6 +1088,31 @@ export class AgentDO extends DurableObject<Env> {
 			tags: body.tags,
 			extractText: body.extract_text !== false,
 		});
+		return json(meta, 201);
+	}
+
+	/** Register an object the multipart upload already placed in R2 (see fileRegister). */
+	private async handleRegisterFile(request: Request): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		const body = await request.json<{
+			id: string;
+			name: string;
+			r2_key: string;
+			mime_type?: string;
+			user_id?: string;
+		}>();
+		if (!body.id || !body.name || !body.r2_key)
+			return json({ error: "id, name, r2_key required" }, 400);
+		const meta = await engine.fileRegister({
+			id: body.id,
+			name: body.name,
+			r2Key: body.r2_key,
+			mimeType: body.mime_type || "application/octet-stream",
+			userId: body.user_id,
+		});
+		if (!meta) return json({ error: "Object not found in storage" }, 404);
 		return json(meta, 201);
 	}
 

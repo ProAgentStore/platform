@@ -14,6 +14,7 @@ import { logEvent, listEvents } from "../lib/events.js";
 import { parseLoopDecision } from "../lib/loop-decide.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import { attachGlossesToMessages, registerTranslationRoutes } from "./instances-translation.js";
+import { registerFileUploadRoutes } from "./instances-files.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import type { Env } from "../types.js";
 import {
@@ -578,6 +579,7 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 // input channel live in instances-apply.ts to keep this file focused.
 registerApplyRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
+registerFileUploadRoutes(instanceRoutes);
 
 /** Remove my registered runtime. */
 instanceRoutes.delete("/:instanceId/runtime", async (c) => {
