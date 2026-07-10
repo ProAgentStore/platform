@@ -5,7 +5,7 @@ import type { Instance, Message } from "../lib/types";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
-import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, Settings, Loader2 } from "lucide-react";
+import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2 } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
 import DynamicSurface from "../components/DynamicSurface";
@@ -507,7 +507,10 @@ export default function InstanceDetail() {
 								<button type="button" onClick={() => setShowLoopForm(!showLoopForm)} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
 							)}
 							<div className="relative">
-								<button type="button" onClick={() => setShowChatMenu((v) => !v)} title="Chat options" aria-label="Chat options" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}><Settings size={13} /></button>
+								{/* Kebab, NOT a gear: these are conversation ACTIONS (copy/clear) — real
+							    settings live on the Settings tab. A gear here read as a second
+							    settings surface and confused people. */}
+							<button type="button" onClick={() => setShowChatMenu((v) => !v)} title="Chat options" aria-label="Chat options" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}><MoreVertical size={13} /></button>
 								{showChatMenu && (
 									<>
 										<div className="fixed inset-0 z-10" onClick={() => setShowChatMenu(false)} />
