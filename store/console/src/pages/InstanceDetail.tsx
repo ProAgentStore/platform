@@ -145,6 +145,9 @@ export default function InstanceDetail() {
 	const [trFontSize, setTrFontSize] = useState("medium");
 	const [translations, setTranslations] = useState<Record<string, { translation: string; transliteration?: string; pairs?: Array<[string, string]> }>>({});
 	const trInFlight = useRef<Set<string>>(new Set());
+	// Ref mirror so doSend (stable callback) sees the live value.
+	const trEnabledRef = useRef(false);
+	useEffect(() => { trEnabledRef.current = trEnabled; }, [trEnabled]);
 	useEffect(() => {
 		// Reset the cache only when switching instances (not tabs).
 		setTrEnabled(false);
@@ -377,6 +380,28 @@ export default function InstanceDetail() {
 				setMessages((prev) => [...prev, data.toolMessage!]);
 			}
 			if (data.message) {
+				// One final card: fetch the gloss BEFORE showing the reply so message,
+				// transliteration, and translation render together (the thinking spinner
+				// covers the wait). Capped at 6s — a slow/failed gloss never holds the
+				// reply hostage; it just fills in lazily like before.
+				if (trEnabledRef.current && data.message.role === "assistant" && data.message.content?.trim()) {
+					try {
+						const gloss = await Promise.race([
+							api<{ translation?: string; transliteration?: string; pairs?: Array<[string, string]> }>(`/v1/instances/${id}/translate`, {
+								method: "POST",
+								body: JSON.stringify({ text: data.message.content }),
+							}),
+							new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+						]);
+						if (gloss?.translation) {
+							trInFlight.current.add(data.message.content);
+							setTranslations((t) => ({
+								...t,
+								[data.message!.content]: { translation: gloss.translation as string, transliteration: gloss.transliteration, pairs: gloss.pairs },
+							}));
+						}
+					} catch { /* lazy fill-in fallback */ }
+				}
 				setMessages((prev) => [...prev, data.message!]);
 				speakRef.current(data.message.content);
 			} else {
