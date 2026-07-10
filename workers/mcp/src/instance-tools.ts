@@ -144,7 +144,7 @@ export function registerInstanceTools(
 				message?: { content?: string };
 				error?: string;
 			};
-			if (!data.error) await audit(safetyFor(token), { tool: "chat_with_instance", action: "completed", input: { instance_id, messageBytes: new TextEncoder().encode(message).length } });
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "chat_with_instance", action: "completed", input: { instance_id, messageBytes: new TextEncoder().encode(message).length } });
 			return text(data.message?.content || data.error || "No response");
 		},
 	);
@@ -206,7 +206,7 @@ export function registerInstanceTools(
 				},
 				env,
 			)) as { runtime?: unknown; error?: string };
-			if (!data.error) await audit(safetyFor(token), { tool: "register_instance_runtime", action: "completed", input: { ...input, runner_token: runner_token ? "[provided]" : undefined }, result: data.runtime });
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "register_instance_runtime", action: "completed", input: { ...input, runner_token: runner_token ? "[provided]" : undefined }, result: data.runtime });
 			return data.error
 				? text(`Error: ${data.error}`)
 				: text(`Runtime registered for ${instance_id}.\n${JSON.stringify(data.runtime, null, 2)}`);
@@ -1026,6 +1026,618 @@ export function registerInstanceTools(
 			return text(`Loop stopped at iteration ${state.iteration}/${state.maxIterations}.`);
 		},
 	);
+
+	// ── Instance memory ────────────────────────────────────────────────────────
+
+	server.tool(
+		"get_instance_memory",
+		"Read a subscribed instance's memory entries (identity, knowledge, preference, skill, context — the console's Knowledge → Memory tab).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/memory`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"write_instance_memory",
+		"Create or update a memory entry on a subscribed instance. Read get_instance_memory first to reuse an existing key instead of creating a near-duplicate.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			key: z.string().describe("Memory key (reuse an existing key to update it)"),
+			type: z.enum(["identity", "knowledge", "preference", "skill", "context"]),
+			content: z.string(),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, key, type, content, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, key, type };
+			const denied = await requirePermission(safetyFor(token), "write", "write_instance_memory", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "write_instance_memory", "write instance memory entry", input, {
+					endpoint: `/v1/instances/${instance_id}/memory`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/memory`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ key, type, content, source: "user" }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "write_instance_memory", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"delete_instance_memory",
+		"Delete one memory entry (by key) from a subscribed instance.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			key: z.string().describe("Memory key to delete"),
+			confirm: z.string().optional().describe('Must be "delete_instance_memory" to delete a memory entry.'),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, key, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, key };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_instance_memory", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "delete_instance_memory", "delete instance memory entry", input, {
+					endpoint: `/v1/instances/${instance_id}/memory/${encodeURIComponent(key)}`,
+					method: "DELETE",
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_instance_memory", confirm, "delete_instance_memory", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/memory/${encodeURIComponent(key)}`,
+				sessionToken,
+				{ method: "DELETE" },
+				env,
+			);
+			await audit(safetyFor(token), { tool: "delete_instance_memory", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	// ── Instance settings / config ─────────────────────────────────────────────
+
+	server.tool(
+		"get_instance_settings",
+		"Read a subscribed instance's typed agent settings (values + the agent's declared settings schema, e.g. Language Buddy's target language).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/settings`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_instance_settings",
+		"Update a subscribed instance's typed agent settings (patch — only sent fields change; a voiceLanguage field also syncs the voice STT/TTS language).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			settings: z.record(z.unknown()).describe("Field id → new value, per the agent's settings schema"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, settings, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, fields: Object.keys(settings) };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_settings", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_settings", "update instance agent settings", input, {
+					endpoint: `/v1/instances/${instance_id}/settings`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/settings`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ settings }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_settings", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"rename_instance",
+		"Set (or clear) a subscribed instance's display name — how it appears in the console when you run several instances of the same agent.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			name: z.string().optional().describe("New display name (max 60 chars). Omit or empty to reset to the agent's name."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, name, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, name: name ?? "" };
+			const denied = await requirePermission(safetyFor(token), "write", "rename_instance", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "rename_instance", "rename instance", input, {
+					endpoint: `/v1/instances/${instance_id}/name`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/name`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ name: name ?? "" }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "rename_instance", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"get_instance_instructions",
+		"Read a subscribed instance's Special Instructions (the subscriber's free-text rules injected at the top of the agent's prompt — console Knowledge → Rules & Tips).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/instructions`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_instance_instructions",
+		"Replace a subscribed instance's Special Instructions (max 4000 chars; these override the agent's defaults).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			instructions: z.string().describe("The full new rules text (replaces the old text; empty string clears)"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, instructions, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, bytes: instructions.length };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_instructions", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_instructions", "replace instance special instructions", input, {
+					endpoint: `/v1/instances/${instance_id}/instructions`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/instructions`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ instructions }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_instructions", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"get_translation_config",
+		"Read a subscribed instance's translation display config (translation under messages, transliteration/pinyin, word-tap pronunciation, font size).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/translation`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_translation_config",
+		"Update a subscribed instance's translation display config. Only sent fields change.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			enabled: z.boolean().optional().describe("Show a translation under every message"),
+			target: z.string().optional().describe("Translation target language name (e.g. English)"),
+			transliterate: z.boolean().optional().describe("Word-by-word interlinear transliteration (e.g. pinyin for Chinese)"),
+			word_tap: z.boolean().optional().describe("Tap a word to hear it pronounced"),
+			font_size: z.string().optional().describe("Interlinear text size: small | medium | large"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, enabled, target, transliterate, word_tap, font_size, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const patch: Record<string, unknown> = {};
+			if (enabled !== undefined) patch.enabled = enabled;
+			if (target !== undefined) patch.target = target;
+			if (transliterate !== undefined) patch.transliterate = transliterate;
+			if (word_tap !== undefined) patch.wordTap = word_tap;
+			if (font_size !== undefined) patch.fontSize = font_size;
+			const input = { instance_id, ...patch };
+			const denied = await requirePermission(safetyFor(token), "write", "set_translation_config", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_translation_config", "update instance translation config", input, {
+					endpoint: `/v1/instances/${instance_id}/translation`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/translation`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify(patch) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_translation_config", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"get_instance_state",
+		"Read a subscribed instance's DO state (identity, guardrails, permissions). Read-only — permission toggles stay in the console.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/state`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	// ── Instance activity / files / messages ───────────────────────────────────
+
+	server.tool(
+		"instance_activity",
+		"Read a subscribed instance's activity log (chat, tool calls, file uploads, record mutations — append-only).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/activity`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"delete_instance_file",
+		"Delete an uploaded file from a subscribed instance (Knowledge → Files). Removes the R2 object, its metadata, and its vectors.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			file_id: z.string(),
+			confirm: z.string().optional().describe('Must be "delete_instance_file" to delete a file.'),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, file_id, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, file_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "delete_instance_file", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "delete_instance_file", "delete instance file", input, {
+					endpoint: `/v1/instances/${instance_id}/files/${encodeURIComponent(file_id)}`,
+					method: "DELETE",
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "delete_instance_file", confirm, "delete_instance_file", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/files/${encodeURIComponent(file_id)}`,
+				sessionToken,
+				{ method: "DELETE" },
+				env,
+			);
+			await audit(safetyFor(token), { tool: "delete_instance_file", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"clear_instance_messages",
+		"Clear a subscribed instance's chat history (all messages; voice recordings are deleted too). This cannot be undone.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			confirm: z.string().optional().describe('Must be "clear_instance_messages" to clear the chat history.'),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, confirm, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "destructive", "clear_instance_messages", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "clear_instance_messages", "clear ALL instance chat messages", input, {
+					endpoint: `/v1/instances/${instance_id}/messages`,
+					method: "DELETE",
+				});
+			}
+			const unconfirmed = await requireConfirmation(safetyFor(token), "clear_instance_messages", confirm, "clear_instance_messages", input);
+			if (unconfirmed) return unconfirmed;
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/messages`,
+				sessionToken,
+				{ method: "DELETE" },
+				env,
+			);
+			await audit(safetyFor(token), { tool: "clear_instance_messages", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	// ── Board + tasks ──────────────────────────────────────────────────────────
+
+	server.tool(
+		"set_board_item_status",
+		"Move a board card to a different column (or reset it to automation by omitting status). Get valid statuses from instance_board / get_agent_board_config.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			job_key: z.string().describe("The card's jobKey from instance_board"),
+			status: z.string().optional().describe("Target column/status id. Omit or empty to hand the card back to automation."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, job_key, status, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, job_key, status: status ?? "" };
+			const denied = await requirePermission(safetyFor(token), "write", "set_board_item_status", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_board_item_status", "move board card", input, {
+					endpoint: `/v1/instances/${instance_id}/board/status`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/board/status`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ jobKey: job_key, status: status ?? "" }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_board_item_status", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"hint_instance_task",
+		"Attach a hint to a runtime task (guidance the agent reads on its next step, e.g. answering a blocked task's question).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			task_id: z.string(),
+			hint: z.string().describe("The guidance text (max 2000 chars)"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, task_id, hint, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, task_id };
+			const denied = await requirePermission(safetyFor(token), "write", "hint_instance_task", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "hint_instance_task", "attach hint to runtime task", input, {
+					endpoint: `/v1/instances/${instance_id}/tasks/${task_id}/hint`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/tasks/${task_id}/hint`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ hint }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "hint_instance_task", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"clear_finished_tasks",
+		"Clear all finished (done/failed/cancelled) runtime tasks from a subscribed instance's board.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id };
+			const denied = await requirePermission(safetyFor(token), "write", "clear_finished_tasks", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "clear_finished_tasks", "clear finished runtime tasks", input, {
+					endpoint: `/v1/instances/${instance_id}/tasks/clear-finished`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/tasks/clear-finished`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({}) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "clear_finished_tasks", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	// ── Creator: agent settings schema ─────────────────────────────────────────
+
+	server.tool(
+		"get_agent_settings_schema",
+		"Read an agent's declared typed settings schema (creator view — the fields subscribers see in Settings → Agent settings).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			agent_id: z.string(),
+		},
+		async ({ token, agent_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/agents/${agent_id}/settings-schema`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_agent_settings_schema",
+		"Replace an agent's typed settings schema (owner only). Fields: {id, label, type: select|text|number|toggle, options?, default?, description?, voiceLanguage?, prompt?}. Max 12 fields.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			agent_id: z.string(),
+			settings_schema: z.array(z.record(z.unknown())).describe("The full schema array (replaces the old one; [] clears)"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, agent_id, settings_schema, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { agent_id, fields: settings_schema.length };
+			const denied = await requirePermission(safetyFor(token), "write", "set_agent_settings_schema", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_agent_settings_schema", "replace agent settings schema", input, {
+					endpoint: `/v1/agents/${agent_id}/settings-schema`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/agents/${agent_id}/settings-schema`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ settingsSchema: settings_schema }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_agent_settings_schema", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	// ── Account-level reads ────────────────────────────────────────────────────
+
+	server.tool(
+		"billing_status",
+		"Read your billing/plan status (free vs Pro, whether the paywall is enforced, whether a billing account exists). Upgrades happen in the console (browser redirect).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall("/v1/billing/status", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"keys_status",
+		"Which AI providers have a BYOK key stored for your account (names only — values are never exposed). Useful when chat says BYOK is required.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall("/v1/keys/status", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"email_status",
+		"Gmail connection status for the email-access tool (configured? connected?). Connect/disconnect happens in the console.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+		},
+		async ({ token }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall("/v1/email/status", sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"update_profile",
+		"Update your structured candidate Profile / Job Preferences (string fields only; used by the apply pipeline). Read get_profile first.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			fields: z.record(z.string()).describe("Field name → value (e.g. full_name, phone, city; empty string clears a field)"),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, fields, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { fields: Object.keys(fields) };
+			const denied = await requirePermission(safetyFor(token), "write", "update_profile", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "update_profile", "update candidate profile fields", input, {
+					endpoint: "/v1/profile",
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				"/v1/profile",
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify(fields) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "update_profile", action: "completed", input, result: { ok: true } });
+			return jsonText(data);
+		},
+	);
+
+	if (groups.has("apply")) {
+		server.tool(
+			"get_apply_tips",
+			"Read the learned per-ATS apply tips for an apply-capable instance (what worked/failed on each ATS host — console Rules & Tips).",
+			{
+				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+				instance_id: z.string(),
+			},
+			async ({ token, instance_id }) => {
+				const sessionToken = tokenFor(token);
+				if (!sessionToken) return authRequired();
+				const data = await authedCall(`/v1/instances/${instance_id}/apply-tips`, sessionToken, {}, env);
+				return jsonText(data);
+			},
+		);
+	}
 }
 
 interface BoardColumn { id: string; title: string; statuses?: string[]; catchAll?: boolean }
