@@ -138,14 +138,21 @@ export async function runAgentThink(opts: {
 	// (glosses break immersion for learners).
 	const translationCfg = instanceCfg.translation as { enabled?: boolean; target?: string; transliterate?: boolean } | undefined;
 	if (translationCfg?.enabled) {
+		const target = translationCfg.target || "English";
 		systemPrompt +=
-			`\n\n## Translation Display\nThe console automatically shows a ${translationCfg.target || "English"} translation` +
+			`\n\n## Translation Display\nThe console automatically shows a ${target} translation` +
 			(translationCfg.transliterate ? " and a word-by-word Latin transliteration (e.g. pinyin)" : "") +
-			` beneath each of your replies. NEVER include inline translations or parenthetical glosses in another language — write purely in the conversation language. ` +
+			` beneath each of your replies, so the user always understands you. Therefore: write your ENTIRE reply — ` +
+			`including explanations, grammar notes, and corrections — in the conversation language, and NEVER switch to ` +
+			`${target} or any other language to explain something (even when the user writes in another language or says ` +
+			`they don't understand — the translation below makes you understood; answer in the conversation language and ` +
+			`keep it simpler if needed). Only reply in another language if the user EXPLICITLY asks you to reply in it. ` +
+			`NEVER include inline translations or parenthetical glosses in another language. ` +
 			(translationCfg.transliterate
 				? `NEVER include pronunciation guides (pinyin/romaji/romanization) either — the platform displays them word-by-word. `
 				: `Pronunciation guides (e.g. pinyin) are still fine when they suit the learner's level. `) +
-			`This section OVERRIDES any earlier instruction (including your goal) to include translations or pronunciation in parentheses.`;
+			`This section OVERRIDES any earlier instruction (including your goal) to explain in another language or to ` +
+			`include translations or pronunciation in parentheses.`;
 	}
 
 	// Repo-chat: list the repositories actually indexed, read live from the DO so
