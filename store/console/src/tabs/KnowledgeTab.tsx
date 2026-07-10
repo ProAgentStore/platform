@@ -209,6 +209,16 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 
 	const uploadKbFile = async (file: File) => {
 		try {
+			// Binary (PDF etc.) or large files belong to the FILES pipeline (R2 +
+			// text-extraction + vectorize, no meaningful size cap) — knowledge DOCS are
+			// small pasted text, capped at 100KB by Durable Object storage. Route
+			// automatically instead of erroring with "Document too large".
+			const isTextDoc = /\.(txt|md|csv|json|html?)$/i.test(file.name) && !file.type.includes("pdf");
+			if (!isTextDoc || file.size > 100_000) {
+				await uploadFile(file);
+				setSubTab("files");
+				return;
+			}
 			const text = await file.text();
 			await api(`/v1/instances/${instanceId}/knowledge`, {
 				method: "POST",
@@ -336,7 +346,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 								<button type="button" onClick={() => setShowUrl((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ URL</button>
 								<label className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold cursor-pointer">
 									+ File
-									<input type="file" accept=".txt,.md,.csv,.json,.html" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKbFile(f); e.target.value = ""; }} />
+									<input type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,.xml" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKbFile(f); e.target.value = ""; }} />
 								</label>
 							</div>
 						</div>
