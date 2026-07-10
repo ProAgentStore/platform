@@ -6,10 +6,6 @@ import FilesSection from "../components/FilesSection";
 import MemorySection from "../components/MemorySection";
 import { formatTime, renderMd } from "@proagentstore/sdk/ui";
 
-/** Above this, uploads go through the resumable multipart path (progress +
- *  pause/resume + disconnect survival); below it, one small request is simpler. */
-const MULTIPART_THRESHOLD = 8 * 1024 * 1024;
-
 type KbSubTab = "docs" | "memory" | "files" | "credentials" | "rules";
 
 interface Props {
@@ -162,34 +158,13 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		}
 	};
 
-	// Resumable multipart uploader for large files (progress, pause, survives
-	// disconnects). Lives HERE (not in FilesSection) because the Documents tab's
-	// "+ File" button shares the routing below.
+	// Resumable uploader for EVERY file (progress, pause, survives disconnects).
+	// Small files are a single-part multipart — same UX, same progress rows,
+	// instead of the old silent single-shot request users read as "nothing
+	// happened". Lives HERE (not in FilesSection) because the Documents tab's
+	// "+ File" button shares it.
 	const uploader = useUploader(instanceId, () => setFilesRefresh((k) => k + 1));
-
-	const uploadFile = async (file: File) => {
-		if (file.size > MULTIPART_THRESHOLD) {
-			uploader.start(file);
-			return;
-		}
-		try {
-			const reader = new FileReader();
-			const base64 = await new Promise<string>((resolve) => {
-				reader.onload = () => resolve((reader.result as string).split(",")[1]);
-				reader.readAsDataURL(file);
-			});
-			// The DO expects contentBase64 + mime_type (NOT data/contentType) — the old
-			// field names made EVERY binary upload 400 with "name and content or
-			// contentBase64 required".
-			await api(`/v1/instances/${instanceId}/files`, {
-				method: "POST",
-				body: JSON.stringify({ name: file.name, contentBase64: base64, mime_type: file.type || "application/octet-stream" }),
-			});
-			setFilesRefresh((k) => k + 1);
-		} catch (e) {
-			alert(e instanceof Error ? e.message : String(e));
-		}
-	};
+	const uploadFile = async (file: File) => uploader.start(file);
 
 	const subTabs: { id: KbSubTab; label: string }[] = [
 		{ id: "docs", label: "Documents" },

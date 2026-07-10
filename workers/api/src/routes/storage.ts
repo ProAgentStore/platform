@@ -342,12 +342,15 @@ instanceStorageRoutes.post("/:id/files", async (c) => {
 	});
 });
 
-/** Stream a file's bytes (from R2 via the DO) — powers download + in-console preview. */
+/** Stream a file's bytes (from R2 via the DO) — powers download + in-console preview.
+ *  NOT proxyDO: that helper JSON-parses the body, which throws on binary → 500. */
 instanceStorageRoutes.get("/:id/files/:fileId", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
 	const fileId = c.req.param("fileId");
-	return proxyDO(c, instance.id, `/files/${encodeURIComponent(fileId)}`);
+	const stub = getStub(c, instance.id);
+	const doRes = await stub.fetch(new Request(`https://agent/files/${encodeURIComponent(fileId)}`));
+	return new Response(doRes.body, { status: doRes.status, headers: doRes.headers });
 });
 
 instanceStorageRoutes.delete("/:id/files/:fileId", async (c) => {
