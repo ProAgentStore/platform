@@ -493,6 +493,8 @@ instanceRoutes.get("/:instanceId/translation", async (c) => {
 			enabled: t.enabled === true,
 			target: typeof t.target === "string" && TRANSLATION_LANGUAGES.includes(t.target) ? t.target : "English",
 			transliterate: t.transliterate === true,
+			// Tap a single word to hear it (long-press still selects). Default ON.
+			wordTap: t.wordTap !== false,
 		},
 		languages: TRANSLATION_LANGUAGES,
 	});
@@ -503,11 +505,12 @@ instanceRoutes.put("/:instanceId/translation", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown; target?: unknown; transliterate?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown; target?: unknown; transliterate?: unknown; wordTap?: unknown };
 	const translation = {
 		enabled: body.enabled === true,
 		target: typeof body.target === "string" && TRANSLATION_LANGUAGES.includes(body.target) ? body.target : "English",
 		transliterate: body.transliterate === true,
+		wordTap: body.wordTap !== false,
 	};
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	cfg.translation = translation;

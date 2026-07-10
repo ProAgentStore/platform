@@ -13,6 +13,46 @@ import DynamicSurface from "../components/DynamicSurface";
 // A built-in SurfaceId or a custom (agent-published) surface id.
 type Tab = string;
 
+/**
+ * The word under a tap, for tap-to-pronounce. Uses the caret-from-point APIs to find
+ * the text position, then Intl.Segmenter (word granularity — it segments Chinese/
+ * Japanese without spaces, so a tap yields 名字, not a lone character) to expand it.
+ * Returns null off-text, on punctuation/whitespace, or when the APIs are unavailable
+ * (caller falls back to speaking the whole block).
+ */
+function wordAtPoint(x: number, y: number): string | null {
+	const doc = document as Document & {
+		caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+		caretRangeFromPoint?: (x: number, y: number) => Range | null;
+	};
+	let node: Node | null = null;
+	let offset = 0;
+	if (doc.caretPositionFromPoint) {
+		const p = doc.caretPositionFromPoint(x, y);
+		if (p) { node = p.offsetNode; offset = p.offset; }
+	} else if (doc.caretRangeFromPoint) {
+		const r = doc.caretRangeFromPoint(x, y);
+		if (r) { node = r.startContainer; offset = r.startOffset; }
+	}
+	if (!node || node.nodeType !== Node.TEXT_NODE) return null;
+	const text = node.textContent || "";
+	if (!text.trim()) return null;
+	const Seg = (Intl as unknown as {
+		Segmenter?: new (locale: undefined, opts: { granularity: "word" }) => {
+			segment(t: string): Iterable<{ segment: string; index: number; isWordLike?: boolean }>;
+		};
+	}).Segmenter;
+	if (!Seg) return null;
+	try {
+		for (const s of new Seg(undefined, { granularity: "word" }).segment(text)) {
+			if (offset >= s.index && offset < s.index + s.segment.length) {
+				return s.isWordLike ? s.segment : null;
+			}
+		}
+	} catch { /* segmentation unavailable */ }
+	return null;
+}
+
 export default function InstanceDetail() {
 	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
 	const navigate = useNavigate();
@@ -101,6 +141,7 @@ export default function InstanceDetail() {
 	// history messages are auto-translated to keep the per-load request count small.
 	const [trEnabled, setTrEnabled] = useState(false);
 	const [trTarget, setTrTarget] = useState("English");
+	const [trWordTap, setTrWordTap] = useState(true);
 	const [translations, setTranslations] = useState<Record<string, { translation: string; transliteration?: string }>>({});
 	const trInFlight = useRef<Set<string>>(new Set());
 	useEffect(() => {
@@ -116,9 +157,10 @@ export default function InstanceDetail() {
 		if (!id || tab !== "chat") return;
 		(async () => {
 			try {
-				const d = await api<{ translation?: { enabled: boolean; target?: string } }>(`/v1/instances/${id}/translation`);
+				const d = await api<{ translation?: { enabled: boolean; target?: string; wordTap?: boolean } }>(`/v1/instances/${id}/translation`);
 				setTrEnabled(d.translation?.enabled === true);
 				setTrTarget(d.translation?.target || "English");
+				setTrWordTap(d.translation?.wordTap !== false);
 			} catch {}
 		})();
 	}, [id, tab]);
@@ -619,15 +661,23 @@ export default function InstanceDetail() {
 									>
 										<button type="button" onClick={(e) => { e.stopPropagation(); copyMsgText(m.content); }} onDoubleClick={(e) => e.stopPropagation()} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
 										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
-										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Assistant</span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
+										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<>
-												{/* Tap the original to hear it in the conversation language.
-												    Links/buttons inside the markdown keep their own behavior. */}
+												{/* Word-tap pronunciation: tap a word to hear just that word (Segmenter
+												    handles Chinese word boundaries); long-press/drag selection is
+												    respected — a tap with an active selection does nothing. Whole-message
+												    playback lives on the bubble's speaker button. Links keep their behavior. */}
 												<div
-													className={`msg-md ${trEnabled ? "cursor-pointer" : ""}`}
-													title={trEnabled ? "Tap to hear it spoken" : undefined}
-													onClick={trEnabled ? (e) => { if ((e.target as HTMLElement).closest("a, button")) return; e.stopPropagation(); voice.speak(m.content); } : undefined}
+													className={`msg-md ${trEnabled && trWordTap ? "cursor-pointer" : ""}`}
+													title={trEnabled && trWordTap ? "Tap a word to hear it" : undefined}
+													onClick={trEnabled && trWordTap ? (e) => {
+														if ((e.target as HTMLElement).closest("a, button")) return;
+														if (window.getSelection()?.toString()) return; // long-press selected text
+														e.stopPropagation();
+														const word = wordAtPoint(e.clientX, e.clientY);
+														if (word) voice.speak(word);
+													} : undefined}
 													dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
 												/>
 												{trEnabled && translations[m.content] && (
@@ -638,16 +688,22 @@ export default function InstanceDetail() {
 															<div
 																className="text-[0.78rem] text-muted whitespace-pre-wrap cursor-pointer"
 																title="Tap to hear the original spoken"
-																onClick={(e) => { e.stopPropagation(); voice.speak(m.content); }}
+																onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); voice.speak(m.content); }}
 															>
 																{translations[m.content].transliteration}
 															</div>
 														)}
-														{/* Translation — spoken in ITS OWN language on tap. */}
+														{/* Translation — spoken in ITS OWN language: the tapped word when
+														    word-tap is on (whole line as fallback), else the whole line. */}
 														<div
 															className="text-[0.78rem] text-muted italic whitespace-pre-wrap cursor-pointer"
-															title={`Tap to hear it in ${trTarget}`}
-															onClick={(e) => { e.stopPropagation(); voice.speak(translations[m.content].translation, TR_LANG_TAGS[trTarget]); }}
+															title={trWordTap ? `Tap a word to hear it in ${trTarget}` : `Tap to hear it in ${trTarget}`}
+															onClick={(e) => {
+																if (window.getSelection()?.toString()) return;
+																e.stopPropagation();
+																const word = trWordTap ? wordAtPoint(e.clientX, e.clientY) : null;
+																voice.speak(word || translations[m.content].translation, TR_LANG_TAGS[trTarget]);
+															}}
 														>
 															{translations[m.content].translation}
 														</div>
