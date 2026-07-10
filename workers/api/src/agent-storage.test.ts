@@ -261,6 +261,39 @@ describe("AgentStorageEngine", () => {
 		});
 	});
 
+	describe("vectorStats", () => {
+		it("groups vec:* entries by source, resolves names, and sorts newest first", async () => {
+			const storage = mockDoStorage();
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+
+			const vec = (id: string, sourceType: string, sourceId: string, chunkIndex: number, text: string, createdAt: string) =>
+				storage.put(`vec:${id}`, { id, agentId: "agent-1", sourceType, sourceId, chunkIndex, text, createdAt });
+
+			await storage.put("file:f1", { id: "f1", name: "catalog.pdf" });
+			await storage.put("kb:d1", { id: "d1", title: "Brand voice" });
+			await vec("a_0", "file", "f1", 0, "first file chunk", "2026-07-10T10:00:00Z");
+			await vec("a_1", "file", "f1", 1, "second file chunk", "2026-07-10T10:00:01Z");
+			await vec("b_0", "knowledge", "d1", 0, "doc chunk", "2026-07-11T09:00:00Z");
+			await vec("c_0", "repo", "owner/repo::src/foo.ts", 0, "repo chunk", "2026-07-09T08:00:00Z");
+			// Another agent's vector must not leak into this agent's stats.
+			await storage.put("vec:x_0", { id: "x_0", agentId: "agent-2", sourceType: "file", sourceId: "f9", chunkIndex: 0, text: "zz", createdAt: "2026-07-12T00:00:00Z" });
+
+			const stats = await engine.vectorStats();
+			expect(stats.totalSources).toBe(3);
+			expect(stats.totalChunks).toBe(4);
+			expect(stats.totalChars).toBe("first file chunk".length + "second file chunk".length + "doc chunk".length + "repo chunk".length);
+			expect(stats.sources.map((s) => s.name)).toEqual(["Brand voice", "catalog.pdf", "owner/repo::src/foo.ts"]);
+			const file = stats.sources.find((s) => s.sourceType === "file");
+			expect(file).toMatchObject({ chunks: 2, preview: "first file chunk", lastIndexed: "2026-07-10T10:00:01Z" });
+		});
+
+		it("returns zeros for an empty store", async () => {
+			const storage = mockDoStorage();
+			const engine = new AgentStorageEngine(storage, null, null, null, "agent-1");
+			expect(await engine.vectorStats()).toEqual({ totalSources: 0, totalChunks: 0, totalChars: 0, sources: [] });
+		});
+	});
+
 	describe("conversation summarization (no AI)", () => {
 		it("returns null when AI is not available", async () => {
 			const storage = mockDoStorage();

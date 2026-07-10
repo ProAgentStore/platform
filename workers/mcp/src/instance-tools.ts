@@ -1313,6 +1313,21 @@ export function registerInstanceTools(
 		},
 	);
 
+	server.tool(
+		"vector_stats",
+		"What's in a subscribed instance's vector store, grouped by source (files, KB docs, repo files, conversation summaries) with chunk counts — the console's Knowledge → Index panel. Use search_instance_knowledge to test retrieval.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/vectors`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
 	// ── Instance activity / files / messages ───────────────────────────────────
 
 	server.tool(

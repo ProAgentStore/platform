@@ -4,9 +4,10 @@ import type { KnowledgeDoc, Credential } from "../lib/types";
 import { useUploader } from "../lib/use-uploader";
 import FilesSection from "../components/FilesSection";
 import MemorySection from "../components/MemorySection";
+import VectorsSection from "../components/VectorsSection";
 import { formatTime, renderMd } from "@proagentstore/sdk/ui";
 
-type KbSubTab = "docs" | "memory" | "files" | "credentials" | "rules";
+type KbSubTab = "docs" | "memory" | "files" | "index" | "credentials" | "rules";
 
 interface Props {
 	instanceId: string;
@@ -170,6 +171,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		{ id: "docs", label: "Documents" },
 		{ id: "memory", label: "Memory" },
 		{ id: "files", label: "Files" },
+		{ id: "index", label: "Index" },
 		{ id: "credentials", label: "Credentials" },
 		{ id: "rules", label: "Rules & Tips" },
 	];
@@ -313,6 +315,9 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 					onCancel={uploader.cancel}
 				/>
 			)}
+
+			{/* Index — what's in the vector store + a live test search */}
+			{subTab === "index" && <VectorsSection instanceId={instanceId} active={subTab === "index"} />}
 
 			{/* Credentials */}
 			{subTab === "credentials" && (

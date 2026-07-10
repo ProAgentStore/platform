@@ -45,6 +45,24 @@ export interface VectorSearchResult {
 	sourceId: string;
 }
 
+/** One vectorized source (a file, KB doc, repo file, or conversation summary). */
+export interface VectorStatsSource {
+	sourceType: VectorMeta["sourceType"];
+	sourceId: string;
+	name: string;
+	chunks: number;
+	chars: number;
+	lastIndexed: string;
+	preview: string;
+}
+
+export interface VectorStatsResult {
+	totalSources: number;
+	totalChunks: number;
+	totalChars: number;
+	sources: VectorStatsSource[];
+}
+
 // ── File Storage ────────────────────────────────────────────────────────────
 
 export interface FileMeta {

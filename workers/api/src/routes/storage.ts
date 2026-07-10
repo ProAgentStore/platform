@@ -204,6 +204,12 @@ storageRoutes.post("/:id/search", async (c) => {
 	});
 });
 
+storageRoutes.get("/:id/vectors", async (c) => {
+	await requireUser(c);
+	const agent = await resolveAgent(c);
+	return proxyDO(c, agent.id, "/vectors");
+});
+
 // ── Activity Log ────────────────────────────────────────────────────────────
 
 storageRoutes.get("/:id/activity", async (c) => {
@@ -370,6 +376,12 @@ instanceStorageRoutes.post("/:id/search", async (c) => {
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify(await c.req.json()),
 	});
+});
+
+instanceStorageRoutes.get("/:id/vectors", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	return proxyDO(c, instance.id, "/vectors");
 });
 
 instanceStorageRoutes.get("/:id/activity", async (c) => {

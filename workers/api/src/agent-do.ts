@@ -245,6 +245,8 @@ export class AgentDO extends DurableObject<Env> {
 			// Vector search
 			if (path === "/search" && request.method === "POST")
 				return this.handleVectorSearch(request);
+			if (path === "/vectors" && request.method === "GET")
+				return this.handleVectorStats();
 
 			// Activity log
 			if (path === "/activity" && request.method === "GET")
@@ -1160,6 +1162,14 @@ export class AgentDO extends DurableObject<Env> {
 			sourceType: source_type as "knowledge" | "message" | "file" | "collection" | undefined,
 		});
 		return json({ results });
+	}
+
+	/** What's in the vector store, grouped by source — the Knowledge → Index panel. */
+	private async handleVectorStats(): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		const engine = this.getStorageEngine(state.agentId);
+		return json(await engine.vectorStats());
 	}
 
 	// ── Activity Log ──────────────────────────────────────────────────────────
