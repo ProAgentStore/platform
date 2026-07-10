@@ -342,6 +342,14 @@ instanceStorageRoutes.post("/:id/files", async (c) => {
 	});
 });
 
+/** Stream a file's bytes (from R2 via the DO) — powers download + in-console preview. */
+instanceStorageRoutes.get("/:id/files/:fileId", async (c) => {
+	const session = await requireUser(c);
+	const instance = await resolveOwnedInstance(c, session);
+	const fileId = c.req.param("fileId");
+	return proxyDO(c, instance.id, `/files/${encodeURIComponent(fileId)}`);
+});
+
 instanceStorageRoutes.delete("/:id/files/:fileId", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);

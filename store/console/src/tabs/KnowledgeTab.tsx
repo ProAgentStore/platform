@@ -1,15 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
-import type { KnowledgeDoc, MemoryEntry, Credential } from "../lib/types";
+import type { KnowledgeDoc, Credential } from "../lib/types";
 import { useUploader } from "../lib/use-uploader";
+import FilesSection from "../components/FilesSection";
+import MemorySection from "../components/MemorySection";
 import { formatTime, renderMd } from "@proagentstore/sdk/ui";
 
 /** Above this, uploads go through the resumable multipart path (progress +
  *  pause/resume + disconnect survival); below it, one small request is simpler. */
 const MULTIPART_THRESHOLD = 8 * 1024 * 1024;
-
-const fmtBytes = (n: number) =>
-	n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
 
 type KbSubTab = "docs" | "memory" | "files" | "credentials" | "rules";
 
@@ -21,11 +20,11 @@ interface Props {
 export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	const [subTab, setSubTab] = useState<KbSubTab>("docs");
 	const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
-	const [memories, setMemories] = useState<MemoryEntry[]>([]);
-	const [files, setFiles] = useState<{ id: string; name: string; size?: number; createdAt?: string }[]>([]);
 	const [credentials, setCredentials] = useState<Credential[]>([]);
 	const [instructions, setInstructions] = useState("");
 	const [instrStatus, setInstrStatus] = useState("");
+	// Bumped when an upload lands so FilesSection reloads its list.
+	const [filesRefresh, setFilesRefresh] = useState(0);
 
 	// Document editor/viewer: openId = null (list) | "__new__" | a doc id.
 	const [openId, setOpenId] = useState<string | null>(null);
@@ -40,33 +39,11 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	const [urlValue, setUrlValue] = useState("");
 	const [urlTitle, setUrlTitle] = useState("");
 
-	// Memory editor: one row editable at a time; key is identity (rename = delete + add).
-	const [editMemKey, setEditMemKey] = useState<string | null>(null);
-	const [editMemContent, setEditMemContent] = useState("");
-	const [showAddMem, setShowAddMem] = useState(false);
-	const [newMemKey, setNewMemKey] = useState("");
-	const [newMemType, setNewMemType] = useState("knowledge");
-	const [newMemContent, setNewMemContent] = useState("");
-
 	const loadDocs = useCallback(async () => {
 		try {
 			// The DO returns { documents: [...] } with full content.
 			const d = await api<{ documents?: KnowledgeDoc[]; knowledge?: KnowledgeDoc[] }>(`/v1/instances/${instanceId}/knowledge`);
 			setDocs(d.documents || d.knowledge || []);
-		} catch {}
-	}, [instanceId]);
-
-	const loadMemory = useCallback(async () => {
-		try {
-			const d = await api<{ memory: MemoryEntry[] }>(`/v1/instances/${instanceId}/memory`);
-			setMemories(d.memory || []);
-		} catch {}
-	}, [instanceId]);
-
-	const loadFiles = useCallback(async () => {
-		try {
-			const d = await api<{ files: { id: string; name: string; size?: number; createdAt?: string }[] }>(`/v1/instances/${instanceId}/files`);
-			setFiles(d.files || []);
 		} catch {}
 	}, [instanceId]);
 
@@ -84,14 +61,12 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		} catch {}
 	}, [instanceId]);
 
-	// Lazy-load: only fetch data for the active sub-tab
+	// Lazy-load: only fetch data for the active sub-tab (Files/Memory sections load themselves)
 	useEffect(() => {
 		if (subTab === "docs") loadDocs();
-		else if (subTab === "memory") loadMemory();
-		else if (subTab === "files") loadFiles();
 		else if (subTab === "credentials") loadCredentials();
 		else if (subTab === "rules") loadInstructions();
-	}, [subTab, loadDocs, loadMemory, loadFiles, loadCredentials, loadInstructions]);
+	}, [subTab, loadDocs, loadCredentials, loadInstructions]);
 
 	const openNew = () => { setOpenId("__new__"); setEditing(true); setEditTitle(""); setEditContent(""); setPreview(false); setShowUrl(false); };
 	const openView = (d: KnowledgeDoc) => { setOpenId(d.id); setEditing(false); setPreview(false); };
@@ -151,57 +126,6 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		}
 	};
 
-	const deleteFile = async (fileId: string) => {
-		if (!confirm("Delete this file?")) return;
-		try {
-			await api(`/v1/instances/${instanceId}/files/${fileId}`, { method: "DELETE" });
-			loadFiles();
-		} catch (e) {
-			alert(e instanceof Error ? e.message : String(e));
-		}
-	};
-
-	const saveMemory = async (entry: MemoryEntry) => {
-		try {
-			await api(`/v1/instances/${instanceId}/memory`, {
-				method: "PUT",
-				body: JSON.stringify({ key: entry.key, type: entry.type, content: editMemContent, source: "user" }),
-			});
-			setEditMemKey(null);
-			loadMemory();
-		} catch (e) {
-			alert(e instanceof Error ? e.message : String(e));
-		}
-	};
-
-	const addMemory = async () => {
-		if (!newMemKey.trim() || !newMemContent.trim()) { alert("Give the memory a key and content."); return; }
-		try {
-			await api(`/v1/instances/${instanceId}/memory`, {
-				method: "PUT",
-				body: JSON.stringify({ key: newMemKey.trim(), type: newMemType, content: newMemContent, source: "user" }),
-			});
-			setNewMemKey("");
-			setNewMemType("knowledge");
-			setNewMemContent("");
-			setShowAddMem(false);
-			loadMemory();
-		} catch (e) {
-			alert(e instanceof Error ? e.message : String(e));
-		}
-	};
-
-	const deleteMemory = async (key: string) => {
-		if (!confirm("Delete this memory?")) return;
-		try {
-			await api(`/v1/instances/${instanceId}/memory/${encodeURIComponent(key)}`, { method: "DELETE" });
-			if (editMemKey === key) setEditMemKey(null);
-			loadMemory();
-		} catch (e) {
-			alert(e instanceof Error ? e.message : String(e));
-		}
-	};
-
 	const saveInstructions = async () => {
 		try {
 			await api(`/v1/instances/${instanceId}/instructions`, {
@@ -238,8 +162,10 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		}
 	};
 
-	// Resumable multipart uploader for large files (progress, pause, survives disconnects).
-	const uploader = useUploader(instanceId, () => loadFiles());
+	// Resumable multipart uploader for large files (progress, pause, survives
+	// disconnects). Lives HERE (not in FilesSection) because the Documents tab's
+	// "+ File" button shares the routing below.
+	const uploader = useUploader(instanceId, () => setFilesRefresh((k) => k + 1));
 
 	const uploadFile = async (file: File) => {
 		if (file.size > MULTIPART_THRESHOLD) {
@@ -259,7 +185,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 				method: "POST",
 				body: JSON.stringify({ name: file.name, contentBase64: base64, mime_type: file.type || "application/octet-stream" }),
 			});
-			loadFiles();
+			setFilesRefresh((k) => k + 1);
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
 		}
@@ -397,124 +323,20 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 			})()}
 
 			{/* Memory */}
-			{subTab === "memory" && (
-				<div>
-					<div className="flex justify-between items-center gap-2 mb-3">
-						<h3 className="text-base font-bold">Agent Memory</h3>
-						<button type="button" onClick={() => setShowAddMem((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold">+ Add</button>
-					</div>
-
-					{showAddMem && (
-						<div className="bg-panel border border-line rounded-xl p-4 mb-3">
-							<input value={newMemKey} onChange={(e) => setNewMemKey(e.target.value)} placeholder="Key (e.g. language)" className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
-							<select value={newMemType} onChange={(e) => setNewMemType(e.target.value)} className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm">
-								{["identity", "knowledge", "preference", "skill", "context"].map((t) => (
-									<option key={t} value={t}>{t}</option>
-								))}
-							</select>
-							<textarea value={newMemContent} onChange={(e) => setNewMemContent(e.target.value)} placeholder="Content" className="mb-2 w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
-							<div className="flex gap-2">
-								<button type="button" onClick={addMemory} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
-								<button type="button" onClick={() => setShowAddMem(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-							</div>
-						</div>
-					)}
-
-					{memories.length === 0 ? (
-						<p className="text-center py-4 text-muted-soft text-sm">No memories stored yet.</p>
-					) : (
-						<div className="flex flex-col gap-2">
-							{memories.map((m) => (
-								<div key={m.key} className="bg-panel border border-line rounded-lg p-3">
-									<div className="flex justify-between items-start gap-2">
-										<div className="min-w-0">
-											<span className="font-semibold text-sm break-all">{m.key}</span>
-											<span className="text-xs text-purple-400 ml-2">{m.type}</span>
-											{m.source && <span className="text-xs text-muted-soft ml-2">{m.source}</span>}
-										</div>
-										<div className="flex gap-1.5 shrink-0">
-											<button type="button" onClick={() => { setEditMemKey(m.key); setEditMemContent(m.content); }} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">Edit</button>
-											<button type="button" onClick={() => deleteMemory(m.key)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-red hover:bg-red/10 font-semibold">Delete</button>
-										</div>
-									</div>
-									{editMemKey === m.key ? (
-										<div className="mt-2">
-											<textarea value={editMemContent} onChange={(e) => setEditMemContent(e.target.value)} className="w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
-											<div className="flex gap-2 mt-2">
-												<button type="button" onClick={() => saveMemory(m)} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
-												<button type="button" onClick={() => setEditMemKey(null)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-											</div>
-										</div>
-									) : (
-										<div className="text-sm text-muted mt-1">{m.content}</div>
-									)}
-								</div>
-							))}
-						</div>
-					)}
-				</div>
-			)}
+			{subTab === "memory" && <MemorySection instanceId={instanceId} active={subTab === "memory"} />}
 
 			{/* Files */}
 			{subTab === "files" && (
-				<div>
-					<div className="flex justify-between items-center gap-2 mb-3">
-						<h3 className="text-base font-bold">Files</h3>
-						<label className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold cursor-pointer">
-							Upload File
-							<input type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFile(f); e.target.value = ""; }} />
-						</label>
-					</div>
-
-					{/* In-flight resumable uploads: live progress + pause/resume/cancel. An
-					    interrupted upload (disconnect, closed tab) resumes from its last
-					    completed part when the same file is selected again. */}
-					{uploader.jobs.length > 0 && (
-						<div className="flex flex-col gap-2 mb-3">
-							{uploader.jobs.map((j) => (
-								<div key={j.localId} className="bg-panel border border-line rounded-lg p-3">
-									<div className="flex justify-between items-center gap-3 mb-1.5">
-										<div className="text-sm font-semibold truncate">{j.fileName}</div>
-										<div className="flex gap-1.5 shrink-0 items-center">
-											<span className="text-xs text-muted">
-												{j.status === "done" ? "Done ✓" : `${fmtBytes(j.uploaded)} / ${fmtBytes(j.size)}`}
-											</span>
-											{j.status === "uploading" && (
-												<button type="button" onClick={() => uploader.pause(j.localId)} className="text-xs px-2 py-1 rounded border border-line text-muted hover:border-accent hover:text-accent">Pause</button>
-											)}
-											{(j.status === "paused" || j.status === "error") && (
-												<button type="button" onClick={() => uploader.resume(j.localId)} className="text-xs px-2 py-1 rounded bg-accent text-white font-bold">Resume</button>
-											)}
-											{j.status !== "done" && (
-												<button type="button" onClick={() => uploader.cancel(j.localId)} className="text-xs px-2 py-1 rounded border border-line text-red hover:bg-red/10">Cancel</button>
-											)}
-										</div>
-									</div>
-									<div className="h-1.5 bg-line rounded-full overflow-hidden">
-										<div
-											className={`h-full rounded-full transition-all ${j.status === "error" ? "bg-red" : j.status === "paused" ? "bg-muted" : "bg-accent"}`}
-											style={{ width: `${Math.min(100, Math.round((j.uploaded / Math.max(1, j.size)) * 100))}%` }}
-										/>
-									</div>
-									{j.error && <div className="text-xs text-red mt-1">{j.error}</div>}
-								</div>
-							))}
-						</div>
-					)}
-
-					{files.length === 0 ? (
-						<p className="text-center py-4 text-muted-soft text-sm">No files uploaded yet.</p>
-					) : (
-						<div className="flex flex-col gap-2">
-							{files.map((f) => (
-								<div key={f.id} className="bg-panel border border-line rounded-lg p-3 flex justify-between items-center gap-3">
-									<div className="text-sm font-semibold">{f.name}</div>
-									<button type="button" onClick={() => deleteFile(f.id)} className="text-xs text-red shrink-0">Delete</button>
-								</div>
-							))}
-						</div>
-					)}
-				</div>
+				<FilesSection
+					instanceId={instanceId}
+					active={subTab === "files"}
+					refreshKey={filesRefresh}
+					jobs={uploader.jobs}
+					onUpload={uploadFile}
+					onPause={uploader.pause}
+					onResume={uploader.resume}
+					onCancel={uploader.cancel}
+				/>
 			)}
 
 			{/* Credentials */}
