@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { requirePro } from "../lib/billing.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
@@ -225,14 +226,16 @@ function lastTwoSegments(path: string): string {
 }
 
 /** Confirm the caller owns the instance (the workspace). */
-async function requireOwned(c: Context<{ Bindings: Env }>): Promise<{ uid: string; instanceId: string }> {
+async function requireOwned(
+	c: Context<{ Bindings: Env }>,
+): Promise<{ uid: string; instanceId: string; session: Awaited<ReturnType<typeof requireUser>> }> {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId") ?? "";
 	const owned = await c.env.DB.prepare("SELECT id FROM agent_instances WHERE id = ?1 AND user_id = ?2")
 		.bind(instanceId, session.uid)
 		.first();
 	if (!owned) throw new HttpError(404, "Instance not found");
-	return { uid: session.uid, instanceId };
+	return { uid: session.uid, instanceId, session };
 }
 
 /** The instance's Special Instructions (user rules) from its JSON config. */
@@ -569,7 +572,10 @@ codingRoutes.put("/:instanceId/coding/engines", async (c) => {
 
 /** Create a coding session against a repo and start it on the runner (best-effort). */
 codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
-	const { uid, instanceId } = await requireOwned(c);
+	const { uid, instanceId, session: authSession } = await requireOwned(c);
+	// Coding sessions run on the local runner — a Pro feature. Gate creation so the
+	// console gets a clear 402 instead of a confusing runner-offline error.
+	await requirePro(c.env, authSession);
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const repoId = String(body.repoId ?? "");
 	const repo = await getRepo(c.env, instanceId, uid, repoId);

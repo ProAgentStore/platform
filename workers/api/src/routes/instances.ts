@@ -14,6 +14,7 @@ import { logEvent, listEvents } from "../lib/events.js";
 import { parseLoopDecision } from "../lib/loop-decide.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import { attachGlossesToMessages, registerTranslationRoutes } from "./instances-translation.js";
+import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
 import type { Env } from "../types.js";
 import {
 	callRuntime,
@@ -88,16 +89,24 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		.first();
 	if (existing) throw new HttpError(409, "Already subscribed to this agent");
 
-	// Cap total instances per user. Subscribe is expensive (template DO fetch + instance
-	// DO init + KB copy + creator notification), so bound how many a single account can
-	// stand up to blunt resource-exhaustion / notification-spam abuse.
+	// Cap total instances per user: free tier 2, Pro the 100 fair-use cap (which also
+	// bounds resource-exhaustion / notification-spam abuse — subscribe is expensive:
+	// template DO fetch + instance DO init + KB copy + creator notification).
 	const count = await c.env.DB.prepare(
 		"SELECT COUNT(*) AS n FROM agent_instances WHERE user_id = ?1",
 	)
 		.bind(session.uid)
 		.first<{ n: number }>();
-	if ((count?.n ?? 0) >= 100)
-		throw new HttpError(429, "Subscription limit reached (100 agents). Cancel one to add another.");
+	const enforced = isPaywallEnforced(c.env);
+	const entitled = enforced ? await isEntitled(c.env, session) : true;
+	const cap = instanceCapFor(entitled, enforced);
+	if ((count?.n ?? 0) >= cap)
+		throw new HttpError(
+			429,
+			cap === 2
+				? "Free plan limit reached (2 agents). Upgrade to Pro ($9/mo) for up to 100."
+				: "Subscription limit reached (100 agents). Cancel one to add another.",
+		);
 
 	const instanceId = crypto.randomUUID();
 
@@ -234,6 +243,8 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
+	// The local runner (`pags up`) is a Pro feature — fail loudly at registration.
+	await requirePro(c.env, session);
 
 	const body = await c.req.json<RuntimeRegistrationBody & { force?: boolean }>();
 	const endpointUrl = validateRuntimeEndpointUrl(body.endpointUrl);

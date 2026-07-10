@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
+import { requirePro } from "../lib/billing.js";
 import { signRelayToken, verifyRelayToken } from "../lib/session.js";
 import type { Env } from "../types.js";
 
@@ -21,6 +22,10 @@ relayRoutes.post("/:instanceId/token", async (c) => {
 		.bind(instanceId, session.uid)
 		.first<{ id: string }>();
 	if (!instance) return c.json({ error: "Instance not found" }, 404);
+	// The runner is Pro-only. This is the REAL enforcement point: relay tokens are
+	// short-lived and re-minted on every (re)connect, so a lapsed subscription cuts
+	// off at the next connect — no stale-registration loophole.
+	await requirePro(c.env, session);
 	const { token, exp } = await signRelayToken(instanceId, session.uid, c.env.SESSION_SIGNING_KEY);
 	return c.json({ token, expiresAt: new Date(exp * 1000).toISOString() });
 });

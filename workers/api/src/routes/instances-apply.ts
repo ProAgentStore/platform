@@ -1,5 +1,6 @@
 import type { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
+import { requirePro } from "../lib/billing.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences, profileCustomAnswers } from "../lib/profile.js";
@@ -366,6 +367,8 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
+		// The apply workflow drives the local runner — a Pro feature.
+		await requirePro(c.env, session);
 		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 		const url = String(body.url ?? "");
 		try {

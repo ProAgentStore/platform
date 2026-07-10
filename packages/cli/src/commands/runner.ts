@@ -353,6 +353,13 @@ function openRelaySocket(
 			relayToken = await mintToken();
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
+			// 402 = the runner is a Pro feature and this account isn't subscribed.
+			// Retrying can never succeed — surface the upgrade message and stop
+			// (otherwise a free user sits in an infinite mint-retry loop).
+			if (/^402\b/.test(msg)) {
+				writeLine(`Runner unavailable for ${instanceId.slice(0, 8)}…: ${msg.replace(/^402\s*/, "")}`);
+				return;
+			}
 			const hint = /401|token|sign/i.test(msg) ? " (run `pags login`)" : "";
 			writeLine(`Relay token mint failed: ${instanceId.slice(0, 8)}…${hint} — retrying in ${Math.round(backoffMs / 1000)}s`);
 			setTimeout(() => { connect(); }, backoffMs);

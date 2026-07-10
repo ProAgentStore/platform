@@ -59,6 +59,11 @@ export default function Browse() {
 				const inst = (mine.instances || []).find((i) => i.agent_id === a.id);
 				if (inst) { navigate(`/instances/${inst.id}`); return; }
 			}
+			// Free-tier cap / Pro-only feature: offer the one-tap path to Billing.
+			if (/Pro|\$9/.test(msg)) {
+				if (confirm(`${msg}\n\nOpen billing?`)) navigate("/profile");
+				return;
+			}
 			alert(msg);
 		} finally {
 			setBusy(null);

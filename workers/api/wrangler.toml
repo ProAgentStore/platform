@@ -17,6 +17,11 @@ GITHUB_ORG = "ProAgentStore"
 # the sole user. FLIP TO "false" (or remove) before onboarding real users → BYOK-only.
 # LLM chat is always BYOK regardless.
 PLATFORM_AI_ENABLED = "true"
+# Billing (the $9/mo Pro subscription — lib/billing.ts):
+# STRIPE_PRICE_ID = "price_…"   # $9/mo recurring price on the shared (test-mode) Stripe
+#                               # account. Set together with the STRIPE_* secrets.
+# PAYWALL_ENFORCE = "1"         # SOFT LAUNCH: leave unset until Stripe is wired + verified.
+#                               # "1" enforces the free tier (2 agents, Pro-only runner).
 
 [[d1_databases]]
 binding = "DB"

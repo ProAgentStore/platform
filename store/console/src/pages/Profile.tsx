@@ -1,7 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import { api, getToken } from "@proagentstore/sdk/client";
+
+interface BillingStatus {
+	active: boolean;
+	status: string;
+	expiresAt: string | null;
+	hasBillingAccount: boolean;
+	pro: boolean;
+	enforced: boolean;
+}
 
 interface ProfileField {
 	key: string;
@@ -39,6 +48,63 @@ export default function Profile() {
 
 	// Token
 	const [tokenVisible, setTokenVisible] = useState(false);
+
+	// Billing (the $9/mo Pro subscription)
+	const [searchParams, setSearchParams] = useSearchParams();
+	const [billing, setBilling] = useState<BillingStatus | null>(null);
+	const [billingMsg, setBillingMsg] = useState("");
+	const [billingBusy, setBillingBusy] = useState(false);
+	const loadBilling = useCallback(async () => {
+		try {
+			const d = await api<BillingStatus>("/v1/billing/status");
+			setBilling(d);
+			return d;
+		} catch { return null; }
+	}, []);
+	useEffect(() => { loadBilling(); }, [loadBilling]);
+	// Returning from Stripe Checkout: the webhook can lag the redirect by a second
+	// or two — re-poll a few times so the badge flips without a manual refresh.
+	useEffect(() => {
+		const b = searchParams.get("billing");
+		if (!b) return;
+		if (b === "success") {
+			setBillingMsg("Payment received — activating your Pro subscription…");
+			let tries = 0;
+			const tick = async () => {
+				const d = await loadBilling();
+				tries++;
+				if (d?.pro) { setBillingMsg("You're on Pro. Welcome aboard! 🎉"); return; }
+				if (tries < 6) setTimeout(tick, 2000);
+				else setBillingMsg("Payment received — status will update shortly.");
+			};
+			tick();
+		} else if (b === "cancelled") {
+			setBillingMsg("Checkout cancelled — no charge was made.");
+		}
+		searchParams.delete("billing");
+		setSearchParams(searchParams, { replace: true });
+	}, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+	const openCheckout = async () => {
+		setBillingBusy(true);
+		try {
+			const d = await api<{ url: string }>("/v1/billing/checkout", { method: "POST" });
+			window.location.href = d.url;
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+			setBillingBusy(false);
+		}
+	};
+	const openPortal = async () => {
+		setBillingBusy(true);
+		try {
+			const d = await api<{ url: string }>("/v1/billing/portal", { method: "POST" });
+			window.location.href = d.url;
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+			setBillingBusy(false);
+		}
+	};
 
 	// Text scale
 	const [textScale, setTextScaleState] = useState(() => {
@@ -238,6 +304,44 @@ export default function Profile() {
 						<button type="button" onClick={() => { if (token) navigator.clipboard.writeText(token); }} className="text-xs px-2 py-1 border border-line rounded text-muted">Copy</button>
 						<button type="button" onClick={() => setTokenVisible(!tokenVisible)} className="text-xs px-2 py-1 border border-line rounded text-muted">{tokenVisible ? "Hide" : "Show"}</button>
 					</div>
+				</div>
+
+				{/* Billing — the $9/mo Pro subscription */}
+				<div className="mb-6">
+					<h3 className="text-[0.95rem] font-semibold mb-3">Billing</h3>
+					{!billing ? (
+						<p className="text-sm text-muted">Loading…</p>
+					) : (
+						<div className="bg-paper border border-line rounded-lg p-3 flex flex-col gap-2">
+							<div className="flex items-center gap-2">
+								<span className={`text-xs font-bold px-2 py-0.5 rounded-full ${billing.pro ? "bg-accent text-white" : "bg-line text-muted"}`}>
+									{billing.pro ? "Pro" : "Free"}
+								</span>
+								<span className="text-sm text-muted">
+									{billing.pro
+										? billing.status === "canceled" && billing.expiresAt
+											? `Cancelled — Pro until ${new Date(billing.expiresAt).toLocaleDateString()}`
+											: billing.status === "past_due"
+												? "Payment issue — please update your card"
+												: "ProAgentStore Pro — $9/mo"
+										: "Free plan: 2 agents, no local runner"}
+								</span>
+							</div>
+							<div className="flex gap-2">
+								{!billing.pro && (
+									<button type="button" onClick={openCheckout} disabled={billingBusy} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold disabled:opacity-50">
+										Upgrade to Pro — $9/mo
+									</button>
+								)}
+								{billing.hasBillingAccount && (
+									<button type="button" onClick={openPortal} disabled={billingBusy} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold disabled:opacity-50">
+										Manage subscription
+									</button>
+								)}
+							</div>
+							{billingMsg && <div className="text-sm text-muted">{billingMsg}</div>}
+						</div>
+					)}
 				</div>
 
 				{/* API Keys */}

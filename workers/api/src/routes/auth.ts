@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { isSubscriptionActive, subFromUserRow } from "../lib/billing.js";
 import { signPayload, signSession, verifyPayload, verifySession } from "../lib/session.js";
 import { isAllowedReturnTo } from "../lib/origins.js";
 import { logError } from "../lib/error-log.js";
@@ -425,19 +426,22 @@ authRoutes.get("/me", async (c) => {
 	if (!session) return c.json({ error: "Invalid or expired token" }, 401);
 
 	const row = await c.env.DB.prepare(
-		"SELECT id, github_login, github_name, avatar_url, roles, stripe_customer_id, display_name, bio, website, twitter, slack_webhook, board_config FROM users WHERE id = ?1",
+		"SELECT id, github_login, github_name, avatar_url, roles, stripe_customer_id, subscription_status, subscription_expires_at, display_name, bio, website, twitter, slack_webhook, board_config FROM users WHERE id = ?1",
 	)
 		.bind(session.uid)
 		.first<Record<string, string>>();
 	if (!row) return c.json({ error: "User not found" }, 404);
 
+	const roles = JSON.parse(row.roles || '["user"]') as string[];
 	return c.json({
 		id: row.id,
 		login: row.github_login,
 		name: row.display_name || row.github_name,
 		avatar: row.avatar_url,
-		roles: JSON.parse(row.roles || '["user"]'),
-		hasSubscription: !!row.stripe_customer_id,
+		roles,
+		// A usable subscription (or admin comp) — NOT "has a Stripe customer id",
+		// which stays truthy forever after a cancel.
+		hasSubscription: roles.includes("admin") || isSubscriptionActive(subFromUserRow(row)),
 		bio: row.bio || "",
 		website: row.website || "",
 		twitter: row.twitter || "",
