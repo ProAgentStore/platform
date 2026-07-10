@@ -767,6 +767,26 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"list_instance_files",
+		"List files uploaded to a private subscribed instance (PDFs, documents — the console's Knowledge → Files tab). Shows name, size, mime type, and extraction status (extracted files are vectorized and searchable via search_instance_knowledge).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/files`,
+				sessionToken,
+				{},
+				env,
+			);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"search_instance_knowledge",
 		"Semantic (vector) search across a private instance's knowledge base — résumé summary, uploaded docs, indexed repo code, etc. Returns the most relevant chunks by similarity. This validates what's actually retrievable from the instance's vector store.",
 		{
