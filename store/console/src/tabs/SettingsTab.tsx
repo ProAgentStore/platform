@@ -35,7 +35,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [trTranslit, setTrTranslit] = useState(false);
 	const [trWordTap, setTrWordTap] = useState(true);
 	const [trFontSize, setTrFontSize] = useState("medium");
-	const [trLanguages, setTrLanguages] = useState<string[]>([]);
+	const [trLanguages, setTrLanguages] = useState<Array<{ name: string; tag: string }>>([]);
 	const [trMsg, setTrMsg] = useState("");
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
@@ -53,7 +53,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setRuntimeInfo(d);
 			} catch {}
 			try {
-				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: string[] }>(`/v1/instances/${instanceId}/translation`);
+				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }> }>(`/v1/instances/${instanceId}/translation`);
 				setTrEnabled(d.translation?.enabled === true);
 				setTrTarget(d.translation?.target || "English");
 				setTrTranslit(d.translation?.transliterate === true);
@@ -526,8 +526,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							onChange={(e) => saveTranslation(true, e.target.value, trTranslit, trWordTap, trFontSize)}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
 						>
-							{(trLanguages.length ? trLanguages : [trTarget]).map((l) => (
-								<option key={l} value={l}>{l}</option>
+							{(trLanguages.length ? trLanguages : [{ name: trTarget, tag: "" }]).map((l) => (
+								<option key={l.name} value={l.name}>{l.name}</option>
 							))}
 						</select>
 						<label className="flex items-center gap-2 text-sm cursor-pointer mb-2">

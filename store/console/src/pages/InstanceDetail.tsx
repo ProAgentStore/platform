@@ -8,50 +8,12 @@ import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentst
 import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2 } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
+import { useGloss } from "../lib/use-gloss";
 import DynamicSurface from "../components/DynamicSurface";
+import GlossedMessage from "../components/GlossedMessage";
 
 // A built-in SurfaceId or a custom (agent-published) surface id.
 type Tab = string;
-
-/**
- * The word under a tap, for tap-to-pronounce. Uses the caret-from-point APIs to find
- * the text position, then Intl.Segmenter (word granularity — it segments Chinese/
- * Japanese without spaces, so a tap yields 名字, not a lone character) to expand it.
- * Returns null off-text, on punctuation/whitespace, or when the APIs are unavailable
- * (caller falls back to speaking the whole block).
- */
-function wordAtPoint(x: number, y: number): string | null {
-	const doc = document as Document & {
-		caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-		caretRangeFromPoint?: (x: number, y: number) => Range | null;
-	};
-	let node: Node | null = null;
-	let offset = 0;
-	if (doc.caretPositionFromPoint) {
-		const p = doc.caretPositionFromPoint(x, y);
-		if (p) { node = p.offsetNode; offset = p.offset; }
-	} else if (doc.caretRangeFromPoint) {
-		const r = doc.caretRangeFromPoint(x, y);
-		if (r) { node = r.startContainer; offset = r.startOffset; }
-	}
-	if (!node || node.nodeType !== Node.TEXT_NODE) return null;
-	const text = node.textContent || "";
-	if (!text.trim()) return null;
-	const Seg = (Intl as unknown as {
-		Segmenter?: new (locale: undefined, opts: { granularity: "word" }) => {
-			segment(t: string): Iterable<{ segment: string; index: number; isWordLike?: boolean }>;
-		};
-	}).Segmenter;
-	if (!Seg) return null;
-	try {
-		for (const s of new Seg(undefined, { granularity: "word" }).segment(text)) {
-			if (offset >= s.index && offset < s.index + s.segment.length) {
-				return s.isWordLike ? s.segment : null;
-			}
-		}
-	} catch { /* segmentation unavailable */ }
-	return null;
-}
 
 export default function InstanceDetail() {
 	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
@@ -135,95 +97,11 @@ export default function InstanceDetail() {
 		})();
 	}, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-	// Under-message translation (Settings → Translation): when enabled, each assistant
-	// reply gets a lazily-fetched translation (and optional Latin transliteration —
-	// pinyin/romaji) rendered beneath it. Keyed by message content; only the latest few
-	// history messages are auto-translated to keep the per-load request count small.
-	const [trEnabled, setTrEnabled] = useState(false);
-	const [trTarget, setTrTarget] = useState("English");
-	const [trWordTap, setTrWordTap] = useState(true);
-	const [trFontSize, setTrFontSize] = useState("medium");
-	const [translations, setTranslations] = useState<Record<string, { translation: string; transliteration?: string; pairs?: Array<[string, string]> }>>({});
-	const trInFlight = useRef<Set<string>>(new Set());
-	// Ref mirror so doSend (stable callback) sees the live value.
-	const trEnabledRef = useRef(false);
-	useEffect(() => { trEnabledRef.current = trEnabled; }, [trEnabled]);
-	useEffect(() => {
-		// Reset the cache only when switching instances (not tabs).
-		setTrEnabled(false);
-		setTranslations({});
-		trInFlight.current = new Set();
-	}, [id]);
-	useEffect(() => {
-		// Re-read on every return to the chat tab too: Settings is a sibling tab on this
-		// SAME page (no remount), so enabling/changing Translation there must show up
-		// here without a reload.
-		if (!id || tab !== "chat") return;
-		(async () => {
-			try {
-				const d = await api<{ translation?: { enabled: boolean; target?: string; wordTap?: boolean; fontSize?: string } }>(`/v1/instances/${id}/translation`);
-				setTrEnabled(d.translation?.enabled === true);
-				setTrTarget(d.translation?.target || "English");
-				setTrWordTap(d.translation?.wordTap !== false);
-				setTrFontSize(d.translation?.fontSize || "medium");
-			} catch {}
-		})();
-	}, [id, tab]);
-	useEffect(() => {
-		if (!trEnabled || !id) return;
-		// Cached glosses arrive EMBEDDED in the messages payload — seed them so history
-		// renders glossed in the same paint, with zero extra requests.
-		const seeded: Record<string, { translation: string; transliteration?: string; pairs?: Array<[string, string]> }> = {};
-		for (const m of messages) {
-			if (m.role === "assistant" && m.gloss?.translation && !(m.content in translations)) {
-				seeded[m.content] = m.gloss;
-			}
-		}
-		if (Object.keys(seeded).length) setTranslations((t) => ({ ...seeded, ...t }));
-		// Only genuinely uncached messages hit /translate (newest first, so what you're
-		// reading fills in first) — each is computed once EVER, then served embedded.
-		const pending = messages
-			.filter((m) => m.role === "assistant" && m.content?.trim())
-			.reverse()
-			.filter((m) => !(m.content in translations) && !(m.content in seeded) && !trInFlight.current.has(m.content));
-		for (const m of pending) trInFlight.current.add(m.content);
-		(async () => {
-			for (const m of pending) {
-				try {
-					const d = await api<{ translation?: string; transliteration?: string; pairs?: Array<[string, string]> }>(`/v1/instances/${id}/translate`, {
-						method: "POST",
-						body: JSON.stringify({ text: m.content }),
-					});
-					if (d.translation) {
-						setTranslations((t) => ({ ...t, [m.content]: { translation: d.translation as string, transliteration: d.transliteration, pairs: d.pairs } }));
-					}
-				} catch {
-					trInFlight.current.delete(m.content); // retry on a later render
-				}
-			}
-		})();
-	}, [trEnabled, id, messages]); // eslint-disable-line react-hooks/exhaustive-deps
-
-	// Learning-display sizes (Settings → Translation → Text size). The gloss size is
-	// shared by the transliteration AND the translation — equally visible, color is
-	// the only differentiator (pinyin muted, translation accent).
-	// "medium" word size EQUALS the bubble's base text (text-sm = 0.875rem) so glossed
-	// and plain messages look like the same font — mixed sizes read as "different fonts".
-	const TR_SIZES: Record<string, { word: string; gloss: string }> = {
-		small: { word: "text-[0.8rem]", gloss: "text-[0.7rem]" },
-		medium: { word: "text-[0.875rem]", gloss: "text-[0.78rem]" },
-		large: { word: "text-[1.1rem]", gloss: "text-[0.95rem]" },
-	};
-	const trSize = TR_SIZES[trFontSize] || TR_SIZES.medium;
-
-	/** BCP-47 tag for a translation-target language name, so the spoken translation
-	 *  uses a voice in ITS language (the conversation voice stays in the practice one). */
-	const TR_LANG_TAGS: Record<string, string> = {
-		English: "en-US", Spanish: "es-ES", French: "fr-FR", German: "de-DE", Italian: "it-IT",
-		Portuguese: "pt-BR", "Chinese (Simplified)": "zh-CN", Japanese: "ja-JP", Korean: "ko-KR",
-		Hindi: "hi-IN", Russian: "ru-RU", Arabic: "ar-SA", Ukrainian: "uk-UA", Polish: "pl-PL",
-		Dutch: "nl-NL", Turkish: "tr-TR",
-	};
+	// Under-message translation + transliteration (the learning display) — see lib/use-gloss.
+	const gloss = useGloss(id, tab, messages);
+	// Ref mirror so doSend (stable callback) always calls the live glossReply.
+	const glossReplyRef = useRef(gloss.glossReply);
+	glossReplyRef.current = gloss.glossReply;
 
 	// Only agents with a local runner (capabilities.runtime: browser/coding) have a
 	// meaningful connection status — for chat-only agents the dot was permanent grey
@@ -387,26 +265,8 @@ export default function InstanceDetail() {
 			if (data.message) {
 				// One final card: fetch the gloss BEFORE showing the reply so message,
 				// transliteration, and translation render together (the thinking spinner
-				// covers the wait). Capped at 6s — a slow/failed gloss never holds the
-				// reply hostage; it just fills in lazily like before.
-				if (trEnabledRef.current && data.message.role === "assistant" && data.message.content?.trim()) {
-					try {
-						const gloss = await Promise.race([
-							api<{ translation?: string; transliteration?: string; pairs?: Array<[string, string]> }>(`/v1/instances/${id}/translate`, {
-								method: "POST",
-								body: JSON.stringify({ text: data.message.content }),
-							}),
-							new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
-						]);
-						if (gloss?.translation) {
-							trInFlight.current.add(data.message.content);
-							setTranslations((t) => ({
-								...t,
-								[data.message!.content]: { translation: gloss.translation as string, transliteration: gloss.transliteration, pairs: gloss.pairs },
-							}));
-						}
-					} catch { /* lazy fill-in fallback */ }
-				}
+				// covers the wait; a slow/failed gloss falls back to lazy fill-in).
+				if (data.message.role === "assistant") await glossReplyRef.current(data.message.content);
 				setMessages((prev) => [...prev, data.message!]);
 				speakRef.current(data.message.content);
 			} else {
@@ -763,72 +623,16 @@ export default function InstanceDetail() {
 										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
-											<>
-												{/* The interlinear gloss REPLACES the plain original (showing both was a
-												    duplicate); the plain markdown renders until pairs arrive or when the
-												    gloss is off. Word-tap: tap a word to hear just it (Segmenter handles
-												    Chinese boundaries); long-press/drag selection is respected. Whole-
-												    message playback lives on the bubble's speaker button. */}
-												{!(trEnabled && translations[m.content]?.pairs?.length) && (
-													<div
-														className={`msg-md ${trEnabled && trWordTap ? "cursor-pointer" : ""}`}
-														title={trEnabled && trWordTap ? "Tap a word to hear it" : undefined}
-														onClick={trEnabled && trWordTap ? (e) => {
-															if ((e.target as HTMLElement).closest("a, button")) return;
-															if (window.getSelection()?.toString()) return; // long-press selected text
-															e.stopPropagation();
-															const word = wordAtPoint(e.clientX, e.clientY);
-															if (word) speakTap(word);
-														} : undefined}
-														dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
-													/>
-												)}
-												{trEnabled && translations[m.content] && (
-													<div className={`flex flex-col gap-1 ${translations[m.content].pairs?.length ? "" : "mt-1.5 pt-1.5 border-t border-line/60"}`}>
-														{/* Interlinear gloss: each original word with its romanization
-														    directly beneath (textbook-style), every column tappable to hear
-														    that word. Falls back to the flat transliteration line. */}
-														{translations[m.content].pairs?.length ? (
-															<div className="flex flex-wrap gap-x-2 gap-y-1.5 items-end">
-																{translations[m.content].pairs?.map(([word, roman], pi) => (
-																	<span
-																		key={`${pi}-${word}`}
-																		className="inline-flex flex-col items-center cursor-pointer hover:text-accent transition-colors"
-																		title="Tap to hear this word"
-																		onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); speakTap(word); }}
-																	>
-																		<span className={`${trSize.word} leading-tight`}>{word}</span>
-																		<span className={`${trSize.gloss} text-muted leading-tight min-h-[1em]`}>{roman}</span>
-																	</span>
-																))}
-															</div>
-														) : translations[m.content].transliteration ? (
-															<div
-																className={`${trSize.gloss} text-muted whitespace-pre-wrap cursor-pointer`}
-																title="Tap to hear the original spoken"
-																onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); speakTap(m.content); }}
-															>
-																{translations[m.content].transliteration}
-															</div>
-														) : null}
-														{/* Translation — SAME size as the transliteration (equally visible),
-														    color is the differentiator. Spoken in ITS OWN language: the tapped
-														    word when word-tap is on (whole line as fallback), else the line. */}
-														<div
-															className={`${trSize.gloss} text-accent whitespace-pre-wrap cursor-pointer mt-0.5`}
-															title={trWordTap ? `Tap a word to hear it in ${trTarget}` : `Tap to hear it in ${trTarget}`}
-															onClick={(e) => {
-																if (window.getSelection()?.toString()) return;
-																e.stopPropagation();
-																const word = trWordTap ? wordAtPoint(e.clientX, e.clientY) : null;
-																speakTap(word || translations[m.content].translation, TR_LANG_TAGS[trTarget]);
-															}}
-														>
-															{translations[m.content].translation}
-														</div>
-													</div>
-												)}
-											</>
+											<GlossedMessage
+												message={m}
+												gloss={gloss.translations[m.content]}
+												enabled={gloss.enabled}
+												wordTap={gloss.wordTap}
+												target={gloss.target}
+												targetTag={gloss.targetTag}
+												sizes={gloss.sizes}
+												onSpeak={speakTap}
+											/>
 										) : (
 											<span className="whitespace-pre-wrap">{m.content}</span>
 										)}
