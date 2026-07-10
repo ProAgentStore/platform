@@ -325,6 +325,17 @@ export async function runAgentThink(opts: {
 		...messages.map((m) => ({ role: m.role, content: m.content })),
 	];
 
+	// Strongest position of all: a note ON the last user message (request-only — never
+	// stored). Both the mid-prompt rule and the end-of-prompt FINAL RULE lost to
+	// conversational momentum on live replays once the history contained English
+	// explanations invited by English questions; adjacent-to-the-ask wins.
+	if (translationCfg?.enabled && aiMessages.length > 1) {
+		const last = aiMessages[aiMessages.length - 1];
+		if (last.role === "user") {
+			last.content += `\n\n[Platform note: answer ENTIRELY in the conversation language, even though this message may be in another language — the platform shows a ${translationCfg.target || "English"} translation beneath your reply, so the user will understand you.]`;
+		}
+	}
+
 	if (!useTools) {
 		const result = (await runUserWorkersAi(
 			env,
