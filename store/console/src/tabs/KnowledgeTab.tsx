@@ -9,6 +9,14 @@ import { formatTime, renderMd } from "@proagentstore/sdk/ui";
 
 type KbSubTab = "docs" | "memory" | "files" | "index" | "credentials" | "rules";
 
+interface DriveFile {
+	id: string;
+	name: string;
+	mimeType: string;
+	modifiedTime?: string;
+	webViewLink?: string;
+}
+
 interface Props {
 	instanceId: string;
 	isApply: boolean;
@@ -35,6 +43,13 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	const [showUrl, setShowUrl] = useState(false);
 	const [urlValue, setUrlValue] = useState("");
 	const [urlTitle, setUrlTitle] = useState("");
+	const [showDrive, setShowDrive] = useState(false);
+	const [driveStatus, setDriveStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
+	const [driveQuery, setDriveQuery] = useState("");
+	const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
+	const [driveLoading, setDriveLoading] = useState(false);
+	const [driveMsg, setDriveMsg] = useState("");
+	const [importingDriveId, setImportingDriveId] = useState<string | null>(null);
 
 	const loadDocs = useCallback(async () => {
 		try {
@@ -64,6 +79,16 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		else if (subTab === "credentials") loadCredentials();
 		else if (subTab === "rules") loadInstructions();
 	}, [subTab, loadDocs, loadCredentials, loadInstructions]);
+
+	useEffect(() => {
+		if (subTab !== "docs") return;
+		(async () => {
+			try {
+				const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status");
+				setDriveStatus(s);
+			} catch {}
+		})();
+	}, [subTab]);
 
 	const openNew = () => { setOpenId("__new__"); setEditing(true); setEditTitle(""); setEditContent(""); setPreview(false); setShowUrl(false); };
 	const openView = (d: KnowledgeDoc) => { setOpenId(d.id); setEditing(false); setPreview(false); };
@@ -110,6 +135,40 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
 		}
+	};
+
+	const searchDrive = async () => {
+		setDriveLoading(true);
+		setDriveMsg("");
+		try {
+			const params = new URLSearchParams();
+			if (driveQuery.trim()) params.set("q", driveQuery.trim());
+			params.set("limit", "20");
+			const d = await api<{ files?: DriveFile[] }>(`/v1/drive/files?${params}`);
+			setDriveFiles(d.files || []);
+			if (!d.files?.length) setDriveMsg("No matching Drive files.");
+		} catch (e) {
+			setDriveMsg(e instanceof Error ? e.message : "Drive search failed");
+		}
+		setDriveLoading(false);
+	};
+
+	const importDriveFile = async (file: DriveFile) => {
+		setImportingDriveId(file.id);
+		setDriveMsg("");
+		try {
+			await api(`/v1/drive/instances/${instanceId}/import`, {
+				method: "POST",
+				body: JSON.stringify({ fileId: file.id }),
+			});
+			setDriveMsg(`Imported ${file.name}.`);
+			setShowDrive(false);
+			setDriveFiles([]);
+			loadDocs();
+		} catch (e) {
+			setDriveMsg(e instanceof Error ? e.message : "Drive import failed");
+		}
+		setImportingDriveId(null);
 	};
 
 	const deleteDoc = async (docId: string) => {
@@ -166,6 +225,17 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	// "+ File" button shares it.
 	const uploader = useUploader(instanceId, () => setFilesRefresh((k) => k + 1));
 	const uploadFile = async (file: File) => uploader.start(file);
+
+	const supportedDriveFile = (file: DriveFile) => (
+		file.mimeType.startsWith("text/") ||
+		file.mimeType === "application/json" ||
+		file.mimeType === "application/xml" ||
+		file.mimeType === "application/x-ndjson" ||
+		file.mimeType === "application/yaml" ||
+		file.mimeType === "application/vnd.google-apps.document" ||
+		file.mimeType === "application/vnd.google-apps.spreadsheet" ||
+		file.mimeType === "application/vnd.google-apps.presentation"
+	);
 
 	const subTabs: { id: KbSubTab; label: string }[] = [
 		{ id: "docs", label: "Documents" },
@@ -262,6 +332,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 							<div className="flex gap-1.5 flex-wrap">
 								<button type="button" onClick={openNew} className="text-xs px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold">+ New</button>
 								<button type="button" onClick={() => setShowUrl((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ URL</button>
+								<button type="button" onClick={() => setShowDrive((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ Drive</button>
 								<label className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold cursor-pointer">
 									+ File
 									<input type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,.xml" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKbFile(f); e.target.value = ""; }} />
@@ -277,6 +348,54 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 									<button type="button" onClick={addUrl} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Import</button>
 									<button type="button" onClick={() => setShowUrl(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
 								</div>
+							</div>
+						)}
+
+						{showDrive && (
+							<div className="bg-panel border border-line rounded-xl p-4 mb-3">
+								{driveStatus?.connected ? (
+									<>
+										<div className="flex gap-2 mb-2 flex-wrap">
+											<input
+												value={driveQuery}
+												onChange={(e) => setDriveQuery(e.target.value)}
+												onKeyDown={(e) => { if (e.key === "Enter") searchDrive(); }}
+												placeholder="Search Google Drive"
+												className="flex-1 min-w-[12rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+											/>
+											<button type="button" onClick={searchDrive} disabled={driveLoading} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-50">
+												{driveLoading ? "Searching..." : "Search"}
+											</button>
+											<button type="button" onClick={() => setShowDrive(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+										</div>
+										{driveFiles.length > 0 && (
+											<div className="flex flex-col gap-2 mt-3">
+												{driveFiles.map((f) => {
+													const supported = supportedDriveFile(f);
+													return (
+														<div key={f.id} className="bg-paper border border-line rounded-lg p-3 flex items-start justify-between gap-3">
+															<div className="min-w-0">
+																<div className="text-sm font-semibold truncate">{f.name}</div>
+																<div className="text-xs text-muted truncate">{f.mimeType}</div>
+															</div>
+															<button
+																type="button"
+																disabled={!supported || importingDriveId === f.id}
+																onClick={() => importDriveFile(f)}
+																className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
+															>
+																{importingDriveId === f.id ? "Importing..." : supported ? "Import" : "Unsupported"}
+															</button>
+														</div>
+													);
+												})}
+											</div>
+										)}
+									</>
+								) : (
+									<p className="text-sm text-muted">Connect Google Drive in Settings before importing Drive files.</p>
+								)}
+								{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
 							</div>
 						)}
 

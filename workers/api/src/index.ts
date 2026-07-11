@@ -13,6 +13,7 @@ import { credentialRoutes } from "./routes/credentials.js";
 import { profileRoutes } from "./routes/profile.js";
 import { keysRoutes } from "./routes/keys.js";
 import { emailRoutes } from "./routes/email.js";
+import { driveRoutes } from "./routes/drive.js";
 import { errorRoutes } from "./routes/errors.js";
 import { dashboardRoutes } from "./routes/dashboard.js";
 import { notificationRoutes } from "./routes/notifications.js";
@@ -99,6 +100,7 @@ app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google
+app.route("/v1/drive", driveRoutes); // /v1/drive/google/start, /callback, /status, /files, /instances/:id/import
 app.route("/v1/errors", errorRoutes); // GET /v1/errors — durable error log read-back
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);
