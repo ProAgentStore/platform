@@ -100,15 +100,15 @@ export async function verifyPayload<T>(
 ): Promise<T | null> {
 	const [data, sig] = token.split(".");
 	if (!data || !sig) return null;
-	const key = await hmacKey(signingKey);
-	const valid = await crypto.subtle.verify(
-		"HMAC",
-		key,
-		unb64url(sig),
-		new TextEncoder().encode(data),
-	);
-	if (!valid) return null;
 	try {
+		const key = await hmacKey(signingKey);
+		const valid = await crypto.subtle.verify(
+			"HMAC",
+			key,
+			unb64url(sig),
+			new TextEncoder().encode(data),
+		);
+		if (!valid) return null;
 		return JSON.parse(new TextDecoder().decode(unb64url(data))) as T;
 	} catch {
 		return null;
@@ -121,17 +121,21 @@ export async function verifySession(
 ): Promise<SessionPayload | null> {
 	const [data, sig] = token.split(".");
 	if (!data || !sig) return null;
-	const key = await hmacKey(signingKey);
-	const valid = await crypto.subtle.verify(
-		"HMAC",
-		key,
-		unb64url(sig),
-		new TextEncoder().encode(data),
-	);
-	if (!valid) return null;
-	const payload: SessionPayload = JSON.parse(
-		new TextDecoder().decode(unb64url(data)),
-	);
-	if (payload.exp < Math.floor(Date.now() / 1000)) return null;
-	return payload;
+	try {
+		const key = await hmacKey(signingKey);
+		const valid = await crypto.subtle.verify(
+			"HMAC",
+			key,
+			unb64url(sig),
+			new TextEncoder().encode(data),
+		);
+		if (!valid) return null;
+		const payload: SessionPayload = JSON.parse(
+			new TextDecoder().decode(unb64url(data)),
+		);
+		if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+		return payload;
+	} catch {
+		return null;
+	}
 }

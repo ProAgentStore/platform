@@ -47,9 +47,14 @@ describe("session", () => {
 
 	it("rejects tampered token", async () => {
 		const token = await signSession("user-123", SECRET);
-		const tampered = `${token.slice(0, -2)}xx`;
+		const [data, sig] = token.split(".");
+		const tampered = `${data}a.${sig}`;
 		const payload = await verifySession(tampered, SECRET);
 		expect(payload).toBeNull();
+	});
+
+	it("rejects malformed tokens without throwing", async () => {
+		await expect(verifySession("not-base64.not-base64", SECRET)).resolves.toBeNull();
 	});
 
 	it("rejects wrong signing key", async () => {

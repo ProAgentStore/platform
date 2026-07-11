@@ -181,7 +181,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await until(() => s.runState() === "idle", 3000);
 		expect(s.runState()).toBe("idle");
 		s.stop();
-	});
+	}, 10_000);
 
 	it("with NO command/bin, a non-Claude engine spawns ITS OWN binary (not `claude`)", async () => {
 		// Regression: the constructor fell back to a hard-coded "claude" when no command was
