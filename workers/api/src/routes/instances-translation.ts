@@ -189,12 +189,13 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 					.run();
 			} catch { /* cache write is best-effort */ }
 		};
+		const plainSystem = `You are a translator. Translate the user's message into ${target}. Output ONLY the translation — no quotes, no notes, no commentary.`;
 		const system = transliterate
 			? `You are a translator. Reply with ONLY a JSON object, no other text:\n` +
 				`{"translation": "<the user's message translated into ${target}>", ` +
 				`"pairs": [["<word from the ORIGINAL message>", "<its Latin transliteration — Hanyu Pinyin with tone marks for Chinese, Hepburn romaji for Japanese, Revised Romanization for Korean, standard romanization for other scripts; \\"\\" for punctuation or words already in Latin script>"], ...]}\n` +
 				`The pairs must cover the ENTIRE original message, in order, split into natural words (e.g. 名字 is one word).`
-			: `You are a translator. Translate the user's message into ${target}. Output ONLY the translation — no quotes, no notes, no commentary.`;
+			: plainSystem;
 		const messages = [
 			{ role: "system", content: system },
 			{ role: "user", content: text },
@@ -220,10 +221,10 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 				return null;
 			}
 		};
-		const runByok = async (): Promise<string> => {
+		const runByok = async (msgs = messages): Promise<string> => {
 			try {
 				const r = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
-					messages,
+					messages: msgs,
 					maxTokens: 2000,
 				})) as { response?: string };
 				return (r.response || "").trim();
@@ -250,7 +251,7 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 			raw = await runByok();
 			viaPlatform = false;
 		}
-		if (!raw) throw new HttpError(502, "Translation failed");
+		if (!raw) throw new HttpError(502, "Translation failed — no AI provider responded (add an Anthropic API key in Profile, or try again)");
 		if (!transliterate) {
 			await saveGloss(raw);
 			return c.json({ translation: raw });
@@ -277,7 +278,32 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 		if (salvage) {
 			try { return c.json({ translation: JSON.parse(`"${salvage[1]}"`) as string }); } catch { /* fall through */ }
 		}
-		if (raw.trimStart().startsWith("{")) throw new HttpError(502, "Translation failed");
+		if (raw.trimStart().startsWith("{")) {
+			// JSON-shaped but unsalvageable. Last resort: ask for a PLAIN translation (that
+			// prompt can't emit JSON), so the user gets a flat line NOW instead of a 502 that
+			// replays on every page load; the flat cache entry counts as stale in
+			// transliterate mode, so a later load recomputes and upgrades it to pairs.
+			const plainMsgs = [
+				{ role: "system", content: plainSystem },
+				{ role: "user", content: text },
+			];
+			let plain = "";
+			if (c.env.PLATFORM_AI_ENABLED === "true" && c.env.AI) {
+				try {
+					const r = (await c.env.AI.run(
+						"@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
+						{ messages: plainMsgs, max_tokens: 2048 },
+					)) as { response?: string };
+					plain = (r.response || "").trim();
+				} catch { /* fall through to BYOK */ }
+			}
+			if (!plain || plain.startsWith("{")) plain = await runByok(plainMsgs);
+			if (plain && !plain.startsWith("{")) {
+				await saveGloss(plain);
+				return c.json({ translation: plain });
+			}
+			throw new HttpError(502, "Translation failed");
+		}
 		return c.json({ translation: raw });
 	});
 }
