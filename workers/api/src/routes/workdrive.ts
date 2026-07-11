@@ -1,28 +1,31 @@
 /**
- * Google Drive connector.
+ * Zoho WorkDrive connector.
  *
- * Users connect Drive with read-only OAuth. We store only the refresh token,
- * encrypted in the key vault as provider "google_drive". Imported Drive docs are
- * copied into the instance knowledge base, then the existing DO path vectorizes
- * them like any other document.
+ * Users connect WorkDrive with read-only OAuth. We store only the refresh token,
+ * encrypted in the key vault as provider "zoho_workdrive". Imported files are
+ * copied into the instance knowledge base through the existing vectorizing path.
  */
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
-import { DRIVE_SCOPE, exportDriveFile, listDriveFiles, mintDriveAccessToken } from "../lib/drive.js";
+import {
+	exportWorkDriveFile,
+	listWorkDriveFolder,
+	mintWorkDriveAccessToken,
+	WORKDRIVE_SCOPE,
+	workDriveAccountsBase,
+} from "../lib/workdrive.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
-export const driveRoutes = new Hono<{ Bindings: Env }>();
+export const workdriveRoutes = new Hono<{ Bindings: Env }>();
 
-const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
-const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const STATE_TTL_SECONDS = 10 * 60;
-const PROVIDER = "google_drive";
+const PROVIDER = "zoho_workdrive";
 
 function redirectUri(c: { req: { url: string } }): string {
-	return new URL("/v1/drive/google/callback", c.req.url).toString();
+	return new URL("/v1/workdrive/zoho/callback", c.req.url).toString();
 }
 
 function b64url(bytes: Uint8Array): string {
@@ -85,7 +88,7 @@ async function storedRefreshToken(env: Env, userId: string): Promise<string> {
 	)
 		.bind(userId, PROVIDER)
 		.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
-	if (!row) throw new HttpError(400, "Google Drive is not connected");
+	if (!row) throw new HttpError(400, "Zoho WorkDrive is not connected");
 	return decryptKey(
 		new Uint8Array(row.key_ciphertext),
 		new Uint8Array(row.dek_wrapped),
@@ -94,39 +97,39 @@ async function storedRefreshToken(env: Env, userId: string): Promise<string> {
 	);
 }
 
-driveRoutes.get("/google/start", async (c) => {
+workdriveRoutes.get("/zoho/start", async (c) => {
 	const session = await requireUser(c);
-	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
-		throw new HttpError(503, "Google Drive connection is not configured on this deployment");
+	if (!c.env.ZOHO_CLIENT_ID || !c.env.ZOHO_CLIENT_SECRET) {
+		throw new HttpError(503, "Zoho WorkDrive connection is not configured on this deployment");
 	}
 	const state = await signState(
 		session.uid,
 		Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
 		c.env.SESSION_SIGNING_KEY,
 	);
-	const url = new URL(AUTH_ENDPOINT);
-	url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
+	const url = new URL(`${workDriveAccountsBase(c.env)}/oauth/v2/auth`);
+	url.searchParams.set("client_id", c.env.ZOHO_CLIENT_ID);
 	url.searchParams.set("redirect_uri", redirectUri(c));
 	url.searchParams.set("response_type", "code");
-	url.searchParams.set("scope", `openid email ${DRIVE_SCOPE}`);
+	url.searchParams.set("scope", WORKDRIVE_SCOPE);
 	url.searchParams.set("access_type", "offline");
 	url.searchParams.set("prompt", "consent");
 	url.searchParams.set("state", state);
 	return c.json({ url: url.toString() });
 });
 
-driveRoutes.get("/status", async (c) => {
+workdriveRoutes.get("/status", async (c) => {
 	const session = await requireUser(c);
-	const configured = !!(c.env.GOOGLE_CLIENT_ID && c.env.GOOGLE_CLIENT_SECRET);
+	const configured = !!(c.env.ZOHO_CLIENT_ID && c.env.ZOHO_CLIENT_SECRET);
 	const row = await c.env.DB.prepare(
 		"SELECT created_at, account_label FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
 	)
 		.bind(session.uid, PROVIDER)
 		.first<{ created_at: string; account_label: string | null }>();
-	return c.json({ connected: !!row, email: row?.account_label ?? null, connectedAt: row?.created_at ?? null, configured });
+	return c.json({ connected: !!row, account: row?.account_label ?? null, connectedAt: row?.created_at ?? null, configured });
 });
 
-driveRoutes.delete("/google", async (c) => {
+workdriveRoutes.delete("/zoho", async (c) => {
 	const session = await requireUser(c);
 	await c.env.DB.prepare(
 		"DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
@@ -136,48 +139,36 @@ driveRoutes.delete("/google", async (c) => {
 	return c.json({ success: true });
 });
 
-driveRoutes.get("/google/callback", async (c) => {
+workdriveRoutes.get("/zoho/callback", async (c) => {
 	const code = c.req.query("code");
 	const stateRaw = c.req.query("state");
 	if (!code || !stateRaw) return c.text("missing code or state", 400);
-	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
-		return c.text("Google Drive connection is not configured", 503);
+	if (!c.env.ZOHO_CLIENT_ID || !c.env.ZOHO_CLIENT_SECRET) {
+		return c.text("Zoho WorkDrive connection is not configured", 503);
 	}
 	if (!c.env.KEY_ENCRYPTION_KEY) return c.text("Key encryption not configured", 500);
 
 	const uid = await verifyState(stateRaw, c.env.SESSION_SIGNING_KEY);
 	if (!uid) return c.text("invalid or expired state", 400);
 
-	const tokenRes = await fetch(TOKEN_ENDPOINT, {
+	const tokenRes = await fetch(`${workDriveAccountsBase(c.env)}/oauth/v2/token`, {
 		method: "POST",
 		headers: { "Content-Type": "application/x-www-form-urlencoded" },
 		body: new URLSearchParams({
-			client_id: c.env.GOOGLE_CLIENT_ID,
-			client_secret: c.env.GOOGLE_CLIENT_SECRET,
+			client_id: c.env.ZOHO_CLIENT_ID,
+			client_secret: c.env.ZOHO_CLIENT_SECRET,
 			code,
 			redirect_uri: redirectUri(c),
 			grant_type: "authorization_code",
 		}),
 	});
-	if (!tokenRes.ok) return c.text(`Google Drive token exchange failed (${tokenRes.status})`, 400);
-	const tok = (await tokenRes.json()) as { refresh_token?: string; access_token?: string };
+	if (!tokenRes.ok) return c.text(`Zoho WorkDrive token exchange failed (${tokenRes.status})`, 400);
+	const tok = (await tokenRes.json()) as { refresh_token?: string };
 	if (!tok.refresh_token) {
 		return c.text(
-			"Google did not return a refresh token. Remove this app's access at myaccount.google.com/permissions and reconnect.",
+			"Zoho did not return a refresh token. Revoke this app in Zoho Accounts and reconnect WorkDrive.",
 			400,
 		);
-	}
-
-	let accountLabel: string | null = null;
-	if (tok.access_token) {
-		try {
-			const ui = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-				headers: { Authorization: `Bearer ${tok.access_token}` },
-			});
-			if (ui.ok) accountLabel = ((await ui.json()) as { email?: string }).email ?? null;
-		} catch {
-			/* non-fatal */
-		}
 	}
 
 	const { ciphertext, dekWrapped, iv } = await encryptKey(
@@ -194,35 +185,37 @@ driveRoutes.get("/google/callback", async (c) => {
        account_label = excluded.account_label,
        created_at = excluded.created_at`,
 	)
-		.bind(uid, PROVIDER, ciphertext, dekWrapped, iv, accountLabel)
+		.bind(uid, PROVIDER, ciphertext, dekWrapped, iv, "Zoho WorkDrive")
 		.run();
 
 	return c.html(
-		"<!doctype html><title>Google Drive connected</title><body style='font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0'><div style='text-align:center'><h1>Google Drive connected</h1><p>You can close this tab and return to ProAgentStore.</p></div></body>",
+		"<!doctype html><title>Zoho WorkDrive connected</title><body style='font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0'><div style='text-align:center'><h1>Zoho WorkDrive connected</h1><p>You can close this tab and return to ProAgentStore.</p></div></body>",
 	);
 });
 
-driveRoutes.get("/files", async (c) => {
+workdriveRoutes.get("/folder", async (c) => {
 	const session = await requireUser(c);
+	const folder = c.req.query("folder") || c.req.query("url") || "";
+	if (!folder) throw new HttpError(400, "folder or url required");
+	const limit = Number(c.req.query("limit")) || undefined;
+	const offset = Number(c.req.query("offset")) || undefined;
 	const refresh = await storedRefreshToken(c.env, session.uid);
-	const accessToken = await mintDriveAccessToken(c.env, refresh);
-	const query = c.req.query("q") || undefined;
-	const limit = Number(c.req.query("limit")) || 20;
-	return c.json({ files: await listDriveFiles(accessToken, { query, pageSize: limit }) });
+	const accessToken = await mintWorkDriveAccessToken(c.env, refresh);
+	return c.json(await listWorkDriveFolder(c.env, accessToken, folder, { limit, offset }));
 });
 
-driveRoutes.post("/instances/:instanceId/import", async (c) => {
+workdriveRoutes.post("/instances/:instanceId/import", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { fileId?: string; url?: string; title?: string };
-	const fileRef = body.fileId || body.url;
-	if (!fileRef) throw new HttpError(400, "fileId or url required");
+	const body = (await c.req.json().catch(() => ({}))) as { resourceId?: string; url?: string; title?: string };
+	const fileRef = body.resourceId || body.url;
+	if (!fileRef) throw new HttpError(400, "resourceId or url required");
 
 	const refresh = await storedRefreshToken(c.env, session.uid);
-	const accessToken = await mintDriveAccessToken(c.env, refresh);
-	const file = await exportDriveFile(accessToken, fileRef);
-	const title = (body.title?.trim() || file.name || "Google Drive import").slice(0, 500);
+	const accessToken = await mintWorkDriveAccessToken(c.env, refresh);
+	const file = await exportWorkDriveFile(c.env, accessToken, fileRef);
+	const title = (body.title?.trim() || file.name || "Zoho WorkDrive import").slice(0, 500);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(
 		new Request("https://agent/knowledge", {
@@ -231,14 +224,14 @@ driveRoutes.post("/instances/:instanceId/import", async (c) => {
 			body: JSON.stringify({
 				title,
 				content: file.text,
-				source: "drive",
-				sourceUrl: file.webViewLink,
+				source: "workdrive",
+				sourceUrl: file.permalink,
 			}),
 		}),
 	);
 	const payload = (await doRes.json()) as Record<string, unknown>;
 	return c.json(
-		{ ...payload, driveFile: { id: file.id, name: file.name, mimeType: file.mimeType, webViewLink: file.webViewLink } },
+		{ ...payload, workdriveFile: { id: file.id, name: file.name, mimeType: file.mimeType, permalink: file.permalink } },
 		(doRes.ok ? 201 : doRes.status) as ContentfulStatusCode,
 	);
 });
