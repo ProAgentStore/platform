@@ -37,6 +37,13 @@ export interface Env {
 	/** Google OAuth client used for the Gmail email-access connection. */
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;
+	/** Zoho OAuth client used for the WorkDrive read-only connector. */
+	ZOHO_CLIENT_ID?: string;
+	ZOHO_CLIENT_SECRET?: string;
+	/** Optional Zoho DC overrides, e.g. https://accounts.zoho.com.au and https://www.zohoapis.com.au/workdrive. */
+	ZOHO_ACCOUNTS_BASE?: string;
+	ZOHO_WORKDRIVE_API_BASE?: string;
+	ZOHO_WORKDRIVE_DOWNLOAD_BASE?: string;
 	/** Web Push (VAPID). Public key is non-secret; private key is a secret. */
 	VAPID_PUBLIC_KEY?: string;
 	VAPID_PRIVATE_KEY?: string;

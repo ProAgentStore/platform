@@ -17,6 +17,16 @@ interface DriveFile {
 	webViewLink?: string;
 }
 
+interface WorkDriveFile {
+	id: string;
+	name: string;
+	type: string;
+	isFolder?: boolean;
+	mimeType?: string;
+	extension?: string;
+	permalink?: string;
+}
+
 interface Props {
 	instanceId: string;
 	isApply: boolean;
@@ -50,6 +60,14 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	const [driveLoading, setDriveLoading] = useState(false);
 	const [driveMsg, setDriveMsg] = useState("");
 	const [importingDriveId, setImportingDriveId] = useState<string | null>(null);
+	const [showWorkdrive, setShowWorkdrive] = useState(false);
+	const [workdriveStatus, setWorkdriveStatus] = useState<{ connected: boolean; configured: boolean; account?: string | null } | null>(null);
+	const [workdriveRef, setWorkdriveRef] = useState("");
+	const [workdriveFiles, setWorkdriveFiles] = useState<WorkDriveFile[]>([]);
+	const [workdriveNextOffset, setWorkdriveNextOffset] = useState<number | null>(null);
+	const [workdriveLoading, setWorkdriveLoading] = useState(false);
+	const [workdriveMsg, setWorkdriveMsg] = useState("");
+	const [importingWorkdriveId, setImportingWorkdriveId] = useState<string | null>(null);
 
 	const loadDocs = useCallback(async () => {
 		try {
@@ -86,6 +104,10 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 			try {
 				const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status");
 				setDriveStatus(s);
+			} catch {}
+			try {
+				const s = await api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status");
+				setWorkdriveStatus(s);
 			} catch {}
 		})();
 	}, [subTab]);
@@ -171,6 +193,52 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		setImportingDriveId(null);
 	};
 
+	const listWorkdriveFolder = async (ref = workdriveRef, offset = 0, append = false) => {
+		const folderRef = ref.trim();
+		if (!folderRef) return;
+		setWorkdriveLoading(true);
+		setWorkdriveMsg("");
+		try {
+			const params = new URLSearchParams({ folder: folderRef, offset: String(offset), limit: "50" });
+			const d = await api<{ files?: WorkDriveFile[]; nextOffset?: number | null }>(`/v1/workdrive/folder?${params}`);
+			const files = d.files || [];
+			setWorkdriveRef(folderRef);
+			setWorkdriveFiles((prev) => (append ? [...prev, ...files] : files));
+			setWorkdriveNextOffset(typeof d.nextOffset === "number" ? d.nextOffset : null);
+			if (!append && !files.length) setWorkdriveMsg("No files or folders found.");
+		} catch (e) {
+			setWorkdriveMsg(e instanceof Error ? e.message : "WorkDrive folder lookup failed");
+		}
+		setWorkdriveLoading(false);
+	};
+
+	const openWorkdriveFolder = (file: WorkDriveFile) => {
+		setWorkdriveFiles([]);
+		setWorkdriveNextOffset(null);
+		listWorkdriveFolder(file.id);
+	};
+
+	const importWorkdriveFile = async (file?: WorkDriveFile) => {
+		const ref = file?.id || workdriveRef.trim();
+		if (!ref) return;
+		setImportingWorkdriveId(file?.id || "__direct__");
+		setWorkdriveMsg("");
+		try {
+			await api(`/v1/workdrive/instances/${instanceId}/import`, {
+				method: "POST",
+				body: JSON.stringify(file ? { resourceId: file.id } : { url: ref }),
+			});
+			setWorkdriveMsg(`Imported ${file?.name || "WorkDrive file"}.`);
+			setShowWorkdrive(false);
+			setWorkdriveFiles([]);
+			setWorkdriveNextOffset(null);
+			loadDocs();
+		} catch (e) {
+			setWorkdriveMsg(e instanceof Error ? e.message : "WorkDrive import failed");
+		}
+		setImportingWorkdriveId(null);
+	};
+
 	const deleteDoc = async (docId: string) => {
 		if (!confirm("Delete this document?")) return;
 		try {
@@ -236,6 +304,17 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		file.mimeType === "application/vnd.google-apps.spreadsheet" ||
 		file.mimeType === "application/vnd.google-apps.presentation"
 	);
+
+	const supportedWorkdriveFile = (file: WorkDriveFile) => {
+		const type = (file.mimeType || "").toLowerCase();
+		const ext = (file.extension || file.name.split(".").pop() || "").toLowerCase();
+		return type.startsWith("text/") || type.includes("json") || type.includes("xml") || ["txt", "md", "csv", "json", "xml", "html", "htm", "yaml", "yml", "tsv"].includes(ext);
+	};
+
+	const isWorkdriveFolder = (file: WorkDriveFile) => {
+		const type = file.type.toLowerCase();
+		return file.isFolder === true || type.includes("folder");
+	};
 
 	const subTabs: { id: KbSubTab; label: string }[] = [
 		{ id: "docs", label: "Documents" },
@@ -333,6 +412,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 								<button type="button" onClick={openNew} className="text-xs px-2.5 py-1.5 rounded-lg bg-accent text-white font-bold">+ New</button>
 								<button type="button" onClick={() => setShowUrl((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ URL</button>
 								<button type="button" onClick={() => setShowDrive((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ Drive</button>
+								<button type="button" onClick={() => setShowWorkdrive((s) => !s)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">+ WorkDrive</button>
 								<label className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold cursor-pointer">
 									+ File
 									<input type="file" accept=".txt,.md,.csv,.json,.html,.htm,.pdf,.xml" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadKbFile(f); e.target.value = ""; }} />
@@ -396,6 +476,68 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 									<p className="text-sm text-muted">Connect Google Drive in Settings before importing Drive files.</p>
 								)}
 								{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
+							</div>
+						)}
+
+						{showWorkdrive && (
+							<div className="bg-panel border border-line rounded-xl p-4 mb-3">
+								{workdriveStatus?.connected ? (
+									<>
+										<div className="flex gap-2 mb-2 flex-wrap">
+											<input
+												value={workdriveRef}
+												onChange={(e) => setWorkdriveRef(e.target.value)}
+												onKeyDown={(e) => { if (e.key === "Enter") listWorkdriveFolder(); }}
+												placeholder="Zoho WorkDrive file or folder URL / ID"
+												className="flex-1 min-w-[12rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+											/>
+											<button type="button" onClick={() => importWorkdriveFile()} disabled={!workdriveRef.trim() || importingWorkdriveId === "__direct__"} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-50">
+												{importingWorkdriveId === "__direct__" ? "Importing..." : "Import file"}
+											</button>
+											<button type="button" onClick={() => listWorkdriveFolder()} disabled={workdriveLoading || !workdriveRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">
+												{workdriveLoading ? "Listing..." : "List folder"}
+											</button>
+											<button type="button" onClick={() => setShowWorkdrive(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+										</div>
+										{workdriveFiles.length > 0 && (
+											<div className="flex flex-col gap-2 mt-3">
+												{workdriveFiles.map((f) => {
+													const folder = isWorkdriveFolder(f);
+													const supported = supportedWorkdriveFile(f);
+													return (
+														<div key={f.id} className="bg-paper border border-line rounded-lg p-3 flex items-start justify-between gap-3">
+															<div className="min-w-0">
+																<div className="text-sm font-semibold truncate">{f.name}</div>
+																<div className="text-xs text-muted truncate">{folder ? "Folder" : f.mimeType || f.extension || f.type}</div>
+															</div>
+															<button
+																type="button"
+																disabled={(!folder && !supported) || importingWorkdriveId === f.id || workdriveLoading}
+																onClick={() => folder ? openWorkdriveFolder(f) : importWorkdriveFile(f)}
+																className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
+															>
+																{importingWorkdriveId === f.id ? "Importing..." : folder ? "Open" : supported ? "Import" : "Unsupported"}
+															</button>
+														</div>
+													);
+												})}
+												{workdriveNextOffset !== null && (
+													<button
+														type="button"
+														onClick={() => listWorkdriveFolder(workdriveRef, workdriveNextOffset, true)}
+														disabled={workdriveLoading}
+														className="self-start text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50"
+													>
+														{workdriveLoading ? "Loading..." : "Load more"}
+													</button>
+												)}
+											</div>
+										)}
+									</>
+								) : (
+									<p className="text-sm text-muted">Connect Zoho WorkDrive in Settings before importing WorkDrive files.</p>
+								)}
+								{workdriveMsg && <div className="text-xs text-muted mt-2">{workdriveMsg}</div>}
 							</div>
 						)}
 

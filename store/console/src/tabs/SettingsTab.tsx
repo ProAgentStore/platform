@@ -45,6 +45,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [emailMsg, setEmailMsg] = useState("");
 	const [driveStatus, setDriveStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [driveMsg, setDriveMsg] = useState("");
+	const [workdriveStatus, setWorkdriveStatus] = useState<{ connected: boolean; configured: boolean; account?: string | null } | null>(null);
+	const [workdriveMsg, setWorkdriveMsg] = useState("");
 
 	useEffect(() => {
 		(async () => {
@@ -103,29 +105,22 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setDriveStatus(s);
 			} catch {}
 			try {
+				const s = await api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status");
+				setWorkdriveStatus(s);
+			} catch {}
+			try {
 				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
 				setEmailPermission(st.permissions?.email === true);
 			} catch {}
 		})();
 	}, [instanceId]);
 
-	// Gmail is connected in a popup; re-check when the user returns to this tab.
-	const refreshEmail = async () => {
-		try {
-			const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status");
-			setEmailStatus(s);
-		} catch {}
-	};
-	const refreshDrive = async () => {
-		try {
-			const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status");
-			setDriveStatus(s);
-		} catch {}
-	};
+	// Cloud connectors open OAuth in a popup; re-check when the user returns to this tab.
 	useEffect(() => {
 		const onFocus = () => {
 			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status").then(setEmailStatus).catch(() => {});
 			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status").then(setDriveStatus).catch(() => {});
+			api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
 		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
@@ -207,6 +202,27 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			setDriveMsg("Google Drive disconnected.");
 		} catch (e) {
 			setDriveMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const connectWorkdrive = async () => {
+		try {
+			const { url } = await api<{ url: string }>("/v1/workdrive/zoho/start");
+			window.open(url, "_blank", "noopener");
+			setWorkdriveMsg("Complete the Zoho sign-in in the new tab, then come back here.");
+		} catch (e) {
+			setWorkdriveMsg(e instanceof Error ? e.message : "Failed to start Zoho WorkDrive connection");
+		}
+	};
+
+	const disconnectWorkdrive = async () => {
+		if (!confirm("Disconnect Zoho WorkDrive? Existing imported documents stay, but new WorkDrive imports will stop working.")) return;
+		try {
+			await api("/v1/workdrive/zoho", { method: "DELETE" });
+			setWorkdriveStatus((s) => (s ? { ...s, connected: false } : s));
+			setWorkdriveMsg("Zoho WorkDrive disconnected.");
+		} catch (e) {
+			setWorkdriveMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -406,6 +422,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{driveStatus && !driveStatus.configured && (
 					<p className="text-xs text-red mb-2">Google Drive connection isn’t configured on this deployment yet.</p>
 				)}
+				{workdriveStatus && !workdriveStatus.configured && (
+					<p className="text-xs text-red mb-2">Zoho WorkDrive connection isn’t configured on this deployment yet.</p>
+				)}
 
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<div className="text-sm">
@@ -447,6 +466,26 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					)}
 				</div>
 
+				<div className="flex items-center justify-between gap-3 mb-3">
+					<div className="text-sm">
+						<span className="font-semibold">Zoho WorkDrive</span>{" "}
+						{workdriveStatus?.connected
+							? <span className="text-green">· connected{workdriveStatus.account ? ` (${workdriveStatus.account})` : ""}</span>
+							: <span className="text-muted">· not connected</span>}
+					</div>
+					{workdriveStatus?.configured && (
+						workdriveStatus.connected ? (
+							<button type="button" onClick={disconnectWorkdrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
+								Disconnect
+							</button>
+						) : (
+							<button type="button" onClick={connectWorkdrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
+								Connect WorkDrive
+							</button>
+						)
+					)}
+				</div>
+
 				<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
 					<input
 						type="checkbox"
@@ -461,6 +500,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				)}
 				{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
 				{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
+				{workdriveMsg && <div className="text-xs text-muted mt-2">{workdriveMsg}</div>}
 			</div>
 
 			{/* Voice */}
