@@ -90,9 +90,11 @@ export const STORAGE_TOOLS: ToolDef[] = [
 	},
 	{
 		name: "read_file",
-		description: "Read a file's contents from your storage by ID.",
+		description:
+			"Read a document from your storage by ID (for PDFs and other binary files this is the extracted text). Use offset to page through a long document — e.g. to read around a search_knowledge match (chunks are ~512 chars, so offset ≈ chunkIndex × 512) and quote it exactly.",
 		parameters: {
 			id: { type: "string", description: "File ID", required: true },
+			offset: { type: "number", description: "Character offset to start reading from (default 0)" },
 		},
 	},
 	{
@@ -256,7 +258,10 @@ export async function executeStorageTool(
 				if (results.length === 0) {
 					return ok(call.name, "No relevant results found. The knowledge base may be empty or the query didn't match any stored content.");
 				}
-				return ok(call.name, JSON.stringify(results, null, 2));
+				return ok(
+					call.name,
+					`${JSON.stringify(results, null, 2)}\n\nTo read around a file match and quote it exactly: read_file with id=sourceId and offset ≈ (the number after "_" in the match id) × 512.`,
+				);
 			}
 
 			case "list_knowledge": {
@@ -329,8 +334,24 @@ export async function executeStorageTool(
 			case "read_file": {
 				const id = call.input.id as string;
 				if (!id) return fail(call.name, "id required");
+				const offset = Math.max(0, Number(call.input.offset) || 0);
+				const WINDOW = 4000;
+				// Prefer the extracted text — for a PDF the raw bytes are binary noise;
+				// the extraction is the readable document (it's also what was vectorized,
+				// so offsets line up with search_knowledge chunk positions).
+				const extracted = await engine.fileGetText(id);
+				if (extracted?.text) {
+					const total = extracted.text.length;
+					const slice = extracted.text.slice(offset, offset + WINDOW);
+					if (!slice) return fail(call.name, `offset ${offset} is past the end of the document (${total} chars)`);
+					const more = offset + WINDOW < total ? `\n...[${total - offset - WINDOW} more chars — call read_file again with offset=${offset + WINDOW}]` : "";
+					return ok(call.name, `File: ${extracted.meta.name} (chars ${offset}–${Math.min(offset + WINDOW, total)} of ${total})\n\n${slice}${more}`);
+				}
 				const file = await engine.fileGet(id);
 				if (!file) return fail(call.name, `File not found: ${id}`);
+				if (!file.meta.mimeType.startsWith("text/") && !/json|xml|csv|html/.test(file.meta.mimeType)) {
+					return fail(call.name, `${file.meta.name} is ${file.meta.mimeType} and has no extracted text — its content is not readable as text`);
+				}
 				const reader = file.body.getReader();
 				const chunks: Uint8Array[] = [];
 				for (;;) {
@@ -341,8 +362,9 @@ export async function executeStorageTool(
 				const text = new TextDecoder().decode(
 					chunks.length > 0 ? concatUint8Arrays(chunks) : new Uint8Array(0),
 				);
-				const truncated = text.length > 4000 ? `${text.slice(0, 4000)}...[truncated]` : text;
-				return ok(call.name, `File: ${file.meta.name}\n\n${truncated}`);
+				const slice = text.slice(offset, offset + WINDOW);
+				const more = offset + WINDOW < text.length ? `\n...[${text.length - offset - WINDOW} more chars — call read_file again with offset=${offset + WINDOW}]` : "";
+				return ok(call.name, `File: ${file.meta.name} (chars ${offset}–${Math.min(offset + WINDOW, text.length)} of ${text.length})\n\n${slice}${more}`);
 			}
 
 			case "delete_file": {
