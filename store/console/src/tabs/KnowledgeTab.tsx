@@ -15,6 +15,7 @@ interface DriveFile {
 	mimeType: string;
 	modifiedTime?: string;
 	webViewLink?: string;
+	parents?: string[];
 }
 
 interface WorkDriveFile {
@@ -30,6 +31,14 @@ interface WorkDriveFile {
 interface Props {
 	instanceId: string;
 	isApply: boolean;
+}
+
+interface ConnectorGrant {
+	id: string;
+	provider: "google_drive" | "zoho_workdrive";
+	resourceId: string;
+	resourceName: string;
+	resourceType: string;
 }
 
 export default function KnowledgeTab({ instanceId, isApply }: Props) {
@@ -57,6 +66,9 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	const [driveStatus, setDriveStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [driveQuery, setDriveQuery] = useState("");
 	const [driveFiles, setDriveFiles] = useState<DriveFile[]>([]);
+	const [driveGrants, setDriveGrants] = useState<ConnectorGrant[]>([]);
+	const [driveGrantId, setDriveGrantId] = useState("");
+	const [driveFolderId, setDriveFolderId] = useState("");
 	const [driveLoading, setDriveLoading] = useState(false);
 	const [driveMsg, setDriveMsg] = useState("");
 	const [importingDriveId, setImportingDriveId] = useState<string | null>(null);
@@ -64,6 +76,8 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	const [workdriveStatus, setWorkdriveStatus] = useState<{ connected: boolean; configured: boolean; account?: string | null } | null>(null);
 	const [workdriveRef, setWorkdriveRef] = useState("");
 	const [workdriveFiles, setWorkdriveFiles] = useState<WorkDriveFile[]>([]);
+	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
+	const [workdriveGrantId, setWorkdriveGrantId] = useState("");
 	const [workdriveNextOffset, setWorkdriveNextOffset] = useState<number | null>(null);
 	const [workdriveLoading, setWorkdriveLoading] = useState(false);
 	const [workdriveMsg, setWorkdriveMsg] = useState("");
@@ -106,11 +120,25 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 				setDriveStatus(s);
 			} catch {}
 			try {
+				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/drive/instances/${instanceId}/grants`);
+				const grants = d.grants || [];
+				setDriveGrants(grants);
+				setDriveGrantId((current) => current || grants[0]?.id || "");
+				setDriveFolderId((current) => current || grants[0]?.resourceId || "");
+			} catch {}
+			try {
 				const s = await api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status");
 				setWorkdriveStatus(s);
 			} catch {}
+			try {
+				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/workdrive/instances/${instanceId}/grants`);
+				const grants = d.grants || [];
+				setWorkdriveGrants(grants);
+				setWorkdriveGrantId((current) => current || grants[0]?.id || "");
+				setWorkdriveRef((current) => current || grants[0]?.resourceId || "");
+			} catch {}
 		})();
-	}, [subTab]);
+	}, [subTab, instanceId]);
 
 	const openNew = () => { setOpenId("__new__"); setEditing(true); setEditTitle(""); setEditContent(""); setPreview(false); setShowUrl(false); };
 	const openView = (d: KnowledgeDoc) => { setOpenId(d.id); setEditing(false); setPreview(false); };
@@ -160,13 +188,19 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	};
 
 	const searchDrive = async () => {
+		if (!driveGrantId) {
+			setDriveMsg("Grant this agent a Google Drive folder in Settings first.");
+			return;
+		}
 		setDriveLoading(true);
 		setDriveMsg("");
 		try {
 			const params = new URLSearchParams();
+			params.set("grantId", driveGrantId);
+			if (driveFolderId) params.set("folder", driveFolderId);
 			if (driveQuery.trim()) params.set("q", driveQuery.trim());
-			params.set("limit", "20");
-			const d = await api<{ files?: DriveFile[] }>(`/v1/drive/files?${params}`);
+			params.set("limit", "50");
+			const d = await api<{ files?: DriveFile[] }>(`/v1/drive/instances/${instanceId}/files?${params}`);
 			setDriveFiles(d.files || []);
 			if (!d.files?.length) setDriveMsg("No matching Drive files.");
 		} catch (e) {
@@ -181,7 +215,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		try {
 			await api(`/v1/drive/instances/${instanceId}/import`, {
 				method: "POST",
-				body: JSON.stringify({ fileId: file.id }),
+				body: JSON.stringify({ fileId: file.id, grantId: driveGrantId }),
 			});
 			setDriveMsg(`Imported ${file.name}.`);
 			setShowDrive(false);
@@ -193,14 +227,33 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		setImportingDriveId(null);
 	};
 
+	const openDriveFolder = (file: DriveFile) => {
+		setDriveFolderId(file.id);
+		setDriveFiles([]);
+		setDriveMsg("");
+		setDriveQuery("");
+	};
+
+	const selectDriveGrant = (grantId: string) => {
+		const grant = driveGrants.find((g) => g.id === grantId);
+		setDriveGrantId(grantId);
+		setDriveFolderId(grant?.resourceId || "");
+		setDriveFiles([]);
+		setDriveMsg("");
+	};
+
 	const listWorkdriveFolder = async (ref = workdriveRef, offset = 0, append = false) => {
-		const folderRef = ref.trim();
+		if (!workdriveGrantId) {
+			setWorkdriveMsg("Grant this agent a WorkDrive folder in Settings first.");
+			return;
+		}
+		const folderRef = ref.trim() || workdriveGrants.find((g) => g.id === workdriveGrantId)?.resourceId || "";
 		if (!folderRef) return;
 		setWorkdriveLoading(true);
 		setWorkdriveMsg("");
 		try {
-			const params = new URLSearchParams({ folder: folderRef, offset: String(offset), limit: "50" });
-			const d = await api<{ files?: WorkDriveFile[]; nextOffset?: number | null }>(`/v1/workdrive/folder?${params}`);
+			const params = new URLSearchParams({ grantId: workdriveGrantId, folder: folderRef, offset: String(offset), limit: "50" });
+			const d = await api<{ files?: WorkDriveFile[]; nextOffset?: number | null }>(`/v1/workdrive/instances/${instanceId}/folder?${params}`);
 			const files = d.files || [];
 			setWorkdriveRef(folderRef);
 			setWorkdriveFiles((prev) => (append ? [...prev, ...files] : files));
@@ -213,20 +266,18 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	};
 
 	const openWorkdriveFolder = (file: WorkDriveFile) => {
-		setWorkdriveFiles([]);
-		setWorkdriveNextOffset(null);
-		listWorkdriveFolder(file.id);
+		setWorkdriveMsg("Grant that WorkDrive folder in Settings before browsing it.");
 	};
 
 	const importWorkdriveFile = async (file?: WorkDriveFile) => {
 		const ref = file?.id || workdriveRef.trim();
-		if (!ref) return;
+		if (!ref || !workdriveGrantId) return;
 		setImportingWorkdriveId(file?.id || "__direct__");
 		setWorkdriveMsg("");
 		try {
 			await api(`/v1/workdrive/instances/${instanceId}/import`, {
 				method: "POST",
-				body: JSON.stringify(file ? { resourceId: file.id } : { url: ref }),
+				body: JSON.stringify(file ? { resourceId: file.id, grantId: workdriveGrantId } : { url: ref, grantId: workdriveGrantId }),
 			});
 			setWorkdriveMsg(`Imported ${file?.name || "WorkDrive file"}.`);
 			setShowWorkdrive(false);
@@ -237,6 +288,15 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 			setWorkdriveMsg(e instanceof Error ? e.message : "WorkDrive import failed");
 		}
 		setImportingWorkdriveId(null);
+	};
+
+	const selectWorkdriveGrant = (grantId: string) => {
+		const grant = workdriveGrants.find((g) => g.id === grantId);
+		setWorkdriveGrantId(grantId);
+		setWorkdriveRef(grant?.resourceId || "");
+		setWorkdriveFiles([]);
+		setWorkdriveNextOffset(null);
+		setWorkdriveMsg("");
 	};
 
 	const deleteDoc = async (docId: string) => {
@@ -304,6 +364,8 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 		file.mimeType === "application/vnd.google-apps.spreadsheet" ||
 		file.mimeType === "application/vnd.google-apps.presentation"
 	);
+
+	const isDriveFolder = (file: DriveFile) => file.mimeType === "application/vnd.google-apps.folder";
 
 	const supportedWorkdriveFile = (file: WorkDriveFile) => {
 		const type = (file.mimeType || "").toLowerCase();
@@ -435,36 +497,53 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 							<div className="bg-panel border border-line rounded-xl p-4 mb-3">
 								{driveStatus?.connected ? (
 									<>
+										{driveGrants.length === 0 ? (
+											<p className="text-sm text-muted">Grant this agent access to a Google Drive folder in Settings before importing Drive files.</p>
+										) : (
 										<div className="flex gap-2 mb-2 flex-wrap">
+											<select
+												value={driveGrantId}
+												onChange={(e) => selectDriveGrant(e.target.value)}
+												className="bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+											>
+												{driveGrants.map((grant) => <option key={grant.id} value={grant.id}>{grant.resourceName}</option>)}
+											</select>
 											<input
 												value={driveQuery}
 												onChange={(e) => setDriveQuery(e.target.value)}
 												onKeyDown={(e) => { if (e.key === "Enter") searchDrive(); }}
-												placeholder="Search Google Drive"
+												placeholder="Search granted folder"
 												className="flex-1 min-w-[12rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 											/>
 											<button type="button" onClick={searchDrive} disabled={driveLoading} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-50">
-												{driveLoading ? "Searching..." : "Search"}
+												{driveLoading ? "Loading..." : "List"}
 											</button>
+											{driveFolderId && driveFolderId !== driveGrants.find((g) => g.id === driveGrantId)?.resourceId && (
+												<button type="button" onClick={() => { const grant = driveGrants.find((g) => g.id === driveGrantId); setDriveFolderId(grant?.resourceId || ""); setDriveFiles([]); }} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">
+													Root
+												</button>
+											)}
 											<button type="button" onClick={() => setShowDrive(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
 										</div>
+										)}
 										{driveFiles.length > 0 && (
 											<div className="flex flex-col gap-2 mt-3">
 												{driveFiles.map((f) => {
+													const folder = isDriveFolder(f);
 													const supported = supportedDriveFile(f);
 													return (
 														<div key={f.id} className="bg-paper border border-line rounded-lg p-3 flex items-start justify-between gap-3">
 															<div className="min-w-0">
 																<div className="text-sm font-semibold truncate">{f.name}</div>
-																<div className="text-xs text-muted truncate">{f.mimeType}</div>
+																<div className="text-xs text-muted truncate">{folder ? "Folder" : f.mimeType}</div>
 															</div>
 															<button
 																type="button"
-																disabled={!supported || importingDriveId === f.id}
-																onClick={() => importDriveFile(f)}
+																disabled={(!folder && !supported) || importingDriveId === f.id}
+																onClick={() => folder ? openDriveFolder(f) : importDriveFile(f)}
 																className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-40 disabled:hover:border-line disabled:hover:text-muted"
 															>
-																{importingDriveId === f.id ? "Importing..." : supported ? "Import" : "Unsupported"}
+																{importingDriveId === f.id ? "Importing..." : folder ? "Open" : supported ? "Import" : "Unsupported"}
 															</button>
 														</div>
 													);
@@ -483,22 +562,23 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 							<div className="bg-panel border border-line rounded-xl p-4 mb-3">
 								{workdriveStatus?.connected ? (
 									<>
+										{workdriveGrants.length === 0 ? (
+											<p className="text-sm text-muted">Grant this agent access to a Zoho WorkDrive folder in Settings before importing WorkDrive files.</p>
+										) : (
 										<div className="flex gap-2 mb-2 flex-wrap">
-											<input
-												value={workdriveRef}
-												onChange={(e) => setWorkdriveRef(e.target.value)}
-												onKeyDown={(e) => { if (e.key === "Enter") listWorkdriveFolder(); }}
-												placeholder="Zoho WorkDrive file or folder URL / ID"
-												className="flex-1 min-w-[12rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
-											/>
-											<button type="button" onClick={() => importWorkdriveFile()} disabled={!workdriveRef.trim() || importingWorkdriveId === "__direct__"} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-50">
-												{importingWorkdriveId === "__direct__" ? "Importing..." : "Import file"}
-											</button>
+											<select
+												value={workdriveGrantId}
+												onChange={(e) => selectWorkdriveGrant(e.target.value)}
+												className="bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+											>
+												{workdriveGrants.map((grant) => <option key={grant.id} value={grant.id}>{grant.resourceName}</option>)}
+											</select>
 											<button type="button" onClick={() => listWorkdriveFolder()} disabled={workdriveLoading || !workdriveRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">
 												{workdriveLoading ? "Listing..." : "List folder"}
 											</button>
 											<button type="button" onClick={() => setShowWorkdrive(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
 										</div>
+										)}
 										{workdriveFiles.length > 0 && (
 											<div className="flex flex-col gap-2 mt-3">
 												{workdriveFiles.map((f) => {

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { driveFileIdFromUrl } from "./drive.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { driveFileDescendsFrom, driveFileIdFromUrl } from "./drive.js";
 
 describe("driveFileIdFromUrl", () => {
 	it("accepts a raw Drive file id", () => {
@@ -19,8 +19,37 @@ describe("driveFileIdFromUrl", () => {
 		expect(driveFileIdFromUrl("https://drive.google.com/open?id=file_456")).toBe("file_456");
 	});
 
+	it("extracts folder ids", () => {
+		expect(driveFileIdFromUrl("https://drive.google.com/drive/folders/folder_789?usp=sharing")).toBe("folder_789");
+	});
+
 	it("returns null for empty or non-url inputs", () => {
 		expect(driveFileIdFromUrl("")).toBeNull();
 		expect(driveFileIdFromUrl("not a url with spaces")).toBeNull();
+	});
+});
+
+describe("driveFileDescendsFrom", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("walks Drive parents to verify a file is under a granted folder", async () => {
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				id: "file123456789",
+				name: "notes.md",
+				mimeType: "text/markdown",
+				parents: ["childFolder123"],
+			}), { status: 200, headers: { "content-type": "application/json" } }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				id: "childFolder123",
+				name: "Child",
+				mimeType: "application/vnd.google-apps.folder",
+				parents: ["rootFolder123"],
+			}), { status: 200, headers: { "content-type": "application/json" } }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(driveFileDescendsFrom("token", "file123456789", "rootFolder123")).resolves.toBe(true);
 	});
 });

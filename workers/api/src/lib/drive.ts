@@ -17,6 +17,7 @@ export interface DriveFile {
 	modifiedTime?: string;
 	webViewLink?: string;
 	size?: string;
+	parents?: string[];
 }
 
 export interface DriveExportedFile {
@@ -65,6 +66,7 @@ export function driveFileIdFromUrl(input: string): string | null {
 			/\/spreadsheets\/d\/([^/]+)/,
 			/\/presentation\/d\/([^/]+)/,
 			/\/file\/d\/([^/]+)/,
+			/\/folders\/([^/?#]+)/,
 			/\/open\/([^/]+)/,
 		];
 		for (const pattern of patterns) {
@@ -81,6 +83,10 @@ async function driveFetch(accessToken: string, path: string): Promise<Response> 
 	return fetch(`${DRIVE_API}${path}`, {
 		headers: { Authorization: `Bearer ${accessToken}` },
 	});
+}
+
+export function isDriveFolder(file: DriveFile): boolean {
+	return file.mimeType === "application/vnd.google-apps.folder";
 }
 
 async function driveErrorReason(res: Response): Promise<string> {
@@ -126,14 +132,61 @@ export async function listDriveFiles(
 	return data.files ?? [];
 }
 
-async function fileMetadata(accessToken: string, fileId: string): Promise<DriveFile> {
+export async function listDriveFolderFiles(
+	accessToken: string,
+	folderIdOrUrl: string,
+	opts: { query?: string; pageSize?: number } = {},
+): Promise<DriveFile[]> {
+	const folderId = driveFileIdFromUrl(folderIdOrUrl);
+	if (!folderId) throw new DriveError("Google Drive folder id or URL required");
+	const pageSize = Math.max(1, Math.min(opts.pageSize ?? 50, 50));
+	const q = opts.query?.trim();
+	const clauses = [`'${escapeDriveQuery(folderId)}' in parents`, "trashed = false"];
+	if (q) clauses.push(`name contains '${escapeDriveQuery(q)}'`);
 	const params = new URLSearchParams({
-		fields: "id,name,mimeType,modifiedTime,webViewLink,size",
+		pageSize: String(pageSize),
+		q: clauses.join(" and "),
+		orderBy: "folder,name",
+		fields: "files(id,name,mimeType,modifiedTime,webViewLink,size,parents)",
+		supportsAllDrives: "true",
+		includeItemsFromAllDrives: "true",
+	});
+	const res = await driveFetch(accessToken, `/files?${params}`);
+	if (!res.ok) throw new DriveError(`Google Drive folder list failed (${res.status}): ${await driveErrorReason(res)}`);
+	const data = (await res.json()) as { files?: DriveFile[] };
+	return data.files ?? [];
+}
+
+export async function getDriveFileMetadata(accessToken: string, fileIdOrUrl: string): Promise<DriveFile> {
+	const fileId = driveFileIdFromUrl(fileIdOrUrl);
+	if (!fileId) throw new DriveError("Google Drive file id or URL required");
+	const params = new URLSearchParams({
+		fields: "id,name,mimeType,modifiedTime,webViewLink,size,parents",
 		supportsAllDrives: "true",
 	});
 	const res = await driveFetch(accessToken, `/files/${encodeURIComponent(fileId)}?${params}`);
 	if (!res.ok) throw new DriveError(`Google Drive file lookup failed (${res.status}): ${await driveErrorReason(res)}`);
 	return (await res.json()) as DriveFile;
+}
+
+export async function driveFileDescendsFrom(
+	accessToken: string,
+	fileIdOrUrl: string,
+	rootIdOrUrl: string,
+): Promise<boolean> {
+	const fileId = driveFileIdFromUrl(fileIdOrUrl);
+	const rootId = driveFileIdFromUrl(rootIdOrUrl);
+	if (!fileId || !rootId) return false;
+	if (fileId === rootId) return true;
+	let current = await getDriveFileMetadata(accessToken, fileId);
+	for (let depth = 0; depth < 20; depth++) {
+		const parents = current.parents ?? [];
+		if (parents.includes(rootId)) return true;
+		const next = parents[0];
+		if (!next) return false;
+		current = await getDriveFileMetadata(accessToken, next);
+	}
+	return false;
 }
 
 function exportMimeType(mimeType: string): string | null {
@@ -159,7 +212,7 @@ export async function exportDriveFile(
 ): Promise<DriveExportedFile> {
 	const fileId = driveFileIdFromUrl(fileIdOrUrl);
 	if (!fileId) throw new DriveError("Google Drive file id or URL required");
-	const meta = await fileMetadata(accessToken, fileId);
+	const meta = await getDriveFileMetadata(accessToken, fileId);
 	const exportedType = exportMimeType(meta.mimeType);
 	let res: Response;
 	if (exportedType) {

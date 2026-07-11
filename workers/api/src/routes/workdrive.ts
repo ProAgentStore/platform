@@ -8,13 +8,22 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import {
+	deleteConnectorGrant,
+	listConnectorGrants,
+	requireConnectorGrant,
+	upsertConnectorGrant,
+} from "../lib/connector-grants.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import {
 	exportWorkDriveFile,
+	getWorkDriveFile,
 	listWorkDriveFolder,
 	mintWorkDriveAccessToken,
 	WORKDRIVE_SCOPE,
 	workDriveAccountsBase,
+	workDriveFolderContainsFile,
+	workDriveResourceIdFromUrl,
 } from "../lib/workdrive.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -204,17 +213,86 @@ workdriveRoutes.get("/folder", async (c) => {
 	return c.json(await listWorkDriveFolder(c.env, accessToken, folder, { limit, offset }));
 });
 
+workdriveRoutes.get("/instances/:instanceId/grants", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json({ grants: await listConnectorGrants(c.env, instanceId, session.uid, PROVIDER) });
+});
+
+workdriveRoutes.post("/instances/:instanceId/grants", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { resourceId?: string; url?: string; name?: string };
+	const ref = body.resourceId || body.url;
+	if (!ref) throw new HttpError(400, "resourceId or url required");
+	const refresh = await storedRefreshToken(c.env, session.uid);
+	const accessToken = await mintWorkDriveAccessToken(c.env, refresh);
+	const fallbackId = workDriveResourceIdFromUrl(ref);
+	if (!fallbackId) throw new HttpError(400, "resourceId or url required");
+	const meta = await getWorkDriveFile(c.env, accessToken, ref).catch(() => ({
+		id: fallbackId,
+		name: body.name?.trim() || "Zoho WorkDrive folder",
+		type: "folder",
+		isFolder: true,
+		permalink: typeof body.url === "string" ? body.url : undefined,
+	}));
+	if (!meta.isFolder) throw new HttpError(400, "Grant a Zoho WorkDrive folder. File grants are not supported yet.");
+	const grant = await upsertConnectorGrant(c.env, instanceId, session.uid, {
+		provider: PROVIDER,
+		resourceId: meta.id,
+		resourceName: (body.name?.trim() || meta.name || "Zoho WorkDrive folder").slice(0, 500),
+		resourceType: "folder",
+		resourceUrl: meta.permalink,
+	});
+	return c.json({ grant }, 201);
+});
+
+workdriveRoutes.delete("/instances/:instanceId/grants/:grantId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	await deleteConnectorGrant(c.env, instanceId, session.uid, PROVIDER, c.req.param("grantId"));
+	return c.json({ success: true });
+});
+
+workdriveRoutes.get("/instances/:instanceId/folder", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const grantId = c.req.query("grantId") || "";
+	if (!grantId) throw new HttpError(400, "grantId required");
+	const grant = await requireConnectorGrant(c.env, instanceId, session.uid, PROVIDER, grantId);
+	const folder = c.req.query("folder") || grant.resourceId;
+	if (folder !== grant.resourceId) {
+		throw new HttpError(403, "Grant this WorkDrive folder before browsing it");
+	}
+	const limit = Number(c.req.query("limit")) || undefined;
+	const offset = Number(c.req.query("offset")) || undefined;
+	const refresh = await storedRefreshToken(c.env, session.uid);
+	const accessToken = await mintWorkDriveAccessToken(c.env, refresh);
+	return c.json({ ...await listWorkDriveFolder(c.env, accessToken, folder, { limit, offset }), grant });
+});
+
 workdriveRoutes.post("/instances/:instanceId/import", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { resourceId?: string; url?: string; title?: string };
+	const body = (await c.req.json().catch(() => ({}))) as { resourceId?: string; url?: string; title?: string; grantId?: string };
 	const fileRef = body.resourceId || body.url;
 	if (!fileRef) throw new HttpError(400, "resourceId or url required");
+	if (!body.grantId) throw new HttpError(400, "grantId required");
+	const resourceId = workDriveResourceIdFromUrl(fileRef);
+	if (!resourceId) throw new HttpError(400, "resourceId or url required");
 
 	const refresh = await storedRefreshToken(c.env, session.uid);
 	const accessToken = await mintWorkDriveAccessToken(c.env, refresh);
-	const file = await exportWorkDriveFile(c.env, accessToken, fileRef);
+	const grant = await requireConnectorGrant(c.env, instanceId, session.uid, PROVIDER, body.grantId);
+	if (!await workDriveFolderContainsFile(c.env, accessToken, grant.resourceId, resourceId)) {
+		throw new HttpError(403, "This agent has not been granted access to that WorkDrive file");
+	}
+	const file = await exportWorkDriveFile(c.env, accessToken, resourceId);
 	const title = (body.title?.trim() || file.name || "Zoho WorkDrive import").slice(0, 500);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
 	const doRes = await stub.fetch(

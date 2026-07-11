@@ -10,6 +10,15 @@ interface Props {
 	onUnsubscribe: () => void;
 }
 
+interface ConnectorGrant {
+	id: string;
+	provider: "google_drive" | "zoho_workdrive";
+	resourceId: string;
+	resourceName: string;
+	resourceType: string;
+	resourceUrl?: string | null;
+}
+
 export default function SettingsTab({ instanceId, isApply, settingsSchema, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	// Agent-declared settings: the schema prop is the fast path; the GET also returns
@@ -45,8 +54,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [emailMsg, setEmailMsg] = useState("");
 	const [driveStatus, setDriveStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [driveMsg, setDriveMsg] = useState("");
+	const [driveGrantRef, setDriveGrantRef] = useState("");
+	const [driveGrants, setDriveGrants] = useState<ConnectorGrant[]>([]);
 	const [workdriveStatus, setWorkdriveStatus] = useState<{ connected: boolean; configured: boolean; account?: string | null } | null>(null);
 	const [workdriveMsg, setWorkdriveMsg] = useState("");
+	const [workdriveGrantRef, setWorkdriveGrantRef] = useState("");
+	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
 
 	useEffect(() => {
 		(async () => {
@@ -105,8 +118,16 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setDriveStatus(s);
 			} catch {}
 			try {
+				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/drive/instances/${instanceId}/grants`);
+				setDriveGrants(d.grants || []);
+			} catch {}
+			try {
 				const s = await api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status");
 				setWorkdriveStatus(s);
+			} catch {}
+			try {
+				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/workdrive/instances/${instanceId}/grants`);
+				setWorkdriveGrants(d.grants || []);
 			} catch {}
 			try {
 				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
@@ -205,6 +226,31 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
+	const addDriveGrant = async () => {
+		if (!driveGrantRef.trim()) return;
+		try {
+			const d = await api<{ grant: ConnectorGrant }>(`/v1/drive/instances/${instanceId}/grants`, {
+				method: "POST",
+				body: JSON.stringify({ url: driveGrantRef.trim() }),
+			});
+			setDriveGrants((grants) => [d.grant, ...grants.filter((g) => g.id !== d.grant.id && g.resourceId !== d.grant.resourceId)]);
+			setDriveGrantRef("");
+			setDriveMsg(`Granted this agent access to ${d.grant.resourceName}.`);
+		} catch (e) {
+			setDriveMsg(e instanceof Error ? e.message : "Failed to grant Drive folder");
+		}
+	};
+
+	const removeDriveGrant = async (grant: ConnectorGrant) => {
+		try {
+			await api(`/v1/drive/instances/${instanceId}/grants/${grant.id}`, { method: "DELETE" });
+			setDriveGrants((grants) => grants.filter((g) => g.id !== grant.id));
+			setDriveMsg(`Removed access to ${grant.resourceName}.`);
+		} catch (e) {
+			setDriveMsg(e instanceof Error ? e.message : "Failed to remove Drive access");
+		}
+	};
+
 	const connectWorkdrive = async () => {
 		try {
 			const { url } = await api<{ url: string }>("/v1/workdrive/zoho/start");
@@ -223,6 +269,31 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			setWorkdriveMsg("Zoho WorkDrive disconnected.");
 		} catch (e) {
 			setWorkdriveMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const addWorkdriveGrant = async () => {
+		if (!workdriveGrantRef.trim()) return;
+		try {
+			const d = await api<{ grant: ConnectorGrant }>(`/v1/workdrive/instances/${instanceId}/grants`, {
+				method: "POST",
+				body: JSON.stringify({ url: workdriveGrantRef.trim() }),
+			});
+			setWorkdriveGrants((grants) => [d.grant, ...grants.filter((g) => g.id !== d.grant.id && g.resourceId !== d.grant.resourceId)]);
+			setWorkdriveGrantRef("");
+			setWorkdriveMsg(`Granted this agent access to ${d.grant.resourceName}.`);
+		} catch (e) {
+			setWorkdriveMsg(e instanceof Error ? e.message : "Failed to grant WorkDrive folder");
+		}
+	};
+
+	const removeWorkdriveGrant = async (grant: ConnectorGrant) => {
+		try {
+			await api(`/v1/workdrive/instances/${instanceId}/grants/${grant.id}`, { method: "DELETE" });
+			setWorkdriveGrants((grants) => grants.filter((g) => g.id !== grant.id));
+			setWorkdriveMsg(`Removed access to ${grant.resourceName}.`);
+		} catch (e) {
+			setWorkdriveMsg(e instanceof Error ? e.message : "Failed to remove WorkDrive access");
 		}
 	};
 
@@ -413,7 +484,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Permissions &amp; Connections</h3>
 				<p className="text-sm text-muted mb-3">
-					Connect Google accounts for agent workflows. Gmail is permissioned per agent; Drive imports copy selected files into this instance's Documents.
+					Connect accounts once, then grant this agent access to only the folders it should use.
 				</p>
 
 				{emailStatus && !emailStatus.configured && (
@@ -465,6 +536,32 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						)
 					)}
 				</div>
+				{driveStatus?.connected && (
+					<div className="mb-4 pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
+						<div className="flex gap-2 flex-wrap mb-2">
+							<input
+								value={driveGrantRef}
+								onChange={(e) => setDriveGrantRef(e.target.value)}
+								onKeyDown={(e) => { if (e.key === "Enter") addDriveGrant(); }}
+								placeholder="Google Drive folder URL or ID"
+								className="flex-1 min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+							/>
+							<button type="button" onClick={addDriveGrant} disabled={!driveGrantRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">
+								Grant folder
+							</button>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							{driveGrants.length === 0 ? (
+								<p className="text-xs text-muted">No Drive folders granted to this agent yet.</p>
+							) : driveGrants.map((grant) => (
+								<div key={grant.id} className="flex items-center justify-between gap-2 text-xs bg-paper border border-line rounded-lg px-2.5 py-2">
+									<span className="min-w-0 truncate">{grant.resourceName}</span>
+									<button type="button" onClick={() => removeDriveGrant(grant)} className="shrink-0 text-muted hover:text-red">Remove</button>
+								</div>
+							))}
+						</div>
+					</div>
+				)}
 
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<div className="text-sm">
@@ -485,6 +582,32 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						)
 					)}
 				</div>
+				{workdriveStatus?.connected && (
+					<div className="mb-4 pl-0 sm:pl-3 border-l-0 sm:border-l sm:border-line">
+						<div className="flex gap-2 flex-wrap mb-2">
+							<input
+								value={workdriveGrantRef}
+								onChange={(e) => setWorkdriveGrantRef(e.target.value)}
+								onKeyDown={(e) => { if (e.key === "Enter") addWorkdriveGrant(); }}
+								placeholder="Zoho WorkDrive folder URL or ID"
+								className="flex-1 min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+							/>
+							<button type="button" onClick={addWorkdriveGrant} disabled={!workdriveGrantRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">
+								Grant folder
+							</button>
+						</div>
+						<div className="flex flex-col gap-1.5">
+							{workdriveGrants.length === 0 ? (
+								<p className="text-xs text-muted">No WorkDrive folders granted to this agent yet.</p>
+							) : workdriveGrants.map((grant) => (
+								<div key={grant.id} className="flex items-center justify-between gap-2 text-xs bg-paper border border-line rounded-lg px-2.5 py-2">
+									<span className="min-w-0 truncate">{grant.resourceName}</span>
+									<button type="button" onClick={() => removeWorkdriveGrant(grant)} className="shrink-0 text-muted hover:text-red">Remove</button>
+								</div>
+							))}
+						</div>
+					</div>
+				)}
 
 				<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
 					<input

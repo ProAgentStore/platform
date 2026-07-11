@@ -9,8 +9,23 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import {
+	DRIVE_SCOPE,
+	driveFileDescendsFrom,
+	exportDriveFile,
+	getDriveFileMetadata,
+	isDriveFolder,
+	listDriveFolderFiles,
+	listDriveFiles,
+	mintDriveAccessToken,
+} from "../lib/drive.js";
+import {
+	deleteConnectorGrant,
+	listConnectorGrants,
+	requireConnectorGrant,
+	upsertConnectorGrant,
+} from "../lib/connector-grants.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
-import { DRIVE_SCOPE, exportDriveFile, listDriveFiles, mintDriveAccessToken } from "../lib/drive.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -211,16 +226,75 @@ driveRoutes.get("/files", async (c) => {
 	return c.json({ files: await listDriveFiles(accessToken, { query, pageSize: limit }) });
 });
 
+driveRoutes.get("/instances/:instanceId/grants", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json({ grants: await listConnectorGrants(c.env, instanceId, session.uid, PROVIDER) });
+});
+
+driveRoutes.post("/instances/:instanceId/grants", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { resourceId?: string; url?: string; name?: string };
+	const ref = body.resourceId || body.url;
+	if (!ref) throw new HttpError(400, "resourceId or url required");
+	const refresh = await storedRefreshToken(c.env, session.uid);
+	const accessToken = await mintDriveAccessToken(c.env, refresh);
+	const meta = await getDriveFileMetadata(accessToken, ref);
+	if (!isDriveFolder(meta)) throw new HttpError(400, "Grant a Google Drive folder. File grants are not supported yet.");
+	const grant = await upsertConnectorGrant(c.env, instanceId, session.uid, {
+		provider: PROVIDER,
+		resourceId: meta.id,
+		resourceName: (body.name?.trim() || meta.name || "Google Drive folder").slice(0, 500),
+		resourceType: "folder",
+		resourceUrl: meta.webViewLink,
+	});
+	return c.json({ grant }, 201);
+});
+
+driveRoutes.delete("/instances/:instanceId/grants/:grantId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	await deleteConnectorGrant(c.env, instanceId, session.uid, PROVIDER, c.req.param("grantId"));
+	return c.json({ success: true });
+});
+
+driveRoutes.get("/instances/:instanceId/files", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const grantId = c.req.query("grantId") || "";
+	if (!grantId) throw new HttpError(400, "grantId required");
+	const grant = await requireConnectorGrant(c.env, instanceId, session.uid, PROVIDER, grantId);
+	const refresh = await storedRefreshToken(c.env, session.uid);
+	const accessToken = await mintDriveAccessToken(c.env, refresh);
+	const folder = c.req.query("folder") || grant.resourceId;
+	if (!await driveFileDescendsFrom(accessToken, folder, grant.resourceId)) {
+		throw new HttpError(403, "This agent has not been granted access to that Drive folder");
+	}
+	const query = c.req.query("q") || undefined;
+	const limit = Number(c.req.query("limit")) || 50;
+	return c.json({ files: await listDriveFolderFiles(accessToken, folder, { query, pageSize: limit }), grant, folder });
+});
+
 driveRoutes.post("/instances/:instanceId/import", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = (await c.req.json().catch(() => ({}))) as { fileId?: string; url?: string; title?: string };
+	const body = (await c.req.json().catch(() => ({}))) as { fileId?: string; url?: string; title?: string; grantId?: string };
 	const fileRef = body.fileId || body.url;
 	if (!fileRef) throw new HttpError(400, "fileId or url required");
+	if (!body.grantId) throw new HttpError(400, "grantId required");
 
 	const refresh = await storedRefreshToken(c.env, session.uid);
 	const accessToken = await mintDriveAccessToken(c.env, refresh);
+	const grant = await requireConnectorGrant(c.env, instanceId, session.uid, PROVIDER, body.grantId);
+	if (!await driveFileDescendsFrom(accessToken, fileRef, grant.resourceId)) {
+		throw new HttpError(403, "This agent has not been granted access to that Drive file");
+	}
 	const file = await exportDriveFile(accessToken, fileRef);
 	const title = (body.title?.trim() || file.name || "Google Drive import").slice(0, 500);
 	const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));

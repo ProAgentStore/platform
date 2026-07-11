@@ -409,12 +409,24 @@ Current connectors:
   text-like files into knowledge.
 
 Connector tokens are stored in `user_api_keys` with encrypted refresh tokens.
+OAuth connections are account-level, but Drive/WorkDrive access is narrowed per
+agent instance through `instance_connector_grants`. A user connects Google or
+Zoho once, then grants individual agent instances access to specific folders.
+Knowledge imports for those providers must pass through an instance grant before
+files are copied into that instance's documents.
 
 ### Assessment
 
 The connector model is useful and consistent with the Knowledge product. The
-implementation now has enough duplication to justify a small shared connector
-service.
+implementation now has an explicit authorization split:
+
+- `user_api_keys`: who connected the external account.
+- `instance_connector_grants`: which agent instance may browse/import from which
+  external roots.
+- Agent knowledge docs: copied content the agent can use after import.
+
+There is still enough OAuth and token-vault duplication to justify a small
+shared connector service.
 
 Recommended extraction:
 

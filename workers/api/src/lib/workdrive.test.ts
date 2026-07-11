@@ -4,6 +4,7 @@ import {
 	listWorkDriveFolder,
 	mintWorkDriveAccessToken,
 	WORKDRIVE_SCOPE,
+	workDriveFolderContainsFile,
 	workDriveResourceIdFromUrl,
 } from "./workdrive.js";
 
@@ -112,6 +113,36 @@ describe("listWorkDriveFolder", () => {
 		const url = String(fetchMock.mock.calls[0][0]);
 		expect(url).toContain("page%5Blimit%5D=2");
 		expect(url).toContain("page%5Boffset%5D=4");
+	});
+});
+
+describe("workDriveFolderContainsFile", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("checks later pages when a granted folder has more than one page", async () => {
+		const firstPage = Array.from({ length: 50 }, (_, i) => ({
+			id: `file${i}123456789`,
+			type: "files",
+			attributes: { name: `file-${i}.txt`, extn: "txt", mime_type: "text/plain" },
+		}));
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify({ data: firstPage }), { status: 200, headers: { "content-type": "application/vnd.api+json" } }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				data: [
+					{
+						id: "target123456789",
+						type: "files",
+						attributes: { name: "target.txt", extn: "txt", mime_type: "text/plain" },
+					},
+				],
+			}), { status: 200, headers: { "content-type": "application/vnd.api+json" } }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(workDriveFolderContainsFile({}, "token", "folder123456789", "target123456789")).resolves.toBe(true);
+		expect(String(fetchMock.mock.calls[0][0])).toContain("page%5Boffset%5D=0");
+		expect(String(fetchMock.mock.calls[1][0])).toContain("page%5Boffset%5D=50");
 	});
 });
 

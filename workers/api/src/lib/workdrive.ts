@@ -238,6 +238,24 @@ export async function listWorkDriveFolder(
 	throw new WorkDriveError(`Zoho WorkDrive folder list failed (${filesRes.status}): ${filesReason}`);
 }
 
+export async function workDriveFolderContainsFile(
+	env: WorkDriveEnv,
+	accessToken: string,
+	folderIdOrUrl: string,
+	resourceIdOrUrl: string,
+): Promise<boolean> {
+	const folderId = workDriveResourceIdFromUrl(folderIdOrUrl);
+	const resourceId = workDriveResourceIdFromUrl(resourceIdOrUrl);
+	if (!folderId || !resourceId) return false;
+	if (folderId === resourceId) return true;
+	for (let offset = 0; offset < 1_000; offset += 50) {
+		const page = await listWorkDriveFolder(env, accessToken, folderId, { limit: 50, offset });
+		if (page.files.some((file) => file.id === resourceId)) return true;
+		if (!page.hasMore || page.nextOffset === null) return false;
+	}
+	return false;
+}
+
 export async function getWorkDriveFile(
 	env: WorkDriveEnv,
 	accessToken: string,
