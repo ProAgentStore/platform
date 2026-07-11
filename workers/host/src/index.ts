@@ -81,8 +81,15 @@ const ICON_MAP: Record<string, string> = {
 	"/apple-touch-icon.png": icon180,
 };
 
+interface Env {
+	// api.proagentstore.online is a route-mapped Worker — a plain same-zone
+	// fetch() would bypass it and hit the origin DNS record, so the sitemap's
+	// agent list must go through this service binding.
+	API: Fetcher;
+}
+
 export default {
-	async fetch(request: Request): Promise<Response> {
+	async fetch(request: Request, env: Env): Promise<Response> {
 		if (request.method !== "GET" && request.method !== "HEAD") {
 			return new Response("Method Not Allowed", { status: 405 });
 		}
@@ -171,7 +178,7 @@ export default {
 				xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;
 			}
 			try {
-				const res = await fetch("https://api.proagentstore.online/v1/agents");
+				const res = await env.API.fetch("https://api.proagentstore.online/v1/agents");
 				const data = await res.json() as { agents?: Array<{ slug: string; creator_login?: string }> };
 				const devs = new Set<string>();
 				for (const a of data.agents || []) {

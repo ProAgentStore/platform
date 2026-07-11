@@ -11,3 +11,10 @@ zone_name = "proagentstore.online"
 [[routes]]
 pattern = "console.proagentstore.online/*"
 zone_name = "proagentstore.online"
+
+# Service binding to the API worker — same-zone subrequests bypass route-mapped
+# Workers, so the sitemap's agent-list fetch must go through this, not a plain
+# fetch() to api.proagentstore.online.
+[[services]]
+binding = "API"
+service = "proagentstore-api"
