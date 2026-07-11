@@ -102,9 +102,11 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 			</p>
 
 			{/* Two columns on desktop: inventory left, test search riding co-pilot on the
-			    right (sticky). Mobile stacks: search first — it's the tool, not the list. */}
-			<div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-				<div className="order-2 lg:order-1">
+			    right (sticky). Width-capped so the search panel (and its Search button)
+			    never hugs the far screen edge on very wide windows. Mobile stacks:
+			    search first — it's the tool, not the list. */}
+			<div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,26rem)] gap-4 items-start max-w-[1200px]">
+				<div className="order-2 lg:order-1 min-w-0">
 					{/* Stat chips */}
 					{stats && (
 						<div className="flex flex-wrap gap-2 mb-3">
@@ -145,7 +147,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 				</div>
 
 				{/* Test search — the co-pilot column */}
-				<div className="order-1 lg:order-2 lg:sticky lg:top-16 bg-panel border border-line rounded-lg p-3">
+				<div className="order-1 lg:order-2 min-w-0 lg:sticky lg:top-16 bg-panel border border-line rounded-lg p-3">
 					<div className="flex gap-2">
 						<input
 							value={query}
