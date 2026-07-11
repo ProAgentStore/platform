@@ -109,6 +109,10 @@ The full MCP-first developer surface is documented at:
 
 MCP safety is enforced server-side. OAuth supports `read`, `write`, `runtime`, and `destructive` scopes; `MCP_READ_ONLY=1` forces read-only mode; mutating tools support `dry_run` where useful; overwrite/destructive tools require exact `confirm` values; and `mcp_audit_log` exposes recent MCP write, runtime, dry-run, denied, and destructive events.
 
+## Architecture
+
+The current system map, runtime boundaries, data ownership rules, risk assessment, and refactor roadmap live in [Architecture](docs/architecture.md).
+
 ### Browser runtime (`pags up`)
 
 Browser- and coding-capable agents use PAGS as the control-plane brain and a local **ProAgentStore browser runtime** (`runtimePlane: "pags"`, Playwright + tmux, bundled into the CLI) as the hands. One public package, one command — no monorepo, no tunnel binary in the default path.
