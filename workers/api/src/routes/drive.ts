@@ -25,7 +25,12 @@ import {
 	requireConnectorGrant,
 	upsertConnectorGrant,
 } from "../lib/connector-grants.js";
-import { decryptKey, encryptKey } from "../lib/crypto.js";
+import {
+	readConnectorRefreshToken,
+	saveConnectorRefreshToken,
+	signConnectorState,
+	verifyConnectorState,
+} from "../lib/connector-oauth.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -40,73 +45,8 @@ function redirectUri(c: { req: { url: string } }): string {
 	return new URL("/v1/drive/google/callback", c.req.url).toString();
 }
 
-function b64url(bytes: Uint8Array): string {
-	return btoa(String.fromCharCode(...bytes))
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
-}
-
-function unb64url(s: string): Uint8Array {
-	const padded = s.replace(/-/g, "+").replace(/_/g, "/") + "==".slice(0, (4 - (s.length % 4)) % 4);
-	return Uint8Array.from(atob(padded), (ch) => ch.charCodeAt(0));
-}
-
-async function hmacKey(secret: string): Promise<CryptoKey> {
-	return crypto.subtle.importKey(
-		"raw",
-		new TextEncoder().encode(secret),
-		{ name: "HMAC", hash: "SHA-256" },
-		false,
-		["sign", "verify"],
-	);
-}
-
-async function signState(uid: string, exp: number, secret: string): Promise<string> {
-	const payload = b64url(new TextEncoder().encode(JSON.stringify({ uid, exp })));
-	const sig = b64url(
-		new Uint8Array(await crypto.subtle.sign("HMAC", await hmacKey(secret), new TextEncoder().encode(payload))),
-	);
-	return `${payload}.${sig}`;
-}
-
-async function verifyState(token: string, secret: string): Promise<string | null> {
-	try {
-		const [payload, sig] = token.split(".");
-		if (!payload || !sig) return null;
-		const valid = await crypto.subtle.verify(
-			"HMAC",
-			await hmacKey(secret),
-			unb64url(sig),
-			new TextEncoder().encode(payload),
-		);
-		if (!valid) return null;
-		const { uid, exp } = JSON.parse(new TextDecoder().decode(unb64url(payload))) as {
-			uid: string;
-			exp: number;
-		};
-		if (typeof uid !== "string" || typeof exp !== "number") return null;
-		if (exp < Math.floor(Date.now() / 1000)) return null;
-		return uid;
-	} catch {
-		return null;
-	}
-}
-
 async function storedRefreshToken(env: Env, userId: string): Promise<string> {
-	if (!env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
-	const row = await env.DB.prepare(
-		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
-	)
-		.bind(userId, PROVIDER)
-		.first<{ key_ciphertext: ArrayBuffer; dek_wrapped: ArrayBuffer; iv: ArrayBuffer }>();
-	if (!row) throw new HttpError(400, "Google Drive is not connected");
-	return decryptKey(
-		new Uint8Array(row.key_ciphertext),
-		new Uint8Array(row.dek_wrapped),
-		new Uint8Array(row.iv),
-		env.KEY_ENCRYPTION_KEY,
-	);
+	return readConnectorRefreshToken(env, userId, PROVIDER, "Google Drive");
 }
 
 driveRoutes.get("/google/start", async (c) => {
@@ -114,7 +54,7 @@ driveRoutes.get("/google/start", async (c) => {
 	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
 		throw new HttpError(503, "Google Drive connection is not configured on this deployment");
 	}
-	const state = await signState(
+	const state = await signConnectorState(
 		session.uid,
 		Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
 		c.env.SESSION_SIGNING_KEY,
@@ -160,7 +100,7 @@ driveRoutes.get("/google/callback", async (c) => {
 	}
 	if (!c.env.KEY_ENCRYPTION_KEY) return c.text("Key encryption not configured", 500);
 
-	const uid = await verifyState(stateRaw, c.env.SESSION_SIGNING_KEY);
+	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY);
 	if (!uid) return c.text("invalid or expired state", 400);
 
 	const tokenRes = await fetch(TOKEN_ENDPOINT, {
@@ -195,22 +135,12 @@ driveRoutes.get("/google/callback", async (c) => {
 		}
 	}
 
-	const { ciphertext, dekWrapped, iv } = await encryptKey(
-		tok.refresh_token,
-		c.env.KEY_ENCRYPTION_KEY,
-	);
-	await c.env.DB.prepare(
-		`INSERT INTO user_api_keys (user_id, provider, key_ciphertext, dek_wrapped, iv, account_label, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'))
-     ON CONFLICT(user_id, provider) DO UPDATE SET
-       key_ciphertext = excluded.key_ciphertext,
-       dek_wrapped = excluded.dek_wrapped,
-       iv = excluded.iv,
-       account_label = excluded.account_label,
-       created_at = excluded.created_at`,
-	)
-		.bind(uid, PROVIDER, ciphertext, dekWrapped, iv, accountLabel)
-		.run();
+	await saveConnectorRefreshToken(c.env, {
+		userId: uid,
+		provider: PROVIDER,
+		refreshToken: tok.refresh_token,
+		accountLabel,
+	});
 
 	return c.html(
 		"<!doctype html><title>Google Drive connected</title><body style='font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0'><div style='text-align:center'><h1>Google Drive connected</h1><p>You can close this tab and return to ProAgentStore.</p></div></body>",
