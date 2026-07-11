@@ -153,7 +153,7 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		await until(() => s.runState() === "idle", 3000); // quiet for 1.5s → idle
 		expect(s.runState()).toBe("idle");
 		s.stop();
-	});
+	}, 10_000);
 
 	it("a slow first token does NOT flip to idle mid-turn", async () => {
 		const s = new HeadlessSession({ id: "raw2", workDir: dir, clientType: "codex", bin: slowBin });

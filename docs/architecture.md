@@ -412,8 +412,9 @@ Connector tokens are stored in `user_api_keys` with encrypted refresh tokens.
 OAuth connections are account-level, but Drive/WorkDrive access is narrowed per
 agent instance through `instance_connector_grants`. A user connects Google or
 Zoho once, then grants individual agent instances access to specific folders.
-Knowledge imports for those providers must pass through an instance grant before
-files are copied into that instance's documents.
+Folder grants authorize that folder and descendants. Knowledge imports for those
+providers must pass through an instance grant before files are copied into that
+instance's documents.
 
 ### Assessment
 

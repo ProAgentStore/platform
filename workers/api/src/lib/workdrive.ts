@@ -248,10 +248,20 @@ export async function workDriveFolderContainsFile(
 	const resourceId = workDriveResourceIdFromUrl(resourceIdOrUrl);
 	if (!folderId || !resourceId) return false;
 	if (folderId === resourceId) return true;
-	for (let offset = 0; offset < 1_000; offset += 50) {
-		const page = await listWorkDriveFolder(env, accessToken, folderId, { limit: 50, offset });
-		if (page.files.some((file) => file.id === resourceId)) return true;
-		if (!page.hasMore || page.nextOffset === null) return false;
+	const pending = [folderId];
+	const seen = new Set<string>();
+	for (let scanned = 0; pending.length > 0 && scanned < 100; scanned++) {
+		const currentFolderId = pending.shift();
+		if (!currentFolderId || seen.has(currentFolderId)) continue;
+		seen.add(currentFolderId);
+		for (let offset = 0; offset < 1_000; offset += 50) {
+			const page = await listWorkDriveFolder(env, accessToken, currentFolderId, { limit: 50, offset });
+			for (const file of page.files) {
+				if (file.id === resourceId) return true;
+				if (file.isFolder && !seen.has(file.id)) pending.push(file.id);
+			}
+			if (!page.hasMore || page.nextOffset === null) break;
+		}
 	}
 	return false;
 }

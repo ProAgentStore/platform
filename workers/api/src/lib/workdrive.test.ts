@@ -144,6 +144,48 @@ describe("workDriveFolderContainsFile", () => {
 		expect(String(fetchMock.mock.calls[0][0])).toContain("page%5Boffset%5D=0");
 		expect(String(fetchMock.mock.calls[1][0])).toContain("page%5Boffset%5D=50");
 	});
+
+	it("checks nested folders under a granted folder", async () => {
+		const fetchMock = vi.fn()
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				data: [
+					{
+						id: "childfolder123456789",
+						type: "folders",
+						attributes: { name: "Child folder" },
+					},
+				],
+			}), { status: 200, headers: { "content-type": "application/vnd.api+json" } }))
+			.mockResolvedValueOnce(new Response(JSON.stringify({
+				data: [
+					{
+						id: "target123456789",
+						type: "files",
+						attributes: { name: "target.txt", extn: "txt", mime_type: "text/plain" },
+					},
+				],
+			}), { status: 200, headers: { "content-type": "application/vnd.api+json" } }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(workDriveFolderContainsFile({}, "token", "rootfolder123456789", "target123456789")).resolves.toBe(true);
+		expect(String(fetchMock.mock.calls[0][0])).toContain("/api/v1/files/rootfolder123456789/files?");
+		expect(String(fetchMock.mock.calls[1][0])).toContain("/api/v1/files/childfolder123456789/files?");
+	});
+
+	it("returns false when a file is not under the granted folder", async () => {
+		const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+			data: [
+				{
+					id: "other123456789",
+					type: "files",
+					attributes: { name: "other.txt", extn: "txt", mime_type: "text/plain" },
+				},
+			],
+		}), { status: 200, headers: { "content-type": "application/vnd.api+json" } }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(workDriveFolderContainsFile({}, "token", "rootfolder123456789", "target123456789")).resolves.toBe(false);
+	});
 });
 
 describe("mintWorkDriveAccessToken", () => {

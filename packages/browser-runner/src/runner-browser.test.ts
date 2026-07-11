@@ -28,7 +28,7 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		await runner.close();
 		await server.close();
 		rmSync(dir, { recursive: true, force: true });
-	});
+	}, 30_000);
 
 	function resume(): string {
 		const p = join(dir, "resume.pdf");

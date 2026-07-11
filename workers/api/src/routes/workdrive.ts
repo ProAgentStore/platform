@@ -265,13 +265,13 @@ workdriveRoutes.get("/instances/:instanceId/folder", async (c) => {
 	if (!grantId) throw new HttpError(400, "grantId required");
 	const grant = await requireConnectorGrant(c.env, instanceId, session.uid, PROVIDER, grantId);
 	const folder = c.req.query("folder") || grant.resourceId;
-	if (folder !== grant.resourceId) {
+	const refresh = await storedRefreshToken(c.env, session.uid);
+	const accessToken = await mintWorkDriveAccessToken(c.env, refresh);
+	if (!await workDriveFolderContainsFile(c.env, accessToken, grant.resourceId, folder)) {
 		throw new HttpError(403, "Grant this WorkDrive folder before browsing it");
 	}
 	const limit = Number(c.req.query("limit")) || undefined;
 	const offset = Number(c.req.query("offset")) || undefined;
-	const refresh = await storedRefreshToken(c.env, session.uid);
-	const accessToken = await mintWorkDriveAccessToken(c.env, refresh);
 	return c.json({ ...await listWorkDriveFolder(c.env, accessToken, folder, { limit, offset }), grant });
 });
 

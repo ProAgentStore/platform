@@ -266,7 +266,10 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 	};
 
 	const openWorkdriveFolder = (file: WorkDriveFile) => {
-		setWorkdriveMsg("Grant that WorkDrive folder in Settings before browsing it.");
+		setWorkdriveRef(file.id);
+		setWorkdriveFiles([]);
+		setWorkdriveNextOffset(null);
+		setWorkdriveMsg("");
 	};
 
 	const importWorkdriveFile = async (file?: WorkDriveFile) => {
@@ -573,11 +576,16 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 											>
 												{workdriveGrants.map((grant) => <option key={grant.id} value={grant.id}>{grant.resourceName}</option>)}
 											</select>
-											<button type="button" onClick={() => listWorkdriveFolder()} disabled={workdriveLoading || !workdriveRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">
-												{workdriveLoading ? "Listing..." : "List folder"}
-											</button>
-											<button type="button" onClick={() => setShowWorkdrive(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-										</div>
+												<button type="button" onClick={() => listWorkdriveFolder()} disabled={workdriveLoading || !workdriveRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">
+													{workdriveLoading ? "Listing..." : "List folder"}
+												</button>
+												{workdriveRef && workdriveRef !== workdriveGrants.find((g) => g.id === workdriveGrantId)?.resourceId && (
+													<button type="button" onClick={() => { const grant = workdriveGrants.find((g) => g.id === workdriveGrantId); setWorkdriveRef(grant?.resourceId || ""); setWorkdriveFiles([]); setWorkdriveNextOffset(null); }} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">
+														Root
+													</button>
+												)}
+												<button type="button" onClick={() => setShowWorkdrive(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+											</div>
 										)}
 										{workdriveFiles.length > 0 && (
 											<div className="flex flex-col gap-2 mt-3">
