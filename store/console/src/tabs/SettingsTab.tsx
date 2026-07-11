@@ -43,6 +43,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
 	const [emailMsg, setEmailMsg] = useState("");
+	const [driveStatus, setDriveStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
+	const [driveMsg, setDriveMsg] = useState("");
 
 	useEffect(() => {
 		(async () => {
@@ -92,7 +94,14 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			} catch {
 				setHasOpenAiKey(false);
 			}
-			await refreshEmail();
+			try {
+				const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status");
+				setEmailStatus(s);
+			} catch {}
+			try {
+				const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status");
+				setDriveStatus(s);
+			} catch {}
 			try {
 				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
 				setEmailPermission(st.permissions?.email === true);
@@ -107,8 +116,17 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			setEmailStatus(s);
 		} catch {}
 	};
+	const refreshDrive = async () => {
+		try {
+			const s = await api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status");
+			setDriveStatus(s);
+		} catch {}
+	};
 	useEffect(() => {
-		const onFocus = () => { refreshEmail(); };
+		const onFocus = () => {
+			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status").then(setEmailStatus).catch(() => {});
+			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status").then(setDriveStatus).catch(() => {});
+		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
 	}, []);
@@ -168,6 +186,27 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			setEmailMsg("Gmail disconnected.");
 		} catch (e) {
 			setEmailMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const connectDrive = async () => {
+		try {
+			const { url } = await api<{ url: string }>("/v1/drive/google/start");
+			window.open(url, "_blank", "noopener");
+			setDriveMsg("Complete the Google sign-in in the new tab, then come back here.");
+		} catch (e) {
+			setDriveMsg(e instanceof Error ? e.message : "Failed to start Google Drive connection");
+		}
+	};
+
+	const disconnectDrive = async () => {
+		if (!confirm("Disconnect Google Drive? You can keep existing imported documents, but new Drive imports will stop working.")) return;
+		try {
+			await api("/v1/drive/google", { method: "DELETE" });
+			setDriveStatus((s) => (s ? { ...s, connected: false } : s));
+			setDriveMsg("Google Drive disconnected.");
+		} catch (e) {
+			setDriveMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -358,11 +397,14 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Permissions &amp; Connections</h3>
 				<p className="text-sm text-muted mb-3">
-					Connect Gmail so this agent can read <b>one-time sign-in links and verification codes</b> when a site (e.g. a job portal) emails one — instead of pausing to ask you.
+					Connect Google accounts for agent workflows. Gmail is permissioned per agent; Drive imports copy selected files into this instance's Documents.
 				</p>
 
 				{emailStatus && !emailStatus.configured && (
 					<p className="text-xs text-red mb-2">Email connection isn’t configured on this deployment yet.</p>
+				)}
+				{driveStatus && !driveStatus.configured && (
+					<p className="text-xs text-red mb-2">Google Drive connection isn’t configured on this deployment yet.</p>
 				)}
 
 				<div className="flex items-center justify-between gap-3 mb-3">
@@ -385,6 +427,26 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					)}
 				</div>
 
+				<div className="flex items-center justify-between gap-3 mb-3">
+					<div className="text-sm">
+						<span className="font-semibold">Google Drive</span>{" "}
+						{driveStatus?.connected
+							? <span className="text-green">· connected{driveStatus.email ? ` (${driveStatus.email})` : ""}</span>
+							: <span className="text-muted">· not connected</span>}
+					</div>
+					{driveStatus?.configured && (
+						driveStatus.connected ? (
+							<button type="button" onClick={disconnectDrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-red hover:text-red font-bold">
+								Disconnect
+							</button>
+						) : (
+							<button type="button" onClick={connectDrive} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold">
+								Connect Drive
+							</button>
+						)
+					)}
+				</div>
+
 				<label className={`flex items-center gap-2 text-sm ${emailStatus?.connected ? "" : "opacity-50"}`}>
 					<input
 						type="checkbox"
@@ -398,6 +460,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					<p className="text-xs text-muted mt-1">Connect Gmail above to enable this.</p>
 				)}
 				{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
+				{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
 			</div>
 
 			{/* Voice */}
