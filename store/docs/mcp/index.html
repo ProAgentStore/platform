@@ -1,250 +1,783 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ProAgentStore MCP</title>
-  <meta name="description" content="Connect Codex, Claude Code, and other MCP clients to ProAgentStore through the official MCP server.">
-  <link rel="canonical" href="https://proagentstore.online/docs/mcp/">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <style>
-    *,*::before,*::after{box-sizing:border-box}body{margin:0;background:#0a0a0a;color:#fafafa;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}header{border-bottom:1px solid #27272a;background:#09090b}header .bar{max-width:1100px;margin:0 auto;padding:14px 20px;display:flex;align-items:center;gap:18px}.brand{color:#fafafa;font-weight:750}.nav{margin-left:auto;display:flex;gap:16px;font-size:14px}.nav a{color:#a1a1aa}main{max-width:980px;margin:0 auto;padding:42px 20px 64px}h1{font-size:40px;line-height:1.08;margin:0 0 12px}h2{font-size:24px;margin:36px 0 12px}h3{font-size:18px;margin:24px 0 8px}.lead{font-size:18px;color:#d4d4d8;max-width:760px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin:20px 0}.card{border:1px solid #27272a;background:#111113;border-radius:8px;padding:16px}.card h3{margin-top:0}.pill{display:inline-block;border:1px solid #3f3f46;border-radius:999px;padding:2px 9px;color:#d4d4d8;font-size:12px;margin-right:6px}pre{background:#050505;border:1px solid #27272a;border-radius:8px;padding:14px;overflow:auto;color:#d8b4fe;font-size:13px}code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#d8b4fe}table{width:100%;border-collapse:collapse;margin:12px 0 24px}th,td{border-bottom:1px solid #27272a;padding:10px;text-align:left;vertical-align:top}th{color:#fafafa}td{color:#d4d4d8}ul{padding-left:22px;color:#d4d4d8}.warn{border-left:3px solid #f59e0b;background:#18130a;padding:12px 14px;color:#fde68a}.ok{border-left:3px solid #22c55e;background:#08140d;padding:12px 14px;color:#bbf7d0}@media(max-width:640px){h1{font-size:32px}.nav{display:none}}
-  </style>
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+
+        <meta name="description" content="ProAgentStore platform documentation for account-connected agents, connectors, MCP, browser runtimes, architecture, and skill publishing.">
 
 
-<style id="m-fix">
-html{overflow-x:clip}
-header{position:sticky;top:0;z-index:50;background:var(--paper,#0a0a0a)}
-.m-menu-btn{display:none}
-@media(max-width:640px){
-body{overflow-x:clip;max-width:100%}
-pre,code{max-width:100%;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
-img,video,canvas{max-width:100%;height:auto}
-table{display:block;overflow-x:auto}
-.container,.c{padding-left:1rem;padding-right:1rem}
-header{flex-wrap:wrap}
-header>div{position:relative;flex-wrap:nowrap}
-.m-menu-btn{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;width:40px;height:40px;border:1px solid var(--line,#262626);border-radius:9px;background:transparent;color:var(--ink,#fafafa);font-size:1.25rem;line-height:1;cursor:pointer;flex-shrink:0;padding:0}
-header nav{display:none!important;position:absolute;top:100%;left:0;right:0;width:100%;flex-direction:column!important;gap:0!important;background:var(--panel,#171717);border-bottom:1px solid var(--line,#262626);padding:0.25rem 1rem 0.6rem;z-index:1000;margin:0!important;box-shadow:0 10px 25px -8px rgba(0,0,0,0.5)}
-header.m-open nav{display:flex!important}
-header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;border-bottom:1px solid var(--line,#1f1f1f);font-size:0.98rem;text-align:left}
-}
-</style>
-<script>
-(function(){function init(){var h=document.querySelector("header");if(!h)return;var nav=h.querySelector("nav");if(!nav||h.querySelector(".m-menu-btn"))return;var b=document.createElement("button");b.className="m-menu-btn";b.setAttribute("aria-label","Menu");b.type="button";b.textContent="☰";b.addEventListener("click",function(e){e.stopPropagation();h.classList.toggle("m-open");b.textContent=h.classList.contains("m-open")?"✕":"☰";});nav.parentNode.insertBefore(b,nav);function close(){h.classList.remove("m-open");b.textContent="☰";}document.addEventListener("click",close);nav.addEventListener("click",close);}if(document.readyState!=="loading")init();else document.addEventListener("DOMContentLoaded",init);})();
-</script>
-</head>
-<body>
-  <header>
-    <div class="bar">
-      <a class="brand" href="/">ProAgentStore</a>
-      <nav class="nav">
-        <a href="/skills/">Skills</a>
-        <a href="/docs/">Docs</a>
-        <a href="/get-started/">Get Started</a>
-        <a href="/console/">Console</a>
-        <a href="https://github.com/ProAgentStore/platform">GitHub</a>
-      </nav>
+
+        <link rel="canonical" href="https://proagentstore.online/docs/mcp/">
+
+
+        <link rel="prev" href="../connectors/">
+
+
+        <link rel="next" href="../browser-runtime/">
+
+
+
+
+
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="zensical-0.0.44">
+
+
+
+        <title>ProAgentStore MCP - ProAgentStore Docs</title>
+
+
+
+
+
+
+      <link rel="stylesheet" href="../assets/stylesheets/modern/main.fba56155.min.css">
+
+
+
+
+
+
+
+
+
+
+
+
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+
+
+
+    <script>__md_scope=new URL("..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+
+
+
+
+
+  </head>
+
+
+    <body dir="ltr">
+
+
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-label="Navigation"></label>
+    <div data-md-component="skip">
+
+
+        <a href="#proagentstore-mcp" class="md-skip">
+          Skip to content
+        </a>
+
     </div>
-  </header>
-  <main>
-    <span class="pill">MCP-first</span><span class="pill">OAuth</span><span class="pill">Streamable HTTP</span>
-    <h1>ProAgentStore MCP</h1>
-    <p class="lead">Use ProAgentStore from Codex, Claude Code, Cursor, and other MCP clients through the official MCP server. Agents should use MCP workflows instead of scraping the UI or calling private APIs directly.</p>
+    <div data-md-component="announce">
 
-    <section>
-      <h2>Use It Now</h2>
-      <div class="grid">
-        <div class="card">
-          <h3>Codex</h3>
-          <pre><code>codex mcp add proagentstore --url https://mcp.proagentstore.online/mcp
-codex mcp list
-# If the server shows "Not logged in":
-codex mcp login proagentstore</code></pre>
+    </div>
+
+
+
+
+
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://proagentstore.online" title="ProAgentStore Docs" class="md-header__button md-logo" aria-label="ProAgentStore Docs" data-md-component="logo">
+
+
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
+
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ProAgentStore Docs
+          </span>
         </div>
-        <div class="card">
-          <h3>Claude Code</h3>
-          <pre><code>claude mcp add --transport http proagentstore https://mcp.proagentstore.online/mcp
-claude mcp list</code></pre>
-        </div>
-        <div class="card">
-          <h3>Generic MCP Client</h3>
-          <pre><code>npx mcp-remote https://mcp.proagentstore.online/mcp</code></pre>
-        </div>
-        <div class="card">
-          <h3>Local npx Proxy</h3>
-          <pre><code>npx @proagentstore/cli mcp</code></pre>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+
+              ProAgentStore MCP
+
+          </span>
         </div>
       </div>
-      <p>Authentication uses browser sign-in/OAuth where the client supports it. Existing PAGS session tokens are accepted by individual tools as a fallback.</p>
-    </section>
+    </div>
 
-    <section>
-      <h2>Project Config</h2>
-      <p>Add this to repos that should use ProAgentStore only through MCP:</p>
-      <pre><code>{
-  "mcpServers": {
-    "proagentstore": {
-      "type": "streamable-http",
-      "url": "https://mcp.proagentstore.online/mcp"
-    }
-  }
-}</code></pre>
-      <p>For Codex project-local config in trusted repos:</p>
-      <pre><code>[mcp_servers.proagentstore]
-url = "https://mcp.proagentstore.online/mcp"
-tool_timeout_sec = 120
-default_tools_approval_mode = "prompt"</code></pre>
-      <p>For stdio-only MCP clients, use the published CLI as the local proxy:</p>
-      <pre><code>{
-  "mcpServers": {
-    "proagentstore": {
-      "command": "npx",
-      "args": ["-y", "@proagentstore/cli", "mcp"]
-    }
-  }
-}</code></pre>
-    </section>
 
-    <section>
-      <h2>Agent Instructions</h2>
-      <pre><code>Use ProAgentStore only through the configured MCP server.
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
 
-Do not use the web UI.
-Do not call REST/GraphQL/private APIs directly.
-First inspect available MCP tools/resources.
-Prefer read-only tools unless the task explicitly requires changes.
-Confirm before destructive actions.</code></pre>
-    </section>
 
-    <section>
-      <h2>Auth Scopes And Safety</h2>
-      <p>OAuth connections can request <code>read</code>, <code>write</code>, <code>runtime</code>, and <code>destructive</code> scopes. If a client only requests standard OAuth/OIDC scopes such as <code>openid email profile</code>, ProAgentStore grants the existing default scope set for compatibility. Write, runtime, and destructive tools enforce ProAgentStore scopes server-side. Set <code>MCP_READ_ONLY=1</code> on the MCP worker to force read-only mode.</p>
-      <table>
-        <thead><tr><th>Control</th><th>Behavior</th></tr></thead>
-        <tbody>
-          <tr><td><code>dry_run: true</code></td><td>Available on mutating tools where useful; returns the planned action without changing state.</td></tr>
-          <tr><td><code>confirm</code></td><td>Required for destructive or overwrite-style tools: <code>write_agent_file</code>, <code>batch_write_agent_files</code>, <code>unregister_instance_runtime</code>, <code>cancel_instance_task</code>, <code>delete_instance_knowledge</code>, and <code>cancel_instance</code>.</td></tr>
-          <tr><td><code>mcp_audit_log</code></td><td>Reads recent MCP write, runtime, dry-run, denied, and destructive tool audit events for the authenticated account.</td></tr>
-        </tbody>
-      </table>
-    </section>
 
-    <section>
-      <h2>Capabilities</h2>
-      <table>
-        <thead><tr><th>Area</th><th>Supported</th></tr></thead>
-        <tbody>
-          <tr><td>Read</td><td>public agents, owned agents, private instances, messages, knowledge, deployment status, analytics, runtime status, task events, MCP audit log</td></tr>
-          <tr><td>Write</td><td>create/update agents, scaffold repos, write agent files, subscribe to agents, add instance knowledge, register runtimes, create/approve/cancel runtime tasks</td></tr>
-          <tr><td>Not supported</td><td>user deletion, permission changes, broad billing changes, arbitrary shell access, generic API proxying</td></tr>
-        </tbody>
-      </table>
-    </section>
 
-    <section>
-      <h2>Tool Groups</h2>
-      <p>Roughly 67 tools, grouped below.</p>
-      <div class="grid">
-        <div class="card">
-          <h3>Discovery</h3>
-          <ul><li><code>list_agents</code></li><li><code>agent_info</code></li><li><code>chat_with_agent</code></li><li><code>platform_guide</code></li><li><code>sdk_reference</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Private Runtime</h3>
-          <ul><li><code>subscribe_agent</code></li><li><code>my_instances</code></li><li><code>chat_with_instance</code></li><li><code>instance_messages</code></li><li><code>add_instance_knowledge</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Browser Runtime</h3>
-          <ul><li><code>register_instance_runtime</code></li><li><code>instance_runtime_status</code></li><li><code>run_instance_task</code></li><li><code>approve_instance_task</code></li><li><code>instance_task_events</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Apply</h3>
-          <ul><li><code>apply_to_job</code></li><li><code>upload_resume</code></li><li><code>get_profile</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Board</h3>
-          <ul><li><code>instance_board</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Knowledge</h3>
-          <ul><li><code>add_instance_knowledge</code></li><li><code>list_instance_knowledge</code></li><li><code>search_instance_knowledge</code></li><li><code>delete_instance_knowledge</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Repo Chat</h3>
-          <ul><li><code>ingest_repo</code></li><li><code>ingest_repo_status</code></li><li><code>remove_repo</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Coding (Coder)</h3>
-          <ul><li><code>coding_loop_start</code></li><li><code>coding_loop_status</code></li><li><code>coding_loop_stop</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Creator Ops</h3>
-          <ul><li><code>create_agent</code></li><li><code>update_agent</code></li><li><code>scaffold_agent</code></li><li><code>list_agent_repo_files</code></li><li><code>read_agent_file</code></li><li><code>write_agent_file</code></li><li><code>batch_write_agent_files</code></li><li><code>get_agent_board_config</code></li><li><code>update_agent_board_config</code></li><li><code>trigger_agent_deploy</code></li><li><code>agent_deploy_status</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Observability</h3>
-          <ul><li><code>list_errors</code></li><li><code>mcp_audit_log</code></li></ul>
-        </div>
-        <div class="card">
-          <h3>Safety</h3>
-          <ul><li><code>mcp_audit_log</code></li><li><code>dry_run</code> on writes</li><li><code>confirm</code> on destructive actions</li><li>OAuth scopes</li></ul>
-        </div>
-      </div>
-    </section>
 
-    <section>
-      <h2>Executable Recipes</h2>
-      <h3>Find an agent and run a private instance</h3>
-      <pre><code>Prompt: "Find a job application agent, subscribe me, add my resume, and run my private instance."
-Expected tool flow:
-1. list_agents
-2. subscribe_agent
-3. my_instances
-4. add_instance_knowledge
-5. chat_with_instance</code></pre>
+        <label class="md-header__button md-icon" for="__search" aria-label="Search">
 
-      <h3>Connect the ProAgentStore browser runtime</h3>
-      <pre><code>npm i -g @proagentstore/cli
-pags up
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
 
-Expected MCP flow:
-1. subscribe_agent
-2. register_instance_runtime
-3. instance_runtime_status
-4. run_instance_task
-5. approve_instance_task
-6. instance_task_events</code></pre>
-      <p><code>pags up</code> connects outbound over a WebSocket relay by default (no tunnel binary, nothing public exposed) and multiplexes every one of your agents through one runner. Cloudflare Tunnel (<code>pags up --tunnel quick|named</code>) is a legacy/optional connectivity path.</p>
-      <pre><code>PAGS MCP/API control plane (brain) -> ProAgentStore browser runtime (hands) -> Playwright browser</code></pre>
-    </section>
 
-    <section>
-      <h2>Security Model</h2>
-      <div class="warn">MCP servers expose tools to agents. Keep permissions narrow, use specific tools, and avoid generic execution surfaces.</div>
-      <ul>
-        <li>OAuth/browser sign-in is the default auth path.</li>
-        <li>OAuth scopes are enforced server-side for write, runtime, and destructive tools.</li>
-        <li>Tools are purpose-specific; there is no generic shell or arbitrary API proxy tool.</li>
-        <li>Mutating tools support dry-run previews where useful.</li>
-        <li>Destructive and repository overwrite tools require explicit confirmation.</li>
-        <li>MCP audit events are stored for authenticated OAuth sessions.</li>
-        <li>Browser actions are task-based and can require explicit approval.</li>
-        <li>Private instance runtime uses caller-owned AI credentials and refuses platform-owned AI billing.</li>
-        <li>Use `default_tools_approval_mode = "prompt"` in Codex for write-heavy work.</li>
-      </ul>
-    </section>
+    <div class="md-header__source">
 
-    <section>
-      <h2>Discovery Files</h2>
-      <ul>
-        <li><a href="/llms.txt">/llms.txt</a></li>
-        <li><a href="/llms-full.txt">/llms-full.txt</a></li>
-        <li><a href="/.well-known/mcp-server.json">/.well-known/mcp-server.json</a></li>
-        <li><a href="https://mcp.proagentstore.online/health">MCP health</a></li>
-      </ul>
-      <div class="ok">The remote MCP endpoint is <code>https://mcp.proagentstore.online/mcp</code>.</div>
-    </section>
-  </main>
-</body>
+    </div>
+  </nav>
+
+</header>
+
+    <div class="md-container" data-md-component="container">
+
+
+
+
+
+
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+
+
+
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://proagentstore.online" title="ProAgentStore Docs" class="md-nav__button md-logo" aria-label="ProAgentStore Docs" data-md-component="logo">
+
+
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+
+    </a>
+    ProAgentStore Docs
+  </label>
+
+  <ul class="md-nav__list" data-md-scrollfix>
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="./.." class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Overview
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="../connectors/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Connectors
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item md-nav__item--active">
+
+
+
+
+
+
+
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+
+
+
+  <span class="md-ellipsis">
+
+
+  MCP
+
+
+  </span>
+
+
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+
+      <a href="././" class="md-nav__link md-nav__link--active">
+
+
+
+  <span class="md-ellipsis">
+
+
+  MCP
+
+
+  </span>
+
+
+
+      </a>
+
+
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+
+
+
+
+
+
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+
+        <li class="md-nav__item">
+  <a href="#use-it-now" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Use It Now
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#project-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Project Config
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#agent-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Agent Rules
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#auth-scopes-and-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Auth Scopes And Safety
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#correct-runtime-flows" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Correct Runtime Flows
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Capabilities
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Security
+      </span>
+    </span>
+  </a>
+
+</li>
+
+    </ul>
+
+</nav>
+
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="../browser-runtime/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Browser Runtime
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Architecture
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="../skill-publishing/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Skill Publishing
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+
+
+
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+
+
+
+
+
+
+
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+
+
+                  <div class="md-sidebar__inner">
+
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+
+
+
+
+
+
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+
+        <li class="md-nav__item">
+  <a href="#use-it-now" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Use It Now
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#project-config" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Project Config
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#agent-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Agent Rules
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#auth-scopes-and-safety" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Auth Scopes And Safety
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#correct-runtime-flows" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Correct Runtime Flows
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#capabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Capabilities
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Security
+      </span>
+    </span>
+  </a>
+
+</li>
+
+    </ul>
+
+</nav>
+                  </div>
+                </div>
+              </div>
+
+
+
+            <div class="md-content" data-md-component="content">
+
+              <article class="md-content__inner md-typeset">
+
+
+
+<h1 id="proagentstore-mcp">ProAgentStore MCP<a class="headerlink" href="#proagentstore-mcp" title="Permanent link">&para;</a></h1>
+<p>ProAgentStore is MCP-first. Agents should operate account state through the official MCP server instead of scraping the UI or calling private APIs directly.</p>
+<p>Remote MCP endpoint:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>https://mcp.proagentstore.online/mcp
+</span></code></pre></div>
+<p>Human and AI docs:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>https://proagentstore.online/docs/mcp/
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>https://proagentstore.online/llms.txt
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>https://proagentstore.online/.well-known/mcp-server.json
+</span></code></pre></div>
+<h2 id="use-it-now">Use It Now<a class="headerlink" href="#use-it-now" title="Permanent link">&para;</a></h2>
+<p>Codex:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>codex<span class="w"> </span>mcp<span class="w"> </span>add<span class="w"> </span>proagentstore<span class="w"> </span>--url<span class="w"> </span>https://mcp.proagentstore.online/mcp
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>codex<span class="w"> </span>mcp<span class="w"> </span>list
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># If the server shows &quot;Not logged in&quot;:</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>codex<span class="w"> </span>mcp<span class="w"> </span>login<span class="w"> </span>proagentstore
+</span></code></pre></div>
+<p>Claude Code:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>claude<span class="w"> </span>mcp<span class="w"> </span>add<span class="w"> </span>--transport<span class="w"> </span>http<span class="w"> </span>proagentstore<span class="w"> </span>https://mcp.proagentstore.online/mcp
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>claude<span class="w"> </span>mcp<span class="w"> </span>list
+</span></code></pre></div>
+<p>Generic MCP client:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>npx<span class="w"> </span>mcp-remote<span class="w"> </span>https://mcp.proagentstore.online/mcp
+</span></code></pre></div>
+<p>First-party local <code>npx</code> proxy:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>npx<span class="w"> </span>@proagentstore/cli<span class="w"> </span>mcp
+</span></code></pre></div>
+<h2 id="project-config">Project Config<a class="headerlink" href="#project-config" title="Permanent link">&para;</a></h2>
+<p>Use <code>.mcp.json</code> for MCP clients that support project-local config:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">    </span><span class="nt">&quot;proagentstore&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;streamable-http&quot;</span><span class="p">,</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">      </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://mcp.proagentstore.online/mcp&quot;</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="p">}</span>
+</span></code></pre></div>
+<p>Use <code>.codex/config.toml</code> for Codex project-local config in trusted repos:</p>
+<div class="language-toml highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="k">[mcp_servers.proagentstore]</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">url</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;https://mcp.proagentstore.online/mcp&quot;</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">tool_timeout_sec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">120</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">default_tools_approval_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">&quot;prompt&quot;</span>
+</span></code></pre></div>
+<p>For stdio-only MCP clients, use the published CLI as the local proxy:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="p">{</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span><span class="nt">&quot;mcpServers&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">    </span><span class="nt">&quot;proagentstore&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="w">      </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;npx&quot;</span><span class="p">,</span>
+</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="w">      </span><span class="nt">&quot;args&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;-y&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;@proagentstore/cli&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;mcp&quot;</span><span class="p">]</span>
+</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="p">}</span>
+</span></code></pre></div>
+<h2 id="agent-rules">Agent Rules<a class="headerlink" href="#agent-rules" title="Permanent link">&para;</a></h2>
+<div class="language-md highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>Use ProAgentStore only through the configured MCP server.
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>Do not use the web UI.
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>Do not call REST/GraphQL/private APIs directly.
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>First inspect available MCP tools/resources.
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>Prefer read-only tools unless the task explicitly requires changes.
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a>Confirm before destructive actions.
+</span></code></pre></div>
+<h2 id="auth-scopes-and-safety">Auth Scopes And Safety<a class="headerlink" href="#auth-scopes-and-safety" title="Permanent link">&para;</a></h2>
+<p>OAuth connections can be scoped to:</p>
+<ul>
+<li><code>read</code></li>
+<li><code>write</code></li>
+<li><code>runtime</code></li>
+<li><code>destructive</code></li>
+</ul>
+<p>If a client does not request a ProAgentStore-specific scope, or only requests standard OAuth/OIDC scopes such as <code>openid email profile</code>, ProAgentStore grants the existing default scope set for compatibility. Use <code>read</code> only for inspection agents. Set <code>MCP_READ_ONLY=1</code> on the MCP worker to force server-wide read-only mode.</p>
+<p>Mutating tools support <code>dry_run: true</code> where useful. Destructive or overwrite-style tools require an exact <code>confirm</code> value:</p>
+<ul>
+<li><code>write_agent_file</code>: <code>confirm: "write_agent_file"</code></li>
+<li><code>batch_write_agent_files</code>: <code>confirm: "batch_write_agent_files"</code></li>
+<li><code>unregister_instance_runtime</code>: <code>confirm: "unregister_instance_runtime"</code></li>
+<li><code>cancel_instance_task</code>: <code>confirm: "cancel_instance_task"</code></li>
+<li><code>delete_instance_knowledge</code>: <code>confirm: "delete_instance_knowledge"</code></li>
+<li><code>cancel_instance</code>: <code>confirm: "cancel_instance"</code></li>
+</ul>
+<p>Use <code>mcp_audit_log</code> to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account.</p>
+<h2 id="correct-runtime-flows">Correct Runtime Flows<a class="headerlink" href="#correct-runtime-flows" title="Permanent link">&para;</a></h2>
+<p>Public trial preview:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>list_agents -&gt; chat_with_agent
+</span></code></pre></div>
+<p>Private instance runtime:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>list_agents -&gt; subscribe_agent -&gt; my_instances -&gt; add_instance_knowledge -&gt; chat_with_instance -&gt; instance_messages
+</span></code></pre></div>
+<p>Browser-capable instance runtime:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>subscribe_agent -&gt; register_instance_runtime -&gt; instance_runtime_status -&gt; run_instance_task -&gt; approve_instance_task -&gt; instance_task_events
+</span></code></pre></div>
+<h2 id="capabilities">Capabilities<a class="headerlink" href="#capabilities" title="Permanent link">&para;</a></h2>
+<p>Read:</p>
+<ul>
+<li>agents</li>
+<li>private instances</li>
+<li>messages</li>
+<li>knowledge</li>
+<li>deployment status</li>
+<li>analytics</li>
+<li>runtime status</li>
+<li>task events</li>
+<li>MCP audit log</li>
+</ul>
+<p>Write:</p>
+<ul>
+<li>create/update agents</li>
+<li>scaffold repositories</li>
+<li>write agent files</li>
+<li>subscribe to agents</li>
+<li>add instance knowledge</li>
+<li>register runtimes</li>
+<li>create, approve, and cancel runtime tasks</li>
+</ul>
+<p>Not supported:</p>
+<ul>
+<li>user deletion</li>
+<li>permission changes</li>
+<li>broad billing changes</li>
+<li>arbitrary shell execution</li>
+<li>generic API proxying</li>
+</ul>
+<h2 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h2>
+<ul>
+<li>OAuth/browser sign-in is the default auth path.</li>
+<li>OAuth scopes are enforced server-side for write, runtime, and destructive tools.</li>
+<li>Tools are purpose-specific; there is no generic shell or arbitrary API proxy tool.</li>
+<li>Mutating tools support dry-run previews where useful.</li>
+<li>Destructive and repository overwrite tools require explicit confirmation.</li>
+<li>MCP audit events are stored for authenticated OAuth sessions.</li>
+<li>Browser actions are task-based and can require explicit approval.</li>
+<li>Private instance runtime uses caller-owned AI credentials.</li>
+<li>Prefer read-only tools unless the user explicitly requests changes.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+              </article>
+            </div>
+
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+
+      </main>
+
+        <footer class="md-footer">
+
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+
+    <div class="md-copyright__highlight">
+      ProAgentStore
+    </div>
+
+
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+
+</div>
+
+    </div>
+  </div>
+</footer>
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+
+
+
+
+
+      <script id="__config" type="application/json">{"annotate":null,"base":"..","features":[],"search":"../assets/javascripts/workers/search.e2d2d235.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+
+
+      <script src="../assets/javascripts/bundle.6e5f0216.min.js"></script>
+
+
+  </body>
 </html>

@@ -1,132 +1,724 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Connectors and Google Docs — ProAgentStore Docs</title>
-  <meta name="description" content="Set up ProAgentStore connectors, connect Google Drive, import Google Docs, and grant agent instances access to folders.">
-  <link rel="canonical" href="https://proagentstore.online/docs/connectors/">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <meta name="theme-color" content="#7c3aed">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--line:#262626;--accent:#7c3aed;--blue:#3b82f6;--green:#22c55e;--amber:#f59e0b;--radius:8px}
-    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
-    a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
-    code{font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#c4b5fd}
-    pre{background:#050505;border:1px solid var(--line);border-radius:var(--radius);padding:.9rem;overflow:auto;color:#c4b5fd;font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-    .container{max-width:1040px;margin:0 auto;padding:0 1.25rem}
-    header{border-bottom:1px solid var(--line);background:rgba(10,10,10,.94);position:sticky;top:0;z-index:10}
-    header .container{display:flex;align-items:center;gap:1rem;padding-top:.75rem;padding-bottom:.75rem}
-    .brand{display:flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none}
-    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#2563eb);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
-    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
-    nav{display:flex;gap:1rem;font-size:.88rem;font-weight:700;margin-left:auto;align-items:center;flex-wrap:wrap}
-    nav a{color:var(--muted);text-decoration:none}nav a:hover,nav a.active{color:var(--ink)}
-    .layout{display:grid;grid-template-columns:230px minmax(0,1fr);gap:2rem;padding:1.5rem 0 3rem}
-    aside{position:sticky;top:76px;align-self:start;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);padding:1rem}
-    aside h2{font-size:.78rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:.7rem}
-    aside a{display:block;color:var(--muted);font-size:.86rem;padding:.38rem 0;text-decoration:none}aside a:hover{color:var(--ink)}
-    main{min-width:0}
-    .eyebrow{color:var(--blue);font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.55rem}
-    h1{font-family:var(--font-display);font-size:clamp(2rem,5vw,3.2rem);line-height:1.02;margin-bottom:.75rem}
-    h2{font-size:1.3rem;margin:1.8rem 0 .7rem}
-    h3{font-size:1rem;margin:1.1rem 0 .45rem}
-    p,li{color:var(--muted);line-height:1.65}
-    ul,ol{display:grid;gap:.42rem;margin:.65rem 0 .65rem 1.25rem}
-    .lead{max-width:780px;color:var(--muted);line-height:1.65;font-size:1rem}
-    .callout{border-left:3px solid var(--green);background:rgba(34,197,94,.08);border-radius:0 var(--radius) var(--radius) 0;padding:.85rem;margin:1rem 0;color:#bbf7d0}
-    .warn{border-left-color:var(--amber);background:rgba(245,158,11,.08);color:#fde68a}
-    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;color:#737373;font-size:.8rem}
-    @media(max-width:820px){.layout{grid-template-columns:1fr}aside{position:static}.container{padding:0 1rem}}
-  </style>
-</head>
-<body>
-  <header>
-    <div class="container">
-      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
-      <nav>
-        <a href="/">Agents</a>
-        <a href="/skills/">Skills</a>
-        <a class="active" href="/docs/">Docs</a>
-        <a href="/get-started/">Get Started</a>
-        <a href="/console/">Console</a>
-      </nav>
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+
+        <meta name="description" content="ProAgentStore platform documentation for account-connected agents, connectors, MCP, browser runtimes, architecture, and skill publishing.">
+
+
+
+        <link rel="canonical" href="https://proagentstore.online/docs/connectors/">
+
+
+        <link rel="prev" href="./..">
+
+
+        <link rel="next" href="../mcp/">
+
+
+
+
+
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="zensical-0.0.44">
+
+
+
+        <title>Connectors - ProAgentStore Docs</title>
+
+
+
+
+
+
+      <link rel="stylesheet" href="../assets/stylesheets/modern/main.fba56155.min.css">
+
+
+
+
+
+
+
+
+
+
+
+
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+
+
+
+    <script>__md_scope=new URL("..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+
+
+
+
+
+  </head>
+
+
+    <body dir="ltr">
+
+
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-label="Navigation"></label>
+    <div data-md-component="skip">
+
+
+        <a href="#connectors" class="md-skip">
+          Skip to content
+        </a>
+
     </div>
-  </header>
-  <div class="container layout">
-    <aside>
-      <h2>Connectors</h2>
-      <a href="#model">Access model</a>
-      <a href="#admin">Admin setup</a>
-      <a href="#google">Google Docs</a>
-      <a href="#client">Client flow</a>
-      <a href="#troubleshooting">Troubleshooting</a>
-    </aside>
-    <main>
-      <div class="eyebrow">Setup Guide</div>
-      <h1>Connectors and Google Docs</h1>
-      <p class="lead">Google Docs are imported through the Google Drive connector. A user connects their Google account once, then grants individual agent instances access to specific Drive folders.</p>
+    <div data-md-component="announce">
 
-      <section id="model">
-        <h2>Access model</h2>
-        <h3>Folder grants</h3>
-        <ul>
-          <li>OAuth connections are account-level and stored in <code>user_api_keys</code> with encrypted refresh tokens.</li>
-          <li>Agent access is instance-level through <code>instance_connector_grants</code>.</li>
-          <li>A folder grant authorizes that folder and descendants.</li>
-          <li>Imported Google Docs are copied into the selected agent instance's knowledge base.</li>
-        </ul>
-        <div class="callout">The agent does not automatically get the whole Google account. It can only browse/import through folders granted to that instance.</div>
-      </section>
+    </div>
 
-      <section id="admin">
-        <h2>Admin setup</h2>
-        <ol>
-          <li>Create or open a Google Cloud OAuth Web application.</li>
-          <li>Add the redirect URI <code>https://api.proagentstore.online/v1/drive/google/callback</code>.</li>
-          <li>Enable the Drive API and request <code>https://www.googleapis.com/auth/drive.readonly</code>.</li>
-          <li>Set Worker configuration for <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>, and <code>KEY_ENCRYPTION_KEY</code>.</li>
-        </ol>
-        <pre><code>cd workers/api
-pnpm wrangler secret put GOOGLE_CLIENT_SECRET
-pnpm wrangler secret put KEY_ENCRYPTION_KEY</code></pre>
-        <p>If the same Google OAuth app is used for login or Gmail, keep those callback URLs too: <code>/v1/auth/google/callback</code> and <code>/v1/email/google/callback</code>.</p>
-      </section>
 
-      <section id="google">
-        <h2>Connect Google Docs</h2>
-        <ol>
-          <li>Open the ProAgentStore Console.</li>
-          <li>Open an agent instance, then go to Settings.</li>
-          <li>Click Connect Google Drive and approve access.</li>
-          <li>Paste a Google Drive folder URL or folder ID into Grant folder.</li>
-          <li>Go to Knowledge, click + Drive, list/search files, then import supported Google Docs, Sheets, Slides, or text files.</li>
-        </ol>
-      </section>
 
-      <section id="client">
-        <h2>What clients do</h2>
-        <p>Each client connects their own Google account. For shared drives or team folders, grant the agent a folder that the connected Google account can read. Existing imported documents remain in the agent knowledge base even if Drive is later disconnected.</p>
-      </section>
 
-      <section id="troubleshooting">
-        <h2>Troubleshooting</h2>
-        <ul>
-          <li><strong>Not configured:</strong> confirm <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> are set on the API worker.</li>
-          <li><strong>Missing refresh token:</strong> revoke the app at Google Account permissions and reconnect with consent.</li>
-          <li><strong>Cannot import a file:</strong> verify the file is inside the granted folder and the connected account can read it.</li>
-          <li><strong>Unsupported file type:</strong> import Google Docs/Sheets/Slides or text-like files. Binary formats need the regular file upload path.</li>
-        </ul>
-        <div class="callout warn">For production setup, keep the OAuth consent screen published and make sure the callback domain exactly matches <code>api.proagentstore.online</code>.</div>
-      </section>
-    </main>
+
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://proagentstore.online" title="ProAgentStore Docs" class="md-header__button md-logo" aria-label="ProAgentStore Docs" data-md-component="logo">
+
+
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
+
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ProAgentStore Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+
+              Connectors
+
+          </span>
+        </div>
+      </div>
+    </div>
+
+
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+
+
+
+
+
+        <label class="md-header__button md-icon" for="__search" aria-label="Search">
+
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+
+
+    <div class="md-header__source">
+
+    </div>
+  </nav>
+
+</header>
+
+    <div class="md-container" data-md-component="container">
+
+
+
+
+
+
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+
+
+
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://proagentstore.online" title="ProAgentStore Docs" class="md-nav__button md-logo" aria-label="ProAgentStore Docs" data-md-component="logo">
+
+
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+
+    </a>
+    ProAgentStore Docs
+  </label>
+
+  <ul class="md-nav__list" data-md-scrollfix>
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="./.." class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Overview
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item md-nav__item--active">
+
+
+
+
+
+
+
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Connectors
+
+
+  </span>
+
+
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+
+      <a href="././" class="md-nav__link md-nav__link--active">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Connectors
+
+
+  </span>
+
+
+
+      </a>
+
+
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+
+
+
+
+
+
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+
+        <li class="md-nav__item">
+  <a href="#recommended-permission-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Recommended Permission Model
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#google-docs-through-google-drive" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Google Docs Through Google Drive
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#client-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Client Flow
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#folder-grants" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Folder Grants
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#zoho-workdrive" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Zoho WorkDrive
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#agent-access-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Agent Access Rules
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Troubleshooting
+      </span>
+    </span>
+  </a>
+
+</li>
+
+    </ul>
+
+</nav>
+
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="../mcp/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  MCP
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="../browser-runtime/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Browser Runtime
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="../architecture/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Architecture
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="../skill-publishing/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Skill Publishing
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+
+
+
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+
+
+
+
+
+
+
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+
+
+                  <div class="md-sidebar__inner">
+
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+
+
+
+
+
+
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+
+        <li class="md-nav__item">
+  <a href="#recommended-permission-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Recommended Permission Model
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#google-docs-through-google-drive" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Google Docs Through Google Drive
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#client-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Client Flow
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#folder-grants" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Folder Grants
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#zoho-workdrive" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Zoho WorkDrive
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#agent-access-rules" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Agent Access Rules
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Troubleshooting
+      </span>
+    </span>
+  </a>
+
+</li>
+
+    </ul>
+
+</nav>
+                  </div>
+                </div>
+              </div>
+
+
+
+            <div class="md-content" data-md-component="content">
+
+              <article class="md-content__inner md-typeset">
+
+
+
+<h1 id="connectors">Connectors<a class="headerlink" href="#connectors" title="Permanent link">&para;</a></h1>
+<p>ProAgentStore connectors are account-level integrations with per-agent grants.</p>
+<p>The user connects Google Drive, Google Docs, Zoho WorkDrive, Gmail, or another provider to their ProAgentStore account. After connection, the user chooses which agents can access which folders, shared drives, or provider resources.</p>
+<h2 id="recommended-permission-model">Recommended Permission Model<a class="headerlink" href="#recommended-permission-model" title="Permanent link">&para;</a></h2>
+<p>Connect providers to the account, not to individual agents.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>User account
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  -&gt; provider connection
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  -&gt; folder/shared-drive grants
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  -&gt; agent access
+</span></code></pre></div>
+<p>This avoids repeated OAuth flows, keeps revocation simple, and lets the user reuse one provider connection across many agents without giving every agent blanket access.</p>
+<h2 id="google-docs-through-google-drive">Google Docs Through Google Drive<a class="headerlink" href="#google-docs-through-google-drive" title="Permanent link">&para;</a></h2>
+<p>Google Docs files are Drive files with Google Docs MIME types. To let an agent work with Google Docs, connect Google Drive and grant the agent access to the relevant folders or shared drives.</p>
+<p>Production OAuth callback:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>https://api.proagentstore.online/v1/drive/google/callback
+</span></code></pre></div>
+<p>Worker configuration:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GOOGLE_CLIENT_ID=&lt;google-oauth-client-id&gt;
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>GOOGLE_CLIENT_SECRET=&lt;worker secret&gt;
+</span></code></pre></div>
+<p>Cloudflare secret:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>wrangler<span class="w"> </span>secret<span class="w"> </span>put<span class="w"> </span>GOOGLE_CLIENT_SECRET
+</span></code></pre></div>
+<h2 id="client-flow">Client Flow<a class="headerlink" href="#client-flow" title="Permanent link">&para;</a></h2>
+<ol>
+<li>The user opens the ProAgentStore console.</li>
+<li>The user chooses <strong>Connect Google Drive</strong>.</li>
+<li>Google asks the user to approve the OAuth consent screen.</li>
+<li>ProAgentStore stores the encrypted account-level connection.</li>
+<li>The user grants one or more folders or shared drives to an agent.</li>
+<li>The agent imports, searches, reads, or writes only within those grants.</li>
+</ol>
+<h2 id="folder-grants">Folder Grants<a class="headerlink" href="#folder-grants" title="Permanent link">&para;</a></h2>
+<p>Folder grants are the boundary agents should use by default.</p>
+<ul>
+<li>Grant the smallest folder that contains the documents the agent needs.</li>
+<li>Prefer a shared drive or dedicated project folder for team workflows.</li>
+<li>Avoid whole-drive access unless the agent is explicitly an account-wide document manager.</li>
+<li>Revoke a folder grant when an agent no longer needs it.</li>
+</ul>
+<h2 id="zoho-workdrive">Zoho WorkDrive<a class="headerlink" href="#zoho-workdrive" title="Permanent link">&para;</a></h2>
+<p>Zoho WorkDrive follows the same model:</p>
+<ol>
+<li>Connect the Zoho account to the user account.</li>
+<li>Store the encrypted connection and refresh metadata.</li>
+<li>Let the user grant selected WorkDrive folders or team folders to agents.</li>
+<li>Enforce grants server-side before import, read, write, or search actions.</li>
+</ol>
+<p>Nested WorkDrive folders must preserve the provider folder identity chain so grants on a parent folder can authorize descendants without confusing sibling folders.</p>
+<h2 id="agent-access-rules">Agent Access Rules<a class="headerlink" href="#agent-access-rules" title="Permanent link">&para;</a></h2>
+<p>Agents should never receive raw provider credentials.</p>
+<p>Agents receive scoped platform capabilities:</p>
+<ul>
+<li>list granted folders</li>
+<li>search granted files</li>
+<li>import files into instance knowledge</li>
+<li>read allowed files</li>
+<li>write only when the grant and tool scope allow it</li>
+</ul>
+<p>All access should be checked against the authenticated ProAgentStore user, the private agent instance, and the provider grant.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<p>If Google Drive or Google Docs connection fails:</p>
+<ul>
+<li>Confirm the OAuth app callback exactly matches <code>https://api.proagentstore.online/v1/drive/google/callback</code>.</li>
+<li>Confirm <code>GOOGLE_CLIENT_ID</code> is configured in the API worker environment.</li>
+<li>Confirm <code>GOOGLE_CLIENT_SECRET</code> is set as a Worker secret.</li>
+<li>Confirm the user approved the requested scopes.</li>
+<li>Confirm the agent has a folder or shared-drive grant after the account connection succeeds.</li>
+</ul>
+<p>If an agent cannot see a document:</p>
+<ul>
+<li>Confirm the document is in a granted folder or shared drive.</li>
+<li>Confirm the provider account itself can access the document.</li>
+<li>Confirm the grant belongs to the same ProAgentStore account and private instance.</li>
+<li>Disconnect and reconnect only when OAuth refresh fails; missing grants should be fixed through folder access.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+              </article>
+            </div>
+
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+
+      </main>
+
+        <footer class="md-footer">
+
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+
+    <div class="md-copyright__highlight">
+      ProAgentStore
+    </div>
+
+
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+
+</div>
+
+    </div>
   </div>
-  <footer>
-    <a href="/docs/">Docs</a> &middot; <a href="/docs/mcp/">MCP</a> &middot; <a href="/docs/browser-runtime/">Browser Runtime</a> &middot; <a href="/console/">Console</a>
-  </footer>
-</body>
+</footer>
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+
+
+
+
+
+      <script id="__config" type="application/json">{"annotate":null,"base":"..","features":[],"search":"../assets/javascripts/workers/search.e2d2d235.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+
+
+      <script src="../assets/javascripts/bundle.6e5f0216.min.js"></script>
+
+
+  </body>
 </html>

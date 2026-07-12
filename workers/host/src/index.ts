@@ -3,10 +3,10 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, docsPage, connectorsDocsPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, consolePage, agentDetailPage,
 	privacyPage, termsPage, supportPage, deletePage,
 	widgetJs, authWidgetJs, swJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
-	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
+	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson, docsFiles,
 	faviconSvg, manifestJson,
 	icon16, icon32, icon180, icon192, icon512, ogImage,
 } from "./pages.js";
@@ -21,14 +21,6 @@ const PAGES: Record<string, string> = {
 	"/skills/": skillsPage,
 	"/skills/proagentstore-mcp-operator": skillMcpOperatorPage,
 	"/skills/proagentstore-mcp-operator/": skillMcpOperatorPage,
-	"/docs": docsPage,
-	"/docs/": docsPage,
-	"/docs/connectors": connectorsDocsPage,
-	"/docs/connectors/": connectorsDocsPage,
-	"/docs/browser-runtime": browserRuntimeDocsPage,
-	"/docs/browser-runtime/": browserRuntimeDocsPage,
-	"/docs/mcp": mcpDocsPage,
-	"/docs/mcp/": mcpDocsPage,
 	"/console": consolePage,
 	"/console/": consolePage,
 	"/admin": adminPage,
@@ -85,6 +77,29 @@ const ICON_MAP: Record<string, string> = {
 	"/apple-touch-icon.png": icon180,
 };
 
+function contentTypeForPath(path: string): string {
+	if (path.endsWith(".html")) return "text/html; charset=utf-8";
+	if (path.endsWith(".json")) return "application/json; charset=utf-8";
+	if (path.endsWith(".js")) return "application/javascript; charset=utf-8";
+	if (path.endsWith(".css")) return "text/css; charset=utf-8";
+	if (path.endsWith(".xml")) return "application/xml; charset=utf-8";
+	if (path.endsWith(".txt")) return "text/plain; charset=utf-8";
+	if (path.endsWith(".png")) return "image/png";
+	if (path.endsWith(".svg")) return "image/svg+xml";
+	if (path.endsWith(".ico")) return "image/x-icon";
+	return "application/octet-stream";
+}
+
+function docsLookupPath(path: string): string | null {
+	if (path === "/docs") return "/docs/index.html";
+	if (path === "/docs/") return "/docs/index.html";
+	if (!path.startsWith("/docs/")) return null;
+	if (docsFiles[path]) return path;
+	if (path.endsWith("/")) return `${path}index.html`;
+	if (!path.includes(".", path.lastIndexOf("/") + 1)) return `${path}/index.html`;
+	return path;
+}
+
 interface Env {
 	// api.proagentstore.online is a route-mapped Worker — a plain same-zone
 	// fetch() would bypass it and hit the origin DNS record, so the sitemap's
@@ -103,6 +118,20 @@ export default {
 			url.hostname === "console.proagentstore.online" && url.pathname === "/"
 				? "/console"
 				: url.pathname;
+
+		const docsPath = docsLookupPath(path);
+		if (docsPath) {
+			const body = docsFiles[docsPath];
+			if (body) {
+				return new Response(b64ToBytes(body), {
+					headers: {
+						"Content-Type": contentTypeForPath(docsPath),
+						"Cache-Control": docsPath.endsWith(".html") ? "public, max-age=300" : "public, max-age=3600",
+						"X-Content-Type-Options": "nosniff",
+					},
+				});
+			}
+		}
 
 		// Static pages
 		const page = PAGES[path];
@@ -176,7 +205,7 @@ export default {
 
 		// Dynamic sitemap — fetches published agents from API
 		if (path === "/sitemap.xml") {
-				const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/", "/docs/connectors/", "/docs/mcp/", "/docs/browser-runtime/", "/console/", "/changelog/"];
+			const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/", "/docs/connectors/", "/docs/mcp/", "/docs/browser-runtime/", "/docs/architecture/", "/docs/skill-publishing/", "/console/", "/changelog/"];
 			let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
 			for (const u of staticUrls) {
 				xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;

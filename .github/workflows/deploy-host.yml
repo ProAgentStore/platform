@@ -5,6 +5,10 @@ on:
     paths:
       - 'workers/host/**'
       - 'store/**'
+      - 'platform-docs/**'
+      - 'zensical.toml'
+      - 'scripts/clean-generated-docs.mjs'
+      - 'package.json'
       # The console bundles @proagentstore/sdk + the coder UI at build time, so
       # changes there must redeploy the console (else SDK-only fixes never go live).
       - 'packages/sdk/**'
@@ -32,11 +36,16 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install Zensical
+        run: python3 -m pip install zensical==0.0.44
 
       - name: Build SDK
         # The console bundles @proagentstore/sdk from its built dist — emit it first.
         working-directory: packages/sdk
         run: npx tsc
+
+      - name: Build docs
+        run: pnpm docs:build
 
       - name: Build console React app
         working-directory: store/console

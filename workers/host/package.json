@@ -4,9 +4,9 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"build": "cd ../../store/console && npx vite build && cd ../../workers/host && node build.js",
-		"dev": "cd ../../store/console && npx vite build && cd ../../workers/host && node build.js && wrangler dev",
-		"deploy": "cd ../../store/console && npx vite build && cd ../../workers/host && node build.js && wrangler deploy"
+		"build": "cd ../.. && pnpm docs:build && cd store/console && npx vite build && cd ../../workers/host && node build.js",
+		"dev": "cd ../.. && pnpm docs:build && cd store/console && npx vite build && cd ../../workers/host && node build.js && wrangler dev",
+		"deploy": "cd ../.. && pnpm docs:build && cd store/console && npx vite build && cd ../../workers/host && node build.js && wrangler deploy"
 	},
 	"devDependencies": {
 		"wrangler": "^4.76.0"

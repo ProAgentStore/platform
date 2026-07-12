@@ -10,13 +10,13 @@
 
 
 
-        <link rel="canonical" href="https://proagentstore.online/docs/browser-runtime/">
+        <link rel="canonical" href="https://proagentstore.online/docs/architecture/">
 
 
-        <link rel="prev" href="../mcp/">
+        <link rel="prev" href="../browser-runtime/">
 
 
-        <link rel="next" href="../architecture/">
+        <link rel="next" href="../skill-publishing/">
 
 
 
@@ -27,7 +27,7 @@
 
 
 
-        <title>ProAgentStore Browser Runtime - ProAgentStore Docs</title>
+        <title>Architecture - ProAgentStore Docs</title>
 
 
 
@@ -71,7 +71,7 @@
     <div data-md-component="skip">
 
 
-        <a href="#proagentstore-browser-runtime" class="md-skip">
+        <a href="#architecture" class="md-skip">
           Skip to content
         </a>
 
@@ -107,7 +107,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
 
-              ProAgentStore Browser Runtime
+              Architecture
 
           </span>
         </div>
@@ -255,6 +255,32 @@
 
 
 
+    <li class="md-nav__item">
+      <a href="../browser-runtime/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Browser Runtime
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
 
 
     <li class="md-nav__item md-nav__item--active">
@@ -272,7 +298,7 @@
   <span class="md-ellipsis">
 
 
-  Browser Runtime
+  Architecture
 
 
   </span>
@@ -289,7 +315,7 @@
   <span class="md-ellipsis">
 
 
-  Browser Runtime
+  Architecture
 
 
   </span>
@@ -315,10 +341,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
 
         <li class="md-nav__item">
-  <a href="#connectivity-modes" class="md-nav__link">
+  <a href="#repository-map" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Connectivity Modes
+        Repository Map
       </span>
     </span>
   </a>
@@ -326,10 +352,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#brain-vs-hands" class="md-nav__link">
+  <a href="#system-context" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Brain vs Hands
+        System Context
       </span>
     </span>
   </a>
@@ -337,10 +363,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#browser-capable-agents" class="md-nav__link">
+  <a href="#control-plane" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Browser-Capable Agents
+        Control Plane
       </span>
     </span>
   </a>
@@ -348,10 +374,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#coder-agents" class="md-nav__link">
+  <a href="#state-plane" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Coder Agents
+        State Plane
       </span>
     </span>
   </a>
@@ -359,10 +385,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#safety-rules" class="md-nav__link">
+  <a href="#runtime-plane" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Safety Rules
+        Runtime Plane
       </span>
     </span>
   </a>
@@ -370,10 +396,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#when-not-to-use-a-browser-runtime" class="md-nav__link">
+  <a href="#docs-plane" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        When Not To Use A Browser Runtime
+        Docs Plane
       </span>
     </span>
   </a>
@@ -384,32 +410,6 @@
 
 </nav>
 
-    </li>
-
-
-
-
-
-
-
-
-
-    <li class="md-nav__item">
-      <a href="../architecture/" class="md-nav__link">
-
-
-
-  <span class="md-ellipsis">
-
-
-  Architecture
-
-
-  </span>
-
-
-
-      </a>
     </li>
 
 
@@ -481,10 +481,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
 
         <li class="md-nav__item">
-  <a href="#connectivity-modes" class="md-nav__link">
+  <a href="#repository-map" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Connectivity Modes
+        Repository Map
       </span>
     </span>
   </a>
@@ -492,10 +492,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#brain-vs-hands" class="md-nav__link">
+  <a href="#system-context" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Brain vs Hands
+        System Context
       </span>
     </span>
   </a>
@@ -503,10 +503,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#browser-capable-agents" class="md-nav__link">
+  <a href="#control-plane" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Browser-Capable Agents
+        Control Plane
       </span>
     </span>
   </a>
@@ -514,10 +514,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#coder-agents" class="md-nav__link">
+  <a href="#state-plane" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Coder Agents
+        State Plane
       </span>
     </span>
   </a>
@@ -525,10 +525,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#safety-rules" class="md-nav__link">
+  <a href="#runtime-plane" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Safety Rules
+        Runtime Plane
       </span>
     </span>
   </a>
@@ -536,10 +536,10 @@
 </li>
 
         <li class="md-nav__item">
-  <a href="#when-not-to-use-a-browser-runtime" class="md-nav__link">
+  <a href="#docs-plane" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        When Not To Use A Browser Runtime
+        Docs Plane
       </span>
     </span>
   </a>
@@ -561,80 +561,84 @@
 
 
 
-<h1 id="proagentstore-browser-runtime">ProAgentStore Browser Runtime<a class="headerlink" href="#proagentstore-browser-runtime" title="Permanent link">&para;</a></h1>
-<p>Runtime-backed agents use <code>pags up</code>, which runs local browser and CLI capabilities from <code>packages/browser-runner</code>.</p>
-<p>The current PAGS runtime pattern is:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Workflow brain -&gt; callRunner() -&gt; RelayDO -&gt; WebSocket -&gt; local runner -&gt; browser/tmux
+<h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
+<p>ProAgentStore is a Cloudflare-native marketplace and runtime platform for server-powered AI agents.</p>
+<h2 id="repository-map">Repository Map<a class="headerlink" href="#repository-map" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>platform/
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  workers/
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    api/                 Hono API Worker, AgentDO, RelayDO, Workflows
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    mcp/                 MCP server and OAuth provider
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    host/                Static host for store, console, widget, docs
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>  store/
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    console/             React/Vite console app
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    docs/                Zensical-generated public docs
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>  platform-docs/         Zensical Markdown source for public docs
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  packages/
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    sdk/                 Browser/client SDK and shared helpers
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    cli/                 pags CLI: init, publish, login, mcp, runner
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    browser-runner/      Local Playwright/tmux runtime served by `pags up`
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    compliance/          Policy/check tooling
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>  agents/                First-party catalog agents
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>  templates/             Agent scaffolds
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>  docs/                  Internal architecture and planning docs
 </span></code></pre></div>
-<p>The cloud-hosted workflow is the brain. The local runner is the hands. This keeps account state, audit, and orchestration in ProAgentStore while browser sessions, local files, and CLI sessions stay on the user's machine.</p>
-<h2 id="connectivity-modes">Connectivity Modes<a class="headerlink" href="#connectivity-modes" title="Permanent link">&para;</a></h2>
-<p><code>pags up</code> connects outbound to the ProAgentStore WebSocket relay. The local machine does not need to expose an inbound port.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>ProAgentStore Workflow
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  -&gt; RelayDO
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  -&gt; outbound WebSocket
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  -&gt; local browser runner
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  -&gt; Playwright browser or tmux CLI
+<h2 id="system-context">System Context<a class="headerlink" href="#system-context" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Browser console / widget
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>        |
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>        v
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>workers/host -------------- static assets, generated docs, widget
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>        |
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>        v
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>workers/api --------------- auth, agents, instances, runtime, connectors
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  |      |      |      |
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  |      |      |      +-- D1: users, agents, instances, runtime rows, billing
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>  |      |      +--------- R2: files, media, screenshots, agent assets
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>  |      +---------------- Vectorize: knowledge embeddings
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  +----------------------- Durable Objects: AgentDO, RelayDO
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>           |
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>           +-- Workflows: JobApplyWorkflow, CodingSessionWorkflow
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>MCP clients
+</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>        |
+</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>        v
+</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>workers/mcp --------------- OAuth + tool surface, calls workers/api
+</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>
+</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>Local machine
+</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>        |
+</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>        v
+</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>packages/browser-runner ---- Playwright browser, tmux CLIs, local files
+</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>        ^
+</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>        |
+</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>RelayDO WebSocket relay ---- outbound runner connection, no inbound tunnel
 </span></code></pre></div>
-<p>Cloudflare Tunnel remains a fallback/debug path for older runtime registrations, but the default model is outbound WebSocket relay.</p>
-<h2 id="brain-vs-hands">Brain vs Hands<a class="headerlink" href="#brain-vs-hands" title="Permanent link">&para;</a></h2>
-<p>The workflow brain runs in ProAgentStore. The hands run locally.</p>
-<table>
-<thead>
-<tr>
-<th>Piece</th>
-<th>Where It Runs</th>
-<th>Responsibility</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Brain</td>
-<td>Cloudflare Workflow</td>
-<td>Plans steps, manages durable task state, checks policy, requests approval</td>
-</tr>
-<tr>
-<td>Relay</td>
-<td>RelayDO WebSocket relay</td>
-<td>Carries scoped calls between the cloud workflow and local runner</td>
-</tr>
-<tr>
-<td>Hands</td>
-<td>Local <code>pags up</code> runner</td>
-<td>Drives Playwright browser actions or tmux CLI sessions</td>
-</tr>
-<tr>
-<td>Browser/session</td>
-<td>User machine</td>
-<td>Keeps cookies, local files, active logins, and interactive handoff state</td>
-</tr>
-</tbody>
-</table>
-<h2 id="browser-capable-agents">Browser-Capable Agents<a class="headerlink" href="#browser-capable-agents" title="Permanent link">&para;</a></h2>
-<p>Browser-capable agents are useful when a task needs:</p>
+<h2 id="control-plane">Control Plane<a class="headerlink" href="#control-plane" title="Permanent link">&para;</a></h2>
+<p>The control plane is the Cloudflare-hosted platform:</p>
 <ul>
-<li>saved browser logins</li>
-<li>real page interaction</li>
-<li>file uploads and downloads</li>
-<li>manual handoff</li>
-<li>long-running task state</li>
-<li>screenshots or browser event traces</li>
+<li><code>workers/api</code>: product API, orchestration, auth, connector OAuth, runtime registration, instance lifecycle, billing, analytics, storage routing.</li>
+<li><code>workers/mcp</code>: MCP tool interface with OAuth scopes, confirmation gates, dry-run support, and audit logging.</li>
+<li><code>workers/host</code>: static web host for the store, console, docs, widget, and public assets.</li>
 </ul>
-<p>The Job Application Assistant is the reference browser-capable agent. Its Cloudflare Workflow brain drives a local Playwright browser through snapshot/action steps and can pause for user approval.</p>
-<h2 id="coder-agents">Coder Agents<a class="headerlink" href="#coder-agents" title="Permanent link">&para;</a></h2>
-<p>Coder agents use the same runtime idea, but the local capability is a tmux-backed CLI session rather than a browser.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Workflow brain -&gt; RelayDO -&gt; local runner -&gt; tmux CLI session
-</span></code></pre></div>
-<p>This allows long-running coding sessions while preserving the account-level control plane and audit model.</p>
-<h2 id="safety-rules">Safety Rules<a class="headerlink" href="#safety-rules" title="Permanent link">&para;</a></h2>
+<p>The control plane owns authorization, persistence, durable workflow state, and user-visible operational records.</p>
+<h2 id="state-plane">State Plane<a class="headerlink" href="#state-plane" title="Permanent link">&para;</a></h2>
+<p>State is split intentionally:</p>
 <ul>
-<li>The runner must authenticate to ProAgentStore.</li>
-<li>Runtime tasks are scoped to a private instance.</li>
-<li>Destructive actions require explicit confirmation where supported.</li>
-<li>Browser tasks can require approval before final submission.</li>
-<li>Local files and browser profiles stay local unless the user intentionally uploads or imports content.</li>
+<li>D1 stores account, marketplace, instance, runtime, billing, OAuth-token ciphertext metadata, board, events, errors, and workflow/task mirrors.</li>
+<li>Durable Object storage stores per-agent runtime state: messages, memory, knowledge docs, tasks, collections, activity, file metadata, summaries.</li>
+<li>R2 stores binary files and large artifacts.</li>
+<li>Vectorize stores semantic vectors for knowledge and repo/file retrieval.</li>
 </ul>
-<h2 id="when-not-to-use-a-browser-runtime">When Not To Use A Browser Runtime<a class="headerlink" href="#when-not-to-use-a-browser-runtime" title="Permanent link">&para;</a></h2>
-<p>Most server-only agents should use hosted Worker execution or standard instance chat. Do not require <code>pags up</code> for agents that only need text processing, API calls, knowledge search, or document drafting.</p>
+<h2 id="runtime-plane">Runtime Plane<a class="headerlink" href="#runtime-plane" title="Permanent link">&para;</a></h2>
+<p>Runtime-backed agents use <code>pags up</code>, which runs a local browser/CLI runtime from <code>packages/browser-runner</code>. The runner connects outbound to a per-instance <code>RelayDO</code>, so the cloud can call local capabilities without opening inbound ports.</p>
+<p>Current runtime-backed surfaces:</p>
+<ul>
+<li>Job Application Assistant: Cloudflare Workflow brain drives Playwright browser actions.</li>
+<li>Coder: Cloudflare Workflow brain drives local CLI sessions in tmux.</li>
+</ul>
+<h2 id="docs-plane">Docs Plane<a class="headerlink" href="#docs-plane" title="Permanent link">&para;</a></h2>
+<p>Zensical is the standard generator for public platform docs.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>platform-docs/*.md -&gt; python3 -m zensical build --strict -&gt; store/docs/**
+</span></code></pre></div>
+<p>The Host Worker build inlines the generated <code>store/docs</code> tree so <code>/docs/</code>, <code>/docs/search.json</code>, <code>/docs/assets/...</code>, and generated article pages are served from the same Worker as the main site.</p>
 
 
 

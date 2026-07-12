@@ -1,0 +1,22 @@
+[project]
+site_name = "ProAgentStore Docs"
+site_url = "https://proagentstore.online/docs"
+site_description = "ProAgentStore platform documentation for account-connected agents, connectors, MCP, browser runtimes, architecture, and skill publishing."
+docs_dir = "platform-docs"
+site_dir = "store/docs"
+copyright = "ProAgentStore"
+
+nav = [
+  { "Overview" = "index.md" },
+  { "Connectors" = "connectors.md" },
+  { "MCP" = "mcp.md" },
+  { "Browser Runtime" = "browser-runtime.md" },
+  { "Architecture" = "architecture.md" },
+  { "Skill Publishing" = "skill-publishing.md" }
+]
+
+[project.extra]
+homepage = "https://proagentstore.online"
+
+[project.theme]
+variant = "modern"

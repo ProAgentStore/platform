@@ -20,6 +20,7 @@
 	},
 	"scripts": {
 		"build": "pnpm -r build",
+		"docs:build": "python3 -m zensical build --strict && node scripts/clean-generated-docs.mjs",
 		"typecheck": "pnpm -r typecheck",
 		"test": "vitest run",
 		"test:e2e": "playwright test",

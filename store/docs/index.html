@@ -1,85 +1,610 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Docs — ProAgentStore</title>
-  <meta name="description" content="ProAgentStore documentation for MCP, browser runtime, connectors, Google Docs imports, and developer setup.">
-  <link rel="canonical" href="https://proagentstore.online/docs/">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <meta name="theme-color" content="#7c3aed">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <style>
-    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--line:#262626;--accent:#7c3aed;--blue:#3b82f6;--radius:8px}
-    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
-    a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
-    .container{max-width:1040px;margin:0 auto;padding:0 1.25rem}
-    header{border-bottom:1px solid var(--line);background:rgba(10,10,10,.94);position:sticky;top:0;z-index:10}
-    header .container{display:flex;align-items:center;gap:1rem;padding-top:.75rem;padding-bottom:.75rem}
-    .brand{display:flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none}
-    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#2563eb);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
-    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
-    nav{display:flex;gap:1rem;font-size:.88rem;font-weight:700;margin-left:auto;align-items:center;flex-wrap:wrap}
-    nav a{color:var(--muted);text-decoration:none}nav a:hover,nav a.active{color:var(--ink)}
-    main{padding:3rem 0 4rem}
-    .eyebrow{color:var(--blue);font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.55rem}
-    h1{font-family:var(--font-display);font-size:clamp(2.2rem,5vw,3.6rem);line-height:1.02;margin-bottom:.75rem}
-    .lead{max-width:760px;color:var(--muted);line-height:1.65;font-size:1rem}
-    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem;margin-top:2rem}
-    .card{border:1px solid var(--line);background:var(--panel);border-radius:var(--radius);padding:1rem;text-decoration:none;color:inherit}
-    .card:hover{border-color:#404040;text-decoration:none}
-    .card span{display:inline-flex;color:var(--blue);font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem}
-    .card h2{font-size:1.05rem;margin-bottom:.35rem}
-    .card p{color:var(--muted);line-height:1.55;font-size:.88rem}
-    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;color:var(--muted-soft);font-size:.8rem}
-    @media(max-width:720px){.grid{grid-template-columns:1fr}nav{gap:.7rem}.container{padding:0 1rem}}
-  </style>
-</head>
-<body>
-  <header>
-    <div class="container">
-      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
-      <nav>
-        <a href="/">Agents</a>
-        <a href="/skills/">Skills</a>
-        <a class="active" href="/docs/">Docs</a>
-        <a href="/get-started/">Get Started</a>
-        <a href="/console/">Console</a>
-      </nav>
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+
+        <meta name="description" content="ProAgentStore platform documentation for account-connected agents, connectors, MCP, browser runtimes, architecture, and skill publishing.">
+
+
+
+        <link rel="canonical" href="https://proagentstore.online/docs/">
+
+
+
+        <link rel="next" href="./connectors/">
+
+
+
+
+
+      <link rel="icon" href="./assets/images/favicon.png">
+      <meta name="generator" content="zensical-0.0.44">
+
+
+
+        <title>ProAgentStore Docs - ProAgentStore Docs</title>
+
+
+
+
+
+
+      <link rel="stylesheet" href="./assets/stylesheets/modern/main.fba56155.min.css">
+
+
+
+
+
+
+
+
+
+
+
+
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+
+
+
+    <script>__md_scope=new URL(".",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+
+
+
+
+
+  </head>
+
+
+    <body dir="ltr">
+
+
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-label="Navigation"></label>
+    <div data-md-component="skip">
+
+
+        <a href="#proagentstore-docs" class="md-skip">
+          Skip to content
+        </a>
+
     </div>
-  </header>
-  <main class="container">
-    <div class="eyebrow">Documentation</div>
-    <h1>ProAgentStore Docs</h1>
-    <p class="lead">Setup guides and architecture notes for using ProAgentStore agents, connecting accounts, importing knowledge, and running browser-capable workflows.</p>
-    <div class="grid">
-      <a class="card" href="/docs/connectors/">
-        <span>Setup</span>
-        <h2>Connectors and Google Docs</h2>
-        <p>Connect Google Drive, import Google Docs into agent knowledge, and grant each agent access to specific folders.</p>
-      </a>
-      <a class="card" href="/docs/mcp/">
-        <span>MCP</span>
-        <h2>ProAgentStore MCP</h2>
-        <p>Use ProAgentStore from Codex, Claude Code, Cursor, and other MCP clients through the official MCP server.</p>
-      </a>
-      <a class="card" href="/docs/browser-runtime/">
-        <span>Runtime</span>
-        <h2>Browser Runtime</h2>
-        <p>How cloud agents drive a local browser runtime through a relay, including human handoffs and browser tasks.</p>
-      </a>
-      <a class="card" href="/openapi.yaml">
-        <span>API</span>
-        <h2>OpenAPI Spec</h2>
-        <p>Machine-readable API description for integrating with ProAgentStore services.</p>
-      </a>
+    <div data-md-component="announce">
+
     </div>
-  </main>
-  <footer>
-    <a href="/">Agents</a> &middot; <a href="/docs/connectors/">Connectors</a> &middot; <a href="/docs/mcp/">MCP</a> &middot; <a href="/console/">Console</a>
-  </footer>
-</body>
+
+
+
+
+
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="https://proagentstore.online" title="ProAgentStore Docs" class="md-header__button md-logo" aria-label="ProAgentStore Docs" data-md-component="logo">
+
+
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
+
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ProAgentStore Docs
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+
+              ProAgentStore Docs
+
+          </span>
+        </div>
+      </div>
+    </div>
+
+
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+
+
+
+
+
+        <label class="md-header__button md-icon" for="__search" aria-label="Search">
+
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+
+
+    <div class="md-header__source">
+
+    </div>
+  </nav>
+
+</header>
+
+    <div class="md-container" data-md-component="container">
+
+
+
+
+
+
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+
+
+
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="https://proagentstore.online" title="ProAgentStore Docs" class="md-nav__button md-logo" aria-label="ProAgentStore Docs" data-md-component="logo">
+
+
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 7v14M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/></svg>
+
+    </a>
+    ProAgentStore Docs
+  </label>
+
+  <ul class="md-nav__list" data-md-scrollfix>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item md-nav__item--active">
+
+
+
+
+
+
+
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Overview
+
+
+  </span>
+
+
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+
+      <a href="" class="md-nav__link md-nav__link--active">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Overview
+
+
+  </span>
+
+
+
+      </a>
+
+
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+
+
+
+
+
+
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+
+        <li class="md-nav__item">
+  <a href="#start-here" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Start Here
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#core-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Core Model
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#public-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Public Endpoints
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#operating-rule-for-agents" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Operating Rule For Agents
+      </span>
+    </span>
+  </a>
+
+</li>
+
+    </ul>
+
+</nav>
+
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="./connectors/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Connectors
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="./mcp/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  MCP
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="./browser-runtime/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Browser Runtime
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="./architecture/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Architecture
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
+      <a href="./skill-publishing/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Skill Publishing
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+
+
+
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+
+
+
+
+
+
+
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+
+
+                  <div class="md-sidebar__inner">
+
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+
+
+
+
+
+
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+
+        <li class="md-nav__item">
+  <a href="#start-here" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Start Here
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#core-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Core Model
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#public-endpoints" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Public Endpoints
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#operating-rule-for-agents" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Operating Rule For Agents
+      </span>
+    </span>
+  </a>
+
+</li>
+
+    </ul>
+
+</nav>
+                  </div>
+                </div>
+              </div>
+
+
+
+            <div class="md-content" data-md-component="content">
+
+              <article class="md-content__inner md-typeset">
+
+
+
+<h1 id="proagentstore-docs">ProAgentStore Docs<a class="headerlink" href="#proagentstore-docs" title="Permanent link">&para;</a></h1>
+<p>ProAgentStore is an MCP-first marketplace and runtime platform for server-powered AI agents.</p>
+<p>Creators publish agent templates. Users subscribe to private agent instances. Each instance keeps user-specific state, knowledge, memory, credentials, and runtime tasks. The console, API, MCP server, connectors, and local runner all operate on that same private instance model.</p>
+<h2 id="start-here">Start Here<a class="headerlink" href="#start-here" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="connectors/">Connectors</a>: connect Google Drive, Google Docs, and Zoho WorkDrive at the account level, then grant selected folders or shared drives to agents.</li>
+<li><a href="mcp/">MCP</a>: connect Codex, Claude Code, Cursor, and other MCP clients to the official ProAgentStore MCP server.</li>
+<li><a href="browser-runtime/">Browser Runtime</a>: run local browser and CLI capabilities with <code>pags up</code>.</li>
+<li><a href="architecture/">Architecture</a>: understand the control plane, state plane, runtime plane, and main Cloudflare services.</li>
+<li><a href="skill-publishing/">Skill Publishing</a>: publish ProAgentStore skills for Codex and Claude users.</li>
+</ul>
+<h2 id="core-model">Core Model<a class="headerlink" href="#core-model" title="Permanent link">&para;</a></h2>
+<p>ProAgentStore separates account connections from agent permissions.</p>
+<ol>
+<li>The user connects a provider to their ProAgentStore account.</li>
+<li>The user grants selected folders, shared drives, repositories, mailboxes, or runtime capabilities to one or more agents.</li>
+<li>Agents use only the granted resources through scoped platform tools.</li>
+<li>MCP and console actions share the same authorization and audit model.</li>
+</ol>
+<p>This is the intended model for Google Docs and Zoho WorkDrive. Connect the account once, then allow specific agents to use specific folders or shared drives.</p>
+<h2 id="public-endpoints">Public Endpoints<a class="headerlink" href="#public-endpoints" title="Permanent link">&para;</a></h2>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>https://proagentstore.online/docs/
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>https://proagentstore.online/llms.txt
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>https://proagentstore.online/llms-full.txt
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>https://proagentstore.online/openapi.yaml
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>https://proagentstore.online/.well-known/mcp-server.json
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>https://mcp.proagentstore.online/mcp
+</span></code></pre></div>
+<h2 id="operating-rule-for-agents">Operating Rule For Agents<a class="headerlink" href="#operating-rule-for-agents" title="Permanent link">&para;</a></h2>
+<p>Agents should use ProAgentStore through MCP or documented platform APIs. They should not scrape the console or call private endpoints directly.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+              </article>
+            </div>
+
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+
+      </main>
+
+        <footer class="md-footer">
+
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+
+    <div class="md-copyright__highlight">
+      ProAgentStore
+    </div>
+
+
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+
+</div>
+
+    </div>
+  </div>
+</footer>
+
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+
+
+
+
+
+      <script id="__config" type="application/json">{"annotate":null,"base":".","features":[],"search":"./assets/javascripts/workers/search.e2d2d235.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+
+
+      <script src="./assets/javascripts/bundle.6e5f0216.min.js"></script>
+
+
+  </body>
 </html>
