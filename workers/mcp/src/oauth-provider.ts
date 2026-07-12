@@ -43,7 +43,7 @@ export const loginHandler: ExportedHandler<LoginEnv> = {
 		}
 		if (path === "/health") {
 			return new Response(
-				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 36 }),
+				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 41 }),
 				{
 					headers: {
 						"Content-Type": "application/json",
@@ -59,7 +59,7 @@ export const loginHandler: ExportedHandler<LoginEnv> = {
 };
 
 const ROOT_TEXT =
-	"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for text private instances. Use register_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, and instance_task_events for browser-capable private instances.\n\nSafety: OAuth scopes are read/write/runtime/destructive. Mutating tools support dry_run where useful. Destructive and repository overwrite tools require exact confirm values. Use mcp_audit_log to inspect recent MCP events.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, register/manage instance runtimes, run/approve/cancel instance tasks, scaffold_agent, create_agent, update_agent, get/update agent board config, list/read/write agent files, add/list knowledge, analytics, deploy status, MCP audit log, platform guide, SDK reference.";
+	"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for text private instances. Use list_instance_triggers, create_instance_trigger, run_instance_trigger, list_instance_trigger_events, and delete_instance_trigger for webhooks, crons, and connector syncs. Use register_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, and instance_task_events for browser-capable private instances.\n\nSafety: OAuth scopes are read/write/runtime/destructive. Mutating tools support dry_run where useful. Destructive and repository overwrite tools require exact confirm values. Use mcp_audit_log to inspect recent MCP events.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, trigger management, register/manage instance runtimes, run/approve/cancel instance tasks, scaffold_agent, create_agent, update_agent, get/update agent board config, list/read/write agent files, add/list knowledge, analytics, deploy status, MCP audit log, platform guide, SDK reference.";
 
 function escapeHtml(value: string): string {
 	return value.replace(

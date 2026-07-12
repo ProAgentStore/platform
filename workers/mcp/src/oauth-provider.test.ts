@@ -75,7 +75,7 @@ describe("loginHandler health + root", () => {
 		await expect(res.json()).resolves.toEqual({
 			ok: true,
 			service: "proagentstore-mcp",
-			tools: 36,
+			tools: 41,
 		});
 	});
 

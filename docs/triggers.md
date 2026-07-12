@@ -110,6 +110,5 @@ by provider resource id and fingerprint.
 ## Next Work
 
 - Add payload mapping UI per action.
-- Add MCP tools for trigger management.
 - Add retry/backoff policies and notification-on-failure preferences.
 - Add timezone-aware schedule UX.

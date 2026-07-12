@@ -110,6 +110,5 @@ Webhook body example:
 ## Current Limitations
 
 - No payload-mapping UI yet.
-- No MCP trigger-management tools yet.
 - No retry policy UI yet.
 - No timezone-aware schedule editor yet.

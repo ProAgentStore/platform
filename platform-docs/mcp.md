@@ -113,6 +113,7 @@ Mutating tools support `dry_run: true` where useful. Destructive or overwrite-st
 - `unregister_instance_runtime`: `confirm: "unregister_instance_runtime"`
 - `cancel_instance_task`: `confirm: "cancel_instance_task"`
 - `delete_instance_knowledge`: `confirm: "delete_instance_knowledge"`
+- `delete_instance_trigger`: `confirm: "delete_instance_trigger"`
 - `cancel_instance`: `confirm: "cancel_instance"`
 
 Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account.
@@ -130,6 +131,16 @@ Private instance runtime:
 ```text
 list_agents -> subscribe_agent -> my_instances -> add_instance_knowledge -> chat_with_instance -> instance_messages
 ```
+
+Private instance triggers:
+
+```text
+my_instances -> list_instance_triggers -> create_instance_trigger -> run_instance_trigger -> list_instance_trigger_events
+```
+
+Use `create_instance_trigger` with action `sync_connector` and config
+`provider` plus `grant_id` to schedule Google Drive or Zoho WorkDrive folder
+syncs for an already-granted folder.
 
 Browser-capable instance runtime:
 

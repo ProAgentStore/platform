@@ -688,6 +688,7 @@
 <li><code>unregister_instance_runtime</code>: <code>confirm: "unregister_instance_runtime"</code></li>
 <li><code>cancel_instance_task</code>: <code>confirm: "cancel_instance_task"</code></li>
 <li><code>delete_instance_knowledge</code>: <code>confirm: "delete_instance_knowledge"</code></li>
+<li><code>delete_instance_trigger</code>: <code>confirm: "delete_instance_trigger"</code></li>
 <li><code>cancel_instance</code>: <code>confirm: "cancel_instance"</code></li>
 </ul>
 <p>Use <code>mcp_audit_log</code> to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account.</p>
@@ -698,8 +699,14 @@
 <p>Private instance runtime:</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>list_agents -&gt; subscribe_agent -&gt; my_instances -&gt; add_instance_knowledge -&gt; chat_with_instance -&gt; instance_messages
 </span></code></pre></div>
+<p>Private instance triggers:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>my_instances -&gt; list_instance_triggers -&gt; create_instance_trigger -&gt; run_instance_trigger -&gt; list_instance_trigger_events
+</span></code></pre></div>
+<p>Use <code>create_instance_trigger</code> with action <code>sync_connector</code> and config
+<code>provider</code> plus <code>grant_id</code> to schedule Google Drive or Zoho WorkDrive folder
+syncs for an already-granted folder.</p>
 <p>Browser-capable instance runtime:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>subscribe_agent -&gt; register_instance_runtime -&gt; instance_runtime_status -&gt; run_instance_task -&gt; approve_instance_task -&gt; instance_task_events
+<div class="language-text highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>subscribe_agent -&gt; register_instance_runtime -&gt; instance_runtime_status -&gt; run_instance_task -&gt; approve_instance_task -&gt; instance_task_events
 </span></code></pre></div>
 <h2 id="capabilities">Capabilities<a class="headerlink" href="#capabilities" title="Permanent link">&para;</a></h2>
 <p>Read:</p>
