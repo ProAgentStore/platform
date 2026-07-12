@@ -22,6 +22,10 @@ PLATFORM_AI_ENABLED = "true"
 #                               # account. Set together with the STRIPE_* secrets.
 # PAYWALL_ENFORCE = "1"         # SOFT LAUNCH: leave unset until Stripe is wired + verified.
 #                               # "1" enforces the free tier (2 agents, Pro-only runner).
+# Google Drive / Docs connector:
+# GOOGLE_CLIENT_ID = "…"        # Google OAuth web client id.
+# GOOGLE_CLIENT_SECRET is a Worker secret.
+# Redirect URI: https://api.proagentstore.online/v1/drive/google/callback
 # Zoho WorkDrive connector:
 # ZOHO_CLIENT_ID = "1000.…"     # Zoho OAuth client id (server-based app)
 # ZOHO_ACCOUNTS_BASE = "https://accounts.zoho.com"          # Optional DC override: .com.au, .eu, .in, …

@@ -59,13 +59,21 @@ const pages = {
 		path.join(storeDir, "skills", "index.html"),
 		"utf-8",
 	),
-	skillMcpOperatorPage: fs.readFileSync(
-		path.join(storeDir, "skills", "proagentstore-mcp-operator", "index.html"),
-		"utf-8",
-	),
-	browserRuntimeDocsPage: fs.readFileSync(
-		path.join(storeDir, "docs", "browser-runtime", "index.html"),
-		"utf-8",
+		skillMcpOperatorPage: fs.readFileSync(
+			path.join(storeDir, "skills", "proagentstore-mcp-operator", "index.html"),
+			"utf-8",
+		),
+		docsPage: fs.readFileSync(
+			path.join(storeDir, "docs", "index.html"),
+			"utf-8",
+		),
+		connectorsDocsPage: fs.readFileSync(
+			path.join(storeDir, "docs", "connectors", "index.html"),
+			"utf-8",
+		),
+		browserRuntimeDocsPage: fs.readFileSync(
+			path.join(storeDir, "docs", "browser-runtime", "index.html"),
+			"utf-8",
 	),
 	mcpDocsPage: fs.readFileSync(
 		path.join(storeDir, "docs", "mcp", "index.html"),

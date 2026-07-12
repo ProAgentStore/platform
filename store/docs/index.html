@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Docs — ProAgentStore</title>
+  <meta name="description" content="ProAgentStore documentation for MCP, browser runtime, connectors, Google Docs imports, and developer setup.">
+  <link rel="canonical" href="https://proagentstore.online/docs/">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <meta name="theme-color" content="#7c3aed">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{--font-body:'Manrope',system-ui,sans-serif;--font-display:'Fraunces',Georgia,serif;--paper:#0a0a0a;--panel:#171717;--ink:#fafafa;--muted:#a3a3a3;--muted-soft:#737373;--line:#262626;--accent:#7c3aed;--blue:#3b82f6;--radius:8px}
+    body{font-family:var(--font-body);background:var(--paper);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased}
+    a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}
+    .container{max-width:1040px;margin:0 auto;padding:0 1.25rem}
+    header{border-bottom:1px solid var(--line);background:rgba(10,10,10,.94);position:sticky;top:0;z-index:10}
+    header .container{display:flex;align-items:center;gap:1rem;padding-top:.75rem;padding-bottom:.75rem}
+    .brand{display:flex;align-items:center;gap:.6rem;color:var(--ink);text-decoration:none}
+    .brand-mark{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#2563eb);display:flex;align-items:center;justify-content:center;font-size:1.1rem}
+    .brand-name{font-family:var(--font-display);font-size:1.15rem;font-weight:700}
+    nav{display:flex;gap:1rem;font-size:.88rem;font-weight:700;margin-left:auto;align-items:center;flex-wrap:wrap}
+    nav a{color:var(--muted);text-decoration:none}nav a:hover,nav a.active{color:var(--ink)}
+    main{padding:3rem 0 4rem}
+    .eyebrow{color:var(--blue);font-size:.78rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;margin-bottom:.55rem}
+    h1{font-family:var(--font-display);font-size:clamp(2.2rem,5vw,3.6rem);line-height:1.02;margin-bottom:.75rem}
+    .lead{max-width:760px;color:var(--muted);line-height:1.65;font-size:1rem}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.85rem;margin-top:2rem}
+    .card{border:1px solid var(--line);background:var(--panel);border-radius:var(--radius);padding:1rem;text-decoration:none;color:inherit}
+    .card:hover{border-color:#404040;text-decoration:none}
+    .card span{display:inline-flex;color:var(--blue);font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.5rem}
+    .card h2{font-size:1.05rem;margin-bottom:.35rem}
+    .card p{color:var(--muted);line-height:1.55;font-size:.88rem}
+    footer{border-top:1px solid var(--line);padding:2rem 0;text-align:center;color:var(--muted-soft);font-size:.8rem}
+    @media(max-width:720px){.grid{grid-template-columns:1fr}nav{gap:.7rem}.container{padding:0 1rem}}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <a href="/" class="brand"><span class="brand-mark">&#9889;</span><span class="brand-name">ProAgentStore</span></a>
+      <nav>
+        <a href="/">Agents</a>
+        <a href="/skills/">Skills</a>
+        <a class="active" href="/docs/">Docs</a>
+        <a href="/get-started/">Get Started</a>
+        <a href="/console/">Console</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container">
+    <div class="eyebrow">Documentation</div>
+    <h1>ProAgentStore Docs</h1>
+    <p class="lead">Setup guides and architecture notes for using ProAgentStore agents, connecting accounts, importing knowledge, and running browser-capable workflows.</p>
+    <div class="grid">
+      <a class="card" href="/docs/connectors/">
+        <span>Setup</span>
+        <h2>Connectors and Google Docs</h2>
+        <p>Connect Google Drive, import Google Docs into agent knowledge, and grant each agent access to specific folders.</p>
+      </a>
+      <a class="card" href="/docs/mcp/">
+        <span>MCP</span>
+        <h2>ProAgentStore MCP</h2>
+        <p>Use ProAgentStore from Codex, Claude Code, Cursor, and other MCP clients through the official MCP server.</p>
+      </a>
+      <a class="card" href="/docs/browser-runtime/">
+        <span>Runtime</span>
+        <h2>Browser Runtime</h2>
+        <p>How cloud agents drive a local browser runtime through a relay, including human handoffs and browser tasks.</p>
+      </a>
+      <a class="card" href="/openapi.yaml">
+        <span>API</span>
+        <h2>OpenAPI Spec</h2>
+        <p>Machine-readable API description for integrating with ProAgentStore services.</p>
+      </a>
+    </div>
+  </main>
+  <footer>
+    <a href="/">Agents</a> &middot; <a href="/docs/connectors/">Connectors</a> &middot; <a href="/docs/mcp/">MCP</a> &middot; <a href="/console/">Console</a>
+  </footer>
+</body>
+</html>

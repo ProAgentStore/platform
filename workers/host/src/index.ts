@@ -3,7 +3,7 @@
  * Pages inlined from store/ at build time via build.js → pages.ts.
  */
 import {
-	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, agentDetailPage,
+	homepage, aboutPage, getStartedPage, skillsPage, skillMcpOperatorPage, docsPage, connectorsDocsPage, browserRuntimeDocsPage, mcpDocsPage, consolePage, agentDetailPage,
 	privacyPage, termsPage, supportPage, deletePage,
 	widgetJs, authWidgetJs, swJs, developerProfilePage, adminPage, notFoundPage, changelogPage, openapiYaml,
 	llmsTxt, llmsFullTxt, skillsJson, mcpServerJson,
@@ -21,6 +21,10 @@ const PAGES: Record<string, string> = {
 	"/skills/": skillsPage,
 	"/skills/proagentstore-mcp-operator": skillMcpOperatorPage,
 	"/skills/proagentstore-mcp-operator/": skillMcpOperatorPage,
+	"/docs": docsPage,
+	"/docs/": docsPage,
+	"/docs/connectors": connectorsDocsPage,
+	"/docs/connectors/": connectorsDocsPage,
 	"/docs/browser-runtime": browserRuntimeDocsPage,
 	"/docs/browser-runtime/": browserRuntimeDocsPage,
 	"/docs/mcp": mcpDocsPage,
@@ -172,7 +176,7 @@ export default {
 
 		// Dynamic sitemap — fetches published agents from API
 		if (path === "/sitemap.xml") {
-			const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/mcp/", "/docs/browser-runtime/", "/console/", "/changelog/"];
+				const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/", "/docs/connectors/", "/docs/mcp/", "/docs/browser-runtime/", "/console/", "/changelog/"];
 			let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
 			for (const u of staticUrls) {
 				xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;
