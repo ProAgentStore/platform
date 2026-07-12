@@ -4,6 +4,9 @@ compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
 
+[triggers]
+crons = ["* * * * *"]
+
 [[routes]]
 pattern = "api.proagentstore.online"
 zone_name = "proagentstore.online"

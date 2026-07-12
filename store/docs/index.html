@@ -319,6 +319,32 @@
 
 
     <li class="md-nav__item">
+      <a href="./triggers/" class="md-nav__link">
+
+
+
+  <span class="md-ellipsis">
+
+
+  Triggers
+
+
+  </span>
+
+
+
+      </a>
+    </li>
+
+
+
+
+
+
+
+
+
+    <li class="md-nav__item">
       <a href="./mcp/" class="md-nav__link">
 
 
@@ -521,6 +547,7 @@
 <h2 id="start-here">Start Here<a class="headerlink" href="#start-here" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="connectors/">Connectors</a>: connect Google Drive, Google Docs, and Zoho WorkDrive at the account level, then grant selected folders or shared drives to agents.</li>
+<li><a href="triggers/">Triggers</a>: configure webhooks and cron schedules for private agent instances.</li>
 <li><a href="mcp/">MCP</a>: connect Codex, Claude Code, Cursor, and other MCP clients to the official ProAgentStore MCP server.</li>
 <li><a href="browser-runtime/">Browser Runtime</a>: run local browser and CLI capabilities with <code>pags up</code>.</li>
 <li><a href="architecture/">Architecture</a>: understand the control plane, state plane, runtime plane, and main Cloudflare services.</li>
@@ -531,6 +558,7 @@
 <ol>
 <li>The user connects a provider to their ProAgentStore account.</li>
 <li>The user grants selected folders, shared drives, repositories, mailboxes, or runtime capabilities to one or more agents.</li>
+<li>The user configures instance-level triggers such as webhooks or schedules when external systems should start work.</li>
 <li>Agents use only the granted resources through scoped platform tools.</li>
 <li>MCP and console actions share the same authorization and audit model.</li>
 </ol>

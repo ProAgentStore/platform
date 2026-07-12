@@ -20,6 +20,10 @@ const runtimeTaskMirrorMigration = readFileSync(
 	join(__dirname, "../migrations/0012_runtime_task_mirror.sql"),
 	"utf-8",
 );
+const triggerMigration = readFileSync(
+	join(__dirname, "../migrations/0045_instance_triggers.sql"),
+	"utf-8",
+);
 
 describe("D1 migration 0001_init", () => {
 	it("creates users table", () => {
@@ -113,5 +117,21 @@ describe("D1 migration 0012_runtime_task_mirror", () => {
 		expect(runtimeTaskMirrorMigration).toContain("idx_instance_runtime_tasks_instance");
 		expect(runtimeTaskMirrorMigration).toContain("idx_instance_runtime_task_events_instance");
 		expect(runtimeTaskMirrorMigration).toContain("idx_instance_runtime_task_events_task");
+	});
+});
+
+describe("D1 migration 0045_instance_triggers", () => {
+	it("creates trigger definitions and event history", () => {
+		expect(triggerMigration).toContain("CREATE TABLE IF NOT EXISTS agent_triggers");
+		expect(triggerMigration).toContain("CREATE TABLE IF NOT EXISTS agent_trigger_events");
+		expect(triggerMigration).toContain("secret_token  TEXT UNIQUE");
+		expect(triggerMigration).toContain("next_run_at");
+	});
+
+	it("adds due and ownership indexes", () => {
+		expect(triggerMigration).toContain("idx_agent_triggers_user");
+		expect(triggerMigration).toContain("idx_agent_triggers_instance");
+		expect(triggerMigration).toContain("idx_agent_triggers_due");
+		expect(triggerMigration).toContain("idx_agent_trigger_events_trigger");
 	});
 });

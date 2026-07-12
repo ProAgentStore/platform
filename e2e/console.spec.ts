@@ -224,6 +224,24 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			});
 		}
 		if (path === "/v1/instances/inst-1/messages") return json({ messages: [] });
+		if (path === "/v1/triggers" && method === "GET") {
+			return json({
+				triggers: [
+					{
+						id: "trigger-1",
+						name: "Daily digest",
+						type: "cron",
+						action: "create_task",
+						enabled: true,
+						schedule: "@daily",
+						nextRunAt: "2026-07-13T00:00:00.000Z",
+					},
+				],
+			});
+		}
+		if (path === "/v1/triggers" && method === "POST") return json({ trigger: { id: "trigger-2" } }, 201);
+		if (path === "/v1/triggers/trigger-1/run" && method === "POST") return json({ success: true });
+		if (path === "/v1/triggers/trigger-1" && method === "DELETE") return json({ success: true });
 		if (path === "/v1/instances/inst-1/chat" && method === "POST") {
 			return json(
 				options.instanceChatBody ?? {
@@ -502,6 +520,15 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.goto("/console/notifications");
 		await expect(page.getByRole("heading", { name: "Notifications" })).toBeVisible();
 		await expect(page.getByText("No notifications")).toBeVisible();
+	});
+
+	test("instance settings show webhook and cron triggers", async ({ page }) => {
+		await mockSignedInConsole(page);
+
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
+		await expect(page.getByText("Daily digest")).toBeVisible();
+		await expect(page.getByRole("button", { name: "Run now" })).toBeVisible();
 	});
 
 	test("instance chat sends messages and shows responses", async ({

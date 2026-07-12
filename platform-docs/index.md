@@ -7,6 +7,7 @@ Creators publish agent templates. Users subscribe to private agent instances. Ea
 ## Start Here
 
 - [Connectors](connectors.md): connect Google Drive, Google Docs, and Zoho WorkDrive at the account level, then grant selected folders or shared drives to agents.
+- [Triggers](triggers.md): configure webhooks and cron schedules for private agent instances.
 - [MCP](mcp.md): connect Codex, Claude Code, Cursor, and other MCP clients to the official ProAgentStore MCP server.
 - [Browser Runtime](browser-runtime.md): run local browser and CLI capabilities with `pags up`.
 - [Architecture](architecture.md): understand the control plane, state plane, runtime plane, and main Cloudflare services.
@@ -18,8 +19,9 @@ ProAgentStore separates account connections from agent permissions.
 
 1. The user connects a provider to their ProAgentStore account.
 2. The user grants selected folders, shared drives, repositories, mailboxes, or runtime capabilities to one or more agents.
-3. Agents use only the granted resources through scoped platform tools.
-4. MCP and console actions share the same authorization and audit model.
+3. The user configures instance-level triggers such as webhooks or schedules when external systems should start work.
+4. Agents use only the granted resources through scoped platform tools.
+5. MCP and console actions share the same authorization and audit model.
 
 This is the intended model for Google Docs and Zoho WorkDrive. Connect the account once, then allow specific agents to use specific folders or shared drives.
 

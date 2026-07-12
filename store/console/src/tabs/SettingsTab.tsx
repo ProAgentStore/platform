@@ -19,6 +19,20 @@ interface ConnectorGrant {
 	resourceUrl?: string | null;
 }
 
+interface InstanceTrigger {
+	id: string;
+	name: string;
+	type: "webhook" | "cron";
+	action: "create_task" | "add_knowledge" | "log_event";
+	enabled: boolean;
+	schedule?: string | null;
+	webhookUrl?: string;
+	lastRunAt?: string | null;
+	nextRunAt?: string | null;
+	failureCount?: number;
+	lastError?: string | null;
+}
+
 export default function SettingsTab({ instanceId, isApply, settingsSchema, onUnsubscribe }: Props) {
 	const [maintMsg, setMaintMsg] = useState("");
 	// Agent-declared settings: the schema prop is the fast path; the GET also returns
@@ -60,6 +74,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [workdriveMsg, setWorkdriveMsg] = useState("");
 	const [workdriveGrantRef, setWorkdriveGrantRef] = useState("");
 	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
+	const [triggers, setTriggers] = useState<InstanceTrigger[]>([]);
+	const [triggerMsg, setTriggerMsg] = useState("");
+	const [triggerName, setTriggerName] = useState("");
+	const [triggerType, setTriggerType] = useState<"webhook" | "cron">("webhook");
+	const [triggerAction, setTriggerAction] = useState<"create_task" | "add_knowledge" | "log_event">("create_task");
+	const [triggerSchedule, setTriggerSchedule] = useState("@daily");
 
 	useEffect(() => {
 		(async () => {
@@ -133,8 +153,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
 				setEmailPermission(st.permissions?.email === true);
 			} catch {}
+			loadTriggers();
 		})();
-	}, [instanceId]);
+	}, [instanceId]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Cloud connectors open OAuth in a popup; re-check when the user returns to this tab.
 	useEffect(() => {
@@ -321,6 +342,62 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		} catch (e) {
 			setTrMsg(e instanceof Error ? e.message : "Failed");
 		}
+	};
+
+	const loadTriggers = async () => {
+		try {
+			const d = await api<{ triggers?: InstanceTrigger[] }>(`/v1/triggers?instanceId=${encodeURIComponent(instanceId)}`);
+			setTriggers(d.triggers || []);
+		} catch (e) {
+			setTriggerMsg(e instanceof Error ? e.message : "Failed to load triggers");
+		}
+	};
+
+	const createTrigger = async () => {
+		try {
+			const name = triggerName.trim() || (triggerType === "webhook" ? "Inbound webhook" : "Scheduled run");
+			await api("/v1/triggers", {
+				method: "POST",
+				body: JSON.stringify({
+					instanceId,
+					name,
+					type: triggerType,
+					action: triggerAction,
+					schedule: triggerType === "cron" ? triggerSchedule : undefined,
+				}),
+			});
+			setTriggerName("");
+			setTriggerMsg("Trigger created.");
+			await loadTriggers();
+		} catch (e) {
+			setTriggerMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const runTrigger = async (id: string) => {
+		try {
+			await api(`/v1/triggers/${id}/run`, { method: "POST", body: JSON.stringify({ manual: true }) });
+			setTriggerMsg("Trigger run queued.");
+			await loadTriggers();
+		} catch (e) {
+			setTriggerMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const deleteTrigger = async (trigger: InstanceTrigger) => {
+		if (!confirm(`Delete trigger "${trigger.name}"?`)) return;
+		try {
+			await api(`/v1/triggers/${trigger.id}`, { method: "DELETE" });
+			setTriggerMsg("Trigger deleted.");
+			await loadTriggers();
+		} catch (e) {
+			setTriggerMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	const copyWebhook = async (url: string) => {
+		await navigator.clipboard?.writeText(url).catch(() => undefined);
+		setTriggerMsg("Webhook URL copied.");
 	};
 
 	const clearFinished = async () => {
@@ -624,6 +701,70 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{emailMsg && <div className="text-xs text-muted mt-2">{emailMsg}</div>}
 				{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
 				{workdriveMsg && <div className="text-xs text-muted mt-2">{workdriveMsg}</div>}
+			</div>
+
+			{/* Triggers */}
+			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
+				<h3 className="text-base font-bold mb-1">Triggers</h3>
+				<p className="text-sm text-muted mb-3">
+					Start work from an inbound webhook or a schedule. Triggers run inside this private instance.
+				</p>
+				<div className="grid grid-cols-1 md:grid-cols-[1.2fr_0.8fr_0.9fr_0.9fr_auto] gap-2 items-end mb-4">
+					<div>
+						<label className="block text-xs font-semibold mb-1">Name</label>
+						<input value={triggerName} onChange={(e) => setTriggerName(e.target.value)} placeholder="Daily digest" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
+					</div>
+					<div>
+						<label className="block text-xs font-semibold mb-1">Type</label>
+						<select value={triggerType} onChange={(e) => setTriggerType(e.target.value as "webhook" | "cron")} className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full">
+							<option value="webhook">Webhook</option>
+							<option value="cron">Cron</option>
+						</select>
+					</div>
+					<div>
+						<label className="block text-xs font-semibold mb-1">Action</label>
+						<select value={triggerAction} onChange={(e) => setTriggerAction(e.target.value as "create_task" | "add_knowledge" | "log_event")} className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full">
+							<option value="create_task">Create task</option>
+							<option value="add_knowledge">Add knowledge</option>
+							<option value="log_event">Log event</option>
+						</select>
+					</div>
+					<div>
+						<label className="block text-xs font-semibold mb-1">Schedule</label>
+						<input disabled={triggerType !== "cron"} value={triggerSchedule} onChange={(e) => setTriggerSchedule(e.target.value)} placeholder="@daily" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full disabled:opacity-50" />
+					</div>
+					<button type="button" onClick={createTrigger} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold">Add</button>
+				</div>
+				<div className="flex flex-col gap-2">
+					{triggers.length === 0 ? (
+						<p className="text-xs text-muted">No triggers configured yet.</p>
+					) : triggers.map((trigger) => (
+						<div key={trigger.id} className="bg-paper border border-line rounded-lg p-3">
+							<div className="flex items-start justify-between gap-3">
+								<div className="min-w-0">
+									<div className="text-sm font-bold">{trigger.name}</div>
+									<div className="text-xs text-muted mt-0.5">
+										{trigger.type} · {trigger.action.replace("_", " ")}
+										{trigger.schedule ? ` · ${trigger.schedule}` : ""}
+										{trigger.nextRunAt ? ` · next ${new Date(trigger.nextRunAt).toLocaleString()}` : ""}
+									</div>
+									{trigger.lastError && <div className="text-xs text-red mt-1">{trigger.lastError}</div>}
+								</div>
+								<div className="flex gap-2 shrink-0 flex-wrap justify-end">
+									<button type="button" onClick={() => runTrigger(trigger.id)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">Run now</button>
+									<button type="button" onClick={() => deleteTrigger(trigger)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-red hover:border-red font-semibold">Delete</button>
+								</div>
+							</div>
+							{trigger.webhookUrl && (
+								<div className="flex gap-2 mt-2">
+									<input readOnly value={trigger.webhookUrl} className="flex-1 min-w-0 text-xs bg-panel border border-line rounded px-2 py-1.5 font-mono" />
+									<button type="button" onClick={() => copyWebhook(trigger.webhookUrl || "")} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">Copy</button>
+								</div>
+							)}
+						</div>
+					))}
+				</div>
+				{triggerMsg && <div className="text-xs text-muted mt-2">{triggerMsg}</div>}
 			</div>
 
 			{/* Voice */}

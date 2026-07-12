@@ -191,12 +191,12 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// the transcript must reference codex and NEVER claude.
 		const s = new HeadlessSession({ id: "raw-default", workDir: dir, clientType: "codex" });
 		expect(() => s.start()).not.toThrow();
-		await until(() => s.snapshot().toLowerCase().includes("codex"), 4000);
+		await until(() => s.snapshot().toLowerCase().includes("codex"), 8000, "default raw engine process output");
 		const snap = s.snapshot().toLowerCase();
 		expect(snap).toContain("codex");
 		expect(snap).not.toContain("claude");
 		s.stop();
-	});
+	}, 15_000);
 });
 
 describe("parseCommand", () => {

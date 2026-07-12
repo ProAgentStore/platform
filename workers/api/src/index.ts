@@ -28,6 +28,8 @@ import { storageRoutes, instanceStorageRoutes } from "./routes/storage.js";
 import { codingRoutes } from "./routes/coding.js";
 import { githubRoutes } from "./routes/github.js";
 import { relayRoutes } from "./routes/relay.js";
+import { triggerRoutes } from "./routes/triggers.js";
+import { runDueTriggers } from "./lib/triggers.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
@@ -105,6 +107,7 @@ app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /
 app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google
 app.route("/v1/drive", driveRoutes); // /v1/drive/google/start, /callback, /status, /files, /instances/:id/import
 app.route("/v1/workdrive", workdriveRoutes); // /v1/workdrive/zoho/start, /callback, /status, /folder, /instances/:id/import
+app.route("/v1/triggers", triggerRoutes); // instance webhook + cron triggers
 app.route("/v1/errors", errorRoutes); // GET /v1/errors — durable error log read-back
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);
@@ -123,4 +126,11 @@ app.onError((err, c) => {
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
-export default app;
+export default {
+	fetch(request: Request, env: Env, ctx: ExecutionContext) {
+		return app.fetch(request, env, ctx);
+	},
+	async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+		ctx.waitUntil(runDueTriggers(env));
+	},
+};
