@@ -3,6 +3,7 @@ import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
 import { rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
 import { agentRoutes } from "./routes/agents.js";
+import { agentBuilderRoutes } from "./routes/agent-builder.js";
 import { batchRoutes } from "./routes/batch.js";
 import { analyticsRoutes } from "./routes/analytics.js";
 import { authRoutes } from "./routes/auth.js";
@@ -81,6 +82,7 @@ app.use("/v1/keys/*/reveal", rateLimitStrict()); // hands out a raw decrypted ke
 // ── Routes ─────────────────────────────────────────────────────────────────
 
 app.route("/v1/auth", authRoutes);
+app.route("/v1/agent-builder", agentBuilderRoutes);
 app.route("/v1/agents", agentRoutes);
 app.route("/v1/agents", chatRoutes); // /v1/agents/:id/chat, /ws, /messages, /memory, /tasks
 app.route("/v1/agents", runRoutes); // /v1/agents/:id/run, /executions

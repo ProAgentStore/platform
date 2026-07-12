@@ -497,50 +497,162 @@ export default function AgentDetail() {
 
 function CreateAgent() {
 	const navigate = useNavigate();
-	const [slug, setSlug] = useState("");
-	const [name, setName] = useState("");
-	const [desc, setDesc] = useState("");
-	const [cat, setCat] = useState("general");
-	const [model, setModel] = useState(MODELS[0].value);
-	const [personality, setPersonality] = useState("");
-	const [goal, setGoal] = useState("");
+	type BuilderPlan = {
+		intent: string;
+		action: "create_agent" | "scaffold_agent";
+		agent: {
+			slug: string;
+			name: string;
+			description: string;
+			category: string;
+			model: string;
+			personality: string;
+			goal: string;
+		};
+		template?: "worker" | "cron" | "api";
+		runtime?: { kind: "hosted" | "browser" | "coder"; reason: string };
+		connectors: Array<{ provider: string; reason: string; requiredGrant: string }>;
+		suggestedSurfaces: string[];
+		warnings: string[];
+		dryRun: { endpoint: string; method: string; body: Record<string, unknown> };
+	};
+	const [prompt, setPrompt] = useState("");
+	const [plan, setPlan] = useState<BuilderPlan | null>(null);
+	const [planning, setPlanning] = useState(false);
+	const [executing, setExecuting] = useState(false);
+	const [showAdvanced, setShowAdvanced] = useState(false);
 	const [error, setError] = useState("");
 
-	const create = async () => {
-		if (!slug.trim() || !name.trim()) { setError("Slug and name required"); return; }
+	const updateAgent = (patch: Partial<BuilderPlan["agent"]>) => {
+		setPlan(current => current ? { ...current, agent: { ...current.agent, ...patch } } : current);
+	};
+
+	const buildPlan = async () => {
+		if (!prompt.trim()) { setError("Describe the agent you want to create."); return; }
+		setPlanning(true);
+		setError("");
 		try {
-			const res = await api<{ id: string }>("/v1/agents", {
+			const res = await api<{ plan: BuilderPlan }>("/v1/agent-builder/plan", {
 				method: "POST",
-				body: JSON.stringify({ slug, name, description: desc, category: cat, model, personality, goal }),
+				body: JSON.stringify({ prompt }),
 			});
-			if (res.id) navigate(`/agents/${res.id}`);
-		} catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+			setPlan(res.plan);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setPlanning(false);
+		}
+	};
+
+	const execute = async () => {
+		if (!plan) return;
+		setExecuting(true);
+		setError("");
+		try {
+			const res = await api<{ result: { agentId: string } }>("/v1/agent-builder/execute", {
+				method: "POST",
+				body: JSON.stringify({ plan }),
+			});
+			if (res.result?.agentId) navigate(`/agents/${res.result.agentId}`);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setExecuting(false);
+		}
 	};
 
 	return (
 		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<button type="button" onClick={() => navigate("/agents")} className="text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink">&larr; Back</button>
-			<h2 className="font-display text-xl font-bold mb-4">Create Agent</h2>
-			<div className="bg-panel border border-line rounded-xl p-4">
-				<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-					<div><label className="text-xs text-muted font-semibold block mb-1">Slug</label><input value={slug} onChange={e => setSlug(e.target.value)} placeholder="my-agent" /></div>
-					<div><label className="text-xs text-muted font-semibold block mb-1">Name</label><input value={name} onChange={e => setName(e.target.value)} placeholder="My Agent" /></div>
-				</div>
-				<div className="grid grid-cols-2 gap-3 mt-3 max-sm:grid-cols-1">
-					<div><label className="text-xs text-muted font-semibold block mb-1">Category</label><select value={cat} onChange={e => setCat(e.target.value)}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
-					<div><label className="text-xs text-muted font-semibold block mb-1">Model</label><select value={model} onChange={e => setModel(e.target.value)}>{MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</select></div>
-				</div>
-				<div className="mt-3"><label className="text-xs text-muted font-semibold block mb-1">Description</label><input value={desc} onChange={e => setDesc(e.target.value)} placeholder="What does this agent do?" /></div>
-				<div className="grid grid-cols-2 gap-3 mt-3 max-sm:grid-cols-1">
-					<div><label className="text-xs text-muted font-semibold block mb-1">Personality</label><textarea value={personality} onChange={e => setPersonality(e.target.value)} placeholder="How should the agent behave?" /></div>
-					<div><label className="text-xs text-muted font-semibold block mb-1">Goal</label><textarea value={goal} onChange={e => setGoal(e.target.value)} placeholder="What should the agent accomplish?" /></div>
-				</div>
+			<h2 className="font-display text-xl font-bold mb-2">Create Agent</h2>
+			<p className="text-sm text-muted mb-4">Describe what you want. ProAgentStore will choose the right creation path, then show a plan before anything is created.</p>
+
+			<div className="bg-panel border border-line rounded-xl p-4 mb-4">
+				<label htmlFor="agent-builder-prompt" className="text-xs text-muted font-semibold block mb-1">Agent prompt</label>
+				<textarea
+					id="agent-builder-prompt"
+					value={prompt}
+					onChange={e => setPrompt(e.target.value)}
+					placeholder="Create an agent that reviews Google Docs in a project folder and summarizes contract risks."
+					className="min-h-[120px]"
+				/>
 				<div className="flex gap-2 mt-4">
-					<button type="button" onClick={create} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold hover:bg-accent-hover">Create</button>
+					<button type="button" onClick={buildPlan} disabled={planning} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold hover:bg-accent-hover disabled:opacity-60">{planning ? "Planning..." : "Plan Agent"}</button>
 					<button type="button" onClick={() => navigate("/agents")} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Cancel</button>
 				</div>
 				{error && <div className="text-red text-sm mt-2">{error}</div>}
 			</div>
+
+			{plan && (
+				<div className="bg-panel border border-line rounded-xl p-4">
+					<div className="flex items-start justify-between gap-3 mb-4 max-sm:flex-col">
+						<div>
+							<div className="text-xs uppercase tracking-wide text-accent font-bold mb-1">Review plan</div>
+							<h3 className="font-display text-lg font-bold">{plan.agent.name}</h3>
+							<p className="text-sm text-muted mt-1">{plan.agent.description}</p>
+						</div>
+						<div className="flex gap-2 text-xs font-bold">
+							<span className="px-2 py-1 rounded-lg bg-accent-soft text-purple-400">{plan.action === "scaffold_agent" ? "Scaffold" : "Draft chat"}</span>
+							<span className="px-2 py-1 rounded-lg bg-panel-2 border border-line text-muted">{plan.runtime?.kind || "hosted"}</span>
+						</div>
+					</div>
+
+					<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
+						<div><label htmlFor="agent-builder-slug" className="text-xs text-muted font-semibold block mb-1">Slug</label><input id="agent-builder-slug" value={plan.agent.slug} onChange={e => updateAgent({ slug: e.target.value })} /></div>
+						<div><label htmlFor="agent-builder-name" className="text-xs text-muted font-semibold block mb-1">Name</label><input id="agent-builder-name" value={plan.agent.name} onChange={e => updateAgent({ name: e.target.value })} /></div>
+					</div>
+					<div className="mt-3"><label htmlFor="agent-builder-description" className="text-xs text-muted font-semibold block mb-1">Description</label><input id="agent-builder-description" value={plan.agent.description} onChange={e => updateAgent({ description: e.target.value })} /></div>
+					<div className="grid grid-cols-2 gap-3 mt-3 max-sm:grid-cols-1">
+						<div><label htmlFor="agent-builder-category" className="text-xs text-muted font-semibold block mb-1">Category</label><select id="agent-builder-category" value={plan.agent.category} onChange={e => updateAgent({ category: e.target.value })}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+						<div><label htmlFor="agent-builder-template" className="text-xs text-muted font-semibold block mb-1">Template</label><input id="agent-builder-template" value={plan.template || "none"} readOnly /></div>
+					</div>
+
+					<div className="mt-4 grid grid-cols-3 gap-3 max-md:grid-cols-1">
+						<div className="border border-line rounded-lg p-3">
+							<div className="text-xs text-muted font-bold mb-1">Surfaces</div>
+							<div className="text-sm">{plan.suggestedSurfaces.join(", ")}</div>
+						</div>
+						<div className="border border-line rounded-lg p-3">
+							<div className="text-xs text-muted font-bold mb-1">Runtime</div>
+							<div className="text-sm">{plan.runtime?.kind || "hosted"}</div>
+						</div>
+						<div className="border border-line rounded-lg p-3">
+							<div className="text-xs text-muted font-bold mb-1">Connectors</div>
+							<div className="text-sm">{plan.connectors.length ? plan.connectors.map(c => c.provider).join(", ") : "none"}</div>
+						</div>
+					</div>
+
+					{plan.connectors.length > 0 && (
+						<div className="mt-4 border border-amber/30 bg-amber/10 rounded-lg p-3">
+							<div className="text-sm font-bold text-amber mb-1">Connector grants needed after creation</div>
+							<ul className="text-sm text-muted list-disc pl-5">
+								{plan.connectors.map(c => <li key={`${c.provider}-${c.requiredGrant}`}>{c.provider}: grant a {c.requiredGrant}. {c.reason}</li>)}
+							</ul>
+						</div>
+					)}
+
+					{plan.warnings.length > 0 && (
+						<div className="mt-4 text-sm text-muted">
+							{plan.warnings.map(w => <div key={w}>- {w}</div>)}
+						</div>
+					)}
+
+					<button type="button" onClick={() => setShowAdvanced(v => !v)} className="mt-4 text-sm text-muted hover:text-ink">{showAdvanced ? "Hide advanced" : "Show advanced"}</button>
+					{showAdvanced && (
+						<div className="grid grid-cols-2 gap-3 mt-3 max-sm:grid-cols-1">
+							<div><label htmlFor="agent-builder-model" className="text-xs text-muted font-semibold block mb-1">Model</label><select id="agent-builder-model" value={plan.agent.model} onChange={e => updateAgent({ model: e.target.value })}>{MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</select></div>
+							<div><label htmlFor="agent-builder-action" className="text-xs text-muted font-semibold block mb-1">Action</label><input id="agent-builder-action" value={plan.action} readOnly /></div>
+							<div><label htmlFor="agent-builder-personality" className="text-xs text-muted font-semibold block mb-1">Personality</label><textarea id="agent-builder-personality" value={plan.agent.personality} onChange={e => updateAgent({ personality: e.target.value })} /></div>
+							<div><label htmlFor="agent-builder-goal" className="text-xs text-muted font-semibold block mb-1">Goal</label><textarea id="agent-builder-goal" value={plan.agent.goal} onChange={e => updateAgent({ goal: e.target.value })} /></div>
+						</div>
+					)}
+
+					<div className="flex gap-2 mt-5">
+						<button type="button" onClick={execute} disabled={executing} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold hover:bg-accent-hover disabled:opacity-60">{executing ? "Creating..." : "Approve and Create"}</button>
+						<button type="button" onClick={() => setPlan(null)} className="text-sm px-3 py-2 rounded-xl border border-line text-muted font-semibold">Revise prompt</button>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

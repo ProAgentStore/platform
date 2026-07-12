@@ -78,6 +78,8 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	let approvedTaskId: string | null = null;
 	let cancelledTaskId: string | null = null;
 	const profileUpdates: unknown[] = [];
+	const builderPlans: unknown[] = [];
+	const builderExecutes: unknown[] = [];
 
 	await page.route(`${API}/**`, async (route) => {
 		const url = new URL(route.request().url());
@@ -111,6 +113,35 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			});
 		}
 		if (path === "/v1/notifications") return json({ notifications: [], unreadCount: 0 });
+		if (path === "/v1/agent-builder/plan" && method === "POST") {
+			builderPlans.push(route.request().postDataJSON());
+			return json({
+				plan: {
+					intent: "Create an agent that reviews Google Docs in a project folder and summarizes contract risks.",
+					action: "create_agent",
+					agent: {
+						slug: "contract-review-agent",
+						name: "Contract Review Agent",
+						description: "Reviews Google Docs in a project folder and summarizes contract risks.",
+						category: "productivity",
+						model: "@cf/meta/llama-3.2-3b-instruct",
+						personality: "Careful and explicit about assumptions.",
+						goal: "Review project documents and summarize contract risks.",
+					},
+					runtime: { kind: "hosted", reason: "Can run as a hosted knowledge agent." },
+					connectors: [
+						{ provider: "google_drive", reason: "Needs Google Docs access.", requiredGrant: "folder" },
+					],
+					suggestedSurfaces: ["chat", "knowledge", "settings"],
+					warnings: ["Connector access is not granted automatically."],
+					dryRun: { endpoint: "/v1/agents", method: "POST", body: {} },
+				},
+			});
+		}
+		if (path === "/v1/agent-builder/execute" && method === "POST") {
+			builderExecutes.push(route.request().postDataJSON());
+			return json({ result: { agentId: "agent-1", slug: "contract-review-agent", action: "create_agent", connectors: [], nextSteps: [] } }, 201);
+		}
 		if (path === "/v1/agents/my/agents") {
 			return json({
 				agents: options.agents ?? [
@@ -320,6 +351,12 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		get cancelledTaskId() {
 			return cancelledTaskId;
 		},
+		get builderPlans() {
+			return builderPlans;
+		},
+		get builderExecutes() {
+			return builderExecutes;
+		},
 	};
 }
 
@@ -402,6 +439,24 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("Agents you've built")).toBeVisible();
 		await expect(page.getByText("Draft Agent")).toBeVisible();
 		await expect(page.getByText("Live Agent")).toBeVisible();
+	});
+
+	test("agent builder plans and executes from a prompt", async ({ page }) => {
+		const mock = await mockSignedInConsole(page);
+		await page.goto("/console/agents/new");
+
+		await expect(page.getByRole("heading", { name: "Create Agent" })).toBeVisible();
+		await page.getByLabel("Agent prompt").fill("Create an agent that reviews Google Docs in a project folder and summarizes contract risks.");
+		await page.getByRole("button", { name: "Plan Agent" }).click();
+
+		await expect(page.getByText("Review plan")).toBeVisible();
+		await expect(page.locator("#agent-builder-slug")).toHaveValue("contract-review-agent");
+		await expect(page.getByText("google_drive", { exact: true })).toBeVisible();
+
+		await page.getByRole("button", { name: "Approve and Create" }).click();
+		await page.waitForURL(/\/console\/agents\/agent-1$/);
+		expect(mock.builderPlans).toHaveLength(1);
+		expect(mock.builderExecutes).toHaveLength(1);
 	});
 
 	test("signed-in user can open an instance and see the apply tab", async ({
