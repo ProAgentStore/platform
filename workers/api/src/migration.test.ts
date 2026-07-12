@@ -24,6 +24,10 @@ const triggerMigration = readFileSync(
 	join(__dirname, "../migrations/0045_instance_triggers.sql"),
 	"utf-8",
 );
+const triggerSyncMigration = readFileSync(
+	join(__dirname, "../migrations/0046_trigger_sync_state.sql"),
+	"utf-8",
+);
 
 describe("D1 migration 0001_init", () => {
 	it("creates users table", () => {
@@ -133,5 +137,19 @@ describe("D1 migration 0045_instance_triggers", () => {
 		expect(triggerMigration).toContain("idx_agent_triggers_instance");
 		expect(triggerMigration).toContain("idx_agent_triggers_due");
 		expect(triggerMigration).toContain("idx_agent_trigger_events_trigger");
+	});
+});
+
+describe("D1 migration 0046_trigger_sync_state", () => {
+	it("creates a connector sync ledger for trigger imports", () => {
+		expect(triggerSyncMigration).toContain("CREATE TABLE IF NOT EXISTS agent_trigger_sync_state");
+		expect(triggerSyncMigration).toContain("PRIMARY KEY (trigger_id, provider, resource_id)");
+		expect(triggerSyncMigration).toContain("fingerprint     TEXT NOT NULL");
+		expect(triggerSyncMigration).toContain("imported_doc_id TEXT");
+	});
+
+	it("indexes instance/provider sync lookups", () => {
+		expect(triggerSyncMigration).toContain("idx_agent_trigger_sync_state_instance");
+		expect(triggerSyncMigration).toContain("ON agent_trigger_sync_state(instance_id, provider, updated_at DESC)");
 	});
 });

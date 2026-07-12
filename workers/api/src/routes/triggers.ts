@@ -185,6 +185,10 @@ triggerRoutes.put("/:id", async (c) => {
 triggerRoutes.delete("/:id", async (c) => {
 	const session = await requireUser(c);
 	const trigger = await requireOwnedTrigger(c.env, session.uid, c.req.param("id"));
+	await c.env.DB.prepare("DELETE FROM agent_trigger_sync_state WHERE trigger_id = ?1 AND user_id = ?2")
+		.bind(trigger.id, session.uid)
+		.run()
+		.catch(() => undefined);
 	await c.env.DB.prepare("DELETE FROM agent_trigger_events WHERE trigger_id = ?1 AND user_id = ?2")
 		.bind(trigger.id, session.uid)
 		.run();

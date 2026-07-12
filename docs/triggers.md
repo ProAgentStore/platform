@@ -5,6 +5,7 @@ outside chat:
 
 - inbound webhooks from Zapier, Make, n8n, forms, product events, or custom apps
 - cron schedules for digests, monitoring, syncs, and recurring checks
+- scheduled Google Drive and Zoho WorkDrive folder syncs into instance knowledge
 
 Triggers are instance-scoped. A creator can build an agent that supports scheduled
 or event-driven work, but each client configures their own instance schedule,
@@ -18,7 +19,8 @@ Triggers are not arbitrary code execution and not a generic API proxy.
 - Authenticated trigger management is scoped to the instance owner.
 - Cron triggers are dispatched by the platform worker scheduler.
 - Dispatch targets the instance Durable Object only.
-- Actions are narrow and auditable: `create_task`, `add_knowledge`, `log_event`.
+- Actions are narrow and auditable: `create_task`, `add_knowledge`,
+  `sync_connector`, `log_event`.
 - Every trigger run writes an `agent_trigger_events` row and an `agent_events`
   trace row.
 
@@ -30,6 +32,11 @@ Migration `0045_instance_triggers.sql` adds:
   next run, last run, and failure state.
 - `agent_trigger_events`: append-only history of received, running, succeeded,
   and failed trigger runs.
+
+Migration `0046_trigger_sync_state.sql` adds:
+
+- `agent_trigger_sync_state`: per-trigger connector file fingerprints so cron
+  syncs do not re-import unchanged Drive or WorkDrive files every run.
 
 ## API
 
@@ -83,10 +90,26 @@ Adds a document to the instance knowledge base. Payload fields `title`, `content
 Records the trigger event without changing the agent state. This is useful during
 setup and for webhooks that should be audited before automation is enabled.
 
+`sync_connector`
+
+Imports new or changed text-like files from a granted Google Drive or Zoho
+WorkDrive folder into the instance knowledge base. The trigger config must name
+the provider and the per-instance grant:
+
+```json
+{
+  "provider": "google_drive",
+  "grantId": "grant_uuid",
+  "limit": 10
+}
+```
+
+The sync ledger is per trigger. Re-running the same trigger skips unchanged files
+by provider resource id and fingerprint.
+
 ## Next Work
 
 - Add payload mapping UI per action.
-- Add connector polling triggers for Google Drive and Zoho WorkDrive folders.
 - Add MCP tools for trigger management.
 - Add retry/backoff policies and notification-on-failure preferences.
 - Add timezone-aware schedule UX.

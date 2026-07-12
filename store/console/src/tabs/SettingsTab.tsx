@@ -19,13 +19,17 @@ interface ConnectorGrant {
 	resourceUrl?: string | null;
 }
 
+type TriggerActionType = "create_task" | "add_knowledge" | "log_event" | "sync_connector";
+type ConnectorProviderType = "google_drive" | "zoho_workdrive";
+
 interface InstanceTrigger {
 	id: string;
 	name: string;
 	type: "webhook" | "cron";
-	action: "create_task" | "add_knowledge" | "log_event";
+	action: TriggerActionType;
 	enabled: boolean;
 	schedule?: string | null;
+	config?: { provider?: ConnectorProviderType; grantId?: string };
 	webhookUrl?: string;
 	lastRunAt?: string | null;
 	nextRunAt?: string | null;
@@ -78,8 +82,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [triggerMsg, setTriggerMsg] = useState("");
 	const [triggerName, setTriggerName] = useState("");
 	const [triggerType, setTriggerType] = useState<"webhook" | "cron">("webhook");
-	const [triggerAction, setTriggerAction] = useState<"create_task" | "add_knowledge" | "log_event">("create_task");
+	const [triggerAction, setTriggerAction] = useState<TriggerActionType>("create_task");
 	const [triggerSchedule, setTriggerSchedule] = useState("@daily");
+	const [triggerConnectorProvider, setTriggerConnectorProvider] = useState<ConnectorProviderType>("google_drive");
+	const [triggerConnectorGrantId, setTriggerConnectorGrantId] = useState("");
+	const triggerConnectorGrants = triggerConnectorProvider === "google_drive" ? driveGrants : workdriveGrants;
 
 	useEffect(() => {
 		(async () => {
@@ -355,7 +362,16 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 	const createTrigger = async () => {
 		try {
-			const name = triggerName.trim() || (triggerType === "webhook" ? "Inbound webhook" : "Scheduled run");
+			const syncGrantId = triggerConnectorGrantId || triggerConnectorGrants[0]?.id || "";
+			if (triggerAction === "sync_connector" && !syncGrantId) {
+				setTriggerMsg(`Grant a ${triggerConnectorProvider === "google_drive" ? "Google Drive" : "Zoho WorkDrive"} folder before creating a sync trigger.`);
+				return;
+			}
+			const name = triggerName.trim() || (
+				triggerAction === "sync_connector"
+					? `${triggerConnectorProvider === "google_drive" ? "Google Drive" : "WorkDrive"} sync`
+					: triggerType === "webhook" ? "Inbound webhook" : "Scheduled run"
+			);
 			await api("/v1/triggers", {
 				method: "POST",
 				body: JSON.stringify({
@@ -364,6 +380,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					type: triggerType,
 					action: triggerAction,
 					schedule: triggerType === "cron" ? triggerSchedule : undefined,
+					config: triggerAction === "sync_connector" ? {
+						provider: triggerConnectorProvider,
+						grantId: syncGrantId,
+					} : undefined,
 				}),
 			});
 			setTriggerName("");
@@ -723,9 +743,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					</div>
 					<div>
 						<label className="block text-xs font-semibold mb-1">Action</label>
-						<select value={triggerAction} onChange={(e) => setTriggerAction(e.target.value as "create_task" | "add_knowledge" | "log_event")} className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full">
+						<select value={triggerAction} onChange={(e) => setTriggerAction(e.target.value as TriggerActionType)} className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full">
 							<option value="create_task">Create task</option>
 							<option value="add_knowledge">Add knowledge</option>
+							<option value="sync_connector">Sync folder</option>
 							<option value="log_event">Log event</option>
 						</select>
 					</div>
@@ -735,6 +756,38 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					</div>
 					<button type="button" onClick={createTrigger} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold">Add</button>
 				</div>
+				{triggerAction === "sync_connector" && (
+					<div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-end mb-4">
+						<div>
+							<label className="block text-xs font-semibold mb-1">Connector</label>
+							<select
+								value={triggerConnectorProvider}
+								onChange={(e) => {
+									setTriggerConnectorProvider(e.target.value as ConnectorProviderType);
+									setTriggerConnectorGrantId("");
+								}}
+								className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full"
+							>
+								<option value="google_drive">Google Drive</option>
+								<option value="zoho_workdrive">Zoho WorkDrive</option>
+							</select>
+						</div>
+						<div>
+							<label className="block text-xs font-semibold mb-1">Folder grant</label>
+							<select
+								value={triggerConnectorGrantId || triggerConnectorGrants[0]?.id || ""}
+								onChange={(e) => setTriggerConnectorGrantId(e.target.value)}
+								className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full"
+							>
+								{triggerConnectorGrants.length === 0 ? (
+									<option value="">No granted folders</option>
+								) : triggerConnectorGrants.map((grant) => (
+									<option key={grant.id} value={grant.id}>{grant.resourceName}</option>
+								))}
+							</select>
+						</div>
+					</div>
+				)}
 				<div className="flex flex-col gap-2">
 					{triggers.length === 0 ? (
 						<p className="text-xs text-muted">No triggers configured yet.</p>
@@ -746,6 +799,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 									<div className="text-xs text-muted mt-0.5">
 										{trigger.type} · {trigger.action.replace("_", " ")}
 										{trigger.schedule ? ` · ${trigger.schedule}` : ""}
+										{trigger.action === "sync_connector" && trigger.config?.provider ? ` · ${trigger.config.provider === "google_drive" ? "Google Drive" : "WorkDrive"}` : ""}
 										{trigger.nextRunAt ? ` · next ${new Date(trigger.nextRunAt).toLocaleString()}` : ""}
 									</div>
 									{trigger.lastError && <div className="text-xs text-red mt-1">{trigger.lastError}</div>}

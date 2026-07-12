@@ -6,6 +6,7 @@ Use triggers for:
 
 - inbound webhooks from Zapier, Make, n8n, forms, product events, or custom apps
 - recurring cron schedules for digests, syncs, monitoring, and reminders
+- scheduled Google Drive and Zoho WorkDrive folder syncs into knowledge
 
 Triggers are configured per private instance. A creator can build an agent that
 supports event-driven work, but each client controls their own webhook URL,
@@ -29,11 +30,32 @@ The first trigger actions are intentionally narrow:
 
 - `create_task`: create an instance task from the payload.
 - `add_knowledge`: add the payload as an instance knowledge document.
+- `sync_connector`: import new or changed files from a granted Drive or
+  WorkDrive folder.
 - `log_event`: record the event without changing agent state.
 
 There is no arbitrary shell, generic API proxy, or hidden platform-owned AI spend
 path. Triggered work lands in the same instance state, board, knowledge, and audit
 surface as manual work.
+
+## Connector Sync
+
+Folder sync triggers use the same account-level connector and per-agent grant
+model as manual imports. Connect Google Drive or Zoho WorkDrive once, grant a
+folder to an agent instance, then create a trigger with action `sync_connector`.
+
+Example config:
+
+```json
+{
+  "provider": "google_drive",
+  "grantId": "grant_uuid",
+  "limit": 10
+}
+```
+
+Each trigger keeps a file fingerprint ledger, so later runs skip unchanged files
+instead of importing duplicates.
 
 ## Schedules
 
@@ -88,7 +110,6 @@ Webhook body example:
 ## Current Limitations
 
 - No payload-mapping UI yet.
-- No connector polling triggers yet for Google Drive or Zoho WorkDrive.
 - No MCP trigger-management tools yet.
 - No retry policy UI yet.
 - No timezone-aware schedule editor yet.

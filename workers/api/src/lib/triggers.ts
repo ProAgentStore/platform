@@ -1,9 +1,26 @@
 import { HttpError } from "./auth.js";
+import { requireConnectorGrant, type ConnectorProvider } from "./connector-grants.js";
+import { readConnectorRefreshToken } from "./connector-oauth.js";
+import {
+	driveFileDescendsFrom,
+	exportDriveFile,
+	isDriveFolder,
+	listDriveFolderFiles,
+	mintDriveAccessToken,
+	type DriveFile,
+} from "./drive.js";
 import { logEvent } from "./events.js";
+import {
+	exportWorkDriveFile,
+	listWorkDriveFolder,
+	mintWorkDriveAccessToken,
+	workDriveFolderContainsFile,
+	type WorkDriveFile,
+} from "./workdrive.js";
 import type { Env } from "../types.js";
 
 export type TriggerType = "webhook" | "cron";
-export type TriggerAction = "create_task" | "add_knowledge" | "log_event";
+export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector";
 export type TriggerEventType = TriggerType | "manual";
 
 export interface TriggerRow {
@@ -31,9 +48,14 @@ export interface TriggerConfig {
 	description?: string;
 	source?: string;
 	sourceUrl?: string;
+	provider?: ConnectorProvider;
+	grantId?: string;
+	folderId?: string;
+	limit?: number;
+	query?: string;
 }
 
-const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event"]);
+const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector"]);
 const TYPES = new Set<TriggerType>(["webhook", "cron"]);
 const MAX_PAYLOAD_CHARS = 16_000;
 
@@ -46,7 +68,7 @@ export function assertTriggerType(value: unknown): TriggerType {
 
 export function assertTriggerAction(value: unknown): TriggerAction {
 	if (typeof value !== "string" || !ACTIONS.has(value as TriggerAction)) {
-		throw new HttpError(400, "trigger action must be create_task, add_knowledge, or log_event");
+		throw new HttpError(400, "trigger action must be create_task, add_knowledge, log_event, or sync_connector");
 	}
 	return value as TriggerAction;
 }
@@ -161,6 +183,11 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			description: typeof parsed.description === "string" ? parsed.description.slice(0, 2000) : undefined,
 			source: typeof parsed.source === "string" ? parsed.source.slice(0, 120) : undefined,
 			sourceUrl: typeof parsed.sourceUrl === "string" ? parsed.sourceUrl.slice(0, 2000) : undefined,
+			provider: parsed.provider === "google_drive" || parsed.provider === "zoho_workdrive" ? parsed.provider : undefined,
+			grantId: typeof parsed.grantId === "string" ? parsed.grantId.slice(0, 200) : undefined,
+			folderId: typeof parsed.folderId === "string" ? parsed.folderId.slice(0, 500) : undefined,
+			limit: typeof parsed.limit === "number" ? Math.max(1, Math.min(Math.trunc(parsed.limit), 20)) : undefined,
+			query: typeof parsed.query === "string" ? parsed.query.slice(0, 200) : undefined,
 		};
 	} catch {
 		return {};
@@ -203,8 +230,9 @@ export async function dispatchTrigger(
 	await recordTriggerEvent(env, trigger, sourceType, "running", { payload });
 	const traceId = `trigger:${trigger.id}:${Date.now()}`;
 	try {
-		const stub = env.AGENT.get(env.AGENT.idFromName(trigger.instance_id));
 		const config = parseConfig(trigger.config);
+		const stub = env.AGENT.get(env.AGENT.idFromName(trigger.instance_id));
+		let resultPayload: unknown = payload;
 		if (trigger.action === "create_task") {
 			const body = payloadRecord(payload);
 			const title = stringValue(body.title) || config.title || `${trigger.name} trigger`;
@@ -231,12 +259,17 @@ export async function dispatchTrigger(
 				}),
 			}));
 			if (!res.ok) throw new Error(`knowledge dispatch failed (${res.status})`);
+		} else if (trigger.action === "sync_connector") {
+			resultPayload = await syncConnectorTrigger(env, trigger, config);
 		}
 
 		await env.DB.prepare(
 			"UPDATE agent_triggers SET last_run_at = datetime('now'), failure_count = 0, last_error = NULL, updated_at = datetime('now') WHERE id = ?1",
 		).bind(trigger.id).run();
-		const eventId = await recordTriggerEvent(env, trigger, sourceType, "succeeded", { message: `${trigger.action} dispatched`, payload });
+		const eventId = await recordTriggerEvent(env, trigger, sourceType, "succeeded", {
+			message: successMessage(trigger.action, resultPayload),
+			payload: resultPayload,
+		});
 		await logEvent(env, {
 			source: "trigger",
 			event: "trigger.dispatched",
@@ -305,4 +338,214 @@ function stringValue(value: unknown): string {
 function stringifyPayload(payload: unknown): string {
 	if (typeof payload === "string") return payload;
 	return safeJson(payload);
+}
+
+function successMessage(action: TriggerAction, payload: unknown): string {
+	if (action !== "sync_connector") return `${action} dispatched`;
+	const result = payloadRecord(payload);
+	return `connector sync imported ${Number(result.imported || 0)} file(s), skipped ${Number(result.skipped || 0)}`;
+}
+
+interface SyncItem {
+	provider: ConnectorProvider;
+	id: string;
+	name: string;
+	fingerprint: string;
+	sourceUrl?: string;
+	exportFile: () => Promise<{ title: string; content: string; sourceUrl?: string }>;
+}
+
+async function syncConnectorTrigger(
+	env: Env,
+	trigger: TriggerRow,
+	config: TriggerConfig,
+): Promise<{ provider: ConnectorProvider; grantId: string; scanned: number; imported: number; skipped: number; errors: string[] }> {
+	const provider = config.provider;
+	const grantId = config.grantId;
+	if (!provider) throw new Error("sync_connector requires config.provider");
+	if (!grantId) throw new Error("sync_connector requires config.grantId");
+	const grant = await requireConnectorGrant(env, trigger.instance_id, trigger.user_id, provider, grantId);
+	const limit = config.limit ?? 10;
+	const items = provider === "google_drive"
+		? await listDriveSyncItems(env, trigger, grant.resourceId, config)
+		: await listWorkDriveSyncItems(env, trigger, grant.resourceId, config);
+	let scanned = 0;
+	let imported = 0;
+	let skipped = 0;
+	const errors: string[] = [];
+	const stub = env.AGENT.get(env.AGENT.idFromName(trigger.instance_id));
+	for (const item of items) {
+		scanned++;
+		if (imported >= limit) {
+			skipped++;
+			continue;
+		}
+		if (await syncStateMatches(env, trigger, item.provider, item.id, item.fingerprint)) {
+			skipped++;
+			continue;
+		}
+		try {
+			const exported = await item.exportFile();
+			if (!exported.content.trim()) {
+				skipped++;
+				continue;
+			}
+			const res = await stub.fetch(new Request("https://agent/knowledge", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					title: exported.title.slice(0, 500),
+					content: exported.content.slice(0, 100_000),
+					source: item.provider === "google_drive" ? "drive" : "workdrive",
+					sourceUrl: exported.sourceUrl || item.sourceUrl,
+				}),
+			}));
+			if (!res.ok) throw new Error(`knowledge import failed (${res.status})`);
+			const doc = await res.json().catch(() => ({})) as { id?: string };
+			await upsertSyncState(env, trigger, item, doc.id);
+			imported++;
+		} catch (err) {
+			errors.push(`${item.name}: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300));
+		}
+	}
+	return { provider, grantId, scanned, imported, skipped, errors };
+}
+
+async function listDriveSyncItems(
+	env: Env,
+	trigger: TriggerRow,
+	grantedRootId: string,
+	config: TriggerConfig,
+): Promise<SyncItem[]> {
+	const refresh = await readConnectorRefreshToken(env, trigger.user_id, "google_drive", "Google Drive");
+	const accessToken = await mintDriveAccessToken(env, refresh);
+	const folder = config.folderId || grantedRootId;
+	if (!await driveFileDescendsFrom(accessToken, folder, grantedRootId)) {
+		throw new Error("Drive sync folder is outside the granted folder");
+	}
+	const files = await listDriveFolderFiles(accessToken, folder, { query: config.query, pageSize: 50 });
+	return files.filter((file) => !isDriveFolder(file) && isDriveSyncable(file)).map((file) => driveSyncItem(accessToken, file));
+}
+
+function driveSyncItem(accessToken: string, file: DriveFile): SyncItem {
+	const fingerprint = [file.modifiedTime || "", file.size || "", file.mimeType].join(":") || file.id;
+	return {
+		provider: "google_drive",
+		id: file.id,
+		name: file.name,
+		fingerprint,
+		sourceUrl: file.webViewLink,
+		exportFile: async () => {
+			const exported = await exportDriveFile(accessToken, file.id);
+			return {
+				title: exported.name || file.name,
+				content: exported.text,
+				sourceUrl: exported.webViewLink || file.webViewLink,
+			};
+		},
+	};
+}
+
+async function listWorkDriveSyncItems(
+	env: Env,
+	trigger: TriggerRow,
+	grantedRootId: string,
+	config: TriggerConfig,
+): Promise<SyncItem[]> {
+	const refresh = await readConnectorRefreshToken(env, trigger.user_id, "zoho_workdrive", "Zoho WorkDrive");
+	const accessToken = await mintWorkDriveAccessToken(env, refresh);
+	const folder = config.folderId || grantedRootId;
+	if (!await workDriveFolderContainsFile(env, accessToken, grantedRootId, folder)) {
+		throw new Error("WorkDrive sync folder is outside the granted folder");
+	}
+	const page = await listWorkDriveFolder(env, accessToken, folder, { limit: 50 });
+	return page.files.filter((file) => !file.isFolder && isWorkDriveSyncable(file)).map((file) => workDriveSyncItem(env, accessToken, file));
+}
+
+function workDriveSyncItem(env: Env, accessToken: string, file: WorkDriveFile): SyncItem {
+	const fingerprint = [file.modifiedTime || "", file.mimeType || "", file.extension || ""].join(":") || file.id;
+	return {
+		provider: "zoho_workdrive",
+		id: file.id,
+		name: file.name,
+		fingerprint,
+		sourceUrl: file.permalink,
+		exportFile: async () => {
+			const exported = await exportWorkDriveFile(env, accessToken, file.id);
+			return {
+				title: exported.name || file.name,
+				content: exported.text,
+				sourceUrl: exported.permalink || file.permalink,
+			};
+		},
+	};
+}
+
+function isDriveSyncable(file: DriveFile): boolean {
+	if (
+		file.mimeType === "application/vnd.google-apps.document" ||
+		file.mimeType === "application/vnd.google-apps.spreadsheet" ||
+		file.mimeType === "application/vnd.google-apps.presentation"
+	) return true;
+	return (
+		file.mimeType.startsWith("text/") ||
+		file.mimeType === "application/json" ||
+		file.mimeType === "application/xml" ||
+		file.mimeType === "application/x-ndjson" ||
+		file.mimeType === "application/yaml"
+	);
+}
+
+function isWorkDriveSyncable(file: WorkDriveFile): boolean {
+	const mime = (file.mimeType || "").toLowerCase();
+	const ext = (file.extension || file.name.split(".").pop() || "").toLowerCase();
+	return (
+		mime.startsWith("text/") ||
+		mime.includes("json") ||
+		mime.includes("xml") ||
+		["txt", "md", "csv", "json", "xml", "html", "htm", "yaml", "yml", "tsv"].includes(ext)
+	);
+}
+
+async function syncStateMatches(
+	env: Env,
+	trigger: TriggerRow,
+	provider: ConnectorProvider,
+	resourceId: string,
+	fingerprint: string,
+): Promise<boolean> {
+	const row = await env.DB.prepare(
+		`SELECT fingerprint FROM agent_trigger_sync_state
+     WHERE trigger_id = ?1 AND provider = ?2 AND resource_id = ?3`,
+	).bind(trigger.id, provider, resourceId).first<{ fingerprint: string }>();
+	return row?.fingerprint === fingerprint;
+}
+
+async function upsertSyncState(
+	env: Env,
+	trigger: TriggerRow,
+	item: SyncItem,
+	importedDocId?: string,
+): Promise<void> {
+	await env.DB.prepare(
+		`INSERT INTO agent_trigger_sync_state
+       (trigger_id, user_id, instance_id, provider, resource_id, fingerprint, imported_doc_id, source_url, imported_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'), datetime('now'))
+     ON CONFLICT(trigger_id, provider, resource_id) DO UPDATE SET
+       fingerprint = excluded.fingerprint,
+       imported_doc_id = excluded.imported_doc_id,
+       source_url = excluded.source_url,
+       updated_at = datetime('now')`,
+	)
+		.bind(
+			trigger.id,
+			trigger.user_id,
+			trigger.instance_id,
+			item.provider,
+			item.id,
+			item.fingerprint,
+			importedDocId ?? null,
+			item.sourceUrl ?? null,
+		)
+		.run();
 }
