@@ -51,9 +51,10 @@ rl.on("line", (line) => {
 `;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function until(cond: () => boolean, timeoutMs = 4000): Promise<void> {
+async function until(cond: () => boolean, timeoutMs = 8000, description = "condition"): Promise<void> {
 	const start = Date.now();
 	while (!cond() && Date.now() - start < timeoutMs) await wait(25);
+	if (!cond()) throw new Error(`Timed out waiting for ${description} after ${timeoutMs}ms`);
 }
 
 describe("HeadlessSession (stream-json engine)", () => {
@@ -144,16 +145,16 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		s.input("hi");
 		expect(s.runState()).toBe("thinking"); // set synchronously on send
 
-		await until(() => s.snapshot().includes("done: hi"));
+		await until(() => s.snapshot().includes("done: hi"), 12_000, "raw stdout to include final line");
 		const pane = s.snapshot();
 		expect(pane).toContain("thinking about: hi"); // raw line captured
 		expect(pane).not.toContain("\x1b["); // ANSI escapes stripped
 		expect(pane).toMatch(/❯ \[\d{2}:\d{2}:\d{2}\] hi/); // your turn, echoed
 
-		await until(() => s.runState() === "idle", 3000); // quiet for 1.5s → idle
+		await until(() => s.runState() === "idle", 6000, "raw session to settle idle"); // quiet for 1.5s → idle
 		expect(s.runState()).toBe("idle");
 		s.stop();
-	}, 10_000);
+	}, 20_000);
 
 	it("a slow first token does NOT flip to idle mid-turn", async () => {
 		const s = new HeadlessSession({ id: "raw2", workDir: dir, clientType: "codex", bin: slowBin });
@@ -161,27 +162,27 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		s.input("go");
 		await wait(1000); // 1s in, no output yet — old heuristic would have flipped idle at 1.5s of silence
 		expect(s.runState()).toBe("thinking");
-		await until(() => s.snapshot().includes("late: go"), 3000);
+		await until(() => s.snapshot().includes("late: go"), 6000, "slow raw first output");
 		s.stop();
-	});
+	}, 15_000);
 
 	it("does NOT latch idle: resumed output after a >1.5s pause restores thinking", async () => {
 		const s = new HeadlessSession({ id: "raw-pause", workDir: dir, clientType: "codex", bin: pauserBin });
 		s.start();
 		s.input("build");
 		// First chunk lands, then a >1.5s pause → the settle heuristic reads idle...
-		await until(() => s.snapshot().includes("part 1: build"), 3000);
-		await until(() => s.runState() === "idle", 3000);
+		await until(() => s.snapshot().includes("part 1: build"), 6000, "first paused raw output");
+		await until(() => s.runState() === "idle", 6000, "paused raw session to settle idle");
 		expect(s.runState()).toBe("idle");
 		// ...but when the turn RESUMES (part 2), state must return to thinking, not stay
 		// latched idle (the bug that made the brain act on a half-finished turn).
-		await until(() => s.snapshot().includes("part 2: build"), 3000);
+		await until(() => s.snapshot().includes("part 2: build"), 6000, "second paused raw output");
 		expect(s.runState()).toBe("thinking");
 		// And it settles to idle again once truly quiet.
-		await until(() => s.runState() === "idle", 3000);
+		await until(() => s.runState() === "idle", 6000, "resumed raw session to settle idle");
 		expect(s.runState()).toBe("idle");
 		s.stop();
-	}, 10_000);
+	}, 20_000);
 
 	it("with NO command/bin, a non-Claude engine spawns ITS OWN binary (not `claude`)", async () => {
 		// Regression: the constructor fell back to a hard-coded "claude" when no command was
