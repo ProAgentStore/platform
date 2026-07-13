@@ -58,6 +58,8 @@ Workflow brain -> RelayDO -> local runner -> tmux CLI session
 
 This allows long-running coding sessions while preserving the account-level control plane and audit model.
 
+Coder also supports multiple connected machines for the same private instance. Each session is pinned to the runner node that owns it, so different repos can run on different machines concurrently. See [Coder Multi-Machine Runtime](coder-multi-machine.md).
+
 ## Safety Rules
 
 - The runner must authenticate to ProAgentStore.

@@ -82,7 +82,7 @@ Runtime-backed agents use `pags up`, which runs a local browser/CLI runtime from
 Current runtime-backed surfaces:
 
 - Job Application Assistant: Cloudflare Workflow brain drives Playwright browser actions.
-- Coder: Cloudflare Workflow brain drives local CLI sessions in tmux.
+- Coder: Cloudflare Workflow brain drives local CLI sessions in tmux. Coder sessions can route to node-scoped runners when multiple machines are connected to the same instance.
 
 ## Docs Plane
 

@@ -205,7 +205,7 @@ export default {
 
 		// Dynamic sitemap — fetches published agents from API
 		if (path === "/sitemap.xml") {
-			const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/", "/docs/connectors/", "/docs/mcp/", "/docs/browser-runtime/", "/docs/architecture/", "/docs/skill-publishing/", "/console/", "/changelog/"];
+			const staticUrls = ["/", "/about/", "/get-started/", "/skills/", "/skills/proagentstore-mcp-operator/", "/docs/", "/docs/connectors/", "/docs/mcp/", "/docs/browser-runtime/", "/docs/coder-multi-machine/", "/docs/architecture/", "/docs/skill-publishing/", "/console/", "/changelog/"];
 			let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n';
 			for (const u of staticUrls) {
 				xml += `  <url><loc>https://proagentstore.online${u}</loc><changefreq>weekly</changefreq></url>\n`;

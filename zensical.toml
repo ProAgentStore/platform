@@ -12,6 +12,7 @@ nav = [
   { "Triggers" = "triggers.md" },
   { "MCP" = "mcp.md" },
   { "Browser Runtime" = "browser-runtime.md" },
+  { "Coder Multi-Machine" = "coder-multi-machine.md" },
   { "Architecture" = "architecture.md" },
   { "Skill Publishing" = "skill-publishing.md" }
 ]

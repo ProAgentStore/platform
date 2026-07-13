@@ -129,16 +129,17 @@ Real browser / real repo
 ```bash
 npm i -g @proagentstore/cli
 pags login
-pags up            # one multiplexed runner for ALL your instances (apply, Coder, …)
+pags up            # one multiplexed runner for ALL your instances on this machine
 ```
 
-`pags up` is the canonical runner: **one process + one connection serves every active instance**. It defaults to a **WebSocket relay** (the runner connects outbound to a per-instance `RelayDO` — no cloudflared, no public server, no inbound tunnel). Cloud → `callRunner()` → `RelayDO` → WebSocket → runner. Cloudflared tunnels remain only as a legacy `--tunnel quick|named` option.
+`pags up` is the canonical runner: **one process serves every active instance on that machine**. It defaults to a **WebSocket relay** (the runner connects outbound to a per-instance or node-scoped `RelayDO` — no cloudflared, no public server, no inbound tunnel). Cloud → `callRunner()` → `RelayDO` → WebSocket → runner. Cloudflared tunnels remain only as a legacy `--tunnel quick|named` option.
 
-- `pags up --force` — take over from another machine (old machine's sessions suspend, resume on reconnect)
+- Coder can run multiple machines against the same instance at once. Each coding session is pinned to the runner node that owns it; different repos can run on different machines concurrently.
+- `pags up --force` — replace the current relay socket when debugging stale local connections
 - `pags up --instance <id>` — pin to one agent (debug)
 - `pags up --headless` — headless mode
 
-The job-application agent runs on this runtime via the LLM-driven apply pipeline below (not a fixed `job.apply_basic` task): `POST /v1/instances/:id/apply { url, resumePath }` starts `JobApplyWorkflow`, which drives the runtime's `/browser/snapshot` + `/browser/act` endpoints. The **Coder** agent runs its chosen CLI (Claude Code / Codex / Grok) in a tmux pane on the same runtime.
+The job-application agent runs on this runtime via the LLM-driven apply pipeline below (not a fixed `job.apply_basic` task): `POST /v1/instances/:id/apply { url, resumePath }` starts `JobApplyWorkflow`, which drives the runtime's `/browser/snapshot` + `/browser/act` endpoints. The **Coder** agent runs its chosen CLI (Claude Code / Codex / Grok) in a tmux pane on the session's assigned runner node.
 
 ### Job application agent (LLM-driven apply)
 
@@ -189,7 +190,7 @@ Public discovery pages:
 | invoice-parser | Tool | POST text → structured JSON extraction |
 | email-drafter | Agent | Brand-voice KB → AI email drafts |
 | **job-application-assistant** | Agent | LLM-driven apply: Brain (`JobApplyWorkflow`) drives the local browser runtime to fill + submit real applications |
-| **Coder** (`coder`) | Agent | Multi-CLI coding agent — runs Claude Code / Codex / Grok in tmux via `pags up`; Engine · Pilot · Co-pilot · Loop · Overseer · Chat |
+| **Coder** (`coder`) | Agent | Multi-CLI coding agent — runs Claude Code / Codex / Grok in tmux via `pags up`; supports multiple connected machines per instance; Engine · Pilot · Co-pilot · Loop · Overseer · Chat |
 | **Repo Chat** (`repo-chat`) | Agent | Read-only chat with any GitHub repo(s) — server-side ingest + RAG, no local runner |
 
 ### Other capabilities
