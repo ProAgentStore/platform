@@ -152,6 +152,12 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
   <script>
     const API = 'https://api.proagentstore.online';
     function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+    function isEmail(value) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '')); }
+    function publicHandle(value) {
+      const label = String(value || '').trim();
+      if (!label) return '';
+      return isEmail(label) ? 'creator' : label.replace(/^@/, '');
+    }
 
     async function loadDeveloper() {
       const match = window.location.pathname.match(/\/developers\/([^/]+)/);
@@ -165,8 +171,8 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
 
         document.title = `${dev.name || dev.login} — ProAgentStore Developer`;
         document.getElementById('d-avatar').src = dev.avatar || '';
-        document.getElementById('d-name').textContent = dev.name || dev.login;
-        document.getElementById('d-login').textContent = `@${dev.login}`;
+        document.getElementById('d-name').textContent = dev.name || publicHandle(dev.login) || 'Creator';
+        document.getElementById('d-login').textContent = publicHandle(dev.login) ? `@${publicHandle(dev.login)}` : '';
         document.getElementById('d-bio').textContent = dev.bio || '';
 
         // Badges

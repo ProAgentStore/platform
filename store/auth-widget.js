@@ -15,10 +15,19 @@
 	const nav = document.querySelector("header nav");
 	if (!nav) return;
 
+	function isEmail(value) {
+		return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || ""));
+	}
+
+	function accountLabel(user) {
+		const label = user?.name || user?.login || "Account";
+		return isEmail(label) ? "Account" : String(label).replace(/^@/, "");
+	}
+
 	// Create container for auth UI
 	const authEl = document.createElement("span");
 	authEl.style.cssText =
-		"display:inline-flex;align-items:center;gap:0.5rem;margin-left:0.25rem";
+		"display:inline-flex;align-items:center;gap:0.5rem;margin-left:0.25rem;min-width:0";
 
 	if (!token) {
 		// Not signed in — show sign-in link
@@ -54,18 +63,19 @@
 			// Valid — show avatar + link to console profile
 			const wrapper = document.createElement("a");
 			wrapper.href = "/console/";
+			wrapper.setAttribute("aria-label", "Open console account");
 			wrapper.style.cssText =
-				"display:inline-flex;align-items:center;gap:0.4rem;text-decoration:none";
+				"display:inline-flex;align-items:center;gap:0.4rem;text-decoration:none;border:1px solid #262626;border-radius:999px;padding:0.18rem 0.5rem 0.18rem 0.18rem;max-width:150px";
 
 			const avatar = document.createElement("img");
 			avatar.src = user.avatar || "";
-			avatar.alt = user.login;
+			avatar.alt = "";
 			avatar.style.cssText =
-				"width:26px;height:26px;border-radius:50%;border:2px solid #262626";
+				"width:24px;height:24px;border-radius:50%;border:1px solid #404040;object-fit:cover;background:#171717";
 
 			const name = document.createElement("span");
-			name.textContent = user.login;
-			name.style.cssText = "font-size:0.82rem;color:#a3a3a3;font-weight:500";
+			name.textContent = accountLabel(user);
+			name.style.cssText = "font-size:0.8rem;color:#a3a3a3;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
 
 			wrapper.appendChild(avatar);
 			wrapper.appendChild(name);
