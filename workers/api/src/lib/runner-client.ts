@@ -1,5 +1,5 @@
 import { decryptKey } from "./crypto.js";
-import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
+import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
 /** A resolved connection to a user's local browser runner (via WebSocket relay). */
@@ -58,6 +58,22 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
 		runnerNode: resolvedNode || undefined,
 		relayName: relayNameForInstance(instanceId, resolvedNode),
 	};
+}
+
+/**
+ * Resolve the runner for an instance honoring its node binding (`config.runnerNode`).
+ * This is the connection any non-coding feature (chat tools, apply, etc.) should use so
+ * that a user with several machines can say "this agent runs on that machine" and have it
+ * respected. When pinned to a node that is online → use it; otherwise fall back to the
+ * legacy default runtime (last-registered), so pinning never strands a working runner.
+ */
+export async function getBoundRunnerConn(env: Env, instanceId: string, userId: string): Promise<RunnerConn | null> {
+	const node = await readInstanceRunnerNode(env, instanceId, userId).catch(() => "");
+	if (node) {
+		const pinned = await getRunnerConn(env, instanceId, userId, node);
+		if (pinned) return pinned;
+	}
+	return getRunnerConn(env, instanceId, userId);
 }
 
 export async function relayConnected(env: Env, instanceId: string, runnerNode?: string | null): Promise<boolean> {

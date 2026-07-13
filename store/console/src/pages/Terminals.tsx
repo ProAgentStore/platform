@@ -2,9 +2,9 @@ import { useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { Terminal, RefreshCw, Bot, GitBranch, Circle } from "lucide-react";
+import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin } from "lucide-react";
 
-interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean }
+interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean }
 interface TerminalSession { sessionId: string; instanceId: string; repoId: string; repoName: string | null; engine: string; status: string; issueNumber?: number; issueTitle?: string; updatedAt: string; terminalTail?: string | null }
 interface TerminalNode { node: string; placement: string; runnerVersion: string; lastSeenAt: string | null; connected: boolean; instances: TerminalInstance[]; sessions: TerminalSession[] }
 
@@ -78,13 +78,14 @@ export default function Terminals() {
 								</div>
 							</div>
 
-							{/* Agents served by this machine */}
+							{/* Agents served by this machine. A 📌 marks agents PINNED to run here. */}
 							<div className="px-4 py-2.5 flex flex-wrap gap-1.5 border-b border-line/60">
 								<span className="text-[0.7rem] uppercase tracking-wide text-muted-soft self-center mr-1">Agents</span>
 								{n.instances.map((i) => (
-									<Link key={i.instanceId} to={`/instances/${i.instanceId}`} className="flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border border-line text-ink no-underline hover:border-accent transition-colors">
+									<Link key={i.instanceId} to={`/instances/${i.instanceId}`} title={i.bound ? "Pinned to run on this machine" : "Served by this machine"} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg border no-underline transition-colors ${i.bound ? "border-accent/50 bg-accent/10 text-ink" : "border-line text-ink hover:border-accent"}`}>
 										<Circle size={7} className={i.connected ? "fill-green text-green" : "fill-muted-soft text-muted-soft"} />
 										<Bot size={12} className="text-muted" />{i.name}
+										{i.bound && <Pin size={10} className="text-accent" />}
 									</Link>
 								))}
 							</div>

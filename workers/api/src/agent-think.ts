@@ -12,7 +12,7 @@ import { runUserWorkersAi } from "./lib/user-ai.js";
 import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
-import { callRunner, getRunnerConn, isRunnerOnline, READ_TIMEOUT_MS } from "./lib/runner-client.js";
+import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "./lib/runner-client.js";
 import type { Env } from "./types.js";
 
 /**
@@ -190,10 +190,13 @@ export async function runAgentThink(opts: {
 			const repos = await listRepos(env, state.agentId, userId);
 			if (repos.length > 0) {
 				hasCodingContext = true;
-				// Authoritative LIVE check: is the runner WS actually connected right now? The
-				// DB session status can read "active" after an unclean disconnect, so ask the
-				// RelayDO. This lets the chat say "run `pags up`" instead of implying live work.
-				const runnerOnline = await isRunnerOnline(env, state.agentId);
+				// Resolve the runner honoring this instance's node binding (config.runnerNode),
+				// then ask the RelayDO — on the SAME node-scoped relay the runner connects to —
+				// whether it's actually live right now. DB session status can read "active" after
+				// an unclean disconnect, so the relay is authoritative. This also fixes the gap
+				// where a node-connected runner looked OFFLINE to a node-less check.
+				const boundConn = await getBoundRunnerConn(env, state.agentId, userId).catch(() => null);
+				const runnerOnline = boundConn ? await relayConnected(env, state.agentId, boundConn.runnerNode ?? null) : false;
 				systemPrompt += runnerOnline
 					? "\n\n## Runner status: ONLINE — the local runner is connected, so the sessions below can reflect live activity."
 					: "\n\n## Runner status: OFFLINE — the local runner is NOT connected right now. Nothing is running; the sessions below show only their LAST captured state. If the user wants to run, search, or fix code, tell them to start the runner first with `pags up` (then use the Coding tab). Do not imply anything is happening live.";
@@ -216,7 +219,7 @@ export async function runAgentThink(opts: {
 					// parallel) so the chat reflects the LIVE terminal, not a persisted snapshot that
 					// only refreshes while the console Coding tab is polling. Fall back to the last
 					// saved snapshot on any miss — never block the chat on a runner round-trip.
-					const conn = runnerOnline ? await getRunnerConn(env, state.agentId, userId).catch(() => null) : null;
+					const conn = runnerOnline ? boundConn : null;
 					const terminals = await Promise.all(active.map(async (s) => {
 						// Keep the FULL snapshot (pane + alive + runState), not just pane — those
 						// fields are what let describeTerminal tell live activity from idle scrollback.

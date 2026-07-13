@@ -53,6 +53,22 @@ describe("groupTerminalNodes", () => {
 		expect(nodes[0].instances[0].connected).toBe(false);
 	});
 
+	it("marks an instance bound when its config pins runnerNode to this machine", () => {
+		const nodes = groupTerminalNodes([
+			nodeRow({ runner_node: "macbook", instance_config: JSON.stringify({ runnerNode: "macbook" }) }),
+			nodeRow({ runner_node: "desktop", instance_id: "i2", instance_config: JSON.stringify({ runnerNode: "macbook" }) }),
+		], []);
+		const mac = nodes.find((n) => n.node === "macbook")!;
+		const desk = nodes.find((n) => n.node === "desktop")!;
+		expect(mac.instances[0].bound).toBe(true);  // pinned here
+		expect(desk.instances[0].bound).toBe(false); // pinned elsewhere → merely served here
+	});
+
+	it("leaves bound false when no pin is set", () => {
+		const nodes = groupTerminalNodes([nodeRow()], []);
+		expect(nodes[0].instances[0].bound).toBe(false);
+	});
+
 	it("skips rows with an empty runner_node", () => {
 		expect(groupTerminalNodes([nodeRow({ runner_node: "" })], [])).toHaveLength(0);
 	});

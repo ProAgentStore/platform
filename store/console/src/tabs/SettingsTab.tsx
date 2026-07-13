@@ -45,6 +45,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [agentSettings, setAgentSettings] = useState<Record<string, string | number | boolean>>({});
 	const [settingsMsg, setSettingsMsg] = useState("");
 	const [runtimeInfo, setRuntimeInfo] = useState<Record<string, unknown> | null>(null);
+	// Node binding: which machine this instance runs on ("" = automatic).
+	const [runnerNode, setRunnerNode] = useState("");
+	const [runnerNodes, setRunnerNodes] = useState<string[]>([]);
+	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
 	const [sensitivity, setSensitivity] = useState(1);
@@ -105,6 +109,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			try {
 				const d = await api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`);
 				setRuntimeInfo(d);
+			} catch {}
+			try {
+				const d = await api<{ runnerNode: string | null; nodes: string[] }>(`/v1/instances/${instanceId}/runner-node`);
+				setRunnerNode(d.runnerNode || "");
+				setRunnerNodes(d.nodes || []);
 			} catch {}
 			try {
 				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }> }>(`/v1/instances/${instanceId}/translation`);
@@ -441,6 +450,17 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
+	const saveRunnerNode = async (node: string) => {
+		setRunnerNode(node);
+		setRunnerNodeMsg("Saving…");
+		try {
+			await api(`/v1/instances/${instanceId}/runner-node`, { method: "PUT", body: JSON.stringify({ runnerNode: node || null }) });
+			setRunnerNodeMsg(node ? `Pinned to ${node}` : "Set to automatic");
+		} catch (e) {
+			setRunnerNodeMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
 	const saveInstName = async () => {
 		try {
 			await api(`/v1/instances/${instanceId}/name`, { method: "PUT", body: JSON.stringify({ name: instName }) });
@@ -571,6 +591,27 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					) : (
 						"Checking runner status..."
 					)}
+				</div>
+
+				{/* Node binding — pin this agent to a specific machine (CLI). Platform-wide:
+				    any agent can be bound to any of your connected nodes. */}
+				<div className="mt-3 pt-3 border-t border-line/60">
+					<label className="block text-sm font-semibold mb-1">Runs on</label>
+					<select
+						value={runnerNode}
+						onChange={(e) => saveRunnerNode(e.target.value)}
+						className="w-full sm:w-auto bg-panel border border-line rounded-lg px-2.5 py-1.5 text-sm"
+					>
+						<option value="">Automatic (any connected machine)</option>
+						{/* The pinned node may not be in the currently-registered list (machine offline) — keep it selectable. */}
+						{runnerNode && !runnerNodes.includes(runnerNode) && <option value={runnerNode}>{runnerNode} (offline)</option>}
+						{runnerNodes.map((n) => <option key={n} value={n}>{n}</option>)}
+					</select>
+					<p className="text-xs text-muted-soft mt-1">
+						Pin this agent to one of your machines running <code className="text-accent">pags up</code>. Its runner tasks (chat tools, apply, coding) route there.
+						{runnerNodes.length === 0 && !runnerNode && <> No machines connected yet — see <span className="text-accent">Terminals</span>.</>}
+					</p>
+					{runnerNodeMsg && <p className="text-xs text-muted mt-0.5">{runnerNodeMsg}</p>}
 				</div>
 			</div>
 

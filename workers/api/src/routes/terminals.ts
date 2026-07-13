@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { relayConnected } from "../lib/runner-client.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
+import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import type { Env } from "../types.js";
 
 /**
@@ -45,6 +46,9 @@ export interface TerminalInstance {
 	agentSlug: string | null;
 	status: string;
 	connected: boolean;
+	/** True when this instance is PINNED to run on this machine (config.runnerNode). A
+	 *  bound instance routes its runner calls here even when another node is also connected. */
+	bound: boolean;
 }
 
 export interface TerminalSession {
@@ -101,7 +105,9 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 			byNode.set(r.runner_node, n);
 		}
 		if (!n.instances.some((i) => i.instanceId === r.instance_id)) {
-			n.instances.push({ instanceId: r.instance_id, name: instanceName(r.instance_config, r.agent_name, r.agent_slug), agentSlug: r.agent_slug, status: r.status, connected: false });
+			// Bound = this instance is explicitly pinned to THIS machine (not merely served by it).
+			const bound = parseBoundRunnerNode(r.instance_config) === r.runner_node;
+			n.instances.push({ instanceId: r.instance_id, name: instanceName(r.instance_config, r.agent_name, r.agent_slug), agentSlug: r.agent_slug, status: r.status, connected: false, bound });
 		}
 	}
 	for (const s of sessionRows) {

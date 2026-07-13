@@ -69,6 +69,7 @@ export {
 	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
+import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -337,6 +338,46 @@ instanceRoutes.get("/:instanceId/runtime", async (c) => {
 	const runtime = await getRuntime(c.env, instanceId, session.uid);
 	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
 	return c.json({ runtime: runtime ? runtimeResponse(runtime) : null, nodes: nodes.map(runtimeNodeResponse) });
+});
+
+/**
+ * Node binding: which machine this instance runs on. A platform primitive — ANY
+ * agent (not just Coder) can be pinned to a specific connected node, and its runner
+ * calls (chat tools, apply, coding defaults) route there. GET returns the current
+ * pin + the nodes currently available to pin to.
+ */
+instanceRoutes.get("/:instanceId/runner-node", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const cfgRow = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+		.bind(instanceId, session.uid)
+		.first<{ config: string | null }>();
+	const runnerNode = parseBoundRunnerNode(cfgRow?.config);
+	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
+	// Distinct node names known for this instance (each registration = one machine).
+	const available = [...new Set(nodes.map((n) => normalizeRunnerNode(n.runner_node)).filter(Boolean))];
+	return c.json({ runnerNode: runnerNode || null, nodes: available });
+});
+
+/** Pin (or clear, with an empty/null value) the node this instance runs on. */
+instanceRoutes.put("/:instanceId/runner-node", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
+	const node = normalizeRunnerNode(body.runnerNode);
+	// Read-merge-write the instance config so we never clobber sibling fields.
+	const row = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+		.bind(instanceId, session.uid)
+		.first<{ config: string | null }>();
+	let cfg: Record<string, unknown> = {};
+	try { cfg = JSON.parse(row?.config || "{}") as Record<string, unknown>; } catch { cfg = {}; }
+	if (node) cfg.runnerNode = node; else delete cfg.runnerNode;
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, session.uid)
+		.run();
+	return c.json({ runnerNode: node || null });
 });
 
 /** Heartbeat from user/CLI after checking the browser runtime is online. */

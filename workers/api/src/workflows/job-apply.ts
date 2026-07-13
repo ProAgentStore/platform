@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { decideAction, describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
-import { callRunner, getRunnerConn, type RunnerConn } from "../lib/runner-client.js";
+import { callRunner, getBoundRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
 import { decryptKey } from "../lib/crypto.js";
@@ -61,7 +61,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			await logError(this.env, { source: "job-apply", userId, status: 500, message: `apply workflow crashed: ${msg}`, context: { instanceId, taskId, url: job?.url } });
 			// Best-effort: don't leave the task stuck "running" after a crash.
 			try {
-				const conn = await getRunnerConn(this.env, instanceId, userId);
+				const conn = await getBoundRunnerConn(this.env, instanceId, userId);
 				if (conn) await callRunner(conn, "/browser/complete", { taskId, outcome: "failed", detail: msg.slice(0, 300) });
 			} catch {
 				/* best-effort */
@@ -75,7 +75,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		const env = this.env;
 
 		// Resolved fresh (not journaled) so the runner token never lands in state.
-		const conn = await getRunnerConn(env, instanceId, userId);
+		const conn = await getBoundRunnerConn(env, instanceId, userId);
 		if (!conn) {
 			return { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
 		}
