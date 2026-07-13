@@ -9,6 +9,7 @@ import AgentDetail from "./pages/AgentDetail";
 import InstanceDetail from "./pages/InstanceDetail";
 import Profile from "./pages/Profile";
 import Notifications from "./pages/Notifications";
+import Terminals from "./pages/Terminals";
 import RunDetail from "./pages/RunDetail";
 
 function AuthGate() {
@@ -38,6 +39,7 @@ function AuthGate() {
 				<Route path="instances/:id/*" element={<InstanceDetail />} />
 				<Route path="dashboard" element={<Dashboard />} />
 				<Route path="tools" element={<Dashboard />} />
+				<Route path="terminals" element={<Terminals />} />
 				<Route path="profile" element={<Profile />} />
 				<Route path="notifications" element={<Notifications />} />
 				<Route path="*" element={<Navigate to="agents" replace />} />
