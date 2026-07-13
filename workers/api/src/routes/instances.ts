@@ -13,6 +13,7 @@ import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import { attachGlossesToMessages, registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
+import { relayConnected } from "../lib/runner-client.js";
 import type { Env } from "../types.js";
 import {
 	callRuntime,
@@ -547,21 +548,12 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		// Persist offline only when the probe fails AND the heartbeat has gone stale.
 		const effective = online || recentlySeen ? "online" : "offline";
 		await updateRuntimeStatus(c.env, instanceId, session.uid, effective);
-		// Check relay status (is runner connected via WebSocket?)
-		let relayConnected = false;
-		if (c.env.RELAY) {
-			try {
-				const stub = c.env.RELAY.get(c.env.RELAY.idFromName(instanceId));
-				const relayRes = await stub.fetch(new Request("https://relay/status"));
-				const relayData = await relayRes.json().catch(() => ({})) as { connected?: boolean };
-				relayConnected = relayData.connected === true;
-			} catch { /* relay probe failed */ }
-		}
+		const relayIsConnected = await relayConnected(c.env, instanceId, runtime.runner_node);
 		return c.json({
 			runtime: runtimeResponse({ ...runtime, status: effective, last_seen_at: new Date().toISOString() }),
 			health,
 			capabilities,
-			relay: { connected: relayConnected },
+			relay: { connected: relayIsConnected, runnerNode: runtime.runner_node || null },
 		});
 	} catch (error) {
 		// Probe threw (network blip). A recently-seen runner stays online — don't clobber it.

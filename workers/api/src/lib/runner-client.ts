@@ -60,16 +60,10 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
 	};
 }
 
-/**
- * Live check: is a runner WebSocket actually connected for this instance right now?
- * Queries the RelayDO (authoritative — it holds the socket), NOT the DB `status`
- * column, which can read "active"/"online" after an unclean disconnect. Cheap: the DO
- * is hibernated when idle. Returns false on any error (treat unknown as offline).
- */
-export async function isRunnerOnline(env: Env, instanceId: string): Promise<boolean> {
+export async function relayConnected(env: Env, instanceId: string, runnerNode?: string | null): Promise<boolean> {
 	try {
 		if (!env.RELAY) return false;
-		const stub = env.RELAY.get(env.RELAY.idFromName(instanceId));
+		const stub = env.RELAY.get(env.RELAY.idFromName(relayNameForInstance(instanceId, runnerNode)));
 		const res = await stub.fetch(new Request("https://relay/status"));
 		if (!res.ok) return false;
 		const data = (await res.json()) as { connected?: boolean };
@@ -77,6 +71,16 @@ export async function isRunnerOnline(env: Env, instanceId: string): Promise<bool
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * Live check: is a runner WebSocket actually connected for this instance right now?
+ * Queries the RelayDO (authoritative — it holds the socket), NOT the DB `status`
+ * column, which can read "active"/"online" after an unclean disconnect. Cheap: the DO
+ * is hibernated when idle. Returns false on any error (treat unknown as offline).
+ */
+export async function isRunnerOnline(env: Env, instanceId: string, runnerNode?: string | null): Promise<boolean> {
+	return relayConnected(env, instanceId, runnerNode);
 }
 
 /** Short timeout for READ-type runner commands (terminal capture, snapshots, status). A

@@ -1,17 +1,22 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { callRunner, isRunnerOnline, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
+import { callRunner, isRunnerOnline, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
 import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
+type MockRelay = {
+	idFromName: (name: string) => { name: string };
+	get: (id: { name: string }) => { fetch: (req: Request) => Promise<Response> };
+};
+
 /** Build a mock RELAY namespace. */
-function mockRelay(handler: (req: Request) => Promise<Response>) {
+function mockRelay(handler: (req: Request) => Promise<Response>): MockRelay {
 	return {
 		idFromName: (name: string) => ({ name }),
-		get: (_id: any) => ({ fetch: handler }),
+		get: () => ({ fetch: handler }),
 	};
 }
 
-function mockConn(overrides: Partial<RunnerConn & { RELAY?: any }> = {}): RunnerConn {
+function mockConn(overrides: Partial<RunnerConn & { RELAY?: MockRelay }> = {}): RunnerConn {
 	return {
 		endpointUrl: "http://127.0.0.1:49171",
 		token: "runner-tok",
@@ -47,6 +52,19 @@ describe("isRunnerOnline", () => {
 		const boom = mockRelay(async () => { throw new Error("DO down"); });
 		expect(await isRunnerOnline(envWith(boom), "inst-1")).toBe(false);
 	});
+
+	it("checks node-scoped relay status when a runner node is provided", async () => {
+		let seenName = "";
+		const relay = {
+			idFromName: (name: string) => {
+				seenName = name;
+				return { name };
+			},
+			get: () => ({ fetch: async () => Response.json({ connected: true }) }),
+		};
+		expect(await relayConnected(envWith(relay), "inst-1", "macbook")).toBe(true);
+		expect(seenName).toBe("inst-1:node:macbook");
+	});
 });
 
 describe("callRunner (relay-only)", () => {
@@ -54,7 +72,7 @@ describe("callRunner (relay-only)", () => {
 
 	it("sends command through relay and returns result", async () => {
 		const relay = mockRelay(async (req) => {
-			const body = await req.json() as any;
+			const body = await req.json() as { method?: string; path?: string };
 			expect(body.method).toBe("POST");
 			expect(body.path).toBe("/browser/snapshot");
 			return Response.json({ url: "https://job.com", snapshot: "<html>" });

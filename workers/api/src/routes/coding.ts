@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
-import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { callRunner, getRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
 import { getUserProviderKey, runUserWorkersAi } from "../lib/user-ai.js";
@@ -81,6 +81,11 @@ async function startSessionOnRunner(
 
 async function getSessionRunnerConn(env: Env, instanceId: string, uid: string, session: CodingSessionRecord) {
 	return getRunnerConn(env, instanceId, uid, session.runnerNode ?? null);
+}
+
+async function getDefaultRunnerConn(env: Env, instanceId: string, uid: string) {
+	const runtime = await getRuntime(env, instanceId, uid);
+	return getRunnerConn(env, instanceId, uid, runtime?.runner_node ?? null);
 }
 
 /**
@@ -1106,7 +1111,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 /** Kill tmux sessions on the runner (orphaned, specific, or all pags-*). */
 codingRoutes.post("/:instanceId/coding/kill-tmux", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
 	if (!conn) return c.json({ error: "Runner not connected", runnerConnected: false }, 502);
 	const body = await c.req.json<{ sessions?: string[]; orphansOnly?: boolean }>();
 	const result = await callRunner(conn, "/coding/kill-tmux", body);
@@ -1116,7 +1121,7 @@ codingRoutes.post("/:instanceId/coding/kill-tmux", async (c) => {
 /** List directories on the runner (for remote browsing). */
 codingRoutes.get("/:instanceId/coding/browse", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
 	if (!conn) return c.json({ error: "Runner not connected" }, 502);
 	const dir = c.req.query("dir") || "~";
 	const result = await callRunner(conn, "/coding/browse", { dir });
@@ -1153,10 +1158,11 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 	};
 
 	// 2. Live runner probe
-	const conn = await getRunnerConn(env, instanceId, uid);
+	const conn = await getRunnerConn(env, instanceId, uid, runtimeRow?.runner_node ?? null);
 	let runnerHealth: unknown = null;
 	let runnerDiag: unknown = null;
 	let runnerReachable = false;
+	const relayName = conn?.relayName ?? null;
 	if (conn) {
 		try {
 			runnerHealth = await callRunner<unknown>(conn, "/health", undefined);
@@ -1170,18 +1176,8 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 			runnerDiag = { error: e instanceof Error ? e.message : String(e) };
 		}
 	}
-	// Check relay status
-	let relayConnected = false;
-	if (env.RELAY) {
-		try {
-			const stub = env.RELAY.get(env.RELAY.idFromName(instanceId));
-			const relayRes = await stub.fetch(new Request("https://relay/status"));
-			const relayData = await relayRes.json().catch(() => ({})) as { connected?: boolean };
-			relayConnected = relayData.connected === true;
-		} catch { /* relay probe failed */ }
-	}
-	// Runner is effectively reachable if either the direct probe worked OR the relay is connected
-	const effectivelyReachable = runnerReachable || relayConnected;
+	const relayIsConnected = await relayConnected(env, instanceId, runtimeRow?.runner_node ?? null);
+	const effectivelyReachable = runnerReachable;
 
 	(runner as Record<string, unknown>).reachable = effectivelyReachable;
 	(runner as Record<string, unknown>).health = runnerHealth;
@@ -1259,7 +1255,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 
 	if (!runtimeRow) {
 		issues.push({ severity: "error", message: "No runner registered for this instance", fix: "Run `pags up` to connect your machine" });
-	} else if (runtimeRow.status === "offline" && !relayConnected) {
+	} else if (runtimeRow.status === "offline" && !relayIsConnected) {
 		issues.push({ severity: "error", message: "Runner status is offline", fix: "Restart `pags up` to reconnect" });
 	} else if (!effectivelyReachable) {
 		issues.push({ severity: "error", message: "Runner registered but not reachable", fix: "Restart `pags up` to reconnect" });
@@ -1283,7 +1279,8 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 		summary: {
 			runnerOnline: effectivelyReachable,
 			runnerStatus: runner.status,
-			relayConnected,
+			relayConnected: relayIsConnected,
+			relayName,
 			totalRepos: repos.length,
 			totalSessions: sessions.length,
 			activeSessions: activeSessions.length,
@@ -1291,7 +1288,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 			issueCount: issues.filter((i) => i.severity === "error" || i.severity === "warn").length,
 		},
 		runner,
-		relay: { connected: relayConnected },
+		relay: { connected: relayIsConnected, relayName, runnerNode: runtimeRow?.runner_node ?? null },
 		tmux: diagData ? {
 			trackedSessions: diagData.tracked?.length ?? 0,
 			orphanedSessions: diagData.orphanedTmux ?? [],
