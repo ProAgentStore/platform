@@ -49,7 +49,7 @@ export default function Layout() {
 	return (
 		<div className="flex flex-col h-dvh overflow-hidden">
 			{/* Denser in instance view (navHidden): every px of chrome is space the chat
-			    loses — tighter gaps, slimmer bar, icon-only logo. */}
+			    loses — tighter gaps, slimmer bar, icon-only logo on mobile. */}
 			<header className={`border-b border-line-strong bg-panel z-60 flex items-center shrink-0 ${navHidden ? "gap-1.5 px-2 h-10" : "gap-2 px-3 h-12"}`} style={{ boxShadow: "0 1px 6px rgba(0,0,0,0.4)" }}>
 				{/* Logo — always visible */}
 				<a
@@ -58,16 +58,14 @@ export default function Layout() {
 						e.preventDefault();
 						navigate("/");
 					}}
-					className={`items-center gap-1.5 no-underline text-ink shrink-0 ${navHidden ? "hidden sm:flex" : "flex"}`}
+					className="flex items-center gap-1.5 no-underline text-ink shrink-0"
 				>
 					<span className={`rounded-lg bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center text-sm ${navHidden ? "w-6 h-6" : "w-7 h-7"}`}>
 						<Zap size={navHidden ? 14 : 16} />
 					</span>
-					{!navHidden && (
-						<span className="font-display font-bold text-[0.95rem] hidden sm:inline">
-							PAGS
-						</span>
-					)}
+					<span className="font-display font-bold text-[0.95rem] hidden sm:inline">
+						ProAgentStore
+					</span>
 				</a>
 
 				{/* Nav links — hidden when instance detail injects its controls */}
