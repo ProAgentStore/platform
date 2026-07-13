@@ -37,6 +37,7 @@ function AuthGate() {
 				<Route path="instances/:id/tasks/:taskId" element={<RunDetail />} />
 				<Route path="instances/:id/*" element={<InstanceDetail />} />
 				<Route path="dashboard" element={<Dashboard />} />
+				<Route path="tools" element={<Dashboard />} />
 				<Route path="profile" element={<Profile />} />
 				<Route path="notifications" element={<Notifications />} />
 				<Route path="*" element={<Navigate to="agents" replace />} />

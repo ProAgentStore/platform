@@ -4,22 +4,30 @@ import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { Zap, Bell, Menu, BellRing, X } from "lucide-react";
+import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
+
+const navItems = [
+	{ to: "/agents", label: "My Agents", icon: Bot },
+	{ to: "/browse", label: "Library", icon: Library },
+	{ to: "/instances", label: "Instances", icon: Server },
+	{ to: "/dashboard", label: "Stats", icon: BarChart3 },
+	{ to: "/tools", label: "Tools", icon: Wrench },
+] as const;
 
 export default function Layout() {
 	const { user } = useAuth();
 	const navigate = useNavigate();
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [unreadCount, setUnreadCount] = useState(0);
-	const navRef = useRef<HTMLElement>(null);
+	const menuRef = useRef<HTMLElement>(null);
 	const navHidden = useNavHidden();
 	const headerSlot = useHeaderSlotContent();
 
 	useEffect(() => {
 		if (!menuOpen) return;
 		const handler = (e: MouseEvent) => {
-			if (navRef.current && !navRef.current.contains(e.target as Node)) {
+			if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
 				setMenuOpen(false);
 			}
 		};
@@ -65,28 +73,21 @@ export default function Layout() {
 				{/* Nav links — hidden when instance detail injects its controls */}
 				{!navHidden && (
 					<>
-						<nav
-							ref={navRef}
-							className={`items-center gap-0.5 shrink-0 ${
-								menuOpen
-									? "flex max-lg:absolute max-lg:top-[50px] max-lg:right-2 max-lg:flex-col max-lg:items-stretch max-lg:bg-panel max-lg:border max-lg:border-line max-lg:rounded-xl max-lg:p-1 max-lg:min-w-48 max-lg:shadow-lg max-lg:z-80"
-									: "hidden lg:flex"
-							}`}
-						>
-							<NavLink to="/agents" className={({ isActive }) => `text-[0.82rem] px-2.5 py-1.5 rounded-md no-underline whitespace-nowrap transition-all ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}>
-								Agents
-							</NavLink>
-							<NavLink to="/browse" className={({ isActive }) => `text-[0.82rem] px-2.5 py-1.5 rounded-md no-underline whitespace-nowrap transition-all ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}>
-								Browse
-							</NavLink>
-							<NavLink to="/instances" className={({ isActive }) => `text-[0.82rem] px-2.5 py-1.5 rounded-md no-underline whitespace-nowrap transition-all ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}>
-								Instances
-							</NavLink>
-							<NavLink to="/dashboard" className={({ isActive }) => `text-[0.82rem] px-2.5 py-1.5 rounded-md no-underline whitespace-nowrap transition-all ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}>
-								Stats
-							</NavLink>
+						<nav className="flex items-center gap-0.5 shrink-0 min-w-0" aria-label="Primary">
+							{navItems.map(({ to, label, icon: Icon }) => (
+								<NavLink
+									key={to}
+									to={to}
+									title={label}
+									aria-label={label}
+									className={({ isActive }) => `h-8 w-7 sm:w-8 lg:w-auto lg:h-auto lg:px-2.5 px-0 py-1.5 rounded-md no-underline whitespace-nowrap transition-all flex items-center justify-center gap-1.5 text-[0.82rem] ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}
+								>
+									<Icon size={15} className="shrink-0" />
+									<span className="hidden lg:inline">{label}</span>
+								</NavLink>
+							))}
 						</nav>
-						<div className="flex-1" />
+						<div className="flex-1 min-w-0" />
 					</>
 				)}
 
@@ -124,6 +125,25 @@ export default function Layout() {
 					>
 						<Menu size={20} />
 					</button>
+				)}
+				{!navHidden && menuOpen && (
+					<nav
+						ref={menuRef}
+						className="lg:hidden absolute top-[50px] right-2 flex flex-col items-stretch bg-panel border border-line rounded-xl p-1 min-w-48 shadow-lg z-80"
+						aria-label="Menu"
+					>
+						{navItems.map(({ to, label, icon: Icon }) => (
+							<NavLink
+								key={to}
+								to={to}
+								onClick={() => setMenuOpen(false)}
+								className={({ isActive }) => `text-[0.82rem] px-2.5 py-2 rounded-md no-underline whitespace-nowrap transition-all flex items-center gap-2 ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}
+							>
+								<Icon size={15} className="shrink-0" />
+								{label}
+							</NavLink>
+						))}
+					</nav>
 				)}
 			</header>
 			{user && <PushPrompt />}
