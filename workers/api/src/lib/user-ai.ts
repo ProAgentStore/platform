@@ -1,4 +1,5 @@
 import { decryptKey } from "./crypto.js";
+import { recordUsage, type UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
 export class UserAiCredentialsError extends Error {
@@ -38,18 +39,19 @@ export async function runUserWorkersAi(
 	userId: string | undefined,
 	model: string,
 	body: unknown,
+	ctx?: UsageContext,
 ): Promise<unknown> {
 	// BYOK: try providers in order of what the user has configured
 	const anthropicKey = await getUserProviderKey(env, userId, "anthropic");
 	if (anthropicKey) {
 		// content is usually a string, but may be an array of content blocks (e.g. a
 		// PDF `document` block for résumé parsing) — passed straight through to Anthropic.
-		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number });
+		return runAnthropic(env, userId, anthropicKey, body as { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number }, ctx);
 	}
 
 	const cfCredentials = await getUserCloudflareAiCredentials(env, userId).catch(() => null);
 	if (cfCredentials) {
-		return runCloudflareAi(env, userId, cfCredentials, model, body);
+		return runCloudflareAi(env, userId, cfCredentials, model, body, ctx);
 	}
 
 	throw new UserAiCredentialsError("Add an API key in Profile → API Keys (Anthropic or Cloudflare Workers AI).");
@@ -60,6 +62,7 @@ async function runAnthropic(
 	userId: string | undefined,
 	apiKey: string,
 	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number },
+	ctx?: UsageContext,
 ): Promise<unknown> {
 	const messages = (body.messages || []).filter((m) => m.role !== "system");
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
@@ -151,6 +154,11 @@ async function runAnthropic(
 		output: u.output_tokens || 0,
 	};
 
+	// Ledger the call for the Usage page (best-effort; never blocks the response).
+	if (ctx) {
+		await recordUsage(env, { ...ctx, userId, provider: "anthropic", model: (anthropicBody.model as string) || "claude-sonnet-4-6" }, usage);
+	}
+
 	if (toolUse.length > 0) {
 		return {
 			response: textParts,
@@ -170,6 +178,7 @@ async function runCloudflareAi(
 	credentials: StoredCloudflareAiCredentials,
 	model: string,
 	body: unknown,
+	ctx?: UsageContext,
 ): Promise<unknown> {
 	const encodedModel = model.split("/").map(encodeURIComponent).join("/");
 	const timeoutMs = (body as { timeoutMs?: number })?.timeoutMs ?? 25_000;
@@ -209,6 +218,15 @@ async function runCloudflareAi(
 	await env.DB.prepare(
 		"UPDATE user_api_keys SET last_used_at = datetime('now') WHERE user_id = ?1 AND provider = 'cloudflare'",
 	).bind(userId).run();
+	// CF Workers AI is per-neuron (cost ~0), but still emit a ledger row with token
+	// counts when the response carries usage, so the Usage page shows CF calls too.
+	if (ctx) {
+		const cu = (data as { usage?: Record<string, number> })?.usage || {};
+		await recordUsage(env, { ...ctx, userId, provider: "cloudflare", model }, {
+			input: cu.prompt_tokens || cu.input_tokens || 0,
+			output: cu.completion_tokens || cu.output_tokens || 0,
+		});
+	}
 	if (data && typeof data === "object" && "result" in data) {
 		return (data as { result: unknown }).result;
 	}

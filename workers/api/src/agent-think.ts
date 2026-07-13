@@ -342,6 +342,7 @@ export async function runAgentThink(opts: {
 			userId,
 			state.model,
 			{ messages: aiMessages },
+			{ kind: "chat", instanceId: state.agentId },
 		)) as { response?: string };
 		return { response: result.response || "", toolCalls: [] };
 	}
@@ -370,6 +371,7 @@ export async function runAgentThink(opts: {
 			userId,
 			state.model,
 			{ messages: aiMessages, tools },
+			{ kind: "chat", instanceId: state.agentId },
 		)) as Record<string, unknown>;
 
 		let toolCalls = normalizeToolCalls((rawResult.tool_calls as unknown[]) || []);
@@ -440,6 +442,7 @@ export async function runAgentThink(opts: {
 		userId,
 		state.model,
 		{ messages: aiMessages },
+		{ kind: "chat", instanceId: state.agentId },
 	)) as { response?: string };
 	const response = final.response || "";
 	return { response, toolCalls: allToolLog };
