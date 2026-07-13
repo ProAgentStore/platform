@@ -21,7 +21,7 @@ GITHUB_ORG = "ProAgentStore"
 # LLM chat is always BYOK regardless.
 PLATFORM_AI_ENABLED = "true"
 # Billing (the $9/mo Pro subscription — lib/billing.ts):
-STRIPE_PRICE_ID = "price_1TshgoBLFr7lHgtyc6HKLkFX" # ProAgentStore Pro, $9/mo, shared test-mode Stripe account.
+STRIPE_PRICE_ID = "price_1TsiIaB11Tib1JCQ9LUDZhVi" # ProAgentStore Pro, $9/mo, live Stripe account.
 # PAYWALL_ENFORCE = "1"         # SOFT LAUNCH: leave unset until Stripe is wired + verified.
 #                               # "1" enforces the free tier (2 agents, Pro-only runner).
 # Google Drive / Docs connector:
