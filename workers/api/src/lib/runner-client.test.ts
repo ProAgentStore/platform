@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { callRunner, isRunnerOnline, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
+import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
 /** Build a mock RELAY namespace. */
@@ -16,6 +17,7 @@ function mockConn(overrides: Partial<RunnerConn & { RELAY?: any }> = {}): Runner
 		token: "runner-tok",
 		instanceId: "inst-1",
 		userId: "user-1",
+		relayName: "inst-1",
 		env: {
 			RELAY: overrides.RELAY ?? undefined,
 			DB: { prepare: () => ({ bind: () => ({ first: async () => null }) }) },
@@ -62,6 +64,22 @@ describe("callRunner (relay-only)", () => {
 		expect(result.url).toBe("https://job.com");
 	});
 
+	it("uses the node-scoped relay name when a session is pinned to a runner node", async () => {
+		let seenName = "";
+		const relay = {
+			idFromName: (name: string) => {
+				seenName = name;
+				return { name };
+			},
+			get: () => ({
+				fetch: async () => Response.json({ ok: true }),
+			}),
+		};
+		const conn = mockConn({ RELAY: relay, relayName: "inst-1:node:macbook" });
+		await callRunner(conn, "/coding/capture", { sessionId: "s1" });
+		expect(seenName).toBe("inst-1:node:macbook");
+	});
+
 	it("throws when relay returns 503 (no runner connected)", async () => {
 		const relay = mockRelay(async () => Response.json({ error: "No runner connected" }, { status: 503 }));
 		const conn = mockConn({ RELAY: relay });
@@ -106,5 +124,13 @@ describe("callRunner (relay-only)", () => {
 		const conn = mockConn({ RELAY: relay });
 		const result = await callRunner(conn, "/test");
 		expect(result).toBeNull();
+	});
+});
+
+describe("runtime node helpers", () => {
+	it("normalizes runner node names and builds stable relay names", () => {
+		expect(normalizeRunnerNode(" macbook ")).toBe("macbook");
+		expect(relayNameForInstance("inst-1", "macbook")).toBe("inst-1:node:macbook");
+		expect(relayNameForInstance("inst-1", "")).toBe("inst-1");
 	});
 });

@@ -46,6 +46,8 @@ export interface CodingSessionRecord {
 	clientType: CodingClientType;
 	status: CodingSessionStatus;
 	tmuxSession?: string;
+	/** Machine node that owns this session. Empty legacy sessions fall back to the default runner. */
+	runnerNode?: string | null;
 	/** The exact command this session's engine was launched with (e.g. `claude --dangerously-skip-permissions`, `codex`). */
 	launchCommand?: string;
 	issueNumber?: number;

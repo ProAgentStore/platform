@@ -1,6 +1,8 @@
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
+import { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
+export { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import type { Env } from "../types.js";
 
 export interface InstanceRow {
@@ -57,6 +59,26 @@ export const UPSERT_INSTANCE_RUNTIME_SQL = `INSERT INTO instance_runtimes (
        capabilities = excluded.capabilities,
        runner_version = excluded.runner_version,
        runner_node = excluded.runner_node,
+       status = 'registered',
+       last_seen_at = datetime('now'),
+       updated_at = datetime('now')`;
+
+export const UPSERT_INSTANCE_RUNTIME_NODE_SQL = `INSERT INTO instance_runtime_nodes (
+       instance_id, user_id, runner_node, placement, endpoint_url,
+       token_ciphertext, token_dek_wrapped, token_iv, token_plaintext,
+       capabilities, runner_version, status, last_seen_at, created_at, updated_at
+     )
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'registered', datetime('now'), datetime('now'), datetime('now'))
+     ON CONFLICT(instance_id, runner_node) DO UPDATE SET
+       user_id = excluded.user_id,
+       placement = excluded.placement,
+       endpoint_url = excluded.endpoint_url,
+       token_ciphertext = excluded.token_ciphertext,
+       token_dek_wrapped = excluded.token_dek_wrapped,
+       token_iv = excluded.token_iv,
+       token_plaintext = excluded.token_plaintext,
+       capabilities = excluded.capabilities,
+       runner_version = excluded.runner_version,
        status = 'registered',
        last_seen_at = datetime('now'),
        updated_at = datetime('now')`;
@@ -125,6 +147,13 @@ export function runtimeResponse(row: RuntimeRow) {
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		hasToken: Boolean(row.token_plaintext || row.token_ciphertext),
+	};
+}
+
+export function runtimeNodeResponse(row: RuntimeRow) {
+	return {
+		...runtimeResponse(row),
+		relayName: relayNameForInstance(row.instance_id, row.runner_node),
 	};
 }
 
@@ -581,6 +610,45 @@ export async function getRuntime(
 		.first<RuntimeRow>();
 }
 
+export async function getRuntimeNode(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	runnerNode: string,
+): Promise<RuntimeRow | null> {
+	const node = normalizeRunnerNode(runnerNode);
+	if (!node) return null;
+	return env.DB.prepare(
+		"SELECT * FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 AND runner_node = ?3",
+	)
+		.bind(instanceId, userId, node)
+		.first<RuntimeRow>();
+}
+
+export async function listRuntimeNodes(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<RuntimeRow[]> {
+	const { results } = await env.DB.prepare(
+		"SELECT * FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 ORDER BY updated_at DESC",
+	)
+		.bind(instanceId, userId)
+		.all<RuntimeRow>();
+	return results ?? [];
+}
+
+export async function getRuntimeForNode(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	runnerNode?: string | null,
+): Promise<RuntimeRow | null> {
+	const node = normalizeRunnerNode(runnerNode);
+	if (node) return (await getRuntimeNode(env, instanceId, userId, node)) ?? null;
+	return getRuntime(env, instanceId, userId);
+}
+
 export async function requireRuntime(
 	env: Env,
 	instanceId: string,
@@ -640,7 +708,7 @@ export async function callRuntime(
 	init: RequestInit = {},
 ): Promise<Response> {
 	if (!env.RELAY) throw new Error("RELAY binding not configured");
-	const stub = env.RELAY.get(env.RELAY.idFromName(row.instance_id));
+	const stub = env.RELAY.get(env.RELAY.idFromName(relayNameForInstance(row.instance_id, row.runner_node)));
 	const relayBody = init.body
 		? typeof init.body === "string" ? JSON.parse(init.body) : init.body
 		: undefined;
@@ -673,7 +741,18 @@ export async function updateRuntimeStatus(
 	instanceId: string,
 	userId: string,
 	status: string,
+	runnerNode?: string | null,
 ): Promise<void> {
+	const node = normalizeRunnerNode(runnerNode);
+	if (node) {
+		await env.DB.prepare(
+			`UPDATE instance_runtime_nodes
+       SET status = ?1, last_seen_at = datetime('now'), updated_at = datetime('now')
+       WHERE instance_id = ?2 AND user_id = ?3 AND runner_node = ?4`,
+		)
+			.bind(status, instanceId, userId, node)
+			.run();
+	}
 	await env.DB.prepare(
 		`UPDATE instance_runtimes
      SET status = ?1, last_seen_at = datetime('now'), updated_at = datetime('now')
@@ -682,4 +761,3 @@ export async function updateRuntimeStatus(
 		.bind(status, instanceId, userId)
 		.run();
 }
-

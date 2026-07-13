@@ -20,7 +20,7 @@ import {
 	updateRepo,
 	updateRepoClone,
 } from "../lib/coding-store.js";
-import { getRuntime } from "./instances-runtime.js";
+import { getRuntime, getRuntimeForNode, normalizeRunnerNode } from "./instances-runtime.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
@@ -50,7 +50,7 @@ async function startSessionOnRunner(
 	session: CodingSessionRecord,
 	repo: CodingRepo,
 ): Promise<boolean> {
-	const conn = await getRunnerConn(env, instanceId, uid);
+	const conn = await getSessionRunnerConn(env, instanceId, uid, session);
 	if (!conn) return false;
 	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
 	const token = owner ? await installationTokenForOwner(env, uid, owner) : null;
@@ -77,6 +77,10 @@ async function startSessionOnRunner(
 		await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
 		return false;
 	}
+}
+
+async function getSessionRunnerConn(env: Env, instanceId: string, uid: string, session: CodingSessionRecord) {
+	return getRunnerConn(env, instanceId, uid, session.runnerNode ?? null);
 }
 
 /**
@@ -339,8 +343,8 @@ codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 	const repoId = c.req.param("repoId");
 	// End any active sessions on the runner before deleting from DB
 	const sessions = await listSessions(c.env, instanceId, uid);
-	const conn = await getRunnerConn(c.env, instanceId, uid);
 	for (const s of sessions.filter((s) => s.repoId === repoId && s.status === "active")) {
+		const conn = await getSessionRunnerConn(c.env, instanceId, uid, s);
 		if (conn) await callRunner(conn, "/coding/end", { sessionId: s.id }).catch(() => undefined);
 	}
 	const ok = await deleteRepo(c.env, instanceId, uid, repoId);
@@ -592,8 +596,12 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	// Resolve which engine to launch: the chosen preset (engineId), else the repo's
 	// remembered default, else the instance default engine.
 	const { command, clientType } = await resolveEngine(c.env, instanceId, uid, body.engineId ?? body.clientType ?? repo.defaultClient);
-	// Stamp the owning machine so a later machine switch can suspend/resume by ownership.
-	const runtimeNow = await getRuntime(c.env, instanceId, uid);
+	const requestedRunnerNode = normalizeRunnerNode(body.runnerNode);
+	const runtimeNow = requestedRunnerNode
+		? await getRuntimeForNode(c.env, instanceId, uid, requestedRunnerNode)
+		: await getRuntime(c.env, instanceId, uid);
+	if (requestedRunnerNode && (!runtimeNow || runtimeNow.status === "offline")) throw new HttpError(409, `Runner node is not connected: ${requestedRunnerNode}`);
+	// Stamp the owning machine so later commands route back to the same runner.
 	let session: CodingSessionRecord;
 	try {
 		session = await createSession(c.env, instanceId, uid, {
@@ -637,7 +645,9 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/start", async (c) => 
 codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	if (!session) throw new HttpError(404, "Session not found");
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: false });
 	const snap = await callRunner(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
 	if (!snap) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: true });
@@ -664,7 +674,8 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	const sessionId = c.req.param("sessionId");
 	// Verify the session belongs to this instance/user BEFORE touching its timeline —
 	// the timeline helpers are scoped by sessionId alone.
-	if (!(await getSession(c.env, instanceId, uid, sessionId))) throw new HttpError(404, "Session not found");
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	if (!session) throw new HttpError(404, "Session not found");
 	const body = (await c.req.json().catch(() => ({}))) as { question?: string; finished?: boolean; persist?: boolean };
 	const question = typeof body.question === "string" ? body.question.trim() : "";
 	const finished = body.finished === true;
@@ -674,7 +685,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	const persist = body.persist !== false;
 
 	// Capture the current terminal.
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	let pane = "";
 	if (conn) {
 		const snap = (await callRunner(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null)) as { pane?: string } | null;
@@ -695,7 +706,6 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	// did, outcomes) so the co-pilot remembers the session, not just this moment.
 	const memory = await contextForCopilot(c.env, sessionId);
 	// Inject instance + repo instructions into the co-pilot prompt.
-	const session = await getSession(c.env, instanceId, uid, sessionId);
 	const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
 	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
 	const repoInstructions = repo?.instructions;
@@ -737,14 +747,15 @@ async function driveClaude(
 	instruction: string,
 	summary?: string,
 ): Promise<{ delegated: boolean; reply: string }> {
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	if (!session) return { delegated: false, reply: "Coding session not found." };
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
 	// NOTE: don't log a `command` turn here — the chat_assistant "On it — I asked
 	// Claude to: …" already records it; a command entry would show a 3rd duplicate
 	// bubble in the thread (loadChat surfaces commands as your turns).
 	const act = () => callRunner(conn, "/coding/act", { sessionId, action: { kind: "message", text: instruction } }).catch(() => null);
 	let snap = await act();
-	const session = await getSession(c.env, instanceId, uid, sessionId);
 	const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
 	if (snap === null && session && repo) {
 		await startSessionOnRunner(c.env, instanceId, uid, session, repo); // reattach a session lost to a runner restart
@@ -758,7 +769,7 @@ async function driveClaude(
 		.catch(() => undefined);
 	await c.env.CODING_SESSION.create({
 		id: watchId,
-		params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", mode: "watch", watchId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
+		params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", runnerNode: session.runnerNode ?? null, mode: "watch", watchId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
 	}).catch(async () => {
 		// The finish-watcher failed to start — tell the user so the missing completion
 		// summary isn't a silent "did it even work?".
@@ -781,7 +792,8 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
 	// Verify the session belongs to this instance/user before touching its timeline.
-	if (!(await getSession(c.env, instanceId, uid, sessionId))) throw new HttpError(404, "Session not found");
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	if (!session) throw new HttpError(404, "Session not found");
 	const body = (await c.req.json().catch(() => ({}))) as { message?: string; audioKey?: string };
 	const raw = String(body.message ?? "").trim();
 	if (!raw) return c.json({ error: "message is required" }, 400);
@@ -796,7 +808,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	}
 
 	// Otherwise: one tool-enabled call — answer from context OR call drive_claude.
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	let pane = "";
 	if (conn) {
 		const snap = (await callRunner(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null)) as { pane?: string } | null;
@@ -937,10 +949,12 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 		typeof body.keys === "string"
 			? { kind: "keys", keys: body.keys }
 			: { kind: "message", text: String(body.text ?? "") };
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	if (!session) throw new HttpError(404, "Session not found");
 	// `chat:true` = sent from the Agent chat (relay my words to Claude on my behalf),
 	// so persist it as a chat turn (survives reload) — not just the raw command log.
 	const fromChat = body.chat === true;
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) throw new HttpError(409, "No coding runner connected. Start it with: pags up");
 	if (action.kind === "message" && action.text) {
 		// Log the user's clean text first…
@@ -949,7 +963,6 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 		// Rules) before sending to the CLI. Manual sends bypass the autonomous brain
 		// (which injects rules into its own prompt), so without this the CLI never sees
 		// them. This makes the rules bind the CLI no matter how it's driven.
-		const session = await getSession(c.env, instanceId, uid, sessionId);
 		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
 		const combined = [await readSpecialInstructions(c.env, instanceId, uid), repo?.instructions].filter(Boolean).join("\n\n");
 		if (combined) action.text = `[Project rules — follow these for everything you do:\n${combined}\n]\n\n${action.text}`;
@@ -973,7 +986,6 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 	// stamped one — so several sends can't fire several push notifications for one
 	// completion.
 	if (action.kind === "message" && action.text) {
-		const session = await getSession(c.env, instanceId, uid, sessionId);
 		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
 		const watchId = `cw-${sessionId}-${Date.now()}`;
 		await c.env.DB.prepare(
@@ -989,6 +1001,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 				userId: uid,
 				sessionId,
 				repoId: repo?.id ?? "",
+				runnerNode: session.runnerNode ?? null,
 				mode: "watch",
 				watchId,
 				goal: { objective: action.text, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" },
@@ -1030,6 +1043,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 			userId: uid,
 			sessionId,
 			repoId: repo.id,
+			runnerNode: session.runnerNode ?? null,
 			cloneUrl: repo.cloneUrl,
 			branch: repo.branch || undefined,
 			token: token ?? undefined,
@@ -1044,7 +1058,9 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/resume", async (c) =>
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
 	const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	if (!session) throw new HttpError(404, "Session not found");
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) throw new HttpError(409, "No coding runner connected");
 	await callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/resolve`, {
 		value: typeof body.value === "string" ? body.value : undefined,
@@ -1056,7 +1072,8 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/resume", async (c) =>
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessionId = c.req.param("sessionId");
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	const conn = session ? await getSessionRunnerConn(c.env, instanceId, uid, session) : null;
 	if (conn) await callRunner(conn, "/coding/end", { sessionId }).catch(() => undefined);
 	const ok = await endSession(c.env, instanceId, uid, sessionId);
 	return c.json({ ok });
@@ -1074,7 +1091,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 	if (session.status !== "active") return c.json({ ok: false, error: "session has ended" }, 409);
 	const repo = await getRepo(c.env, instanceId, uid, session.repoId);
 	if (!repo) throw new HttpError(404, "Repo not found");
-	const conn = await getRunnerConn(c.env, instanceId, uid);
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) return c.json({ ok: false, runnerConnected: false });
 	await callRunner(conn, "/coding/end", { sessionId: session.id }).catch(() => undefined);
 	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo);

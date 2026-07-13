@@ -1,4 +1,5 @@
 import { decryptKey } from "./crypto.js";
+import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
 /** A resolved connection to a user's local browser runner (via WebSocket relay). */
@@ -8,23 +9,29 @@ export interface RunnerConn {
 	instanceId: string;
 	userId: string;
 	env: Env;
+	runnerNode?: string;
+	relayName: string;
 }
 
 /**
  * Resolve the connected runner for an instance and decrypt its bearer token.
  * Returns null when no runner is online.
  */
-export async function getRunnerConn(env: Env, instanceId: string, userId: string): Promise<RunnerConn | null> {
+export async function getRunnerConn(env: Env, instanceId: string, userId: string, runnerNode?: string | null): Promise<RunnerConn | null> {
+	const node = normalizeRunnerNode(runnerNode);
 	const row = await env.DB.prepare(
-		"SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2 AND status != 'offline'",
+		node
+			? "SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv, runner_node FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 AND runner_node = ?3 AND status != 'offline'"
+			: "SELECT endpoint_url, token_plaintext, token_ciphertext, token_dek_wrapped, token_iv, runner_node FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2 AND status != 'offline'",
 	)
-		.bind(instanceId, userId)
+		.bind(...(node ? [instanceId, userId, node] : [instanceId, userId]))
 		.first<{
 			endpoint_url: string;
 			token_plaintext: string | null;
 			token_ciphertext: ArrayBuffer | null;
 			token_dek_wrapped: ArrayBuffer | null;
 			token_iv: ArrayBuffer | null;
+			runner_node?: string | null;
 		}>();
 	if (!row?.endpoint_url) return null;
 
@@ -41,7 +48,16 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
 			/* fall through with empty token */
 		}
 	}
-	return { endpointUrl: row.endpoint_url.replace(/\/$/, ""), token, instanceId, userId, env };
+	const resolvedNode = normalizeRunnerNode(row.runner_node || node);
+	return {
+		endpointUrl: row.endpoint_url.replace(/\/$/, ""),
+		token,
+		instanceId,
+		userId,
+		env,
+		runnerNode: resolvedNode || undefined,
+		relayName: relayNameForInstance(instanceId, resolvedNode),
+	};
 }
 
 /**
@@ -75,7 +91,7 @@ export const READ_TIMEOUT_MS = 10_000;
  *  for reads so a hung runner can't wedge the UI. */
 export async function callRunner<T = unknown>(conn: RunnerConn, path: string, body?: unknown, opts?: { timeoutMs?: number }): Promise<T> {
 	if (!conn.env.RELAY) throw new Error("RELAY binding not configured");
-	const stub = conn.env.RELAY.get(conn.env.RELAY.idFromName(conn.instanceId));
+	const stub = conn.env.RELAY.get(conn.env.RELAY.idFromName(conn.relayName || conn.instanceId));
 	const res = await stub.fetch(new Request("https://relay/command", {
 		method: "POST",
 		headers: { "Content-Type": "application/json" },

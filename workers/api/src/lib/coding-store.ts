@@ -201,6 +201,7 @@ interface SessionRow {
 	client_type: string;
 	status: string;
 	tmux_session: string | null;
+	runner_node: string | null;
 	launch_command: string | null;
 	issue_number: number | null;
 	issue_title: string | null;
@@ -218,6 +219,7 @@ function toSession(r: SessionRow): CodingSessionRecord {
 		clientType: client(r.client_type),
 		status: r.status as CodingSessionStatus,
 		tmuxSession: r.tmux_session ?? undefined,
+		runnerNode: r.runner_node ?? null,
 		launchCommand: r.launch_command ?? undefined,
 		issueNumber: r.issue_number ?? undefined,
 		issueTitle: r.issue_title ?? undefined,

@@ -8,7 +8,7 @@ import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, column
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
-import { suspendSessionsFromOtherNodes, resumeSessionsForNode } from "../lib/coding-store.js";
+import { resumeSessionsForNode } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
 import { parseLoopDecision } from "../lib/loop-decide.js";
@@ -28,6 +28,7 @@ import {
 	runtimeSetupTaskId,
 	expireOrphanedRuntimeTasks,
 	getRuntime,
+	listRuntimeNodes,
 	isCloudflareAiCredentialsError,
 	isRecord,
 	mirrorRuntimeTask,
@@ -39,15 +40,18 @@ import {
 	mirroredRuntimeTask,
 	mirroredRuntimeTasks,
 	normalizeRunnerTaskBody,
+	normalizeRunnerNode,
 	requireOwnedInstance,
 	requireRuntime,
 	runtimeErrorPayload,
 	runtimeJson,
+	runtimeNodeResponse,
 	runtimeResponse,
 	runtimeStatus,
 	safeCapabilities,
 	syntheticEventsFromTasks,
 	updateRuntimeStatus,
+	UPSERT_INSTANCE_RUNTIME_NODE_SQL,
 	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 	type InstanceRow,
@@ -61,8 +65,10 @@ export {
 	runtimeSetupTaskId,
 	isCloudflareAiCredentialsError,
 	normalizeRunnerTaskBody,
+	normalizeRunnerNode,
 	runtimeEventsFromPayload,
 	runtimeTasksFromPayload,
+	UPSERT_INSTANCE_RUNTIME_NODE_SQL,
 	UPSERT_INSTANCE_RUNTIME_SQL,
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
@@ -268,38 +274,33 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	const capabilities = JSON.stringify(safeCapabilities(body.capabilities));
 	const placement = body.placement === "managed" ? "managed" : "local";
 	const runnerVersion = String(body.runnerVersion || "").slice(0, 80);
-	const runnerNode = String(body.runnerNode || "").slice(0, 120);
+	const runnerNode = normalizeRunnerNode(body.runnerNode);
 
-	// Reject if a different machine is already connected (unless --force)
-	if (!body.force && runnerNode) {
-		const existing = await getRuntime(c.env, instanceId, session.uid);
-		if (existing && existing.runner_node && existing.runner_node !== runnerNode && existing.status !== "offline") {
-			const lastSeen = existing.last_seen_at ? Date.parse(`${existing.last_seen_at.replace(" ", "T")}Z`) : 0;
-			const stale = lastSeen > 0 && Date.now() - lastSeen > 120_000; // 2 min without heartbeat = stale
-			if (!stale) {
-				return c.json({
-					error: `Another machine is connected: ${existing.runner_node}. Disconnect it first, or use --force to take over.`,
-					connectedNode: existing.runner_node,
-					lastSeenAt: existing.last_seen_at,
-				}, 409);
-			}
-		}
-	}
-
-	// Machine-switch session lifecycle, driven by per-session OWNERSHIP (runner_node) rather
-	// than the last-registered node (the old comparison never matched on the reconnect path,
-	// so resume was dead and sessions stranded 'suspended' forever):
-	// - On a real node change → suspend sessions owned by the OTHER (departing) machine.
-	// - Always → resume THIS machine's OWN suspended sessions (index-safe, per-repo where free).
+	// Multi-machine Coder: each machine registers as an addressable node. The legacy
+	// instance_runtimes row is still updated as the default runtime for browser/apply
+	// features and older clients, but Coder sessions route by their stored runner_node.
 	const prevRuntime = await getRuntime(c.env, instanceId, session.uid);
 	if (runnerNode) {
-		const nodeChanged = !!prevRuntime?.runner_node && prevRuntime.runner_node !== runnerNode;
-		if (nodeChanged) {
-			const suspended = await suspendSessionsFromOtherNodes(c.env, instanceId, session.uid, runnerNode).catch(() => 0);
-			if (suspended) console.log(`Suspended ${suspended} session(s) from ${prevRuntime?.runner_node} → ${runnerNode}`);
-		}
 		const resumed = await resumeSessionsForNode(c.env, instanceId, session.uid, runnerNode).catch(() => 0);
 		if (resumed) console.log(`Resumed ${resumed} suspended session(s) on ${runnerNode}`);
+	}
+
+	if (runnerNode) {
+		await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_NODE_SQL)
+			.bind(
+				instanceId,
+				session.uid,
+				runnerNode,
+				placement,
+				endpointUrl,
+				tokenParts.ciphertext,
+				tokenParts.dekWrapped,
+				tokenParts.iv,
+				tokenParts.plaintext,
+				capabilities,
+				runnerVersion,
+			)
+			.run();
 	}
 
 	await c.env.DB.prepare(UPSERT_INSTANCE_RUNTIME_SQL)
@@ -318,14 +319,18 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 		)
 		.run();
 
-	// A fresh runner session can't own tasks paused on the previous one — expire
-	// them so the board doesn't keep stale "Needs you" cards after a restart.
-	await expireOrphanedRuntimeTasks(c.env, instanceId, session.uid).catch(() => undefined);
+	// A replacement default runner can't own tasks paused on the previous default,
+	// but adding another Coder node should not expire work on other machines.
+	if (!runnerNode || !prevRuntime?.runner_node || prevRuntime.runner_node === runnerNode) {
+		await expireOrphanedRuntimeTasks(c.env, instanceId, session.uid).catch(() => undefined);
+	}
 
 	// Read back to confirm (or just return success if readback fails)
 	const runtime = await getRuntime(c.env, instanceId, session.uid);
+	const nodes = runnerNode ? await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []) : [];
 	return c.json({
 		runtime: runtime ? runtimeResponse(runtime) : { instanceId, endpointUrl, placement, status: "registered" },
+		nodes: nodes.map(runtimeNodeResponse),
 	}, 201);
 });
 
@@ -335,7 +340,8 @@ instanceRoutes.get("/:instanceId/runtime", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const runtime = await getRuntime(c.env, instanceId, session.uid);
-	return c.json({ runtime: runtime ? runtimeResponse(runtime) : null });
+	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
+	return c.json({ runtime: runtime ? runtimeResponse(runtime) : null, nodes: nodes.map(runtimeNodeResponse) });
 });
 
 /** Heartbeat from user/CLI after checking the browser runtime is online. */
@@ -344,7 +350,8 @@ instanceRoutes.post("/:instanceId/runtime/heartbeat", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	await requireRuntime(c.env, instanceId, session.uid);
-	await updateRuntimeStatus(c.env, instanceId, session.uid, "online");
+	const body = (await c.req.json().catch(() => ({}))) as { runnerNode?: unknown };
+	await updateRuntimeStatus(c.env, instanceId, session.uid, "online", normalizeRunnerNode(body.runnerNode));
 	return c.json({ success: true, status: "online" });
 });
 
@@ -586,6 +593,20 @@ instanceRoutes.delete("/:instanceId/runtime", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runnerNode = normalizeRunnerNode(c.req.query("node"));
+	if (runnerNode) {
+		await c.env.DB.prepare(
+			"DELETE FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 AND runner_node = ?3",
+		)
+			.bind(instanceId, session.uid, runnerNode)
+			.run();
+		return c.json({ success: true });
+	}
+	await c.env.DB.prepare(
+		"DELETE FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2",
+	)
+		.bind(instanceId, session.uid)
+		.run();
 	await c.env.DB.prepare(
 		"DELETE FROM instance_runtimes WHERE instance_id = ?1 AND user_id = ?2",
 	)
@@ -1182,4 +1203,3 @@ function optionalStr(value: unknown): string | undefined {
 	const trimmed = value.trim();
 	return trimmed.length > 0 ? trimmed : undefined;
 }
-

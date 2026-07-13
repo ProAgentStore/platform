@@ -274,6 +274,7 @@ async function connectViaRelay(
 	const apiBase = pagsApiBase(opts.apiBase).replace(/^http/, "ws"); // https → wss
 	const pagsToken = clean(opts.pagsToken) || clean(process.env.PAGS_TOKEN) || clean(loadSession()?.token);
 	if (!pagsToken) throw new Error("PAGS token required for WebSocket relay");
+	const runnerNode = hostname();
 
 	// Register the runtime (needed for the status badge / getRunnerConn)
 	const capabilities = await requestRunner<{ capabilities?: unknown }>("GET", "/capabilities", { url: localUrl, token: runnerToken, instanceId: instanceIds[0] });
@@ -286,19 +287,11 @@ async function connectViaRelay(
 				placement: "local",
 				capabilities: caps,
 				runnerVersion: CLI_VERSION,
-				runnerNode: hostname(),
+				runnerNode,
 				force,
 			});
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
-			// 409 = another machine is connected
-			if (msg.includes("409") && msg.includes("Another machine")) {
-				writeError(msg);
-				writeLine("");
-				writeLine("  To take over, run:  pags up --tunnel ws --force");
-				writeLine("");
-				throw new Error("Another machine is already connected");
-			}
 			writeError(`register ${id.slice(0, 8)}… failed: ${msg}`);
 		}
 	}
@@ -325,7 +318,7 @@ async function connectViaRelay(
 	const heartbeat = () => {
 		const timer = setTimeout(async () => {
 			for (const id of instanceIds) {
-				await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, {}).catch(() => undefined);
+				await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, { runnerNode }).catch(() => undefined);
 			}
 			heartbeat();
 		}, 30_000);
@@ -366,7 +359,9 @@ function openRelaySocket(
 			backoffMs = Math.min(backoffMs * 2, 30_000);
 			return;
 		}
-		const url = `${wsBase}/v1/relay/${encodeURIComponent(instanceId)}/connect?token=${encodeURIComponent(relayToken)}${force ? "&force=1" : ""}`;
+		const params = new URLSearchParams({ token: relayToken, node: hostname() });
+		if (force) params.set("force", "1");
+		const url = `${wsBase}/v1/relay/${encodeURIComponent(instanceId)}/connect?${params.toString()}`;
 		const ws = new WebSocket(url);
 
 		ws.onopen = () => {

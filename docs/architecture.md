@@ -129,7 +129,9 @@ Current runtime-backed surfaces:
 
 - Job Application Assistant: Cloudflare Workflow brain drives Playwright browser
   actions.
-- Coder: Cloudflare Workflow brain drives local CLI sessions in tmux.
+- Coder: Cloudflare Workflow brain drives local CLI sessions in tmux. Multiple
+  machines can connect to the same Coder instance through node-scoped relay
+  connections; see [Coder Multi-Machine Runtime](coder-multi-machine.md).
 
 The key architectural pattern is "brain in cloud, hands local":
 
@@ -624,3 +626,4 @@ Use these rules when adding new platform features:
 - [Cloudflare Agent Stack 2026](cloudflare-agent-stack-2026.md)
 - [Agent Platform Strategy](agent-platform-strategy.md)
 - [Coder Cloud vs Local Placement](coder-cloud-vs-local-placement.md)
+- [Coder Multi-Machine Runtime](coder-multi-machine.md)

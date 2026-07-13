@@ -22,6 +22,8 @@ export interface CodingSessionParams {
 	sessionId: string;
 	/** Repo identity + clone source, so the runner can (re)clone if it lost the session. */
 	repoId: string;
+	/** Runner node that owns this coding session. Null/empty falls back to the legacy default runner. */
+	runnerNode?: string | null;
 	cloneUrl?: string;
 	branch?: string;
 	/** GitHub App installation token for cloning a private repo. */
@@ -51,10 +53,10 @@ const HANDOFF_WAIT_POLLS = 180; // 180 × 5s = 15 min
 export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSessionParams> {
 	async run(event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
 		if (event.payload.mode === "watch") return this.runWatch(event, step);
-		const { instanceId, userId, sessionId, repoId, cloneUrl, branch, token, goal } = event.payload;
+		const { instanceId, userId, sessionId, repoId, runnerNode, cloneUrl, branch, token, goal } = event.payload;
 		const env = this.env;
 
-		const conn = await getRunnerConn(env, instanceId, userId);
+		const conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
 		if (!conn) {
 			return { outcome: "failed", detail: "No coding runner connected. Start it with: pags up", steps: 0 };
 		}
@@ -176,9 +178,9 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 	 * to you" the same way the autonomous run does, even with the console closed.
 	 */
 	private async runWatch(event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
-		const { instanceId, userId, sessionId, repoId, goal } = event.payload;
+		const { instanceId, userId, sessionId, repoId, runnerNode, goal } = event.payload;
 		const env = this.env;
-		const conn = await getRunnerConn(env, instanceId, userId);
+		const conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
 		if (!conn) return { outcome: "failed", detail: "No coding runner connected.", steps: 0 };
 
 		// Wait for the just-sent instruction to run to completion (pane goes idle).

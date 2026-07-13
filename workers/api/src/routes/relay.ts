@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
+import { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import { signRelayToken, verifyRelayToken } from "../lib/session.js";
 import type { Env } from "../types.js";
 
@@ -62,10 +63,12 @@ relayRoutes.get("/:instanceId/connect", async (c) => {
 		.first<{ id: string }>();
 	if (!instance) return new Response("Instance not found", { status: 404 });
 
-	// Forward to RelayDO (one per instance), preserving ?force=1 if present
+	const runnerNode = normalizeRunnerNode(c.req.query("node"));
+	// Forward to RelayDO. Legacy/default runners use the instance id; Coder runners
+	// pass ?node=<hostname> so multiple machines can stay connected concurrently.
 	const doUrl = new URL("/connect", c.req.url);
 	if (c.req.query("force") === "1") doUrl.searchParams.set("force", "1");
-	const stub = c.env.RELAY.get(c.env.RELAY.idFromName(instanceId));
+	const stub = c.env.RELAY.get(c.env.RELAY.idFromName(relayNameForInstance(instanceId, runnerNode)));
 	return stub.fetch(new Request(doUrl, {
 		headers: c.req.raw.headers,
 	}));
@@ -84,7 +87,8 @@ relayRoutes.get("/:instanceId/status", async (c) => {
 		.first<{ id: string }>();
 	if (!instance) return c.json({ error: "Instance not found" }, 404);
 
-	const stub = c.env.RELAY.get(c.env.RELAY.idFromName(instanceId));
+	const runnerNode = normalizeRunnerNode(c.req.query("node"));
+	const stub = c.env.RELAY.get(c.env.RELAY.idFromName(relayNameForInstance(instanceId, runnerNode)));
 	const res = await stub.fetch(new Request(new URL("/status", c.req.url)));
 	return new Response(res.body, { status: res.status, headers: res.headers });
 });
