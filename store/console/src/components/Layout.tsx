@@ -50,7 +50,7 @@ export default function Layout() {
 						e.preventDefault();
 						navigate("/");
 					}}
-					className="flex items-center gap-1.5 no-underline text-ink shrink-0"
+					className={`items-center gap-1.5 no-underline text-ink shrink-0 ${navHidden ? "hidden sm:flex" : "flex"}`}
 				>
 					<span className={`rounded-lg bg-gradient-to-br from-accent to-indigo-500 flex items-center justify-center text-sm ${navHidden ? "w-6 h-6" : "w-7 h-7"}`}>
 						<Zap size={navHidden ? 14 : 16} />
@@ -92,10 +92,9 @@ export default function Layout() {
 
 				{/* Instance controls injected via useHeaderSlot */}
 				{navHidden && headerSlot && (
-					<>
+					<div className="min-w-0 flex-1">
 						{headerSlot}
-						<div className="flex-1" />
-					</>
+					</div>
 				)}
 
 				{/* Right: notifications + avatar — always visible */}

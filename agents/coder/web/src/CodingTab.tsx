@@ -489,12 +489,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	useEffect(() => {
 		if (!openSession || !onHeaderOverride) return;
 		onHeaderOverride(
-			<div className="flex items-center gap-2 min-w-0">
-				{/* Labeled on mobile so the way back to the repos list (where "+ Add repo"
-				    lives) is obvious — a bare arrow was too easy to miss in the crowded bar. */}
-				<button type="button" onClick={closeTerminal} title="All repos" className="flex items-center gap-1 text-muted hover:text-ink shrink-0 -ml-1 px-1 py-1"><ArrowLeft size={16} /><span className="text-xs font-semibold sm:hidden">Repos</span></button>
-				<div className="relative shrink-0">
-					<button type="button" onClick={() => setRepoMenuOpen((v) => !v)} title="Switch repo" className="flex items-center gap-1 text-sm font-semibold hover:text-accent max-w-[11rem]">
+			<div className="flex items-center gap-1 sm:gap-2 min-w-0 w-full">
+				<button type="button" onClick={closeTerminal} title="All repos" aria-label="All repos" className="flex items-center justify-center text-muted hover:text-ink shrink-0 -ml-1 w-7 h-8 sm:w-auto sm:h-auto sm:px-1 sm:py-1"><ArrowLeft size={16} /></button>
+				<div className="relative min-w-0 shrink">
+					<button type="button" onClick={() => setRepoMenuOpen((v) => !v)} title="Switch repo" className="flex items-center gap-1 text-sm font-semibold hover:text-accent w-full max-w-[5.75rem] sm:max-w-[11rem] min-w-0">
 						<span className="truncate">{openRepo?.name || openSession.repoId}</span>
 						<ChevronDown size={14} className="shrink-0 text-muted" />
 					</button>
@@ -524,12 +522,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				</div>
 				{/* Icon-only on mobile (saves space); icon + label from sm up. */}
 				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
-					<button type="button" onClick={() => setView("summary")} title="Co-pilot" aria-label="Co-pilot" aria-pressed={view === "summary"} className={`flex items-center gap-1 px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}><Eye size={14} /><span className="hidden sm:inline">Co-pilot</span></button>
-					<button type="button" onClick={() => setView("terminal")} title="Terminal" aria-label="Terminal" aria-pressed={view === "terminal"} className={`flex items-center gap-1 px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}><SquareTerminal size={14} /><span className="hidden sm:inline">Terminal</span></button>
+					<button type="button" onClick={() => setView("summary")} title="Co-pilot" aria-label="Co-pilot" aria-pressed={view === "summary"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}><Eye size={14} /><span className="hidden sm:inline">Co-pilot</span></button>
+					<button type="button" onClick={() => setView("terminal")} title="Terminal" aria-label="Terminal" aria-pressed={view === "terminal"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}><SquareTerminal size={14} /><span className="hidden sm:inline">Terminal</span></button>
 				</div>
 				<div className="ml-auto flex gap-1 shrink-0">
 					<button type="button" onClick={() => setSettingsRepoId(openRepo?.id || openSession.repoId)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={13} /></button>
-					<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent flex items-center gap-1"><Copy size={12} /><span className="hidden sm:inline">Copy</span></button>
+					<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Copy size={12} /><span>Copy</span></button>
 					<button type="button" onClick={freshStart} title="Fresh start" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Fresh</button>
 					<button type="button" onClick={restartSession} title="Restart CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Restart</button>
 					<button type="button" onClick={endSession} title="End session" className="text-xs px-1.5 py-1 rounded-md border border-red text-red font-semibold">End</button>
