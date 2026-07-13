@@ -11,6 +11,7 @@
  * (see `isPaymentField` / `isPaymentSubmit`) as a belt-and-braces guard.
  */
 import { runUserWorkersAi } from "./user-ai.js";
+import type { UsageContext } from "./usage.js";
 import type { ApplyDecision, BrowserJobBase, PageSnapshot } from "./apply-loop.js";
 import { toolCallToDecision } from "./apply-loop.js";
 import type { Env } from "../types.js";
@@ -182,6 +183,7 @@ export async function decideBookingAction(
 	env: Env,
 	userId: string,
 	params: { job: BookingJob; actionLog: string[]; snapshot: PageSnapshot },
+	usageCtx?: UsageContext,
 ): Promise<ApplyDecision> {
 	const MAX_LOG = 30;
 	const log =
@@ -202,7 +204,7 @@ export async function decideBookingAction(
 		],
 		tools: BOOKING_TOOLS,
 		timeoutMs: 60_000,
-	})) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
+	}, usageCtx)) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
 
 	const call = res.tool_calls?.[0];
 	if (!call) {

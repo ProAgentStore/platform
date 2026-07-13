@@ -69,7 +69,7 @@ export async function parseResumeIntoProfile(env: Env, instanceId: string, userI
 			tools: [SAVE_RESUME_TOOL],
 			maxTokens: 2000,
 			timeoutMs: 60_000,
-		})) as { tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }> };
+		}, { kind: "resume", instanceId })) as { tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }> };
 
 		const call = res.tool_calls?.find((t) => t.name === "save_resume");
 		if (!call) throw new Error("the résumé couldn't be read (the model returned no fields)");

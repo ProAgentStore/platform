@@ -72,6 +72,37 @@ export function estimateCostMicros(
 	return Math.round(micros);
 }
 
+// ── Voice (OpenAI audio via the key-proxy) ────────────────────────────────
+// A different unit from tokens: TTS bills per character, STT per minute of audio.
+// TTS char-count is exact (we read the request `input`); STT duration is ESTIMATED
+// from the uploaded audio bytes (we don't get duration back), so its cost is rough.
+
+/** OpenAI tts-1 list price, USD per 1,000,000 characters. */
+export const TTS_USD_PER_M_CHARS = 15;
+/** OpenAI Whisper / gpt-4o-transcribe list price, USD per minute of audio. */
+export const STT_USD_PER_MINUTE = 0.006;
+/** Rough bytes-per-second for typical Opus/WebM voice (~20 kbps) — used only to
+ *  turn an uploaded clip's size into an approximate duration for STT costing. */
+export const VOICE_BYTES_PER_SEC = 2500;
+
+/** Estimated TTS cost in micros of USD for `chars` characters (exact char count). */
+export function estimateTtsMicros(chars: number): number {
+	return Math.round(Math.max(0, Math.floor(Number(chars) || 0)) * TTS_USD_PER_M_CHARS);
+}
+
+/** Estimated STT cost in micros of USD for `seconds` of audio (seconds is itself an
+ *  estimate from byte size — see VOICE_BYTES_PER_SEC). */
+export function estimateSttMicros(seconds: number): number {
+	const sec = Math.max(0, Number(seconds) || 0);
+	// USD = (sec/60) × $/min ; micros = USD × 1e6.
+	return Math.round((sec / 60) * STT_USD_PER_MINUTE * 1_000_000);
+}
+
+/** Approximate audio duration (seconds) from an uploaded clip's byte length. */
+export function secondsFromAudioBytes(bytes: number): number {
+	return Math.max(0, Math.round((Number(bytes) || 0) / VOICE_BYTES_PER_SEC));
+}
+
 /** Format micros of USD as a human dollar string (e.g. 1234567 → "$1.23"). */
 export function formatUsd(micros: number): string {
 	const usd = (Number(micros) || 0) / 1_000_000;

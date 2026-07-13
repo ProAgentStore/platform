@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeModel, priceFor, estimateCostMicros, formatUsd, DEFAULT_PRICE } from "./ai-pricing.js";
+import { normalizeModel, priceFor, estimateCostMicros, formatUsd, DEFAULT_PRICE, estimateTtsMicros, estimateSttMicros, secondsFromAudioBytes } from "./ai-pricing.js";
 
 describe("normalizeModel", () => {
 	it("maps versioned/dated ids to the base key (longest prefix)", () => {
@@ -49,6 +49,25 @@ describe("estimateCostMicros", () => {
 	});
 	it("uses DEFAULT_PRICE for an unknown model so it is not silently free", () => {
 		expect(estimateCostMicros("mystery-model", 1_000_000, 0)).toBe(3_000_000);
+	});
+});
+
+describe("voice pricing", () => {
+	it("prices TTS by exact character count ($15/1M chars)", () => {
+		// 1M chars @ $15/M = $15 = 15_000_000 micros
+		expect(estimateTtsMicros(1_000_000)).toBe(15_000_000);
+		expect(estimateTtsMicros(1000)).toBe(15_000); // 1000 × 15
+		expect(estimateTtsMicros(0)).toBe(0);
+	});
+	it("prices STT by minutes of audio ($0.006/min)", () => {
+		// 60s = 1 min = $0.006 = 6000 micros
+		expect(estimateSttMicros(60)).toBe(6000);
+		expect(estimateSttMicros(0)).toBe(0);
+	});
+	it("estimates audio seconds from byte size", () => {
+		expect(secondsFromAudioBytes(2500)).toBe(1);
+		expect(secondsFromAudioBytes(25_000)).toBe(10);
+		expect(secondsFromAudioBytes(0)).toBe(0);
 	});
 });
 

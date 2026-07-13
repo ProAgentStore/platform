@@ -226,7 +226,7 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 				const r = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
 					messages: msgs,
 					maxTokens: 2000,
-				})) as { response?: string };
+				}, { kind: "translate", instanceId })) as { response?: string };
 				return (r.response || "").trim();
 			} catch {
 				return ""; // no key / provider error — salvage whatever we already have

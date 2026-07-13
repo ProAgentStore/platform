@@ -1,4 +1,5 @@
 import { runUserWorkersAi } from "./user-ai.js";
+import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
 /**
@@ -190,6 +191,7 @@ export async function decideCodingAction(
 	env: Env,
 	userId: string,
 	params: { goal: CodingGoal; actionLog: string[]; snapshot: CodingPaneSnapshot },
+	usageCtx?: UsageContext,
 ): Promise<CodingDecision> {
 	const userMsg = [
 		`Steps so far:\n${params.actionLog.length ? params.actionLog.map((a, i) => `${i + 1}. ${a}`).join("\n") : "(none yet)"}`,
@@ -204,7 +206,7 @@ export async function decideCodingAction(
 			{ role: "user", content: userMsg },
 		],
 		tools: CODING_TOOLS,
-	})) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
+	}, usageCtx)) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
 
 	const call = res.tool_calls?.[0];
 	if (!call) return { thought: res.response, stuck: { why: res.response || "no action chosen" }, usage: res.usage };

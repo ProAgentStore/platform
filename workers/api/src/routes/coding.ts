@@ -728,6 +728,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 		sessionId,
 		workDir: repo?.workdir ?? undefined,
 		githubRepo: repo?.githubRepo ?? undefined,
+		instanceId,
 	})) || "(no response)";
 	// Don't persist a transient "runner offline / session hasn't started" auto-summary
 	// — it's only true at this moment, and once the runner attaches it lingers at the
@@ -846,7 +847,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 		messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
 		tools,
 		maxTokens: 700,
-	}).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
+	}, { kind: "overseer", instanceId }).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
 	const call = res.tool_calls?.find((t) => t.name === "drive_claude");
 	const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";
 	const summary = call && typeof call.arguments?.summary === "string" ? (call.arguments.summary as string).trim() : "";
@@ -908,7 +909,7 @@ codingRoutes.post("/:instanceId/coding/overseer", async (c) => {
 		messages: [{ role: "system", content: system }, { role: "user", content: userMsg }],
 		tools,
 		maxTokens: 800,
-	}).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
+	}, { kind: "overseer", instanceId }).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
 
 	const call = res.tool_calls?.find((t) => t.name === "drive_claude");
 	const repoId = call && typeof call.arguments?.repoId === "string" ? (call.arguments.repoId as string) : "";

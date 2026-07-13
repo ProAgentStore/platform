@@ -40,6 +40,8 @@ export interface CopilotArgs {
 	workDir?: string;
 	/** "owner/repo" — enables the read-only GitHub issue tools (cloud-side, no runner needed). */
 	githubRepo?: string;
+	/** For the usage ledger — attributes these calls to the instance. */
+	instanceId?: string;
 }
 
 /** Generate a co-pilot reply. Returns "" if the model gave nothing. */
@@ -70,7 +72,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 		const res = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", {
 			messages,
 			maxTokens: question ? 600 : 160,
-		})) as { response?: string };
+		}, { kind: "copilot", instanceId: args.instanceId })) as { response?: string };
 		return res.response || "";
 	}
 
@@ -81,7 +83,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 	const target = { conn: args.conn as RunnerConn, sessionId: args.sessionId, workDir: args.workDir, env, userId, githubRepo: args.githubRepo };
 	const executed = new Set<string>();
 	for (let round = 0; round < 3; round++) {
-		const raw = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, tools, maxTokens: 600 })) as Record<string, unknown>;
+		const raw = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, tools, maxTokens: 600 }, { kind: "copilot", instanceId: args.instanceId })) as Record<string, unknown>;
 		let calls = normalizeToolCalls((raw.tool_calls as unknown[]) || []);
 		if (calls.length === 0 && raw.response) calls = parseToolCallsFromText(raw.response as string);
 		if (calls.length === 0) return (raw.response as string) || "";
@@ -107,6 +109,6 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 		messages.push({ role: "user", content: "Now answer my question using ONLY what you just read, in plain language (max 2 sentences unless I asked for detail). Do NOT paste code, diffs, or file paths." });
 		if (did === 0) break; // only refused/duplicate calls — stop rather than spin
 	}
-	const fin = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, maxTokens: 600 })) as { response?: string };
+	const fin = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, maxTokens: 600 }, { kind: "copilot", instanceId: args.instanceId })) as { response?: string };
 	return fin.response || "";
 }

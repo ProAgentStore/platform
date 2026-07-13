@@ -1759,6 +1759,22 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"usage_summary",
+		"Token usage + ESTIMATED cost across all your agents, broken down by agent, model, and activity (chat/apply/coding/voice/…), over a time range. Cost is a BYOK estimate from list prices, not a bill; history starts when tracking was enabled.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			range: z.enum(["7d", "30d", "90d", "all"]).optional().describe("Time window (default 30d)."),
+		},
+		async ({ token, range }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const q = range ? `?range=${encodeURIComponent(range)}` : "";
+			const data = await authedCall(`/v1/usage${q}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"keys_status",
 		"Which AI providers have a BYOK key stored for your account (names only — values are never exposed). Useful when chat says BYOK is required.",
 		{

@@ -43,7 +43,7 @@ runRoutes.post("/:id/run", async (c) => {
 
 	let result: unknown;
 	try {
-		result = await runUserWorkersAi(c.env, session.uid, model, body.input);
+		result = await runUserWorkersAi(c.env, session.uid, model, body.input, { kind: "run", agentId: agent.id });
 	} catch (err) {
 		if (err instanceof UserAiCredentialsError) {
 			throw new HttpError(err.status, err.message);

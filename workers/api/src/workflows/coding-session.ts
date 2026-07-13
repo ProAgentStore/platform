@@ -71,7 +71,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, capture) as Promise<CodingPaneSnapshot>,
 			act: (a: CodingActionKind) =>
 				step.do(`s${n++}-act`, retry, () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: a })) as Promise<CodingPaneSnapshot>,
-			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideCodingAction(env, userId, p)) as Promise<CodingDecision>,
+			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideCodingAction(env, userId, p, { kind: "coding", instanceId })) as Promise<CodingDecision>,
 			// Poll capture until the CLI goes idle (the pane stops "thinking"/"responding").
 			// Bounded so the loop can't outrun idleRetry's 10-minute step timeout.
 			waitIdle: () =>
@@ -221,7 +221,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		// Summarize what the agent did, post it to the thread, and ping the user.
 		await step.do("watch-summarize", async () => {
 			const memory = await contextForCopilot(env, sessionId);
-			const reply = await copilotSummary(env, userId, { finished: true, memory, pane: finalPane.pane || "" }).catch(() => "");
+			const reply = await copilotSummary(env, userId, { finished: true, memory, pane: finalPane.pane || "", instanceId }).catch(() => "");
 			if (reply) await appendTimeline(env, { sessionId, instanceId, userId, type: "chat_assistant", content: reply });
 			// Save the actual terminal transcript too (deduped) — the audit trail of what
 			// Claude really did, not just the summary. Otherwise the manual chat flow only

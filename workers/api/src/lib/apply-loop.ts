@@ -1,4 +1,5 @@
 import { runUserWorkersAi } from "./user-ai.js";
+import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
 /** The candidate + job context the brain applies with. */
@@ -521,6 +522,7 @@ export async function decideAction(
 	env: Env,
 	userId: string,
 	params: { job: ApplyJob; actionLog: string[]; snapshot: PageSnapshot },
+	usageCtx?: UsageContext,
 ): Promise<ApplyDecision> {
 	// Keep the action log bounded — it grows every step (and one entry can be an
 	// 800-char sign-in link), which bloated the context until the AI call timed out.
@@ -548,7 +550,7 @@ export async function decideAction(
 		// The apply runs in a durable Workflow (2-min step budget), not an interactive
 		// request — a 25s cap crashed the whole run on a big-context decision. Give it 60s.
 		timeoutMs: 60_000,
-	})) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
+	}, usageCtx)) as { response?: string; tool_calls?: Array<{ name: string; arguments: Record<string, unknown> }>; usage?: { input: number; output: number } };
 
 	const call = res.tool_calls?.[0];
 	if (!call) {

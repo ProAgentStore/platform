@@ -113,7 +113,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		let n = 0;
 		const deps: ApplyDeps = {
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId })) as Promise<PageSnapshot>,
-			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideAction(env, userId, p)) as Promise<ApplyDecision>,
+			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideAction(env, userId, p, { kind: "apply", instanceId })) as Promise<ApplyDecision>,
 			// Capture the step index OUTSIDE step.do so it's the SAME on a resume (n
 			// increments deterministically every execution). Using it as the screenshot
 			// seq keeps R2 keys unique + stable across handoff/resume — a plain counter

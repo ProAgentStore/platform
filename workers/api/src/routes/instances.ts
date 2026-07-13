@@ -1028,7 +1028,7 @@ Reply ONLY with JSON: { "decision": "continue"|"done"|"escalate"|"failed", "next
 				{ role: "user", content: userContent },
 			],
 			maxTokens: 300,
-		})) as { response?: string };
+		}, { kind: "chat", instanceId })) as { response?: string };
 
 		// Robust parse: handles ```fences```, trailing prose, an example object first, or a
 		// pure-prose reply — instead of dead-ending the loop on anything but clean JSON.

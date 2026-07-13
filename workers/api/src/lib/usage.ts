@@ -73,6 +73,30 @@ export async function recordUsage(
 	}
 }
 
+/**
+ * Record a voice (OpenAI audio) call: a cost-only row (no LLM tokens) so STT/TTS
+ * show up on the Usage page alongside text. Best-effort, like recordUsage. The proxy
+ * is account-scoped, so instanceId is usually absent (voice attributes to totals /
+ * by-model / by-activity, not by-agent). cost is already estimated by the caller.
+ */
+export async function recordVoiceUsage(
+	env: { DB: D1Database },
+	args: { userId: string | undefined; instanceId?: string | null; model: string; costMicros: number },
+): Promise<void> {
+	try {
+		if (!args.userId) return;
+		const cost = Math.max(0, Math.floor(Number(args.costMicros) || 0));
+		await env.DB.prepare(
+			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cost_micros, created_at)
+			 VALUES (?1, ?2, NULL, ?3, 'openai', ?4, 'voice', 0, 0, ?5, datetime('now'))`,
+		)
+			.bind(crypto.randomUUID(), args.userId, args.instanceId ?? null, args.model, cost)
+			.run();
+	} catch {
+		/* observability, never load-bearing */
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Aggregation (pure — unit-tested against fixture rows)
 // ---------------------------------------------------------------------------

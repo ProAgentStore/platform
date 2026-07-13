@@ -8,6 +8,8 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
+import { recordVoiceUsage } from "../lib/usage.js";
+import { estimateTtsMicros, estimateSttMicros, secondsFromAudioBytes } from "../lib/ai-pricing.js";
 import {
 	encodeCloudflareAiCredentials,
 	runUserWorkersAi,
@@ -420,6 +422,22 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 		});
 		return new Response(errBody, { status: upstream.status, headers: respHeaders });
 	}
+	// Meter voice (OpenAI audio) for the Usage page. TTS char-count is exact (from the
+	// request `input`); STT duration is estimated from the uploaded audio size. Best-effort
+	// and cost-only (these aren't LLM tokens). Fire-and-forget — never delays the response.
+	if (providerId === "openai" && reqBody && (upstreamPath.includes("/audio/speech") || upstreamPath.includes("/audio/transcriptions"))) {
+		try {
+			if (upstreamPath.includes("/audio/speech")) {
+				const j = JSON.parse(new TextDecoder().decode(reqBody)) as { input?: unknown; model?: unknown };
+				const chars = typeof j.input === "string" ? j.input.length : 0;
+				void recordVoiceUsage(c.env, { userId: session.uid, model: `tts:${String(j.model || "tts-1")}`, costMicros: estimateTtsMicros(chars) });
+			} else {
+				const seconds = secondsFromAudioBytes(reqBody.byteLength);
+				void recordVoiceUsage(c.env, { userId: session.uid, model: "stt:whisper", costMicros: estimateSttMicros(seconds) });
+			}
+		} catch { /* metering is best-effort */ }
+	}
+
 	return new Response(upstream.body, {
 		status: upstream.status,
 		headers: respHeaders,

@@ -29,6 +29,7 @@ import { codingRoutes } from "./routes/coding.js";
 import { githubRoutes } from "./routes/github.js";
 import { relayRoutes } from "./routes/relay.js";
 import { terminalRoutes } from "./routes/terminals.js";
+import { usageRoutes } from "./routes/usage.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import type { Env } from "./types.js";
@@ -104,6 +105,7 @@ app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /se
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
 app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/terminals", terminalRoutes); // platform: /v1/terminals/nodes — all the user's CLIs
+app.route("/v1/usage", usageRoutes); // platform: /v1/usage — token/cost transparency across agents
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google

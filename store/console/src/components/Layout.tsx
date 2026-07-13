@@ -4,7 +4,7 @@ import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal } from "lucide-react";
+import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
 
 const navItems = [
@@ -12,6 +12,7 @@ const navItems = [
 	{ to: "/browse", label: "Library", icon: Library },
 	{ to: "/instances", label: "Instances", icon: Server },
 	{ to: "/terminals", label: "Terminals", icon: Terminal },
+	{ to: "/usage", label: "Usage", icon: Gauge },
 	{ to: "/dashboard", label: "Stats", icon: BarChart3 },
 	{ to: "/tools", label: "Tools", icon: Wrench },
 ] as const;
