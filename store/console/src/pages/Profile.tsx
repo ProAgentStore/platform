@@ -203,11 +203,11 @@ export default function Profile() {
 
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-6">
 				{/* Header */}
-				<div className="flex items-center gap-5 mb-6">
+				<div className="flex items-center gap-5 mb-6 min-w-0">
 					<img src={user.avatar} alt="" className="w-[72px] h-[72px] rounded-full border-[3px] border-line" />
-					<div>
-						<div className="font-display text-xl font-bold">{user.display_name || user.login}</div>
-						<div className="text-sm text-muted">@{user.login}</div>
+					<div className="min-w-0 flex-1">
+						<div className="font-display text-xl font-bold [overflow-wrap:anywhere]">{user.display_name || user.login}</div>
+						<div className="text-sm text-muted [overflow-wrap:anywhere]">@{user.login}</div>
 						{user.roles && (
 							<div className="flex gap-1.5 mt-1.5">
 								{user.roles.map(r => (
@@ -221,13 +221,13 @@ export default function Profile() {
 				{/* Account */}
 				<div className="mb-6">
 					<h3 className="text-[0.95rem] font-semibold mb-3">Account</h3>
-					<div className="flex justify-between items-center py-2.5 border-b border-line text-sm">
+					<div className="flex justify-between items-center gap-3 py-2.5 border-b border-line text-sm min-w-0">
 						<span className="text-muted font-medium">User ID</span>
-						<span className="font-mono text-sm truncate max-w-[200px]">{user.id}</span>
+						<span className="font-mono text-sm truncate max-w-[200px] min-w-0 text-right">{user.id}</span>
 					</div>
-					<div className="flex justify-between items-center py-2.5 border-b border-line text-sm">
+					<div className="flex justify-between items-center gap-3 py-2.5 border-b border-line text-sm min-w-0">
 						<span className="text-muted font-medium">GitHub</span>
-						<a href={`https://github.com/${user.login}`} target="_blank" rel="noopener" className="text-accent">{user.login}</a>
+						<a href={`https://github.com/${user.login}`} target="_blank" rel="noopener" className="text-accent min-w-0 text-right [overflow-wrap:anywhere]">{user.login}</a>
 					</div>
 				</div>
 
