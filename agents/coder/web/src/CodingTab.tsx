@@ -10,7 +10,7 @@ import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
 import RepoSettingsModal from "./RepoSettingsModal";
 import EnginesModal from "./EnginesModal";
-import { ArrowLeft, Copy, Settings, ChevronDown, Eye, SquareTerminal, Plus } from "lucide-react";
+import { ArrowLeft, Copy, Settings, ChevronDown, Eye, Square, SquareTerminal, Plus } from "lucide-react";
 
 interface Props {
 	instanceId: string;
@@ -474,10 +474,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	};
 
 	const [repoMenuOpen, setRepoMenuOpen] = useState(false);
+	const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
 	const reposRef = useRef(repos);
 	reposRef.current = repos;
 	const switchToRepo = (r: CodingRepo) => {
 		setRepoMenuOpen(false);
+		setSessionMenuOpen(false);
 		const active = getActiveSession(r.id);
 		if (active) openTerminal(active);
 		else startSession(r.id);
@@ -526,11 +528,24 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					<button type="button" onClick={() => setView("terminal")} title="Terminal" aria-label="Terminal" aria-pressed={view === "terminal"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}><SquareTerminal size={14} /><span className="hidden sm:inline">Terminal</span></button>
 				</div>
 				<div className="ml-auto flex gap-1 shrink-0">
-					<button type="button" onClick={() => setSettingsRepoId(openRepo?.id || openSession.repoId)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={13} /></button>
+					<div className="relative">
+						<button type="button" onClick={() => setSessionMenuOpen((v) => !v)} title="Session settings" aria-label="Session settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent sm:hidden"><Settings size={13} /></button>
+						<button type="button" onClick={() => setSettingsRepoId(openRepo?.id || openSession.repoId)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block"><Settings size={13} /></button>
+						{sessionMenuOpen && (
+							<>
+								<button type="button" aria-label="Close session menu" onClick={() => setSessionMenuOpen(false)} className="fixed inset-0 z-40 cursor-default sm:hidden" />
+								<div className="absolute right-0 top-full mt-1 z-50 min-w-44 bg-panel border border-line rounded-lg shadow-lg py-1 sm:hidden">
+									<button type="button" onClick={() => { setSessionMenuOpen(false); setSettingsRepoId(openRepo?.id || openSession.repoId); }} className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"><Settings size={14} /> Repo settings</button>
+									<div className="border-t border-line my-1" />
+									<button type="button" onClick={() => { setSessionMenuOpen(false); endSession(); }} className="w-full text-left px-3 py-2 text-sm text-red hover:bg-red/10 flex items-center gap-2"><Square size={14} /> Stop session</button>
+								</div>
+							</>
+						)}
+					</div>
 					<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Copy size={12} /><span>Copy</span></button>
 					<button type="button" onClick={freshStart} title="Fresh start" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Fresh</button>
 					<button type="button" onClick={restartSession} title="Restart CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Restart</button>
-					<button type="button" onClick={endSession} title="End session" className="text-xs px-1.5 py-1 rounded-md border border-red text-red font-semibold">End</button>
+					<button type="button" onClick={endSession} title="End session" aria-label="End session" className="text-xs px-1.5 py-1 rounded-md border border-red text-red font-semibold hidden sm:block"><Square size={13} /></button>
 				</div>
 			</div>
 		);
@@ -538,7 +553,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		// Deps so this only re-runs when the header's VISIBLE content changes. With no
 		// deps it was a render storm: each run handed setChildHeader a fresh element →
 		// re-rendered the parent → this child → effect again, continuously.
-	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen]);
+	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen]);
 
 	const settingsModal = settingsRepoId
 		? (() => {
