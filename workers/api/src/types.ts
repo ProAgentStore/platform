@@ -29,10 +29,10 @@ export interface Env {
 	KEY_ENCRYPTION_KEY?: string;
 	STRIPE_SECRET_KEY?: string;
 	STRIPE_WEBHOOK_SECRET?: string;
-	/** price_… id of the $9/mo Pro subscription (non-secret, wrangler [vars]). */
+	/** price_… id of the $5/mo Pro subscription (non-secret, wrangler [vars]). */
 	STRIPE_PRICE_ID?: string;
-	/** "1"/"true" = ENFORCE the paid tier (free caps + Pro-only runner). Unset = soft
-	 *  launch: billing works but no gate blocks anything. */
+	/** "1"/"true" = require Pro for signed-in platform APIs. Unset = soft launch:
+	 *  billing works but no platform gate blocks anything. */
 	PAYWALL_ENFORCE?: string;
 	/** Google OAuth client used for the Gmail email-access connection. */
 	GOOGLE_CLIENT_ID?: string;

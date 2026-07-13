@@ -1,5 +1,5 @@
 /**
- * Billing routes — the $9/mo ProAgentStore Pro subscription (see lib/billing.ts).
+ * Billing routes — the $5/mo ProAgentStore Pro subscription (see lib/billing.ts).
  * Checkout + customer portal + the Stripe webhook that keeps the users columns
  * in sync. Webhook URL registered with Stripe:
  * https://api.proagentstore.online/v1/billing/webhook

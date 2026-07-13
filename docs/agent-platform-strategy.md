@@ -65,11 +65,12 @@ capability registry. Over time, converge toward the shared agent runtime so
 
 ## Create → use → pay
 
-Economic model already exists (single $9/mo platform sub; creators paid by **usage
-share**, Spotify-style — `pas/platform/STRATEGY.md`). Missing plumbing: **per-agent
-metering** (executions/tokens — `usage`/`agent_executions` tables exist; Dynamic
-Workers/WfP add per-Worker analytics) → monthly Stripe Connect payout split. Works
-identically for Tier 1 and Tier 2.
+The PAS economic model exists (single $5/mo platform sub; creators paid by **usage
+share**, Spotify-style — `pas/platform/STRATEGY.md`). PAGS billing is deferred for
+now; when enabled later, the missing plumbing is **per-agent metering**
+(executions/tokens — `usage`/`agent_executions` tables exist; Dynamic Workers/WfP
+add per-Worker analytics) → monthly Stripe Connect payout split. Works identically
+for Tier 1 and Tier 2.
 
 ## The flywheel
 

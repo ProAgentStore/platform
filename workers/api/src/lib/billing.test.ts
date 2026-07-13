@@ -204,7 +204,7 @@ describe("entitlement", () => {
 		await expect(requirePro(envWith(null), session(["user"]))).resolves.toBeUndefined();
 		await expect(requirePro(envWith(null, "1"), session(["user"]))).rejects.toMatchObject({
 			status: 402,
-			message: expect.stringContaining("Pro ($9/mo)"),
+			message: expect.stringContaining("platform access requires Pro ($5/mo)"),
 		});
 		// entitled user passes even when enforced
 		await expect(
@@ -212,9 +212,9 @@ describe("entitlement", () => {
 		).resolves.toBeUndefined();
 	});
 
-	it("instanceCapFor: free+enforced = 2, otherwise the 100 fair-use cap", () => {
-		expect(instanceCapFor(false, true)).toBe(2);
-		expect(instanceCapFor(true, true)).toBe(100);
-		expect(instanceCapFor(false, false)).toBe(100);
+	it("instanceCapFor: unpaid+enforced = 0, otherwise effectively unlimited", () => {
+		expect(instanceCapFor(false, true)).toBe(0);
+		expect(instanceCapFor(true, true)).toBe(Number.MAX_SAFE_INTEGER);
+		expect(instanceCapFor(false, false)).toBe(Number.MAX_SAFE_INTEGER);
 	});
 });

@@ -2685,7 +2685,7 @@ paths:
   /v1/billing/status:
     get:
       summary: Get subscription status
-      description: Returns whether the user has an active $9/mo platform subscription.
+      description: Returns dormant PAGS billing status. Production billing is currently disabled and not enforced.
       operationId: getBillingStatus
       tags: [Billing]
       responses:

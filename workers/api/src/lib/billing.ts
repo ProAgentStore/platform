@@ -1,5 +1,5 @@
 /**
- * Stripe billing — the $9/mo ProAgentStore Pro subscription, per USER.
+ * Stripe billing — the $5/mo ProAgentStore Pro subscription, per USER.
  *
  * Vendored from pws/platform packages/worker/src/billing.ts (raw Stripe REST —
  * no SDK, ~200KB smaller; Workers-native HMAC webhook verification), adapted
@@ -7,8 +7,9 @@
  * columns that have existed since migration 0001 (stripe_customer_id,
  * subscription_status, subscription_expires_at).
  *
- * Entitlement: admins are always Pro (operator comp). Gates only enforce when
- * PAYWALL_ENFORCE is "1"/"true" — the soft-launch switch.
+ * Entitlement: admins are always Pro (operator comp). When PAYWALL_ENFORCE is
+ * "1"/"true", signed-in platform APIs require Pro unless explicitly allowlisted
+ * by the API entrypoint (auth, billing, public endpoints).
  */
 import { HttpError } from "./auth.js";
 import type { Env, SessionPayload } from "../types.js";
@@ -16,7 +17,7 @@ import type { Env, SessionPayload } from "../types.js";
 const STRIPE_API = "https://api.stripe.com/v1";
 
 const UPGRADE_MESSAGE =
-	"This feature requires ProAgentStore Pro ($9/mo). Upgrade at https://proagentstore.online/console/profile";
+	"ProAgentStore platform access requires Pro ($5/mo). Upgrade at https://proagentstore.online/console/profile";
 
 async function stripePost(
 	env: Env,
@@ -197,15 +198,15 @@ export async function isEntitled(env: Env, session: SessionPayload): Promise<boo
 	return isSubscriptionActive(subFromUserRow(row));
 }
 
-/** Gate a Pro-only route. No-op unless the paywall is enforced. */
+/** Gate paid platform access. No-op unless the paywall is enforced. */
 export async function requirePro(env: Env, session: SessionPayload): Promise<void> {
 	if (!isPaywallEnforced(env)) return;
 	if (!(await isEntitled(env, session))) throw new HttpError(402, UPGRADE_MESSAGE);
 }
 
-/** Instance cap for a user: free tier 2, Pro (or unenforced) the 100 fair-use cap. */
+/** Instance cap for a user: Pro (or unenforced dev mode) is effectively unlimited. */
 export function instanceCapFor(entitled: boolean, enforced: boolean): number {
-	return enforced && !entitled ? 2 : 100;
+	return enforced && !entitled ? 0 : Number.MAX_SAFE_INTEGER;
 }
 
 /**

@@ -56,11 +56,6 @@ export default function Browse() {
 			navigate(`/instances/${r.instanceId}`);
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
-			// Free-tier cap / Pro-only feature: offer the one-tap path to Billing.
-			if (/Pro|\$9/.test(msg)) {
-				if (confirm(`${msg}\n\nOpen billing?`)) navigate("/profile");
-				return;
-			}
 			alert(msg);
 		} finally {
 			setBusy(null);

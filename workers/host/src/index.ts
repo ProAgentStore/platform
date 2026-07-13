@@ -54,6 +54,11 @@ const HTML_HEADERS: Record<string, string> = {
 		"object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
 };
 
+const CONSOLE_HEADERS: Record<string, string> = {
+	...HTML_HEADERS,
+	"Cache-Control": "no-store",
+};
+
 const JS_HEADERS: Record<string, string> = {
 	"Content-Type": "application/javascript; charset=utf-8",
 	"Cache-Control": "public, max-age=3600",
@@ -135,13 +140,15 @@ export default {
 
 		// Static pages
 		const page = PAGES[path];
-		if (page) return new Response(page, { headers: HTML_HEADERS });
+		if (page) {
+			return new Response(page, { headers: path === "/console" || path === "/console/" ? CONSOLE_HEADERS : HTML_HEADERS });
+		}
 
 		if (
 			path.startsWith("/console/") ||
 			(url.hostname === "console.proagentstore.online" && !path.includes("."))
 		) {
-			return new Response(consolePage, { headers: HTML_HEADERS });
+			return new Response(consolePage, { headers: CONSOLE_HEADERS });
 		}
 
 		// JS assets

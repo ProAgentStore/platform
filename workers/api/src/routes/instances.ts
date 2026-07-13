@@ -95,9 +95,7 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 		.first<{ n: number }>();
 	const nth = (sameAgent?.n ?? 0) + 1;
 
-	// Cap total instances per user: free tier 2, Pro the 100 fair-use cap (which also
-	// bounds resource-exhaustion / notification-spam abuse — subscribe is expensive:
-	// template DO fetch + instance DO init + KB copy + creator notification).
+	// Cap total instances per user: paid platform users are effectively unlimited for now.
 	const count = await c.env.DB.prepare(
 		"SELECT COUNT(*) AS n FROM agent_instances WHERE user_id = ?1",
 	)
@@ -108,10 +106,10 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	const cap = instanceCapFor(entitled, enforced);
 	if ((count?.n ?? 0) >= cap)
 		throw new HttpError(
-			429,
-			cap === 2
-				? "Free plan limit reached (2 agents). Upgrade to Pro ($9/mo) for up to 100."
-				: "Subscription limit reached (100 agents). Cancel one to add another.",
+			cap === 0 ? 402 : 429,
+			cap === 0
+				? "ProAgentStore billing is not enabled yet."
+				: "Subscription limit reached. Cancel one to add another.",
 		);
 
 	const instanceId = crypto.randomUUID();
