@@ -8,7 +8,7 @@ import { renderMd, mdLite, esc, escAttr, formatTime } from "@proagentstore/sdk/u
 // Lets an agent ship its OWN UI as a published bundle instead of hardcoding it
 // into the console. A surface bundle is an ESM module that exports:
 //
-//   export function mount(ctx: SurfaceMountContext): void | (() => void)
+//   export function mount(ctx: SurfaceMountContext): undefined | (() => void)
 //
 // It renders into ctx.el and returns an optional cleanup function. The platform
 // injects ctx.sdk (api/auth/markdown helpers) so the bundle never has to ship the
@@ -54,7 +54,7 @@ export interface SurfaceMountContext {
 }
 
 type SurfaceModule = {
-	mount?: (ctx: SurfaceMountContext) => void | (() => void);
+	mount?: (ctx: SurfaceMountContext) => undefined | (() => void);
 };
 
 const sdk: SurfaceSdk = { api, getToken, apiBase: API, renderMd, mdLite, esc, escAttr, formatTime };
@@ -70,7 +70,7 @@ export default function DynamicSurface({ bundleUrl, instanceId, sessionId }: {
 
 	useEffect(() => {
 		let cancelled = false;
-		let unmount: void | (() => void);
+		let unmount: undefined | (() => void);
 		setError("");
 		setLoading(true);
 		// Refuse a cross-origin bundle BEFORE importing it — a creator-hosted script would

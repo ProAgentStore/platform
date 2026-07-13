@@ -54,21 +54,21 @@ export default function RepoTab({ instanceId }: Props) {
 		}
 	}, [instanceId]);
 
-	const stopPoll = () => {
+	const stopPoll = useCallback(() => {
 		if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-	};
+	}, []);
 	const startPoll = useCallback(() => {
 		stopPoll();
 		pollRef.current = setInterval(async () => {
 			const active = await loadStatus();
 			if (!active) stopPoll();
 		}, 1500);
-	}, [loadStatus]);
+	}, [loadStatus, stopPoll]);
 
 	useEffect(() => {
 		(async () => { if (await loadStatus()) startPoll(); })();
 		return stopPoll;
-	}, [loadStatus, startPoll]);
+	}, [loadStatus, startPoll, stopPoll]);
 
 	const addRepo = async (repoUrl: string) => {
 		if (!repoUrl.trim()) return;

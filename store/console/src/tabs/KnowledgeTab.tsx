@@ -41,7 +41,7 @@ interface ConnectorGrant {
 	resourceType: string;
 }
 
-export default function KnowledgeTab({ instanceId, isApply }: Props) {
+export default function KnowledgeTab({ instanceId }: Props) {
 	const [subTab, setSubTab] = useState<KbSubTab>("docs");
 	const [docs, setDocs] = useState<KnowledgeDoc[]>([]);
 	const [credentials, setCredentials] = useState<Credential[]>([]);
@@ -425,7 +425,6 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 									onChange={(e) => setEditTitle(e.target.value)}
 									placeholder="Document title"
 									className="flex-1 min-w-[12rem] bg-panel border border-line rounded-lg px-3 py-2 text-sm font-semibold"
-									autoFocus
 								/>
 								<div className="flex gap-1.5">
 									<button type="button" onClick={() => setPreview((p) => !p)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold">{preview ? "Write" : "Preview"}</button>
@@ -434,6 +433,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 								</div>
 							</div>
 							{preview ? (
+								// biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by knowledge previews.
 								<div className="bg-paper border border-line rounded-xl p-4 min-h-[320px] msg-md" dangerouslySetInnerHTML={{ __html: renderMd(editContent || "_Nothing to preview yet._") }} />
 							) : (
 								<textarea
@@ -463,6 +463,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 								</div>
 							</div>
 							{openDoc.source && <div className="text-xs text-muted-soft mb-2">{openDoc.source}{openDoc.createdAt ? ` · ${formatTime(openDoc.createdAt)}` : ""}</div>}
+							{/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by knowledge documents. */}
 							<div className="bg-paper border border-line rounded-xl p-4 msg-md" dangerouslySetInnerHTML={{ __html: renderMd(openDoc.content || "_This document is empty. Click Edit to add content._") }} />
 						</div>
 					);
@@ -637,7 +638,7 @@ export default function KnowledgeTab({ instanceId, isApply }: Props) {
 									<button key={d.id} type="button" onClick={() => openView(d)} className="text-left bg-panel border border-line rounded-lg p-3 flex justify-between items-start gap-3 hover:border-accent transition-colors">
 										<div className="min-w-0">
 											<div className="font-semibold text-sm truncate">{d.title}</div>
-											<div className="text-xs text-muted mt-0.5 line-clamp-1">{(d.content || "").replace(/[#*_`>\-]/g, "").trim().slice(0, 100) || d.source || "Empty"}</div>
+											<div className="text-xs text-muted mt-0.5 line-clamp-1">{(d.content || "").replace(/[#*_`>-]/g, "").trim().slice(0, 100) || d.source || "Empty"}</div>
 										</div>
 										<span className="text-xs text-accent shrink-0">Open →</span>
 									</button>

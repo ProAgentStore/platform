@@ -35,15 +35,19 @@ export function useGloss(instanceId: string | undefined, tab: string, messages: 
 	const [wordTap, setWordTap] = useState(true);
 	const [fontSize, setFontSize] = useState("medium");
 	const [translations, setTranslations] = useState<Record<string, MessageGloss>>({});
+	const translationsRef = useRef<Record<string, MessageGloss>>({});
 	const inFlight = useRef<Set<string>>(new Set());
 	// Ref mirror so ref-stable callers (doSend) see the live value.
 	const enabledRef = useRef(false);
 	useEffect(() => { enabledRef.current = enabled; }, [enabled]);
+	useEffect(() => { translationsRef.current = translations; }, [translations]);
 
 	// Reset the cache only when switching instances (not tabs).
 	useEffect(() => {
+		if (!instanceId) return;
 		setEnabled(false);
 		setTranslations({});
+		translationsRef.current = {};
 		inFlight.current = new Set();
 	}, [instanceId]);
 
@@ -70,9 +74,10 @@ export function useGloss(instanceId: string | undefined, tab: string, messages: 
 	// first) — each is computed once EVER, then served embedded.
 	useEffect(() => {
 		if (!enabled || !instanceId) return;
+		const currentTranslations = translationsRef.current;
 		const seeded: Record<string, MessageGloss> = {};
 		for (const m of messages) {
-			if (m.role === "assistant" && m.gloss?.translation && !(m.content in translations)) {
+			if (m.role === "assistant" && m.gloss?.translation && !(m.content in currentTranslations)) {
 				seeded[m.content] = m.gloss;
 			}
 		}
@@ -80,7 +85,7 @@ export function useGloss(instanceId: string | undefined, tab: string, messages: 
 		const pending = messages
 			.filter((m) => m.role === "assistant" && m.content?.trim())
 			.reverse()
-			.filter((m) => !(m.content in translations) && !(m.content in seeded) && !inFlight.current.has(m.content));
+			.filter((m) => !(m.content in currentTranslations) && !(m.content in seeded) && !inFlight.current.has(m.content));
 		for (const m of pending) inFlight.current.add(m.content);
 		(async () => {
 			for (const m of pending) {
@@ -95,7 +100,7 @@ export function useGloss(instanceId: string | undefined, tab: string, messages: 
 				}
 			}
 		})();
-	}, [enabled, instanceId, messages]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [enabled, instanceId, messages]);
 
 	/** One-card rendering for a FRESH reply: fetch its gloss BEFORE the caller appends
 	 *  the message (the thinking spinner covers the wait). Capped at 6s — a slow or

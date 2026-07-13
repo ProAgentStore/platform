@@ -34,9 +34,9 @@ function humanEvent(ev: RuntimeEvent): string {
 function linkify(text: string): ReactNode {
 	if (!text) return text;
 	const parts = text.split(/(https?:\/\/[^\s"'<>)\]]+)/g);
-	return parts.map((p, i) =>
+	return parts.map((p) =>
 		/^https?:\/\//.test(p)
-			? <a key={i} href={p} target="_blank" rel="noreferrer" className="text-accent hover:underline break-all">{p}</a>
+			? <a key={p} href={p} target="_blank" rel="noreferrer" className="text-accent hover:underline break-all">{p}</a>
 			: p,
 	);
 }
@@ -87,8 +87,8 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 		return () => { document.body.style.overflow = prev; };
 	}, []);
 
-	const send = (body: Record<string, unknown>) =>
-		api(`/v1/instances/${instanceId}/takeover/${taskId}/input`, { method: "POST", body: JSON.stringify(body) }).catch(() => {});
+	const send = useCallback((body: Record<string, unknown>) =>
+		api(`/v1/instances/${instanceId}/takeover/${taskId}/input`, { method: "POST", body: JSON.stringify(body) }).catch(() => {}), [instanceId, taskId]);
 
 	const toXY = (clientX: number, clientY: number) => {
 		const img = imgRef.current; if (!img || !frame) return null;
@@ -126,7 +126,7 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 		};
 		img.addEventListener("wheel", onWheelNative, { passive: false });
 		return () => img.removeEventListener("wheel", onWheelNative);
-	}, [!!frame, poll]); // attach once the frame (img) mounts
+	}, [poll, send]); // attach once the frame (img) mounts
 	const onKey = (e: React.KeyboardEvent) => {
 		if (e.key === "Escape") { onClose(); return; }
 		if (e.key === "Tab") return; // let focus leave the panel
@@ -141,6 +141,9 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 	return (
 		<div
 			ref={boxRef}
+			role="application"
+			aria-label="Live remote browser control"
+			// biome-ignore lint/a11y/noNoninteractiveTabindex: this full-screen remote-control surface must capture keyboard input for the agent browser.
 			tabIndex={0}
 			onKeyDown={onKey}
 			className="fixed inset-0 z-[100] bg-black flex flex-col outline-none"
@@ -156,6 +159,7 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 			</div>
 			<div className="flex-1 min-h-0 flex items-center justify-center overflow-hidden bg-black">
 				{frame ? (
+					// biome-ignore lint/a11y/useKeyWithClickEvents: remote browser clicks require pointer coordinates from the rendered screenshot.
 					<img
 						ref={imgRef}
 						src={frame.frame}
@@ -226,7 +230,7 @@ export default function RunDetail() {
 	const needsInputEv = events.slice().reverse().find((e) => e.type === "agent.needs_input");
 	const reason = String((handoffEv?.data as Record<string, unknown>)?.reason ?? "");
 	const kind: "value" | "captcha" | "stuck" =
-		reason === "needs_input" || !!needsInputEv || /needs a value|enter it/i.test(handoffEv?.message ?? "") ? "value"
+		reason === "needs_input" || needsInputEv || /needs a value|enter it/i.test(handoffEv?.message ?? "") ? "value"
 		: reason === "challenge" || /captcha|verify you|human check/i.test(`${handoffEv?.message ?? ""}`) ? "captcha" : "stuck";
 	const detail = needsInputEv?.message ?? handoffEv?.message ?? "";
 	const field = task?.handoff_field || detail.replace(/^Needs your input\s*[—-]\s*/i, "").split("(")[0].trim() || "your answer";
@@ -331,7 +335,7 @@ export default function RunDetail() {
 						</div>
 					)}
 					<div className="flex gap-2 mt-2">
-						<input autoFocus value={inputVal} onChange={(e) => setInputVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") sendValue(inputVal); }} placeholder={field} className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink" />
+						<input value={inputVal} onChange={(e) => setInputVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") sendValue(inputVal); }} placeholder={field} className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink" />
 						<button type="button" disabled={!inputVal.trim()} onClick={() => sendValue(inputVal)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base disabled:opacity-40 shrink-0">Send</button>
 					</div>
 				</div>

@@ -184,13 +184,28 @@ export default function Profile() {
 				<div className="mb-6">
 					<h3 className="text-[0.95rem] font-semibold mb-3">Edit Profile</h3>
 					<div className="flex flex-col gap-2">
-						<div><label className="text-xs text-muted font-semibold">Display Name</label><input value={displayName} onChange={e => setDisplayName(e.target.value)} /></div>
-						<div><label className="text-xs text-muted font-semibold">Bio</label><input value={bio} onChange={e => setBio(e.target.value)} /></div>
+						<label className="flex flex-col gap-1">
+							<span className="text-xs text-muted font-semibold">Display Name</span>
+							<input value={displayName} onChange={e => setDisplayName(e.target.value)} />
+						</label>
+						<label className="flex flex-col gap-1">
+							<span className="text-xs text-muted font-semibold">Bio</span>
+							<input value={bio} onChange={e => setBio(e.target.value)} />
+						</label>
 						<div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
-							<div><label className="text-xs text-muted font-semibold">Website</label><input value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://..." /></div>
-							<div><label className="text-xs text-muted font-semibold">Twitter/X</label><input value={twitter} onChange={e => setTwitter(e.target.value)} placeholder="username" /></div>
+							<label className="flex flex-col gap-1">
+								<span className="text-xs text-muted font-semibold">Website</span>
+								<input value={website} onChange={e => setWebsite(e.target.value)} placeholder="https://..." />
+							</label>
+							<label className="flex flex-col gap-1">
+								<span className="text-xs text-muted font-semibold">Twitter/X</span>
+								<input value={twitter} onChange={e => setTwitter(e.target.value)} placeholder="username" />
+							</label>
 						</div>
-						<div><label className="text-xs text-muted font-semibold">Slack Webhook</label><input value={slack} onChange={e => setSlack(e.target.value)} placeholder="https://hooks.slack.com/..." /></div>
+						<label className="flex flex-col gap-1">
+							<span className="text-xs text-muted font-semibold">Slack Webhook</span>
+							<input value={slack} onChange={e => setSlack(e.target.value)} placeholder="https://hooks.slack.com/..." />
+						</label>
 						<button type="button" onClick={saveProfile} className="self-start text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold">Save Profile</button>
 					</div>
 				</div>
@@ -202,10 +217,10 @@ export default function Profile() {
 						<p className="text-sm text-muted mb-3">Structured info your agents use to fill forms. Private — never shown publicly.</p>
 						<div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
 							{identityFields.map(f => (
-								<div key={f.key}>
-									<label className="text-xs text-muted font-semibold">{f.label}{f.private ? <span className="text-muted-soft"> · private</span> : ""}</label>
+								<label key={f.key} className="flex flex-col gap-1">
+									<span className="text-xs text-muted font-semibold">{f.label}{f.private ? <span className="text-muted-soft"> · private</span> : ""}</span>
 									<input value={cpValues[f.key] || ""} onChange={e => setCpValues(p => ({ ...p, [f.key]: e.target.value }))} />
-								</div>
+								</label>
 							))}
 						</div>
 						{prefFields.length > 0 && (
@@ -213,10 +228,10 @@ export default function Profile() {
 								<div className="mt-3 font-bold text-sm">Job Preferences <span className="font-normal text-muted text-xs">— guides the agent's answers</span></div>
 								<div className="grid grid-cols-2 gap-2 mt-1 max-sm:grid-cols-1">
 									{prefFields.map(f => (
-										<div key={f.key}>
-											<label className="text-xs text-muted font-semibold">{f.label}</label>
+										<label key={f.key} className="flex flex-col gap-1">
+											<span className="text-xs text-muted font-semibold">{f.label}</span>
 											<input value={cpValues[f.key] || ""} onChange={e => setCpValues(p => ({ ...p, [f.key]: e.target.value }))} />
-										</div>
+										</label>
 									))}
 								</div>
 							</>

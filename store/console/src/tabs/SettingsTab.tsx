@@ -88,6 +88,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [triggerConnectorGrantId, setTriggerConnectorGrantId] = useState("");
 	const triggerConnectorGrants = triggerConnectorProvider === "google_drive" ? driveGrants : workdriveGrants;
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: initial settings hydration calls the trigger loader once for this instance; trigger CRUD refreshes itself.
 	useEffect(() => {
 		(async () => {
 			try {
@@ -162,7 +163,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			} catch {}
 			loadTriggers();
 		})();
-	}, [instanceId]); // eslint-disable-line react-hooks/exhaustive-deps
+	}, [instanceId]);
 
 	// Cloud connectors open OAuth in a popup; re-check when the user returns to this tab.
 	useEffect(() => {
@@ -478,12 +479,15 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					<p className="text-sm text-muted mb-3">
 						Settings this agent understands. They apply to every conversation with it.
 					</p>
-					{agentFields.map((f) => (
+					{agentFields.map((f) => {
+						const controlId = `agent-setting-${f.id}`;
+						return (
 						<div key={f.id} className="mb-3">
-							<label className="block text-sm font-semibold mb-1">{f.label}</label>
+							<label htmlFor={controlId} className="block text-sm font-semibold mb-1">{f.label}</label>
 							{f.description && <p className="text-xs text-muted mb-1">{f.description}</p>}
 							{f.type === "select" && (
 								<select
+									id={controlId}
 									value={String(agentSettings[f.id] ?? "")}
 									onChange={(e) => saveSetting(f.id, e.target.value)}
 									className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"
@@ -497,6 +501,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							{f.type === "toggle" && (
 								<label className="flex items-center gap-2 text-sm cursor-pointer">
 									<input
+										id={controlId}
 										type="checkbox"
 										checked={agentSettings[f.id] === true}
 										onChange={(e) => saveSetting(f.id, e.target.checked)}
@@ -507,6 +512,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							)}
 							{f.type === "text" && (
 								<input
+									id={controlId}
 									value={String(agentSettings[f.id] ?? "")}
 									onChange={(e) => setAgentSettings((s) => ({ ...s, [f.id]: e.target.value }))}
 									onBlur={(e) => saveSetting(f.id, e.target.value)}
@@ -515,6 +521,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							)}
 							{f.type === "number" && (
 								<input
+									id={controlId}
 									type="number"
 									value={agentSettings[f.id] === undefined ? "" : Number(agentSettings[f.id])}
 									onChange={(e) => setAgentSettings((s) => ({ ...s, [f.id]: Number(e.target.value) }))}
@@ -526,7 +533,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 								<p className="text-xs text-muted mt-1">Also sets the voice language for speech recognition and speaking.</p>
 							)}
 						</div>
-					))}
+						);
+					})}
 					{settingsMsg && <div className="text-sm text-muted mt-1">{settingsMsg}</div>}
 				</div>
 			)}
@@ -730,36 +738,36 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					Start work from an inbound webhook or a schedule. Triggers run inside this private instance.
 				</p>
 				<div className="grid grid-cols-1 md:grid-cols-[1.2fr_0.8fr_0.9fr_0.9fr_auto] gap-2 items-end mb-4">
-					<div>
-						<label className="block text-xs font-semibold mb-1">Name</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-semibold">Name</span>
 						<input value={triggerName} onChange={(e) => setTriggerName(e.target.value)} placeholder="Daily digest" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
-					</div>
-					<div>
-						<label className="block text-xs font-semibold mb-1">Type</label>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-semibold">Type</span>
 						<select value={triggerType} onChange={(e) => setTriggerType(e.target.value as "webhook" | "cron")} className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full">
 							<option value="webhook">Webhook</option>
 							<option value="cron">Cron</option>
 						</select>
-					</div>
-					<div>
-						<label className="block text-xs font-semibold mb-1">Action</label>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-semibold">Action</span>
 						<select value={triggerAction} onChange={(e) => setTriggerAction(e.target.value as TriggerActionType)} className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full">
 							<option value="create_task">Create task</option>
 							<option value="add_knowledge">Add knowledge</option>
 							<option value="sync_connector">Sync folder</option>
 							<option value="log_event">Log event</option>
 						</select>
-					</div>
-					<div>
-						<label className="block text-xs font-semibold mb-1">Schedule</label>
+					</label>
+					<label className="flex flex-col gap-1">
+						<span className="text-xs font-semibold">Schedule</span>
 						<input disabled={triggerType !== "cron"} value={triggerSchedule} onChange={(e) => setTriggerSchedule(e.target.value)} placeholder="@daily" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full disabled:opacity-50" />
-					</div>
+					</label>
 					<button type="button" onClick={createTrigger} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold">Add</button>
 				</div>
 				{triggerAction === "sync_connector" && (
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-end mb-4">
-						<div>
-							<label className="block text-xs font-semibold mb-1">Connector</label>
+						<label className="flex flex-col gap-1">
+							<span className="text-xs font-semibold">Connector</span>
 							<select
 								value={triggerConnectorProvider}
 								onChange={(e) => {
@@ -771,9 +779,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 								<option value="google_drive">Google Drive</option>
 								<option value="zoho_workdrive">Zoho WorkDrive</option>
 							</select>
-						</div>
-						<div>
-							<label className="block text-xs font-semibold mb-1">Folder grant</label>
+						</label>
+						<label className="flex flex-col gap-1">
+							<span className="text-xs font-semibold">Folder grant</span>
 							<select
 								value={triggerConnectorGrantId || triggerConnectorGrants[0]?.id || ""}
 								onChange={(e) => setTriggerConnectorGrantId(e.target.value)}
@@ -785,7 +793,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 									<option key={grant.id} value={grant.id}>{grant.resourceName}</option>
 								))}
 							</select>
-						</div>
+						</label>
 					</div>
 				)}
 				<div className="flex flex-col gap-2">
@@ -825,11 +833,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Voice</h3>
 
-				<label className="block text-sm font-semibold mb-1">Speech recognition (how it hears you)</label>
+				<label htmlFor="voice-stt-mode" className="block text-sm font-semibold mb-1">Speech recognition (how it hears you)</label>
 				<p className="text-xs text-muted mb-2">
 					<b>Dictation</b> shows words <b>live as you speak</b> (real-time) — on-device, instant, but error-prone with accents. <b>Smart (AI)</b> records your whole turn and transcribes it with OpenAI Whisper — far more accurate, but the text only appears <b>at the end</b> (no live words). Whisper needs your OpenAI key (Knowledge → Credentials; falls back to Dictation without it).
 				</p>
 				<select
+					id="voice-stt-mode"
 					value={sttMode}
 					onChange={(e) => { setSttMode(e.target.value); saveVoice({ sttMode: e.target.value }); }}
 					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
@@ -845,11 +854,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					)
 				)}
 
-				<label className="block text-sm font-semibold mb-1 mt-4">Voice output (how it speaks back)</label>
+				<label htmlFor="voice-tts-provider" className="block text-sm font-semibold mb-1 mt-4">Voice output (how it speaks back)</label>
 				<p className="text-xs text-muted mb-2">
 					<b>Browser voice</b> is built-in and free. <b>Natural (OpenAI)</b> uses OpenAI TTS for a far more human voice (needs your OpenAI key; falls back to the browser voice without it).
 				</p>
 				<select
+					id="voice-tts-provider"
 					value={ttsProvider}
 					onChange={(e) => { setTtsProvider(e.target.value); saveVoice({ provider: e.target.value }); }}
 					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
@@ -862,8 +872,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				)}
 				{ttsProvider.includes("openai") && (
 					<div className="mb-2">
-						<label className="block text-xs font-semibold mb-1">Voice</label>
+						<label htmlFor="voice-openai-voice" className="block text-xs font-semibold mb-1">Voice</label>
 						<select
+							id="voice-openai-voice"
 							value={ttsVoice}
 							onChange={(e) => { setTtsVoice(e.target.value); saveVoice({ openai: { ...((voiceSettings?.openai as Record<string, unknown>) || {}), voice: e.target.value } }); }}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
@@ -875,8 +886,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					</div>
 				)}
 				<div className="mb-1">
-					<label className="block text-xs font-semibold mb-1">Speaking speed</label>
+					<label htmlFor="voice-speed" className="block text-xs font-semibold mb-1">Speaking speed</label>
 					<select
+						id="voice-speed"
 						value={speed}
 						onChange={(e) => { setSpeed(Number(e.target.value)); saveVoice({ speed: Number(e.target.value) }); }}
 						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
@@ -890,12 +902,13 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 				<div className="border-t border-line my-3" />
 
-				<label className="block text-sm font-semibold mb-1">Conversation — pause before sending</label>
+				<label htmlFor="voice-silence" className="block text-sm font-semibold mb-1">Conversation — pause before sending</label>
 				<p className="text-xs text-muted mb-2">
 					How long to keep listening after you stop talking. Higher = pause mid-sentence without being cut off.
 				</p>
 				<div className="flex items-center gap-2 flex-wrap">
 					<select
+						id="voice-silence"
 						value={silenceMs}
 						onChange={(e) => { setSilenceMs(Number(e.target.value)); saveVoice({ silenceMs: Number(e.target.value) }); }}
 						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
@@ -911,11 +924,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{/* Mic sensitivity — only Whisper (AI) uses the mic-level pause detector. */}
 				{sttMode === "openai" && (
 					<div className="mt-4">
-						<label className="block text-sm font-semibold mb-1">Mic sensitivity</label>
+						<label htmlFor="voice-sensitivity" className="block text-sm font-semibold mb-1">Mic sensitivity</label>
 						<p className="text-xs text-muted mb-2">
 							If it keeps listening and never sends, your mic is noisy — lower this. If it cuts you off too soon, raise it.
 						</p>
 						<select
+							id="voice-sensitivity"
 							value={sensitivity}
 							onChange={(e) => { setSensitivity(Number(e.target.value)); saveVoice({ sensitivity: Number(e.target.value) }); }}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
@@ -929,9 +943,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 				<div className="border-t border-line my-3" />
 
-				<label className="block text-sm font-semibold mb-1">Language</label>
+				<label htmlFor="voice-language" className="block text-sm font-semibold mb-1">Language</label>
 				<p className="text-xs text-muted mb-2">Language for both speech recognition and the spoken voice.</p>
 				<select
+					id="voice-language"
 					value={language}
 					onChange={(e) => { setLanguage(e.target.value); saveVoice({ language: e.target.value }); }}
 					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-1 block w-full sm:w-auto"
@@ -943,7 +958,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 				<div className="border-t border-line my-3" />
 
-				<label className="block text-sm font-semibold mb-1">Voice commands</label>
+				<div className="block text-sm font-semibold mb-1">Voice commands</div>
 				<p className="text-xs text-muted mb-2">
 					In hands-free mode, speak a command instead of a message and it acts locally:
 				</p>
@@ -979,8 +994,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				</label>
 				{trEnabled && (
 					<>
-						<label className="block text-xs font-semibold mb-1">Translate into</label>
+						<label htmlFor="translation-target" className="block text-xs font-semibold mb-1">Translate into</label>
 						<select
+							id="translation-target"
 							value={trTarget}
 							onChange={(e) => saveTranslation(true, e.target.value, trTranslit, trWordTap, trFontSize)}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
@@ -1007,8 +1023,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							/>
 							<span className="text-muted">Tap a word to hear it pronounced (long-press still selects text)</span>
 						</label>
-						<label className="block text-xs font-semibold mb-1">Text size</label>
+						<label htmlFor="translation-text-size" className="block text-xs font-semibold mb-1">Text size</label>
 						<select
+							id="translation-text-size"
 							value={trFontSize}
 							onChange={(e) => saveTranslation(true, trTarget, trTranslit, trWordTap, e.target.value)}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"

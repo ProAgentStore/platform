@@ -165,7 +165,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 						<div className="flex flex-col gap-2 mt-3 lg:max-h-[60vh] lg:overflow-y-auto">
 							{hits.length === 0 && <p className="text-xs text-muted-soft">No matches — this content may not be indexed.</p>}
 							{(showAll ? hits : hits.slice(0, 5)).map((h, i) => (
-								<div key={i} className="border border-line rounded-lg p-2.5">
+								<div key={`${h.sourceType}:${h.sourceId}:${h.score}:${h.text.slice(0, 48)}`} className="border border-line rounded-lg p-2.5">
 									<div className="flex justify-between items-center gap-2 mb-1">
 										<span className="text-xs font-semibold truncate">#{i + 1} · {nameFor(h)}</span>
 										<span className="text-xs text-muted shrink-0">{TYPE_LABEL[h.sourceType] || h.sourceType} · {Math.round(h.score * 100)}% match</span>

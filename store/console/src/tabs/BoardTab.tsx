@@ -45,7 +45,7 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	const [error, setError] = useState<string | null>(null);
 	const [retrying, setRetrying] = useState<Set<string>>(new Set());
 
-	const cols = serverCols && serverCols.length ? serverCols : (columns && columns.length ? columns : GENERIC_COLUMNS);
+	const cols = serverCols?.length ? serverCols : (columns?.length ? columns : GENERIC_COLUMNS);
 
 	const loadBoard = useCallback(async () => {
 		try {

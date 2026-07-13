@@ -43,7 +43,8 @@ export default function FilesSection({ instanceId, active, refreshKey, jobs, onU
 	}, [instanceId]);
 
 	useEffect(() => {
-		if (active) loadFiles();
+		const shouldReload = active && Number.isFinite(refreshKey);
+		if (shouldReload) loadFiles();
 	}, [active, refreshKey, loadFiles]);
 
 	const deleteFile = async (fileId: string) => {

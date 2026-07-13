@@ -49,9 +49,10 @@ export default function Notifications() {
 			) : (
 				<div className="flex flex-col gap-2">
 					{notifications.map((n) => (
-						<div
+						<button
+							type="button"
 							key={n.id}
-							className={`p-3 bg-panel border border-line rounded-lg cursor-pointer hover:border-accent transition-all ${n.read ? "opacity-60" : ""}`}
+							className={`p-3 text-left bg-panel border border-line rounded-lg cursor-pointer hover:border-accent transition-all ${n.read ? "opacity-60" : ""}`}
 							onClick={async () => {
 								if (!n.read) await markRead(n.id);
 								// Navigate to the relevant instance if possible
@@ -67,7 +68,7 @@ export default function Notifications() {
 								</div>
 								{!n.read && <span className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1" />}
 							</div>
-						</div>
+						</button>
 					))}
 				</div>
 			)}

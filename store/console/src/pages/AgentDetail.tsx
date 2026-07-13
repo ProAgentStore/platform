@@ -16,6 +16,8 @@ const MODELS = [
 	{ value: "@cf/qwen/qwen2.5-coder-32b-instruct", label: "Qwen 2.5 Coder 32B" },
 ];
 
+const localRowId = () => (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `row-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
 export default function AgentDetail() {
 	const { id } = useParams<{ id: string }>();
 	const navigate = useNavigate();
@@ -50,19 +52,21 @@ export default function AgentDetail() {
 	const [versions, setVersions] = useState<{ id: string; version_num: number; description: string; created_at: string }[]>([]);
 
 	// Custom surfaces (Phase 3 — agent-published UIs)
-	type CSurface = { id: string; label: string; icon?: string; bundleUrl: string };
+	type CSurface = { clientId: string; id: string; label: string; icon?: string; bundleUrl: string };
 	const [surfaces, setSurfaces] = useState<CSurface[]>([]);
 	const loadSurfaces = useCallback(async () => {
 		try {
-			const d = await api<{ customSurfaces?: CSurface[] }>(`/v1/agents/${id}/capabilities`);
-			setSurfaces(d.customSurfaces || []);
+			const d = await api<{ customSurfaces?: Array<Omit<CSurface, "clientId">> }>(`/v1/agents/${id}/capabilities`);
+			setSurfaces((d.customSurfaces || []).map((s) => ({ ...s, clientId: localRowId() })));
 		} catch { /* none */ }
 	}, [id]);
 	const saveSurfaces = async () => {
-		const clean = surfaces.filter((s) => s.id.trim() && s.label.trim() && /^https:\/\//.test(s.bundleUrl.trim()));
+		const clean = surfaces
+			.filter((s) => s.id.trim() && s.label.trim() && /^https:\/\//.test(s.bundleUrl.trim()))
+			.map(({ clientId: _clientId, ...surface }) => surface);
 		try {
-			const d = await api<{ customSurfaces: CSurface[] }>(`/v1/agents/${id}/capabilities`, { method: "PUT", body: JSON.stringify({ customSurfaces: clean }) });
-			setSurfaces(d.customSurfaces || []);
+			const d = await api<{ customSurfaces: Array<Omit<CSurface, "clientId">> }>(`/v1/agents/${id}/capabilities`, { method: "PUT", body: JSON.stringify({ customSurfaces: clean }) });
+			setSurfaces((d.customSurfaces || []).map((s) => ({ ...s, clientId: localRowId() })));
 			alert("Custom surfaces saved. Subscribers see them on their next load.");
 		} catch (e) {
 			alert(e instanceof Error ? e.message : String(e));
@@ -72,12 +76,13 @@ export default function AgentDetail() {
 	// Subscriber settings schema — typed fields subscribers set on their instance's
 	// Settings tab; values are injected into the chat prompt. Options edited as one
 	// `value | Label` per line.
-	type SField = { id: string; label: string; type: string; description: string; optionsText: string; defaultValue: string; voiceLanguage: boolean };
+	type SField = { clientId: string; id: string; label: string; type: string; description: string; optionsText: string; defaultValue: string; voiceLanguage: boolean };
 	const [sFields, setSFields] = useState<SField[]>([]);
 	const loadSettingsSchema = useCallback(async () => {
 		try {
 			const d = await api<{ settingsSchema?: Array<{ id: string; label: string; type: string; description?: string; options?: Array<{ value: string; label: string }>; default?: string | number | boolean; voiceLanguage?: boolean }> }>(`/v1/agents/${id}/settings-schema`);
 			setSFields((d.settingsSchema || []).map((f) => ({
+				clientId: localRowId(),
 				id: f.id,
 				label: f.label,
 				type: f.type,
@@ -145,7 +150,10 @@ export default function AgentDetail() {
 	}, [id]);
 
 	useEffect(() => { loadMessages(); }, [loadMessages]);
-	useEffect(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight; }, [messages]);
+	useEffect(() => {
+		const messageCount = messages.length;
+		if (messageCount >= 0 && chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+	}, [messages.length]);
 
 	const sendMessage = async () => {
 		if (!chatInput.trim() || !id) return;
@@ -191,7 +199,7 @@ export default function AgentDetail() {
 		else if (tab === "tasks") loadTasks();
 		else if (tab === "analytics") loadAnalytics();
 		else if (tab === "settings") { loadVersions(); loadSurfaces(); loadSettingsSchema(); }
-	}, [tab, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions, loadSettingsSchema]);
+	}, [tab, loadKnowledge, loadMemory, loadTasks, loadAnalytics, loadVersions, loadSurfaces, loadSettingsSchema]);
 
 	const saveSettings = async () => {
 		if (!id) return;
@@ -271,9 +279,12 @@ export default function AgentDetail() {
 			{tab === "chat" && (
 				<div className="flex flex-col" style={{ height: "calc(100dvh - 320px)", minHeight: 300 }}>
 					<div ref={chatRef} className="flex-1 overflow-y-auto flex flex-col gap-4 py-3 chat-scroll">
-						{messages.map((m, i) => (
-							<div key={i} className={`max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "bg-accent text-white self-end rounded-br-sm" : m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15" : "bg-panel border border-line self-start rounded-bl-sm"}`}>
-								{m.role === "assistant" ? <div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} /> : <span className="whitespace-pre-wrap">{m.content}</span>}
+						{messages.map((m) => (
+							<div key={m.id || `${m.role}:${m.createdAt || ""}:${m.content.slice(0, 80)}`} className={`max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "bg-accent text-white self-end rounded-br-sm" : m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15" : "bg-panel border border-line self-start rounded-bl-sm"}`}>
+								{m.role === "assistant" ? (
+									// biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by chat surfaces.
+									<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+								) : <span className="whitespace-pre-wrap">{m.content}</span>}
 							</div>
 						))}
 						{thinking && <div className="text-muted text-sm flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" />Thinking...</div>}
@@ -344,22 +355,22 @@ export default function AgentDetail() {
 					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
 						<h3 className="text-base font-semibold mb-3">Identity</h3>
 						<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-							<div><label className="text-xs text-muted font-semibold block mb-1">Name</label><input value={sName} onChange={e => setSName(e.target.value)} /></div>
-							<div><label className="text-xs text-muted font-semibold block mb-1">Category</label><select value={sCat} onChange={e => setSCat(e.target.value)}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select></div>
+							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Name</span><input value={sName} onChange={e => setSName(e.target.value)} /></label>
+							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Category</span><select value={sCat} onChange={e => setSCat(e.target.value)}>{CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}</select></label>
 						</div>
-						<div className="mt-3"><label className="text-xs text-muted font-semibold block mb-1">Description</label><textarea value={sDesc} onChange={e => setSDesc(e.target.value)} /></div>
+						<label className="mt-3 flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Description</span><textarea value={sDesc} onChange={e => setSDesc(e.target.value)} /></label>
 						<div className="grid grid-cols-2 gap-3 mt-3 max-sm:grid-cols-1">
-							<div><label className="text-xs text-muted font-semibold block mb-1">Personality</label><textarea value={sPersonality} onChange={e => setSPersonality(e.target.value)} /></div>
-							<div><label className="text-xs text-muted font-semibold block mb-1">Goal</label><textarea value={sGoal} onChange={e => setSGoal(e.target.value)} /></div>
+							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Personality</span><textarea value={sPersonality} onChange={e => setSPersonality(e.target.value)} /></label>
+							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Goal</span><textarea value={sGoal} onChange={e => setSGoal(e.target.value)} /></label>
 						</div>
-						<div className="mt-3"><label className="text-xs text-muted font-semibold block mb-1">Welcome Message</label><input value={sWelcome} onChange={e => setSWelcome(e.target.value)} /></div>
+						<label className="mt-3 flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Welcome Message</span><input value={sWelcome} onChange={e => setSWelcome(e.target.value)} /></label>
 					</div>
 
 					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
 						<h3 className="text-base font-semibold mb-3">Model & Publishing</h3>
 						<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-							<div><label className="text-xs text-muted font-semibold block mb-1">Visibility</label><select value={sVis} onChange={e => setSVis(e.target.value)}><option value="draft">Draft</option><option value="published">Published</option><option value="unlisted">Unlisted</option></select></div>
-							<div><label className="text-xs text-muted font-semibold block mb-1">Model</label><select value={sModel} onChange={e => setSModel(e.target.value)}>{MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</select></div>
+							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Visibility</span><select value={sVis} onChange={e => setSVis(e.target.value)}><option value="draft">Draft</option><option value="published">Published</option><option value="unlisted">Unlisted</option></select></label>
+							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Model</span><select value={sModel} onChange={e => setSModel(e.target.value)}>{MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</select></label>
 						</div>
 					</div>
 
@@ -369,7 +380,7 @@ export default function AgentDetail() {
 						<p className="text-xs text-muted mb-3">Ship your own UI as a published bundle — each loads from an https URL that exports <code>mount(ctx)</code>. See docs/custom-surfaces.md (example: <code>/console/surfaces/notes.js</code>).</p>
 						<div className="flex flex-col gap-3">
 							{surfaces.map((s, i) => (
-								<div key={i} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
+								<div key={s.clientId} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
 									<div className="flex gap-2">
 										<input value={s.id} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. notes)" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
 										<input value={s.label} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
@@ -382,7 +393,7 @@ export default function AgentDetail() {
 							{surfaces.length === 0 && <div className="text-xs text-muted-soft">No custom surfaces yet — add one to ship your own UI.</div>}
 						</div>
 						<div className="flex gap-2 mt-3">
-							<button type="button" onClick={() => setSurfaces(cs => [...cs, { id: "", label: "", bundleUrl: "" }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add surface</button>
+							<button type="button" onClick={() => setSurfaces(cs => [...cs, { clientId: localRowId(), id: "", label: "", bundleUrl: "" }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add surface</button>
 							<button type="button" onClick={saveSurfaces} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save surfaces</button>
 						</div>
 					</div>
@@ -393,7 +404,7 @@ export default function AgentDetail() {
 						<p className="text-xs text-muted mb-3">Typed settings each subscriber sets on their instance's Settings tab — injected into every chat as authoritative configuration (e.g. a tutor's target language). For selects, one option per line as <code>value | Label</code>.</p>
 						<div className="flex flex-col gap-3">
 							{sFields.map((f, i) => (
-								<div key={i} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
+								<div key={f.clientId} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
 									<div className="flex gap-2 flex-wrap">
 										<input value={f.id} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. target_language)" className="flex-1 min-w-32 bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
 										<input value={f.label} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 min-w-32 bg-paper border border-line rounded px-2 py-1 text-sm" />
@@ -423,7 +434,7 @@ export default function AgentDetail() {
 							{sFields.length === 0 && <div className="text-xs text-muted-soft">No subscriber settings yet — add a field to give subscribers typed configuration.</div>}
 						</div>
 						<div className="flex gap-2 mt-3">
-							<button type="button" onClick={() => setSFields(fs => [...fs, { id: "", label: "", type: "select", description: "", optionsText: "", defaultValue: "", voiceLanguage: false }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add field</button>
+							<button type="button" onClick={() => setSFields(fs => [...fs, { clientId: localRowId(), id: "", label: "", type: "select", description: "", optionsText: "", defaultValue: "", voiceLanguage: false }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add field</button>
 							<button type="button" onClick={saveSettingsSchema} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save settings</button>
 						</div>
 					</div>
@@ -476,9 +487,9 @@ export default function AgentDetail() {
 							<div className="bg-panel border border-line rounded-xl p-4">
 								<h3 className="text-sm font-semibold mb-3">Daily Usage (last 30 days)</h3>
 								<div className="flex items-end gap-0.5 h-20">
-									{((analytics.dailyUsage as { day: string; count: number }[]) || []).map((d, i) => {
+									{((analytics.dailyUsage as { day: string; count: number }[]) || []).map((d) => {
 										const max = Math.max(1, ...((analytics.dailyUsage as { count: number }[]) || []).map(x => x.count));
-										return <div key={i} className="flex-1 min-w-[3px] bg-accent rounded-t" style={{ height: `${Math.max(4, (d.count / max) * 100)}%` }} title={`${d.day}: ${d.count}`} />;
+										return <div key={d.day} className="flex-1 min-w-[3px] bg-accent rounded-t" style={{ height: `${Math.max(4, (d.count / max) * 100)}%` }} title={`${d.day}: ${d.count}`} />;
 									})}
 								</div>
 							</div>
