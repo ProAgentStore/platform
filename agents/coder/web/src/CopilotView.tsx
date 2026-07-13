@@ -2,7 +2,7 @@ import { type KeyboardEvent, type RefObject, useState } from "react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
-import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Eye, Settings, Loader2 } from "lucide-react";
+import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2 } from "lucide-react";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
  *  the text via TTS. Owner-scoped fetch of the R2 blob. */
@@ -76,7 +76,7 @@ export default function CopilotView({
 						value={voice.interim || chatInput}
 						onChange={(e) => { if (!voice.interim) setChatInput(e.target.value); }}
 						onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendInstruction(); }}
-						placeholder={voice.mode === "handsfree" ? "Hands-free — just talk" : voice.mode === "ptt" ? "Tap the chat to talk" : "Ask or tell the agent…"}
+						placeholder="Talk to Co-Pilot"
 						readOnly={!!voice.interim}
 						className={`w-full bg-panel border rounded-lg px-2.5 py-1.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent font-semibold" : voice.micOn ? "border-green" : "border-line"}`}
 					/>
@@ -157,10 +157,6 @@ export default function CopilotView({
 						</>
 					)}
 				</div>
-			</div>
-			{/* Scope hint — this is NOT the general Assistant chat; it's tied to THIS session. */}
-			<div className="px-3 pb-1.5 shrink-0 text-[0.7rem] text-muted-soft flex items-center gap-1">
-				<Eye size={11} className="shrink-0" /> Co-pilot — watching this coding session
 			</div>
 			{/* Loop form — DIRECT mode: presets + a custom objective. */}
 			{loop.showLoopForm && !loop.loopOn && workMode === "direct" && (
