@@ -5,9 +5,6 @@ import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
 import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, columnsForInstance } from "../lib/board.js";
-import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
-import { findCredentialForHost } from "../lib/credentials.js";
-import { getProfile, profileToCandidate, profileToPreferences } from "../lib/profile.js";
 import { resumeSessionsForNode } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
@@ -43,7 +40,6 @@ import {
 	normalizeRunnerNode,
 	requireOwnedInstance,
 	requireRuntime,
-	runtimeErrorPayload,
 	runtimeJson,
 	runtimeNodeResponse,
 	runtimeResponse,
@@ -1196,10 +1192,3 @@ instanceRoutes.post("/:instanceId/cancel", async (c) => {
 
 	return c.json({ success: true });
 });
-
-/** Trim a value to a non-empty string, or undefined. */
-function optionalStr(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : undefined;
-}

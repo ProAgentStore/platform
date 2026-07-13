@@ -384,7 +384,7 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployment", async (c) => {
 	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 	if (!repo) throw new HttpError(404, "Repo not found");
 	const full = repo.githubRepo;
-	if (!full || !full.includes("/") || !githubAppConfigured(c.env)) return c.json({ available: false });
+	if (!full?.includes("/") || !githubAppConfigured(c.env)) return c.json({ available: false });
 	const owner = full.split("/")[0];
 	const token = await installationTokenForOwner(c.env, uid, owner).catch(() => null);
 	if (!token) return c.json({ available: false });
@@ -428,7 +428,7 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/issues", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 	if (!repo) throw new HttpError(404, "Repo not found");
-	if (!repo.githubRepo || !repo.githubRepo.includes("/")) {
+	if (!repo.githubRepo?.includes("/")) {
 		return c.json({ error: "This repo isn't connected to GitHub — add it by owner/repo or a GitHub URL to use issues." }, 400);
 	}
 	const state = c.req.query("state");
@@ -444,7 +444,7 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/issues/:number", async (c) =
 	const { uid, instanceId } = await requireOwned(c);
 	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 	if (!repo) throw new HttpError(404, "Repo not found");
-	if (!repo.githubRepo || !repo.githubRepo.includes("/")) {
+	if (!repo.githubRepo?.includes("/")) {
 		return c.json({ error: "This repo isn't connected to GitHub." }, 400);
 	}
 	const number = Number.parseInt(c.req.param("number"), 10);
@@ -492,7 +492,7 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/next-issue", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 	if (!repo) throw new HttpError(404, "Repo not found");
-	if (!repo.githubRepo || !repo.githubRepo.includes("/")) {
+	if (!repo.githubRepo?.includes("/")) {
 		return c.json({ error: "This repo isn't connected to GitHub — add it by owner/repo or a GitHub URL to use issues." }, 400);
 	}
 	const exclude = new Set<number>();
