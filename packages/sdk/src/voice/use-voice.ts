@@ -164,6 +164,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// Flag: true while the agent is processing (mic should stay off)
 	const pausedForThinkingRef = useRef(false);
+	// When the agent last finished speaking — used to ignore the speaker echo tail.
+	const speakEndedAtRef = useRef(0);
+
+	// Assemble the guard snapshot ONE way from its live sources — the agent's TTS-speaking
+	// flag, the echo-tail timestamp, the paused-for-reply flag, and mute — so every decision
+	// (open the mic? ignore this result? was that echo?) is fed IDENTICAL inputs. This is the
+	// state half of the interaction model: Phase 1 made the verdicts pure + single (machine.ts);
+	// this makes the inputs single, killing the drift risk of the three duplicated inline
+	// literals it replaces (add a guard input here and every decision picks it up at once).
+	const readGuard = useCallback((): VoiceGuardState => ({
+		ttsSpeaking: !!ttsRef.current?.speaking,
+		speakEndedAt: speakEndedAtRef.current,
+		paused: pausedForThinkingRef.current,
+		muted: mutedRef.current,
+	}), []);
 
 	const stopAudioMonitor = useCallback(() => {
 		gateRef.current?.stop();
@@ -279,7 +294,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			};
 			analyserRef.current = { ctx, analyser, source, stream, ownsStream, raf: requestAnimationFrame(tick) };
 		} catch {}
-	}, [stopAudioMonitor]);
+	}, [stopAudioMonitor, readGuard]);
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
@@ -344,25 +359,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// chime (there was no agent turn, so a chime every idle window would be confusing).
 	const idleRecycleRef = useRef(false);
 	const lastLevelSetRef = useRef(0);
-	// When the agent last finished speaking — used to ignore the speaker echo tail.
-	const speakEndedAtRef = useRef(0);
 	// The agent's last reply text — re-spoken by the "repeat" voice command.
 	const lastSpokenTextRef = useRef("");
 	// The raw audio of the just-transcribed Whisper turn — saved for replay on send.
 	const lastAudioBlobRef = useRef<Blob | null>(null);
-
-	// Assemble the guard snapshot ONE way from its live sources — the agent's TTS-speaking
-	// flag, the echo-tail timestamp, the paused-for-reply flag, and mute — so every decision
-	// (open the mic? ignore this result? was that echo?) is fed IDENTICAL inputs. This is the
-	// state half of the interaction model: Phase 1 made the verdicts pure + single (machine.ts);
-	// this makes the inputs single, killing the drift risk of the three duplicated inline
-	// literals it replaces (add a guard input here and every decision picks it up at once).
-	const readGuard = useCallback((): VoiceGuardState => ({
-		ttsSpeaking: !!ttsRef.current?.speaking,
-		speakEndedAt: speakEndedAtRef.current,
-		paused: pausedForThinkingRef.current,
-		muted: mutedRef.current,
-	}), []);
 
 	useEffect(() => {
 		getVoiceConfig(instanceId).then((c) => {
@@ -401,7 +401,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			if (convoOnRef.current && !idleRecycleRef.current) playListeningChime();
 			idleRecycleRef.current = false;
 		} catch {}
-	}, [startAudioMonitor]);
+	}, [startAudioMonitor, readGuard]);
 
 	// Speak text on demand (e.g. tap a message/translation to hear it), regardless of
 	// whether an auto-speak/hands-free mode is active. maybeSpeakResponse is gated on
@@ -571,7 +571,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		} else {
 			flushSync(() => setInterim(text));
 		}
-	}, [stopAudioMonitor]);
+	}, [stopAudioMonitor, readGuard]);
 
 	const makeStt = useCallback(async () => {
 		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page

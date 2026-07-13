@@ -58,8 +58,8 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved }
 					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-lg leading-none">✕</button>
 				</div>
 
-				<label className="block text-xs font-bold text-muted mb-1">Name</label>
-				<input value={name} onChange={(e) => setName(e.target.value)} className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm mb-3" />
+				<label htmlFor="repo-settings-name" className="block text-xs font-bold text-muted mb-1">Name</label>
+				<input id="repo-settings-name" value={name} onChange={(e) => setName(e.target.value)} className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm mb-3" />
 
 				{/* Read-only details */}
 				<div className="grid grid-cols-2 gap-2 mb-3">
@@ -69,8 +69,9 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved }
 					<Detail label="Repo id" value={repo.id} />
 				</div>
 
-				<label className="block text-xs font-bold text-muted mb-1">Special instructions (rules for this repo)</label>
+				<label htmlFor="repo-settings-rules" className="block text-xs font-bold text-muted mb-1">Special instructions (rules for this repo)</label>
 				<textarea
+					id="repo-settings-rules"
 					value={rules}
 					onChange={(e) => setRules(e.target.value)}
 					placeholder="e.g. Always create feature branches. Never push to main. Use conventional commits. Run tests before committing."
@@ -78,10 +79,13 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved }
 					rows={4}
 				/>
 
-				<label className="block text-xs font-bold text-muted mb-1">Launch URLs (optional)</label>
-				<input value={dev} onChange={(e) => setDev(e.target.value)} placeholder="Dev URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs mb-1.5" />
-				<input value={staging} onChange={(e) => setStaging(e.target.value)} placeholder="Staging URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs mb-1.5" />
-				<input value={prod} onChange={(e) => setProd(e.target.value)} placeholder="Production URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs" />
+				<div className="text-xs font-bold text-muted mb-1">Launch URLs (optional)</div>
+				<label htmlFor="repo-settings-dev-url" className="sr-only">Dev URL</label>
+				<input id="repo-settings-dev-url" value={dev} onChange={(e) => setDev(e.target.value)} placeholder="Dev URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs mb-1.5" />
+				<label htmlFor="repo-settings-staging-url" className="sr-only">Staging URL</label>
+				<input id="repo-settings-staging-url" value={staging} onChange={(e) => setStaging(e.target.value)} placeholder="Staging URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs mb-1.5" />
+				<label htmlFor="repo-settings-production-url" className="sr-only">Production URL</label>
+				<input id="repo-settings-production-url" value={prod} onChange={(e) => setProd(e.target.value)} placeholder="Production URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs" />
 
 				<div className="flex gap-2 justify-end mt-4">
 					<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>

@@ -22,7 +22,13 @@ class FakeSR {
 
 function withFakeSR(): { instances: FakeSR[]; restore: () => void } {
 	const instances: FakeSR[] = [];
-	const ctor = function () { const r = new FakeSR(); instances.push(r); return r; } as unknown as new () => FakeSR;
+	class FakeSRCtor extends FakeSR {
+		constructor() {
+			super();
+			instances.push(this);
+		}
+	}
+	const ctor = FakeSRCtor as unknown as new () => FakeSR;
 	const prev = (globalThis as { window?: unknown }).window;
 	(globalThis as { window?: unknown }).window = { webkitSpeechRecognition: ctor };
 	return { instances, restore: () => { (globalThis as { window?: unknown }).window = prev; } };

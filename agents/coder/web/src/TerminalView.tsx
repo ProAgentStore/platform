@@ -39,6 +39,7 @@ export default function TerminalView({
 					const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 					setTermAutoScroll(atBottom);
 				}}
+				// biome-ignore lint/security/noDangerouslySetInnerHtml: renderTerminal escapes pane text before adding controlled color markup.
 				dangerouslySetInnerHTML={{ __html: renderTerminal(terminalText) }}
 			/>
 			{!termAutoScroll && (

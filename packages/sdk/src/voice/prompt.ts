@@ -26,7 +26,7 @@ export function buildTranscribePrompt(surfaces: string[] = [], extra: string[] =
 	const parts: string[] = [];
 	if (surfaces.includes("coding") || surfaces.includes("repo")) parts.push(CODING_TERMS);
 	if (surfaces.includes("apply")) parts.push(APPLY_TERMS);
-	const extraStr = extra.filter((t) => t && t.trim()).join(", ");
+	const extraStr = extra.filter((t) => t?.trim()).join(", ");
 	if (extraStr) parts.push(extraStr);
 	if (!parts.length) return "";
 	// Framed as context, not a command — the prompt primes vocabulary, it isn't spoken.

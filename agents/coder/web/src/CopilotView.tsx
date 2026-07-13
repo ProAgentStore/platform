@@ -1,4 +1,4 @@
-import { type RefObject, useState } from "react";
+import { type KeyboardEvent, type RefObject, useState } from "react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
@@ -54,6 +54,19 @@ export default function CopilotView({
 	onSetWorkMode: (mode: "direct" | "issues") => void;
 }) {
 	const [showChatMenu, setShowChatMenu] = useState(false);
+	const closeChatMenu = () => setShowChatMenu(false);
+	const activateOnKeyboard = (handler: () => void) => (e: KeyboardEvent) => {
+		if (e.key === "Enter" || e.key === " ") {
+			e.preventDefault();
+			handler();
+		}
+	};
+	const messageKey = (m: Message) => `${m.time || ""}:${m.role}:${m.audioKey || ""}:${m.content.slice(0, 80)}`;
+	const handleThreadTap = (target: EventTarget | null) => {
+		if ((target as HTMLElement | null)?.closest("button, a, summary, input, textarea")) return;
+		if (voice.mode === "ptt") voice.toggleTalk();
+		else if (voice.mode === "handsfree") voice.cancelSpeak();
+	};
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
 			{/* Input bar — top, always visible. Compact input, big controls. */}
@@ -85,7 +98,7 @@ export default function CopilotView({
 			<div className="flex flex-wrap gap-1.5 px-2 pt-0.5 pb-1.5 shrink-0 items-center">
 				{/* Three distinct interaction modes — one segmented control (was four
 				    overlapping toggles). Chat · Tap-to-talk · Hands-free. */}
-				<div className="flex border border-line rounded-lg overflow-hidden shrink-0" role="radiogroup" aria-label="Interaction mode">
+				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
 					{([
 						{ id: "text", label: "Chat", icon: <MessageSquare size={15} />, title: "Chat: type and read replies — no voice", on: "border-accent bg-accent text-white" },
 						{ id: "ptt", label: "Tap to talk", icon: <Mic size={15} />, title: "Tap to talk: tap the chat to record, tap again to send. Replies are read aloud.", on: "border-accent bg-accent text-white" },
@@ -94,8 +107,7 @@ export default function CopilotView({
 						<button
 							key={m.id}
 							type="button"
-							role="radio"
-							aria-checked={voice.mode === m.id}
+							aria-pressed={voice.mode === m.id}
 							title={m.title}
 							onClick={() => voice.setVoiceMode(m.id)}
 							className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : "text-muted hover:bg-panel-hover hover:text-accent"}`}
@@ -111,12 +123,12 @@ export default function CopilotView({
 				)}
 				{/* Work-mode: Direct (type each objective) vs Issues (work the GitHub backlog,
 				    approve-per-issue). Sits next to the Loop it configures. */}
-				<div className="flex border border-line rounded-lg overflow-hidden shrink-0" role="radiogroup" aria-label="Loop work mode">
+				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
 					{([
 						{ id: "direct", label: "Direct", title: "Direct: you type each Loop objective" },
 						{ id: "issues", label: "Issues", title: "Issues: the Loop works your GitHub backlog, approving one issue at a time" },
 					] as const).map((m) => (
-						<button key={m.id} type="button" role="radio" aria-checked={workMode === m.id} title={m.title} disabled={loop.loopOn}
+						<button key={m.id} type="button" aria-pressed={workMode === m.id} title={m.title} disabled={loop.loopOn}
 							onClick={() => onSetWorkMode(m.id)}
 							className={`px-2 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${workMode === m.id ? "bg-accent text-white" : "text-muted hover:bg-panel-hover hover:text-accent"}`}>
 							{m.label}
@@ -138,7 +150,7 @@ export default function CopilotView({
 					<button type="button" onClick={() => setShowChatMenu((v) => !v)} title="Chat options" aria-label="Chat options" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}><Settings size={13} /></button>
 					{showChatMenu && (
 						<>
-							<div className="fixed inset-0 z-10" onClick={() => setShowChatMenu(false)} />
+							<button type="button" className="fixed inset-0 z-10 cursor-default" aria-label="Close chat options" onClick={closeChatMenu} />
 							<div className="absolute right-0 top-full mt-1 z-20 bg-panel border border-line rounded-xl shadow-lg py-1 min-w-[10rem]">
 								<button type="button" onClick={() => { setShowChatMenu(false); onClearChat(); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"><Trash2 size={13} /> Clear messages</button>
 							</div>
@@ -213,45 +225,51 @@ export default function CopilotView({
 			{/* Messages. In Tap-to-talk a tap here (not on a bubble/button) starts/stops a
 			    recording turn; in Hands-free a tap interrupts the agent so you can talk. */}
 			<div className="relative flex-1 min-h-0 flex flex-col">
+			{/* biome-ignore lint/a11y/useSemanticElements: this scrollable message thread is a tap target in voice modes and cannot be a native button because it contains controls. */}
 			<div
 				ref={threadRef}
-				onClick={(e) => {
-					if ((e.target as HTMLElement).closest("button, a, summary, input, textarea")) return;
-					if (voice.mode === "ptt") voice.toggleTalk();
-					else if (voice.mode === "handsfree") voice.cancelSpeak();
-				}}
+				role="button"
+				tabIndex={0}
+				aria-label={voice.mode === "ptt" ? "Tap to talk" : voice.mode === "handsfree" ? "Interrupt speech" : "Message thread"}
+				onClick={(e) => handleThreadTap(e.target)}
+				onKeyDown={activateOnKeyboard(() => handleThreadTap(document.activeElement))}
 				className={`flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll transition-shadow ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
 			>
-				{summaryHistory.map((m, i) => {
+				{summaryHistory.map((m) => {
 					// Tool calls: collapsed chip
 					const isToolCall = m.role === "system" && /^[✅❌]/.test(m.content);
 					if (isToolCall) {
 						const toolNames = m.content.match(/\*\*(\w+)\*\*/g)?.map((t) => t.replace(/\*\*/g, "")) || ["tools"];
 						const summary = toolNames.length <= 2 ? toolNames.join(", ") : `${toolNames.length} tools`;
 						return (
-							<details key={i} className="self-start max-w-[90%]">
+							<details key={messageKey(m)} className="self-start max-w-[90%]">
 								<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
 									<Wrench size={11} className="shrink-0" />
 									<span>Used {summary}</span>
 								</summary>
+								{/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd escapes raw content before adding controlled markup. */}
 								<div className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 							</details>
 						);
 					}
 					if (m.role === "system") {
 						return (
-							<div key={i} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15">
+							<div key={messageKey(m)} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15">
 								<span className="whitespace-pre-wrap">{m.content}</span>
 							</div>
 						);
 					}
 					return (
+						/* biome-ignore lint/a11y/useSemanticElements: message bubbles contain nested controls, so a native button would be invalid. */
 						<div
-							key={i}
+							key={messageKey(m)}
 							// Keep a bubble tap from bubbling to the thread tap handler (which would
 							// churn the mic on a double-tap-to-replay); double-tap still replays.
+							role="button"
+							tabIndex={0}
 							onClick={(e) => e.stopPropagation()}
 							onDoubleClick={() => playMessage(instanceId, m, voice.maybeSpeakResponse)}
+							onKeyDown={activateOnKeyboard(() => playMessage(instanceId, m, voice.maybeSpeakResponse))}
 							className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
 								m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 									: "bg-panel border border-line self-start rounded-bl-sm"
@@ -261,6 +279,7 @@ export default function CopilotView({
 							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.maybeSpeakResponse); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Co-pilot</span>{m.time && <span className="font-normal text-muted">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (
+								/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd escapes raw content before adding controlled markup. */
 								<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 							) : (
 								<span className="whitespace-pre-wrap">{m.content}</span>

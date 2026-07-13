@@ -477,7 +477,7 @@ export class LocalRunner {
 				if (!res.ok) return null;
 				const buf = Buffer.from(await res.arrayBuffer());
 				const disp = res.headers.get("content-disposition") || "";
-				const name = (disp.match(/filename="?([^"]+)"?/i)?.[1] || "resume.pdf").replace(/[^\w.\-]/g, "_");
+				const name = (disp.match(/filename="?([^"]+)"?/i)?.[1] || "resume.pdf").replace(/[^\w.-]/g, "_");
 				const dir = join(this.config.dataDir, "uploads");
 				mkdirSync(dir, { recursive: true });
 				const dest = join(dir, name);
@@ -1061,7 +1061,7 @@ export class LocalRunner {
 		// never resolve → the workflow polls until it times out (15-min wedge, "failed").
 		// Report failure so the caller (API/MCP) learns it wasn't accepted, like the
 		// no-session branch. (The console already blocks empty; this closes the API path.)
-		if (!value || !value.trim()) return { ok: false };
+		if (!value?.trim()) return { ok: false };
 		session.inputValue = value;
 		const task = this.store.getTask(taskId);
 		if (task) {

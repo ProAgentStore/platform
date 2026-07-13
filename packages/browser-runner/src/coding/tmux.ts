@@ -78,6 +78,7 @@ export function listSessions(): string[] {
 	}
 }
 
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escape codes from tmux output.
 const ANSI = /\x1B\[[0-?]*[ -/]*[@-~]/g;
 
 /** Strip ANSI escape codes. */

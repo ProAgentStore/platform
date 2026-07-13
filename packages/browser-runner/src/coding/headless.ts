@@ -369,8 +369,8 @@ export function buildClaudeArgs(userArgs: string[], resumeId: string | null): st
 }
 
 /** Strip ANSI/VT escape sequences so a raw CLI's coloured output reads as plain text. */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escape codes
 function stripAnsi(s: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escape/control codes from terminal output.
 	return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b[()][AB0-2]/g, "").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
 }
 

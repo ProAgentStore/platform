@@ -111,19 +111,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		})();
 	}, [loadCoding]);
 
-	// Auto-open session on mount — prefer URL session, fall back to first active
-	const autoOpenedRef = useRef(false);
-	useEffect(() => {
-		if (autoOpenedRef.current || !sessions.length) return;
-		const target = initialSessionId
-			? sessions.find((s) => s.id === initialSessionId)
-			: sessions.find((s) => s.status === "active");
-		if (target) {
-			autoOpenedRef.current = true;
-			openTerminal(target);
-		}
-	}, [sessions]); // eslint-disable-line react-hooks/exhaustive-deps
-
 	// Repo status polling (3s) — use ref for sessions to avoid interval restarts
 	const sessionsRef = useRef(sessions);
 	sessionsRef.current = sessions;
@@ -193,11 +180,13 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	// Scroll on new messages (co-pilot)
 	useEffect(() => {
+		if (summaryHistory.length < 0) return;
 		if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
 	}, [summaryHistory]);
 
 	// Auto-scroll terminal when new output arrives or view switches to terminal
 	useEffect(() => {
+		if (!terminalText && view !== "terminal") return;
 		if (termAutoScroll && termRef.current) {
 			requestAnimationFrame(() => {
 				if (termRef.current) termRef.current.scrollTop = termRef.current.scrollHeight;
@@ -205,7 +194,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	}, [terminalText, termAutoScroll, view]);
 
-	const openTerminal = async (session: CodingSession) => {
+	const openTerminal = useCallback(async (session: CodingSession) => {
 		setOpenSession(session);
 		setView("summary");
 		setSummaryHistory([]);
@@ -230,13 +219,26 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		} catch (e) {
 			console.error("[coding] timeline load failed:", e);
 		}
-	};
+	}, [instanceId, navigate]);
 
-	const closeTerminal = () => {
+	// Auto-open session on mount — prefer URL session, fall back to first active.
+	const autoOpenedRef = useRef(false);
+	useEffect(() => {
+		if (autoOpenedRef.current || !sessions.length) return;
+		const target = initialSessionId
+			? sessions.find((s) => s.id === initialSessionId)
+			: sessions.find((s) => s.status === "active");
+		if (target) {
+			autoOpenedRef.current = true;
+			openTerminal(target);
+		}
+	}, [sessions, initialSessionId, openTerminal]);
+
+	const closeTerminal = useCallback(() => {
 		setOpenSession(null);
 		setSummaryHistory([]);
 		navigate(`/instances/${instanceId}/coding`, { replace: true });
-	};
+	}, [instanceId, navigate]);
 
 	// Watch the Engine after delegation — poll until idle, then auto-summarize
 	const watcherRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -483,6 +485,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	// Push session header override to parent when session is open
 	const openRepo = openSession ? repos.find((r) => getActiveSession(r.id)?.id === openSession.id) : null;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: event handlers intentionally read current component state; the header only needs to refresh when visible header state changes.
 	useEffect(() => {
 		if (!openSession || !onHeaderOverride) return;
 		onHeaderOverride(

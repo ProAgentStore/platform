@@ -7,6 +7,7 @@
  */
 import { renderMd } from "@proagentstore/sdk/ui";
 import type { Message, MessageGloss } from "../lib/types";
+import type { KeyboardEvent } from "react";
 
 /**
  * The word under a tap, for tap-to-pronounce. Uses the caret-from-point APIs to find
@@ -63,15 +64,24 @@ interface Props {
 
 export default function GlossedMessage({ message: m, gloss, enabled, wordTap, target, targetTag, sizes, onSpeak }: Props) {
 	const hasGrid = enabled && !!gloss?.pairs?.length;
+	const activateSpeak = (text: string, lang?: string) => (e: KeyboardEvent) => {
+		if (e.key !== "Enter" && e.key !== " ") return;
+		e.preventDefault();
+		e.stopPropagation();
+		onSpeak(text, lang);
+	};
 	return (
 		<>
 			{/* The interlinear grid REPLACES the plain original (showing both duplicated the
 			    text); plain markdown renders until pairs arrive or when the gloss is off.
 			    Whole-message playback lives on the bubble's speaker button. */}
 			{!hasGrid && (
+				/* biome-ignore lint/a11y/noStaticElementInteractions: markdown content can contain links, so this cannot be a native button. */
 				<div
 					className={`msg-md ${enabled && wordTap ? "cursor-pointer" : ""}`}
 					title={enabled && wordTap ? "Tap a word to hear it" : undefined}
+					role={enabled && wordTap ? "button" : undefined}
+					tabIndex={enabled && wordTap ? 0 : undefined}
 					onClick={enabled && wordTap ? (e) => {
 						if ((e.target as HTMLElement).closest("a, button")) return;
 						if (window.getSelection()?.toString()) return; // long-press selected text
@@ -79,6 +89,8 @@ export default function GlossedMessage({ message: m, gloss, enabled, wordTap, ta
 						const word = wordAtPoint(e.clientX, e.clientY);
 						if (word) onSpeak(word);
 					} : undefined}
+					onKeyDown={enabled && wordTap ? activateSpeak(m.content) : undefined}
+					/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd escapes raw content before adding controlled markup. */
 					dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
 				/>
 			)}
@@ -89,31 +101,36 @@ export default function GlossedMessage({ message: m, gloss, enabled, wordTap, ta
 					    Falls back to the flat transliteration line. */}
 					{hasGrid ? (
 						<div className="flex flex-wrap gap-x-2 gap-y-1.5 items-end">
-							{gloss.pairs?.map(([word, roman], pi) => (
-								<span
-									key={`${pi}-${word}`}
+							{gloss.pairs?.map(([word, roman]) => (
+								<button
+									type="button"
+									key={`${word}-${roman}`}
 									className="inline-flex flex-col items-center cursor-pointer hover:text-accent transition-colors"
 									title="Tap to hear this word"
 									onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); onSpeak(word); }}
+									onKeyDown={activateSpeak(word)}
 								>
 									<span className={`${sizes.word} leading-tight`}>{word}</span>
 									<span className={`${sizes.gloss} text-muted leading-tight min-h-[1em]`}>{roman}</span>
-								</span>
+								</button>
 							))}
 						</div>
 					) : gloss.transliteration ? (
-						<div
+						<button
+							type="button"
 							className={`${sizes.gloss} text-muted whitespace-pre-wrap cursor-pointer`}
 							title="Tap to hear the original spoken"
 							onClick={(e) => { if (window.getSelection()?.toString()) return; e.stopPropagation(); onSpeak(m.content); }}
+							onKeyDown={activateSpeak(m.content)}
 						>
 							{gloss.transliteration}
-						</div>
+						</button>
 					) : null}
 					{/* Translation — SAME size as the transliteration (equally visible), color
 					    is the differentiator. Spoken in ITS OWN language: the tapped word when
 					    word-tap is on (whole line as fallback), else the line. */}
-					<div
+					<button
+						type="button"
 						className={`${sizes.gloss} text-accent whitespace-pre-wrap cursor-pointer mt-0.5`}
 						title={wordTap ? `Tap a word to hear it in ${target}` : `Tap to hear it in ${target}`}
 						onClick={(e) => {
@@ -122,9 +139,10 @@ export default function GlossedMessage({ message: m, gloss, enabled, wordTap, ta
 							const word = wordTap ? wordAtPoint(e.clientX, e.clientY) : null;
 							onSpeak(word || gloss.translation, targetTag);
 						}}
+						onKeyDown={activateSpeak(gloss.translation, targetTag)}
 					>
 						{gloss.translation}
-					</div>
+					</button>
 				</div>
 			)}
 		</>

@@ -87,7 +87,7 @@ export function isNoiseTranscript(text: string): boolean {
 	// Strip punctuation (Latin + CJK) + collapse whitespace, then judge.
 	const t = text
 		.toLowerCase()
-		.replace(/[.,!?"'’“”…·•\-–—:;()\[\]。，！？、：；「」『』（）《》]/g, " ")
+		.replace(/[.,!?"'’“”…·•–—:;()。，！？、：；「」『』（）《》-]|\[|\]/g, " ")
 		.replace(/\s+/g, " ")
 		.trim();
 	if (!t) return true; // was only punctuation/whitespace (".", "…", "\"", …)

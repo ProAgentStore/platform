@@ -98,11 +98,9 @@ export default function FilePreview({ instanceId, file, onClose }: {
 	};
 
 	return (
-		<div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-6" onClick={onClose}>
-			<div
-				className="bg-panel border border-line rounded-xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden"
-				onClick={(e) => e.stopPropagation()}
-			>
+		<div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-6">
+			<button type="button" aria-label="Close preview" className="absolute inset-0 cursor-default" onClick={onClose} />
+			<div className="relative bg-panel border border-line rounded-xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
 				<div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-line shrink-0">
 					<div className="text-sm font-semibold truncate">{file.name}</div>
 					<div className="flex items-center gap-1.5 shrink-0">
@@ -127,6 +125,7 @@ export default function FilePreview({ instanceId, file, onClose }: {
 						</div>
 					)}
 					{text !== null && kind === "markdown" && (
+						/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd escapes raw content before adding controlled markup. */
 						<div className="p-4 msg-md text-sm" dangerouslySetInnerHTML={{ __html: renderMd(text) }} />
 					)}
 					{text !== null && kind === "text" && (

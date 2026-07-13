@@ -143,7 +143,7 @@ describe("VoiceTts.unlock", () => {
 		const synth = { resume: vi.fn(), speak: vi.fn() };
 		vi.stubGlobal("window", { speechSynthesis: synth });
 		vi.stubGlobal("speechSynthesis", synth);
-		vi.stubGlobal("SpeechSynthesisUtterance", class { volume = 1; constructor(_: string) {} });
+		vi.stubGlobal("SpeechSynthesisUtterance", class { volume = 1; text: string; constructor(text: string) { this.text = text; } });
 
 		await new VoiceTts("openai").unlock();
 

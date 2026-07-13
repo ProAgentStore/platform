@@ -81,6 +81,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 				<div className="flex flex-col gap-2">
 					{engines.map((e, i) => {
 						const isClaude = clientOf(e.command) === "claude";
+						const signInId = `engine-${e.id}-auth`;
 						return (
 							<div key={e.id} className="bg-paper border border-line rounded-lg p-2.5">
 								<div className="flex gap-1.5 items-center flex-wrap">
@@ -107,8 +108,9 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 									</button>
 								</div>
 								<div className="flex gap-3 items-center mt-1.5 flex-wrap">
-									<label className="text-xs text-muted font-bold shrink-0">Sign-in</label>
+									<label htmlFor={signInId} className="text-xs text-muted font-bold shrink-0">Sign-in</label>
 									<select
+										id={signInId}
 										value={e.auth ?? "auto"}
 										onChange={(ev) => update(i, { auth: ev.target.value as EngineAuth })}
 										className="bg-panel border border-line rounded-lg px-2 py-1 text-xs"

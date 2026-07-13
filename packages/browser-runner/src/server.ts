@@ -202,7 +202,7 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	}
 	if (req.method === "POST" && path === "/coding/browse") {
 		const { readdirSync, statSync } = await import("node:fs");
-		const { resolve, basename } = await import("node:path");
+		const { resolve } = await import("node:path");
 		const { homedir } = await import("node:os");
 		const b = await readJson<{ dir?: string }>(req);
 		const raw = (b.dir || "~").replace(/^~(?=$|\/)/, homedir());

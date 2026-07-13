@@ -64,7 +64,7 @@ export function canOpenMic(s: Pick<VoiceGuardState, "paused" | "muted">): boolea
  * gate that isn't alive (iOS, or a stalled recognizer) can never veto real speech.
  */
 export function endOfTurnAction(gate: { isAlive: boolean; heardSpeech: boolean } | null | undefined): "transcribe" | "discard" {
-	if (gate && gate.isAlive && !gate.heardSpeech) return "discard";
+	if (gate?.isAlive && !gate.heardSpeech) return "discard";
 	return "transcribe";
 }
 

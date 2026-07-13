@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { resolve } from "node:path";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
