@@ -236,10 +236,37 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 						schedule: "@daily",
 						nextRunAt: "2026-07-13T00:00:00.000Z",
 					},
+					{
+						id: "trigger-sync",
+						name: "Drive sync",
+						type: "cron",
+						action: "sync_connector",
+						enabled: true,
+						schedule: "@hourly",
+						config: { provider: "google_drive", grantId: "grant-drive" },
+						lastRunAt: "2026-07-12T23:30:00.000Z",
+						nextRunAt: "2026-07-13T00:30:00.000Z",
+					},
 				],
 			});
 		}
 		if (path === "/v1/triggers" && method === "POST") return json({ trigger: { id: "trigger-2" } }, 201);
+		if (path === "/v1/triggers/trigger-sync/events" && method === "GET") {
+			return json({
+				events: [
+					{
+						id: "sync-event-1",
+						trigger_id: "trigger-sync",
+						type: "cron",
+						status: "succeeded",
+						message: "connector sync imported 1 file(s), skipped 2",
+						payload: { provider: "google_drive", grantId: "grant-drive", scanned: 3, imported: 1, skipped: 2, errors: [] },
+						error: null,
+						created_at: "2026-07-12T23:30:00.000Z",
+					},
+				],
+			});
+		}
 		if (path === "/v1/triggers/trigger-1/run" && method === "POST") return json({ success: true });
 		if (path === "/v1/triggers/trigger-1" && method === "DELETE") return json({ success: true });
 		if (path === "/v1/instances/inst-1/chat" && method === "POST") {
@@ -250,9 +277,69 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				options.instanceChatStatus ?? 200,
 			);
 		}
-		if (path === "/v1/instances/inst-1/knowledge") return json({ knowledge: [] });
+		if (path === "/v1/instances/inst-1/knowledge") {
+			return json({
+				documents: [
+					{
+						id: "doc-indexed",
+						title: "Profile summary",
+						content: "Candidate profile summary for search.",
+						source: "paste",
+						addedAt: "2026-07-12T22:00:00.000Z",
+					},
+					{
+						id: "doc-pending",
+						title: "Pending contract notes",
+						content: "Contract notes waiting to be embedded.",
+						source: "drive",
+						addedAt: "2026-07-12T23:00:00.000Z",
+					},
+				],
+			});
+		}
 		if (path === "/v1/instances/inst-1/memory") return json({ memory: [] });
-		if (path === "/v1/instances/inst-1/files") return json({ files: [] });
+		if (path === "/v1/instances/inst-1/files") {
+			return json({
+				files: [
+					{
+						id: "file-indexed",
+						name: "Resume.pdf",
+						mimeType: "application/pdf",
+						size: 184000,
+						extractionStatus: "extracted",
+						extractedTextLength: 12000,
+						createdAt: "2026-07-12T21:30:00.000Z",
+					},
+				],
+			});
+		}
+		if (path === "/v1/instances/inst-1/vectors") {
+			return json({
+				totalSources: 2,
+				totalChunks: 6,
+				totalChars: 14320,
+				sources: [
+					{
+						sourceType: "knowledge",
+						sourceId: "doc-indexed",
+						name: "Profile summary",
+						chunks: 2,
+						chars: 1320,
+						lastIndexed: "2026-07-12T22:01:00.000Z",
+						preview: "Candidate profile summary for search.",
+					},
+					{
+						sourceType: "file",
+						sourceId: "file-indexed",
+						name: "Resume.pdf",
+						chunks: 4,
+						chars: 13000,
+						lastIndexed: "2026-07-12T21:31:00.000Z",
+						preview: "Resume extract with skills and roles.",
+					},
+				],
+			});
+		}
 		if (path === "/v1/instances/inst-1/credentials") return json({ credentials: [] });
 		if (path === "/v1/instances/inst-1/instructions") return json({ instructions: "" });
 		if (path === "/v1/instances/inst-1/apply-tips") return json({ tips: [] });
@@ -508,6 +595,18 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByRole("heading", { name: "Documents" })).toBeVisible();
 	});
 
+	test("instance indexing page shows indexed, pending, and sync status", async ({ page }) => {
+		await mockSignedInConsole(page);
+
+		await page.goto("/console/instances/inst-1/indexing");
+
+		await expect(page.getByRole("heading", { name: "Indexing" })).toBeVisible();
+		await expect(page.getByText("Profile summary", { exact: true })).toBeVisible();
+		await expect(page.getByText("Pending contract notes", { exact: true })).toBeVisible();
+		await expect(page.getByText("Drive sync", { exact: true })).toBeVisible();
+		await expect(page.getByText("Imported", { exact: true })).toBeVisible();
+	});
+
 	test("profile and notifications have refreshable routes", async ({ page }) => {
 		await mockSignedInConsole(page);
 
@@ -528,7 +627,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.goto("/console/instances/inst-1/settings");
 		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
 		await expect(page.getByText("Daily digest")).toBeVisible();
-		await expect(page.getByRole("button", { name: "Run now" })).toBeVisible();
+		await expect(page.getByRole("button", { name: "Run now" }).first()).toBeVisible();
 	});
 
 	test("instance chat sends messages and shows responses", async ({

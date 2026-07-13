@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { CodingTab } from "@proagentstore/coder-web";
 import BoardTab from "../tabs/BoardTab";
+import IndexingTab from "../tabs/IndexingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
@@ -19,7 +20,7 @@ import type { BoardColumn, SettingsField } from "./types";
 // See ../../../PLAN-agent-os.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "knowledge" | "settings";
+export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "indexing" | "knowledge" | "settings";
 
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
@@ -95,6 +96,14 @@ export const SURFACES: SurfaceDef[] = [
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId, isApply }) => <KnowledgeTab instanceId={instanceId} isApply={isApply} />,
+	},
+	{
+		id: "indexing",
+		label: "Indexing",
+		icon: "🔎",
+		show: () => true,
+		scroll: true,
+		render: ({ instanceId }) => <IndexingTab instanceId={instanceId} />,
 	},
 	{
 		id: "settings",
