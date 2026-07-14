@@ -99,6 +99,9 @@ describe("runner command helpers", () => {
 	});
 
 	it("requires a PAGS token for PAGS API requests", async () => {
+		// Ensure no ambient PAGS_TOKEN leaks in from the environment so the
+		// no-token path is actually exercised (mocked loadSession already → null).
+		vi.stubEnv("PAGS_TOKEN", "");
 		await expect(requestPags("GET", "/v1/instances/inst-1/runtime", {})).rejects.toThrow(
 			"PAGS token required",
 		);
