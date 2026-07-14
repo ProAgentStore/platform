@@ -154,7 +154,8 @@ async function runAnthropic(
 		output: u.output_tokens || 0,
 	};
 
-	// Ledger the call for the Usage page (best-effort; never blocks the response).
+	// Ledger the call for the Usage page. Best-effort: recordUsage swallows all errors,
+	// so it can never break the AI call — it's a small awaited D1 insert on the return path.
 	if (ctx) {
 		await recordUsage(env, { ...ctx, userId, provider: "anthropic", model: (anthropicBody.model as string) || "claude-sonnet-4-6" }, usage);
 	}

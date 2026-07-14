@@ -424,17 +424,22 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 	}
 	// Meter voice (OpenAI audio) for the Usage page. TTS char-count is exact (from the
 	// request `input`); STT duration is estimated from the uploaded audio size. Best-effort
-	// and cost-only (these aren't LLM tokens). Fire-and-forget — never delays the response.
+	// and cost-only (these aren't LLM tokens). Registered with waitUntil so the ledger write
+	// isn't cancelled when the streamed response returns (a bare un-awaited promise would be).
 	if (providerId === "openai" && reqBody && (upstreamPath.includes("/audio/speech") || upstreamPath.includes("/audio/transcriptions"))) {
 		try {
+			let write: Promise<void> | null = null;
 			if (upstreamPath.includes("/audio/speech")) {
 				const j = JSON.parse(new TextDecoder().decode(reqBody)) as { input?: unknown; model?: unknown };
 				const chars = typeof j.input === "string" ? j.input.length : 0;
-				void recordVoiceUsage(c.env, { userId: session.uid, model: `tts:${String(j.model || "tts-1")}`, costMicros: estimateTtsMicros(chars) });
+				write = recordVoiceUsage(c.env, { userId: session.uid, model: `tts:${String(j.model || "tts-1")}`, costMicros: estimateTtsMicros(chars) });
 			} else {
 				const seconds = secondsFromAudioBytes(reqBody.byteLength);
-				void recordVoiceUsage(c.env, { userId: session.uid, model: "stt:whisper", costMicros: estimateSttMicros(seconds) });
+				write = recordVoiceUsage(c.env, { userId: session.uid, model: "stt:whisper", costMicros: estimateSttMicros(seconds) });
 			}
+			// waitUntil keeps the isolate alive for the write; fall back to awaiting when the
+			// execution context is unavailable (e.g. tests).
+			try { c.executionCtx.waitUntil(write); } catch { await write; }
 		} catch { /* metering is best-effort */ }
 	}
 

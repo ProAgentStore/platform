@@ -62,17 +62,16 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
 
 /**
  * Resolve the runner for an instance honoring its node binding (`config.runnerNode`).
- * This is the connection any non-coding feature (chat tools, apply, etc.) should use so
- * that a user with several machines can say "this agent runs on that machine" and have it
- * respected. When pinned to a node that is online → use it; otherwise fall back to the
- * legacy default runtime (last-registered), so pinning never strands a working runner.
+ * This is the connection every runner feature (chat tools, apply, coding) should use so a
+ * user with several machines can say "this agent runs on that machine" and have it respected
+ * CONSISTENTLY. When pinned, that machine is **authoritative**: we do NOT silently fall back
+ * to another node when it's offline — doing so would run the agent somewhere the user didn't
+ * choose and misreport "online" for the wrong machine. Pinned + offline → null (the agent is
+ * offline; the user can start that machine or repin). Unpinned → the legacy default runtime.
  */
 export async function getBoundRunnerConn(env: Env, instanceId: string, userId: string): Promise<RunnerConn | null> {
 	const node = await readInstanceRunnerNode(env, instanceId, userId).catch(() => "");
-	if (node) {
-		const pinned = await getRunnerConn(env, instanceId, userId, node);
-		if (pinned) return pinned;
-	}
+	if (node) return getRunnerConn(env, instanceId, userId, node);
 	return getRunnerConn(env, instanceId, userId);
 }
 

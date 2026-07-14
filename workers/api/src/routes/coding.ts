@@ -21,6 +21,7 @@ import {
 	updateRepoClone,
 } from "../lib/coding-store.js";
 import { getRuntime, getRuntimeForNode, normalizeRunnerNode } from "./instances-runtime.js";
+import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
@@ -601,7 +602,11 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	// Resolve which engine to launch: the chosen preset (engineId), else the repo's
 	// remembered default, else the instance default engine.
 	const { command, clientType } = await resolveEngine(c.env, instanceId, uid, body.engineId ?? body.clientType ?? repo.defaultClient);
-	const requestedRunnerNode = normalizeRunnerNode(body.runnerNode);
+	// Which machine runs this session: an explicit request wins, else the instance's
+	// node PIN (config.runnerNode) so the Coding tab honors "Runs on" exactly like chat/
+	// apply do, else the legacy default runtime. A pinned/requested node that's offline is
+	// a hard 409 (don't silently run on a different machine than the user chose).
+	const requestedRunnerNode = normalizeRunnerNode(body.runnerNode) || await readInstanceRunnerNode(c.env, instanceId, uid).catch(() => "");
 	const runtimeNow = requestedRunnerNode
 		? await getRuntimeForNode(c.env, instanceId, uid, requestedRunnerNode)
 		: await getRuntime(c.env, instanceId, uid);
