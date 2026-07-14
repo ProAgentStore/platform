@@ -83,7 +83,12 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 	// a task 'running'/'needs_human' forever and 409 every future apply with no way to clear
 	// it. A staleness cutoff (no update within the workflow's max lifetime) lets a new apply
 	// through instead of wedging the agent permanently.
-	const STALE_APPLY_MS = 30 * 60 * 1000; // > the apply workflow's realistic max runtime
+	// Must exceed the workflow's THEORETICAL max, not its "realistic" one: a run can sit in
+	// up to CAPTCHA_WAIT_POLLS (15 min) per handoff round across many rounds (~3h worst case).
+	// 30 min wrongly judged a still-alive multi-handoff run as stale and retired it WITHOUT
+	// stopping the workflow → a second apply started on the same browser (duplicate submits).
+	// 4h is safely past the ceiling; a genuinely dead task can be cleared sooner via Cancel.
+	const STALE_APPLY_MS = 4 * 60 * 60 * 1000;
 	const active = await env.DB.prepare(
 		"SELECT id, updated_at FROM instance_runtime_tasks WHERE instance_id = ?1 AND user_id = ?2 AND type = 'job.apply_agent' AND status IN ('queued','running','needs_human') AND hidden = 0 ORDER BY updated_at DESC LIMIT 1",
 	).bind(instanceId, userId).first<{ id: string; updated_at: string | null }>();

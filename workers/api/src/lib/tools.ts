@@ -180,6 +180,19 @@ export async function executeTool(
 						success: false,
 					};
 				}
+				// Runtime guard for user-owned memory: the prompt tells the model not to
+				// overwrite (user-set) entries, but that's advisory only — untrusted RAG /
+				// webhook text (treated as attacker-authored) could nudge a write_memory that
+				// clobbers a user fact AND flips its source to "agent", destroying the marker.
+				// Enforce it: never overwrite a source:"user" entry from a tool call.
+				const priorMem = await storage.get<MemoryEntry>(`mem:${key}`);
+				if (priorMem?.source === "user") {
+					return {
+						name: call.name,
+						content: `"${key}" is user-set and protected — leave it as the user defined it. Use a different key to record something related.`,
+						success: false,
+					};
+				}
 				const entry: MemoryEntry = {
 					key,
 					type: type as MemoryEntry["type"],
@@ -199,6 +212,11 @@ export async function executeTool(
 				const key = call.input.key as string;
 				if (!key)
 					return { name: call.name, content: "key required", success: false };
+				// Same protection as write_memory: a tool call must not delete a user-set entry.
+				const toDelete = await storage.get<MemoryEntry>(`mem:${key}`);
+				if (toDelete?.source === "user") {
+					return { name: call.name, content: `"${key}" is user-set and protected — only the user can remove it.`, success: false };
+				}
 				const existed = await storage.delete(`mem:${key}`);
 				if (!existed)
 					return {

@@ -95,7 +95,7 @@ async function getDefaultRunnerConn(env: Env, instanceId: string, uid: string) {
  * key stored for other features (e.g. the openai key powering Whisper voice)
  * must not silently switch an engine from subscription to per-token billing.
  */
-async function resolveEngineEnv(
+export async function resolveEngineEnv(
 	env: Env,
 	instanceId: string,
 	uid: string,
@@ -1120,7 +1120,7 @@ codingRoutes.post("/:instanceId/coding/kill-tmux", async (c) => {
 	const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
 	if (!conn) return c.json({ error: "Runner not connected", runnerConnected: false }, 502);
 	const body = await c.req.json<{ sessions?: string[]; orphansOnly?: boolean }>();
-	const result = await callRunner(conn, "/coding/kill-tmux", body);
+	const result = await callRunner(conn, "/coding/kill-tmux", body, { timeoutMs: READ_TIMEOUT_MS });
 	return c.json(result);
 });
 
@@ -1130,7 +1130,7 @@ codingRoutes.get("/:instanceId/coding/browse", async (c) => {
 	const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
 	if (!conn) return c.json({ error: "Runner not connected" }, 502);
 	const dir = c.req.query("dir") || "~";
-	const result = await callRunner(conn, "/coding/browse", { dir });
+	const result = await callRunner(conn, "/coding/browse", { dir }, { timeoutMs: READ_TIMEOUT_MS });
 	return c.json(result);
 });
 
@@ -1171,13 +1171,13 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 	const relayName = conn?.relayName ?? null;
 	if (conn) {
 		try {
-			runnerHealth = await callRunner<unknown>(conn, "/health", undefined);
+			runnerHealth = await callRunner<unknown>(conn, "/health", undefined, { timeoutMs: READ_TIMEOUT_MS });
 			runnerReachable = true;
 		} catch (e) {
 			runnerHealth = { error: e instanceof Error ? e.message : String(e) };
 		}
 		try {
-			runnerDiag = await callRunner<unknown>(conn, "/coding/diagnostics", undefined);
+			runnerDiag = await callRunner<unknown>(conn, "/coding/diagnostics", undefined, { timeoutMs: READ_TIMEOUT_MS });
 		} catch (e) {
 			runnerDiag = { error: e instanceof Error ? e.message : String(e) };
 		}

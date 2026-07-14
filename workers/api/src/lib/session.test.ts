@@ -69,6 +69,23 @@ describe("session", () => {
 		expect(payload).toBeNull();
 	});
 
+	// Security: other tokens are signed with the SAME key and carry uid+exp. verifySession
+	// must NOT accept them as a full account session (a leaked relay URL / OAuth state → takeover).
+	it("rejects a relay token (same key, but typ:relay + no roles[])", async () => {
+		const { token } = await signRelayToken("inst-1", "victim", SECRET);
+		expect(await verifySession(token, SECRET)).toBeNull();
+	});
+
+	it("rejects a connector-OAuth state payload (uid+exp, no roles[])", async () => {
+		const state = await signPayload({ uid: "victim", exp: Math.floor(Date.now() / 1000) + 600 }, SECRET);
+		expect(await verifySession(state, SECRET)).toBeNull();
+	});
+
+	it("rejects any token bearing a typ marker even if it has roles[]", async () => {
+		const weird = await signPayload({ typ: "relay", uid: "victim", roles: ["user"], exp: Math.floor(Date.now() / 1000) + 600 }, SECRET);
+		expect(await verifySession(weird, SECRET)).toBeNull();
+	});
+
 	it("respects custom TTL", async () => {
 		const token = await signSession("user-123", SECRET, { ttl: 3600 });
 		const payload = await verifySession(token, SECRET);

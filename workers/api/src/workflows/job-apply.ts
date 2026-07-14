@@ -133,7 +133,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				// slip through and really submit in test mode). "Finish"/"Done" are never entry
 				// buttons; "Easy/Quick Apply" + "1-click" submit from a saved profile. Plain
 				// "Apply"/"Apply now"/"Next"/"Continue" stay walkable so dry-run can still fill.
-				if (job.dryRun && a.action === "click" && /\bsubmit\b|\bfinish\b|\bdone\b|send application|submit application|easy apply|quick apply|one[- ]?click|1[- ]?click/i.test(String(a.name ?? ""))) {
+				if (job.dryRun && a.action === "click" && /\bsubmit\b|\bfinish\b|\bdone\b|\bcomplete\b|\bconfirm\b|send application|submit application|easy apply|quick apply|one[- ]?click|1[- ]?click/i.test(String(a.name ?? ""))) {
 					return { url: "", challenge: null as string | null, error: "DRY-RUN (test mode): the final submit is BLOCKED — do not submit. Call finish(status:\"ready\") now." };
 				}
 				try {

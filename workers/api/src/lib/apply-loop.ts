@@ -252,7 +252,11 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 		// arrow key is an autocomplete accept, not a submit, so that case is allowed.
 		if (job.dryRun && filledSomething) {
 			const act = decision.action;
-			const submitClick = act.action === "click" && /\b(apply|submit|send|finish|done)\b/i.test(act.name ?? "");
+			// Post-fill, so eSignature/acknowledge terminals ("I Agree", "Accept", "Complete
+			// Application", "Confirm") are safe to treat as submit — they're the common LAST
+			// step before/at submission. (accept/agree only added here, not in the stateless
+			// workflow guard, so a PRE-fill cookie "Accept" banner stays walkable.)
+			const submitClick = act.action === "click" && /\b(apply|submit|send|finish|done|complete|confirm|accept|agree)\b/i.test(act.name ?? "");
 			const enterSubmit = act.action === "key" && /^(enter|return)$/i.test(act.key ?? "") && !lastActionWasArrow;
 			if (submitClick || enterSubmit) {
 				const label = act.name ?? act.key ?? "submit";

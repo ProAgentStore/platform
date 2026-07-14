@@ -130,9 +130,15 @@ export async function verifySession(
 			new TextEncoder().encode(data),
 		);
 		if (!valid) return null;
-		const payload: SessionPayload = JSON.parse(
+		const payload = JSON.parse(
 			new TextDecoder().decode(unb64url(data)),
-		);
+		) as SessionPayload & { typ?: unknown };
+		// Type-pin: other tokens are signed with the SAME key and carry uid+exp — a relay
+		// token ({typ:"relay",…}, deliberately placed in a WS URL query → edge logs) and a
+		// connector-OAuth `state` ({uid,exp} → travels via Google + browser history). Without
+		// this check verifySession would accept them as a full account session (takeover via a
+		// leaked URL). A real session ALWAYS has a roles[] and NEVER a `typ`; nothing else does.
+		if (payload.typ !== undefined || !Array.isArray(payload.roles)) return null;
 		if (payload.exp < Math.floor(Date.now() / 1000)) return null;
 		return payload;
 	} catch {

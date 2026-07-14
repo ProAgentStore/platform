@@ -221,7 +221,13 @@ export class AgentStorageEngine {
 	async vectorizeRepoFile(repoKey: string, path: string, content: string): Promise<number> {
 		if (!this.vectorize || !this.ai) return 0;
 		const chunks = chunkText(content, CHUNK_SIZE);
-		if (chunks.length === 0) return 0;
+		// Short files (every chunk below chunkText's min length) yield none — index the whole
+		// trimmed content as one chunk instead of silently dropping the file. Matches the
+		// knowledge path (vectorizeStore), which otherwise indexes small files this one skipped.
+		if (chunks.length === 0) {
+			if (content.trim()) chunks.push(content.trim());
+			else return 0; // genuinely empty → nothing to do (not a failure)
+		}
 
 		const sourceId = `${repoKey}::${path}`;
 		const vectors: VectorizeVector[] = [];
@@ -238,7 +244,11 @@ export class AgentStorageEngine {
 			});
 			metas.push({ key: `vec:${id}`, meta: { id, agentId: this.agentId, sourceType: "repo", sourceId, chunkIndex: i, text: labeled, createdAt: new Date().toISOString() } });
 		}
-		if (vectors.length === 0) return 0;
+		// We had chunks to embed but produced zero vectors → every embed() returned null
+		// (a swallowed Workers-AI provider error). Signal failure (-1) so the ingest alarm
+		// counts it instead of marking the file done-but-empty — otherwise the repo advertises
+		// "Ready (N files)" while RAG returns nothing for it and no error is ever surfaced.
+		if (vectors.length === 0) return -1;
 		for (let i = 0; i < vectors.length; i += 100) await this.vectorize.upsert(vectors.slice(i, i + 100));
 		for (const { key, meta } of metas) await this.doStorage.put(key, meta);
 		return vectors.length;

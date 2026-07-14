@@ -314,9 +314,14 @@ export async function runDueTriggers(env: Env, now = new Date(), limit = 25): Pr
 	let failed = 0;
 	for (const trigger of results ?? []) {
 		const next = trigger.schedule ? nextRunAt(trigger.schedule, now) : null;
-		await env.DB.prepare(
-			"UPDATE agent_triggers SET next_run_at = ?2, updated_at = datetime('now') WHERE id = ?1",
-		).bind(trigger.id, next).run();
+		// Atomic claim (compare-and-swap on next_run_at): the "* * * * *" cron can have
+		// overlapping scheduled() invocations, and a plain WHERE id=? UPDATE let BOTH read the
+		// same due row and dispatch it → duplicate tasks/knowledge. Advance only if next_run_at
+		// is STILL the due value we read; if another invocation already claimed it, skip dispatch.
+		const claim = await env.DB.prepare(
+			"UPDATE agent_triggers SET next_run_at = ?2, updated_at = datetime('now') WHERE id = ?1 AND next_run_at IS ?3",
+		).bind(trigger.id, next, trigger.next_run_at).run();
+		if (!claim.meta.changes) continue;
 		try {
 			await dispatchTrigger(env, trigger, "cron", { schedule: trigger.schedule, dueAt: dueIso });
 			dispatched++;

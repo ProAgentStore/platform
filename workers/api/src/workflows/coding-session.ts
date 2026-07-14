@@ -10,6 +10,8 @@ import {
 	type CodingResult,
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { getSession, getRepo } from "../lib/coding-store.js";
+import { resolveEngineEnv } from "../routes/coding.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
@@ -100,9 +102,27 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		try {
 			// Ensure the tmux session is up and the CLI launched (clones the repo if the
 			// runner doesn't already have this session, e.g. after a runner restart).
-			await step.do("start", { retries: { limit: 1, delay: "3 seconds" as const, backoff: "constant" as const }, timeout: "5 minutes" as const }, () =>
-				callRunner<{ sessionId?: string }>(conn, "/coding/start", { sessionId, repoId, cloneUrl, branch, token, clientType: goal.clientType }),
-			);
+			await step.do("start", { retries: { limit: 1, delay: "3 seconds" as const, backoff: "constant" as const }, timeout: "5 minutes" as const }, async () => {
+				// Resolve the session's exact CLI command, its workDir, and its engine env
+				// (API key / OAuth token) FRESH here — the same fields startSessionOnRunner
+				// passes. Without them, a runner that must re-create the session after a restart
+				// would relaunch the DEFAULT cli with NO auth (wrong binary / auth failure). Env
+				// is resolved inside the step (not journaled) so the key never lands in workflow
+				// state — matching how the runner token is kept out of state elsewhere.
+				const [sess, repo] = await Promise.all([
+					getSession(env, instanceId, userId, sessionId),
+					getRepo(env, instanceId, userId, repoId),
+				]);
+				const engineEnv = sess ? await resolveEngineEnv(env, instanceId, userId, sess) : undefined;
+				return callRunner<{ sessionId?: string }>(conn, "/coding/start", {
+					sessionId, repoId,
+					workDir: repo?.workdir || undefined,
+					cloneUrl, branch, token,
+					clientType: goal.clientType,
+					command: sess?.launchCommand || undefined,
+					env: engineEnv,
+				});
+			});
 			await step.do("tl-start", async () => {
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${goal.objective}` });
 				return null;
