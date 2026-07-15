@@ -1,5 +1,5 @@
 import type { Env } from "../types.js";
-import { callRuntime, isRecord, mirrorRuntimeTasks, requireRuntime, runtimeJson } from "./instances-runtime.js";
+import { callRuntime, isRecord, mirrorRuntimeTasks, requireLiveRuntime, runtimeJson } from "./instances-runtime.js";
 
 export interface BrowserRuntimeTaskRequest {
 	type: string;
@@ -26,7 +26,7 @@ export async function createBrowserRuntimeTask(
 	userId: string,
 	request: BrowserRuntimeTaskRequest,
 ): Promise<BrowserRuntimeTaskResult> {
-	const runtime = await requireRuntime(env, instanceId, userId);
+	const runtime = await requireLiveRuntime(env, instanceId, userId);
 	const taskRes = await callRuntime(env, runtime, "/tasks", {
 		method: "POST",
 		body: JSON.stringify({

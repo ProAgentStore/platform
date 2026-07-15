@@ -10,7 +10,7 @@ import { runShotKey } from "../lib/run-shots.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
 import { deriveFromUrl } from "../lib/board.js";
-import { callRuntime, requireOwnedInstance, requireRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
+import { callRuntime, requireOwnedInstance, requireLiveRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
 
 /** An apply failure with an HTTP-ish status so callers can map it. */
 export class ApplyError extends Error {
@@ -73,7 +73,7 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 	const resumePath = await resolveResumeReference(env, instanceId, userId, String(input.resumePath ?? ""));
 	if (!resumePath) throw new ApplyError("no résumé on file — upload one in the console (Knowledge → Résumé) so the agent can attach it");
 
-	await requireRuntime(env, instanceId, userId); // throws if no runner
+	await requireLiveRuntime(env, instanceId, userId); // throws if no runner
 
 	// Single-flight: the runner drives ONE browser page, so a second concurrent application on
 	// the same instance would clobber the first (interleaved fills + submits, DUPLICATE real
@@ -283,7 +283,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const runtime = await requireRuntime(c.env, instanceId, session.uid);
+		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, "/takeover");
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
@@ -294,7 +294,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const runtime = await requireRuntime(c.env, instanceId, session.uid);
+		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/frame`);
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
@@ -305,7 +305,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const runtime = await requireRuntime(c.env, instanceId, session.uid);
+		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const body = await c.req.text();
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/input`, { method: "POST", body });
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
@@ -317,7 +317,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const runtime = await requireRuntime(c.env, instanceId, session.uid);
+		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/resume`, { method: "POST" });
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});
@@ -364,7 +364,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const runtime = await requireRuntime(c.env, instanceId, session.uid);
+		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { taskId?: string; value?: string };
 		if (!body.taskId) return c.json({ error: "taskId required" }, 400);
 		const res = await callRuntime(c.env, runtime, "/browser/input", {
@@ -380,7 +380,7 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		const taskId = c.req.param("taskId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const runtime = await requireRuntime(c.env, instanceId, session.uid);
+		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, `/takeover/${encodeURIComponent(taskId)}/end`, { method: "POST" });
 		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
 	});

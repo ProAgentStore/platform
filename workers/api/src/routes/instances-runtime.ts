@@ -2,6 +2,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
+import { getBoundRunnerConn } from "../lib/runner-client.js";
 export { normalizeRunnerNode, relayNameForInstance } from "../lib/runtime-nodes.js";
 import type { Env } from "../types.js";
 
@@ -657,6 +658,30 @@ export async function requireRuntime(
 	const runtime = await getRuntime(env, instanceId, userId);
 	if (!runtime) throw new HttpError(404, "Runtime not registered");
 	return runtime;
+}
+
+/**
+ * Like requireRuntime, but resolves the row for the machine that is LIVE right now (pin-aware,
+ * relay-checked) instead of the stale `instance_runtimes` default row. Anything that actually
+ * DISPATCHES to the runner (apply task creation, human-takeover proxies, generic task CRUD)
+ * must use this: the default row is overwritten by the newest `pags up` and never cleared on
+ * disconnect, so `callRuntime` on it targets the wrong (often dead) machine's RelayDO — while
+ * the JobApplyWorkflow drives via getBoundRunnerConn. This keeps both sides on the SAME node,
+ * which is what lets a human actually solve a captcha the workflow paused on. 503 if none live.
+ */
+export async function requireLiveRuntime(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<RuntimeRow> {
+	const conn = await getBoundRunnerConn(env, instanceId, userId);
+	const row = conn
+		? conn.runnerNode
+			? await getRuntimeNode(env, instanceId, userId, conn.runnerNode)
+			: await getRuntime(env, instanceId, userId)
+		: null;
+	if (!row) throw new HttpError(503, "No runner connected. Start it with: pags up");
+	return row;
 }
 
 export async function encodeRuntimeToken(env: Env, token: string | undefined): Promise<{

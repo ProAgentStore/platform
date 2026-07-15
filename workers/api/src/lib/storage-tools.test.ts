@@ -54,7 +54,10 @@ function mockRuntimeEnv(opts?: { profile?: Record<string, unknown> }) {
 				idFromName: () => ({ name: "test" }),
 				get: () => ({
 					fetch: async (req: Request) => {
-						// Relay stub: forward to the global fetch mock
+						// The live-runner probe (relayConnected → requireLiveRuntime) hits /status —
+						// report connected so apply routing resolves this machine as the live node.
+						if (new URL(req.url).pathname === "/status") return Response.json({ connected: true });
+						// Relay stub: forward the command to the global fetch mock
 						const body = await req.json() as { path: string; body: unknown };
 						return globalThis.fetch(`https://runner.example.test${body.path}`, {
 							method: "POST",
