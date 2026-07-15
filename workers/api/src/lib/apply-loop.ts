@@ -250,15 +250,21 @@ export async function runApplyLoop<J extends BrowserJobBase = ApplyJob>(deps: Ap
 		// form. "Continue"/"Next"/"Review" are deliberately NOT matched — they advance
 		// multi-page forms and must stay walkable in test mode. An Enter right after an
 		// arrow key is an autocomplete accept, not a submit, so that case is allowed.
-		if (job.dryRun && filledSomething) {
+		if (job.dryRun) {
 			const act = decision.action;
-			// Post-fill, so eSignature/acknowledge terminals ("I Agree", "Accept", "Complete
-			// Application", "Confirm") are safe to treat as submit — they're the common LAST
-			// step before/at submission. (accept/agree only added here, not in the stateless
-			// workflow guard, so a PRE-fill cookie "Accept" banner stays walkable.)
-			const submitClick = act.action === "click" && /\b(apply|submit|send|finish|done|complete|confirm|accept|agree)\b/i.test(act.name ?? "");
+			// Enter/Return that ISN'T an autocomplete-accept (an arrow immediately before) submits
+			// a focused form — and a pre-filled, logged-in one-page application submits on the
+			// very FIRST Enter, before any of our field mutations set `filledSomething`. So block
+			// it unconditionally in dry-run (NOT gated on a prior fill) — the one case the
+			// post-fill guard below misses and the stateless workflow guard (click-only) can't see.
 			const enterSubmit = act.action === "key" && /^(enter|return)$/i.test(act.key ?? "") && !lastActionWasArrow;
-			if (submitClick || enterSubmit) {
+			// Submit CLICKS only count post-fill: "Apply" is the ENTRY button on most multi-page
+			// ATS, so blocking it pre-fill would stop dry-run before it fills anything. Post-fill,
+			// eSignature/acknowledge terminals ("I Agree", "Accept", "Complete", "Confirm") are the
+			// common LAST step, safe to treat as submit. (accept/agree live only here, not in the
+			// stateless workflow guard, so a PRE-fill cookie "Accept" banner stays walkable.)
+			const submitClick = filledSomething && act.action === "click" && /\b(apply|submit|send|finish|done|complete|confirm|accept|agree)\b/i.test(act.name ?? "");
+			if (enterSubmit || submitClick) {
 				const label = act.name ?? act.key ?? "submit";
 				await deps.onEvent?.("agent.dryrun", `Reached final "${label}" — stopping without submitting (test mode)`, {});
 				return { outcome: "ready", detail: `reached final submit "${label}" — test mode, not submitted`, url: snap.url, steps: step, transcript: [...actionLog] };

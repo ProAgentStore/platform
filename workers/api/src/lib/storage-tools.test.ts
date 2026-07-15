@@ -40,7 +40,9 @@ function mockRuntimeEnv(opts?: { profile?: Record<string, unknown> }) {
 		if (sql.includes("FROM user_profile")) return opts?.profile ?? null;
 		return null;
 	});
-	const bind = vi.fn((sql: string) => ({ first: () => first(sql), run: vi.fn(async () => ({})), all: vi.fn(async () => ({ results: [] })) }));
+	// run() returns a D1-shaped result; changes:1 so the apply single-flight claim insert
+	// (INSERT … WHERE NOT EXISTS) reads as "claimed" and the apply proceeds.
+	const bind = vi.fn((sql: string) => ({ first: () => first(sql), run: vi.fn(async () => ({ meta: { changes: 1 } })), all: vi.fn(async () => ({ results: [] })) }));
 	const prepare = vi.fn((sql: string) => ({ bind: () => bind(sql) }));
 	const create = vi.fn(async () => ({ id: "wf_123" }));
 	return {

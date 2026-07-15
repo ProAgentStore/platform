@@ -218,6 +218,20 @@ describe("runApplyLoop", () => {
 		expect(acted.map((a) => a.action)).toEqual(["type"]); // the Enter submit was NOT acted
 	});
 
+	it("dry-run BLOCKS Enter as the FIRST action, before any field is filled (pre-filled one-page form submits on Enter)", async () => {
+		// Regression: the Enter guard used to be gated on `filledSomething`, so a pre-filled,
+		// logged-in one-page application whose first action is Enter (submitting the focused
+		// form) slipped past — a REAL submit during a dry run. Enter (not after an arrow) must
+		// block regardless of prior fills.
+		const { deps, acted } = scriptedDeps(
+			[page('- textbox "Name": Sergey')],
+			[{ action: { action: "key", key: "Enter" } }],
+		);
+		const result = await runApplyLoop(deps, { ...JOB, dryRun: true }, { maxSteps: 5 });
+		expect(result.outcome).toBe("ready");
+		expect(acted).toEqual([]); // the Enter submit was NOT acted — nothing was submitted
+	});
+
 	it("dry-run ALLOWS Enter right after an arrow key (autocomplete accept, not a submit)", async () => {
 		const { deps, acted } = scriptedDeps(
 			[page('- textbox "City"'), page('- textbox "City"'), page('- textbox "City": Sydney'), page('- button "Submit"')],

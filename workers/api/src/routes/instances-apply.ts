@@ -75,87 +75,105 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 
 	await requireRuntime(env, instanceId, userId); // throws if no runner
 
-	// Single-flight: the runner drives ONE browser page, so a second concurrent
-	// application on the same instance would clobber the first (interleaved fills +
-	// submits). Reject while one is still active — BUT only if it's been touched recently.
-	// The orphan reaper deliberately exempts apply tasks (the workflow owns their lifecycle),
-	// so a workflow that dies without completing (permanent error, lost instance) would leave
-	// a task 'running'/'needs_human' forever and 409 every future apply with no way to clear
-	// it. A staleness cutoff (no update within the workflow's max lifetime) lets a new apply
-	// through instead of wedging the agent permanently.
-	// Must exceed the workflow's THEORETICAL max, not its "realistic" one: a run can sit in
-	// up to CAPTCHA_WAIT_POLLS (15 min) per handoff round across many rounds (~3h worst case).
-	// 30 min wrongly judged a still-alive multi-handoff run as stale and retired it WITHOUT
-	// stopping the workflow → a second apply started on the same browser (duplicate submits).
-	// 4h is safely past the ceiling; a genuinely dead task can be cleared sooner via Cancel.
+	// Single-flight: the runner drives ONE browser page, so a second concurrent application on
+	// the same instance would clobber the first (interleaved fills + submits, DUPLICATE real
+	// submissions). A plain SELECT-then-create was a TOCTOU race — two triggers (double-click,
+	// or the console racing the chat apply-tool) both saw "nothing active" across the awaits
+	// below and both launched. Enforce it ATOMICALLY: insert a placeholder claim row in ONE
+	// statement that only lands when no non-stale active apply task exists. D1 serializes
+	// writes, so of two racers exactly one inserts (changes=1) and the other sees the first's
+	// row (changes=0 → 409). The real runner task created next takes over the slot and we drop
+	// the placeholder in `finally`; the task's own lifecycle (→ done/failed) releases the slot.
+	//
+	// Staleness (updated_at cutoff): the orphan reaper exempts apply tasks (the workflow owns
+	// their lifecycle), so a workflow that dies mid-run would 409 every future apply forever.
+	// A task not touched within the workflow's THEORETICAL max is treated as dead so a new
+	// apply can proceed. That ceiling: up to CAPTCHA_WAIT_POLLS (15 min) per handoff round
+	// across many rounds (~3h worst case) — 30 min wrongly retired a live multi-handoff run.
+	// 4h is safely past it; a genuinely dead task clears sooner via Cancel.
 	const STALE_APPLY_MS = 4 * 60 * 60 * 1000;
-	const active = await env.DB.prepare(
-		"SELECT id, updated_at FROM instance_runtime_tasks WHERE instance_id = ?1 AND user_id = ?2 AND type = 'job.apply_agent' AND status IN ('queued','running','needs_human') AND hidden = 0 ORDER BY updated_at DESC LIMIT 1",
-	).bind(instanceId, userId).first<{ id: string; updated_at: string | null }>();
-	if (active) {
-		const lastTouch = active.updated_at ? Date.parse(active.updated_at) : NaN;
-		const stale = Number.isNaN(lastTouch) ? false : Date.now() - lastTouch > STALE_APPLY_MS;
-		if (!stale) throw new ApplyError("An application is already in progress on this agent — finish or cancel it before starting another.", 409);
-		// Stale/orphaned: retire it so it can't linger, then let the new apply proceed.
-		await env.DB.prepare("UPDATE instance_runtime_tasks SET status = 'failed', hidden = 1, updated_at = ?3 WHERE id = ?1 AND instance_id = ?2")
-			.bind(active.id, instanceId, new Date().toISOString()).run();
+	const claimId = `apply-claim_${crypto.randomUUID()}`;
+	const nowIso = new Date().toISOString();
+	const staleCutoff = new Date(Date.now() - STALE_APPLY_MS).toISOString();
+	const claim = await env.DB.prepare(
+		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
+		 SELECT ?1, ?2, ?3, 'job.apply_agent', 'queued', '{"claim":true}', ?4, ?4
+		 WHERE NOT EXISTS (
+		   SELECT 1 FROM instance_runtime_tasks
+		   WHERE instance_id = ?2 AND type = 'job.apply_agent'
+		     AND status IN ('queued','running','needs_human') AND hidden = 0
+		     AND updated_at > ?5
+		 )`,
+	).bind(claimId, instanceId, userId, nowIso, staleCutoff).run();
+	if ((claim.meta.changes ?? 0) === 0) {
+		throw new ApplyError("An application is already in progress on this agent — finish or cancel it before starting another.", 409);
 	}
+	// From here on the claim is held; ANY exit path must drop the placeholder (below, in
+	// `finally`) so a failed start never wedges the agent for the full stale window.
 
-	const cand = input.candidate ?? {};
-	const rawProfile = await getProfile(env, userId);
-	const prof = profileToCandidate(rawProfile);
-	const prefs = profileToPreferences(rawProfile);
-	const cfg = await readInstanceConfig(env, instanceId, userId);
-	const cred = await findCredentialForHost(env, instanceId, userId, url);
-	const fullName = trimmed(cand.fullName) ?? trimmed(cand.full_name) ?? prof.fullName ?? "";
-	const email = trimmed(cand.email) ?? cred?.username ?? prof.email ?? "";
-	if (!fullName || !email) throw new ApplyError("no candidate name/email in your Profile — fill it in the console (Profile → Candidate Profile)");
-
-	const job = {
-		url,
-		resumePath,
-		candidate: {
-			fullName,
-			email,
-			phone: trimmed(cand.phone) ?? prof.phone,
-			location: trimmed(cand.location) ?? prof.location,
-			linkedin: trimmed(cand.linkedin) ?? prof.linkedin,
-			portfolio: trimmed(cand.portfolio) ?? prof.portfolio,
-			workAuthorization: trimmed(cand.workAuthorization ?? cand.work_authorization) ?? prof.workAuthorization,
-			salaryExpectation: prof.salaryExpectation,
-		},
-		coverNote: trimmed(input.coverNote),
-		password: cred?.password ?? (await deriveJobPassword(env, userId)),
-		hasStoredLogin: !!cred,
-		dryRun: input.dryRun === true,
-		specialInstructions: trimmed(cfg.specialInstructions),
-		preferences: prefs,
-		// Reuse answers the agent previously asked for via a ticket (saved to the
-		// Profile's custom JSON) so it never re-asks and never falls back to a
-		// wrong-country field — e.g. "australian working rights: Australian citizen".
-		providedAnswers: profileCustomAnswers(rawProfile),
-		today: new Date().toISOString().slice(0, 10),
-	};
-
-	let taskId: string;
+	// Any exit path after the claim drops the placeholder: on success the REAL runner task
+	// (created below) holds the single-flight slot; on failure this frees it immediately.
+	const dropClaim = () =>
+		env.DB.prepare("DELETE FROM instance_runtime_tasks WHERE id = ?1").bind(claimId).run().catch(() => undefined);
 	try {
-		// Give the board card a real title up front (best-effort from the job URL),
-		// so it reads e.g. "Business Ai Group… Head Of Engineering / employmenthero.com"
-		// instead of a derived-at-render guess.
-		const card = deriveFromUrl(url);
-		({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
-			type: "job.apply_agent",
-			input: { url, resumePath },
-			title: card.title || undefined,
-			subtitle: card.subtitle || undefined,
-		}));
-	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
-		throw new ApplyError(msg, 502);
-	}
+		const cand = input.candidate ?? {};
+		const rawProfile = await getProfile(env, userId);
+		const prof = profileToCandidate(rawProfile);
+		const prefs = profileToPreferences(rawProfile);
+		const cfg = await readInstanceConfig(env, instanceId, userId);
+		const cred = await findCredentialForHost(env, instanceId, userId, url);
+		const fullName = trimmed(cand.fullName) ?? trimmed(cand.full_name) ?? prof.fullName ?? "";
+		const email = trimmed(cand.email) ?? cred?.username ?? prof.email ?? "";
+		if (!fullName || !email) throw new ApplyError("no candidate name/email in your Profile — fill it in the console (Profile → Candidate Profile)");
 
-	const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job } });
-	return { workflowId: instance.id, taskId };
+		const job = {
+			url,
+			resumePath,
+			candidate: {
+				fullName,
+				email,
+				phone: trimmed(cand.phone) ?? prof.phone,
+				location: trimmed(cand.location) ?? prof.location,
+				linkedin: trimmed(cand.linkedin) ?? prof.linkedin,
+				portfolio: trimmed(cand.portfolio) ?? prof.portfolio,
+				workAuthorization: trimmed(cand.workAuthorization ?? cand.work_authorization) ?? prof.workAuthorization,
+				salaryExpectation: prof.salaryExpectation,
+			},
+			coverNote: trimmed(input.coverNote),
+			password: cred?.password ?? (await deriveJobPassword(env, userId)),
+			hasStoredLogin: !!cred,
+			dryRun: input.dryRun === true,
+			specialInstructions: trimmed(cfg.specialInstructions),
+			preferences: prefs,
+			// Reuse answers the agent previously asked for via a ticket (saved to the
+			// Profile's custom JSON) so it never re-asks and never falls back to a
+			// wrong-country field — e.g. "australian working rights: Australian citizen".
+			providedAnswers: profileCustomAnswers(rawProfile),
+			today: new Date().toISOString().slice(0, 10),
+		};
+
+		let taskId: string;
+		try {
+			// Give the board card a real title up front (best-effort from the job URL),
+			// so it reads e.g. "Business Ai Group… Head Of Engineering / employmenthero.com"
+			// instead of a derived-at-render guess.
+			const card = deriveFromUrl(url);
+			({ taskId } = await createBrowserRuntimeTask(env, instanceId, userId, {
+				type: "job.apply_agent",
+				input: { url, resumePath },
+				title: card.title || undefined,
+				subtitle: card.subtitle || undefined,
+			}));
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : String(e);
+			throw new ApplyError(msg, 502);
+		}
+
+		const instance = await env.JOB_APPLY.create({ params: { instanceId, userId, taskId, job } });
+		return { workflowId: instance.id, taskId };
+	} finally {
+		await dropClaim();
+	}
 }
 
 /** Read the instance's JSON config (client-side settings incl. specialInstructions). */
