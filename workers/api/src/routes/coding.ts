@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
-import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
 import { getUserProviderKey, runUserWorkersAi } from "../lib/user-ai.js";
@@ -41,9 +41,13 @@ function parseJsonOr<T>(raw: string | null | undefined, fallback: T): T {
 
 /**
  * Ensure a session is live on the user's runner: clone the repo (idempotent on
- * the runner) and launch the CLI. Returns false if no runner is connected. Used
- * both when creating a session and when re-attaching an orphaned one (created
- * while the runner was offline, or after a runner restart).
+ * the runner) and launch the CLI. Returns the connection it actually used (null if
+ * no runner is connected). Used both when creating a session and when re-attaching
+ * an orphaned one (created while the runner was offline, or after a runner restart).
+ *
+ * IMPORTANT: on a machine switch this RELOCATES the session to the live machine and
+ * returns THAT machine's connection — callers retrying a command must use the returned
+ * conn, not one they captured earlier (which may point at the now-dead old machine).
  */
 async function startSessionOnRunner(
 	env: Env,
@@ -51,7 +55,7 @@ async function startSessionOnRunner(
 	uid: string,
 	session: CodingSessionRecord,
 	repo: CodingRepo,
-): Promise<boolean> {
+): Promise<RunnerConn | null> {
 	let conn = await getSessionRunnerConn(env, instanceId, uid, session);
 	// Machine-switch reclaim. `conn` resolves from the DB (endpoint+token) even for a machine
 	// that's gone offline — the `status` column isn't cleared on disconnect — so verify the
@@ -70,7 +74,7 @@ async function startSessionOnRunner(
 			conn = fallback;
 		}
 	}
-	if (!conn) return false;
+	if (!conn) return null;
 	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
 	const token = owner ? await installationTokenForOwner(env, uid, owner) : null;
 	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
@@ -90,11 +94,11 @@ async function startSessionOnRunner(
 			env: engineEnv,
 		});
 		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
-		return true;
+		return conn;
 	} catch (e) {
 		const msg = e instanceof Error ? e.message.slice(0, 300) : String(e);
 		await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
-		return false;
+		return null;
 	}
 }
 
@@ -613,7 +617,7 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	// directory and conflict (concurrent edits, git index races). Reuse the live one.
 	const existing = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
 	if (existing) {
-		const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, existing, repo);
+		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, existing, repo)) != null;
 		return c.json({ session: existing, runnerConnected, reused: true }, 200);
 	}
 
@@ -651,11 +655,11 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 		// whoever won instead of erroring.
 		const winner = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
 		if (!winner) throw new HttpError(409, "Could not start a session — try again.");
-		const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, winner, repo);
+		const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, winner, repo)) != null;
 		return c.json({ session: winner, runnerConnected, reused: true }, 200);
 	}
 
-	const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+	const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)) != null;
 	return c.json({ session, runnerConnected }, 201);
 });
 
@@ -671,7 +675,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/start", async (c) => 
 	if (session.status !== "active") return c.json({ ok: false, error: "session has ended" }, 409);
 	const repo = await getRepo(c.env, instanceId, uid, session.repoId);
 	if (!repo) throw new HttpError(404, "Repo not found");
-	const runnerConnected = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+	const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)) != null;
 	return c.json({ ok: runnerConnected, runnerConnected });
 });
 
@@ -784,8 +788,9 @@ async function driveClaude(
 ): Promise<{ delegated: boolean; reply: string }> {
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) return { delegated: false, reply: "Coding session not found." };
-	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
-	if (!conn) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
+	const conn0 = await getSessionRunnerConn(c.env, instanceId, uid, session);
+	if (!conn0) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
+	let conn: RunnerConn = conn0;
 	// NOTE: don't log a `command` turn here — the chat_assistant "On it — I asked
 	// Claude to: …" already records it; a command entry would show a 3rd duplicate
 	// bubble in the thread (loadChat surfaces commands as your turns).
@@ -793,7 +798,11 @@ async function driveClaude(
 	let snap = await act();
 	const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
 	if (snap === null && session && repo) {
-		await startSessionOnRunner(c.env, instanceId, uid, session, repo); // reattach a session lost to a runner restart
+		// Reattach a session lost to a runner restart — and on a machine SWITCH this relocates
+		// the session to the live machine and returns THAT connection, so retry there (the
+		// captured `conn` still points at the old, now-dead machine).
+		const relocated = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
+		if (relocated) conn = relocated;
 		snap = await act();
 	}
 	// Finish watcher (one per send: stamp the session so only the latest notifies).
@@ -1006,11 +1015,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 	if (snap === null) {
 		// The runner is online but lost the in-memory session (it restarted) — its
 		// tmux pane usually survives, so reattach (CodingSession.start reconnects to
-		// the live tmux, no new CLI) and retry once.
-		const session = await getSession(c.env, instanceId, uid, sessionId);
-		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
-		if (session && repo) await startSessionOnRunner(c.env, instanceId, uid, session, repo);
-		snap = await callRunner(conn, "/coding/act", { sessionId, action }).catch(() => null);
+		// the live tmux, no new CLI) and retry once. On a machine SWITCH, startSessionOnRunner
+		// relocates the session and returns the LIVE machine's connection — retry on that, not
+		// the captured `conn` (which points at the old, now-dead machine → 409).
+		const fresh = await getSession(c.env, instanceId, uid, sessionId);
+		const repo = fresh ? await getRepo(c.env, instanceId, uid, fresh.repoId) : null;
+		const relocated = fresh && repo ? await startSessionOnRunner(c.env, instanceId, uid, fresh, repo) : null;
+		snap = await callRunner(relocated ?? conn, "/coding/act", { sessionId, action }).catch(() => null);
 	}
 	if (snap === null) throw new HttpError(409, "This session isn't live on the runner — open it again (or run pags up).");
 

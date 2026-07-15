@@ -204,6 +204,24 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		emitSystem("Loop stopped by user.");
 	};
 
+	// Halt the loop when the OPEN SESSION changes. The loop self-schedules via runStepRef,
+	// which always reads the CURRENT `sessionId` prop — so switching to another repo's session
+	// mid-loop would silently redirect the loop to drive the WRONG Engine with the old
+	// objective. Stop on switch (the user restarts it explicitly on the new session). Not on
+	// first mount (prev === current), so a fresh session isn't spuriously "stopped".
+	const prevSessionRef = useRef(sessionId);
+	useEffect(() => {
+		if (prevSessionRef.current === sessionId) return;
+		prevSessionRef.current = sessionId;
+		if (!loopOnRef.current) return;
+		loopOnRef.current = false;
+		setLoopOn(false);
+		if (timerRef.current) clearTimeout(timerRef.current);
+		setProposedIssue(null);
+		activeIssueRef.current = null;
+		emitSystem("Loop stopped — you switched sessions.");
+	}, [sessionId]);
+
 	return {
 		loopOn, loopObjective, setLoopObjective, loopIteration, loopMax, setLoopMax,
 		showLoopForm, setShowLoopForm,

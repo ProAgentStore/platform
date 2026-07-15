@@ -177,15 +177,25 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	}, [instanceId]);
 
 	// Cloud connectors open OAuth in a popup; re-check when the user returns to this tab.
+	// Also re-check the RUNNER: a machine can connect/disconnect (or be taken over with
+	// `pags up --force`) while this tab is open, and the runner card + "Runs on" picker are
+	// otherwise fetched only once on mount — so without this they'd show stale online/offline
+	// state (and a stale "⚠ machine offline" warning) until a full reload.
 	useEffect(() => {
 		const onFocus = () => {
 			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status").then(setEmailStatus).catch(() => {});
 			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status").then(setDriveStatus).catch(() => {});
 			api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
+			api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`).then(setRuntimeInfo).catch(() => {});
+			api<{ runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean }> }>(`/v1/instances/${instanceId}/runner-node`).then((d) => {
+				setRunnerNode(d.runnerNode || "");
+				setRunnerNodes(d.nodes || []);
+				setRunnerNodesDetail(d.nodesDetail || []);
+			}).catch(() => {});
 		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
-	}, []);
+	}, [instanceId]);
 
 	// Agent settings save (patch semantics — only the changed field is sent).
 	const saveSetting = async (id: string, value: string | number | boolean) => {
