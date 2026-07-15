@@ -3,6 +3,7 @@ import { requireUser } from "../lib/auth.js";
 import { relayConnected } from "../lib/runner-client.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
+import { agentCapabilities } from "../lib/agent-capabilities.js";
 import type { Env } from "../types.js";
 
 /**
@@ -25,6 +26,8 @@ interface NodeRow {
 	instance_config: string | null;
 	agent_name: string | null;
 	agent_slug: string | null;
+	agent_category: string | null;
+	agent_config: string | null;
 }
 
 interface SessionRow {
@@ -49,6 +52,9 @@ export interface TerminalInstance {
 	/** True when this instance is PINNED to run on this machine (config.runnerNode). A
 	 *  bound instance routes its runner calls here even when another node is also connected. */
 	bound: boolean;
+	/** The runner runtime this agent uses ("coding" | "browser"). Runner-less agents
+	 *  (runtime:null — chat/RAG/connector) are excluded from the list entirely. */
+	runtime: "browser" | "coding";
 }
 
 export interface TerminalSession {
@@ -105,9 +111,15 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 			byNode.set(r.runner_node, n);
 		}
 		if (!n.instances.some((i) => i.instanceId === r.instance_id)) {
+			// Only list agents that actually USE a local runner. `pags up` (multiplexed)
+			// registers EVERY active instance, but chat/RAG/connector agents (runtime:null)
+			// never touch the CLI — listing them under a "terminal" is misleading. Gate on the
+			// resolved runtime capability so only coding/browser agents appear.
+			const runtime = agentCapabilities({ slug: r.agent_slug, category: r.agent_category, config: r.agent_config }).runtime;
+			if (!runtime) continue;
 			// Bound = this instance is explicitly pinned to THIS machine (not merely served by it).
 			const bound = parseBoundRunnerNode(r.instance_config) === r.runner_node;
-			n.instances.push({ instanceId: r.instance_id, name: instanceName(r.instance_config, r.agent_name, r.agent_slug), agentSlug: r.agent_slug, status: r.status, connected: false, bound });
+			n.instances.push({ instanceId: r.instance_id, name: instanceName(r.instance_config, r.agent_name, r.agent_slug), agentSlug: r.agent_slug, status: r.status, connected: false, bound, runtime });
 		}
 	}
 	for (const s of sessionRows) {
@@ -116,7 +128,10 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 		if (!n) continue; // a session whose machine no longer has a registration row
 		n.sessions.push({ sessionId: s.id, instanceId: s.instance_id, repoId: s.repo_id, repoName: s.repo_name, engine: s.client_type, status: s.status, issueNumber: s.issue_number ?? undefined, issueTitle: s.issue_title ?? undefined, updatedAt: s.updated_at });
 	}
-	return [...byNode.values()];
+	// Drop machines that ended up with no runner-using agents AND no sessions — i.e. a node
+	// that (via an older, over-eager `pags up`) only registered chat/RAG agents that don't
+	// need a runner. Nothing runner-related lives there, so it's noise on a "Terminals" view.
+	return [...byNode.values()].filter((n) => n.instances.length > 0 || n.sessions.length > 0);
 }
 
 /** All the user's CLIs (machines), across every agent — connected or not. */
@@ -126,7 +141,8 @@ terminalRoutes.get("/nodes", async (c) => {
 
 	const nodeRows = (await c.env.DB.prepare(
 		`SELECT n.instance_id, n.runner_node, n.placement, n.runner_version, n.status, n.last_seen_at, n.updated_at,
-		        i.config AS instance_config, a.name AS agent_name, a.slug AS agent_slug
+		        i.config AS instance_config, a.name AS agent_name, a.slug AS agent_slug,
+		        a.category AS agent_category, a.config AS agent_config
 		 FROM instance_runtime_nodes n
 		 JOIN agent_instances i ON i.id = n.instance_id
 		 LEFT JOIN agents a ON a.id = i.agent_id

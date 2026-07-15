@@ -4,7 +4,7 @@ import { groupTerminalNodes } from "./terminals.js";
 const nodeRow = (over: Partial<Parameters<typeof groupTerminalNodes>[0][number]> = {}) => ({
 	instance_id: "i1", runner_node: "macbook", placement: "local", runner_version: "0.4.16",
 	status: "active", last_seen_at: "2026-07-14T10:00:00Z", updated_at: "2026-07-14T10:00:00Z",
-	instance_config: null, agent_name: "Coder", agent_slug: "coder", ...over,
+	instance_config: null, agent_name: "Coder", agent_slug: "coder", agent_category: null, agent_config: null, ...over,
 });
 const sessionRow = (over: Partial<Parameters<typeof groupTerminalNodes>[1][number]> = {}) => ({
 	id: "s1", instance_id: "i1", repo_id: "r1", runner_node: "macbook", client_type: "claude",
@@ -13,16 +13,30 @@ const sessionRow = (over: Partial<Parameters<typeof groupTerminalNodes>[1][numbe
 
 describe("groupTerminalNodes", () => {
 	it("groups per-instance registrations into one machine, deduping instances", () => {
-		// The same machine serves two instances → one node with two instances (multiplexed pags up).
+		// The same machine serves two runner-using instances → one node with two instances.
 		const nodes = groupTerminalNodes([
 			nodeRow({ instance_id: "i1", agent_name: "Coder" }),
-			nodeRow({ instance_id: "i2", agent_name: "Repo Chat", agent_slug: "repo-chat" }),
+			nodeRow({ instance_id: "i2", agent_name: "Applier", agent_slug: "job-application-assistant" }),
 			nodeRow({ instance_id: "i1" }), // duplicate registration for i1 (older row) — deduped
 		], []);
 		expect(nodes).toHaveLength(1);
 		expect(nodes[0].node).toBe("macbook");
 		expect(nodes[0].instances.map((i) => i.instanceId)).toEqual(["i1", "i2"]);
 		expect(nodes[0].instances[0].name).toBe("Coder");
+	});
+
+	it("excludes runner-less agents (chat/RAG) and drops a machine that has only them", () => {
+		// Multiplexed `pags up` registers every instance, but repo-chat/doc-chat (runtime:null)
+		// never touch a runner — they must not appear on a Terminals view.
+		const nodes = groupTerminalNodes([
+			nodeRow({ instance_id: "i1", agent_name: "Coder", agent_slug: "coder" }),
+			nodeRow({ instance_id: "i2", agent_name: "Repo Chat", agent_slug: "repo-chat" }),
+		], []);
+		expect(nodes[0].instances.map((i) => i.instanceId)).toEqual(["i1"]); // repo-chat excluded
+
+		// A machine whose ONLY agents are runner-less + no sessions is dropped entirely.
+		const empty = groupTerminalNodes([nodeRow({ instance_id: "i9", agent_slug: "repo-chat", runner_node: "chat-only" })], []);
+		expect(empty).toHaveLength(0);
 	});
 
 	it("separates distinct machines", () => {

@@ -66,14 +66,29 @@ export const upCommand = new Command("up")
 			printStep("Failed to fetch instances: " + res.status, "fail");
 			process.exit(1);
 		}
-		const data = await res.json() as { instances?: Array<{ id: string; agent_id: string; status: string; name?: string; slug?: string }> };
-		let instances = (data.instances || []).filter((i) => i.status === "active");
+		const data = await res.json() as { instances?: Array<{ id: string; agent_id: string; status: string; name?: string; slug?: string; capabilities?: { runtime?: string | null } }> };
+		const active = (data.instances || []).filter((i) => i.status === "active");
+		let instances = active;
 
 		if (opts.instance) {
+			// Explicit pin: honor it as-is (the user knows what they're debugging).
 			instances = instances.filter((i) => i.id === opts.instance || i.slug === opts.instance);
+		} else {
+			// Auto: only register agents that actually USE a local runner (coding/browser).
+			// Chat/RAG/connector agents (runtime:null) run entirely in the cloud and never
+			// call the runner — registering them just creates noise (relay DOs, heartbeats,
+			// and phantom entries on the Terminals page).
+			instances = instances.filter((i) => i.capabilities?.runtime != null);
 		}
 
 		if (instances.length === 0) {
+			// Distinguish "you have agents, none need a runner" from "no agents at all".
+			if (!opts.instance && active.length > 0) {
+				printStep("None of your agents need a local runner", "ok");
+				writeLine("  They run in the cloud (chat, knowledge, connectors) — nothing to connect here.");
+				writeLine("  Only coding (Coder) and browser agents (e.g. Job Application Assistant) use `pags up`.");
+				process.exit(0);
+			}
 			printStep("No active instances found", "fail");
 			writeLine("  Subscribe to an agent at https://proagentstore.online");
 			process.exit(1);
