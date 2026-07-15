@@ -342,6 +342,21 @@ export async function resumeSessionsForNode(env: Env, instanceId: string, userId
 	return res.meta.changes ?? 0;
 }
 
+/**
+ * Move a session to a different machine (`runner_node`). Used by the machine-switch reclaim:
+ * when a session's owning machine goes offline and the user runs the agent on another machine,
+ * point the session at the machine that's connected now so it resumes there instead of
+ * dead-ending on the offline one. No status change — the session stays active, just relocates.
+ */
+export async function reassignSessionNode(env: Env, instanceId: string, userId: string, sessionId: string, runnerNode: string | null): Promise<void> {
+	const node = (runnerNode || "").trim().slice(0, 120) || null;
+	await env.DB.prepare(
+		"UPDATE coding_sessions SET runner_node = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+	)
+		.bind(sessionId, instanceId, userId, node)
+		.run();
+}
+
 export async function endSession(env: Env, instanceId: string, userId: string, sessionId: string, status: CodingSessionStatus = "ended"): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions

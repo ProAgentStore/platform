@@ -99,7 +99,13 @@ export default function Terminals() {
 											<div className="flex items-center gap-2 text-sm">
 												<GitBranch size={13} className="text-muted shrink-0" />
 												<span className="font-semibold truncate">{s.repoName || s.repoId}</span>
-												<span className={`text-[0.7rem] font-bold ${sessionTone(s.status)}`}>{s.status}</span>
+												{/* An "active" session under an offline machine is stranded — its runner is gone.
+												    Don't paint it green; show it amber with the reason so it reads as "not running". */}
+												{s.status === "active" && !n.connected ? (
+													<span className="text-[0.7rem] font-bold text-amber-400" title="This machine is offline — open the agent to move this session to a connected machine.">active · machine offline</span>
+												) : (
+													<span className={`text-[0.7rem] font-bold ${sessionTone(s.status)}`}>{s.status}</span>
+												)}
 												<span className="text-[0.7rem] text-muted-soft">{s.engine}</span>
 												{typeof s.issueNumber === "number" && <span className="text-[0.7rem] text-accent">#{s.issueNumber}</span>}
 												<span className="text-[0.7rem] text-muted-soft ml-auto shrink-0">{ago(s.updatedAt)}</span>

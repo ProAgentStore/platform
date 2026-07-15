@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
-import { callRunner, getRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
 import { getUserProviderKey, runUserWorkersAi } from "../lib/user-ai.js";
@@ -17,6 +17,7 @@ import {
 	getSession,
 	listRepos,
 	listSessions,
+	reassignSessionNode,
 	updateRepo,
 	updateRepoClone,
 } from "../lib/coding-store.js";
@@ -51,7 +52,24 @@ async function startSessionOnRunner(
 	session: CodingSessionRecord,
 	repo: CodingRepo,
 ): Promise<boolean> {
-	const conn = await getSessionRunnerConn(env, instanceId, uid, session);
+	let conn = await getSessionRunnerConn(env, instanceId, uid, session);
+	// Machine-switch reclaim. `conn` resolves from the DB (endpoint+token) even for a machine
+	// that's gone offline — the `status` column isn't cleared on disconnect — so verify the
+	// session's own machine actually holds a live relay socket. If it doesn't, but the user is
+	// now running the agent on another machine, relocate the session there so switching laptops
+	// "just works" instead of dead-ending on the offline node. `getBoundRunnerConn` is live +
+	// pin-aware: pinned-elsewhere stays put (returns that node), pinned-to-this-offline → null.
+	const sessionLive = session.runnerNode
+		? await relayConnected(env, instanceId, session.runnerNode).catch(() => false)
+		: await relayConnected(env, instanceId, null).catch(() => false);
+	if (!sessionLive) {
+		const fallback = await getBoundRunnerConn(env, instanceId, uid);
+		if (fallback && normalizeRunnerNode(fallback.runnerNode) !== normalizeRunnerNode(session.runnerNode)) {
+			await reassignSessionNode(env, instanceId, uid, session.id, fallback.runnerNode ?? null);
+			session.runnerNode = fallback.runnerNode ?? null;
+			conn = fallback;
+		}
+	}
 	if (!conn) return false;
 	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
 	const token = owner ? await installationTokenForOwner(env, uid, owner) : null;
@@ -610,7 +628,13 @@ codingRoutes.post("/:instanceId/coding/sessions", async (c) => {
 	const runtimeNow = requestedRunnerNode
 		? await getRuntimeForNode(c.env, instanceId, uid, requestedRunnerNode)
 		: await getRuntime(c.env, instanceId, uid);
-	if (requestedRunnerNode && (!runtimeNow || runtimeNow.status === "offline")) throw new HttpError(409, `Runner node is not connected: ${requestedRunnerNode}`);
+	// Live check, not the DB `status` — that column isn't cleared when a runner drops, so a
+	// pinned machine that closed its laptop still reads "registered" and the old guard passed,
+	// stamping a session onto a dead node (silent `runnerConnected:false` instead of a clear 409).
+	if (requestedRunnerNode) {
+		const live = await relayConnected(c.env, instanceId, requestedRunnerNode).catch(() => false);
+		if (!runtimeNow || !live) throw new HttpError(409, `Runner node is not connected: ${requestedRunnerNode}`);
+	}
 	// Stamp the owning machine so later commands route back to the same runner.
 	let session: CodingSessionRecord;
 	try {

@@ -5,7 +5,7 @@ import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
 import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, columnsForInstance } from "../lib/board.js";
-import { resumeSessionsForNode } from "../lib/coding-store.js";
+import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
 import { parseLoopDecision } from "../lib/loop-decide.js";
@@ -277,6 +277,16 @@ instanceRoutes.post("/:instanceId/runtime", async (c) => {
 	// features and older clients, but Coder sessions route by their stored runner_node.
 	const prevRuntime = await getRuntime(c.env, instanceId, session.uid);
 	if (runnerNode) {
+		// `--force` takeover: this machine claims the instance. Park sessions still marked active
+		// on OTHER machines (the previous one, disconnected without ever clearing its status) so
+		// they don't (a) block this machine's sessions via the one-active-per-repo index or (b)
+		// leave the Coding tab dead-ending on an offline node. History is preserved (suspended,
+		// not ended); the old machine's sessions resume if it reconnects. This wires up the
+		// documented takeover contract — the suspend half was previously never called.
+		if (body.force) {
+			const suspended = await suspendSessionsFromOtherNodes(c.env, instanceId, session.uid, runnerNode).catch(() => 0);
+			if (suspended) console.log(`Suspended ${suspended} session(s) from other machines (force takeover of ${runnerNode})`);
+		}
 		const resumed = await resumeSessionsForNode(c.env, instanceId, session.uid, runnerNode).catch(() => 0);
 		if (resumed) console.log(`Resumed ${resumed} suspended session(s) on ${runnerNode}`);
 	}
@@ -357,7 +367,12 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
 	// Distinct node names known for this instance (each registration = one machine).
 	const available = [...new Set(nodes.map((n) => normalizeRunnerNode(n.runner_node)).filter(Boolean))];
-	return c.json({ runnerNode: runnerNode || null, nodes: available });
+	// Live-connected flag per node (RelayDO truth, not the stale DB status) so the picker can
+	// mark an offline machine and warn when the pinned one isn't connected. Bounded fan-out.
+	const detail = await Promise.all(
+		available.slice(0, 25).map(async (node) => ({ node, connected: await relayConnected(c.env, instanceId, node).catch(() => false) })),
+	);
+	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail: detail });
 });
 
 /** Pin (or clear, with an empty/null value) the node this instance runs on. */

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { callRunner, isRunnerOnline, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
+import { callRunner, getBoundRunnerConn, isRunnerOnline, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
 import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
@@ -150,5 +150,86 @@ describe("runtime node helpers", () => {
 		expect(normalizeRunnerNode(" macbook ")).toBe("macbook");
 		expect(relayNameForInstance("inst-1", "macbook")).toBe("inst-1:node:macbook");
 		expect(relayNameForInstance("inst-1", "")).toBe("inst-1");
+	});
+});
+
+describe("getBoundRunnerConn (live-aware routing)", () => {
+	const INST = "inst-1";
+	// Build an Env whose DB answers the three reads getBoundRunnerConn makes, and whose RELAY
+	// reports `connected` only for relay names in `liveNames`. This models the real bug: the DB
+	// `status` column is never cleared on disconnect, so routing MUST follow the live socket.
+	function buildEnv(opts: {
+		pin?: string;                                   // config.runnerNode (pin)
+		defaultNode?: string | null;                    // instance_runtimes.runner_node
+		nodes?: string[];                               // instance_runtime_nodes rows
+		liveNames?: string[];                           // relay names reporting connected
+	}): Env {
+		const live = new Set(opts.liveNames ?? []);
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async first() {
+								if (sql.includes("FROM agent_instances")) return { config: JSON.stringify({ runnerNode: opts.pin ?? "" }) };
+								if (sql.includes("FROM instance_runtimes")) {
+									return opts.defaultNode
+										? { endpoint_url: `http://default`, token_plaintext: "t", runner_node: opts.defaultNode, token_ciphertext: null, token_dek_wrapped: null, token_iv: null }
+										: null;
+								}
+								if (sql.includes("FROM instance_runtime_nodes") && sql.includes("runner_node = ?3")) {
+									const node = String(args[2]);
+									return (opts.nodes ?? []).includes(node)
+										? { endpoint_url: `http://${node}`, token_plaintext: "t", runner_node: node, token_ciphertext: null, token_dek_wrapped: null, token_iv: null }
+										: null;
+								}
+								return null;
+							},
+							async all() {
+								if (sql.includes("SELECT DISTINCT runner_node")) return { results: (opts.nodes ?? []).map((n) => ({ runner_node: n })) };
+								return { results: [] };
+							},
+							async run() { return { meta: { changes: 0 } }; },
+						};
+					},
+				};
+			},
+		};
+		const RELAY = {
+			idFromName: (name: string) => ({ name }),
+			get: (id: { name: string }) => ({ fetch: async () => Response.json({ connected: live.has(id.name) }) }),
+		};
+		return { RELAY, DB } as unknown as Env;
+	}
+
+	it("unpinned: routes to the default machine when its relay is live", async () => {
+		const env = buildEnv({ defaultNode: "A", nodes: ["A"], liveNames: [relayNameForInstance(INST, "A")] });
+		const conn = await getBoundRunnerConn(env, INST, "u1");
+		expect(conn?.endpointUrl).toBe("http://default");
+	});
+
+	it("unpinned: skips a stale default (offline) and picks a live registered node — the hijack fix", async () => {
+		// instance_runtimes still points at A (a machine that disconnected without clearing status),
+		// but only B holds a live socket. Must route to B, not dead-end on A.
+		const env = buildEnv({ defaultNode: "A", nodes: ["A", "B"], liveNames: [relayNameForInstance(INST, "B")] });
+		const conn = await getBoundRunnerConn(env, INST, "u1");
+		expect(conn?.endpointUrl).toBe("http://B");
+	});
+
+	it("unpinned: returns null when no machine is actually connected", async () => {
+		const env = buildEnv({ defaultNode: "A", nodes: ["A", "B"], liveNames: [] });
+		expect(await getBoundRunnerConn(env, INST, "u1")).toBeNull();
+	});
+
+	it("pinned: routes to the pinned machine only when its relay is live", async () => {
+		const env = buildEnv({ pin: "A", nodes: ["A"], liveNames: [relayNameForInstance(INST, "A")] });
+		const conn = await getBoundRunnerConn(env, INST, "u1");
+		expect(conn?.endpointUrl).toBe("http://A");
+	});
+
+	it("pinned + offline: returns null (no silent fallback to another machine)", async () => {
+		// Pinned to A (offline), B is live. Strict pin must NOT run on B — the agent is offline.
+		const env = buildEnv({ pin: "A", nodes: ["A", "B"], liveNames: [relayNameForInstance(INST, "B")] });
+		expect(await getBoundRunnerConn(env, INST, "u1")).toBeNull();
 	});
 });

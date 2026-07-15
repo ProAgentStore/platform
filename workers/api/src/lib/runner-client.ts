@@ -71,8 +71,42 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
  */
 export async function getBoundRunnerConn(env: Env, instanceId: string, userId: string): Promise<RunnerConn | null> {
 	const node = await readInstanceRunnerNode(env, instanceId, userId).catch(() => "");
-	if (node) return getRunnerConn(env, instanceId, userId, node);
-	return getRunnerConn(env, instanceId, userId);
+	if (node) {
+		// Pinned = authoritative: only that machine, and only if its relay socket is ACTUALLY
+		// live. We can't trust the DB `status` column — it's never cleared when a runner drops
+		// (RelayDO.webSocketClose doesn't touch D1), so a machine that closed its laptop still
+		// reads `registered`. The RelayDO is the only source of truth. Pinned + dead → offline.
+		if (!(await relayConnected(env, instanceId, node).catch(() => false))) return null;
+		return getRunnerConn(env, instanceId, userId, node);
+	}
+	// Unpinned: route to whichever registered machine holds a LIVE relay socket right now —
+	// not whatever the stale `instance_runtimes` default points at. A second `pags up` overwrites
+	// that default row (to the newest machine) BEFORE its socket is up and it's never cleared on
+	// disconnect, so trusting it silently repoints an unpinned agent at an offline machine.
+	return getLiveRunnerConn(env, instanceId, userId);
+}
+
+/**
+ * Resolve a runner connection to a machine whose relay socket is CONNECTED right now. Prefers
+ * the legacy default runtime (the common single-machine + old-client case), else scans the
+ * user's registered nodes for a live one. Returns null if nothing is actually connected. This
+ * is the antidote to the stale-`status` column: routing follows the socket, not the DB row.
+ */
+async function getLiveRunnerConn(env: Env, instanceId: string, userId: string): Promise<RunnerConn | null> {
+	const def = await getRunnerConn(env, instanceId, userId);
+	if (def && (await relayConnected(env, instanceId, def.runnerNode ?? null).catch(() => false))) return def;
+	// Default is stale/offline — scan the per-machine node registrations for a live socket.
+	const { results } = await env.DB.prepare(
+		"SELECT DISTINCT runner_node FROM instance_runtime_nodes WHERE instance_id = ?1 AND user_id = ?2 AND runner_node IS NOT NULL AND runner_node != '' ORDER BY updated_at DESC",
+	).bind(instanceId, userId).all<{ runner_node: string }>().catch(() => ({ results: [] as { runner_node: string }[] }));
+	for (const r of results ?? []) {
+		const node = normalizeRunnerNode(r.runner_node);
+		if (!node) continue;
+		if (await relayConnected(env, instanceId, node).catch(() => false)) {
+			return getRunnerConn(env, instanceId, userId, node);
+		}
+	}
+	return null;
 }
 
 export async function relayConnected(env: Env, instanceId: string, runnerNode?: string | null): Promise<boolean> {

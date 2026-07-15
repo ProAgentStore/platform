@@ -48,6 +48,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	// Node binding: which machine this instance runs on ("" = automatic).
 	const [runnerNode, setRunnerNode] = useState("");
 	const [runnerNodes, setRunnerNodes] = useState<string[]>([]);
+	const [runnerNodesDetail, setRunnerNodesDetail] = useState<Array<{ node: string; connected: boolean }>>([]);
 	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
@@ -111,9 +112,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setRuntimeInfo(d);
 			} catch {}
 			try {
-				const d = await api<{ runnerNode: string | null; nodes: string[] }>(`/v1/instances/${instanceId}/runner-node`);
+				const d = await api<{ runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean }> }>(`/v1/instances/${instanceId}/runner-node`);
 				setRunnerNode(d.runnerNode || "");
 				setRunnerNodes(d.nodes || []);
+				setRunnerNodesDetail(d.nodesDetail || []);
 			} catch {}
 			try {
 				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }> }>(`/v1/instances/${instanceId}/translation`);
@@ -605,12 +607,24 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						<option value="">Automatic (any connected machine)</option>
 						{/* The pinned node may not be in the currently-registered list (machine offline) — keep it selectable. */}
 						{runnerNode && !runnerNodes.includes(runnerNode) && <option value={runnerNode}>{runnerNode} (offline)</option>}
-						{runnerNodes.map((n) => <option key={n} value={n}>{n}</option>)}
+						{runnerNodes.map((n) => {
+							// Live status per machine (RelayDO truth). An offline machine is still selectable
+							// but clearly labeled so a pin to it doesn't silently look "connected".
+							const online = runnerNodesDetail.find((d) => d.node === n)?.connected;
+							return <option key={n} value={n}>{n}{online === false ? " (offline)" : ""}</option>;
+						})}
 					</select>
 					<p className="text-xs text-muted-soft mt-1">
 						Pin this agent to one of your machines running <code className="text-accent">pags up</code>. Its runner tasks (chat tools, apply, coding) route there.
 						{runnerNodes.length === 0 && !runnerNode && <> No machines connected yet — see <span className="text-accent">Terminals</span>.</>}
 					</p>
+					{/* Pinned to a machine that isn't connected → the agent is offline until you start that
+					    machine or repin. Called out because a strict pin never silently falls back. */}
+					{runnerNode && runnerNodesDetail.some((d) => d.node === runnerNode && !d.connected) && (
+						<p className="text-xs text-amber-500 mt-0.5">
+							⚠ <b>{runnerNode}</b> isn't connected. This agent's runner tasks won't run until you start <code className="text-accent">pags up</code> on it, or pick another machine above.
+						</p>
+					)}
 					{runnerNodeMsg && <p className="text-xs text-muted mt-0.5">{runnerNodeMsg}</p>}
 				</div>
 			</div>

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { suspendSessionsFromOtherNodes, resumeSessionsForNode } from "./coding-store.js";
+import { suspendSessionsFromOtherNodes, resumeSessionsForNode, reassignSessionNode } from "./coding-store.js";
 import type { CodingSessionStatus } from "./coding-types.js";
 import type { Env } from "../types.js";
 
@@ -57,5 +57,20 @@ describe("coding-store session lifecycle (node-owned suspend/resume)", () => {
 		expect(writes[0].sql).toContain("MAX(rowid)");
 		expect(writes[0].sql).toContain("repo_id NOT IN");
 		expect(writes[0].args).toEqual(["inst-1", "user-1", "node-A"]);
+	});
+
+	it("reassignSessionNode relocates a session to the machine that's connected now (no status change)", async () => {
+		const { env, writes } = mockEnv();
+		await reassignSessionNode(env, "inst-1", "user-1", "csess-9", "node-B");
+		expect(writes.length).toBe(1);
+		expect(writes[0].sql).toContain("UPDATE coding_sessions SET runner_node = ?4");
+		expect(writes[0].sql).not.toContain("status ="); // relocate only — the session stays active
+		expect(writes[0].args).toEqual(["csess-9", "inst-1", "user-1", "node-B"]);
+	});
+
+	it("reassignSessionNode stores an empty/whitespace node as NULL (auto)", async () => {
+		const { env, writes } = mockEnv();
+		await reassignSessionNode(env, "inst-1", "user-1", "csess-9", "   ");
+		expect(writes[0].args).toEqual(["csess-9", "inst-1", "user-1", null]);
 	});
 });
