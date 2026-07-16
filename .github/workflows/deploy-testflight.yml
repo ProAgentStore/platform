@@ -7,6 +7,9 @@ concurrency:
   group: deploy-testflight
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   build-and-upload:
     name: Build & Upload to TestFlight
