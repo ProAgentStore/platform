@@ -132,6 +132,32 @@ describe("repo-ingest-runner", () => {
 		expect(engine.vectorized).toContain("octo/demo::src/b.ts"); // b still indexed
 	});
 
+	it("retries a transient whole-file embed failure and recovers (failed:0)", async () => {
+		const store = memStore();
+		// a.ts fails (returns -1) the first time it's seen, then succeeds on retry.
+		const seen = new Set<string>();
+		const vectorized: string[] = [];
+		const engine: RepoEngine & { vectorized: string[] } = {
+			vectorized,
+			async vectorizeRepoFile(key, path) {
+				if (path === "src/a.ts" && !seen.has(path)) { seen.add(path); return -1; }
+				vectorized.push(`${key}::${path}`);
+				return 2;
+			},
+			async clearRepoVectors() {},
+			async logEvent() { return undefined; },
+		};
+		const f = fakeFetchers(FILES);
+		await addRepo(store, engine, { ref, repoUrl: "octo/demo", now: "t0" });
+		await drain(store, engine, f);
+		const job = await getRepoJob(store, "octo/demo");
+		expect(job?.status).toBe("done");
+		expect(job?.failed).toBe(0); // recovered on retry, not dropped
+		expect(job?.done).toBe(2); // not over-counted despite the retry
+		expect(vectorized).toContain("octo/demo::src/a.ts"); // eventually indexed
+		expect([...store._m.keys()].some((k) => k.startsWith("rifile:"))).toBe(false);
+	});
+
 	it("saveJob refuses to write a superseded job (re-index race)", async () => {
 		const store = memStore();
 		const engine = fakeEngine();

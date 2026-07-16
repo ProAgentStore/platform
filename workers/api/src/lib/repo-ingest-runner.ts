@@ -15,6 +15,7 @@ export const REPO_MAX_FILES = 300;
 export const REPO_MAX_FILE_BYTES = 32_000;
 export const REPO_MAX_TOTAL_BYTES = 4_000_000;
 export const REPO_CHUNK_BUDGET = 60; // ~embed calls per alarm tick
+export const REPO_FILE_MAX_RETRY = 1; // retry a whole-file embed failure once (later tick) before dropping
 export const REPO_MAX_REPOS = 20; // indexed repos per instance
 
 export interface RepoIngestJob {
@@ -192,25 +193,43 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 			}
 		} else if (job.status === "indexing") {
 			const queue = [...job.queue];
+			const retry: number[] = [];
 			let processed = 0;
 			let failed = 0;
 			let chunks = 0;
 			while (queue.length > 0 && (processed === 0 || chunks < REPO_CHUNK_BUDGET)) {
 				const idx = queue.shift() as number;
-				const file = await store.get<{ path: string; content: string }>(`rifile:${job.key}:${idx}`);
+				const file = await store.get<{ path: string; content: string; attempts?: number }>(`rifile:${job.key}:${idx}`);
 				if (file) {
 					const n = await engine.vectorizeRepoFile(job.key, file.path, file.content).then((v) => v, () => -1);
-					if (n < 0) failed++;
-					else if (n > 0) chunks += n;
-					await store.delete(`rifile:${job.key}:${idx}`);
+					if (n < 0) {
+						// Whole-file embed failure (every chunk's embed() returned null — a swallowed
+						// Workers-AI hiccup). Retry once on a LATER alarm tick before giving up, rather
+						// than permanently dropping the file and calling the repo "Ready" with a hole in
+						// its index. A one-tick-later retry usually rides out a transient outage.
+						const attempts = (file.attempts ?? 0) + 1;
+						if (attempts <= REPO_FILE_MAX_RETRY) {
+							await store.put(`rifile:${job.key}:${idx}`, { ...file, attempts });
+							retry.push(idx);
+						} else {
+							failed++;
+							await store.delete(`rifile:${job.key}:${idx}`);
+						}
+					} else {
+						if (n > 0) chunks += n;
+						await store.delete(`rifile:${job.key}:${idx}`);
+					}
 				}
 				processed++;
 			}
+			// Retried files aren't done — they go back on the queue and are re-counted next tick,
+			// so exclude them from `done` (else it over-counts and can exceed `total`).
+			const nextQueue = [...queue, ...retry];
 			await saveJob(store, job, {
-				done: job.done + processed,
+				done: job.done + (processed - retry.length),
 				failed: (job.failed ?? 0) + failed,
-				queue,
-				status: queue.length === 0 ? "summarizing" : "indexing",
+				queue: nextQueue,
+				status: nextQueue.length === 0 ? "summarizing" : "indexing",
 			});
 		} else if (job.status === "summarizing") {
 			const overview = f.buildRepoOverview(ref, { description: job.description, language: job.language, paths: job.paths, readme: job.readme });
