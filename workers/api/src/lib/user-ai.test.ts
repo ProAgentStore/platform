@@ -144,3 +144,70 @@ describe("runUserWorkersAi", () => {
 		expect(calls.some((sql) => sql.includes("UPDATE user_api_keys"))).toBe(false);
 	});
 });
+
+async function envWithAnthropicKey(apiKey = "sk-ant-test") {
+	const encrypted = await encryptKey(apiKey, TEST_KEK);
+	const env = {
+		KEY_ENCRYPTION_KEY: TEST_KEK,
+		DB: {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							first: async () => {
+								if (!sql.includes("SELECT key_ciphertext")) return null;
+								if (args[1] !== "anthropic") return null;
+								return {
+									key_ciphertext: encrypted.ciphertext,
+									dek_wrapped: encrypted.dekWrapped,
+									iv: encrypted.iv,
+								};
+							},
+							run: async () => ({ success: true }),
+						};
+					},
+				};
+			},
+		},
+	} as unknown as Env;
+	return env;
+}
+
+describe("runAnthropic message normalization", () => {
+	it("drops leading assistant messages and merges consecutive same-role turns", async () => {
+		const env = await envWithAnthropicKey();
+		let sentBody: { messages: Array<{ role: string; content: unknown }> } = { messages: [] };
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				sentBody = JSON.parse(init.body as string);
+				return Response.json({
+					content: [{ type: "text", text: "ok" }],
+					usage: { input_tokens: 1, output_tokens: 1 },
+				});
+			}),
+		);
+
+		await runUserWorkersAi(env, "user-1", "claude-sonnet-4-6", {
+			messages: [
+				// system is stripped; leading assistant must be dropped; the two trailing
+				// user turns (error-turn + new turn shape) must merge into one.
+				{ role: "system", content: "sys" },
+				{ role: "assistant", content: "stale leading reply" },
+				{ role: "user", content: "first question" },
+				{ role: "assistant", content: "answer" },
+				{ role: "user", content: "errored turn" },
+				{ role: "user", content: "new question" },
+			],
+		});
+
+		const roles = sentBody.messages.map((m) => m.role);
+		expect(roles[0]).toBe("user");
+		// strict alternation, no adjacent duplicates
+		for (let i = 1; i < roles.length; i++) expect(roles[i]).not.toBe(roles[i - 1]);
+		expect(roles).toEqual(["user", "assistant", "user"]);
+		// merged content of the two trailing user turns
+		expect(sentBody.messages[2].content).toContain("errored turn");
+		expect(sentBody.messages[2].content).toContain("new question");
+	});
+});

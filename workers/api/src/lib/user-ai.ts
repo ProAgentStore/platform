@@ -57,6 +57,42 @@ export async function runUserWorkersAi(
 	throw new UserAiCredentialsError("Add an API key in Profile → API Keys (Anthropic or Cloudflare Workers AI).");
 }
 
+/**
+ * Anthropic's Messages API rejects any array whose first message isn't `user` or
+ * whose roles don't strictly alternate. Our chat history routinely violates both:
+ * a 10-message context window can start on `assistant` (turn 6+), an errored turn
+ * leaves two adjacent `user` messages once the `system` error note is filtered out,
+ * and the tool loop appends `assistant, user, user`. Normalize before sending:
+ * drop leading assistants, then merge consecutive same-role messages into one.
+ */
+function normalizeForAnthropic(
+	msgs: Array<{ role: string; content: unknown }>,
+): Array<{ role: "user" | "assistant"; content: unknown }> {
+	const mapped = msgs.map((m) => ({
+		role: (m.role === "assistant" ? "assistant" : "user") as "user" | "assistant",
+		content: m.content,
+	}));
+	let start = 0;
+	while (start < mapped.length && mapped[start].role === "assistant") start++;
+	const merged: Array<{ role: "user" | "assistant"; content: unknown }> = [];
+	for (const m of mapped.slice(start)) {
+		const last = merged[merged.length - 1];
+		if (last && last.role === m.role) {
+			last.content = mergeAnthropicContent(last.content, m.content);
+		} else {
+			merged.push({ role: m.role, content: m.content });
+		}
+	}
+	return merged;
+}
+
+function mergeAnthropicContent(a: unknown, b: unknown): unknown {
+	if (typeof a === "string" && typeof b === "string") return `${a}\n\n${b}`;
+	const toBlocks = (c: unknown): unknown[] =>
+		Array.isArray(c) ? c : [{ type: "text", text: String(c) }];
+	return [...toBlocks(a), ...toBlocks(b)];
+}
+
 async function runAnthropic(
 	env: Env,
 	userId: string | undefined,
@@ -64,13 +100,13 @@ async function runAnthropic(
 	body: { messages: Array<{ role: string; content: unknown }>; tools?: unknown[]; maxTokens?: number; timeoutMs?: number },
 	ctx?: UsageContext,
 ): Promise<unknown> {
-	const messages = (body.messages || []).filter((m) => m.role !== "system");
+	const messages = normalizeForAnthropic((body.messages || []).filter((m) => m.role !== "system"));
 	const systemMsg = (body.messages || []).find((m) => m.role === "system");
 
 	const anthropicBody: Record<string, unknown> = {
 		model: "claude-sonnet-4-6",
 		max_tokens: body.maxTokens ?? 1024,
-		messages: messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content })),
+		messages,
 	};
 	// Prompt-cache the (large, stable) system prompt so repeated calls within a run
 	// — the apply loop fires one per step — reprocess it from cache instead of

@@ -25,6 +25,12 @@ import { chunkText, deleteKeysBatched, encodeIndexValue, extractFileText, shortI
 
 const MAX_EVENTS = 500;
 const SUMMARY_THRESHOLD = 20;
+// Summarization always runs on the platform Workers AI binding (`this.ai`), never on
+// BYOK Anthropic. Flagship agents carry a Claude model id (`claude-sonnet-4-6`), and
+// passing that to `env.AI.run(...)` throws — so Claude-agent summaries silently never
+// generated (and re-fired every turn). Fall back to a small CF model for any non-`@cf/`
+// agent model so summaries actually run.
+const SUMMARY_CF_MODEL = "@cf/meta/llama-3.2-3b-instruct";
 const MAX_COLLECTION_RECORDS = 10_000;
 const MAX_COLLECTIONS = 50;
 const CHUNK_SIZE = 512; // characters per vector chunk
@@ -984,8 +990,9 @@ export class AgentStorageEngine {
 			.join("\n")
 			.slice(0, 8_000);
 
+		const summaryModel = model.startsWith("@cf/") ? model : SUMMARY_CF_MODEL;
 		try {
-			const result = (await this.ai.run(model as Parameters<Ai["run"]>[0], {
+			const result = (await this.ai.run(summaryModel as Parameters<Ai["run"]>[0], {
 				messages: [
 					{
 						role: "system",
@@ -1025,10 +1032,15 @@ Extract key facts about the user, their preferences, decisions made, and informa
 
 			await this.doStorage.put(`sum:${sessionId}`, summary);
 
-			// Store extracted facts as memory entries
+			// Store extracted facts as memory entries. Never clobber a user-authored entry —
+			// the console Memory tab allows arbitrary keys (a user could set one literally named
+			// `fact:subject:predicate`), and unlike the guarded write_memory tool this path writes
+			// `mem:` directly, so it must re-check provenance itself.
 			for (const fact of summary.facts) {
 				if (fact.confidence >= 0.8) {
 					const key = `fact:${fact.subject}:${fact.predicate}`.slice(0, 100);
+					const existing = await this.doStorage.get<MemoryEntry>(`mem:${key}`);
+					if (existing?.source === "user") continue;
 					const entry: MemoryEntry = {
 						key,
 						type: "knowledge",
