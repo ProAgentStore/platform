@@ -102,6 +102,11 @@ export function normalizeSchedule(value: unknown): string {
 			validRange(month, 1, 12) &&
 			validRange(weekday, 0, 7);
 		if (!valid) throw new HttpError(400, "cron expression has an out-of-range field");
+		// Enforce the same 5-minute floor as the `every N` form. The grammar only allows `*`
+		// or a literal digit per field (no `*/N`), so a `*` minute means EVERY minute — which
+		// would fire per worker-cron tick, bypassing the interval floor and multiplying
+		// connector-scan / AI cost. Require a specific minute (≥ hourly) instead.
+		if (minute === "*") throw new HttpError(400, "minimum cron interval is 5 minutes — pin a specific minute, or use 'every N minutes'");
 		return parts.join(" ");
 	}
 	throw new HttpError(400, "unsupported schedule; use @hourly, @daily, every N minutes, or a simple 5-field cron");

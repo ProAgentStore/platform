@@ -54,21 +54,25 @@ async function signState(uid: string, exp: number, secret: string): Promise<stri
 }
 
 async function verifyState(token: string, secret: string): Promise<string | null> {
-	const [payload, sig] = token.split(".");
-	if (!payload || !sig) return null;
-	const valid = await crypto.subtle.verify(
-		"HMAC",
-		await hmacKey(secret),
-		unb64url(sig),
-		new TextEncoder().encode(payload),
-	);
-	if (!valid) return null;
-	const { uid, exp } = JSON.parse(new TextDecoder().decode(unb64url(payload))) as {
-		uid: string;
-		exp: number;
-	};
-	if (exp < Math.floor(Date.now() / 1000)) return null;
-	return uid;
+	try {
+		const [payload, sig] = token.split(".");
+		if (!payload || !sig) return null;
+		const valid = await crypto.subtle.verify(
+			"HMAC",
+			await hmacKey(secret),
+			unb64url(sig),
+			new TextEncoder().encode(payload),
+		);
+		if (!valid) return null;
+		const { uid, exp } = JSON.parse(new TextDecoder().decode(unb64url(payload))) as {
+			uid: string;
+			exp: number;
+		};
+		if (exp < Math.floor(Date.now() / 1000)) return null;
+		return uid;
+	} catch {
+		return null;
+	}
 }
 
 /** Start the Gmail OAuth flow. Returns the Google consent URL to open. */

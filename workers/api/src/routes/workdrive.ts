@@ -161,13 +161,8 @@ workdriveRoutes.post("/instances/:instanceId/grants", async (c) => {
 	const accessToken = await mintWorkDriveAccessToken(c.env, refresh);
 	const fallbackId = workDriveResourceIdFromUrl(ref);
 	if (!fallbackId) throw new HttpError(400, "resourceId or url required");
-	const meta = await getWorkDriveFile(c.env, accessToken, ref).catch(() => ({
-		id: fallbackId,
-		name: body.name?.trim() || "Zoho WorkDrive folder",
-		type: "folder",
-		isFolder: true,
-		permalink: typeof body.url === "string" ? body.url : undefined,
-	}));
+	const meta = await getWorkDriveFile(c.env, accessToken, ref).catch(() => null);
+	if (!meta) throw new HttpError(502, "Couldn't verify that Zoho WorkDrive item. Check the link and try again.");
 	if (!meta.isFolder) throw new HttpError(400, "Grant a Zoho WorkDrive folder. File grants are not supported yet.");
 	const grant = await upsertConnectorGrant(c.env, instanceId, session.uid, {
 		provider: PROVIDER,
