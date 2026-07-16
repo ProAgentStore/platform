@@ -252,8 +252,9 @@ export class AgentStorageEngine {
 		}
 		// We had chunks to embed but produced zero vectors → every embed() returned null
 		// (a swallowed Workers-AI provider error). Signal failure (-1) so the ingest alarm
-		// counts it instead of marking the file done-but-empty — otherwise the repo advertises
-		// "Ready (N files)" while RAG returns nothing for it and no error is ever surfaced.
+		// retries this file on a later tick (REPO_FILE_MAX_RETRY) before giving up — rather
+		// than marking the file done-but-empty and advertising "Ready (N files)" while RAG
+		// returns nothing for it and no error is ever surfaced.
 		if (vectors.length === 0) return -1;
 		for (let i = 0; i < vectors.length; i += 100) await this.vectorize.upsert(vectors.slice(i, i + 100));
 		for (const { key, meta } of metas) await this.doStorage.put(key, meta);
