@@ -282,6 +282,39 @@ export class AgentStorageEngine {
 		await deleteKeysBatched(this.doStorage, keys);
 	}
 
+	/**
+	 * Clear everything DERIVED from the conversation: summaries, the facts extracted
+	 * from them, and message vectors. Called when the user clears the chat — otherwise
+	 * "cleared" content still leaks back via RAG (summaries + `sourceType:"message"`
+	 * vectors are searched) and the extracted `fact:*` memories survive. User- and
+	 * agent-authored memory is preserved (only `source:"summary"` facts are removed).
+	 */
+	async clearConversationDerived(): Promise<void> {
+		// Summaries.
+		const summaries = await this.doStorage.list<ConversationSummary>({ prefix: "sum:" });
+		await deleteKeysBatched(this.doStorage, [...summaries.keys()]);
+
+		// Facts extracted by summarization (never touch user/agent memory).
+		const mem = await this.doStorage.list<MemoryEntry>({ prefix: "mem:" });
+		const factKeys = [...mem.entries()].filter(([, v]) => v?.source === "summary").map(([k]) => k);
+		await deleteKeysBatched(this.doStorage, factKeys);
+
+		// Message vectors (both the Vectorize index and the `vec:` metadata mirror).
+		if (this.vectorize) {
+			const all = await this.doStorage.list<VectorMeta>({ prefix: "vec:" });
+			const ids: string[] = [];
+			const keys: string[] = [];
+			for (const [key, meta] of all.entries()) {
+				if (meta.agentId === this.agentId && meta.sourceType === "message") {
+					ids.push(meta.id);
+					keys.push(key);
+				}
+			}
+			for (let i = 0; i < ids.length; i += 128) await this.vectorize.deleteByIds(ids.slice(i, i + 128));
+			await deleteKeysBatched(this.doStorage, keys);
+		}
+	}
+
 	// ── Knowledge base (editable via chat) ─────────────────────────────────────
 
 	/** List knowledge documents (id, title, size) — not the full content. */

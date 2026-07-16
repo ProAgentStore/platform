@@ -19,7 +19,14 @@ export function parseToolCallsFromText(text: string): Array<{ name: string; argu
 			const parsed = JSON.parse(jsonStr);
 			const name = parsed.name || parsed.function?.name;
 			if (!name) continue;
-			const rawArgs = parsed.parameters || parsed.arguments || parsed.function?.arguments || {};
+			let rawArgs = parsed.parameters ?? parsed.arguments ?? parsed.function?.arguments;
+			if (rawArgs === undefined || rawArgs === null) {
+				// Flat shape: no args wrapper, so the arguments are the sibling top-level keys
+				// (e.g. {"name":"write_memory","key":"x","type":"knowledge","content":"y"}).
+				// Strip only the wrapper keys — keep every other field (incl. a genuine `type` arg).
+				const { name: _n, function: _f, parameters: _p, arguments: _a, ...rest } = parsed;
+				rawArgs = rest;
+			}
 			const args = typeof rawArgs === "string" ? JSON.parse(rawArgs) : rawArgs;
 			results.push({ name, arguments: args });
 		} catch {

@@ -9,6 +9,15 @@ describe("parseToolCallsFromText", () => {
 		expect(calls[0].arguments.key).toBe("test");
 	});
 
+	it("parses flat-shape calls where args are sibling top-level keys", () => {
+		// A model emitting {"name":"write_memory","key":"x","type":"knowledge","content":"y"}
+		// (no parameters/arguments wrapper) must still yield the args, not {}.
+		const calls = parseToolCallsFromText('{"name":"write_memory","key":"x","type":"knowledge","content":"y"}');
+		expect(calls).toHaveLength(1);
+		expect(calls[0].name).toBe("write_memory");
+		expect(calls[0].arguments).toEqual({ key: "x", type: "knowledge", content: "y" });
+	});
+
 	it("parses multiple tool calls separated by semicolons", () => {
 		const text = '{"name":"insert_record","parameters":{"collection":"apps","data":"{\\"x\\":1}"}}; {"name":"write_memory","parameters":{"key":"k","type":"identity","content":"v"}}';
 		const calls = parseToolCallsFromText(text);

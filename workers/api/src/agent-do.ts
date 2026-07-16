@@ -498,6 +498,13 @@ export class AgentDO extends DurableObject<Env> {
 		for (let i = 0; i < keys.length; i += 128) {
 			await this.ctx.storage.delete(keys.slice(i, i + 128));
 		}
+		// Also drop everything derived from those messages (summaries, extracted facts,
+		// message vectors) so cleared content can't leak back through RAG. Best-effort —
+		// the messages themselves are already gone.
+		const state = await this.getState().catch(() => null);
+		if (state?.agentId) {
+			await this.getStorageEngine(state.agentId).clearConversationDerived().catch(() => undefined);
+		}
 		return json({ deleted: keys.length });
 	}
 
