@@ -41,6 +41,7 @@ import {
 	normalizeRunnerNode,
 	requireOwnedInstance,
 	requireRuntime,
+	requireLiveRuntime,
 	runtimeJson,
 	runtimeNodeResponse,
 	runtimeResponse,
@@ -753,7 +754,9 @@ instanceRoutes.post("/:instanceId/tasks", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	// Route to the machine that's actually live (not the stale default row), so creating a
+	// board task on a multi-machine account reaches the connected runner.
+	const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 	const body = normalizeRunnerTaskBody(await c.req.json());
 	const res = await callRuntime(c.env, runtime, "/tasks", {
 		method: "POST",
@@ -801,7 +804,9 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/approve", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	// Approving a paused task must reach the LIVE runner (the machine the task is running on),
+	// not the stale default row — otherwise approve silently no-ops on a multi-machine account.
+	const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 	const res = await callRuntime(
 		c.env,
 		runtime,

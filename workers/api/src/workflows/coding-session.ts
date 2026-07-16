@@ -9,8 +9,9 @@ import {
 	type CodingPaneSnapshot,
 	type CodingResult,
 } from "../lib/coding-loop.js";
-import { callRunner, getRunnerConn, READ_TIMEOUT_MS } from "../lib/runner-client.js";
-import { getSession, getRepo } from "../lib/coding-store.js";
+import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { getSession, getRepo, reassignSessionNode } from "../lib/coding-store.js";
+import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../routes/coding.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
@@ -58,7 +59,21 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		const { instanceId, userId, sessionId, repoId, runnerNode, cloneUrl, branch, token, goal } = event.payload;
 		const env = this.env;
 
-		const conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
+		let conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
+		// Machine-switch reclaim (matches the interactive /message path). A durable /run can be
+		// queued/resumed long after it was created, by which point the session's owning machine
+		// may be offline while the user is running `pags up` elsewhere. `conn` resolves from the
+		// DB even for a dead node (the `status` column isn't cleared on disconnect), so verify the
+		// relay socket is live; if not, relocate the session to whatever machine the agent runs on
+		// now (live + pin-aware) instead of failing the whole autonomous run.
+		const live = await relayConnected(env, instanceId, runnerNode ?? null).catch(() => false);
+		if (!live) {
+			const fallback = await getBoundRunnerConn(env, instanceId, userId);
+			if (fallback && normalizeRunnerNode(fallback.runnerNode) !== normalizeRunnerNode(runnerNode)) {
+				await reassignSessionNode(env, instanceId, userId, sessionId, fallback.runnerNode ?? null).catch(() => undefined);
+				conn = fallback;
+			}
+		}
 		if (!conn) {
 			return { outcome: "failed", detail: "No coding runner connected. Start it with: pags up", steps: 0 };
 		}

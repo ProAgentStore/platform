@@ -244,11 +244,18 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const watcherRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const voiceRef = useRef(voice);
 	voiceRef.current = voice;
+	// Track the open session so a watcher started for one session can't dump its completion
+	// summary (or speak it) into a DIFFERENT session's Co-pilot thread after the user switches
+	// repos/sessions. The durable server-side watch still persists the summary to the right
+	// session's timeline, so bailing here loses nothing.
+	const openSessionRef = useRef<string | null>(null);
+	openSessionRef.current = openSession?.id ?? null;
 	const watchForFinish = useCallback((sid: string) => {
 		if (watcherRef.current) clearTimeout(watcherRef.current);
 		let attempts = 0;
 		const MAX_ATTEMPTS = 60; // ~3 min max watch time
 		const poll = async () => {
+			if (openSessionRef.current !== sid) return; // user switched away — stop watching this one
 			attempts++;
 			if (attempts > MAX_ATTEMPTS) {
 				setSummaryHistory((prev) => [...prev, { role: "system", content: "Stopped watching — Engine is taking too long. Check the Terminal view." }]);
