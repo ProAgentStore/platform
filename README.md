@@ -102,7 +102,7 @@ That means the instance runtime path is working and correctly refusing to bill t
 The full MCP-first developer surface is documented at:
 
 - https://proagentstore.online/docs/mcp/
-- [docs/mcp.md](docs/mcp.md)
+- [MCP](platform-docs/mcp.md)
 - [server.json](server.json)
 - [.mcp.json](.mcp.json)
 - [AGENTS.md](AGENTS.md)
@@ -163,7 +163,7 @@ Claude Code:
 /reload-plugins
 ```
 
-See [Skill Publishing](docs/skill-publishing.md) for the publishing layout, marketplace files, and dual Codex/Claude release checklist.
+See [Skill Publishing](platform-docs/skill-publishing.md) for the publishing layout, marketplace files, and dual Codex/Claude release checklist.
 
 Public discovery pages:
 
