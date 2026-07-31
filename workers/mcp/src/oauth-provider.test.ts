@@ -79,13 +79,45 @@ describe("loginHandler health + root", () => {
 		});
 	});
 
-	it("serves the human-readable landing page for unknown paths", async () => {
-		const res = await run(makeEnv(), "https://mcp.proagentstore.online/");
+	it("serves the human-readable landing page to a browser at /", async () => {
+		const res = await run(makeEnv(), "https://mcp.proagentstore.online/", {
+			headers: { accept: "text/html,application/xhtml+xml" },
+		});
 		expect(res.status).toBe(200);
 		expect(res.headers.get("Content-Type")).toBe("text/plain");
 		const body = await res.text();
 		expect(body).toContain("ProAgentStore MCP Server");
 		expect(body).toContain("npx mcp-remote");
+	});
+
+	// The landing text used to be the unconditional fallback for every path and
+	// method. A 200 with a short non-stream body tells an MCP client "stream
+	// opened" and then drops it, and the client's correct response to a dropped
+	// stream is to reconnect — ~1/sec, forever, with every response a healthy
+	// 200. These four cases are the loop; keep them 405/404.
+	it("404s unknown paths instead of serving the landing text", async () => {
+		for (const path of ["/sse", "/events", "/mcp/stream", "/favicon.ico"]) {
+			const res = await run(makeEnv(), `https://mcp.proagentstore.online${path}`);
+			expect(res.status, `${path} must not 200`).toBe(404);
+		}
+	});
+
+	it("405s a client asking / for an event stream", async () => {
+		const res = await run(makeEnv(), "https://mcp.proagentstore.online/", {
+			headers: { accept: "text/event-stream" },
+		});
+		expect(res.status).toBe(405);
+		const body = (await res.json()) as { error: { message: string } };
+		expect(body.error.message).toContain("/mcp");
+	});
+
+	it("405s a JSON-RPC POST to /", async () => {
+		const res = await run(makeEnv(), "https://mcp.proagentstore.online/", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" }),
+		});
+		expect(res.status).toBe(405);
 	});
 });
 

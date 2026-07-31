@@ -24,7 +24,10 @@ export type LoginEnv = McpEnv & { OAUTH_PROVIDER: OAuthHelpers };
  *   GET /authorize/continue  — redirect to the platform login start endpoint
  *   GET /oauth/callback       — platform login callback → completeAuthorization
  *   GET /health               — health probe
- *   GET /                     — human-readable landing text
+ *   GET /                     — human-readable landing text (browsers only)
+ *
+ * Anything else 404s. It must not fall through to the landing text — see the
+ * comment on the fallback for why a blanket 200 here is a request-loop bug.
  */
 export const loginHandler: ExportedHandler<LoginEnv> = {
 	async fetch(request, env): Promise<Response> {
@@ -52,11 +55,57 @@ export const loginHandler: ExportedHandler<LoginEnv> = {
 				},
 			);
 		}
+
+		// Everything below used to fall through to an unconditional 200 + ROOT_TEXT,
+		// on EVERY path and EVERY method. That is an unbounded request loop waiting
+		// to happen: MCP's HTTP transport opens a long-lived event stream with a GET,
+		// so to a client that asked for one, 200 means "stream opened" — and a 1.2KB
+		// body that ends in 37ms looks exactly like a stream that opened and dropped.
+		// The spec-correct client response to a dropped stream is to reconnect, so it
+		// redials, ~1/sec, forever. `GET /sse` was the sharp edge: pointing a client
+		// at `--transport sse .../sse` produced the loop directly.
+		//
+		// The flood is invisible to every guard we have — 200s only, no exceptions,
+		// no AI tokens, no D1 writes, and the MCP rate limiter counts `tools/call`
+		// messages carrying an account, which a bare GET has neither of.
+		//
+		// So: unknown paths 404, and `/` says "wrong number" (405, per spec) to
+		// anything that looks like a protocol client rather than a browser.
+		if (path !== "/" && path !== "") {
+			return new Response("Not found", { status: 404 });
+		}
+		const wantsStream = (request.headers.get("accept") ?? "").includes("text/event-stream");
+		if (wantsStream || request.method === "POST") {
+			return wrongEndpoint(issuer);
+		}
 		return new Response(ROOT_TEXT, {
 			headers: { "Content-Type": "text/plain" },
 		});
 	},
 };
+
+/**
+ * The JSON-RPC 405 the MCP spec requires from an endpoint with no stream to
+ * offer. Returning this instead of a 200 is what stops a misconfigured client
+ * from reconnecting in a tight loop. OPTIONS and HEAD deliberately never reach
+ * here, so CORS preflight is unaffected.
+ */
+function wrongEndpoint(issuer: string): Response {
+	return new Response(
+		JSON.stringify({
+			jsonrpc: "2.0",
+			id: null,
+			error: {
+				code: -32000,
+				message: `Method Not Allowed — the MCP endpoint is ${issuer}/mcp`,
+			},
+		}),
+		{
+			status: 405,
+			headers: { "Content-Type": "application/json", Allow: "GET, HEAD" },
+		},
+	);
+}
 
 const ROOT_TEXT =
 	"ProAgentStore MCP Server\n\nConnect: npx mcp-remote https://mcp.proagentstore.online/mcp\n\nUse chat_with_agent for public trial previews. Use subscribe_agent, my_instances, add_instance_knowledge, and chat_with_instance for text private instances. Use list_instance_triggers, create_instance_trigger, run_instance_trigger, list_instance_trigger_events, and delete_instance_trigger for webhooks, crons, and connector syncs. Use register_instance_runtime, run_instance_task, approve_instance_task, cancel_instance_task, and instance_task_events for browser-capable private instances.\n\nSafety: OAuth scopes are read/write/runtime/destructive. Mutating tools support dry_run where useful. Destructive and repository overwrite tools require exact confirm values. Use mcp_audit_log to inspect recent MCP events.\n\nTools include: list_agents, my_agents, my_instances, subscribe_agent, chat_with_instance, trigger management, register/manage instance runtimes, run/approve/cancel instance tasks, scaffold_agent, create_agent, update_agent, get/update agent board config, list/read/write agent files, add/list knowledge, analytics, deploy status, MCP audit log, platform guide, SDK reference.";
