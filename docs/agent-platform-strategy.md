@@ -9,8 +9,11 @@
 
 PAGS today has three coexisting agent patterns:
 
-1. **Standalone-worker agents** (`agents/site-monitor/`, etc.) — each a deployed CF
-   Worker in its own folder. Self-contained, deployed separately.
+1. **Standalone-worker agents** (`site-monitor`, `lead-qualifier`, …) — each a deployed
+   CF Worker, self-contained with its own `deploy.yml`. These live in their **own
+   `ProAgentStore/<slug>` repos**, NOT the monorepo (the duplicate `agents/*` copies
+   were removed 2026-08-01 — see the "agents live outside the monorepo" epic). Clone
+   locally to `~/dev/stores/pags/agents/<slug>/`.
 2. **Runtime-backed agents** (Coder, Job Application Assistant) — logic woven into
    the platform core (`workers/api`, `packages/browser-runner`, `store/console`),
    scattered by layer. Fine for a *handful of first-party* agents; **does NOT
