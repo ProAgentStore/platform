@@ -31,6 +31,8 @@ import { relayRoutes } from "./routes/relay.js";
 import { terminalRoutes } from "./routes/terminals.js";
 import { usageRoutes } from "./routes/usage.js";
 import { triggerRoutes } from "./routes/triggers.js";
+import { adminRoutes } from "./routes/admin.js";
+import { cloudflareAccessGate } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import type { Env } from "./types.js";
 
@@ -83,6 +85,11 @@ app.use("/v1/push/test", rateLimitStrict());
 app.use("/v1/errors/client", rateLimitStrict()); // browser-driven writes to the durable log — throttle hard
 app.use("/v1/keys/*/reveal", rateLimitStrict()); // hands out a raw decrypted key — throttle hard
 
+// Admin perimeter: Cloudflare Access gate in front of the whole operator API
+// (defense-in-depth). Inert until CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set;
+// the admin ROLE is still enforced per-handler behind this.
+app.use("/v1/admin/*", cloudflareAccessGate());
+
 // ── Routes ─────────────────────────────────────────────────────────────────
 
 app.route("/v1/auth", authRoutes);
@@ -115,6 +122,7 @@ app.route("/v1/triggers", triggerRoutes); // instance webhook + cron triggers
 app.route("/v1/errors", errorRoutes); // GET /v1/errors — durable error log read-back
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);
+app.route("/v1/admin", adminRoutes); // operator portal: /me, /audit (+ users, agents, usage, moderation)
 
 app.get("/health", (c) => c.json({ ok: true, service: "proagentstore-api" }));
 

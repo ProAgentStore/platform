@@ -48,6 +48,16 @@ export interface Env {
 	VAPID_PUBLIC_KEY?: string;
 	VAPID_PRIVATE_KEY?: string;
 	VAPID_SUBJECT?: string;
+	/**
+	 * Admin/operator portal (issue #28).
+	 * ADMIN_ALLOWLIST: comma-separated session uids granted admin as a break-glass
+	 * fallback, checked in requireAdmin in addition to users.roles.
+	 * CF_ACCESS_*: when both set, the /v1/admin/* API + /admin UI require a valid
+	 * Cloudflare Access token (defense-in-depth). Inert until configured.
+	 */
+	ADMIN_ALLOWLIST?: string;
+	CF_ACCESS_TEAM_DOMAIN?: string;
+	CF_ACCESS_AUD?: string;
 }
 
 export interface SessionPayload {
