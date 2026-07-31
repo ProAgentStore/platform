@@ -1,0 +1,66 @@
+import { describe, expect, it } from "vitest";
+import { aggregateAdminUsage, PLATFORM_PROVIDER, type AdminUsageRow } from "./usage.js";
+
+function row(p: Partial<AdminUsageRow>): AdminUsageRow {
+	return {
+		user_id: "u1",
+		agent_id: null,
+		instance_id: null,
+		provider: "anthropic",
+		model: "claude-sonnet-4-6",
+		kind: "chat",
+		input_tokens: 1000,
+		output_tokens: 500,
+		cost_micros: 10500,
+		created_at: "2026-08-01 10:00:00",
+		...p,
+	};
+}
+
+describe("aggregateAdminUsage", () => {
+	it("totals across all users and buckets by provider/model/kind/user", () => {
+		const s = aggregateAdminUsage([
+			row({ user_id: "u1", cost_micros: 100 }),
+			row({ user_id: "u2", cost_micros: 300, model: "claude-opus-4" }),
+			row({ user_id: "u2", cost_micros: 50, kind: "apply" }),
+		]);
+		expect(s.totals.calls).toBe(3);
+		expect(s.totals.costMicros).toBe(450);
+		// byUser sorted by cost: u2 (350) before u1 (100)
+		expect(s.byUser.map((b) => b.key)).toEqual(["u2", "u1"]);
+		expect(s.byUser[0].costMicros).toBe(350);
+		expect(s.byModel.map((b) => b.key)).toContain("claude-opus-4");
+		expect(s.byKind.map((b) => b.key).sort()).toEqual(["apply", "chat"]);
+	});
+
+	it("splits platform-paid from BYOK by provider", () => {
+		const s = aggregateAdminUsage([
+			row({ provider: "anthropic", cost_micros: 1000 }),
+			row({ provider: "cloudflare", cost_micros: 0 }),
+			row({ provider: PLATFORM_PROVIDER, cost_micros: 250, kind: "embedding" as AdminUsageRow["kind"] }),
+		]);
+		expect(s.split.platformPaid.costMicros).toBe(250);
+		expect(s.split.platformPaid.calls).toBe(1);
+		expect(s.split.byok.costMicros).toBe(1000);
+		expect(s.split.byok.calls).toBe(2);
+	});
+
+	it("labels users and agents from the provided name maps", () => {
+		const s = aggregateAdminUsage([row({ user_id: "u1", agent_id: "a1" })], {
+			userNames: { u1: "alice" },
+			agentNames: { a1: "Coder" },
+		});
+		expect(s.byUser[0].label).toBe("alice");
+		expect(s.byAgent[0].label).toBe("Coder");
+	});
+
+	it("produces a dense daily series over the window", () => {
+		const s = aggregateAdminUsage([row({ created_at: "2026-08-01 10:00:00" })], {
+			fromDay: "2026-07-30",
+			toDay: "2026-08-01",
+		});
+		expect(s.daily.map((d) => d.date)).toEqual(["2026-07-30", "2026-07-31", "2026-08-01"]);
+		expect(s.daily[0].calls).toBe(0);
+		expect(s.daily[2].calls).toBe(1);
+	});
+});

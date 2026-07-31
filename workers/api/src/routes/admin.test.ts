@@ -11,7 +11,7 @@ const TEST_SECRET = "test-secret";
  * returns for the live-role check; `allowlist` seeds ADMIN_ALLOWLIST; `audit` is
  * the rows the audit query returns.
  */
-function testApp(opts: { dbRoles?: string | null; allowlist?: string; audit?: unknown[] } = {}) {
+function testApp(opts: { dbRoles?: string | null; allowlist?: string; audit?: unknown[]; usageRows?: unknown[]; platformAiEnabled?: boolean } = {}) {
 	const app = new Hono();
 	app.route("/v1/admin", adminRoutes);
 	app.onError((err, c) => {
@@ -21,17 +21,28 @@ function testApp(opts: { dbRoles?: string | null; allowlist?: string; audit?: un
 	const env = {
 		SESSION_SIGNING_KEY: TEST_SECRET,
 		ADMIN_ALLOWLIST: opts.allowlist,
+		PLATFORM_AI_ENABLED: opts.platformAiEnabled ? "true" : "false",
 		DB: {
 			prepare(sql: string) {
+				// requireAdmin's live-role check reads FROM users with a single-row .first();
+				// the usage/audit queries return result sets via .all().
+				const isRoleLookup = sql.includes("SELECT roles FROM users");
 				return {
 					bind() {
 						return {
-							first: async () =>
-								sql.includes("FROM users") ? { roles: opts.dbRoles ?? null } : null,
-							all: async () => ({ results: opts.audit ?? [] }),
+							first: async () => (isRoleLookup ? { roles: opts.dbRoles ?? null } : null),
+							all: async () =>
+								sql.includes("FROM ai_usage")
+									? { results: opts.usageRows ?? [] }
+									: { results: opts.audit ?? [] },
 							run: async () => ({}),
 						};
 					},
+					first: async () => (isRoleLookup ? { roles: opts.dbRoles ?? null } : null),
+					all: async () =>
+						sql.includes("FROM ai_usage")
+							? { results: opts.usageRows ?? [] }
+							: { results: opts.audit ?? [] },
 				};
 			},
 		},
@@ -96,5 +107,42 @@ describe("GET /v1/admin/audit", () => {
 		const res = await req(app, env, "/v1/admin/audit", await token("u1", ["admin"]));
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ count: 1, audit });
+	});
+});
+
+const USAGE_ROWS = [
+	{ user_id: "u1", agent_id: null, instance_id: null, provider: "anthropic", model: "claude-sonnet-4-6", kind: "chat", input_tokens: 1000, output_tokens: 500, cost_micros: 10500, created_at: "2026-08-01 10:00:00", agent_name: null, user_login: "alice" },
+	{ user_id: "u2", agent_id: null, instance_id: null, provider: "platform", model: "@cf/baai/bge-base-en-v1.5", kind: "embedding", input_tokens: 200, output_tokens: 0, cost_micros: 40, created_at: "2026-08-01 11:00:00", agent_name: null, user_login: "bob" },
+];
+
+describe("GET /v1/admin/usage", () => {
+	it("403s a non-admin", async () => {
+		const { app, env } = testApp({ dbRoles: '["user"]' });
+		const res = await req(app, env, "/v1/admin/usage", await token("u2", ["user"]));
+		expect(res.status).toBe(403);
+	});
+
+	it("returns a cross-user rollup for an admin", async () => {
+		const { app, env } = testApp({ usageRows: USAGE_ROWS });
+		const res = await req(app, env, "/v1/admin/usage?range=30d", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.totals.calls).toBe(2);
+		expect(body.byUser.map((b: any) => b.label).sort()).toEqual(["alice", "bob"]);
+		expect(body.split.platformPaid.calls).toBe(1);
+		expect(body.split.byok.calls).toBe(1);
+	});
+});
+
+describe("GET /v1/admin/spending", () => {
+	it("surfaces BYOK spend, top spenders, and the platform-paid caveat", async () => {
+		const { app, env } = testApp({ usageRows: USAGE_ROWS, platformAiEnabled: true });
+		const res = await req(app, env, "/v1/admin/spending", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.byok.costMicros).toBe(10500);
+		expect(body.platformAiEnabled).toBe(true);
+		expect(body.platformPaid.metered).toBe(false);
+		expect(body.topSpenders[0].label).toBe("alice");
 	});
 });
