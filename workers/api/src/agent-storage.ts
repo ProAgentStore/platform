@@ -22,6 +22,21 @@ import type {
 } from "./agent-storage-types.js";
 import type { AgentMessage, KnowledgeDoc, MemoryEntry } from "./agent-types.js";
 import { chunkText, deleteKeysBatched, encodeIndexValue, extractFileText, shortId, validateRecord } from "./agent-storage-utils.js";
+import { approxTokens } from "./lib/ai-pricing.js";
+import { recordPlatformUsage } from "./lib/usage.js";
+
+/**
+ * Optional metering hook (issue #44): when present, platform-paid Workers-AI calls
+ * (embeddings + conversation summaries) run inside this engine are ledgered as
+ * provider="platform" so operator spend is visible + attributable. Absent (most
+ * call sites) → no ledger, same as before.
+ */
+export interface EngineMeter {
+	db: D1Database;
+	userId?: string;
+	agentId?: string | null;
+	instanceId?: string | null;
+}
 
 const MAX_EVENTS = 500;
 const SUMMARY_THRESHOLD = 20;
@@ -42,6 +57,7 @@ export class AgentStorageEngine {
 		private vectorize: VectorizeIndex | null,
 		private ai: Ai | null,
 		private agentId: string,
+		private meter: EngineMeter | null = null,
 	) {}
 
 	// ── Vector Storage ────────────────────────────────────────────────────────
@@ -385,6 +401,15 @@ export class AgentStorageEngine {
 			const result = await this.ai.run("@cf/baai/bge-base-en-v1.5", {
 				text: [text],
 			});
+			// Platform-paid: ledger the embedding (issue #44). Embeddings have no output
+			// tokens; input is estimated from text length (Workers AI returns no usage).
+			if (this.meter?.userId) {
+				await recordPlatformUsage(
+					{ DB: this.meter.db },
+					{ userId: this.meter.userId, agentId: this.meter.agentId, instanceId: this.meter.instanceId, model: "@cf/baai/bge-base-en-v1.5", kind: "embedding" },
+					{ input: approxTokens(text.length), output: 0 },
+				);
+			}
 			return (result as { data: number[][] }).data?.[0] || null;
 		} catch {
 			return null;
@@ -1042,6 +1067,15 @@ Extract key facts about the user, their preferences, decisions made, and informa
 			})) as { response?: string };
 
 			const text = result.response || "";
+			// Platform-paid: ledger the summary LLM call (issue #44). Tokens estimated
+			// from transcript in / response out (Workers AI returns no usage here).
+			if (this.meter?.userId) {
+				await recordPlatformUsage(
+					{ DB: this.meter.db },
+					{ userId: this.meter.userId, agentId: this.meter.agentId, instanceId: this.meter.instanceId, model, kind: "summary" },
+					{ input: approxTokens(transcript.length), output: approxTokens(text.length) },
+				);
+			}
 			const jsonMatch = text.match(/\{[\s\S]*\}/);
 			if (!jsonMatch) return null;
 

@@ -8,6 +8,8 @@
 import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
+import { recordPlatformUsage } from "../lib/usage.js";
+import { approxTokens } from "../lib/ai-pricing.js";
 import type { Env } from "../types.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
@@ -245,6 +247,15 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 				)) as { response?: string };
 				raw = (r.response || "").trim();
 				viaPlatform = !!raw;
+				// Platform-paid: ledger the translation call (issue #44). Workers AI
+				// returns no usage, so tokens are estimated from prompt/response length.
+				if (viaPlatform) {
+					await recordPlatformUsage(
+						c.env,
+						{ userId: session.uid, instanceId, model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", kind: "translate" },
+						{ input: approxTokens(JSON.stringify(messages).length), output: approxTokens(raw.length) },
+					);
+				}
 			} catch { /* fall through to BYOK */ }
 		}
 		if (!raw) {

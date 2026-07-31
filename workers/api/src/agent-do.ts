@@ -65,17 +65,23 @@ export type {
 const MAX_CONTEXT_MESSAGES = 10;
 
 export class AgentDO extends DurableObject<Env> {
-	private getStorageEngine(agentId: string): AgentStorageEngine {
+	private getStorageEngine(agentId: string, userId?: string): AgentStorageEngine {
 		// Platform-paid internal AI (embeddings + summary) is gated behind one master
 		// switch. Off (default) → pass null AI, so embed/summary no-op and the platform
 		// never spends tokens (BYOK-only). LLM chat is BYOK regardless of this flag.
 		const platformAi = this.env.PLATFORM_AI_ENABLED === "true" ? this.env.AI || null : null;
+		// When the acting user is known, meter platform-paid embeds/summaries into the
+		// ai_usage ledger (provider="platform") so operator spend is visible (issue #44).
+		const meter = platformAi && userId
+			? { db: this.env.DB, userId, agentId }
+			: null;
 		return new AgentStorageEngine(
 			this.ctx.storage,
 			this.env.STORAGE || null,
 			this.env.VECTORIZE || null,
 			platformAi,
 			agentId,
+			meter,
 		);
 	}
 
@@ -316,7 +322,7 @@ export class AgentDO extends DurableObject<Env> {
 		await this.appendMessage(userMsg);
 		this.broadcast({ type: "message", message: userMsg });
 
-		const engine = this.getStorageEngine(state.agentId);
+		const engine = this.getStorageEngine(state.agentId, userId);
 		await engine.logEvent("chat.message", userId, { messageId: userMsg.id });
 
 		// Run agent loop

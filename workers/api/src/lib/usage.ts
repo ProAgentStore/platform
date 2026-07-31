@@ -2,7 +2,7 @@
 // it for the Usage page. Recording is best-effort — a ledger write must never
 // break or slow an actual chat/apply/coding call.
 
-import { estimateCostMicros } from "./ai-pricing.js";
+import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js";
 
 export type UsageKind =
 	| "chat"
@@ -13,7 +13,10 @@ export type UsageKind =
 	| "run"
 	| "resume"
 	| "translate"
-	| "voice";
+	| "voice"
+	// Platform-paid internal AI (issue #44), billed to the platform, not BYOK.
+	| "embedding"
+	| "summary";
 
 /** What a call site knows about the call. provider+model+userId are filled in by
  *  the AI layer (it knows the real model actually used), so callers pass only the
@@ -91,6 +94,43 @@ export async function recordVoiceUsage(
 			 VALUES (?1, ?2, NULL, ?3, 'openai', ?4, 'voice', 0, 0, ?5, datetime('now'))`,
 		)
 			.bind(crypto.randomUUID(), args.userId, args.instanceId ?? null, args.model, cost)
+			.run();
+	} catch {
+		/* observability, never load-bearing */
+	}
+}
+
+/**
+ * Ledger a PLATFORM-PAID Workers-AI call (issue #44) — provider "platform" so the
+ * admin split can separate it from BYOK. Cost is the rough platform estimate
+ * (authoritative = CF billing actuals, issue #45). Best-effort like recordUsage.
+ */
+export async function recordPlatformUsage(
+	env: { DB: D1Database },
+	args: { userId: string | undefined; instanceId?: string | null; agentId?: string | null; model: string; kind: UsageKind },
+	usage: UsageTokens | null | undefined,
+): Promise<void> {
+	try {
+		if (!args.userId || !usage) return;
+		const input = Math.max(0, Math.floor(Number(usage.input) || 0));
+		const output = Math.max(0, Math.floor(Number(usage.output) || 0));
+		if (input === 0 && output === 0) return;
+		const cost = estimatePlatformCostMicros(input, output);
+		await env.DB.prepare(
+			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cost_micros, created_at)
+			 VALUES (?1, ?2, ?3, ?4, 'platform', ?5, ?6, ?7, ?8, ?9, datetime('now'))`,
+		)
+			.bind(
+				crypto.randomUUID(),
+				args.userId,
+				args.agentId ?? null,
+				args.instanceId ?? null,
+				args.model,
+				args.kind,
+				input,
+				output,
+				cost,
+			)
 			.run();
 	} catch {
 		/* observability, never load-bearing */
