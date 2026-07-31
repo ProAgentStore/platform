@@ -142,7 +142,9 @@ describe("GET /v1/admin/spending", () => {
 		const body = (await res.json()) as any;
 		expect(body.byok.costMicros).toBe(10500);
 		expect(body.platformAiEnabled).toBe(true);
-		expect(body.platformPaid.metered).toBe(false);
+		expect(body.platformPaid.metered).toBe(true);
+		expect(body.platformPaid.estimated).toBe(true);
+		expect(body.platformPaid.calls).toBe(1); // the platform embedding row
 		expect(body.topSpenders[0].label).toBe("alice");
 	});
 });

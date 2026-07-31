@@ -100,13 +100,14 @@ adminRoutes.get("/usage", async (c) => {
  * GET /v1/admin/spending?range=30d — the money view: BYOK spend (real, estimated
  * from tokens) + top spenders/models + trend, plus the platform-paid picture.
  *
- * IMPORTANT: platform-paid AI (embeddings / summaries / translation run on the
- * platform's Workers AI when PLATFORM_AI_ENABLED) is NOT fully metered into the
- * ledger yet — only rows tagged provider="platform" are counted. Until the
- * write-path metering + Cloudflare billing-actuals integration land (see the
- * follow-up issues), `platformPaid.metered` is false and the authoritative number
- * for platform Workers-AI spend is the Cloudflare dashboard. `platformAiEnabled`
- * reports whether the platform is currently allowed to pay for internal AI.
+ * Platform-paid AI (embeddings / summaries / translation on the platform's Workers
+ * AI when PLATFORM_AI_ENABLED) IS now metered into the ledger as provider="platform"
+ * (issue #44) — but cost is a ROUGH estimate: Cloudflare bills Workers AI per neuron
+ * and we estimate from token counts (issue #45 wires the authoritative CF billing
+ * actuals). So `platformPaid.metered` is true but `platformPaid.estimated` is also
+ * true. Coverage is chat-time embeds/summaries + translation; background ingest
+ * embeds aren't metered yet. `platformAiEnabled` reports whether the platform is
+ * currently allowed to pay for internal AI.
  */
 adminRoutes.get("/spending", async (c) => {
 	await requireAdmin(c);
@@ -123,8 +124,9 @@ adminRoutes.get("/spending", async (c) => {
 		platformAiEnabled: c.env.PLATFORM_AI_ENABLED === "true",
 		platformPaid: {
 			...s.split.platformPaid,
-			metered: false,
-			note: "Platform-paid Workers AI (embeddings/summaries/translation) is not yet fully metered into the ledger; see the CF dashboard for authoritative neuron spend.",
+			metered: true,
+			estimated: true,
+			note: "Platform-paid Workers AI (chat embeddings/summaries + translation) is metered as provider=platform; cost is a rough token-based estimate (authoritative neuron spend = CF billing actuals, issue #45). Background ingest embeds not yet metered.",
 		},
 	});
 });

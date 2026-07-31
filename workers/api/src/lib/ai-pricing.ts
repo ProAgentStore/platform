@@ -110,3 +110,28 @@ export function formatUsd(micros: number): string {
 	if (usd < 0.01) return `<$0.01`;
 	return `$${usd.toFixed(2)}`;
 }
+
+// ── Platform-paid Workers AI (issue #44) ──────────────────────────────────
+// Internal AI the PLATFORM pays for (embeddings/summaries/translation on env.AI)
+// when PLATFORM_AI_ENABLED. Cloudflare bills Workers AI per *neuron*, not per token,
+// and per-model neuron rates vary widely — so this is a deliberately ROUGH, nominal
+// placeholder so platform spend reads as a non-zero, order-of-magnitude number that
+// is attributable per user/kind. The AUTHORITATIVE figure comes from Cloudflare
+// billing actuals (issue #45); UI/API label these as estimates.
+export const PLATFORM_CF_PRICE: ModelPrice = { inputPerM: 0.1, outputPerM: 0.3 };
+
+/** Estimated platform Workers-AI cost (micros USD) for a call. See PLATFORM_CF_PRICE. */
+export function estimatePlatformCostMicros(
+	inputTokens: number | null | undefined,
+	outputTokens: number | null | undefined,
+): number {
+	const inTok = Math.max(0, Math.floor(Number(inputTokens) || 0));
+	const outTok = Math.max(0, Math.floor(Number(outputTokens) || 0));
+	return Math.round(inTok * PLATFORM_CF_PRICE.inputPerM + outTok * PLATFORM_CF_PRICE.outputPerM);
+}
+
+/** Rough token count from character length (~4 chars/token) — for call sites that
+ *  don't get usage back from Workers AI (embeddings, CF llama translate). */
+export function approxTokens(chars: number | null | undefined): number {
+	return Math.ceil(Math.max(0, Number(chars) || 0) / 4);
+}
