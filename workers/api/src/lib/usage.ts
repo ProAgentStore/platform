@@ -201,6 +201,106 @@ export function aggregateUsage(
 	};
 }
 
+// ---------------------------------------------------------------------------
+// Admin aggregation (cross-user) — pure, unit-tested. Powers /v1/admin/usage
+// and /v1/admin/spending. Adds the by-provider and by-user dimensions the
+// per-user page doesn't need, plus a platform-paid-vs-BYOK split.
+// ---------------------------------------------------------------------------
+
+/** A ledger row with its owning user — the per-user view filters by user, admin needs it. */
+export interface AdminUsageRow extends UsageRow {
+	user_id: string;
+}
+
+export interface BucketTotals {
+	inputTokens: number;
+	outputTokens: number;
+	costMicros: number;
+	calls: number;
+}
+
+export interface AdminUsageSummary {
+	totals: BucketTotals;
+	daily: UsageSummary["daily"];
+	byProvider: UsageBucket[];
+	byModel: UsageBucket[];
+	byKind: UsageBucket[];
+	byAgent: UsageBucket[];
+	byUser: UsageBucket[];
+	/** Platform-paid (provider === "platform", billed to us) vs BYOK (everything else). */
+	split: { platformPaid: BucketTotals; byok: BucketTotals };
+}
+
+/** Rows whose cost the platform pays are marked with this provider by the metering layer. */
+export const PLATFORM_PROVIDER = "platform";
+
+const zeroTotals = (): BucketTotals => ({ inputTokens: 0, outputTokens: 0, costMicros: 0, calls: 0 });
+
+function addInto(t: BucketTotals, r: UsageRow) {
+	t.inputTokens += r.input_tokens || 0;
+	t.outputTokens += r.output_tokens || 0;
+	t.costMicros += r.cost_micros || 0;
+	t.calls += 1;
+}
+
+/**
+ * Roll cross-user ledger rows into admin breakdowns. `names` maps ids → display
+ * labels (agentNames for agent_id, userNames for user_id).
+ */
+export function aggregateAdminUsage(
+	rows: AdminUsageRow[],
+	opts: { fromDay?: string; toDay?: string; agentNames?: Record<string, string>; userNames?: Record<string, string> } = {},
+): AdminUsageSummary {
+	const totals = zeroTotals();
+	const maps = {
+		day: new Map<string, UsageBucket>(),
+		provider: new Map<string, UsageBucket>(),
+		model: new Map<string, UsageBucket>(),
+		kind: new Map<string, UsageBucket>(),
+		agent: new Map<string, UsageBucket>(),
+		user: new Map<string, UsageBucket>(),
+	};
+	const split = { platformPaid: zeroTotals(), byok: zeroTotals() };
+
+	const into = (m: Map<string, UsageBucket>, key: string, r: UsageRow) => {
+		let b = m.get(key);
+		if (!b) { b = emptyBucket(key); m.set(key, b); }
+		bump(b, r);
+	};
+
+	for (const r of rows) {
+		addInto(totals, r);
+		into(maps.day, usageDay(r.created_at), r);
+		into(maps.provider, r.provider || "unknown", r);
+		into(maps.model, r.model || "unknown", r);
+		into(maps.kind, r.kind || "unknown", r);
+		into(maps.agent, r.agent_id || "unassigned", r);
+		into(maps.user, r.user_id || "unknown", r);
+		addInto(r.provider === PLATFORM_PROVIDER ? split.platformPaid : split.byok, r);
+	}
+
+	const daily: UsageSummary["daily"] = [];
+	const days = opts.fromDay && opts.toDay ? denseDays(opts.fromDay, opts.toDay) : [...maps.day.keys()].sort();
+	for (const date of days) {
+		const b = maps.day.get(date);
+		daily.push({ date, inputTokens: b?.inputTokens || 0, outputTokens: b?.outputTokens || 0, costMicros: b?.costMicros || 0, calls: b?.calls || 0 });
+	}
+
+	const sortByCost = (m: Map<string, UsageBucket>) =>
+		[...m.values()].sort((a, b) => b.costMicros - a.costMicros || (b.inputTokens + b.outputTokens) - (a.inputTokens + a.outputTokens));
+
+	return {
+		totals,
+		daily,
+		byProvider: sortByCost(maps.provider),
+		byModel: sortByCost(maps.model),
+		byKind: sortByCost(maps.kind),
+		byAgent: sortByCost(maps.agent).map((b) => ({ ...b, label: b.key === "unassigned" ? "Unassigned" : opts.agentNames?.[b.key] || b.key })),
+		byUser: sortByCost(maps.user).map((b) => ({ ...b, label: opts.userNames?.[b.key] || b.key })),
+		split,
+	};
+}
+
 /** Inclusive list of "YYYY-MM-DD" strings from → to (UTC), capped to avoid runaway. */
 export function denseDays(fromDay: string, toDay: string): string[] {
 	const out: string[] = [];
