@@ -30,12 +30,39 @@ export async function requireUser(
 	return session;
 }
 
-/** Require 'admin' role. */
+/**
+ * Resolve whether a session is an admin (issue #28), defense-in-depth:
+ *   1. the role baked into the session token (fast path), then
+ *   2. a LIVE `users.roles` read — so a freshly granted/revoked admin takes effect
+ *      immediately without waiting for the 30-day token to expire, then
+ *   3. the ADMIN_ALLOWLIST env (break-glass, by uid) — bootstraps the first admin.
+ */
+export async function isAdmin(
+	c: Context<{ Bindings: Env }>,
+	session: SessionPayload,
+): Promise<boolean> {
+	if (session.roles.includes("admin")) return true;
+	try {
+		const row = await c.env.DB.prepare("SELECT roles FROM users WHERE id = ?1")
+			.bind(session.uid)
+			.first<{ roles: string }>();
+		if (row?.roles && (JSON.parse(row.roles) as string[]).includes("admin")) return true;
+	} catch {
+		// fall through to allowlist
+	}
+	const allow = (c.env.ADMIN_ALLOWLIST || "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter(Boolean);
+	return allow.includes(session.uid);
+}
+
+/** Require 'admin' role (see isAdmin for the resolution order). */
 export async function requireAdmin(
 	c: Context<{ Bindings: Env }>,
 ): Promise<SessionPayload> {
 	const session = await requireUser(c);
-	if (!session.roles.includes("admin")) {
+	if (!(await isAdmin(c, session))) {
 		throw new HttpError(403, "Admin access required");
 	}
 	return session;
