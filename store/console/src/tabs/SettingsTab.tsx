@@ -73,6 +73,13 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	// your agents (Terminals' node-level truth), even if THIS agent isn't attached to it.
 	const pinnedDetail = runnerNodesDetail.find((d) => d.node === runnerNode);
 	const pinnedNodeOnline = pinnedDetail?.nodeOnline === true;
+	// Is THIS agent's runner live? /runtime/status carries it at relay.connected (there is
+	// no top-level `connected`), and the machine name at relay.runnerNode — reading the wrong
+	// (top-level) keys made the panel read "Offline" permanently. `connected` on the pinned
+	// node's detail is the same RelayDO truth, used as a fallback when the probe hasn't loaded.
+	const relayInfo = (runtimeInfo as { relay?: { connected?: boolean; runnerNode?: string | null } } | null)?.relay;
+	const agentOnline = relayInfo?.connected === true || pinnedDetail?.connected === true;
+	const agentNode = relayInfo?.runnerNode || runnerNode || "";
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
 	const [sensitivity, setSensitivity] = useState(1);
@@ -619,12 +626,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				<div className="text-sm text-muted leading-relaxed">
 					{runtimeInfo ? (
 						<>
-							Status: {String((runtimeInfo as Record<string, unknown>).connected ? "Online" : "Offline")}
-							{/* This agent's own socket may be down while the machine is up for OTHER agents. */}
-							{!(runtimeInfo as Record<string, unknown>).connected && pinnedNodeOnline && <span className="text-amber-500"> · machine online, agent not attached</span>}
-							{(runtimeInfo as Record<string, unknown>).node && (
-								<> · Node: {String((runtimeInfo as Record<string, unknown>).node)}</>
-							)}
+							Status: <span className={agentOnline ? "text-green" : ""}>{agentOnline ? "Online" : "Offline"}</span>
+							{/* Agent's own socket down while the machine is up for OTHER agents. */}
+							{!agentOnline && pinnedNodeOnline && <span className="text-amber-500"> · machine online, agent not attached</span>}
+							{agentNode && <> · Node: {agentNode}</>}
 						</>
 					) : (
 						"Checking runner status..."
