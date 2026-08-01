@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/*
+ * The console renders the Coder UI from @proagentstore/coder-web, whose source
+ * lives outside store/console. Tailwind v4 auto-detection skips node_modules, so
+ * utility classes used ONLY there (e.g. `sm:flex`/`sm:block` on the coding-session
+ * header buttons) were never generated — those controls silently vanished on
+ * desktop while their mobile counterparts (classes shared with console source)
+ * kept working. Explicitly scan the package source so every class it uses ships.
+ */
+@source "../../../agents/coder/web/src";
+
 /* ── Design tokens ── */
 @theme {
 	--color-paper: #0a0a0a;
