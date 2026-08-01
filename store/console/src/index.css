@@ -69,8 +69,10 @@
 		touch-action: manipulation;
 	}
 
-	/* Form element defaults */
-	input,
+	/* Form element defaults. EXCLUDE checkbox/radio — the width:100% (and the mobile
+	 * min-height:44px below) turned them into full-row giant boxes that pushed their
+	 * label off-screen. They keep the browser's native sizing. */
+	input:not([type="checkbox"]):not([type="radio"]),
 	textarea,
 	select {
 		width: 100%;
@@ -83,7 +85,7 @@
 		font-size: 0.88rem;
 		transition: border-color 0.15s;
 	}
-	input:focus,
+	input:not([type="checkbox"]):not([type="radio"]):focus,
 	textarea:focus,
 	select:focus {
 		outline: none;
@@ -188,7 +190,7 @@
 		html {
 			overscroll-behavior: none;
 		}
-		input,
+		input:not([type="checkbox"]):not([type="radio"]),
 		textarea,
 		select {
 			font-size: 16px;

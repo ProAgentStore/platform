@@ -61,15 +61,22 @@ describe("matchVoiceCommand", () => {
 		expect(matchVoiceCommand("hello there")).toBeNull();
 	});
 
-	it("matches repeat phrasings in the supported voice languages (native punctuation)", () => {
-		for (const phrase of ["再说一遍。", "重复一遍", "もう一度。", "다시 말해줘", "¿Qué dijiste?", "Répète.", "Wie bitte?", "De novo!"]) {
-			expect(matchVoiceCommand(phrase)).toBe("repeat");
+	it("matches repeat phrasings in a language ONLY when it's the agent's set language", () => {
+		const cases: Array<[string, string]> = [["再说一遍。", "zh"], ["もう一度。", "ja"], ["다시 말해줘", "ko"], ["¿Qué dijiste?", "es"], ["Répète.", "fr"], ["Wie bitte?", "de"], ["De novo!", "pt"]];
+		for (const [phrase, lang] of cases) {
+			expect(matchVoiceCommand(phrase, undefined, lang)).toBe("repeat");
+			expect(matchVoiceCommand(phrase, undefined, "en-US")).toBeNull(); // wrong language ⇒ no match
 		}
 	});
 
+	it("accepts a full BCP-47 tag (zh-CN, fr-FR)", () => {
+		expect(matchVoiceCommand("再说一遍", undefined, "zh-CN")).toBe("repeat");
+		expect(matchVoiceCommand("répète", undefined, "fr-FR")).toBe("repeat");
+	});
+
 	it("does NOT hijack a real sentence in another language", () => {
-		expect(matchVoiceCommand("我想再说一遍这个故事给你听")).toBeNull();
-		expect(matchVoiceCommand("repite conmigo la frase completa")).toBeNull();
+		expect(matchVoiceCommand("我想再说一遍这个故事给你听", undefined, "zh")).toBeNull();
+		expect(matchVoiceCommand("repite conmigo la frase completa", undefined, "es")).toBeNull();
 	});
 
 	it("matches the built-in 'mute' phrasings (whole-utterance)", () => {

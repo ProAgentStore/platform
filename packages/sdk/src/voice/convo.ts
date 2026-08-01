@@ -112,8 +112,25 @@ export interface VoiceCommandWords {
 	mute?: string[];
 }
 
-/** Default "mute" phrasings — whole-utterance only, so a normal sentence isn't hijacked. */
-const MUTE_PHRASES = new Set(["mute", "mute mic", "mute the mic", "mute microphone", "mute yourself", "stop listening"]);
+/** "Mute" phrasings per language (2-letter code). Whole-utterance only. English is the
+ *  built-in baseline; other-language users add their own words in Settings → Voice. */
+const MUTE_BY_LANG: Record<string, string[]> = {
+	en: ["mute", "mute mic", "mute the mic", "mute microphone", "mute yourself", "stop listening"],
+	es: ["silencio", "silenciar", "cállate"],
+	fr: ["muet", "coupe le micro", "silence"],
+	de: ["stumm", "stummschalten", "sei still"],
+	it: ["muto", "silenzia"],
+	pt: ["mudo", "silenciar"],
+	zh: ["静音", "闭麦", "别听了"],
+	ja: ["ミュート", "消音"],
+	ko: ["음소거"],
+	hi: ["म्यूट", "चुप"],
+};
+
+/** The 2-letter language key for the command maps, defaulting to English. */
+function langKey(lang?: string): string {
+	return (lang || "en").slice(0, 2).toLowerCase();
+}
 
 /** Normalize a transcript for matching: lowercase, strip punctuation (Latin + CJK +
  *  inverted Spanish), collapse whitespace. Shared by every matcher so they agree. */
@@ -126,50 +143,39 @@ function normalizeTranscript(text: string): string {
 }
 
 /**
- * "Repeat" phrasings in the languages the platform's voice stack supports (the
- * voice-settings Language list). Whole-utterance matches only — high precision,
- * so a real sentence containing the word is never hijacked. Kept as plain lists
- * (not regex) so adding a language is data, not syntax.
+ * "Repeat" phrasings per language (2-letter code) — ONLY the agent's configured
+ * language matches, so an English agent never triggers on a Chinese phrase and vice
+ * versa. Whole-utterance matches only (high precision). Data, not regex, so adding a
+ * language is a list edit.
  */
-const REPEAT_PHRASES = new Set([
-	// English
-	"repeat", "repeat that", "repeat it", "repeat again", "repeat please",
-	"say again", "say that again", "say it again", "again please", "come again",
-	"pardon", "what did you say",
-	// Chinese (Mandarin)
-	"再说一遍", "再说一次", "重复一遍", "再来一遍",
-	// Spanish (¿? stripped below)
-	"repite", "repítelo", "otra vez", "qué dijiste",
-	// French
-	"répète", "répétez", "encore une fois",
-	// German
-	"wiederhole", "nochmal", "wie bitte",
-	// Italian
-	"ripeti", "un'altra volta",
-	// Portuguese
-	"repita", "de novo",
-	// Japanese
-	"もう一度", "もう一回",
-	// Korean
-	"다시", "다시 말해줘", "다시 말해 줘",
-	// Hindi
-	"फिर से कहो", "दोबारा कहो",
-]);
+const REPEAT_BY_LANG: Record<string, string[]> = {
+	en: ["repeat", "repeat that", "repeat it", "repeat again", "repeat please", "say again", "say that again", "say it again", "again please", "come again", "pardon", "what did you say"],
+	zh: ["再说一遍", "再说一次", "重复一遍", "再来一遍"],
+	es: ["repite", "repítelo", "otra vez", "qué dijiste"],
+	fr: ["répète", "répétez", "encore une fois"],
+	de: ["wiederhole", "nochmal", "wie bitte"],
+	it: ["ripeti", "un'altra volta"],
+	pt: ["repita", "de novo"],
+	ja: ["もう一度", "もう一回"],
+	ko: ["다시", "다시 말해줘", "다시 말해 줘"],
+	hi: ["फिर से कहो", "दोबारा कहो"],
+};
 
 /**
- * Detect a hands-free voice COMMAND in a finished transcript. Right now just
- * "repeat" (+ common phrasings, in every supported voice language) → re-speak the
- * agent's last reply. Matches only when the whole utterance IS the command
- * (punctuation ignored), so a normal sentence that merely contains it isn't hijacked.
+ * Detect a hands-free voice COMMAND ("repeat" / "mute") in a finished transcript.
+ * Matches only when the whole utterance IS the command (punctuation ignored), so a
+ * normal sentence containing the word isn't hijacked. Built-in phrasings are scoped to
+ * the agent's `lang` (the configured voice language) — an English agent won't trigger on
+ * a Chinese phrase. Custom `words` from Settings REPLACE the built-ins and apply in any
+ * language (the user chose them explicitly).
  */
-export function matchVoiceCommand(text: string, words?: VoiceCommandWords): VoiceCommand | null {
+export function matchVoiceCommand(text: string, words?: VoiceCommandWords, lang?: string): VoiceCommand | null {
 	const t = normalizeTranscript(text);
-	// Custom keywords (from Settings) REPLACE the defaults when provided; otherwise the
-	// built-in multilingual sets apply. Whole-utterance match only — high precision.
-	const repeat = words?.repeat?.length ? new Set(words.repeat.map(normalizeTranscript)) : REPEAT_PHRASES;
-	const mute = words?.mute?.length ? new Set(words.mute.map(normalizeTranscript)) : MUTE_PHRASES;
-	if (repeat.has(t)) return "repeat";
-	if (mute.has(t)) return "mute";
+	const l = langKey(lang);
+	const repeat = words?.repeat?.length ? words.repeat : (REPEAT_BY_LANG[l] ?? REPEAT_BY_LANG.en);
+	const mute = words?.mute?.length ? words.mute : (MUTE_BY_LANG[l] ?? MUTE_BY_LANG.en);
+	if (new Set(repeat.map(normalizeTranscript)).has(t)) return "repeat";
+	if (new Set(mute.map(normalizeTranscript)).has(t)) return "mute";
 	return null;
 }
 

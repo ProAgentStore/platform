@@ -381,6 +381,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			repeatWordsRef.current = c.repeatWords;
 			muteWordsRef.current = c.muteWords;
 			stopWordsRef.current = c.stopWords;
+			voiceLangRef.current = c.language;
 		}).catch(() => {});
 	}, [instanceId]);
 
@@ -537,7 +538,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
 				pendingTextRef.current = "";
 				if (commandsEnabledRef.current) {
-					const cmd = matchVoiceCommand(msg, cmdWords);
+					const cmd = matchVoiceCommand(msg, cmdWords, voiceLangRef.current);
 					if (cmd === "repeat") {
 						flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
 						repeatLastRef.current();
@@ -601,7 +602,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				setMicOn(false);
 			});
 			if (commandsEnabledRef.current) {
-				const cmd = matchVoiceCommand(text.trim(), { repeat: repeatWordsRef.current, mute: muteWordsRef.current });
+				const cmd = matchVoiceCommand(text.trim(), { repeat: repeatWordsRef.current, mute: muteWordsRef.current }, voiceLangRef.current);
 				if (cmd === "repeat") { repeatLastRef.current(); return; }
 				if (cmd === "mute") { muteFromCommandRef.current(); return; }
 			}
