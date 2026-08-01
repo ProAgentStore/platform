@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
+import { logUnhandled } from "./lib/on-error.js";
 import { rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
 import { agentRoutes } from "./routes/agents.js";
 import { agentBuilderRoutes } from "./routes/agent-builder.js";
@@ -142,11 +143,11 @@ app.get("/health", (c) => c.json({ ok: true, service: "proagentstore-api" }));
 
 // ── Global error handler ───────────────────────────────────────────────────
 
-app.onError((err, c) => {
-	if (err instanceof HttpError) {
-		return c.json({ error: err.message }, err.status as 400);
-	}
-	console.error("Unhandled error:", err.message, err.stack);
+app.onError(async (err, c) => {
+	// Persist the exception (full message + stack for real bugs) so it shows up in the
+	// admin Errors view instead of vanishing into the ephemeral worker console.
+	await logUnhandled(c.env, err, { path: c.req.path, method: c.req.method });
+	if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
 	return c.json({ error: "Internal server error" }, 500);
 });
 
