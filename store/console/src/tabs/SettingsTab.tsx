@@ -119,6 +119,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [speed, setSpeed] = useState(100);
 	const [language, setLanguage] = useState("en-US");
 	const [commandsEnabled, setCommandsEnabled] = useState(true);
+	const [keepAwake, setKeepAwake] = useState(true);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
 	// Per-instance display name (distinguishes multiple instances of one agent).
@@ -200,6 +201,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				if (typeof vs.speed === "number") setSpeed(vs.speed);
 				if (typeof vs.language === "string") setLanguage(vs.language);
 				if (typeof vs.commandsEnabled === "boolean") setCommandsEnabled(vs.commandsEnabled);
+				if (typeof vs.keepAwake === "boolean") setKeepAwake(vs.keepAwake);
 				const oa = vs.openai as Record<string, unknown> | undefined;
 				if (oa && typeof oa.voice === "string") setTtsVoice(oa.voice);
 			} catch {}
@@ -1129,6 +1131,23 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					Enable voice commands
 				</label>
 				<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat" is sent as a normal message.</p>
+
+				<div className="border-t border-line my-3" />
+
+				<div className="block text-sm font-semibold mb-1">Keep screen awake</div>
+				<p className="text-xs text-muted mb-2">
+					In hands-free mode, hold a screen wake lock so the display doesn't dim or lock and cut off the mic. Note: on iOS this only keeps it going while the app is open — switching apps or locking still pauses it (it resumes when you return).
+				</p>
+				<label className="flex items-center gap-2 text-sm cursor-pointer">
+					<input
+						type="checkbox"
+						checked={keepAwake}
+						onChange={(e) => { setKeepAwake(e.target.checked); saveVoice({ keepAwake: e.target.checked }); }}
+						className="w-4 h-4 accent-accent"
+					/>
+					Keep the screen awake during hands-free
+				</label>
+				<p className="text-[0.7rem] text-muted-soft mt-1">Off = the screen may sleep on its own timer (saves battery, but ends the conversation when it does).</p>
 			</div>
 
 			{/* Translation — translated text shown under each assistant reply */}

@@ -533,6 +533,8 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		language: typeof body.language === "string" ? body.language.slice(0, 10) : "en-US",
 		// Hands-free voice commands (e.g. "repeat") — on unless explicitly disabled.
 		commandsEnabled: body.commandsEnabled !== false,
+		// Keep the screen awake during hands-free (screen wake lock) — on unless disabled.
+		keepAwake: body.keepAwake !== false,
 	};
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	cfg.voiceSettings = settings;

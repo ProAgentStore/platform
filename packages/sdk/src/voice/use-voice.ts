@@ -355,6 +355,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const vadSensitivityRef = useRef(1);
 	// Whether hands-free voice commands (e.g. "repeat") are honored (from settings).
 	const commandsEnabledRef = useRef(true);
+	// Settings → Voice toggle: hold a screen wake lock during hands-free (default on).
+	const keepAwakeRef = useRef(true);
 	// True while reopening the mic after an idle recycle — suppresses the "your turn"
 	// chime (there was no agent turn, so a chime every idle window would be confusing).
 	const idleRecycleRef = useRef(false);
@@ -370,6 +372,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			sttIsWhisperRef.current = c.sttProvider === "openai";
 			vadSensitivityRef.current = c.sensitivity;
 			commandsEnabledRef.current = c.commandsEnabled;
+			keepAwakeRef.current = c.keepAwake;
 		}).catch(() => {});
 	}, [instanceId]);
 
@@ -584,6 +587,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			sttIsWhisperRef.current = c.sttProvider === "openai";
 			vadSensitivityRef.current = c.sensitivity;
 			commandsEnabledRef.current = c.commandsEnabled;
+			keepAwakeRef.current = c.keepAwake;
 			voiceLangRef.current = c.language;
 		} catch {}
 		const stt = await createStt(instanceId, {
@@ -691,7 +695,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// the mic (below), since iOS killed it while we were away.
 	const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
 	const acquireWakeLock = useCallback(async () => {
-		if (wakeLockRef.current) return;
+		if (!keepAwakeRef.current || wakeLockRef.current) return; // off in Settings → screen may sleep
 		const nav = navigator as Navigator & { wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> } };
 		try { if (nav.wakeLock?.request) wakeLockRef.current = await nav.wakeLock.request("screen"); }
 		catch { /* unsupported / denied — hands-free still works while the app is foreground */ }

@@ -264,16 +264,16 @@ export default function CopilotView({
 							role="button"
 							tabIndex={0}
 							onClick={(e) => e.stopPropagation()}
-							onDoubleClick={() => playMessage(instanceId, m, voice.maybeSpeakResponse)}
-							onKeyDown={activateOnKeyboard(() => playMessage(instanceId, m, voice.maybeSpeakResponse))}
+							onDoubleClick={() => playMessage(instanceId, m, voice.speak)}
+							onKeyDown={activateOnKeyboard(() => playMessage(instanceId, m, voice.speak))}
 							className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
 								m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 									: "bg-panel border border-line self-start rounded-bl-sm"
 							}`}
 						>
 							<button type="button" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.content); }} onDoubleClick={(e) => e.stopPropagation()} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
-							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.maybeSpeakResponse); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatDateTime(m.time)}</span>}</div>}
-							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span>Co-pilot</span>{m.time && <span className="font-normal text-muted">{formatDateTime(m.time)}</span>}</div>}
+							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatDateTime(m.time)}</span>}</div>}
+							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Co-pilot<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.time && <span className="font-normal text-muted">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (
 								/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd escapes raw content before adding controlled markup. */
 								<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />

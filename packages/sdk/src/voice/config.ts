@@ -19,6 +19,9 @@ interface VoiceConfig {
 	sensitivity: number;
 	/** Whether hands-free voice commands (e.g. "repeat") are honored. Default true. */
 	commandsEnabled: boolean;
+	/** Hold a screen wake lock during hands-free so the display doesn't sleep and
+	 *  suspend the mic. Default true; users on iOS can disable it in Settings → Voice. */
+	keepAwake: boolean;
 }
 
 let _cache: VoiceConfig | null = null;
@@ -59,6 +62,7 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		silenceMs: clamp(vs.silenceMs, 500, 6000, 1500),
 		sensitivity: clamp(vs.sensitivity, 0.4, 2, 1),
 		commandsEnabled: vs.commandsEnabled !== false,
+		keepAwake: vs.keepAwake !== false,
 	};
 }
 
