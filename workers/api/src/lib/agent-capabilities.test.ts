@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCapabilities, hasSurface, sanitizeSettingsSchema } from "./agent-capabilities.js";
+import { agentCapabilities, hasSurface, sanitizeSettingsSchema, sanitizeToolList } from "./agent-capabilities.js";
 
 describe("agentCapabilities", () => {
 	it("uses declared config.capabilities when present", () => {
@@ -127,6 +127,32 @@ describe("agentCapabilities", () => {
 			expect(agentCapabilities({}).settingsSchema).toBeUndefined();
 			expect(sanitizeSettingsSchema("nope")).toBeUndefined();
 			expect(sanitizeSettingsSchema([])).toBeUndefined();
+		});
+	});
+
+	describe("declared tool allowlist", () => {
+		it("resolves config.capabilities.tools onto the capabilities", () => {
+			const cfg = JSON.stringify({ capabilities: { surfaces: ["repo"], tools: ["search_knowledge", "read_knowledge"] } });
+			expect(agentCapabilities({ config: cfg }).tools).toEqual(["search_knowledge", "read_knowledge"]);
+		});
+
+		it("resolves tools even when no surfaces are declared (fallback path)", () => {
+			const cfg = JSON.stringify({ capabilities: { tools: ["upload_file"] } });
+			expect(agentCapabilities({ slug: "generic", config: cfg }).tools).toEqual(["upload_file"]);
+		});
+
+		it("is undefined when no tools are declared", () => {
+			expect(agentCapabilities({ slug: "coder" }).tools).toBeUndefined();
+			expect(agentCapabilities({ config: JSON.stringify({ capabilities: { surfaces: ["coding"] } }) }).tools).toBeUndefined();
+		});
+
+		it("sanitizeToolList dedupes, caps at 40, and drops junk", () => {
+			expect(sanitizeToolList(["read_memory", "read_memory", "fetch_url"])).toEqual(["read_memory", "fetch_url"]);
+			expect(sanitizeToolList(["search_knowledge", 3, null, "Bad Name", "-x"])).toEqual(["search_knowledge"]);
+			expect(sanitizeToolList(Array.from({ length: 50 }, (_, i) => `t${i}`))).toHaveLength(40);
+			expect(sanitizeToolList("nope")).toBeUndefined();
+			expect(sanitizeToolList([])).toBeUndefined();
+			expect(sanitizeToolList([1, 2, 3])).toBeUndefined();
 		});
 	});
 });
