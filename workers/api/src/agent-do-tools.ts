@@ -1,5 +1,6 @@
 import { AGENT_TOOLS } from "./lib/tools.js";
 import { STORAGE_TOOLS } from "./lib/storage-tools.js";
+import { registryConnectorGroups, registryToolDefs } from "./lib/tool-registry.js";
 import type { AgentCapabilities } from "./lib/agent-capabilities.js";
 
 // ── Tool groups ──────────────────────────────────────────────────────────────
@@ -63,8 +64,8 @@ export interface ToolCatalogGroup {
 	id: string;
 	label: string;
 	tools: readonly string[];
-	/** base = always granted · standard = creator-selectable · runtime = needs a local runner. */
-	tier: "base" | "standard" | "runtime";
+	/** base = always granted · standard = creator-selectable · runtime = needs a local runner · connector = external system. */
+	tier: "base" | "standard" | "runtime" | "connector";
 }
 
 export const TOOL_CATALOG: readonly ToolCatalogGroup[] = [
@@ -74,6 +75,14 @@ export const TOOL_CATALOG: readonly ToolCatalogGroup[] = [
 	{ id: "files", label: "File storage", tools: FILES, tier: "standard" },
 	{ id: "collections", label: "Structured collections", tools: COLLECTIONS, tier: "standard" },
 	{ id: "coding", label: "Live coding session", tools: CODING, tier: "runtime" },
+	// Connector tools (issue #85/#86): one catalog group per external system, from the
+	// registry — a creator declares them in capabilities.tools like any other tool.
+	...registryConnectorGroups().map((g): ToolCatalogGroup => ({
+		id: `connector:${g.connector}`,
+		label: `${g.connector} connector`,
+		tools: g.tools,
+		tier: "connector",
+	})),
 ];
 
 /** Tool names a creator may grant via `capabilities.tools` (everything non-`base` in
@@ -115,8 +124,8 @@ export function buildAgentToolDefinitions(opts?: { emailEnabled?: boolean; capab
 	// Permission-gated tools are only offered to the model when the user granted them.
 	if (opts?.emailEnabled) enabled.add("find_confirmation_link");
 
-	const toolMap = new Map<string, (typeof AGENT_TOOLS)[number]>();
-	for (const t of [...AGENT_TOOLS, ...STORAGE_TOOLS]) {
+	const toolMap = new Map<string, { name: string; description: string; parameters: Record<string, { type: string; description: string; required?: boolean }> }>();
+	for (const t of [...AGENT_TOOLS, ...STORAGE_TOOLS, ...registryToolDefs()]) {
 		if (enabled.has(t.name)) toolMap.set(t.name, t);
 	}
 	return [...toolMap.values()].map((t) => ({

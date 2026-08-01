@@ -3,6 +3,7 @@ import type { AgentStorageEngine } from "./agent-storage.js";
 import type { AgentMessage, AgentState, AgentTask, MemoryEntry } from "./agent-types.js";
 import { TOOL_CAPABLE_MODELS } from "./agent-do-prompt.js";
 import { buildAgentToolDefinitions, storageToolNameSet, toolNamesFor } from "./agent-do-tools.js";
+import { registryToolNameSet, runRegistryTool } from "./lib/tool-registry.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
 import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
@@ -361,6 +362,7 @@ export async function runAgentThink(opts: {
 	if (state.permissions?.email === true) allowedToolNames.add("find_confirmation_link");
 	const allToolLog: string[] = [];
 	const storageToolNames = storageToolNameSet();
+	const registryToolNames = registryToolNameSet();
 	// Multi-step tasks (e.g. read goal + list files + fetch job page, THEN
 	// submit the application) need headroom; 3 rounds ran out before acting.
 	const maxToolRounds = 8;
@@ -411,7 +413,9 @@ export async function runAgentThink(opts: {
 			executedCalls.add(signature);
 			executedThisRound++;
 			let toolResult: ToolCallResult;
-			if (storageToolNames.has(tc.name)) {
+			if (registryToolNames.has(tc.name)) {
+					toolResult = await runRegistryTool(tc.name, { env, userId, agentId: state.agentId, instanceId: state.agentId }, (tc.arguments ?? {}) as Record<string, unknown>);
+				} else if (storageToolNames.has(tc.name)) {
 				toolResult = await executeStorageTool(
 					{ name: tc.name, input: tc.arguments },
 					engine,
