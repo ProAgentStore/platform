@@ -1,6 +1,6 @@
 import { Hono } from "hono";
-import { isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
-import { listAdminAudit } from "../lib/admin.js";
+import { HttpError, isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
+import { getUserDetail, listAdminAudit, listUsers } from "../lib/admin.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
 import type { Env } from "../types.js";
 
@@ -80,6 +80,28 @@ adminRoutes.get("/audit", async (c) => {
 		limit: Number(c.req.query("limit")) || undefined,
 	});
 	return c.json({ count: rows.length, audit: rows });
+});
+
+/**
+ * GET /v1/admin/users?search=&limit=&offset= — all users with rollup counts
+ * (agents owned, active instances, key providers) + 30-day spend. No secrets.
+ */
+adminRoutes.get("/users", async (c) => {
+	await requireAdmin(c);
+	const result = await listUsers(c.env, {
+		search: c.req.query("search") || undefined,
+		limit: Number(c.req.query("limit")) || undefined,
+		offset: Number(c.req.query("offset")) || undefined,
+	});
+	return c.json(result);
+});
+
+/** GET /v1/admin/users/:id — one user's profile, agents, instances, key providers, recent errors. */
+adminRoutes.get("/users/:id", async (c) => {
+	await requireAdmin(c);
+	const detail = await getUserDetail(c.env, c.req.param("id"));
+	if (!detail) throw new HttpError(404, "User not found");
+	return c.json(detail);
 });
 
 /**
