@@ -485,7 +485,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	};
 
 	return (
-		<div>
+		// min-w-0 lets this shrink inside the flex scroll wrapper; overflow-x-hidden is a
+		// hard guard so no rigid-width descendant can ever make the whole page scroll
+		// sideways (the cards are all w-full, so one over-wide child would clip them all).
+		<div className="min-w-0 overflow-x-hidden">
 			{/* Instance name — distinguishes multiple instances of the same agent */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Instance name</h3>
@@ -714,7 +717,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 								onChange={(e) => setDriveGrantRef(e.target.value)}
 								onKeyDown={(e) => { if (e.key === "Enter") addDriveGrant(); }}
 								placeholder="Google Drive folder URL or ID"
-								className="flex-1 min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+								className="flex-1 min-w-0 sm:min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 							/>
 							<button type="button" onClick={addDriveGrant} disabled={!driveGrantRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">
 								Grant folder
@@ -760,7 +763,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 								onChange={(e) => setWorkdriveGrantRef(e.target.value)}
 								onKeyDown={(e) => { if (e.key === "Enter") addWorkdriveGrant(); }}
 								placeholder="Zoho WorkDrive folder URL or ID"
-								className="flex-1 min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+								className="flex-1 min-w-0 sm:min-w-[14rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
 							/>
 							<button type="button" onClick={addWorkdriveGrant} disabled={!workdriveGrantRef.trim()} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">
 								Grant folder
@@ -802,7 +805,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				<p className="text-sm text-muted mb-3">
 					Start work from an inbound webhook or a schedule. Triggers run inside this private instance.
 				</p>
-				<div className="grid grid-cols-1 md:grid-cols-[1.2fr_0.8fr_0.9fr_0.9fr_auto] gap-2 items-end mb-4">
+				<div className="grid grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto] gap-2 items-end mb-4">
 					<label className="flex flex-col gap-1">
 						<span className="text-xs font-semibold">Name</span>
 						<input value={triggerName} onChange={(e) => setTriggerName(e.target.value)} placeholder="Daily digest" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
