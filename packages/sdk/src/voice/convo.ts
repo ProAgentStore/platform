@@ -101,7 +101,29 @@ export function resolveVoiceStatus(input: {
 }
 
 /** A spoken command the hook acts on locally instead of sending as a chat message. */
-export type VoiceCommand = "repeat";
+export type VoiceCommand = "repeat" | "mute";
+
+/** Per-instance overrides for the command keywords (Settings → Voice). Empty/absent =
+ *  use the built-in defaults for repeat + mute; stop-words are OFF unless configured. */
+export interface VoiceCommandWords {
+	/** Phrases that re-speak the last reply. Overrides the built-in multilingual set. */
+	repeat?: string[];
+	/** Phrases that mute the mic until the user unmutes in the app. */
+	mute?: string[];
+}
+
+/** Default "mute" phrasings — whole-utterance only, so a normal sentence isn't hijacked. */
+const MUTE_PHRASES = new Set(["mute", "mute mic", "mute the mic", "mute microphone", "mute yourself", "stop listening"]);
+
+/** Normalize a transcript for matching: lowercase, strip punctuation (Latin + CJK +
+ *  inverted Spanish), collapse whitespace. Shared by every matcher so they agree. */
+function normalizeTranscript(text: string): string {
+	return text
+		.toLowerCase()
+		.replace(/[.,!?¿¡。，！？、]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
+}
 
 /**
  * "Repeat" phrasings in the languages the platform's voice stack supports (the
@@ -140,15 +162,41 @@ const REPEAT_PHRASES = new Set([
  * agent's last reply. Matches only when the whole utterance IS the command
  * (punctuation ignored), so a normal sentence that merely contains it isn't hijacked.
  */
-export function matchVoiceCommand(text: string): VoiceCommand | null {
-	// Whisper punctuates transcripts, so strip punctuation (Latin + CJK + inverted
-	// Spanish marks) + collapse spaces before matching ("Repeat, please." / "再说一遍。").
-	const t = text
-		.toLowerCase()
-		.replace(/[.,!?¿¡。，！？、]/g, "")
-		.replace(/\s+/g, " ")
-		.trim();
-	return REPEAT_PHRASES.has(t) ? "repeat" : null;
+export function matchVoiceCommand(text: string, words?: VoiceCommandWords): VoiceCommand | null {
+	const t = normalizeTranscript(text);
+	// Custom keywords (from Settings) REPLACE the defaults when provided; otherwise the
+	// built-in multilingual sets apply. Whole-utterance match only — high precision.
+	const repeat = words?.repeat?.length ? new Set(words.repeat.map(normalizeTranscript)) : REPEAT_PHRASES;
+	const mute = words?.mute?.length ? new Set(words.mute.map(normalizeTranscript)) : MUTE_PHRASES;
+	if (repeat.has(t)) return "repeat";
+	if (mute.has(t)) return "mute";
+	return null;
+}
+
+/**
+ * Detect a trailing STOP-WORD ("...do the thing, copy") — the user's spoken "I'm done,
+ * process it now" marker. Returns `ended` (a stop-word closed the turn) and `text` with
+ * the stop-word removed. A stop-word ALONE ("copy") → `{ ended: true, text: "" }` (end
+ * the turn, nothing to send). Off unless `stopWords` is configured — the word is usually
+ * a normal word, so it must be opt-in to avoid hijacking ordinary speech.
+ */
+export function stripStopWord(text: string, stopWords?: string[]): { ended: boolean; text: string } {
+	if (!stopWords?.length) return { ended: false, text };
+	// Compare on a normalized copy but slice the ORIGINAL so casing/spacing is preserved.
+	const cleaned = text.replace(/[.,!?¿¡。，！？、]+\s*$/, "").trimEnd();
+	const norm = normalizeTranscript(cleaned);
+	for (const raw of stopWords) {
+		const w = normalizeTranscript(raw);
+		if (!w) continue;
+		if (norm === w) return { ended: true, text: "" };
+		if (norm.endsWith(` ${w}`)) {
+			// Drop the last N words (the stop-word may be multi-word) off the original.
+			const wordCount = w.split(" ").length;
+			const kept = cleaned.split(/\s+/).slice(0, -wordCount).join(" ").replace(/[\s,]+$/, "").trim();
+			return { ended: true, text: kept };
+		}
+	}
+	return { ended: false, text };
 }
 
 /**

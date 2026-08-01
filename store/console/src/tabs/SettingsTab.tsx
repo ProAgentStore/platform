@@ -119,6 +119,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [speed, setSpeed] = useState(100);
 	const [language, setLanguage] = useState("en-US");
 	const [commandsEnabled, setCommandsEnabled] = useState(true);
+	const [repeatWords, setRepeatWords] = useState("");
+	const [muteWords, setMuteWords] = useState("");
+	const [stopWords, setStopWords] = useState("");
 	const [keepAwake, setKeepAwake] = useState(true);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
@@ -201,6 +204,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				if (typeof vs.speed === "number") setSpeed(vs.speed);
 				if (typeof vs.language === "string") setLanguage(vs.language);
 				if (typeof vs.commandsEnabled === "boolean") setCommandsEnabled(vs.commandsEnabled);
+				if (Array.isArray(vs.repeatWords)) setRepeatWords((vs.repeatWords as string[]).join(", "));
+				if (Array.isArray(vs.muteWords)) setMuteWords((vs.muteWords as string[]).join(", "));
+				if (Array.isArray(vs.stopWords)) setStopWords((vs.stopWords as string[]).join(", "));
 				if (typeof vs.keepAwake === "boolean") setKeepAwake(vs.keepAwake);
 				const oa = vs.openai as Record<string, unknown> | undefined;
 				if (oa && typeof oa.voice === "string") setTtsVoice(oa.voice);
@@ -1130,7 +1136,26 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					/>
 					Enable voice commands
 				</label>
-				<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat" is sent as a normal message.</p>
+				<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat"/"mute" is sent as a normal message.</p>
+
+				{/* Configurable command keywords. Comma-separated. Repeat/mute obey the toggle
+				    above; the stop-word works whenever it's set. */}
+				<div className="grid gap-2.5 mt-3">
+					<label className="block">
+						<span className="block text-xs font-semibold mb-0.5">Repeat keywords</span>
+						<input value={repeatWords} onChange={(e) => setRepeatWords(e.target.value)} onBlur={() => saveVoice({ repeatWords })} placeholder="repeat, say again  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+					</label>
+					<label className="block">
+						<span className="block text-xs font-semibold mb-0.5">Mute keywords</span>
+						<input value={muteWords} onChange={(e) => setMuteWords(e.target.value)} onBlur={() => saveVoice({ muteWords })} placeholder="mute, mute mic  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+						<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say one to mute the mic until you unmute it in the app.</span>
+					</label>
+					<label className="block">
+						<span className="block text-xs font-semibold mb-0.5">Stop-word — finish my turn</span>
+						<input value={stopWords} onChange={(e) => setStopWords(e.target.value)} onBlur={() => saveVoice({ stopWords })} placeholder="e.g. copy, over  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+						<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it at the end (“…do it, <b>copy</b>”) to send immediately without waiting for a pause — it's stripped from your message. Off by default since it's an everyday word.</span>
+					</label>
+				</div>
 
 				<div className="border-t border-line my-3" />
 

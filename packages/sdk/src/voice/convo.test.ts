@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus } from "./convo.js";
+import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, stripStopWord } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -70,6 +70,47 @@ describe("matchVoiceCommand", () => {
 	it("does NOT hijack a real sentence in another language", () => {
 		expect(matchVoiceCommand("我想再说一遍这个故事给你听")).toBeNull();
 		expect(matchVoiceCommand("repite conmigo la frase completa")).toBeNull();
+	});
+
+	it("matches the built-in 'mute' phrasings (whole-utterance)", () => {
+		for (const phrase of ["mute", "Mute.", "mute mic", "mute microphone", "stop listening"]) {
+			expect(matchVoiceCommand(phrase)).toBe("mute");
+		}
+		expect(matchVoiceCommand("mute the notification about my flight")).toBeNull();
+	});
+
+	it("custom keywords REPLACE the defaults", () => {
+		const words = { repeat: ["again"], mute: ["silence", "quiet please"] };
+		expect(matchVoiceCommand("again", words)).toBe("repeat");
+		expect(matchVoiceCommand("silence", words)).toBe("mute");
+		expect(matchVoiceCommand("quiet please", words)).toBe("mute");
+		// A default that isn't in the custom list no longer matches.
+		expect(matchVoiceCommand("repeat", words)).toBeNull();
+		expect(matchVoiceCommand("mute", words)).toBeNull();
+	});
+});
+
+describe("stripStopWord", () => {
+	it("is off (never ends) when no stop-words are configured", () => {
+		expect(stripStopWord("do the thing copy")).toEqual({ ended: false, text: "do the thing copy" });
+		expect(stripStopWord("do the thing copy", [])).toEqual({ ended: false, text: "do the thing copy" });
+	});
+
+	it("ends the turn and strips a trailing stop-word", () => {
+		expect(stripStopWord("book the flight to sydney copy", ["copy"])).toEqual({ ended: true, text: "book the flight to sydney" });
+		expect(stripStopWord("Do it, copy.", ["copy"])).toEqual({ ended: true, text: "Do it" });
+	});
+
+	it("treats a lone stop-word as end-of-turn with nothing to send", () => {
+		expect(stripStopWord("copy", ["copy"])).toEqual({ ended: true, text: "" });
+	});
+
+	it("does NOT strip a stop-word that isn't at the very end", () => {
+		expect(stripStopWord("copy this file to the server", ["copy"])).toEqual({ ended: false, text: "copy this file to the server" });
+	});
+
+	it("supports multi-word stop-words", () => {
+		expect(stripStopWord("send the email over and out", ["over and out"])).toEqual({ ended: true, text: "send the email" });
 	});
 });
 

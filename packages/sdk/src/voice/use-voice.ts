@@ -6,7 +6,7 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, stripStopWord, type VoiceMode } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -357,6 +357,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const commandsEnabledRef = useRef(true);
 	// Settings → Voice toggle: hold a screen wake lock during hands-free (default on).
 	const keepAwakeRef = useRef(true);
+	// Settings → Voice: custom hands-free command keywords (empty ⇒ built-in defaults;
+	// stopWords off unless set). Read live so a settings change applies mid-session.
+	const repeatWordsRef = useRef<string[]>([]);
+	const muteWordsRef = useRef<string[]>([]);
+	const stopWordsRef = useRef<string[]>([]);
 	// True while reopening the mic after an idle recycle — suppresses the "your turn"
 	// chime (there was no agent turn, so a chime every idle window would be confusing).
 	const idleRecycleRef = useRef(false);
@@ -373,6 +378,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			vadSensitivityRef.current = c.sensitivity;
 			commandsEnabledRef.current = c.commandsEnabled;
 			keepAwakeRef.current = c.keepAwake;
+			repeatWordsRef.current = c.repeatWords;
+			muteWordsRef.current = c.muteWords;
+			stopWordsRef.current = c.stopWords;
 		}).catch(() => {});
 	}, [instanceId]);
 
@@ -497,6 +505,19 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const repeatLastRef = useRef(repeatLast);
 	repeatLastRef.current = repeatLast;
 
+	// "mute" voice command → mute the mic until the user unmutes in the app (same as the
+	// Mute button). Flip the ref synchronously so in-flight results stop being processed.
+	const muteFromCommand = useCallback(() => {
+		mutedRef.current = true;
+		setMuted(true);
+		sttRef.current?.stop();
+		stopAudioMonitor();
+		setMicOn(false);
+		setInterim("");
+	}, [stopAudioMonitor]);
+	const muteFromCommandRef = useRef(muteFromCommand);
+	muteFromCommandRef.current = muteFromCommand;
+
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
 		// Ignore results the interaction model says we can't act on right now:
 		//  - ECHO (ALL MODES): while the agent speaks OR within its ~0.8s echo tail — it's
@@ -508,6 +529,34 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 		// Conversation mode.
 		if (convoOnRef.current) {
+			const cmdWords = { repeat: repeatWordsRef.current, mute: muteWordsRef.current };
+			// Finalize a hands-free turn: honor a repeat/mute command, else strip a trailing
+			// stop-word and send. Shared by the Whisper path, the silence timer, and the
+			// stop-word early-flush so all three behave identically.
+			const finalize = (msg: string) => {
+				if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+				pendingTextRef.current = "";
+				if (commandsEnabledRef.current) {
+					const cmd = matchVoiceCommand(msg, cmdWords);
+					if (cmd === "repeat") {
+						flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+						repeatLastRef.current();
+						return;
+					}
+					if (cmd === "mute") { muteFromCommandRef.current(); return; }
+				}
+				const t = stripStopWord(msg, stopWordsRef.current).text.trim();
+				if (!t) { flushSync(() => setInterim("")); return; } // stop-word only / empty — nothing to send
+				flushSync(() => {
+					setInterim("");
+					stopAudioMonitor();
+					pausedForThinkingRef.current = true;
+					if (sttRef.current?.listening) sttRef.current.stop();
+					setMicOn(false);
+					playThinkingChime();
+				});
+				emitSendRef.current(t);
+			};
 			// Whisper: `text` is the full transcribed turn (our VAD already detected the
 			// pause). Send it straight away — no interim accumulation or debounce.
 			if (sttIsWhisperRef.current) {
@@ -517,14 +566,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// send, don't chime; clear the placeholder and let the mic keep listening
 					// (onEnd reopens it). This is the "I'm not talking, don't submit" fix.
 					if (isNoiseTranscript(t)) { flushSync(() => setInterim("")); return; }
-					if (commandsEnabledRef.current && matchVoiceCommand(t) === "repeat") {
-						flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); });
-						repeatLastRef.current();
-						return;
-					}
-					pausedForThinkingRef.current = true;
-					flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); playThinkingChime(); });
-					emitSendRef.current(t);
+					finalize(t);
 				} else if (!isFinal && text.trim()) {
 					// Streaming partial (gpt-4o-transcribe) — show the words landing live in
 					// place of the static "Transcribing…" the VAD set on end-of-turn.
@@ -533,31 +575,20 @@ export function useVoice(instanceId: string | undefined, opts: {
 				return;
 			}
 			// Browser dictation: accumulate speech and only SEND after the user has been
-			// quiet for `silenceMs`. Every result resets the timer, so a short mid-sentence
-			// pause no longer cuts them off — only a real pause sends.
+			// quiet for `silenceMs` — UNLESS a stop-word ("...copy") ends the turn now. Every
+			// result resets the timer, so a short mid-sentence pause no longer cuts them off.
 			if (isFinal && text.trim()) {
 				pendingTextRef.current = `${pendingTextRef.current} ${text}`.trim();
+				if (stopWordsRef.current.length && stripStopWord(pendingTextRef.current, stopWordsRef.current).ended) {
+					finalize(pendingTextRef.current.trim());
+					return;
+				}
 			}
 			flushSync(() => setInterim(`${pendingTextRef.current}${isFinal ? "" : ` ${text}`}`.trim()));
 			if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 			silenceTimerRef.current = setTimeout(() => {
 				const msg = pendingTextRef.current.trim();
-				pendingTextRef.current = "";
-				if (!msg) return;
-				if (commandsEnabledRef.current && matchVoiceCommand(msg) === "repeat") {
-					flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
-					repeatLastRef.current();
-					return;
-				}
-				flushSync(() => {
-					setInterim("");
-					stopAudioMonitor();
-					pausedForThinkingRef.current = true;
-					if (sttRef.current?.listening) sttRef.current.stop();
-					setMicOn(false);
-					playThinkingChime();
-				});
-				emitSendRef.current(msg);
+				if (msg) finalize(msg);
 			}, silenceMsRef.current);
 			return;
 		}
@@ -569,8 +600,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 				stopAudioMonitor();
 				setMicOn(false);
 			});
-			if (commandsEnabledRef.current && matchVoiceCommand(text.trim()) === "repeat") { repeatLastRef.current(); return; }
-			emitSendRef.current(text);
+			if (commandsEnabledRef.current) {
+				const cmd = matchVoiceCommand(text.trim(), { repeat: repeatWordsRef.current, mute: muteWordsRef.current });
+				if (cmd === "repeat") { repeatLastRef.current(); return; }
+				if (cmd === "mute") { muteFromCommandRef.current(); return; }
+			}
+			const sent = stripStopWord(text.trim(), stopWordsRef.current).text.trim();
+			if (sent) emitSendRef.current(sent);
 		} else {
 			flushSync(() => setInterim(text));
 		}
@@ -588,6 +624,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			vadSensitivityRef.current = c.sensitivity;
 			commandsEnabledRef.current = c.commandsEnabled;
 			keepAwakeRef.current = c.keepAwake;
+			repeatWordsRef.current = c.repeatWords;
+			muteWordsRef.current = c.muteWords;
+			stopWordsRef.current = c.stopWords;
 			voiceLangRef.current = c.language;
 		} catch {}
 		const stt = await createStt(instanceId, {

@@ -503,6 +503,12 @@ instanceRoutes.get("/:instanceId/trace", async (c) => {
 	return c.json({ instanceId, count: events.length, events });
 });
 
+/** Normalize a keywords field (array OR comma-separated string) → a clean short list. */
+function parseVoiceWords(v: unknown): string[] {
+	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+	return list.filter((x): x is string => typeof x === "string").map((s) => s.trim().slice(0, 40)).filter(Boolean).slice(0, 20);
+}
+
 /** Update voice settings for hands-off mode. */
 instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 	const session = await requireUser(c);
@@ -535,6 +541,10 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		commandsEnabled: body.commandsEnabled !== false,
 		// Keep the screen awake during hands-free (screen wake lock) — on unless disabled.
 		keepAwake: body.keepAwake !== false,
+		// Custom hands-free command keywords (empty ⇒ built-in defaults; stopWords off unless set).
+		repeatWords: parseVoiceWords(body.repeatWords),
+		muteWords: parseVoiceWords(body.muteWords),
+		stopWords: parseVoiceWords(body.stopWords),
 	};
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	cfg.voiceSettings = settings;

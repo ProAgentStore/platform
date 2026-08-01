@@ -22,6 +22,18 @@ interface VoiceConfig {
 	/** Hold a screen wake lock during hands-free so the display doesn't sleep and
 	 *  suspend the mic. Default true; users on iOS can disable it in Settings → Voice. */
 	keepAwake: boolean;
+	/** Custom hands-free command keywords (Settings → Voice). Empty ⇒ built-in defaults
+	 *  for repeat/mute; stopWords is off unless set. */
+	repeatWords: string[];
+	muteWords: string[];
+	stopWords: string[];
+}
+
+/** Parse a keywords setting stored as an array OR a comma-separated string into a
+ *  clean list (trimmed, de-blanked). Tolerant so the UI can send either shape. */
+function parseWords(v: unknown): string[] {
+	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+	return list.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean).slice(0, 20);
 }
 
 let _cache: VoiceConfig | null = null;
@@ -63,6 +75,9 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		sensitivity: clamp(vs.sensitivity, 0.4, 2, 1),
 		commandsEnabled: vs.commandsEnabled !== false,
 		keepAwake: vs.keepAwake !== false,
+		repeatWords: parseWords(vs.repeatWords),
+		muteWords: parseWords(vs.muteWords),
+		stopWords: parseWords(vs.stopWords),
 	};
 }
 
