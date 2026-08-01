@@ -43,6 +43,20 @@ describe("agent tool definition helpers", () => {
 		}
 	});
 
+	it("passes a registry tool's jsonSchema through verbatim to the LLM-facing definition", () => {
+		// A creator granting a connector tool: it appears in the built definitions with its
+		// authored draft-07 schema (properties + required), NOT a rebuilt ad-hoc map.
+		const declared: AgentCapabilities = { ...caps([]), tools: ["github_read_issue"] };
+		const def = buildAgentToolDefinitions({ capabilities: declared }).find(
+			(t) => t.function.name === "github_read_issue",
+		);
+		expect(def).toBeTruthy();
+		expect(def?.function.parameters.type).toBe("object");
+		expect(def?.function.parameters.properties).toHaveProperty("repo");
+		expect(def?.function.parameters.properties).toHaveProperty("number");
+		expect(def?.function.parameters.required).toEqual(["repo", "number"]);
+	});
+
 	it("prefers storage tool schemas when storage and base tools share a name", () => {
 		const searchKnowledge = buildAgentToolDefinitions().find(
 			(tool) => tool.function.name === "search_knowledge",

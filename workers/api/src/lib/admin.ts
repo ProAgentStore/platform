@@ -2,8 +2,13 @@ import type { Env, SessionPayload } from "../types.js";
 import { agentCapabilities } from "./agent-capabilities.js";
 import { registryTools } from "./tool-registry.js";
 
-// toolName → { connector, scope } from the registry (built once).
-const TOOL_META = new Map(registryTools().map((t) => [t.name, { connector: t.connector, scope: t.scope }] as const));
+// toolName → { connector, scope } for connector-provided registry tools (built once).
+// Only tools that declare a connector are relevant to the connector admin views.
+const TOOL_META = new Map(
+	registryTools()
+		.filter((t): t is typeof t & { connector: string; scope: "read" | "write" } => !!t.connector && !!t.scope)
+		.map((t) => [t.name, { connector: t.connector, scope: t.scope }] as const),
+);
 
 /** Distinct connector names an agent uses, derived from its declared capability tools. */
 function connectorsForTools(tools?: string[]): string[] {

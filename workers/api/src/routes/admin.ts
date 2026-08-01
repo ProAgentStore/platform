@@ -97,8 +97,9 @@ adminRoutes.get("/connectors", async (c) => {
 	await requireAdmin(c);
 	const catalog = new Map<string, Array<{ name: string; scope: string }>>();
 	for (const t of registryTools()) {
+		if (!t.connector) continue; // non-connector tools don't appear in the connector catalog
 		const arr = catalog.get(t.connector) ?? [];
-		arr.push({ name: t.name, scope: t.scope });
+		arr.push({ name: t.name, scope: t.scope ?? "read" });
 		catalog.set(t.connector, arr);
 	}
 	const connectors = [...catalog.entries()].map(([connector, tools]) => ({
