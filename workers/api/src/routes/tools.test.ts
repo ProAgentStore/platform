@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 import { toolRoutes } from "./tools.js";
@@ -115,5 +115,24 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as any;
 		expect(body.content).toMatch(/not connected|not configured/i);
+	});
+	it("invokes the generic http_request tool through the SAME route — no bespoke route (issue #95)", async () => {
+		const { app, env } = testApp();
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response(JSON.stringify({ places: [{ id: "p1", displayName: { text: "Cafe" } }] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+		);
+		const res = await req(
+			app,
+			env,
+			"/v1/instances/i1/tools/http_request",
+			{ method: "POST", body: JSON.stringify({ url: "https://places.googleapis.com/v1/x", responseMap: "places[].{id,name:displayName.text}" }) },
+			await tok("u1"),
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.name).toBe("http_request");
+		expect(body.success).toBe(true);
+		expect(JSON.parse(body.content).data).toEqual([{ id: "p1", name: "Cafe" }]);
+		fetchSpy.mockRestore();
 	});
 });

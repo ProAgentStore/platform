@@ -5,6 +5,7 @@
 import type { Env } from "../../types.js";
 import type { ToolDef } from "../tool-registry.js";
 import { GITHUB_TOOLS } from "./github.js";
+import { HTTP_TOOLS } from "./http.js";
 import { META_TOOLS } from "./meta.js";
 import { TMUX_TOOLS } from "./tmux.js";
 
@@ -67,6 +68,17 @@ export const CONNECTORS: Connector[] = [
 		scopes: { read: true, write: true },
 		grantModel: "user",
 		tools: TMUX_TOOLS,
+	},
+	{
+		id: "http",
+		label: "HTTP / REST (generic)",
+		// auth:"token", no tokenEnv → connectorClient.token() reads the user's vault key
+		// (user_api_keys, provider "http") for api-key mode; http_request injects it into
+		// the configured header/query param itself (not as a Bearer header).
+		auth: "token",
+		scopes: { read: true, write: true },
+		grantModel: "user",
+		tools: HTTP_TOOLS,
 	},
 ];
 

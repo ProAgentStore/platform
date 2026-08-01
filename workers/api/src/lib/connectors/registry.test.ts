@@ -2,9 +2,18 @@ import { describe, expect, it } from "vitest";
 import { CONNECTORS, connectorTools, getConnector } from "./registry.js";
 
 describe("connector registry", () => {
-	it("declares github, meta, and tmux", () => {
+	it("declares github, http, meta, and tmux", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
-		expect(ids).toEqual(["github", "meta", "tmux"]);
+		expect(ids).toEqual(["github", "http", "meta", "tmux"]);
+	});
+
+	it("http is a token-auth, read+write, user-grant connector with no tokenEnv (vault-backed)", () => {
+		const http = getConnector("http");
+		expect(http?.auth).toBe("token");
+		expect(http?.tokenEnv).toBeUndefined(); // no platform env → connectorClient reads the vault key
+		expect(http?.scopes).toEqual({ read: true, write: true });
+		expect(http?.grantModel).toBe("user");
+		expect(http?.tools.map((t) => t.name)).toEqual(["http_request"]);
 	});
 
 	it("github is an app-auth, read+write, user-grant connector", () => {
