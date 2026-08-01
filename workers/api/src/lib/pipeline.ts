@@ -66,6 +66,58 @@ export interface StepResult {
 	output: unknown;
 }
 
+/**
+ * One entry in a record's audit trail (issue #98). Deliberately the SAME shape the /data
+ * tab detail already renders for the lead-finder (`{step, detail, at}`), so generalizing
+ * the console detail view means rendering this array unchanged. `step` is a short label
+ * (an input-seen line, a step's tool→bind decision, or the sink action); `detail` is the
+ * salient one-liner; `at` is an ISO timestamp.
+ */
+export interface AuditEntry {
+	step: string;
+	detail: string;
+	at: string;
+}
+
+/** How many records a step's output represents (array length, or 1 for a single object). */
+function outputCount(output: unknown): number {
+	return Array.isArray(output) ? output.length : output == null ? 0 : 1;
+}
+
+/**
+ * Summarize one completed step into an audit entry — the step's DECISION, captured as the
+ * runner walks (not reconstructed). Records the tool, its bound name, whether it succeeded,
+ * and how many records it produced (the salient output for a source→transform→sink walk).
+ */
+export function auditStepEntry(step: PipelineStep, index: number, result: StepResult): AuditEntry {
+	const bind = stepBind(step, index);
+	const verb = result.success ? "→" : "failed";
+	const count = result.success ? ` ${outputCount(result.output)} record(s)` : `: ${result.content.slice(0, 160)}`;
+	return { step: `step ${index}: ${step.tool}`, detail: `${verb} ${bind}${count}`, at: new Date().toISOString() };
+}
+
+/**
+ * Attach the run's step-by-step audit trail to each output record (issue #98) so the sink
+ * persists it and the /data tab detail renders "what the agent saw and decided" per record.
+ * The trail = an input-seen line + one entry per step + a per-record sink line. Records that
+ * already carry an `audit` array are respected (a dedupe/upsert step may have merged one);
+ * we only fill it when absent. Pure — the durable runner calls it before the sink writes.
+ */
+export function attachAudit(records: unknown[], trail: AuditEntry[], collection: string): Array<Record<string, unknown>> {
+	const out: Array<Record<string, unknown>> = [];
+	for (const rec of records) {
+		if (rec == null || typeof rec !== "object" || Array.isArray(rec)) continue;
+		const r = rec as Record<string, unknown>;
+		if (Array.isArray(r.audit)) {
+			out.push(r);
+			continue;
+		}
+		const sink: AuditEntry = { step: "sink", detail: `upserted into "${collection}"`, at: new Date().toISOString() };
+		out.push({ ...r, audit: [...trail, sink] });
+	}
+	return out;
+}
+
 /** Validate a candidate pipeline definition. Returns an error string, or null if valid.
  *  Boundary validation only (definitions come from stored config / API callers). */
 export function validatePipeline(def: unknown): string | null {

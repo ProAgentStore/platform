@@ -1,7 +1,8 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { executePipelineStep, stepBind, type PipelineDef, type StepResult } from "../lib/pipeline.js";
+import { attachAudit, auditStepEntry, executePipelineStep, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
+import { closeRun } from "../lib/pipeline-runs.js";
 import { isTransientInfraError } from "../lib/transient-error.js";
 import type { Env } from "../types.js";
 
@@ -43,6 +44,11 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 	async run(event: WorkflowEvent<PipelineRunParams>, step: WorkflowStep): Promise<PipelineRunResult> {
 		const { instanceId, userId, pipeline, params = {}, runId, trigger = "api" } = event.payload;
 		const env = this.env;
+		// Run counts (issue #98) — captured as the runner walks, closed onto the run record.
+		let seen = 0;
+		let added = 0;
+		let skipped = 0;
+		let errors = 0;
 		try {
 			await step.do("trace-start", async () => {
 				await logEvent(env, { source: "pipeline", event: "pipeline.start", message: `Run "${pipeline.name}" (${trigger})`, userId, instanceId, traceId: runId, context: { pipeline: pipeline.name, steps: pipeline.steps.length, trigger } }).catch(() => undefined);
@@ -54,6 +60,9 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 			// deterministically on resume. Connector auth is re-minted per step (see caveat).
 			const outputs: Record<string, unknown> = {};
 			let lastOutput: unknown = null;
+			// Per-record audit trail (issue #98): one entry per step's decision, accumulated as
+			// the runner walks, then attached to each output record before the sink persists it.
+			const trail: AuditEntry[] = [{ step: "input", detail: `run "${pipeline.name}" (${trigger}) with ${Object.keys(params).length} param(s)`, at: new Date().toISOString() }];
 
 			for (let i = 0; i < pipeline.steps.length; i++) {
 				const s = pipeline.steps[i];
@@ -67,16 +76,30 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				const result = (await step.do(`s${i}-${s.tool}`, async () => (await executePipelineStep({ env, userId, instanceId }, s, i, outputs, params)) as unknown as Record<string, string>)) as unknown as StepResult;
 				outputs[bind] = result.output;
 				lastOutput = result.output;
+				// Capture this step's DECISION onto the trail (first-class, not reconstructed).
+				trail.push(auditStepEntry(s, i, result));
 				await step.do(`s${i}-trace`, async () => {
 					await logEvent(env, { source: "pipeline", event: "pipeline.step", level: result.success ? "info" : "warn", message: `${s.tool} → ${bind}: ${result.content.slice(0, 160)}`, userId, instanceId, traceId: runId, context: { step: i, tool: s.tool, bind, success: result.success } }).catch(() => undefined);
 					return null;
 				});
 				if (!result.success) {
+					errors++;
+					// Per-step error with input context (issue #98) into the error store so a
+					// failed step is debuggable — which step, what input reference shape.
+					await step.do(`s${i}-error`, async () => {
+						await logError(env, { source: "pipeline-step", userId, status: 500, message: `step ${i} (${s.tool}) failed: ${result.content.slice(0, 200)}`, context: { instanceId, runId, pipeline: pipeline.name, step: i, tool: s.tool, bind, inputs: s.inputs } }).catch(() => undefined);
+						return null;
+					});
 					await step.do("trace-fail", async () => {
 						await logEvent(env, { source: "pipeline", event: "pipeline.end", level: "warn", message: `Failed at step ${i} (${s.tool}): ${result.content.slice(0, 160)}`, userId, instanceId, traceId: runId, context: { failedStep: i, tool: s.tool } }).catch(() => undefined);
 						return null;
 					});
-					return { outcome: "failed", steps: i + 1, detail: `step ${i} (${s.tool}) failed: ${result.content.slice(0, 200)}` };
+					const detail = `step ${i} (${s.tool}) failed: ${result.content.slice(0, 200)}`;
+					await step.do("run-close-fail", async () => {
+						await closeRun(env, runId, "failed", { seen, added, skipped, errors }, detail).catch(() => undefined);
+						return null;
+					});
+					return { outcome: "failed", steps: i + 1, detail };
 				}
 			}
 
@@ -86,23 +109,40 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 			// mid-write. Dedupe/upsert-by-key is #96's job; here we insert.
 			let sunk = 0;
 			if (pipeline.sink) {
-				const records = Array.isArray(lastOutput) ? lastOutput : lastOutput != null ? [lastOutput] : [];
+				const raw = Array.isArray(lastOutput) ? lastOutput : lastOutput != null ? [lastOutput] : [];
+				seen = raw.length;
 				const collection = pipeline.sink.collection;
+				// Attach the captured audit trail to each record so the sink persists it and the
+				// /data tab detail can show "what the pipeline saw + decided" per output record.
+				const records = attachAudit(raw, trail, collection);
+				skipped += raw.length - records.length;
 				for (let r = 0; r < records.length; r++) {
 					const rec = records[r];
-					if (rec == null || typeof rec !== "object") continue;
-					await step.do(`sink-${r}`, async () => {
+					const ok = await step.do(`sink-${r}`, async () => {
 						const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
 						const res = await stub.fetch(new Request(`https://agent/collections/${encodeURIComponent(collection)}/records`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ data: rec }) }));
-						if (!res.ok) throw new Error(`sink insert failed (${res.status}): ${(await res.text()).slice(0, 160)}`);
-						return null;
+						if (!res.ok) {
+							// Per-record sink error with context (issue #98) — captured, then this
+							// record is skipped so one bad row can't fail the whole run.
+							await logError(env, { source: "pipeline-sink", userId, status: res.status, message: `sink insert failed (${res.status}): ${(await res.text()).slice(0, 160)}`, context: { instanceId, runId, pipeline: pipeline.name, collection, record: r } }).catch(() => undefined);
+							return false;
+						}
+						return true;
 					});
-					sunk++;
+					if (ok) sunk++;
+					else errors++;
 				}
+				added = sunk;
+			} else {
+				seen = Array.isArray(lastOutput) ? lastOutput.length : lastOutput != null ? 1 : 0;
 			}
 
 			await step.do("trace-end", async () => {
-				await logEvent(env, { source: "pipeline", event: "pipeline.end", message: `Completed "${pipeline.name}": ${pipeline.steps.length} step(s)${pipeline.sink ? `, ${sunk} → ${pipeline.sink.collection}` : ""}`, userId, instanceId, traceId: runId, context: { steps: pipeline.steps.length, sunk } }).catch(() => undefined);
+				await logEvent(env, { source: "pipeline", event: "pipeline.end", message: `Completed "${pipeline.name}": ${pipeline.steps.length} step(s)${pipeline.sink ? `, ${sunk} → ${pipeline.sink.collection}` : ""}`, userId, instanceId, traceId: runId, context: { steps: pipeline.steps.length, sunk, seen, added, skipped, errors } }).catch(() => undefined);
+				return null;
+			});
+			await step.do("run-close-ok", async () => {
+				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${pipeline.sink ? `, ${added} → ${pipeline.sink.collection}` : ""}`).catch(() => undefined);
 				return null;
 			});
 			return { outcome: "completed", steps: pipeline.steps.length, sunk };
@@ -110,12 +150,15 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 			const msg = err instanceof Error ? err.message : String(err);
 			// A DO/isolate reset from a deploy is TRANSIENT — re-throw so the Workflow retries
 			// + resumes from its last completed step (same as job-apply); don't manufacture a
-			// crash on every deploy.
+			// crash on every deploy. Mark the run interrupted (not failed) so the row reflects
+			// reality; the resume will re-close it terminally.
 			if (isTransientInfraError(msg)) {
 				await logEvent(env, { source: "pipeline", event: "pipeline.interrupted", message: `pipeline interrupted by a deploy, resuming: ${msg}`.slice(0, 200), userId, instanceId, traceId: runId }).catch(() => undefined);
+				await closeRun(env, runId, "interrupted", { seen, added, skipped, errors }, msg.slice(0, 200)).catch(() => undefined);
 				throw err;
 			}
 			await logError(env, { source: "pipeline-run", userId, status: 500, message: `pipeline "${pipeline.name}" crashed: ${msg}`, context: { instanceId, runId, pipeline: pipeline.name, stack: err instanceof Error ? String(err.stack || "").slice(0, 1500) : undefined } });
+			await closeRun(env, runId, "failed", { seen, added, skipped, errors: errors + 1 }, msg.slice(0, 200)).catch(() => undefined);
 			return { outcome: "failed", steps: 0, detail: msg };
 		}
 	}

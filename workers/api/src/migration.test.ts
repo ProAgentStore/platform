@@ -28,6 +28,10 @@ const triggerSyncMigration = readFileSync(
 	join(__dirname, "../migrations/0046_trigger_sync_state.sql"),
 	"utf-8",
 );
+const pipelineRunsMigration = readFileSync(
+	join(__dirname, "../migrations/0052_pipeline_runs.sql"),
+	"utf-8",
+);
 
 describe("D1 migration 0001_init", () => {
 	it("creates users table", () => {
@@ -151,5 +155,23 @@ describe("D1 migration 0046_trigger_sync_state", () => {
 	it("indexes instance/provider sync lookups", () => {
 		expect(triggerSyncMigration).toContain("idx_agent_trigger_sync_state_instance");
 		expect(triggerSyncMigration).toContain("ON agent_trigger_sync_state(instance_id, provider, updated_at DESC)");
+	});
+});
+
+describe("D1 migration 0052_pipeline_runs", () => {
+	it("creates a pipeline_runs table with lifecycle + counts columns", () => {
+		expect(pipelineRunsMigration).toContain("CREATE TABLE IF NOT EXISTS pipeline_runs");
+		expect(pipelineRunsMigration).toContain("run_id       TEXT PRIMARY KEY");
+		expect(pipelineRunsMigration).toContain("status       TEXT NOT NULL DEFAULT 'running'");
+		expect(pipelineRunsMigration).toContain("started_at   INTEGER NOT NULL");
+		expect(pipelineRunsMigration).toContain("finished_at  INTEGER");
+		for (const col of ["seen", "added", "skipped", "errors"]) {
+			expect(pipelineRunsMigration).toContain(`${col}`);
+		}
+	});
+
+	it("indexes owner + instance listing", () => {
+		expect(pipelineRunsMigration).toContain("idx_pipeline_runs_instance");
+		expect(pipelineRunsMigration).toContain("idx_pipeline_runs_user");
 	});
 });

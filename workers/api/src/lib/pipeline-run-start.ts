@@ -4,6 +4,7 @@
 // that's the clean hook for trigger wiring, which is NOT built here.
 import { loadPipeline } from "./pipeline.js";
 import { logEvent } from "./events.js";
+import { openRun } from "./pipeline-runs.js";
 import type { PipelineRunParams } from "../workflows/pipeline-run.js";
 import type { Env } from "../types.js";
 
@@ -30,6 +31,10 @@ export async function startPipelineRun(
 	const runId = crypto.randomUUID();
 	// Audit the start BEFORE the kick so a failed create still leaves a record of who asked.
 	await logEvent(env, { source: "pipeline", event: "pipeline.requested", message: `Start "${name}" via ${trigger}`, userId, instanceId, traceId: runId, context: { pipeline: name, trigger, params } }).catch(() => undefined);
+	// Open the run RECORD (issue #98) at kick, status 'running'. The workflow updates counts
+	// + closes it. Opening here (not in the workflow) means a run that fails to start still
+	// leaves a row, and the row exists before the first step runs.
+	await openRun(env, { runId, userId, instanceId, pipeline: name, trigger, params });
 	const wf = await env.PIPELINE_RUN.create({ params: { instanceId, userId, pipeline, params, runId, trigger } satisfies PipelineRunParams });
 	return { ok: true, runId, workflowId: wf.id };
 }

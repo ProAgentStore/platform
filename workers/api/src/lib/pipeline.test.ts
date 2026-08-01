@@ -12,7 +12,7 @@ vi.mock("./tool-registry.js", () => ({
 	runRegistryTool: (...args: unknown[]) => runRegistryTool(...args),
 }));
 
-import { executePipelineStep, resolveInputs, resolveInputValue, validatePipeline, stepBind, type PipelineDef } from "./pipeline.js";
+import { attachAudit, auditStepEntry, executePipelineStep, resolveInputs, resolveInputValue, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
 import type { Env } from "../types.js";
 
 const env = {} as Env;
@@ -104,10 +104,14 @@ describe("executePipelineStep — dispatches via runRegistryTool + threads outpu
 		expect(res.output).toBe("done");
 	});
 
-	it("propagates a failed tool call as an unsuccessful step", async () => {
+	it("propagates a failed tool call as an unsuccessful step, carrying the reason + bind for error capture", async () => {
 		runRegistryTool.mockResolvedValue({ name: "geocode", content: "boom", success: false });
-		const res = await executePipelineStep(ctx, { tool: "geocode" }, 0, {}, {});
+		// The workflow logs this step's failure with {tool, bind, content} as debuggable context.
+		const res = await executePipelineStep(ctx, { tool: "geocode", bind: "geo" }, 2, {}, {});
 		expect(res.success).toBe(false);
+		expect(res.tool).toBe("geocode");
+		expect(res.bind).toBe("geo");
+		expect(res.content).toBe("boom");
 	});
 
 	it("forEach runs the step once per array item and collects results", async () => {
@@ -134,5 +138,52 @@ describe("stepBind", () => {
 	it("uses the explicit bind, else stepN", () => {
 		expect(stepBind({ tool: "x", bind: "y" }, 3)).toBe("y");
 		expect(stepBind({ tool: "x" }, 3)).toBe("step3");
+	});
+});
+
+// Per-record audit capture (issue #98).
+const ok = (over: Partial<StepResult> = {}): StepResult => ({ tool: "geocode", bind: "geo", success: true, content: "", output: null, ...over });
+
+describe("auditStepEntry", () => {
+	it("captures a successful step's decision with the record count", () => {
+		const e = auditStepEntry({ tool: "places", bind: "results" }, 1, ok({ tool: "places", bind: "results", output: [{ a: 1 }, { a: 2 }] }));
+		expect(e.step).toBe("step 1: places");
+		expect(e.detail).toBe("→ results 2 record(s)");
+		expect(typeof e.at).toBe("string");
+	});
+
+	it("counts a single object output as one record", () => {
+		const e = auditStepEntry({ tool: "geocode" }, 0, ok({ output: { lat: 1 } }));
+		expect(e.detail).toBe("→ step0 1 record(s)");
+	});
+
+	it("captures a failed step's reason instead of a count", () => {
+		const e = auditStepEntry({ tool: "geocode" }, 0, ok({ success: false, content: "boom" }));
+		expect(e.detail).toBe("failed step0: boom");
+	});
+});
+
+describe("attachAudit", () => {
+	const trail = [{ step: "input", detail: "run", at: "t0" }, { step: "step 0: geocode", detail: "→ geo 1 record(s)", at: "t1" }];
+
+	it("attaches the trail plus a sink line onto each object record", () => {
+		const out = attachAudit([{ name: "A" }, { name: "B" }], trail, "leads");
+		expect(out).toHaveLength(2);
+		const audit = out[0].audit as Array<Record<string, string>>;
+		expect(audit).toHaveLength(3); // input + step0 + sink
+		expect(audit[2].step).toBe("sink");
+		expect(audit[2].detail).toBe('upserted into "leads"');
+		expect(out[0].name).toBe("A"); // record data preserved
+	});
+
+	it("skips non-object records (they can't carry an audit field)", () => {
+		const out = attachAudit([{ name: "A" }, null, 42, ["x"]], trail, "leads");
+		expect(out).toHaveLength(1);
+	});
+
+	it("respects a record that already carries an audit array (e.g. from dedupe/upsert)", () => {
+		const existing = [{ step: "prior", detail: "kept", at: "t" }];
+		const out = attachAudit([{ name: "A", audit: existing }], trail, "leads");
+		expect(out[0].audit).toBe(existing); // untouched
 	});
 });
