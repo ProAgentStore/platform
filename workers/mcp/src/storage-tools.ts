@@ -139,6 +139,80 @@ export function registerStorageTools(
 		},
 	);
 
+	// ── Instance-scoped collections ───────────────────────────────────────────
+	// Same collection storage but scoped to a user-owned subscribed instance
+	// (its own D1 table), so an owner can read/write a live instance's data over
+	// MCP instead of hand-rolling auth against /v1/instances/:id/collections/*.
+
+	server.tool(
+		"list_instance_collections",
+		"List all data collections (tables) for one of your subscribed instances. Shows schema and record counts.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+		},
+		async ({ token, instance_id }) => {
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "list_instance_collections", { instance_id });
+			if (denied) return denied;
+			const data = await authedCall(`/v1/instances/${instance_id}/collections`, t, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"query_instance_records",
+		"Query records from a collection on one of your subscribed instances. Filter by field values, sort, paginate.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			collection: z.string().describe("Collection name"),
+			where: z.string().optional().describe('JSON filter: {"status":"submitted"}'),
+			order_by: z.string().optional(),
+			limit: z.number().optional(),
+		},
+		async ({ token, instance_id, collection, where, order_by, limit }) => {
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "read", "query_instance_records", { instance_id, collection });
+			if (denied) return denied;
+			const params = new URLSearchParams();
+			if (where) params.set("where", where);
+			if (order_by) params.set("order_by", order_by);
+			if (limit) params.set("limit", String(limit));
+			const q = params.toString() ? `?${params}` : "";
+			const data = await authedCall(`/v1/instances/${instance_id}/collections/${collection}/records${q}`, t, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"insert_instance_record",
+		"Insert a new record into a collection on one of your subscribed instances. Respects the collection's unique/dedup constraints.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			collection: z.string().describe("Collection name"),
+			data: z.string().describe("JSON object with field values"),
+		},
+		async ({ token, instance_id, collection, data: dataStr }) => {
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "write", "insert_instance_record", { instance_id, collection });
+			if (denied) return denied;
+			let parsed: unknown;
+			try { parsed = JSON.parse(dataStr); } catch { return text("Invalid data JSON"); }
+			const result = await authedCall(`/v1/instances/${instance_id}/collections/${collection}/records`, t, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ data: parsed }),
+			}, env);
+			await audit(safetyFor(token), { tool: "insert_instance_record", action: "write", input: { instance_id, collection } });
+			return jsonText(result);
+		},
+	);
+
 	// ── Files ────────────────────────────────────────────────────────────────
 
 	server.tool(
