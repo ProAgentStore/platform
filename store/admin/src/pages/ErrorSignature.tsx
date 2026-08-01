@@ -34,28 +34,35 @@ export default function ErrorSignature() {
 
 	// 1) Fetch the summary and find the matching signature by key.
 	useEffect(() => {
+		let ignore = false;
 		setErr("");
 		setSig(null);
 		api<{ signatures: Signature[] }>("/v1/admin/errors/summary")
 			.then((r) => {
+				if (ignore) return;
 				const found = r.signatures.find((s) => s.key === sigKey) || null;
 				if (!found) setErr("Signature not found — it may have aged out of the window.");
 				setSig(found);
 			})
-			.catch((e) => setErr(e.message));
+			.catch((e) => { if (!ignore) setErr(e.message); });
+		return () => { ignore = true; };
 	}, [sigKey]);
 
 	// 2) Once we have the signature, fetch recent raw occurrences for its source and
 	//    client-side filter to those whose normalized message matches the pattern.
+	//    The `ignore` guard prevents a slow response for a previous signature from
+	//    overwriting the rows once the user has navigated to another.
 	useEffect(() => {
 		if (!sig) { setRows(null); return; }
+		let ignore = false;
 		setRows(null);
 		const p = new URLSearchParams();
 		p.set("source", sig.source);
 		p.set("limit", "200");
 		api<{ errors: RawErr[] }>(`/v1/admin/errors?${p.toString()}`)
-			.then((r) => setRows(r.errors.filter((e) => normalizeMessage(e.message) === sig.pattern)))
-			.catch(() => setRows([]));
+			.then((r) => { if (!ignore) setRows(r.errors.filter((e) => normalizeMessage(e.message) === sig.pattern)); })
+			.catch(() => { if (!ignore) setRows([]); });
+		return () => { ignore = true; };
 	}, [sig]);
 
 	return (

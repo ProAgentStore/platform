@@ -27,6 +27,9 @@ interface AdminJoinedRow extends AdminUsageRow {
  */
 async function loadAdminUsage(env: Env, days: number | undefined) {
 	const where = days ? "WHERE u.created_at >= ?1" : "";
+	// Safety backstop: the ledger rows are pulled into the Worker and rolled up in JS, so
+	// an unbounded all-time query could OOM at scale. 500k rows is far beyond realistic
+	// near-term volume (totals stay correct below it) and bounds the worst case.
 	const stmt = env.DB.prepare(
 		`SELECT u.user_id, COALESCE(u.agent_id, i.agent_id) AS agent_id, u.instance_id,
 		        u.provider, u.model, u.kind, u.input_tokens, u.output_tokens, u.cost_micros, u.created_at,
@@ -36,7 +39,8 @@ async function loadAdminUsage(env: Env, days: number | undefined) {
 		 LEFT JOIN agents a ON a.id = COALESCE(u.agent_id, i.agent_id)
 		 LEFT JOIN users us ON us.id = u.user_id
 		 ${where}
-		 ORDER BY u.created_at ASC`,
+		 ORDER BY u.created_at ASC
+		 LIMIT 500000`,
 	);
 	const bound = days ? stmt.bind(`${dayUtc(days - 1)} 00:00:00`) : stmt;
 	const rows = (await bound.all<AdminJoinedRow>()).results ?? [];
@@ -164,7 +168,8 @@ adminRoutes.get("/terminals", async (c) => {
 		 JOIN agent_instances i ON i.id = n.instance_id
 		 LEFT JOIN agents a ON a.id = i.agent_id
 		 LEFT JOIN users u ON u.id = n.user_id
-		 ORDER BY n.runner_node ASC, n.updated_at DESC`,
+		 ORDER BY n.runner_node ASC, n.updated_at DESC
+			 LIMIT 5000`,
 	).all<NRow>()).results ?? [];
 
 	const sessionRows = (await c.env.DB.prepare(
@@ -173,7 +178,8 @@ adminRoutes.get("/terminals", async (c) => {
 		 FROM coding_sessions s
 		 LEFT JOIN coding_repos r ON r.id = s.repo_id
 		 WHERE s.runner_node IS NOT NULL AND s.runner_node != ''
-		 ORDER BY s.updated_at DESC`,
+		 ORDER BY s.updated_at DESC
+			 LIMIT 5000`,
 	).all<SRow>()).results ?? [];
 
 	// Group per owner (reuse the proven pure grouping), then stamp owner onto each node.

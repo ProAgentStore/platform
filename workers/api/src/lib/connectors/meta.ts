@@ -14,6 +14,11 @@ import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
 
 const GRAPH = "https://graph.facebook.com/v20.0";
 
+// Cap outbound message text. Meta's own limits (WhatsApp 4096, IG 1000) are generous;
+// this bounds the platform-credentialed egress so a caller can't push an arbitrarily
+// large body through the operator's Meta token.
+const MAX_TEXT = 4096;
+
 // Auth via the connectorClient (issue #86): the "meta" connector is auth:"token" backed
 // by the platform env META_ACCESS_TOKEN, so token() returns exactly what the old inline
 // `ctx.env.META_ACCESS_TOKEN?.trim()` did. Caught to null so the handlers keep emitting
@@ -73,7 +78,7 @@ export const META_TOOLS: ToolDef[] = [
 					},
 				};
 			} else if (input.text) {
-				body = { messaging_product: "whatsapp", to, type: "text", text: { body: String(input.text) } };
+				body = { messaging_product: "whatsapp", to, type: "text", text: { body: String(input.text).slice(0, MAX_TEXT) } };
 			} else {
 				return { content: "Provide `text` (inside a 24h window) or a `template_name`.", success: false };
 			}
@@ -101,7 +106,7 @@ export const META_TOOLS: ToolDef[] = [
 			const igId = ctx.env.META_IG_ID?.trim();
 			if (!token || !igId) return { content: "Instagram messaging not configured (set META_ACCESS_TOKEN + META_IG_ID after Meta app review).", success: false };
 			const recipient = String(input.recipient_id || "").trim();
-			const text = String(input.text || "").trim();
+			const text = String(input.text || "").trim().slice(0, MAX_TEXT);
 			if (!recipient || !text) return { content: "`recipient_id` and `text` are required.", success: false };
 			const r = await graphPost(token, `${igId}/messages`, { recipient: { id: recipient }, message: { text } });
 			return r.ok ? { content: `Instagram DM sent to ${recipient}.`, success: true } : { content: r.error, success: false };

@@ -14,9 +14,14 @@ const GH = (token: string) => ({
 	"User-Agent": "proagentstore-connector/1.0",
 });
 
+// Valid GitHub owner/repo segments are [A-Za-z0-9._-] only. Enforcing the charset here
+// (not just the 2-part shape) stops query/path smuggling — e.g. "owner/name?per_page=100"
+// splits into 2 parts but would otherwise be concatenated raw into an authenticated
+// api.github.com URL. A rejected repo returns the same "invalid repo" message.
+const SEGMENT = /^[A-Za-z0-9._-]+$/;
 function ownerOf(repo: string): string {
 	const p = String(repo || "").split("/");
-	return p.length === 2 && p[0] && p[1] ? p[0] : "";
+	return p.length === 2 && SEGMENT.test(p[0]) && SEGMENT.test(p[1]) ? p[0] : "";
 }
 
 /**

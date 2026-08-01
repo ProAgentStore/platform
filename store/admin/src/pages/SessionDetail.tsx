@@ -46,7 +46,7 @@ export default function SessionDetail() {
 		if (!sid) return;
 		setErr("");
 		setData(null);
-		api<Resp>(`/v1/admin/coding-sessions/${sid}`).then(setData).catch((e) => setErr(e.message));
+		api<Resp>(`/v1/admin/coding-sessions/${encodeURIComponent(sid)}`).then(setData).catch((e) => setErr(e.message));
 	}, [sid]);
 
 	if (err) return <ErrorBox message={err} />;

@@ -54,7 +54,7 @@ export default function Terminals() {
 					{n.sessions.map((s) => (
 						<div key={s.sessionId} className="mt-2 border-t border-line/50 pt-2">
 							<div className="flex gap-2 text-xs text-muted mb-1">
-								<Link to={`/coding-sessions/${s.sessionId}`} className="text-accent hover:underline">{s.engine}</Link>
+								<Link to={`/coding-sessions/${encodeURIComponent(s.sessionId)}`} className="text-accent hover:underline">{s.engine}</Link>
 								<span>{s.status}</span>
 								{s.repoName && <span>{s.repoName}</span>}
 								{s.issueTitle && <span className="truncate max-w-[240px]">{s.issueTitle}</span>}

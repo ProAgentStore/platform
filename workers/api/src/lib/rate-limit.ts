@@ -21,7 +21,10 @@ async function subject(c: Context<{ Bindings: Env }>): Promise<string> {
 			/* fall through to IP */
 		}
 	}
-	return `ip:${c.req.header("CF-Connecting-IP") || c.req.header("X-Forwarded-For") || "unknown"}`;
+	// CF-Connecting-IP is set by the Cloudflare edge and is not client-spoofable. Do NOT
+	// fall back to X-Forwarded-For — an attacker rotating that header would mint a fresh
+	// bucket per request and defeat the anonymous limit entirely.
+	return `ip:${c.req.header("CF-Connecting-IP") || "unknown"}`;
 }
 
 function deny(c: Context<{ Bindings: Env }>) {
