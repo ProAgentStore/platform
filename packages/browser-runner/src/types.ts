@@ -4,7 +4,8 @@ export type RunnerCapability =
 	| "downloads"
 	| "file.upload"
 	| "human.approval"
-	| "human.takeover";
+	| "human.takeover"
+	| "tmux.control";
 
 export type TaskStatus =
 	| "queued"

@@ -71,3 +71,37 @@ describe("tool registry", () => {
 		expect(r.content).toMatch(/not connected|not configured/i);
 	});
 });
+
+describe("tmux connector", () => {
+	it("registers the tmux tools with correct scopes", () => {
+		const names = registryToolNameSet();
+		expect(names.has("tmux_list_sessions")).toBe(true);
+		expect(names.has("tmux_capture_pane")).toBe(true);
+		expect(names.has("tmux_run_command")).toBe(true);
+		expect(names.has("tmux_send_keys")).toBe(true);
+		expect(getRegistryTool("tmux_list_sessions")?.scope).toBe("read");
+		expect(getRegistryTool("tmux_capture_pane")?.scope).toBe("read");
+		expect(getRegistryTool("tmux_run_command")?.scope).toBe("write");
+		expect(getRegistryTool("tmux_send_keys")?.scope).toBe("write");
+		expect(getRegistryTool("tmux_new_session")?.scope).toBe("write");
+		expect(getRegistryTool("tmux_kill_session")?.scope).toBe("write");
+	});
+
+	it("groups tmux tools under the tmux connector for the catalog", () => {
+		const grp = registryConnectorGroups().find((g) => g.connector === "tmux");
+		expect(grp?.tools).toContain("tmux_list_sessions");
+		expect(grp?.tools).toContain("tmux_run_command");
+	});
+
+	it("a READ tool with no runner connected → clear error, no throw", async () => {
+		const r = await runRegistryTool("tmux_list_sessions", { env: envNoGithub, userId: "u1", instanceId: "i1" }, {});
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/runner|pags up/i);
+	});
+
+	it("a WRITE tool without consent is blocked before touching the runner (fail-closed)", async () => {
+		const r = await runRegistryTool("tmux_run_command", { env: envWithConsent(false), userId: "u1", instanceId: "i1" }, { session: "dev", command: "ls" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/isn't permitted|not permitted|consent/i);
+	});
+});

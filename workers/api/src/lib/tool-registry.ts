@@ -5,6 +5,7 @@
 // STORAGE_TOOLS catalog is untouched; registry tools are dispatched alongside them.
 import type { Env } from "../types.js";
 import { GITHUB_TOOLS } from "./connectors/github.js";
+import { TMUX_TOOLS } from "./connectors/tmux.js";
 import { hasConsent } from "./connector-consent.js";
 
 export interface RegistryToolCtx {
@@ -33,7 +34,7 @@ export interface RegistryTool {
 
 // All connectors' tools, keyed by name. Add a connector = add its tools array here.
 const REGISTRY: ReadonlyMap<string, RegistryTool> = new Map(
-	[...GITHUB_TOOLS].map((t) => [t.name, t] as const),
+	[...GITHUB_TOOLS, ...TMUX_TOOLS].map((t) => [t.name, t] as const),
 );
 
 export function getRegistryTool(name: string): RegistryTool | undefined {

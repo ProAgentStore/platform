@@ -38,6 +38,7 @@ const CAPABILITIES: RunnerCapability[] = [
 	"file.upload",
 	"human.approval",
 	"human.takeover",
+	"tmux.control",
 ];
 
 /** How many times a task may attempt an action before handing off to a human. */

@@ -78,6 +78,60 @@ export function listSessions(): string[] {
 	}
 }
 
+export interface TmuxSessionInfo {
+	name: string;
+	windows: number;
+	attached: boolean;
+	/** The command running in the active pane (e.g. "claude", "node", "zsh") — the cheapest "what is this?" signal. */
+	activeCommand: string;
+	/** Title of the active window. */
+	activeWindow: string;
+	/** Unix seconds the session was created (as a string — tmux formats it). */
+	created: string;
+}
+
+/**
+ * Rich listing of every live session with the signal a UI/agent needs to tell them
+ * apart: window count, attach state, and what's running in the active pane. Returns
+ * an empty array when no tmux server is running (never throws).
+ */
+export function listSessionsDetailed(): TmuxSessionInfo[] {
+	try {
+		// Tab-separated so a session name containing spaces can't split a field.
+		const fmt = "#{session_name}\t#{session_windows}\t#{session_attached}\t#{pane_current_command}\t#{window_name}\t#{session_created}";
+		const out = execFileSync("tmux", ["list-sessions", "-F", fmt], { encoding: "utf8", stdio: "pipe" });
+		return out
+			.split("\n")
+			.map((l) => l.trim())
+			.filter(Boolean)
+			.map((line) => {
+				const [name, windows, attached, activeCommand, activeWindow, created] = line.split("\t");
+				return {
+					name: name ?? "",
+					windows: Number(windows) || 0,
+					attached: attached === "1",
+					activeCommand: activeCommand ?? "",
+					activeWindow: activeWindow ?? "",
+					created: created ?? "",
+				};
+			})
+			.filter((s) => s.name);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Type a command line into a session's active pane and press Enter — the convenience
+ * wrapper over sendText + sendKey for "run this shell/git command". The text is sent
+ * literally (`-l`), so it is never shell-interpreted by tmux; the receiving pane's
+ * shell/CLI runs it exactly as a human would have typed it.
+ */
+export function runCommand(target: string, command: string): void {
+	sendText(target, command);
+	sendKey(target, "Enter");
+}
+
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escape codes from tmux output.
 const ANSI = /\x1B\[[0-?]*[ -/]*[@-~]/g;
 

@@ -300,6 +300,62 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, runner.coding.endTakeover(codingEndMatch[1]));
 	}
 
+	// ── tmux connector ──────────────────────────────────────────────────────
+	// The machine-global terminal surface any permitted agent can drive over the
+	// relay: list EVERY live session (not just pags-* ones), read a pane, and —
+	// gated by write-consent in the cloud — send keys / run a command. Reuses the
+	// coding runtime's tmux primitives.
+	if ((req.method === "GET" || req.method === "POST") && path === "/tmux/list") {
+		const { listSessionsDetailed } = await import("./coding/tmux.js");
+		return json(res, 200, { sessions: listSessionsDetailed() });
+	}
+	if (req.method === "POST" && path === "/tmux/capture") {
+		const { capturePane, sessionExists } = await import("./coding/tmux.js");
+		const b = await readJson<{ session?: string; lines?: number }>(req);
+		const session = String(b.session || "").trim();
+		if (!session) return json(res, 400, { error: "A `session` name is required." });
+		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
+		const lines = Math.min(Math.max(Number(b.lines) || 200, 1), 2000);
+		return json(res, 200, { session, pane: capturePane(session, lines) });
+	}
+	if (req.method === "POST" && path === "/tmux/send") {
+		const { sendText, sendKey, capturePane, sessionExists } = await import("./coding/tmux.js");
+		const b = await readJson<{ session?: string; text?: string; keys?: string[] }>(req);
+		const session = String(b.session || "").trim();
+		if (!session) return json(res, 400, { error: "A `session` name is required." });
+		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
+		if (b.text != null) sendText(session, String(b.text));
+		for (const k of b.keys ?? []) sendKey(session, String(k));
+		return json(res, 200, { session, pane: capturePane(session, 200) });
+	}
+	if (req.method === "POST" && path === "/tmux/run") {
+		const { runCommand, capturePane, sessionExists } = await import("./coding/tmux.js");
+		const b = await readJson<{ session?: string; command?: string }>(req);
+		const session = String(b.session || "").trim();
+		const command = String(b.command ?? "");
+		if (!session) return json(res, 400, { error: "A `session` name is required." });
+		if (!command.trim()) return json(res, 400, { error: "A `command` is required." });
+		if (!sessionExists(session)) return json(res, 404, { error: `No tmux session "${session}".` });
+		runCommand(session, command);
+		return json(res, 200, { session, command, pane: capturePane(session, 200) });
+	}
+	if (req.method === "POST" && path === "/tmux/session") {
+		const { createSession, killSession, sessionExists } = await import("./coding/tmux.js");
+		const { homedir } = await import("node:os");
+		const b = await readJson<{ action?: string; session?: string; workDir?: string; command?: string }>(req);
+		const session = String(b.session || "").trim();
+		if (!session) return json(res, 400, { error: "A `session` name is required." });
+		if (b.action === "kill") {
+			return json(res, 200, { session, killed: killSession(session) });
+		}
+		// default: create
+		if (sessionExists(session)) return json(res, 200, { session, created: false, existed: true });
+		const { resolve } = await import("node:path");
+		const workDir = resolve(String(b.workDir || "~").replace(/^~(?=$|\/)/, homedir()));
+		createSession(session, workDir, b.command ? String(b.command) : undefined);
+		return json(res, 200, { session, created: true, workDir });
+	}
+
 	return json(res, 404, { error: "Not found" });
 }
 
