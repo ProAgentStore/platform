@@ -313,4 +313,66 @@ describe("AgentStorageEngine", () => {
 			expect(context).toBe("");
 		});
 	});
+
+	describe("maybeSummarize window boundary (#21 off-by-one)", () => {
+		// A mock AI that always returns a parseable (empty-facts) summary.
+		const mockAi = () =>
+			({ run: vi.fn(async () => ({ response: JSON.stringify({ summary: "ok", facts: [] }) })) }) as unknown as Ai;
+
+		/** Seed n messages under msg:{ts}:{id} with strictly increasing timestamps. */
+		function seedMessages(storage: DurableObjectStorage, startSec: number, n: number): string[] {
+			const keys: string[] = [];
+			for (let i = 0; i < n; i++) {
+				const createdAt = `2026-01-01T00:00:${String(startSec + i).padStart(2, "0")}.000Z`;
+				const id = `id${startSec + i}`;
+				const key = `msg:${createdAt}:${id}`;
+				void storage.put(key, { id, role: "user", content: `m${i}`, createdAt });
+				keys.push(key);
+			}
+			return keys;
+		}
+
+		it("resumes strictly after the last summarized message — no message double-counted", async () => {
+			const storage = mockDoStorage();
+			const engine = new AgentStorageEngine(storage, null, null, mockAi(), "agent-1");
+
+			const win1 = seedMessages(storage, 0, 20); // exactly the threshold
+			const s1 = await engine.maybeSummarize("@cf/x");
+			expect(s1?.messageRange.count).toBe(20);
+			// The boundary key is the FULL last-message key (with :id), not the bare timestamp.
+			expect(s1?.boundaryKey).toBe(win1[19]);
+
+			// A second full window of new messages.
+			seedMessages(storage, 20, 20);
+			const s2 = await engine.maybeSummarize("@cf/x");
+			// Without the fix this would be 21 (the win1 boundary message re-included).
+			expect(s2?.messageRange.count).toBe(20);
+			// And the first message of window 2 is the first NEW message, not the boundary.
+			expect(s2?.messageRange.from).toBe("2026-01-01T00:00:20.000Z");
+		});
+
+		it("falls back to the timestamp boundary for a legacy summary without boundaryKey", async () => {
+			const storage = mockDoStorage();
+			const engine = new AgentStorageEngine(storage, null, null, mockAi(), "agent-1");
+			seedMessages(storage, 0, 5);
+			// Legacy summary row: has messageRange.to but no boundaryKey.
+			await storage.put("sum:legacy", {
+				id: "legacy",
+				sessionId: "legacy",
+				messageRange: { from: "2026-01-01T00:00:00.000Z", to: "2026-01-01T00:00:04.000Z", count: 5 },
+				summary: "old",
+				facts: [],
+				createdAt: "2026-01-01T00:00:04.000Z",
+			});
+			seedMessages(storage, 5, 20);
+			const s = await engine.maybeSummarize("@cf/x");
+			// The timestamp fallback re-includes exactly ONE boundary message (the msg at
+			// `to`, whose key sorts after the bare timestamp) → 21. This is the documented
+			// legacy off-by-one; it happens once, only for summaries written before
+			// boundaryKey existed. New summaries carry boundaryKey and don't hit it (above).
+			expect(s?.messageRange.count).toBe(21);
+			// And crucially it still produces a summary (the fallback keeps working).
+			expect(s?.boundaryKey).toBeDefined();
+		});
+	});
 });
