@@ -48,7 +48,9 @@ for tool execution.
 
 > **Progress (2026-08): mostly landed.** `agents.config.capabilities` now carries a
 > declared `tools[]` allowlist against a data-driven `TOOL_CATALOG` (PR #59); the formal
-> `AgentDefinition` + `sanitizeAgentDefinition` compose the config shape (PR #62); and
+> a formal `AgentDefinition`/`sanitizeAgentDefinition` was prototyped (PR #62) but **removed
+> as premature dead code** — nothing wired it; rebuild it alongside the create/update route
+> when that's actually done. And
 > `repo-chat` is the first agent that declares its tools as data (PR #61). Remaining:
 > wire create/update to a full definition + converge onto the shared runtime.
 
