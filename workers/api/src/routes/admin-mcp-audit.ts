@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireAdmin } from "../lib/auth.js";
+import { redactSecrets } from "../lib/redact.js";
 import type { Env } from "../types.js";
 
 /**
@@ -96,7 +97,15 @@ adminMcpAuditRoutes.get("/mcp-audit", async (c) => {
 	events.sort((a, b) => String(b.time ?? "").localeCompare(String(a.time ?? "")));
 	events = events.slice(0, limit);
 
-	return c.json({ count: events.length, truncated: listed.list_complete === false, events });
+	// Defense-in-depth: tool input/result are untrusted — redact secret-shaped values
+	// on read (the write-time redact in the MCP worker is the first net, this is the second).
+	const safe = events.map((e) => ({
+		...e,
+		input: "input" in e ? redactSecrets(e.input) : e.input,
+		result: "result" in e ? redactSecrets(e.result) : e.result,
+	}));
+
+	return c.json({ count: safe.length, truncated: listed.list_complete === false, events: safe });
 });
 
 /*

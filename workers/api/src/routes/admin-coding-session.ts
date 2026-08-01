@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { HttpError, requireAdmin } from "../lib/auth.js";
+import { redactText } from "../lib/redact.js";
 import type { Env } from "../types.js";
 
 /**
@@ -73,8 +74,10 @@ adminCodingSessionRoutes.get("/coding-sessions/:sid", async (c) => {
 	)
 		.bind(sid)
 		.all<TimelineRow>();
+	// Defense-in-depth: launch_command and timeline text are untrusted (a token could
+	// be embedded in a command flag or captured terminal output) — redact on read.
 	const timeline = (results ?? [])
-		.map((r) => ({ seq: r.seq, type: r.type, content: r.content, createdAt: r.created_at }))
+		.map((r) => ({ seq: r.seq, type: r.type, content: redactText(r.content ?? ""), createdAt: r.created_at }))
 		.reverse();
 
 	return c.json({
@@ -88,7 +91,7 @@ adminCodingSessionRoutes.get("/coding-sessions/:sid", async (c) => {
 			status: session.status,
 			issueNumber: session.issue_number,
 			issueTitle: session.issue_title,
-			launchCommand: session.launch_command,
+			launchCommand: session.launch_command ? redactText(session.launch_command) : session.launch_command,
 			startedAt: session.started_at,
 			updatedAt: session.updated_at,
 			repoName: session.repo_name,

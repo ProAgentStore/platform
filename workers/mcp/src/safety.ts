@@ -135,17 +135,31 @@ export async function listAuditEvents(
 	return rows.filter((row) => row !== null);
 }
 
+// Value shapes that look like a live secret even under an innocent key name.
+const SECRET_VALUE = new RegExp(
+	[
+		"sk-(?:ant-)?[A-Za-z0-9_-]{16,}", // OpenAI / Anthropic
+		"gh[pousr]_[A-Za-z0-9]{20,}", // GitHub tokens
+		"xox[baprs]-[A-Za-z0-9-]{10,}", // Slack
+		"AIza[0-9A-Za-z_-]{20,}", // Google API key
+		"eyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{4,}", // JWT
+		"Bearer\\s+[A-Za-z0-9._-]{12,}", // bearer header
+	].join("|"),
+	"gi",
+);
+
 function redact(value: unknown, depth = 0): unknown {
 	if (depth > 8) return "[truncated]";
 	if (typeof value === "string") {
-		return value.length > 500 ? `${value.slice(0, 500)}...` : value;
+		const masked = value.replace(SECRET_VALUE, "[redacted]");
+		return masked.length > 500 ? `${masked.slice(0, 500)}...` : masked;
 	}
 	if (Array.isArray(value)) return value.map((item) => redact(item, depth + 1));
 	if (!value || typeof value !== "object") return value;
 
 	const out: Record<string, unknown> = {};
 	for (const [key, item] of Object.entries(value)) {
-		if (/token|secret|password|credential|authorization/i.test(key)) {
+		if (/token|secret|password|credential|authorization|auth|api[_-]?key|apikey|access[_-]?(code|token)|refresh[_-]?token|bearer|private[_-]?key|client[_-]?secret|cookie/i.test(key)) {
 			out[key] = "[redacted]";
 		} else {
 			out[key] = redact(item, depth + 1);

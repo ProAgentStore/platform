@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireAdmin } from "../lib/auth.js";
+import { redactJsonString } from "../lib/redact.js";
 import type { Env } from "../types.js";
 
 /**
