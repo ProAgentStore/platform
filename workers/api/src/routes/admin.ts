@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { HttpError, isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
-import { getOverviewStats, getUserDetail, listAdminAudit, listAgents, listInstances, listUsers } from "../lib/admin.js";
+import { getAgentDetail, getOverviewStats, getUserDetail, listAdminAudit, listAgents, listInstances, listUsers } from "../lib/admin.js";
 import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
 import { listAllConsents } from "../lib/connector-consent.js";
 import { registryTools } from "../lib/tool-registry.js";
@@ -123,6 +123,14 @@ adminRoutes.get("/agents", async (c) => {
 		limit: Number(c.req.query("limit")) || undefined,
 		offset: Number(c.req.query("offset")) || undefined,
 	}));
+});
+
+/** GET /v1/admin/agents/:id — one agent's detail incl. its connectors + instances' consents. */
+adminRoutes.get("/agents/:id", async (c) => {
+	await requireAdmin(c);
+	const detail = await getAgentDetail(c.env, c.req.param("id"));
+	if (!detail) throw new HttpError(404, "Agent not found");
+	return c.json(detail);
 });
 
 /** GET /v1/admin/instances?limit=&offset= — all subscriptions across tenants. */

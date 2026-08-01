@@ -7,6 +7,7 @@ import Errors from "./pages/Errors";
 import Users from "./pages/Users";
 import UserDetail from "./pages/UserDetail";
 import Agents from "./pages/Agents";
+import AgentDetail from "./pages/AgentDetail";
 import Instances from "./pages/Instances";
 import Terminals from "./pages/Terminals";
 import Connectors from "./pages/Connectors";
@@ -50,6 +51,7 @@ export default function App() {
 					<Route path="users" element={<Users />} />
 					<Route path="users/:id" element={<UserDetail />} />
 					<Route path="agents" element={<Agents />} />
+					<Route path="agents/:id" element={<AgentDetail />} />
 					<Route path="instances" element={<Instances />} />
 					<Route path="terminals" element={<Terminals />} />
 					<Route path="connectors" element={<Connectors />} />

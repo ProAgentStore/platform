@@ -1,4 +1,16 @@
 import type { Env, SessionPayload } from "../types.js";
+import { agentCapabilities } from "./agent-capabilities.js";
+import { registryTools } from "./tool-registry.js";
+
+// toolName → { connector, scope } from the registry (built once).
+const TOOL_META = new Map(registryTools().map((t) => [t.name, { connector: t.connector, scope: t.scope }] as const));
+
+/** Distinct connector names an agent uses, derived from its declared capability tools. */
+function connectorsForTools(tools?: string[]): string[] {
+	const s = new Set<string>();
+	for (const t of tools ?? []) { const m = TOOL_META.get(t); if (m) s.add(m.connector); }
+	return [...s].sort();
+}
 
 // ── Cross-user reads (issue #30) ───────────────────────────────────────────
 // Every query is parameterized. NEVER selects key/credential/token material —
@@ -119,6 +131,8 @@ export interface AdminAgentRow {
 	created_at: string;
 	owner_login: string | null;
 	instances: number;
+	/** Distinct connectors this agent uses (derived from its declared capability tools). */
+	connectors: string[];
 }
 
 export async function listAgents(
@@ -128,7 +142,7 @@ export async function listAgents(
 	const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
 	const offset = Math.max(opts.offset ?? 0, 0);
 	const search = opts.search?.trim();
-	let sql = `SELECT a.id, a.slug, a.name, a.category, a.model, a.visibility, a.status, a.created_at,
+	let sql = `SELECT a.id, a.slug, a.name, a.category, a.model, a.visibility, a.status, a.created_at, a.config,
 	        u.github_login AS owner_login,
 	        (SELECT COUNT(*) FROM agent_instances i WHERE i.agent_id = a.id AND i.status = 'active') AS instances
 	 FROM agents a LEFT JOIN users u ON u.id = a.owner_id`;
@@ -146,10 +160,73 @@ export async function listAgents(
 	sql += " ORDER BY a.created_at DESC LIMIT ? OFFSET ?";
 	binds.push(limit, offset);
 	const [rows, count] = await Promise.all([
-		env.DB.prepare(sql).bind(...binds).all<AdminAgentRow>(),
+		env.DB.prepare(sql).bind(...binds).all<AdminAgentRow & { config: string | null }>(),
 		env.DB.prepare(countSql).bind(...cbinds).first<{ n: number }>(),
 	]);
-	return { agents: rows.results ?? [], total: count?.n ?? 0 };
+	const agents = (rows.results ?? []).map((r) => {
+		const caps = agentCapabilities({ slug: r.slug, category: r.category, config: r.config });
+		const { config: _drop, ...rest } = r;
+		return { ...rest, connectors: connectorsForTools(caps.tools) };
+	});
+	return { agents, total: count?.n ?? 0 };
+}
+
+export interface AdminAgentDetail {
+	agent: AdminAgentRow;
+	capabilities: { surfaces: string[]; runtime: string | null; workflow: string | null; tools: string[] };
+	/** The agent's connector tools, grouped by connector, with each tool's scope. */
+	connectorTools: Array<{ connector: string; tools: Array<{ name: string; scope: string }> }>;
+	instances: Array<{ id: string; owner_login: string | null; status: string; created_at: string; consents: Array<{ connector: string; scope: string }> }>;
+}
+
+/** Full admin detail for one agent (by id or slug), incl. its connectors + instances' consents. */
+export async function getAgentDetail(env: Env, idOrSlug: string): Promise<AdminAgentDetail | null> {
+	const raw = await env.DB.prepare(
+		`SELECT a.id, a.slug, a.name, a.category, a.model, a.visibility, a.status, a.created_at, a.config,
+		        u.github_login AS owner_login,
+		        (SELECT COUNT(*) FROM agent_instances i WHERE i.agent_id = a.id AND i.status = 'active') AS instances
+		 FROM agents a LEFT JOIN users u ON u.id = a.owner_id WHERE a.id = ?1 OR a.slug = ?1`,
+	).bind(idOrSlug).first<AdminAgentRow & { config: string | null }>();
+	if (!raw) return null;
+	const caps = agentCapabilities({ slug: raw.slug, category: raw.category, config: raw.config });
+	const tools = caps.tools ?? [];
+
+	// connector tools grouped by connector
+	const byConnector = new Map<string, Array<{ name: string; scope: string }>>();
+	for (const t of tools) {
+		const m = TOOL_META.get(t);
+		if (!m) continue;
+		const arr = byConnector.get(m.connector) ?? [];
+		arr.push({ name: t, scope: m.scope });
+		byConnector.set(m.connector, arr);
+	}
+	const connectorTools = [...byConnector.entries()].map(([connector, ts]) => ({ connector, tools: ts }));
+
+	const instRows = (await env.DB.prepare(
+		`SELECT i.id, i.status, i.created_at, u.github_login AS owner_login
+		 FROM agent_instances i LEFT JOIN users u ON u.id = i.user_id
+		 WHERE i.agent_id = ?1 ORDER BY i.created_at DESC`,
+	).bind(raw.id).all<{ id: string; status: string; created_at: string; owner_login: string | null }>()).results ?? [];
+
+	const consentRows = (await env.DB.prepare(
+		`SELECT c.instance_id, c.connector, c.scope
+		 FROM instance_connector_consent c JOIN agent_instances i ON i.id = c.instance_id
+		 WHERE i.agent_id = ?1`,
+	).bind(raw.id).all<{ instance_id: string; connector: string; scope: string }>()).results ?? [];
+	const consentsByInstance = new Map<string, Array<{ connector: string; scope: string }>>();
+	for (const r of consentRows) {
+		const arr = consentsByInstance.get(r.instance_id) ?? [];
+		arr.push({ connector: r.connector, scope: r.scope });
+		consentsByInstance.set(r.instance_id, arr);
+	}
+
+	const { config: _c, ...agentRow } = raw;
+	return {
+		agent: { ...agentRow, connectors: connectorsForTools(tools) },
+		capabilities: { surfaces: caps.surfaces ?? [], runtime: caps.runtime ?? null, workflow: caps.workflow ?? null, tools },
+		connectorTools,
+		instances: instRows.map((i) => ({ ...i, consents: consentsByInstance.get(i.id) ?? [] })),
+	};
 }
 
 export interface AdminInstanceRow {

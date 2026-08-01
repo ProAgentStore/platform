@@ -11,7 +11,7 @@ const TEST_SECRET = "test-secret";
  * returns for the live-role check; `allowlist` seeds ADMIN_ALLOWLIST; `audit` is
  * the rows the audit query returns.
  */
-function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allowlist?: string; audit?: unknown[]; usageRows?: unknown[]; platformAiEnabled?: boolean; userRows?: unknown[]; userCount?: number; userDetail?: unknown; agentRows?: unknown[]; agentCount?: number; instanceRows?: unknown[]; errorRows?: unknown[] } = {}) {
+function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allowlist?: string; audit?: unknown[]; usageRows?: unknown[]; platformAiEnabled?: boolean; userRows?: unknown[]; userCount?: number; userDetail?: unknown; agentRows?: unknown[]; agentCount?: number; agentDetail?: unknown; instanceRows?: unknown[]; errorRows?: unknown[] } = {}) {
 	const app = new Hono();
 	app.route("/v1/admin", adminRoutes);
 	app.onError((err, c) => {
@@ -21,6 +21,7 @@ function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allow
 	// Route a query to the right canned result by inspecting its SQL.
 	const firstFor = (sql: string) => {
 		if (sql.includes("SELECT roles, github_login FROM users")) return { roles: opts.dbRoles ?? null, github_login: opts.dbLogin ?? null };
+		if (sql.includes("FROM agents a LEFT JOIN users") && sql.includes("WHERE a.id")) return opts.agentDetail ?? null; // getAgentDetail main row
 		if (sql.includes("COUNT(*) AS n FROM agents")) return { n: opts.agentCount ?? (opts.agentRows?.length ?? 0) };
 		if (sql.includes("COUNT(*) AS n FROM users")) return { n: opts.userCount ?? (opts.userRows?.length ?? 0) };
 		if (sql.includes("COUNT(*) AS n FROM agent_instances")) return { n: opts.instanceRows?.length ?? 0 };
@@ -35,6 +36,7 @@ function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allow
 		if (sql.includes("FROM ai_usage u")) return { results: opts.usageRows ?? [] };
 		if (sql.includes("admin_audit_log")) return { results: opts.audit ?? [] };
 		if (sql.includes("FROM agents a")) return { results: opts.agentRows ?? [] };
+		if (sql.includes("instance_connector_consent")) return { results: [] }; // agent-detail consents
 		if (sql.includes("FROM agent_instances i")) return { results: opts.instanceRows ?? [] };
 		if (sql.includes("FROM error_log")) return { results: opts.errorRows ?? [] };
 		return { results: [] }; // agents/instances/keys/errors sub-queries in getUserDetail
@@ -198,6 +200,19 @@ describe("new operator views (#31/#33)", () => {
 		const b = (await res.json()) as any;
 		expect(b.agents[0].slug).toBe("coder");
 		expect(b.agents[0].instances).toBe(4);
+	});
+
+	it("GET /v1/admin/agents/:id → 404 when missing, detail with connectors when found", async () => {
+		const missing = testApp({ agentDetail: null });
+		expect((await req(missing.app, missing.env, "/v1/admin/agents/nope", await token("u1", ["admin"]))).status).toBe(404);
+		const agentDetail = { id: "a1", slug: "coder", name: "Coder", category: "code", model: "claude-sonnet-4-6", visibility: "published", status: "active", created_at: "2026-08-01 00:00:00", owner_login: "alice", instances: 1, config: JSON.stringify({ capabilities: { tools: ["github_workflow_runs", "github_create_issue"] } }) };
+		const { app, env } = testApp({ agentDetail });
+		const res = await req(app, env, "/v1/admin/agents/coder", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		const b = (await res.json()) as any;
+		expect(b.agent.slug).toBe("coder");
+		expect(b.agent.connectors).toContain("github");
+		expect(b.connectorTools[0].connector).toBe("github");
 	});
 
 	it("GET /v1/admin/instances → 403 non-admin, list for admin", async () => {
