@@ -52,7 +52,7 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved }
 
 	return (
 		<div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-			<div className="bg-panel border border-line rounded-t-xl sm:rounded-xl w-full sm:max-w-lg max-h-[88vh] overflow-auto p-4">
+			<div className="bg-panel border border-line rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[85dvh] overflow-y-auto overscroll-contain p-4" style={{ WebkitOverflowScrolling: "touch" }}>
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<h3 className="text-base font-bold flex items-center gap-1.5"><Settings size={16} /> Repo settings</h3>
 					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-lg leading-none">✕</button>
