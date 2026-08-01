@@ -2,7 +2,7 @@ import { type KeyboardEvent, type RefObject, useState } from "react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
-import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2 } from "lucide-react";
+import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot } from "lucide-react";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
  *  the text via TTS. Owner-scoped fetch of the R2 blob. */
@@ -125,13 +125,13 @@ export default function CopilotView({
 				    approve-per-issue). Sits next to the Loop it configures. */}
 				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
 					{([
-						{ id: "direct", label: "Direct", title: "Direct: you type each Loop objective" },
-						{ id: "issues", label: "Issues", title: "Issues: the Loop works your GitHub backlog, approving one issue at a time" },
+						{ id: "direct", label: "Direct", title: "Direct: you type each Loop objective", Icon: Pencil },
+						{ id: "issues", label: "Issues", title: "Issues: the Loop works your GitHub backlog, approving one issue at a time", Icon: CircleDot },
 					] as const).map((m) => (
-						<button key={m.id} type="button" aria-pressed={workMode === m.id} title={m.title} disabled={loop.loopOn}
+						<button key={m.id} type="button" aria-pressed={workMode === m.id} aria-label={m.label} title={m.title} disabled={loop.loopOn}
 							onClick={() => onSetWorkMode(m.id)}
-							className={`px-2 py-1.5 text-xs font-semibold transition-colors disabled:opacity-50 ${workMode === m.id ? "bg-accent text-white" : "text-muted hover:bg-panel-hover hover:text-accent"}`}>
-							{m.label}
+							className={`flex items-center justify-center px-2 py-1.5 transition-colors disabled:opacity-50 ${workMode === m.id ? "bg-accent text-white" : "text-muted hover:bg-panel-hover hover:text-accent"}`}>
+							<m.Icon size={14} />
 						</button>
 					))}
 				</div>
