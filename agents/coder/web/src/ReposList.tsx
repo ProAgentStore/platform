@@ -1,5 +1,5 @@
 import type { CodingRepo, CodingSession } from "./types";
-import { Trash2, Settings, Cpu } from "lucide-react";
+import { Settings, Cpu } from "lucide-react";
 import RepoIssues from "./RepoIssues";
 
 /** The all-repos landing view: add-repo form, runner CTA, and one row per repo. */
@@ -7,7 +7,7 @@ export default function ReposList({
 	instanceId,
 	repos, sessions, repoStatuses, runnerOnline,
 	showAddRepo, setShowAddRepo, addRepoInput, setAddRepoInput, addRepo,
-	openTerminal, startSession, deleteRepo, setSettingsRepoId,
+	openTerminal, startSession, setSettingsRepoId,
 	repoLabel, getActiveSession, onWorkOnIssue, onOpenEngines,
 }: {
 	instanceId: string;
@@ -22,7 +22,6 @@ export default function ReposList({
 	addRepo: () => void;
 	openTerminal: (s: CodingSession) => void;
 	startSession: (repoId: string) => void;
-	deleteRepo: (repoId: string) => void;
 	setSettingsRepoId: (id: string) => void;
 	repoLabel: (r: CodingRepo) => string;
 	getActiveSession: (repoId: string) => CodingSession | undefined;
@@ -108,7 +107,6 @@ export default function ReposList({
 												<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
 											)}
 											<button type="button" onClick={() => setSettingsRepoId(r.id)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={14} /></button>
-											<button type="button" onClick={() => deleteRepo(r.id)} title="Delete repo" className="text-xs px-1.5 py-1 text-red"><Trash2 size={14} /></button>
 										</div>
 									</div>
 									{r.githubRepo && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}

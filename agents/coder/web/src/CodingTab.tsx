@@ -374,9 +374,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	};
 
+	// Delete is confirmed in the repo settings sheet (RepoSettingsModal); this just
+	// performs it, closes the sheet, and refreshes the list.
 	const deleteRepo = async (repoId: string) => {
-		if (!confirm("Delete this repo?")) return;
 		await api(`/v1/instances/${instanceId}/coding/repos/${repoId}`, { method: "DELETE" });
+		setSettingsRepoId(null);
 		loadCoding();
 	};
 
@@ -571,7 +573,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		? (() => {
 				const repo = repos.find((r) => r.id === settingsRepoId);
 				return repo ? (
-					<RepoSettingsModal repo={repo} instanceId={instanceId} onClose={() => setSettingsRepoId(null)} onSaved={loadCoding} />
+					<RepoSettingsModal repo={repo} instanceId={instanceId} onClose={() => setSettingsRepoId(null)} onSaved={loadCoding} onDelete={() => deleteRepo(repo.id)} />
 				) : null;
 			})()
 		: null;
@@ -642,7 +644,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				addRepo={addRepo}
 				openTerminal={openTerminal}
 				startSession={startSession}
-				deleteRepo={deleteRepo}
 				setSettingsRepoId={setSettingsRepoId}
 				repoLabel={repoLabel}
 				getActiveSession={getActiveSession}

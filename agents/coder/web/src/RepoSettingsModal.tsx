@@ -1,14 +1,16 @@
 import { useState, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo } from "./types";
-import { Settings } from "lucide-react";
+import { Settings, Trash2 } from "lucide-react";
 
-/** Per-repo settings sheet: name, special instructions (rules), and launch URLs. */
-export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved }: {
+/** Per-repo settings sheet: name, special instructions (rules), launch URLs, and delete. */
+export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved, onDelete }: {
 	repo: CodingRepo;
 	instanceId: string;
 	onClose: () => void;
 	onSaved: () => void;
+	/** Delete this repo (confirmed here); the parent removes it and closes the sheet. */
+	onDelete: () => void | Promise<void>;
 }) {
 	const [name, setName] = useState(repo.name);
 	const [rules, setRules] = useState(repo.instructions || "");
@@ -16,6 +18,18 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved }
 	const [staging, setStaging] = useState(repo.urls?.staging || "");
 	const [prod, setProd] = useState(repo.urls?.prod || "");
 	const [saving, setSaving] = useState(false);
+	const [deleting, setDeleting] = useState(false);
+
+	const del = async () => {
+		if (!confirm(`Delete repo "${repo.name}"? This removes it from the agent.`)) return;
+		setDeleting(true);
+		try {
+			await onDelete();
+		} catch (e) {
+			alert("Delete failed: " + (e instanceof Error ? e.message : String(e)));
+			setDeleting(false);
+		}
+	};
 
 	useEffect(() => {
 		// Load the latest saved rules (the list may be stale).
@@ -87,9 +101,12 @@ export default function RepoSettingsModal({ repo, instanceId, onClose, onSaved }
 				<label htmlFor="repo-settings-production-url" className="sr-only">Production URL</label>
 				<input id="repo-settings-production-url" value={prod} onChange={(e) => setProd(e.target.value)} placeholder="Production URL" className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-xs" />
 
-				<div className="flex gap-2 justify-end mt-4">
-					<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>
-					<button type="button" onClick={save} disabled={saving} className="text-xs px-3 py-1.5 rounded-md bg-accent text-white font-bold disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+				<div className="flex gap-2 justify-between items-center mt-4">
+					<button type="button" onClick={del} disabled={deleting || saving} className="text-xs px-3 py-1.5 rounded-md text-red font-semibold hover:bg-red/10 disabled:opacity-50 flex items-center gap-1"><Trash2 size={13} />{deleting ? "Deleting…" : "Delete"}</button>
+					<div className="flex gap-2">
+						<button type="button" onClick={onClose} className="text-xs px-3 py-1.5 rounded-md border border-line text-muted font-semibold">Cancel</button>
+						<button type="button" onClick={save} disabled={saving || deleting} className="text-xs px-3 py-1.5 rounded-md bg-accent text-white font-bold disabled:opacity-50">{saving ? "Saving…" : "Save"}</button>
+					</div>
 				</div>
 			</div>
 		</div>
