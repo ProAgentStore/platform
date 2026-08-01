@@ -66,7 +66,7 @@ const USER_SELECT = `SELECT u.id, u.github_login, u.github_name, u.avatar_url, u
 	        (SELECT COUNT(*) FROM agents a WHERE a.owner_id = u.id) AS agents_owned,
 	        (SELECT COUNT(*) FROM agent_instances i WHERE i.user_id = u.id AND i.status = 'active') AS active_instances,
 	        (SELECT GROUP_CONCAT(k.provider) FROM user_api_keys k WHERE k.user_id = u.id) AS key_providers,
-	        (SELECT COALESCE(SUM(x.cost_micros), 0) FROM ai_usage x WHERE x.user_id = u.id AND x.created_at >= ?1) AS spend_30d_micros
+	        (SELECT COALESCE(SUM(x.cost_micros), 0) FROM ai_usage x WHERE x.user_id = u.id AND x.created_at >= ?) AS spend_30d_micros
 	 FROM users u`;
 
 /** "YYYY-MM-DD HH:MM:SS" for `days` ago (UTC), matching D1 datetime('now'). */
@@ -116,13 +116,14 @@ export interface AdminUserDetail {
 
 /** Full detail for one user, or null if not found. Never returns key material. */
 export async function getUserDetail(env: Env, id: string): Promise<AdminUserDetail | null> {
-	const raw = await env.DB.prepare(`${USER_SELECT} WHERE u.id = ?2`).bind(sinceTs(30), id).first<RawUserRow>();
+	// USER_SELECT's spend sub-query has the first `?` (since); the id is the second.
+	const raw = await env.DB.prepare(`${USER_SELECT} WHERE u.id = ?`).bind(sinceTs(30), id).first<RawUserRow>();
 	if (!raw) return null;
 	const [agents, instances, keys, errors] = await Promise.all([
-		env.DB.prepare("SELECT id, slug, name, visibility, status, created_at FROM agents WHERE owner_id = ?1 ORDER BY created_at DESC").bind(id).all<AdminUserDetail["agents"][number]>(),
-		env.DB.prepare("SELECT i.id, i.agent_id, a.name AS agent_name, i.status, i.created_at FROM agent_instances i LEFT JOIN agents a ON a.id = i.agent_id WHERE i.user_id = ?1 ORDER BY i.created_at DESC").bind(id).all<AdminUserDetail["instances"][number]>(),
-		env.DB.prepare("SELECT provider, created_at, last_used_at FROM user_api_keys WHERE user_id = ?1").bind(id).all<AdminUserDetail["keyProviders"][number]>(),
-		env.DB.prepare("SELECT id, created_at, source, status, message FROM error_log WHERE user_id = ?1 ORDER BY created_at DESC LIMIT 20").bind(id).all<AdminUserDetail["recentErrors"][number]>(),
+		env.DB.prepare("SELECT id, slug, name, visibility, status, created_at FROM agents WHERE owner_id = ? ORDER BY created_at DESC").bind(id).all<AdminUserDetail["agents"][number]>(),
+		env.DB.prepare("SELECT i.id, i.agent_id, a.name AS agent_name, i.status, i.created_at FROM agent_instances i LEFT JOIN agents a ON a.id = i.agent_id WHERE i.user_id = ? ORDER BY i.created_at DESC").bind(id).all<AdminUserDetail["instances"][number]>(),
+		env.DB.prepare("SELECT provider, created_at, last_used_at FROM user_api_keys WHERE user_id = ?").bind(id).all<AdminUserDetail["keyProviders"][number]>(),
+		env.DB.prepare("SELECT id, created_at, source, status, message FROM error_log WHERE user_id = ? ORDER BY created_at DESC LIMIT 20").bind(id).all<AdminUserDetail["recentErrors"][number]>(),
 	]);
 	return {
 		user: shapeUser(raw),
