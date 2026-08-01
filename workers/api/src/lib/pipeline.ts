@@ -176,8 +176,13 @@ export function resolveInputValue(
 	if (Array.isArray(value)) return value.map((v) => resolveInputValue(v, scope));
 	const obj = value as Record<string, unknown>;
 	if (typeof obj.$param === "string") {
-		// `$param: "item"` inside a forEach body reads the current fan-out item.
-		if (obj.$param === "item" && scope.item !== undefined) return scope.item;
+		// `$param: "item"` inside a forEach body reads the current fan-out item;
+		// `$param: "item.<path>"` reads a dotted field off it (issue #114) — so a per-item
+		// body can plug `item.lat`/`item.lng` into a request or `item.websiteUri` into a probe.
+		if (scope.item !== undefined) {
+			if (obj.$param === "item") return scope.item;
+			if (obj.$param.startsWith("item.")) return readPath(scope.item, obj.$param.slice("item.".length));
+		}
 		return scope.params[obj.$param];
 	}
 	if (typeof obj.$ref === "string") return readPath(scope.outputs, obj.$ref);

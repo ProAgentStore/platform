@@ -49,6 +49,34 @@ function fail(content: string): RegistryToolResult {
 	return { content, success: false };
 }
 
+/** Concatenate an array-of-arrays into a flat array, `depth` levels deep (default 1). Used by
+ *  the `flatten` step (#113) to collapse a grid fan-out's per-cell page arrays into one list. */
+function flattenDeep(items: unknown[], depth: number): unknown[] {
+	if (depth <= 0) return items.slice();
+	const out: unknown[] = [];
+	for (const el of items) {
+		if (Array.isArray(el)) out.push(...flattenDeep(el, depth - 1));
+		else out.push(el);
+	}
+	return out;
+}
+
+/**
+ * Resolve an `enrich` input template against one item (#115). A `{$item:"path"}` node reads a
+ * dotted field off the item (the documented per-item ergonomics — the sibling of the pipeline
+ * runner's `{$param:"item.<path>"}` from #114); everything else passes through, recursing into
+ * objects/arrays so nested `$item` references work.
+ */
+function resolveItemTemplate(tpl: unknown, item: unknown): unknown {
+	if (tpl === null || typeof tpl !== "object") return tpl;
+	if (Array.isArray(tpl)) return tpl.map((v) => resolveItemTemplate(v, item));
+	const obj = tpl as Record<string, unknown>;
+	if (typeof obj.$item === "string") return getPath(item, obj.$item);
+	const out: Record<string, unknown> = {};
+	for (const [k, v] of Object.entries(obj)) out[k] = resolveItemTemplate(v, item);
+	return out;
+}
+
 // ── 1. map ───────────────────────────────────────────────────────────────────
 // Pure reshape of each item: rename fields, derive constants/copies, and extract nested
 // values by the same dotted / `arr[]` grammar as the #95 responseMap (reused via getPath).
@@ -295,6 +323,34 @@ export const STEP_TOOLS: ToolDef[] = [
 		},
 	},
 
+	// 2b ─ flatten (issue #113)
+	{
+		name: "flatten",
+		tier: "standard",
+		scope: "read",
+		description:
+			"Concatenate an array-of-arrays into a flat array (pure, no I/O). `depth` (default 1) is how many nesting levels to collapse. Optional `path`: when a `forEach` binds an array of RESULT ENVELOPES (e.g. one http_request `{status,data:[…]}` per grid cell), `path` pulls that sub-array (\"data\") from each element FIRST, so the grid fan-out (`fan_out` grid → `forEach` http_request → flatten) collapses to one flat list of records for `map`/`filter`/`dedupe_upsert`. Returns the flattened array.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				items: { type: "array", description: "The array to flatten (an array-of-arrays, or an array of result envelopes when `path` is set)." },
+				depth: { type: "number", description: "Levels to flatten (default 1)." },
+				path: { type: "string", description: 'Optional dotted path pulled from each element before concatenating, e.g. "data".' },
+			},
+			required: [],
+		},
+		handler: async (_ctx, input) => {
+			const raw = Array.isArray(input.items) ? input.items : asArray(input.items);
+			// With `path`, lift the sub-array out of each envelope element first (array of
+			// {…,data:[…]} → array-of-arrays); then the same depth flatten collapses it.
+			const path = typeof input.path === "string" && input.path ? input.path : "";
+			const items = path ? raw.map((el) => getPath(el, path)) : raw;
+			const depth = input.depth === undefined ? 1 : Math.max(0, Math.floor(Number(input.depth) || 0));
+			const out = flattenDeep(items, depth);
+			return ok(JSON.stringify({ items: out, count: out.length }, null, 2));
+		},
+	},
+
 	// 3 ─ dedupe_upsert
 	{
 		name: "dedupe_upsert",
@@ -414,6 +470,47 @@ export const STEP_TOOLS: ToolDef[] = [
 				if (cursor === undefined || cursor === null || cursor === "") { pages++; break; }
 			}
 			return ok(JSON.stringify({ mode, items: aggregated, count: aggregated.length, pages }, null, 2));
+		},
+	},
+
+	// 4b ─ enrich (issue #115)
+	{
+		name: "enrich",
+		tier: "standard",
+		scope: "read",
+		description:
+			"Call a tool once PER record and merge each result back onto the record — the general 'enrich a list with a per-item connector call' primitive. `tool` is dispatched with `input`, a template resolved against each item: a `{\"$item\":\"path\"}` node reads that dotted field off the item (e.g. `{url:{\"$item\":\"websiteUri\"}}`). The tool's parsed result is written under key `as` on a COPY of the item. Concurrency-capped (default 4, max 20). Powers 'keep no-website OR unreachable' (enrich with http_reachable) and #99 socials/email (enrich with web_search → extract_contacts). Returns {items,count}.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				items: { type: "array", description: "Records to enrich (a single object is treated as a one-element array)." },
+				tool: { type: "string", description: "Registry tool to run once per item, e.g. \"http_reachable\"." },
+				input: { type: "object", description: 'Input template for `tool`; `{"$item":"path"}` reads a dotted field off the item.' },
+				as: { type: "string", description: "Key on each item to write the tool's result under, e.g. \"reachable\"." },
+				concurrency: { type: "number", description: "Max concurrent per-item calls (default 4, max 20)." },
+			},
+			required: ["tool", "as"],
+		},
+		handler: async (ctx, input) => {
+			const items = asArray(input.items).filter(isRecord) as Record<string, unknown>[];
+			const tool = String(input.tool || "");
+			const as = String(input.as || "");
+			if (!tool || !as) return fail("enrich needs `tool` and `as`.");
+			const template = isRecord(input.input) ? input.input : {};
+			const concurrency = Number(input.concurrency) || 4;
+			const { runRegistryTool } = await import("./tool-registry.js");
+			const out = await mapWithConcurrency(items, concurrency, async (item) => {
+				const perItemInput = resolveItemTemplate(template, item) as Record<string, unknown>;
+				const r = await runRegistryTool(tool, ctx, perItemInput);
+				let result: unknown;
+				try {
+					result = JSON.parse(r.content);
+				} catch {
+					result = r.content;
+				}
+				return { ...item, [as]: result };
+			});
+			return ok(JSON.stringify({ items: out, count: out.length }, null, 2));
 		},
 	},
 

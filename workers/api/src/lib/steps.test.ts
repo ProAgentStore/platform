@@ -7,8 +7,10 @@ import type { ConnectorClient } from "./connectors/client.js";
 // runRegistryTool for the #97 runner, and via POST …/tools/:name with no bespoke route).
 const mapT = getRegistryTool("map")!;
 const filterT = getRegistryTool("filter")!;
+const flattenT = getRegistryTool("flatten")!;
 const dedupeT = getRegistryTool("dedupe_upsert")!;
 const fanOutT = getRegistryTool("fan_out")!;
+const enrichT = getRegistryTool("enrich")!;
 const reachableT = getRegistryTool("http_reachable")!;
 const geocodeT = getRegistryTool("geocode")!;
 const extractT = getRegistryTool("extract_contacts")!;
@@ -24,7 +26,7 @@ afterEach(() => vi.restoreAllMocks());
 // ── registration ──────────────────────────────────────────────────────────────
 describe("step library — registration", () => {
 	it("registers all steps as standard-tier, non-connector tools", () => {
-		for (const t of [mapT, filterT, dedupeT, fanOutT, reachableT, geocodeT, extractT]) {
+		for (const t of [mapT, filterT, flattenT, dedupeT, fanOutT, enrichT, reachableT, geocodeT, extractT]) {
 			expect(t).toBeDefined();
 			expect(t.tier).toBe("standard");
 			expect(t.connector).toBeUndefined();
@@ -110,6 +112,39 @@ describe("filter", () => {
 		});
 		expect(parse(r.content).items).toEqual([{ x: 2 }]);
 		expect(parse(r.content).dropped).toBe(1);
+	});
+});
+
+// ── 2b. flatten (issue #113) ───────────────────────────────────────────────────
+describe("flatten", () => {
+	it("collapses an array-of-arrays (grid fan-out result) into one flat record list", async () => {
+		// The exact grid shape: one page of places per cell → [[…],[…]].
+		const aoa = [[{ place_id: "a" }], [{ place_id: "b" }, { place_id: "c" }]];
+		const r = await flattenT.handler(baseCtx, { items: aoa });
+		const parsed = parse(r.content);
+		expect(parsed.count).toBe(3); // 3 places, NOT 2 cells (the GAP #1 fix)
+		expect(parsed.items.map((x: any) => x.place_id)).toEqual(["a", "b", "c"]);
+	});
+
+	it("default depth 1 leaves deeper nesting intact; depth:2 flattens further", async () => {
+		const nested = [[[1], [2]], [[3]]];
+		expect(parse((await flattenT.handler(baseCtx, { items: nested })).content).items).toEqual([[1], [2], [3]]);
+		expect(parse((await flattenT.handler(baseCtx, { items: nested, depth: 2 })).content).items).toEqual([1, 2, 3]);
+	});
+
+	it("depth:0 is a no-op copy; a flat array passes through unchanged", async () => {
+		expect(parse((await flattenT.handler(baseCtx, { items: [[1], [2]], depth: 0 })).content).items).toEqual([[1], [2]]);
+		expect(parse((await flattenT.handler(baseCtx, { items: [1, 2, 3] })).content).items).toEqual([1, 2, 3]);
+	});
+
+	it("path lifts a sub-array from each envelope before concatenating (per-cell http_request results)", async () => {
+		// The real grid shape: a forEach binds one http_request {status,data:[…]} per cell.
+		const perCell = [
+			{ status: 200, data: [{ place_id: "a" }] },
+			{ status: 200, data: [{ place_id: "b" }, { place_id: "c" }] },
+		];
+		const r = await flattenT.handler(baseCtx, { items: perCell, path: "data" });
+		expect(parse(r.content).items.map((x: any) => x.place_id)).toEqual(["a", "b", "c"]);
 	});
 });
 
@@ -245,6 +280,70 @@ describe("fan_out — pages (cursor drive + concurrency cap)", () => {
 			request: { method: "GET", url: "https://api.test/s", query: { pageToken: "{{pageToken}}" }, pagination: { type: "nextPageToken", path: "next" } },
 		});
 		expect(parse(r.content).pages).toBe(3);
+	});
+});
+
+// ── 4b. enrich (issue #115) ─────────────────────────────────────────────────────
+describe("enrich", () => {
+	it("runs a tool per item ($item template) and merges each result under `as` (via a pure tool)", async () => {
+		// enrich with the pure `map` tool: derive a constant per item, written under `tag`.
+		const r = await enrichT.handler(baseCtx, {
+			items: [{ id: 1 }, { id: 2 }],
+			tool: "map",
+			input: { items: [{}], derive: { flag: "x" } },
+			as: "tag",
+		});
+		const parsed = parse(r.content);
+		expect(parsed.count).toBe(2);
+		// original fields preserved on a COPY; the tool result lands under `as`.
+		expect(parsed.items[0].id).toBe(1);
+		expect(parsed.items[0].tag).toMatchObject({ count: 1 });
+	});
+
+	it("the reachability enrich-merge (the lead-finder 'is this site up' half)", async () => {
+		// enrich with http_reachable; {$item:"websiteUri"} feeds each item's url. Mock the wire:
+		// one live site, one dead host.
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: any) => {
+			if (String(u).includes("live")) return new Response("hi", { status: 200 });
+			throw new Error("ECONNREFUSED");
+		});
+		const r = await enrichT.handler(baseCtx, {
+			items: [
+				{ place_id: "a", websiteUri: "https://live.test" },
+				{ place_id: "b", websiteUri: "https://dead.test" },
+			],
+			tool: "http_reachable",
+			input: { url: { $item: "websiteUri" }, timeoutMs: 500 },
+			as: "reachable",
+			concurrency: 2,
+		});
+		const items = parse(r.content).items;
+		// each place now carries {ok,code} under `reachable` — correlated to ITS url.
+		expect(items.find((x: any) => x.place_id === "a").reachable).toMatchObject({ ok: true, code: 200 });
+		expect(items.find((x: any) => x.place_id === "b").reachable).toMatchObject({ ok: false, code: null });
+	});
+
+	it("filter can then test the merged field → 'keep no-website OR unreachable' fully composes", async () => {
+		// The enrich output above, run through filter with the OR predicate.
+		const enriched = [
+			{ place_id: "a", websiteUri: undefined, reachable: undefined }, // no website
+			{ place_id: "b", websiteUri: "https://x", reachable: { ok: false } }, // dead
+			{ place_id: "c", websiteUri: "https://y", reachable: { ok: true } }, // healthy → drop
+		];
+		const r = await filterT.handler(baseCtx, {
+			items: enriched,
+			any: true,
+			where: [
+				{ field: "websiteUri", op: "missing" },
+				{ field: "reachable.ok", op: "eq", value: false },
+			],
+		});
+		expect(parse(r.content).items.map((x: any) => x.place_id)).toEqual(["a", "b"]);
+	});
+
+	it("fails without tool/as", async () => {
+		expect((await enrichT.handler(baseCtx, { items: [{ a: 1 }], as: "x" } as any)).success).toBe(false);
+		expect((await enrichT.handler(baseCtx, { items: [{ a: 1 }], tool: "map" } as any)).success).toBe(false);
 	});
 });
 
