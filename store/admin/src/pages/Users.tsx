@@ -86,7 +86,7 @@ function UserDetailModal({ id, onClose }: { id: string; onClose: () => void }) {
 	const [d, setD] = useState<UserDetail | null>(null);
 	const [err, setErr] = useState("");
 	useEffect(() => {
-		api<UserDetail>(`/v1/admin/users/${id}`).then(setD).catch((e) => setErr(e.message));
+		api<UserDetail>(`/v1/admin/users/${encodeURIComponent(id)}`).then(setD).catch((e) => setErr(e.message));
 	}, [id]);
 	return (
 		<div className="fixed inset-0 bg-black/60 flex items-start justify-center p-4 overflow-y-auto z-50" onClick={onClose}>

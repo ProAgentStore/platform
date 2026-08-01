@@ -47,9 +47,26 @@ export async function signIn(provider: "google" | "github" = "github") {
 		app_id: string;
 		response_mode: string;
 	};
-	const returnTo = encodeURIComponent(window.location.href);
+	// Strip any #hash — the callback appends ?session= as a query, which would land
+	// in the fragment (unreadable by captureOAuthSession) if a hash were present.
+	const back = window.location.origin + window.location.pathname;
+	const returnTo = encodeURIComponent(back);
 	const url = provider === "google" ? config.google_oauth_url : config.oauth_url;
 	window.location.href = `${url}?app_id=${config.app_id}&response_mode=${config.response_mode}&return_to=${returnTo}`;
+}
+
+/** Best-effort: mirror a browser-side failure into the durable server error log
+ *  (source client:*), so admin-app bugs are visible via list_errors, not just the
+ *  user's DevTools. No-op when signed out (the endpoint needs a session). */
+export function reportClientError(source: string, message: string, context?: Record<string, unknown>) {
+	const token = getToken();
+	if (!token) return;
+	fetch(`${API}/v1/errors/client`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+		body: JSON.stringify({ source: `admin:${source}`, message: message.slice(0, 500), context }),
+		keepalive: true,
+	}).catch(() => {});
 }
 
 /** If we came back from OAuth with ?session=, persist it and clean the URL. */
