@@ -60,6 +60,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [showCols, setShowCols] = useState(false);
 	const [filters, setFilters] = useState<Record<string, string>>({});
 	const [showControls, setShowControls] = useState(false);
+	const [detail, setDetail] = useState<Rec | null>(null);
 
 	const loadCollections = useCallback(async () => {
 		try {
@@ -102,7 +103,8 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		() => collection?.fields?.map((f) => f.name) ?? (records[0] ? Object.keys(records[0].data) : []),
 		[collection, records],
 	);
-	const columns = useMemo(() => allColumns.filter((c) => !hidden.has(c)), [allColumns, hidden]);
+	const baseColumns = useMemo(() => allColumns.filter((c) => c !== "audit"), [allColumns]);
+	const columns = useMemo(() => baseColumns.filter((c) => !hidden.has(c)), [baseColumns, hidden]);
 	const hasStatus = allColumns.includes("status");
 
 	const facetValues = useMemo(() => {
@@ -280,7 +282,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							</button>
 							{showCols && (
 								<div className="absolute z-10 mt-1 bg-white border rounded shadow p-2 max-h-64 overflow-auto text-xs">
-									{allColumns.map((c) => (
+									{baseColumns.map((c) => (
 										<label key={c} className="flex items-center gap-1.5 py-0.5 whitespace-nowrap cursor-pointer">
 											<input
 												type="checkbox"
@@ -342,8 +344,11 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 											</div>
 											{r.data.website_status ? <div className="mt-1">{cell("website_status", r.data.website_status)}</div> : null}
 											{r.data.phone ? <div className="text-xs mt-1">{cell("phone", r.data.phone)}</div> : null}
-											<div className="mt-1">
+											<div className="mt-1 flex items-center gap-2">
 												<StatusSelect rec={r} />
+												<button type="button" onClick={() => setDetail(r)} className="text-accent text-xs underline">
+													log
+												</button>
 											</div>
 										</div>
 									))}
@@ -357,6 +362,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					<table className="w-full border-collapse">
 						<thead>
 							<tr>
+								<th className="px-1 py-1 border-b sticky top-0 bg-white" />
 								{columns.map((c) => (
 									<th
 										key={c}
@@ -372,6 +378,11 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						<tbody>
 							{rows.map((r) => (
 								<tr key={r.id} className="border-b hover:bg-black/5">
+									<td className="px-1 py-1 align-top">
+										<button type="button" onClick={() => setDetail(r)} title="View audit log" className="text-accent">
+											🔍
+										</button>
+									</td>
 									{columns.map((c) => (
 										<td key={c} className="px-2 py-1 whitespace-nowrap align-top">
 											{c === "status" ? <StatusSelect rec={r} /> : cell(c, r.data[c])}
@@ -381,6 +392,49 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							))}
 						</tbody>
 					</table>
+				</div>
+			)}
+
+			{detail && (
+				<div
+					className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+					onClick={() => setDetail(null)}
+				>
+					<div
+						className="bg-white rounded shadow-lg max-w-2xl w-full max-h-[85vh] overflow-auto p-4"
+						onClick={(e) => e.stopPropagation()}
+					>
+						<div className="flex items-center justify-between mb-3">
+							<h3 className="font-semibold text-base">{String(detail.data.name ?? "Lead")}</h3>
+							<button type="button" onClick={() => setDetail(null)} className="text-muted-soft">
+								✕
+							</button>
+						</div>
+						<table className="text-xs mb-4">
+							<tbody>
+								{baseColumns.map((c) => (
+									<tr key={c}>
+										<td className="pr-3 py-0.5 text-muted-soft align-top whitespace-nowrap">{c}</td>
+										<td className="py-0.5">{cell(c, detail.data[c])}</td>
+									</tr>
+								))}
+								<tr>
+									<td className="pr-3 py-0.5 text-muted-soft align-top">created</td>
+									<td className="py-0.5">{fmtDateTime(detail.createdAt)}</td>
+								</tr>
+							</tbody>
+						</table>
+						<h4 className="font-semibold text-sm mb-2">Audit trail — what the agent did</h4>
+						<ol className="text-xs space-y-2">
+							{(Array.isArray(detail.data.audit) ? (detail.data.audit as Array<Record<string, string>>) : []).map((s, i) => (
+								<li key={i} className="border-l-2 border-accent/40 pl-2">
+									<div className="font-medium">{s.step}</div>
+									<div className="text-muted-soft">{s.detail}</div>
+									{s.at ? <div className="text-muted-soft">{fmtDateTime(s.at)}</div> : null}
+								</li>
+							))}
+						</ol>
+					</div>
 				</div>
 			)}
 		</div>
