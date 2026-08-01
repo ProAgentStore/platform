@@ -109,18 +109,34 @@ export const CREATOR_SELECTABLE_TOOLS: ReadonlySet<string> = new Set(
  * the agent gets exactly those catalog tools plus the universal BASE facilities. This
  * is the data-driven path that lets a third-party creator scope tools without a code
  * change; the per-surface cases remain the default for agents that don't declare one.
+ *
+ * EXCEPTION (issue #119 / CODER-008): for a `coding`-surface agent the delegation tools
+ * (`CODING`: send_to_cli, read_terminal, list_coding_repos) are a hard invariant and are
+ * always added last, even over a declared allowlist — the orchestrator must never lose the
+ * ability to drive and observe its Engines.
  */
 export function toolNamesFor(capabilities?: AgentCapabilities): Set<string> {
-	const declared = capabilities?.tools;
-	if (declared && declared.length) {
-		const set = new Set<string>(BASE);
-		for (const name of declared) if (CREATOR_SELECTABLE_TOOLS.has(name)) set.add(name);
-		return set;
-	}
 	const surfaces = capabilities?.surfaces ?? [];
-	if (surfaces.includes("repo")) return new Set<string>([...BASE, ...KB_READ]);
-	if (surfaces.includes("coding")) return new Set<string>([...BASE, ...CODING]);
-	return new Set<string>(FULL);
+	const declared = capabilities?.tools;
+	let set: Set<string>;
+	if (declared && declared.length) {
+		set = new Set<string>(BASE);
+		for (const name of declared) if (CREATOR_SELECTABLE_TOOLS.has(name)) set.add(name);
+	} else if (surfaces.includes("repo")) {
+		set = new Set<string>([...BASE, ...KB_READ]);
+	} else if (surfaces.includes("coding")) {
+		set = new Set<string>([...BASE, ...CODING]);
+	} else {
+		set = new Set<string>(FULL);
+	}
+	// Invariant (issue #119 / CODER-008): a `coding`-surface agent IS the orchestrator that
+	// drives + observes its per-repo Engines. The delegation tools (send_to_cli, read_terminal,
+	// list_coding_repos) are non-negotiable and must ALWAYS be present — even when a declared
+	// `capabilities.tools` allowlist would otherwise omit them. Dropping them silently is exactly
+	// what left the orchestrator unable to send tasks (it then deflected or hallucinated success).
+	// A declared allowlist still governs every OTHER tool (a Coder can opt into KB, etc.).
+	if (surfaces.includes("coding")) for (const t of CODING) set.add(t);
+	return set;
 }
 
 export function buildAgentToolDefinitions(opts?: { emailEnabled?: boolean; capabilities?: AgentCapabilities }) {
@@ -138,6 +154,22 @@ export function buildAgentToolDefinitions(opts?: { emailEnabled?: boolean; capab
 	for (const t of [...AGENT_TOOLS, ...STORAGE_TOOLS, ...registryToolDefs()]) {
 		if (enabled.has(t.name)) toolMap.set(t.name, t);
 	}
+
+	// Guardrail (issue #119 / CODER-008): the coding delegation tools are the orchestrator's
+	// core capability. If one is enabled but has NO backing definition, it would be silently
+	// dropped from the set handed to the model — the exact regression that left the super agent
+	// unable to send tasks (it then deflected or fabricated results). Fail loudly instead so a
+	// wiring regression is caught at build time, not discovered mid-conversation.
+	if (opts?.capabilities?.surfaces?.includes("coding")) {
+		const missing = CODING.filter((name) => enabled.has(name) && !toolMap.has(name));
+		if (missing.length) {
+			throw new Error(
+				`Coder orchestrator is missing delegation tool definition(s): ${missing.join(", ")}. ` +
+					"The agent cannot drive/observe its Engines — check STORAGE_TOOLS registration in lib/storage-tools.ts.",
+			);
+		}
+	}
+
 	return [...toolMap.values()].map((t) => ({
 		type: "function" as const,
 		function: {

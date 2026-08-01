@@ -6,6 +6,8 @@ import { AgentStorageEngine } from "../agent-storage.js";
 import type { CollectionField } from "../agent-storage-types.js";
 import type { ToolCallResult, ToolDef } from "./tools.js";
 import { listRepos, listSessions, getActiveSessionForRepo } from "./coding-store.js";
+import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS } from "./runner-client.js";
+import { lastTerminal } from "./coding-timeline.js";
 import type { Env } from "../types.js";
 
 export interface StorageToolCallRequest {
@@ -627,21 +629,25 @@ export async function executeStorageTool(
 				if (!repo) return fail(call.name, `Repo "${repoName}" not found. Use list_coding_repos.`);
 				const session = await getActiveSessionForRepo(ctx.env as Env, ctx.agentId, ctx.userId, repo.id);
 				if (!session) return fail(call.name, `No active session for "${repoName}".`);
-				try {
-					const relay = (ctx.env as Env).RELAY;
-					if (!relay) return fail(call.name, "Runner not connected");
-					const stub = relay.get(relay.idFromName(ctx.agentId));
-					// Runner expects POST /coding/capture with { sessionId } body
-					const res = await stub.fetch(new Request("https://relay/command", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ method: "POST", path: "/coding/capture", body: { sessionId: session.id } }),
-					}));
-					const data = await res.json() as { pane?: string; runState?: string };
-					return ok(call.name, `[${data.runState || "unknown"}]\n${(data.pane || "(empty)").slice(-3000)}`);
-				} catch {
-					return fail(call.name, "Runner offline — terminal not available");
-				}
+				// Resolve the LIVE runner on the session's node (config.runnerNode-aware), the SAME
+				// path the chat brain uses. The old code addressed a node-less RelayDO by agentId,
+				// which never matched the runner's node-scoped relay — so capture returned an empty
+				// pane and the orchestrator kept reporting "(empty)". (issue #119 / CODER-008)
+				const conn = await getBoundRunnerConn(ctx.env as Env, ctx.agentId, ctx.userId).catch(() => null);
+				const snap = conn
+					? await callRunner<{ pane?: string; runState?: string }>(
+							conn,
+							"/coding/capture",
+							{ sessionId: session.id },
+							{ timeoutMs: READ_TIMEOUT_MS },
+						).catch(() => null)
+					: null;
+				if (snap) return ok(call.name, `[live · ${snap.runState || "unknown"}]\n${(snap.pane || "(empty)").slice(-3000)}`);
+				// Runner offline / capture miss: fall back to the last saved snapshot, clearly labelled
+				// so the orchestrator never presents stale scrollback as live activity.
+				const tail = await lastTerminal(ctx.env as Env, session.id).catch(() => null);
+				if (tail) return ok(call.name, `[last snapshot — runner offline]\n${tail.slice(-3000)}`);
+				return fail(call.name, "Runner offline — no live terminal and no saved snapshot. Start it with `pags up`.");
 			}
 
 			case "send_to_cli": {
@@ -655,16 +661,18 @@ export async function executeStorageTool(
 				if (!rRepo) return fail(call.name, `Repo "${rName}" not found.`);
 				const rSession = await getActiveSessionForRepo(ctx.env as Env, ctx.agentId, ctx.userId, rRepo.id);
 				if (!rSession) return fail(call.name, `No active session for "${rName}".`);
+				// Route to the LIVE runner node (same helper as read_terminal / the chat brain) instead
+				// of a node-less relay lookup, so the instruction actually reaches the Engine. (CODER-008)
+				const rConn = await getBoundRunnerConn(ctx.env as Env, ctx.agentId, ctx.userId).catch(() => null);
+				if (!rConn) return fail(call.name, "Runner offline — cannot send. Start it with `pags up`.");
 				try {
-					const relay = (ctx.env as Env).RELAY;
-					if (!relay) return fail(call.name, "Runner not connected");
-					const stub = relay.get(relay.idFromName(ctx.agentId));
 					// Runner expects POST /coding/act with { sessionId, action }
-					await stub.fetch(new Request("https://relay/command", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ method: "POST", path: "/coding/act", body: { sessionId: rSession.id, action: { kind: "message", text: msg } } }),
-					}));
+					await callRunner(
+						rConn,
+						"/coding/act",
+						{ sessionId: rSession.id, action: { kind: "message", text: msg } },
+						{ timeoutMs: READ_TIMEOUT_MS },
+					);
 					return ok(call.name, `Sent to ${rName}: "${msg.slice(0, 100)}"`);
 				} catch {
 					return fail(call.name, "Runner offline — cannot send");

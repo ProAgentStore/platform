@@ -130,10 +130,16 @@ describe("agent tool definition helpers", () => {
 		expect(names.has("read_terminal")).toBe(false);
 	});
 
-	it("declared allowlist wins even against a surface (e.g. a coding agent opting into KB)", () => {
+	it("a declared allowlist governs other tools but NEVER drops coding delegation (CODER-008)", () => {
+		// A coding agent can opt into KB via a declared allowlist, but the delegation tools
+		// (send_to_cli / read_terminal / list_coding_repos) are a hard invariant for the
+		// `coding` surface and are always present — losing them left the orchestrator unable
+		// to drive its Engines (issue #119).
 		const names = toolNamesFor({ ...caps(["coding"]), tools: ["search_knowledge"] });
-		expect(names.has("search_knowledge")).toBe(true); // override
-		expect(names.has("read_terminal")).toBe(false); // not declared → not granted
+		expect(names.has("search_knowledge")).toBe(true); // declared override still applies
+		expect(names.has("read_terminal")).toBe(true); // invariant: always granted for coding
+		expect(names.has("send_to_cli")).toBe(true); // invariant: delegation never dropped
+		expect(names.has("list_coding_repos")).toBe(true);
 		expect(names.has("read_memory")).toBe(true); // BASE
 	});
 
