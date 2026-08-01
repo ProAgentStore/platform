@@ -105,3 +105,35 @@ describe("tmux connector", () => {
 		expect(r.content).toMatch(/isn't permitted|not permitted|consent/i);
 	});
 });
+
+describe("meta connector (WhatsApp + Instagram)", () => {
+	it("registers the meta write tools", () => {
+		const names = registryToolNameSet();
+		expect(names.has("whatsapp_send_message")).toBe(true);
+		expect(names.has("instagram_send_dm")).toBe(true);
+		expect(getRegistryTool("whatsapp_send_message")?.scope).toBe("write");
+		expect(getRegistryTool("instagram_send_dm")?.scope).toBe("write");
+	});
+
+	it("groups meta tools under the meta connector", () => {
+		const grp = registryConnectorGroups().find((g) => g.connector === "meta");
+		expect(grp?.tools).toContain("whatsapp_send_message");
+	});
+
+	it("WhatsApp send is write-gated without consent (fail-closed)", async () => {
+		const r = await runRegistryTool("whatsapp_send_message", { env: envWithConsent(false), userId: "u1", instanceId: "i1" }, { to: "+14155552671", text: "hi" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/isn't permitted|consent/i);
+	});
+
+	it("with consent but Meta not configured → clear not-configured error (no throw)", async () => {
+		const r = await runRegistryTool("whatsapp_send_message", { env: envWithConsent(true), userId: "u1", instanceId: "i1" }, { to: "+14155552671", text: "hi" });
+		expect(r.content).not.toMatch(/isn't permitted/i);
+		expect(r.content).toMatch(/not configured/i);
+	});
+
+	it("Instagram DM with consent but not configured → clear not-configured error", async () => {
+		const r = await runRegistryTool("instagram_send_dm", { env: envWithConsent(true), userId: "u1", instanceId: "i1" }, { recipient_id: "123", text: "hi" });
+		expect(r.content).toMatch(/not configured/i);
+	});
+});

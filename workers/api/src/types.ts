@@ -58,6 +58,15 @@ export interface Env {
 	ADMIN_ALLOWLIST?: string;
 	CF_ACCESS_TEAM_DOMAIN?: string;
 	CF_ACCESS_AUD?: string;
+	/**
+	 * Meta connector (WhatsApp Business Cloud + Instagram Messaging). Platform-level
+	 * business credentials; inert until set (after Meta app + business setup + review).
+	 * META_ACCESS_TOKEN: system-user / long-lived token. WHATSAPP_PHONE_NUMBER_ID: the
+	 * WABA phone-number id. META_IG_ID: the connected Instagram business account id.
+	 */
+	META_ACCESS_TOKEN?: string;
+	WHATSAPP_PHONE_NUMBER_ID?: string;
+	META_IG_ID?: string;
 }
 
 export interface SessionPayload {

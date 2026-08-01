@@ -6,6 +6,7 @@
 import type { Env } from "../types.js";
 import { GITHUB_TOOLS } from "./connectors/github.js";
 import { TMUX_TOOLS } from "./connectors/tmux.js";
+import { META_TOOLS } from "./connectors/meta.js";
 import { hasConsent } from "./connector-consent.js";
 
 export interface RegistryToolCtx {
@@ -34,7 +35,7 @@ export interface RegistryTool {
 
 // All connectors' tools, keyed by name. Add a connector = add its tools array here.
 const REGISTRY: ReadonlyMap<string, RegistryTool> = new Map(
-	[...GITHUB_TOOLS, ...TMUX_TOOLS].map((t) => [t.name, t] as const),
+	[...GITHUB_TOOLS, ...TMUX_TOOLS, ...META_TOOLS].map((t) => [t.name, t] as const),
 );
 
 export function getRegistryTool(name: string): RegistryTool | undefined {
