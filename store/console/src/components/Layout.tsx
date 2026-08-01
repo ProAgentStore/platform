@@ -73,21 +73,23 @@ export default function Layout() {
 				{/* Nav links — hidden when instance detail injects its controls */}
 				{!navHidden && (
 					<>
-						<nav className="flex items-center gap-0.5 shrink-0 min-w-0" aria-label="Primary">
+						{/* flex-1 + overflow-x-auto so the icons SCROLL horizontally when there isn't
+						    room (many nav items on a narrow phone) instead of being clipped or pushing
+						    the avatar/menu off-screen. Scrollbar hidden for a clean bar. */}
+						<nav className="flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto overflow-y-hidden scrollbar-none" aria-label="Primary">
 							{navItems.map(({ to, label, icon: Icon }) => (
 								<NavLink
 									key={to}
 									to={to}
 									title={label}
 									aria-label={label}
-									className={({ isActive }) => `h-8 w-7 sm:w-8 lg:w-auto lg:h-auto lg:px-2.5 px-0 py-1.5 rounded-md no-underline whitespace-nowrap transition-all flex items-center justify-center gap-1.5 text-[0.82rem] ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}
+									className={({ isActive }) => `shrink-0 h-8 w-7 sm:w-8 lg:w-auto lg:h-auto lg:px-2.5 px-0 py-1.5 rounded-md no-underline whitespace-nowrap transition-all flex items-center justify-center gap-1.5 text-[0.82rem] ${isActive ? "text-ink bg-line font-bold" : "text-muted hover:text-ink hover:bg-line"}`}
 								>
 									<Icon size={15} className="shrink-0" />
 									<span className="hidden lg:inline">{label}</span>
 								</NavLink>
 							))}
 						</nav>
-						<div className="flex-1 min-w-0" />
 					</>
 				)}
 

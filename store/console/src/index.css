@@ -173,6 +173,15 @@
 	}
 }
 
+/* Hide the scrollbar on horizontal-scroll strips (nav, tab bars) while keeping them
+ * scrollable — used across the app; was referenced but never defined until now. */
+@utility scrollbar-none {
+	scrollbar-width: none;
+	&::-webkit-scrollbar {
+		display: none;
+	}
+}
+
 /* ── Mobile ── */
 @layer base {
 	@media (max-width: 640px) {
