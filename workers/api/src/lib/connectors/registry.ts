@@ -8,6 +8,7 @@ import { GITHUB_TOOLS } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { META_TOOLS } from "./meta.js";
 import { TMUX_TOOLS } from "./tmux.js";
+import { WEB_SEARCH_TOOLS } from "./web-search.js";
 
 export interface Connector {
 	/** Stable id, also the `connector` stamped on its tools and the grants/consent key. */
@@ -79,6 +80,17 @@ export const CONNECTORS: Connector[] = [
 		scopes: { read: true, write: true },
 		grantModel: "user",
 		tools: HTTP_TOOLS,
+	},
+	{
+		id: "web-search",
+		label: "Web Search (Google Custom Search)",
+		// auth:"token", no tokenEnv → connectorClient.token() reads the user's vault key
+		// (user_api_keys, provider "web-search") — a separate slot from the http connector's
+		// key. web_search injects it into the request URL itself. Read-only (search only).
+		auth: "token",
+		scopes: { read: true, write: false },
+		grantModel: "user",
+		tools: WEB_SEARCH_TOOLS,
 	},
 ];
 

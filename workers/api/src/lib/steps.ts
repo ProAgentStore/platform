@@ -165,6 +165,76 @@ async function probeReachable(url: string, timeoutMs: number): Promise<{ ok: boo
 	return attempt(); // one retry on a transport error / timeout
 }
 
+// ── 7. contact extraction (pure) ──────────────────────────────────────────────
+// Best-effort scrape of socials + email out of web_search results (issue #99). Given the
+// [{title, link, snippet}] rows web_search returns, pull the first Instagram handle URL,
+// Facebook page URL, and email address seen. PURE (no I/O) — it only reads the text the
+// search connector already fetched, so there's no extra network / SSRF surface here.
+//
+// Precision note (returned in the output): matches are heuristic. A profile/page link is
+// the FIRST instagram.com/… or facebook.com/… that isn't a bare share/login/tag path; the
+// email is the first RFC-ish local@domain found in any title/snippet/link (or a mailto:).
+// It can miss (business has no linked socials) or mis-attribute (a shared/aggregator link),
+// so downstream should treat these as candidates, not verified truth.
+const IG_RE = /https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9._]+)(?:\/|\?|$)/gi;
+const FB_RE = /https?:\/\/(?:www\.|m\.|web\.)?facebook\.com\/([A-Za-z0-9.\-/]+?)(?:\/|\?|$)/gi;
+const MAILTO_RE = /mailto:([^"'\s>?]+@[^"'\s>?]+)/gi;
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+
+// instagram.com/<seg> paths that are NOT a profile (share/discovery/auth surfaces).
+const IG_NON_PROFILE = new Set(["p", "reel", "reels", "explore", "stories", "accounts", "tv", "direct", "about"]);
+// facebook.com/<seg> first-segment paths that are NOT a page (share/auth/apps).
+const FB_NON_PAGE = new Set(["sharer", "sharer.php", "share", "login", "login.php", "dialog", "tr", "plugins", "help", "policies", "watch", "events", "groups", "marketplace", "profile.php"]);
+
+/** First profile-shaped instagram.com URL across the given text blobs, else null. */
+function firstInstagram(texts: string[]): string | null {
+	for (const t of texts) {
+		for (const m of t.matchAll(IG_RE)) {
+			const handle = m[1];
+			if (!IG_NON_PROFILE.has(handle.toLowerCase())) return `https://instagram.com/${handle}`;
+		}
+	}
+	return null;
+}
+
+/** First page-shaped facebook.com URL across the given text blobs, else null. */
+function firstFacebook(texts: string[]): string | null {
+	for (const t of texts) {
+		for (const m of t.matchAll(FB_RE)) {
+			const path = m[1].replace(/\/+$/, "");
+			const firstSeg = path.split("/")[0].toLowerCase();
+			if (!FB_NON_PAGE.has(firstSeg) && path.length > 1) return `https://facebook.com/${path}`;
+		}
+	}
+	return null;
+}
+
+/** First email address (mailto: preferred) across the given text blobs, else null. */
+function firstEmail(texts: string[]): string | null {
+	for (const t of texts) {
+		MAILTO_RE.lastIndex = 0;
+		const mailto = MAILTO_RE.exec(t);
+		if (mailto) return mailto[1].toLowerCase();
+	}
+	for (const t of texts) {
+		EMAIL_RE.lastIndex = 0;
+		const m = EMAIL_RE.exec(t);
+		if (m) return m[0].toLowerCase();
+	}
+	return null;
+}
+
+/** Flatten a web_search-style result row (or arbitrary record) into searchable text blobs. */
+function textsOf(item: unknown): string[] {
+	if (typeof item === "string") return [item];
+	if (!isRecord(item)) return [];
+	const out: string[] = [];
+	for (const v of Object.values(item)) {
+		if (typeof v === "string") out.push(v);
+	}
+	return out;
+}
+
 // ── the catalog ───────────────────────────────────────────────────────────────
 export const STEP_TOOLS: ToolDef[] = [
 	// 1 ─ map
@@ -425,6 +495,44 @@ export const STEP_TOOLS: ToolDef[] = [
 				state: byType("administrative_area_level_1"),
 				locality: byType("locality") ?? byType("postal_town"),
 				formatted: typeof top.formatted_address === "string" ? top.formatted_address : null,
+			};
+			return ok(JSON.stringify(out, null, 2));
+		},
+	},
+
+	// 7 ─ extract_contacts
+	{
+		name: "extract_contacts",
+		tier: "standard",
+		scope: "read",
+		description:
+			"Extract socials + email from web_search results (pure, no I/O). Scans the [{title,link,snippet}] rows and pulls the first Instagram profile URL, Facebook page URL, and email address seen → {instagram, facebook, email} (missing fields are null). The companion to the web_search connector (#99): web_search a business name+suburb, then extract_contacts populates the instagram/facebook/email columns. Best-effort/heuristic — matches are candidates, not verified (precision noted in the output).",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				items: { type: "array", description: "web_search result rows (or any records/strings with links + text to scan)." },
+				fields: { type: "array", description: 'Subset of ["instagram","facebook","email"] to extract (default all three).' },
+			},
+			required: [],
+		},
+		handler: async (_ctx, input) => {
+			// Accept either the raw web_search result rows, or its {results:[…]} envelope.
+			const raw = isRecord(input.items) && Array.isArray((input.items as Record<string, unknown>).results)
+				? (input.items as Record<string, unknown>).results
+				: input.items;
+			const items = asArray(raw);
+			const want = new Set(
+				Array.isArray(input.fields) && input.fields.length
+					? (input.fields as string[])
+					: ["instagram", "facebook", "email"],
+			);
+			// One flat pool of text blobs across every row (link + title + snippet).
+			const texts = items.flatMap(textsOf);
+			const out = {
+				instagram: want.has("instagram") ? firstInstagram(texts) : null,
+				facebook: want.has("facebook") ? firstFacebook(texts) : null,
+				email: want.has("email") ? firstEmail(texts) : null,
+				precision: "best-effort" as const,
 			};
 			return ok(JSON.stringify(out, null, 2));
 		},
