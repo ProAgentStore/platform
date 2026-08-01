@@ -35,26 +35,31 @@ export async function requireUser(
  *   1. the role baked into the session token (fast path), then
  *   2. a LIVE `users.roles` read — so a freshly granted/revoked admin takes effect
  *      immediately without waiting for the 30-day token to expire, then
- *   3. the ADMIN_ALLOWLIST env (break-glass, by uid) — bootstraps the first admin.
+ *   3. the ADMIN_ALLOWLIST env (break-glass) — bootstraps the first admin. Matches
+ *      the session uid OR the user's github_login/email, so the operator can be
+ *      promoted with a value they actually know (not the opaque uid hash) even if
+ *      the seed migration ran before their user row existed.
  */
 export async function isAdmin(
 	c: Context<{ Bindings: Env }>,
 	session: SessionPayload,
 ): Promise<boolean> {
 	if (session.roles.includes("admin")) return true;
-	try {
-		const row = await c.env.DB.prepare("SELECT roles FROM users WHERE id = ?1")
-			.bind(session.uid)
-			.first<{ roles: string }>();
-		if (row?.roles && (JSON.parse(row.roles) as string[]).includes("admin")) return true;
-	} catch {
-		// fall through to allowlist
-	}
 	const allow = (c.env.ADMIN_ALLOWLIST || "")
 		.split(",")
-		.map((s) => s.trim())
+		.map((s) => s.trim().toLowerCase())
 		.filter(Boolean);
-	return allow.includes(session.uid);
+	if (allow.includes(session.uid.toLowerCase())) return true;
+	try {
+		const row = await c.env.DB.prepare("SELECT roles, github_login FROM users WHERE id = ?1")
+			.bind(session.uid)
+			.first<{ roles: string; github_login: string }>();
+		if (row?.roles && (JSON.parse(row.roles) as string[]).includes("admin")) return true;
+		if (row?.github_login && allow.includes(row.github_login.toLowerCase())) return true;
+	} catch {
+		// DB unavailable — uid allowlist above is the only remaining path
+	}
+	return false;
 }
 
 /** Require 'admin' role (see isAdmin for the resolution order). */

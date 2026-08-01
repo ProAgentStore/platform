@@ -20,6 +20,10 @@ GITHUB_ORG = "ProAgentStore"
 # the sole user. FLIP TO "false" (or remove) before onboarding real users → BYOK-only.
 # LLM chat is always BYOK regardless.
 PLATFORM_AI_ENABLED = "true"
+# Admin/operator portal (issue #28): break-glass admin allowlist. Matches session
+# uid OR github_login/email (see isAdmin in lib/auth.ts), so the operator is admin
+# regardless of when the seed migration ran. Non-secret (identifiers only).
+ADMIN_ALLOWLIST = "serge.the.dev@gmail.com,serge-ivo"
 # Billing is intentionally disabled on PAGS for now; PAS owns the paid launch.
 # STRIPE_PRICE_ID = "price_1TsohPB11Tib1JCQ1fVbUG5q"
 # PAYWALL_ENFORCE = "1"

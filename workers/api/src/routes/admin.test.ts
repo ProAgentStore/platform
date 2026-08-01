@@ -11,7 +11,7 @@ const TEST_SECRET = "test-secret";
  * returns for the live-role check; `allowlist` seeds ADMIN_ALLOWLIST; `audit` is
  * the rows the audit query returns.
  */
-function testApp(opts: { dbRoles?: string | null; allowlist?: string; audit?: unknown[]; usageRows?: unknown[]; platformAiEnabled?: boolean; userRows?: unknown[]; userCount?: number; userDetail?: unknown } = {}) {
+function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allowlist?: string; audit?: unknown[]; usageRows?: unknown[]; platformAiEnabled?: boolean; userRows?: unknown[]; userCount?: number; userDetail?: unknown } = {}) {
 	const app = new Hono();
 	app.route("/v1/admin", adminRoutes);
 	app.onError((err, c) => {
@@ -20,7 +20,7 @@ function testApp(opts: { dbRoles?: string | null; allowlist?: string; audit?: un
 	});
 	// Route a query to the right canned result by inspecting its SQL.
 	const firstFor = (sql: string) => {
-		if (sql.includes("SELECT roles FROM users")) return { roles: opts.dbRoles ?? null };
+		if (sql.includes("SELECT roles, github_login FROM users")) return { roles: opts.dbRoles ?? null, github_login: opts.dbLogin ?? null };
 		if (sql.includes("COUNT(*) AS n FROM users")) return { n: opts.userCount ?? (opts.userRows?.length ?? 0) };
 		if (sql.includes("FROM users u WHERE u.id")) return opts.userDetail ?? null; // getUserDetail main row
 		return null;
@@ -86,6 +86,12 @@ describe("GET /v1/admin/me", () => {
 	it("honors the ADMIN_ALLOWLIST break-glass fallback by uid", async () => {
 		const { app, env } = testApp({ dbRoles: '["user"]', allowlist: "u4, u9" });
 		const res = await req(app, env, "/v1/admin/me", await token("u4", ["user"]));
+		expect(await res.json()).toEqual({ admin: true });
+	});
+
+	it("honors ADMIN_ALLOWLIST by github_login/email (case-insensitive)", async () => {
+		const { app, env } = testApp({ dbRoles: '["user"]', dbLogin: "Serge-Ivo", allowlist: "serge.the.dev@gmail.com,serge-ivo" });
+		const res = await req(app, env, "/v1/admin/me", await token("someHashUid", ["user"]));
 		expect(await res.json()).toEqual({ admin: true });
 	});
 
