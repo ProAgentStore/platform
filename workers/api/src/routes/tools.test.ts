@@ -1,0 +1,72 @@
+import { Hono } from "hono";
+import { describe, expect, it } from "vitest";
+import { HttpError } from "../lib/auth.js";
+import { signSession } from "../lib/session.js";
+import { toolRoutes } from "./tools.js";
+
+const SECRET = "test-secret";
+
+function testApp(opts: { owned?: boolean } = { owned: true }) {
+	const app = new Hono();
+	app.route("/v1/instances", toolRoutes);
+	app.onError((err, c) => {
+		if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
+		throw err;
+	});
+	const env = {
+		SESSION_SIGNING_KEY: SECRET,
+		// githubAppConfigured() → false (no GITHUB_APP_ID), so github tools return a
+		// clean "not connected" result instead of hitting the network.
+		DB: {
+			prepare(sql: string) {
+				return {
+					bind() {
+						return {
+							first: async () =>
+								sql.includes("FROM agent_instances") && opts.owned
+									? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}", created_at: "", updated_at: "" }
+									: null,
+						};
+					},
+				};
+			},
+		},
+	};
+	return { app, env };
+}
+
+const tok = (uid: string) => signSession(uid, SECRET, { roles: ["user"] });
+const req = (app: Hono, env: unknown, path: string, init: RequestInit, t: string) =>
+	app.request(path, { ...init, headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json", ...(init.headers || {}) } }, env);
+
+describe("GET /v1/instances/:id/tools", () => {
+	it("404s when the instance isn't owned", async () => {
+		const { app, env } = testApp({ owned: false });
+		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+	it("lists the connector tools for the owner", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.tools.map((t: any) => t.name)).toContain("github_workflow_runs");
+	});
+});
+
+describe("POST /v1/instances/:id/tools/:name", () => {
+	it("404s an unknown tool", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/tools/nope", { method: "POST", body: "{}" }, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+	it("invokes a github tool and returns its result (not connected → success:false)", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/tools/github_workflow_runs", { method: "POST", body: JSON.stringify({ repo: "owner/name" }) }, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.name).toBe("github_workflow_runs");
+		expect(body.success).toBe(false);
+		expect(body.content).toMatch(/not connected|not configured/i);
+	});
+});

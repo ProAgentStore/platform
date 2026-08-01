@@ -32,6 +32,7 @@ import { terminalRoutes } from "./routes/terminals.js";
 import { usageRoutes } from "./routes/usage.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
+import { toolRoutes } from "./routes/tools.js";
 import { cloudflareAccessGate } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import type { Env } from "./types.js";
@@ -109,6 +110,7 @@ app.route("/v1/agents", exportRoutes);
 app.route("/v1/agents", storageRoutes); // /v1/agents/:id/collections, /files, /search, /activity, /summaries
 app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collections, /files, /search, /activity
 app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /sessions (AgentCoder port)
+app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
 app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/terminals", terminalRoutes); // platform: /v1/terminals/nodes — all the user's CLIs

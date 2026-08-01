@@ -77,6 +77,48 @@ export function registerInstanceTools(
 	 *  agents they actually have (e.g. a Repo Chat user never sees apply_to_job). */
 	groups: Set<string>,
 ): void {
+	// Connector/registry tools (issue #87): list + invoke over MCP so external clients
+	// get the same connector capabilities (e.g. GitHub) as the agent runtime. One
+	// definition in the API registry → surfaced here via a thin proxy.
+	server.tool(
+		"list_instance_tools",
+		"List the connector tools (e.g. GitHub) callable on one of your instances, with their input schemas.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/tools`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+	server.tool(
+		"call_instance_tool",
+		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. `input` is the tool's argument object — see list_instance_tools for schemas.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			tool: z.string().describe("Tool name, e.g. github_list_issues"),
+			input: z.record(z.any()).optional().describe("The tool's input arguments object"),
+		},
+		async ({ token, instance_id, tool, input }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			// Gated as a write: this is a generic invoker that will include write connector
+			// tools later; MCP_READ_ONLY mode should block it. Reads still work via the agent.
+			const denied = await requirePermission(safetyFor(token), "write", "call_instance_tool", { tool });
+			if (denied) return denied;
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/tools/${encodeURIComponent(tool)}`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify(input || {}) },
+				env,
+			);
+			return jsonText(data);
+		},
+	);
 	server.tool(
 		"subscribe_agent",
 		"Subscribe to a published agent and create your own private runnable instance. Use this before chat_with_instance for real user runs.",
