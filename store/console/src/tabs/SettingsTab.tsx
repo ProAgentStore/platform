@@ -5,6 +5,28 @@ import type { SettingsField } from "../lib/types";
 /** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
 type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean; nodeOnline?: boolean }> };
 
+/** One of the user's machines (from /v1/terminals/nodes) — used to render the "Runs on" tiles. */
+type Machine = {
+	node: string;
+	placement?: string;
+	runnerVersion?: string;
+	lastSeenAt?: string | null;
+	connected: boolean;
+	instances?: Array<{ instanceId: string; connected: boolean; bound?: boolean }>;
+};
+
+/** Compact relative time for a machine's last-seen. */
+function agoShort(iso?: string | null): string {
+	if (!iso) return "never";
+	const t = Date.parse(iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`);
+	if (Number.isNaN(t)) return "";
+	const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+	if (s < 60) return `${s}s ago`;
+	if (s < 3600) return `${Math.round(s / 60)}m ago`;
+	if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+	return `${Math.round(s / 86400)}d ago`;
+}
+
 interface Props {
 	instanceId: string;
 	isApply: boolean;
@@ -50,22 +72,25 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [runtimeInfo, setRuntimeInfo] = useState<Record<string, unknown> | null>(null);
 	// Node binding: which machine this instance runs on ("" = automatic).
 	const [runnerNode, setRunnerNode] = useState("");
-	const [runnerNodes, setRunnerNodes] = useState<string[]>([]);
 	const [runnerNodesDetail, setRunnerNodesDetail] = useState<Array<{ node: string; connected: boolean; nodeOnline?: boolean }>>([]);
 	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
 	const [runnerRefreshing, setRunnerRefreshing] = useState(false);
+	const [machines, setMachines] = useState<Machine[]>([]);
 
 	// Re-check the runner (live RelayDO truth) on demand — used by the Refresh button and
 	// the tab-focus re-check, so a just-started/stopped `pags up` reflects without a reload.
+	// Also pulls the full machine list (all your `pags up` nodes) for the "Runs on" tiles.
 	const refreshRunner = useCallback(async () => {
 		setRunnerRefreshing(true);
 		try {
-			const [st, rn] = await Promise.all([
+			const [st, rn, tn] = await Promise.all([
 				api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`).catch(() => null),
 				api<RunnerNodeResp>(`/v1/instances/${instanceId}/runner-node`).catch(() => null),
+				api<{ nodes: Machine[] }>(`/v1/terminals/nodes`).catch(() => null),
 			]);
 			if (st) setRuntimeInfo(st);
-			if (rn) { setRunnerNode(rn.runnerNode || ""); setRunnerNodes(rn.nodes || []); setRunnerNodesDetail(rn.nodesDetail || []); }
+			if (rn) { setRunnerNode(rn.runnerNode || ""); setRunnerNodesDetail(rn.nodesDetail || []); }
+			if (tn) setMachines(tn.nodes || []);
 		} finally { setRunnerRefreshing(false); }
 	}, [instanceId]);
 
@@ -80,6 +105,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const relayInfo = (runtimeInfo as { relay?: { connected?: boolean; runnerNode?: string | null } } | null)?.relay;
 	const agentOnline = relayInfo?.connected === true || pinnedDetail?.connected === true;
 	const agentNode = relayInfo?.runnerNode || runnerNode || "";
+	// The machines to render as "Runs on" tiles: all your `pags up` nodes, plus the pinned
+	// one if it's dropped off the live list (so you always see what this agent is bound to).
+	const machinesToShow: Machine[] = runnerNode && !machines.some((m) => m.node === runnerNode)
+		? [{ node: runnerNode, connected: false, instances: [] }, ...machines]
+		: machines;
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
 	const [sensitivity, setSensitivity] = useState(1);
@@ -144,8 +174,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			try {
 				const d = await api<RunnerNodeResp>(`/v1/instances/${instanceId}/runner-node`);
 				setRunnerNode(d.runnerNode || "");
-				setRunnerNodes(d.nodes || []);
 				setRunnerNodesDetail(d.nodesDetail || []);
+			} catch {}
+			try {
+				const d = await api<{ nodes: Machine[] }>(`/v1/terminals/nodes`);
+				setMachines(d.nodes || []);
 			} catch {}
 			try {
 				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }> }>(`/v1/instances/${instanceId}/translation`);
@@ -636,43 +669,62 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					)}
 				</div>
 
-				{/* Node binding — pin this agent to a specific machine (CLI). Platform-wide:
-				    any agent can be bound to any of your connected nodes. */}
+				{/* Node binding — ONE machine per agent (no auto-any). A tile per machine you run
+				    `pags up` on; click one to bind this agent there. */}
 				<div className="mt-3 pt-3 border-t border-line/60">
 					<label className="block text-sm font-semibold mb-1">Runs on</label>
-					<select
-						value={runnerNode}
-						onChange={(e) => saveRunnerNode(e.target.value)}
-						className="w-full sm:w-auto bg-panel border border-line rounded-lg px-2.5 py-1.5 text-sm"
-					>
-						<option value="">Automatic (any connected machine)</option>
-						{/* Pinned node may not be in this agent's registered list — keep it selectable + labeled. */}
-						{runnerNode && !runnerNodes.includes(runnerNode) && <option value={runnerNode}>{runnerNode}{nodeLabel(pinnedDetail)}</option>}
-						{runnerNodes.map((n) => {
-							// Per-machine label: distinguish machine-offline from "machine up, this agent not
-							// attached" — the same RelayDO truth the Terminals page uses, just labeled here.
-							return <option key={n} value={n}>{n}{nodeLabel(runnerNodesDetail.find((d) => d.node === n))}</option>;
-						})}
-					</select>
-					<p className="text-xs text-muted-soft mt-1">
-						Pin this agent to one of your machines running <code className="text-accent">pags up</code>. Its runner tasks (chat tools, apply, coding) route there.
-						{runnerNodes.length === 0 && !runnerNode && <> No machines connected yet — see <span className="text-accent">Terminals</span>.</>}
+					<p className="text-xs text-muted-soft mb-2">
+						Bind this agent to exactly one machine running <code className="text-accent">pags up</code> — its runner tasks (chat tools, apply, coding) route there.
 					</p>
-					{/* Pinned machine not serving THIS agent. Two distinct cases, distinct guidance:
-					    (a) machine is online for other agents → it just hasn't attached this one (restart pags up);
-					    (b) machine is fully offline → start pags up on it (or repin). */}
+					{machinesToShow.length === 0 ? (
+						<div className="text-xs text-muted px-3 py-3 border border-dashed border-line rounded-lg">
+							No machines connected yet. Run <code className="text-accent">pags up</code> on a machine — it appears here and on the <span className="text-accent">Terminals</span> page.
+						</div>
+					) : (
+						<div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+							{machinesToShow.map((m) => {
+								const attached = (m.instances || []).some((i) => i.instanceId === instanceId && i.connected);
+								const machineOnline = m.connected;
+								const pinned = runnerNode === m.node;
+								const tone = attached ? "green" : machineOnline ? "amber" : "off";
+								const statusText = attached ? "Attached · online" : machineOnline ? "Online · agent not attached" : "Offline";
+								return (
+									<button
+										key={m.node}
+										type="button"
+										onClick={() => saveRunnerNode(m.node)}
+										aria-pressed={pinned}
+										title={pinned ? "This agent is bound to this machine" : "Bind this agent to this machine"}
+										className={`text-left rounded-xl border p-3 transition-colors ${pinned ? "border-accent bg-accent/10" : "border-line bg-paper hover:border-accent/60"}`}
+									>
+										<div className="flex items-center gap-2 min-w-0">
+											<span className={`w-2.5 h-2.5 rounded-full shrink-0 ${tone === "green" ? "bg-green" : tone === "amber" ? "bg-amber-500" : "bg-muted-soft"}`} />
+											<span className="font-semibold text-sm truncate">{m.node}</span>
+											{pinned && <span className="ml-auto shrink-0 text-[0.6rem] font-bold uppercase tracking-wide text-accent border border-accent/40 rounded px-1.5 py-0.5">Pinned</span>}
+										</div>
+										<div className={`text-[0.7rem] mt-1 ${tone === "green" ? "text-green" : tone === "amber" ? "text-amber-500" : "text-muted-soft"}`}>{statusText}</div>
+										<div className="text-[0.7rem] text-muted-soft mt-0.5">
+											{m.placement === "managed" ? "cloud" : "local"}{m.runnerVersion ? ` · v${m.runnerVersion}` : ""} · seen {agoShort(m.lastSeenAt)}
+										</div>
+									</button>
+								);
+							})}
+						</div>
+					)}
+					{/* Pinned machine not serving THIS agent → guidance (machine-online vs fully-offline). */}
 					{runnerNode && pinnedDetail && !pinnedDetail.connected && (
 						pinnedNodeOnline ? (
-							<p className="text-xs text-amber-500 mt-0.5">
-								⚠ <b>{runnerNode}</b> is online, but this agent isn't attached to it yet. Restart <code className="text-accent">pags up</code> on that machine (it picks up newly-subscribed agents on start), or pick another machine above.
+							<p className="text-xs text-amber-500 mt-2">
+								⚠ <b>{runnerNode}</b> is online, but this agent isn't attached to it yet. Restart <code className="text-accent">pags up</code> on it (it attaches newly-subscribed agents on start).
 							</p>
 						) : (
-							<p className="text-xs text-amber-500 mt-0.5">
-								⚠ <b>{runnerNode}</b> isn't connected. This agent's runner tasks won't run until you start <code className="text-accent">pags up</code> on it, or pick another machine above.
+							<p className="text-xs text-amber-500 mt-2">
+								⚠ <b>{runnerNode}</b> isn't connected. This agent's runner tasks won't run until you start <code className="text-accent">pags up</code> on it, or pick another machine.
 							</p>
 						)
 					)}
-					{runnerNodeMsg && <p className="text-xs text-muted mt-0.5">{runnerNodeMsg}</p>}
+					{!runnerNode && machinesToShow.length > 0 && <p className="text-xs text-amber-500 mt-2">Pick a machine above to run this agent on.</p>}
+					{runnerNodeMsg && <p className="text-xs text-muted mt-1">{runnerNodeMsg}</p>}
 				</div>
 			</div>
 
@@ -1157,13 +1209,4 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			</div>
 		</div>
 	);
-}
-
-/** Label a machine in the "Runs on" picker from its live state: attached (blank),
- *  online but this agent isn't attached, or fully offline. */
-function nodeLabel(detail?: { connected: boolean; nodeOnline?: boolean }): string {
-	if (!detail) return "";
-	if (detail.connected) return "";
-	if (detail.nodeOnline) return " (online · agent not attached)";
-	return " (offline)";
 }
