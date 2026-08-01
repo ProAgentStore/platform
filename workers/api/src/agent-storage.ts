@@ -1021,18 +1021,21 @@ export class AgentStorageEngine {
 			limit: 1,
 		});
 		const lastSummary = [...summaries.values()][0];
-		const lastTimestamp = lastSummary?.messageRange.to || "0";
+		// Resume STRICTLY after the last summarized message. Prefer its full key; fall
+		// back to the timestamp boundary for legacy summaries without boundaryKey (that
+		// path re-includes one boundary message, but only once, at the transition).
+		const startAfter = lastSummary?.boundaryKey ?? `msg:${lastSummary?.messageRange.to || "0"}`;
 
 		// Get messages since last summary
 		const messages = await this.doStorage.list<AgentMessage>({
 			prefix: "msg:",
-			startAfter: `msg:${lastTimestamp}`,
+			startAfter,
 		});
 
 		if (messages.size < SUMMARY_THRESHOLD) return null;
 
-		const msgList = [...messages.values()];
-		return this.generateSummary(msgList, model);
+		const boundaryKey = [...messages.keys()].pop();
+		return this.generateSummary([...messages.values()], model, boundaryKey);
 	}
 
 	/**
@@ -1041,6 +1044,7 @@ export class AgentStorageEngine {
 	async generateSummary(
 		messages: AgentMessage[],
 		model: string,
+		boundaryKey?: string,
 	): Promise<ConversationSummary | null> {
 		if (!this.ai || messages.length === 0) return null;
 
@@ -1093,6 +1097,7 @@ Extract key facts about the user, their preferences, decisions made, and informa
 					to: messages[messages.length - 1].createdAt,
 					count: messages.length,
 				},
+				boundaryKey,
 				summary: parsed.summary || "",
 				facts: Array.isArray(parsed.facts) ? parsed.facts.slice(0, 20) : [],
 				createdAt: new Date().toISOString(),

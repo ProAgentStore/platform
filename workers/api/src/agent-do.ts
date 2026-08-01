@@ -65,6 +65,12 @@ export type {
 const MAX_CONTEXT_MESSAGES = 10;
 
 export class AgentDO extends DurableObject<Env> {
+	/** In-flight guard for fire-and-forget summarization. The DO input gate lets two
+	 *  turns (e.g. concurrent WS + HTTP) interleave at await points; without this both
+	 *  can cross the threshold and write overlapping summaries. Lives on the DO instance
+	 *  (persistent) — the per-call storage engine can't hold cross-request state. */
+	private summarizing = false;
+
 	private getStorageEngine(agentId: string, userId?: string): AgentStorageEngine {
 		// Platform-paid internal AI (embeddings + summary) is gated behind one master
 		// switch. Off (default) → pass null AI, so embed/summary no-op and the platform
@@ -360,7 +366,16 @@ export class AgentDO extends DurableObject<Env> {
 			this.broadcast({ type: "status", status: "idle" });
 
 			await engine.logEvent("chat.response", userId, { messageId: assistantMsg.id });
-			engine.maybeSummarize(state.model).catch(() => {});
+			// Single-flight: skip if a summarization is already running for this DO.
+			if (!this.summarizing) {
+				this.summarizing = true;
+				engine
+					.maybeSummarize(state.model)
+					.catch(() => {})
+					.finally(() => {
+						this.summarizing = false;
+					});
+			}
 
 			return json({ message: assistantMsg, toolMessage: toolMsg });
 		} catch (err) {
@@ -371,6 +386,25 @@ export class AgentDO extends DurableObject<Env> {
 					: 500;
 			await this.ctx.storage.put("state", { ...state, status: "error" });
 			this.broadcast({ type: "status", status: "error", error: errMsg });
+
+			// #24: a late-round failure can leave earlier side effects already committed
+			// (memory writes, created tasks, inserted records). Surface that completed work
+			// as a tool message BEFORE the error, so it isn't hidden behind "Error:…".
+			const partialToolLog =
+				err && typeof err === "object"
+					? (err as { partialToolLog?: string[] }).partialToolLog
+					: undefined;
+			if (partialToolLog && partialToolLog.length > 0) {
+				const partialMsg: AgentMessage = {
+					id: crypto.randomUUID(),
+					role: "system",
+					content: partialToolLog.join("\n"),
+					channel: channel || "chat",
+					createdAt: new Date().toISOString(),
+				};
+				await this.appendMessage(partialMsg);
+				this.broadcast({ type: "message", message: partialMsg });
+			}
 
 			const errorMsg: AgentMessage = {
 				id: crypto.randomUUID(),

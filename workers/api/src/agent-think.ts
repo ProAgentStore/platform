@@ -369,13 +369,18 @@ export async function runAgentThink(opts: {
 	const executedCalls = new Set<string>();
 
 	for (let round = 0; round < maxToolRounds; round++) {
-		const rawResult = (await runUserWorkersAi(
-			env,
-			userId,
-			state.model,
-			{ messages: aiMessages, tools },
-			{ kind: "chat", instanceId: state.agentId },
-		)) as Record<string, unknown>;
+		let rawResult: Record<string, unknown>;
+		try {
+			rawResult = (await runUserWorkersAi(
+				env,
+				userId,
+				state.model,
+				{ messages: aiMessages, tools },
+				{ kind: "chat", instanceId: state.agentId },
+			)) as Record<string, unknown>;
+		} catch (err) {
+			throw withPartialToolLog(err, allToolLog);
+		}
 
 		let toolCalls = normalizeToolCalls((rawResult.tool_calls as unknown[]) || []);
 		if (toolCalls.length === 0 && rawResult.response) {
@@ -440,13 +445,32 @@ export async function runAgentThink(opts: {
 	if (allToolLog.length > 0) {
 		aiMessages.push({ role: "user", content: `Now give your final answer. ${styleReminder}` });
 	}
-	const final = (await runUserWorkersAi(
-		env,
-		userId,
-		state.model,
-		{ messages: aiMessages },
-		{ kind: "chat", instanceId: state.agentId },
-	)) as { response?: string };
+	let final: { response?: string };
+	try {
+		final = (await runUserWorkersAi(
+			env,
+			userId,
+			state.model,
+			{ messages: aiMessages },
+			{ kind: "chat", instanceId: state.agentId },
+		)) as { response?: string };
+	} catch (err) {
+		throw withPartialToolLog(err, allToolLog);
+	}
 	const response = final.response || "";
 	return { response, toolCalls: allToolLog };
+}
+
+/**
+ * #24: when a late provider call throws, side effects committed in earlier tool rounds
+ * (memory writes, created tasks, inserted records) have already persisted. Attach the
+ * completed tool log to the error so the caller can surface what succeeded instead of
+ * discarding it behind a bare "Error:…". Errors keep their type/status (creds/provider
+ * errors still propagate), so this only ADDS the partial log.
+ */
+export function withPartialToolLog(err: unknown, toolLog: string[]): unknown {
+	if (toolLog.length > 0 && err && typeof err === "object") {
+		(err as { partialToolLog?: string[] }).partialToolLog = toolLog;
+	}
+	return err;
 }

@@ -157,6 +157,12 @@ export interface ConversationSummary {
 		count: number;
 	};
 	summary: string;
+	/** Full storage key (`msg:{ts}:{id}`) of the last message in this range. The next
+	 *  summarization window resumes STRICTLY after it — resuming from `messageRange.to`
+	 *  (the timestamp alone) re-includes this boundary message, since msg keys carry an
+	 *  `:{id}` suffix that sorts after the bare timestamp. Optional: summaries written
+	 *  before this field fall back to the timestamp boundary. */
+	boundaryKey?: string;
 	/** Key facts extracted from this conversation segment */
 	facts: ExtractedFact[];
 	createdAt: string;
