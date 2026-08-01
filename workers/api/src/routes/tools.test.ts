@@ -52,6 +52,17 @@ describe("GET /v1/instances/:id/tools", () => {
 		const body = (await res.json()) as any;
 		expect(body.tools.map((t: any) => t.name)).toContain("github_workflow_runs");
 	});
+	it("emits each tool's jsonSchema verbatim (draft-07 object schema)", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"));
+		const body = (await res.json()) as any;
+		const tool = body.tools.find((t: any) => t.name === "github_workflow_runs");
+		expect(tool.jsonSchema.type).toBe("object");
+		expect(tool.jsonSchema.properties.repo.type).toBe("string");
+		expect(tool.jsonSchema.required).toContain("repo");
+		// The old ad-hoc `parameters` map is gone from the wire shape.
+		expect(tool.parameters).toBeUndefined();
+	});
 });
 
 describe("POST /v1/instances/:id/tools/:name", () => {
@@ -67,6 +78,42 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		const body = (await res.json()) as any;
 		expect(body.name).toBe("github_workflow_runs");
 		expect(body.success).toBe(false);
+		expect(body.content).toMatch(/not connected|not configured/i);
+	});
+	it("400s when a required field is missing (validated against jsonSchema before dispatch)", async () => {
+		const { app, env } = testApp();
+		// github_workflow_runs requires `repo`; omit it.
+		const res = await req(app, env, "/v1/instances/i1/tools/github_workflow_runs", { method: "POST", body: "{}" }, await tok("u1"));
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as any;
+		expect(body.error).toMatch(/required field: repo/i);
+	});
+	it("400s when a field has the wrong basic type", async () => {
+		const { app, env } = testApp();
+		// github_read_issue: `number` must be a number.
+		const res = await req(
+			app,
+			env,
+			"/v1/instances/i1/tools/github_read_issue",
+			{ method: "POST", body: JSON.stringify({ repo: "owner/name", number: "not-a-number" }) },
+			await tok("u1"),
+		);
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as any;
+		expect(body.error).toMatch(/"number" must be a number/i);
+	});
+	it("passes validation when required fields are present + well-typed (reaches the handler)", async () => {
+		const { app, env } = testApp();
+		const res = await req(
+			app,
+			env,
+			"/v1/instances/i1/tools/github_read_issue",
+			{ method: "POST", body: JSON.stringify({ repo: "owner/name", number: 7 }) },
+			await tok("u1"),
+		);
+		// Validation passed → handler ran → GitHub not configured → 200 with success:false.
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
 		expect(body.content).toMatch(/not connected|not configured/i);
 	});
 });

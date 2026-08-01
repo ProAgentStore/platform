@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getRegistryTool, registryConnectorGroups, registryToolDefs, registryToolNameSet, runRegistryTool } from "./tool-registry.js";
+import { getRegistryTool, registryConnectorGroups, registryToolDefs, registryToolNameSet, registryTools, runRegistryTool } from "./tool-registry.js";
 import type { Env } from "../types.js";
 
 const envNoGithub = {} as unknown as Env; // githubAppConfigured() → false
@@ -23,10 +23,26 @@ describe("tool registry", () => {
 		expect(names.has("github_read_issue")).toBe(true);
 	});
 
-	it("exposes ToolDef-shaped definitions (name/description/parameters)", () => {
+	it("exposes ToolDef-shaped definitions (name/description/jsonSchema, verbatim pass-through)", () => {
 		const def = registryToolDefs().find((d) => d.name === "github_workflow_runs");
-		expect(def?.parameters.repo.required).toBe(true);
+		// The registry now carries a draft-07 jsonSchema, passed through verbatim (no
+		// rebuild from an ad-hoc parameters map). Required fields live in `required`.
+		expect(def?.jsonSchema.type).toBe("object");
+		expect(def?.jsonSchema.properties.repo.type).toBe("string");
+		expect(def?.jsonSchema.required).toContain("repo");
 		expect(typeof def?.description).toBe("string");
+		// It's the SAME schema object the tool declares — a true pass-through.
+		expect(def?.jsonSchema).toBe(getRegistryTool("github_workflow_runs")?.jsonSchema);
+	});
+
+	it("every registry tool declares a jsonSchema, a tier, and a connector", () => {
+		for (const t of registryTools()) {
+			expect(t.jsonSchema.type).toBe("object");
+			expect(t.jsonSchema.properties).toEqual(expect.any(Object));
+			expect(["base", "standard", "runtime", "connector"]).toContain(t.tier);
+			// The current registry is connector-only; all entries name their connector.
+			expect(typeof t.connector).toBe("string");
+		}
 	});
 
 	it("groups tools by connector for the catalog", () => {

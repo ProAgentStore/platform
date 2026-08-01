@@ -10,7 +10,7 @@
 //   template, not free text. `text` works only inside an open window.
 // - Instagram: business/creator account linked to a FB Page; messaging windows apply;
 //   no cold-DM.
-import type { RegistryTool, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
 
 const GRAPH = "https://graph.facebook.com/v20.0";
 
@@ -29,19 +29,24 @@ async function graphPost(token: string, path: string, body: unknown): Promise<{ 
 	return { ok: true, data };
 }
 
-export const META_TOOLS: RegistryTool[] = [
+export const META_TOOLS: ToolDef[] = [
 	{
 		name: "whatsapp_send_message",
+		tier: "connector",
 		connector: "meta",
 		scope: "write",
 		description:
 			"Send a WhatsApp message via the WhatsApp Business Cloud API. Use `text` only inside a 24h reply window; otherwise supply `template_name` (a pre-approved template) with `template_lang` and optional `template_params`. WRITE — requires the meta connector's write consent.",
-		parameters: {
-			to: { type: "string", description: "Recipient phone in E.164, e.g. +14155552671.", required: true },
-			text: { type: "string", description: "Message text (valid only inside an open 24h window)." },
-			template_name: { type: "string", description: "Approved template name (required outside the 24h window)." },
-			template_lang: { type: "string", description: "Template language code, e.g. en_US (default en_US)." },
-			template_params: { type: "string", description: "Comma-separated body variables for the template, in order." },
+		jsonSchema: {
+			type: "object",
+			properties: {
+				to: { type: "string", description: "Recipient phone in E.164, e.g. +14155552671." },
+				text: { type: "string", description: "Message text (valid only inside an open 24h window)." },
+				template_name: { type: "string", description: "Approved template name (required outside the 24h window)." },
+				template_lang: { type: "string", description: "Template language code, e.g. en_US (default en_US)." },
+				template_params: { type: "string", description: "Comma-separated body variables for the template, in order." },
+			},
+			required: ["to"],
 		},
 		handler: async (ctx, input) => {
 			const token = metaToken(ctx);
@@ -74,13 +79,18 @@ export const META_TOOLS: RegistryTool[] = [
 	},
 	{
 		name: "instagram_send_dm",
+		tier: "connector",
 		connector: "meta",
 		scope: "write",
 		description:
 			"Send/reply to an Instagram Direct Message from a connected Instagram Business account (Instagram Messaging API). Messaging-window rules apply — you can reply to people who messaged you; no cold-DM. WRITE — requires the meta connector's write consent.",
-		parameters: {
-			recipient_id: { type: "string", description: "The recipient's Instagram-scoped ID (IGSID) from an incoming message.", required: true },
-			text: { type: "string", description: "The message text.", required: true },
+		jsonSchema: {
+			type: "object",
+			properties: {
+				recipient_id: { type: "string", description: "The recipient's Instagram-scoped ID (IGSID) from an incoming message." },
+				text: { type: "string", description: "The message text." },
+			},
+			required: ["recipient_id", "text"],
 		},
 		handler: async (ctx, input) => {
 			const token = metaToken(ctx);

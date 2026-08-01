@@ -1,6 +1,6 @@
 import { AGENT_TOOLS } from "./lib/tools.js";
 import { STORAGE_TOOLS } from "./lib/storage-tools.js";
-import { registryConnectorGroups, registryToolDefs } from "./lib/tool-registry.js";
+import { registryConnectorGroups, registryToolDefs, type JsonSchema } from "./lib/tool-registry.js";
 import type { AgentCapabilities } from "./lib/agent-capabilities.js";
 
 // ── Tool groups ──────────────────────────────────────────────────────────────
@@ -126,7 +126,13 @@ export function buildAgentToolDefinitions(opts?: { emailEnabled?: boolean; capab
 	// Permission-gated tools are only offered to the model when the user granted them.
 	if (opts?.emailEnabled) enabled.add("find_confirmation_link");
 
-	const toolMap = new Map<string, { name: string; description: string; parameters: Record<string, { type: string; description: string; required?: boolean }> }>();
+	// Two def shapes are merged: the legacy AGENT_TOOLS/STORAGE_TOOLS carry an ad-hoc
+	// `parameters` map (rebuilt into a JSON Schema below); registry tools already carry a
+	// draft-07 `jsonSchema` and are passed through verbatim. Both yield the same
+	// {type,properties,required} object the LLM has always seen — no behaviour change.
+	type LegacyDef = { name: string; description: string; parameters: Record<string, { type: string; description: string; required?: boolean }> };
+	type SchemaDef = { name: string; description: string; jsonSchema: JsonSchema };
+	const toolMap = new Map<string, LegacyDef | SchemaDef>();
 	for (const t of [...AGENT_TOOLS, ...STORAGE_TOOLS, ...registryToolDefs()]) {
 		if (enabled.has(t.name)) toolMap.set(t.name, t);
 	}
@@ -135,18 +141,21 @@ export function buildAgentToolDefinitions(opts?: { emailEnabled?: boolean; capab
 		function: {
 			name: t.name,
 			description: t.description,
-			parameters: {
-				type: "object",
-				properties: Object.fromEntries(
-					Object.entries(t.parameters).map(([k, v]) => [
-						k,
-						{ type: v.type, description: v.description },
-					]),
-				),
-				required: Object.entries(t.parameters)
-					.filter(([, v]) => v.required)
-					.map(([k]) => k),
-			},
+			parameters:
+				"jsonSchema" in t
+					? t.jsonSchema
+					: {
+							type: "object",
+							properties: Object.fromEntries(
+								Object.entries(t.parameters).map(([k, v]) => [
+									k,
+									{ type: v.type, description: v.description },
+								]),
+							),
+							required: Object.entries(t.parameters)
+								.filter(([, v]) => v.required)
+								.map(([k]) => k),
+						},
 		},
 	}));
 }
