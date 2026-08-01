@@ -6,7 +6,7 @@ import {
 	TOOL_CATALOG,
 	toolNamesFor,
 } from "./agent-do-tools.js";
-import type { AgentCapabilities } from "./lib/agent-capabilities.js";
+import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
 
 const caps = (surfaces: AgentCapabilities["surfaces"]): AgentCapabilities => ({
 	surfaces,
@@ -147,6 +147,23 @@ describe("agent tool definition helpers", () => {
 		expect(CREATOR_SELECTABLE_TOOLS.has("read_memory")).toBe(false); // BASE, always granted
 		expect(CREATOR_SELECTABLE_TOOLS.has("find_confirmation_link")).toBe(false); // gated
 		expect(CREATOR_SELECTABLE_TOOLS.has("submit_job_application")).toBe(false); // legacy
+	});
+
+	it("repo-chat declaring its tools as data resolves identically to the repo-surface default (migration 0050 dogfood)", () => {
+		// The config shape migration 0050 produces: surface stays "repo", tools now
+		// declared explicitly. The whole point of the dogfood is that this changes NO
+		// behavior — it just moves the choice from a hardcoded special-case to data.
+		const config = JSON.stringify({
+			capabilities: {
+				surfaces: ["repo"],
+				runtime: null,
+				workflow: null,
+				tools: ["search_knowledge", "list_knowledge", "read_knowledge"],
+			},
+		});
+		const declared = [...toolNamesFor(agentCapabilities({ slug: "repo-chat", config }))].sort();
+		const surfaceDefault = [...toolNamesFor(caps(["repo"]))].sort();
+		expect(declared).toEqual(surfaceDefault);
 	});
 
 	it("returns the complete storage tool name set", () => {
