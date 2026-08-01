@@ -40,6 +40,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
 	const [view, setView] = useState<"summary" | "terminal">("summary");
 	const [terminalText, setTerminalText] = useState("(waiting...)");
+	// Last persisted tmux snapshot (coding_timeline, DB) — shown in the Terminal view when
+	// the session has no LIVE pane (ended, or the runner isn't attached), so the terminal
+	// history you saw before doesn't vanish to a blank screen. `terminalLive` tracks whether
+	// what's on screen is the live pane vs this saved fallback.
+	const [savedTerminal, setSavedTerminal] = useState("");
+	const [terminalLive, setTerminalLive] = useState(false);
 	const [termAutoScroll, setTermAutoScroll] = useState(true);
 	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string; time?: string; audioKey?: string }[]>([]);
 
@@ -144,11 +150,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// Terminal polling (1.5s when a session is open)
 	const termTextRef = useRef(terminalText);
 	termTextRef.current = terminalText;
+	const savedTerminalRef = useRef(savedTerminal);
+	savedTerminalRef.current = savedTerminal;
 	const pollTerminal = useCallback(async () => {
 		if (!openSession) return;
 		try {
 			const d = await api<{ pane?: string; runState?: string }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
-			const newText = d.pane ?? "(waiting for output...)";
+			const live = (d.pane || "").trim() ? (d.pane as string) : "";
+			// No live tmux (ended session / detached runner) → fall back to the last saved
+			// snapshot from the DB instead of blanking the terminal.
+			const newText = live || savedTerminalRef.current || "(waiting for output...)";
+			setTerminalLive(!!live);
 			// Skip update if text unchanged or user is selecting text
 			if (newText === termTextRef.current) return;
 			const sel = window.getSelection();
@@ -200,13 +212,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		setSummaryHistory([]);
 		navigate(`/instances/${instanceId}/coding/${session.id}`, { replace: true });
 		setTerminalText("(waiting...)");
+		setSavedTerminal("");
+		setTerminalLive(false);
 		// Ensure session is live
 		try {
 			await api(`/v1/instances/${instanceId}/coding/sessions/${session.id}/start`, { method: "POST" });
 		} catch {}
-		// Load history (chat + system + command messages)
+		// Load history — ?full=1 so we get BOTH the chat AND the persisted terminal snapshots.
 		try {
-			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
+			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline?full=1`);
 			const entries = (d.chat || d.timeline || [])
 				.filter((e) => e.type === "chat_user" || e.type === "chat_assistant" || e.type === "chat_system" || e.type === "system" || e.type === "command")
 				.map((e) => ({
@@ -216,6 +230,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					audioKey: e.audioKey,
 				}));
 			setSummaryHistory(entries);
+			// Last persisted tmux snapshot → the Terminal view's DB fallback. Show it right
+			// away so the terminal isn't blank before the first live capture; a live pane
+			// (if the session is running) overwrites it on the next poll.
+			const lastTerm = (d.timeline || []).filter((e) => e.type === "terminal").slice(-1)[0];
+			const saved = (lastTerm?.content || lastTerm?.text || "").trim();
+			if (saved) { setSavedTerminal(saved); setTerminalText(saved); }
 		} catch (e) {
 			console.error("[coding] timeline load failed:", e);
 		}
@@ -621,6 +641,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						termRef={termRef}
 						termAutoScroll={termAutoScroll}
 						setTermAutoScroll={setTermAutoScroll}
+						stale={!terminalLive && !!savedTerminal}
 					/>
 				)}
 				{settingsModal}

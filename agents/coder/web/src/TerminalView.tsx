@@ -5,7 +5,7 @@ import { renderTerminal } from "./render-terminal";
 /** Raw tmux pane view: a send-to-Engine input + the colorized, auto-scrolling pane. */
 export default function TerminalView({
 	termInput, setTermInput, sendTerminalMessage,
-	terminalText, termRef, termAutoScroll, setTermAutoScroll,
+	terminalText, termRef, termAutoScroll, setTermAutoScroll, stale,
 }: {
 	termInput: string;
 	setTermInput: (v: string) => void;
@@ -14,9 +14,16 @@ export default function TerminalView({
 	termRef: RefObject<HTMLPreElement | null>;
 	termAutoScroll: boolean;
 	setTermAutoScroll: (v: boolean) => void;
+	/** True when the pane shown is the last SAVED snapshot (from the DB), not a live tmux. */
+	stale?: boolean;
 }) {
 	return (
 		<div className="flex flex-col flex-1 min-h-0 relative">
+			{stale && (
+				<div className="px-3 py-1.5 text-[0.7rem] text-amber-500 bg-amber-500/10 border-b border-line shrink-0">
+					Showing the last saved terminal output — this session isn't live (it ended, or the runner isn't attached). It'll go live again when the session is running.
+				</div>
+			)}
 			<div className="flex gap-1 px-2 py-2 shrink-0 items-center border-b border-line">
 				<input
 					value={termInput}
