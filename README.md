@@ -191,7 +191,7 @@ Public discovery pages:
 | email-drafter | Agent | Brand-voice KB → AI email drafts |
 | **job-application-assistant** | Agent | LLM-driven apply: Brain (`JobApplyWorkflow`) drives the local browser runtime to fill + submit real applications |
 | **Coder** (`coder`) | Agent | Multi-CLI coding agent — runs Claude Code / Codex / Grok in tmux via `pags up`; supports multiple connected machines per instance; Engine · Pilot · Co-pilot · Loop · Overseer · Chat |
-| **Repo Chat** (`repo-chat`) | Agent | Read-only chat with any GitHub repo(s) — server-side ingest + RAG, no local runner |
+| **Repo Chat** (`repo-chat`) | Agent | Read-only chat with any GitHub repo(s) — server-side ingest + RAG, no local runner. First agent built "the creator way": declares its tools as data (`capabilities.tools`) rather than relying on the hardcoded `repo`-surface default |
 
 ### Other capabilities
 

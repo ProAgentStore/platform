@@ -35,7 +35,7 @@ runtime-backed Tier-0 like coder/apply). What blocks *third parties*:
 
 | # | Workstream | Note |
 |---|---|---|
-| #51 | Tier-1: declarative agent schema + **open tool catalog** + shared runtime | Replaces the closed capability unions with a data-driven allowlist |
+| #51 | Tier-1: declarative agent schema + **open tool catalog** + shared runtime | **In progress** — tool catalog + per-agent `capabilities.tools` allowlist (PR #59, merged), `repo-chat` dogfooded onto it (PR #61, merged), formal `AgentDefinition`/`sanitizeAgentDefinition` (PR #62). Remaining: wire create/update to accept a full definition + shared-runtime convergence. |
 | #52 | **Tier-2: sandboxed creator code via Dynamic Workers** | **Critical path.** Worker Loader + scoped bindings + server-side secret injection; never `eval()` |
 | #53 | Curated publish + review pipeline | `draft → in_review → listed → suspended`; per-version review + rollback |
 | #54 | Automated pre-review safety scanning | Tool-scope, SSRF, secret-access, prompt-injection, cost-bomb heuristics → risk score |
@@ -48,7 +48,9 @@ runtime-backed Tier-0 like coder/apply). What blocks *third parties*:
 - **Phase 0 — foundation (partly in flight):** admin access-control (#28), metering (#44),
   usage/spend + kill switch (#39/#46), moderation UI (#41). The safety net that must exist first.
 - **Phase 1 — Tier-1 to invited creators:** #51 + #53 + #55 (config-only authoring, curated).
-  Dogfood by migrating `repo-chat` onto the formal declarative schema.
+  ✓ Foundation landed (tool catalog #59, declarative schema #62) and `repo-chat` is dogfooded
+  onto it (#61 — declares its tools as data). Remaining: wire create/update to a full
+  definition, the review pipeline (#53), and the authoring UI (#55).
 - **Phase 2 — Tier-2 code (the hard part):** #52 + #54 + #56. Red-team the sandbox before
   any third party touches it.
 - **Phase 3 — widen + monetize:** loosen curation as guardrails mature; flip payouts (#57).

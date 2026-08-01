@@ -46,6 +46,12 @@ into identity/prompt/guardrails/tools[]/model/surfaces/runtime) + a shared
 multi-tenant runtime (the `AgentDO` chat loop is ~80% there). Possibly **Code Mode**
 for tool execution.
 
+> **Progress (2026-08): mostly landed.** `agents.config.capabilities` now carries a
+> declared `tools[]` allowlist against a data-driven `TOOL_CATALOG` (PR #59); the formal
+> `AgentDefinition` + `sanitizeAgentDefinition` compose the config shape (PR #62); and
+> `repo-chat` is the first agent that declares its tools as data (PR #61). Remaining:
+> wire create/update to a full definition + converge onto the shared runtime.
+
 ### Tier 2 — Code agents via Dynamic Workers (the "write on the fly" path)
 When an agent needs custom logic, the creator (or **Coder itself**) writes code that
 runs **isolated** — via **Dynamic Workers (Worker Loader API)**, NOT the monorepo:
