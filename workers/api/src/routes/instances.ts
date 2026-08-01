@@ -369,12 +369,38 @@ instanceRoutes.get("/:instanceId/runner-node", async (c) => {
 	const nodes = await listRuntimeNodes(c.env, instanceId, session.uid).catch(() => []);
 	// Distinct node names known for this instance (each registration = one machine).
 	const available = [...new Set(nodes.map((n) => normalizeRunnerNode(n.runner_node)).filter(Boolean))];
-	// Live-connected flag per node (RelayDO truth, not the stale DB status) so the picker can
-	// mark an offline machine and warn when the pinned one isn't connected. Bounded fan-out.
-	const detail = await Promise.all(
-		available.slice(0, 25).map(async (node) => ({ node, connected: await relayConnected(c.env, instanceId, node).catch(() => false) })),
+
+	// Machine-level liveness: which of the user's machines are running a runner AT ALL
+	// (any of their instances holds a live relay socket) — the same node-level truth the
+	// Terminals page shows. This lets the picker distinguish "machine offline" from
+	// "machine online but THIS agent isn't attached to it" (its `pags up` was started
+	// before this agent, so it never opened this instance's socket).
+	const allNodeRows = await c.env.DB.prepare(
+		"SELECT DISTINCT instance_id, runner_node FROM instance_runtime_nodes WHERE user_id = ?1",
+	).bind(session.uid).all<{ instance_id: string; runner_node: string }>();
+	const idsByNode = new Map<string, string[]>();
+	for (const r of allNodeRows.results ?? []) {
+		const nn = normalizeRunnerNode(r.runner_node);
+		if (!nn) continue;
+		(idsByNode.get(nn) ?? idsByNode.set(nn, []).get(nn)!).push(r.instance_id);
+	}
+	const nodeMachineOnline = async (node: string): Promise<boolean> => {
+		const ids = (idsByNode.get(node) ?? []).slice(0, 25);
+		const checks = await Promise.all(ids.map((id) => relayConnected(c.env, id, node).catch(() => false)));
+		return checks.some(Boolean);
+	};
+
+	// Report both flags per node: `connected` = THIS agent's own socket; `nodeOnline` =
+	// the machine is up for any agent. Include the pinned node even if this agent never
+	// registered on it, so the picker can label it correctly.
+	const detailNodes = [...new Set([...available, ...(runnerNode ? [runnerNode] : [])])];
+	const nodesDetail = await Promise.all(
+		detailNodes.slice(0, 25).map(async (node) => {
+			const connected = await relayConnected(c.env, instanceId, node).catch(() => false);
+			return { node, connected, nodeOnline: connected ? true : await nodeMachineOnline(node) };
+		}),
 	);
-	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail: detail });
+	return c.json({ runnerNode: runnerNode || null, nodes: available, nodesDetail });
 });
 
 /** Pin (or clear, with an empty/null value) the node this instance runs on. */

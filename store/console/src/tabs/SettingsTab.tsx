@@ -1,6 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { SettingsField } from "../lib/types";
+
+/** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
+type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean; nodeOnline?: boolean }> };
 
 interface Props {
 	instanceId: string;
@@ -48,8 +51,28 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	// Node binding: which machine this instance runs on ("" = automatic).
 	const [runnerNode, setRunnerNode] = useState("");
 	const [runnerNodes, setRunnerNodes] = useState<string[]>([]);
-	const [runnerNodesDetail, setRunnerNodesDetail] = useState<Array<{ node: string; connected: boolean }>>([]);
+	const [runnerNodesDetail, setRunnerNodesDetail] = useState<Array<{ node: string; connected: boolean; nodeOnline?: boolean }>>([]);
 	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
+	const [runnerRefreshing, setRunnerRefreshing] = useState(false);
+
+	// Re-check the runner (live RelayDO truth) on demand — used by the Refresh button and
+	// the tab-focus re-check, so a just-started/stopped `pags up` reflects without a reload.
+	const refreshRunner = useCallback(async () => {
+		setRunnerRefreshing(true);
+		try {
+			const [st, rn] = await Promise.all([
+				api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`).catch(() => null),
+				api<RunnerNodeResp>(`/v1/instances/${instanceId}/runner-node`).catch(() => null),
+			]);
+			if (st) setRuntimeInfo(st);
+			if (rn) { setRunnerNode(rn.runnerNode || ""); setRunnerNodes(rn.nodes || []); setRunnerNodesDetail(rn.nodesDetail || []); }
+		} finally { setRunnerRefreshing(false); }
+	}, [instanceId]);
+
+	// The pinned machine's live state: `nodeOnline` = the machine runs a runner for ANY of
+	// your agents (Terminals' node-level truth), even if THIS agent isn't attached to it.
+	const pinnedDetail = runnerNodesDetail.find((d) => d.node === runnerNode);
+	const pinnedNodeOnline = pinnedDetail?.nodeOnline === true;
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
 	const [sensitivity, setSensitivity] = useState(1);
@@ -112,7 +135,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setRuntimeInfo(d);
 			} catch {}
 			try {
-				const d = await api<{ runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean }> }>(`/v1/instances/${instanceId}/runner-node`);
+				const d = await api<RunnerNodeResp>(`/v1/instances/${instanceId}/runner-node`);
 				setRunnerNode(d.runnerNode || "");
 				setRunnerNodes(d.nodes || []);
 				setRunnerNodesDetail(d.nodesDetail || []);
@@ -186,16 +209,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/email/status").then(setEmailStatus).catch(() => {});
 			api<{ connected: boolean; configured: boolean; email?: string | null }>("/v1/drive/status").then(setDriveStatus).catch(() => {});
 			api<{ connected: boolean; configured: boolean; account?: string | null }>("/v1/workdrive/status").then(setWorkdriveStatus).catch(() => {});
-			api<Record<string, unknown>>(`/v1/instances/${instanceId}/runtime/status`).then(setRuntimeInfo).catch(() => {});
-			api<{ runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean }> }>(`/v1/instances/${instanceId}/runner-node`).then((d) => {
-				setRunnerNode(d.runnerNode || "");
-				setRunnerNodes(d.nodes || []);
-				setRunnerNodesDetail(d.nodesDetail || []);
-			}).catch(() => {});
+			refreshRunner();
 		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
-	}, [instanceId]);
+	}, [instanceId, refreshRunner]);
 
 	// Agent settings save (patch semantics — only the changed field is sent).
 	const saveSetting = async (id: string, value: string | number | boolean) => {
@@ -594,11 +612,16 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 			{/* Runner info */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-1">Runner</h3>
+				<div className="flex items-center justify-between gap-2 mb-1">
+					<h3 className="text-base font-bold">Runner</h3>
+					<button type="button" onClick={refreshRunner} disabled={runnerRefreshing} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold disabled:opacity-50">{runnerRefreshing ? "Refreshing…" : "Refresh"}</button>
+				</div>
 				<div className="text-sm text-muted leading-relaxed">
 					{runtimeInfo ? (
 						<>
 							Status: {String((runtimeInfo as Record<string, unknown>).connected ? "Online" : "Offline")}
+							{/* This agent's own socket may be down while the machine is up for OTHER agents. */}
+							{!(runtimeInfo as Record<string, unknown>).connected && pinnedNodeOnline && <span className="text-amber-500"> · machine online, agent not attached</span>}
 							{(runtimeInfo as Record<string, unknown>).node && (
 								<> · Node: {String((runtimeInfo as Record<string, unknown>).node)}</>
 							)}
@@ -618,25 +641,31 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						className="w-full sm:w-auto bg-panel border border-line rounded-lg px-2.5 py-1.5 text-sm"
 					>
 						<option value="">Automatic (any connected machine)</option>
-						{/* The pinned node may not be in the currently-registered list (machine offline) — keep it selectable. */}
-						{runnerNode && !runnerNodes.includes(runnerNode) && <option value={runnerNode}>{runnerNode} (offline)</option>}
+						{/* Pinned node may not be in this agent's registered list — keep it selectable + labeled. */}
+						{runnerNode && !runnerNodes.includes(runnerNode) && <option value={runnerNode}>{runnerNode}{nodeLabel(pinnedDetail)}</option>}
 						{runnerNodes.map((n) => {
-							// Live status per machine (RelayDO truth). An offline machine is still selectable
-							// but clearly labeled so a pin to it doesn't silently look "connected".
-							const online = runnerNodesDetail.find((d) => d.node === n)?.connected;
-							return <option key={n} value={n}>{n}{online === false ? " (offline)" : ""}</option>;
+							// Per-machine label: distinguish machine-offline from "machine up, this agent not
+							// attached" — the same RelayDO truth the Terminals page uses, just labeled here.
+							return <option key={n} value={n}>{n}{nodeLabel(runnerNodesDetail.find((d) => d.node === n))}</option>;
 						})}
 					</select>
 					<p className="text-xs text-muted-soft mt-1">
 						Pin this agent to one of your machines running <code className="text-accent">pags up</code>. Its runner tasks (chat tools, apply, coding) route there.
 						{runnerNodes.length === 0 && !runnerNode && <> No machines connected yet — see <span className="text-accent">Terminals</span>.</>}
 					</p>
-					{/* Pinned to a machine that isn't connected → the agent is offline until you start that
-					    machine or repin. Called out because a strict pin never silently falls back. */}
-					{runnerNode && runnerNodesDetail.some((d) => d.node === runnerNode && !d.connected) && (
-						<p className="text-xs text-amber-500 mt-0.5">
-							⚠ <b>{runnerNode}</b> isn't connected. This agent's runner tasks won't run until you start <code className="text-accent">pags up</code> on it, or pick another machine above.
-						</p>
+					{/* Pinned machine not serving THIS agent. Two distinct cases, distinct guidance:
+					    (a) machine is online for other agents → it just hasn't attached this one (restart pags up);
+					    (b) machine is fully offline → start pags up on it (or repin). */}
+					{runnerNode && pinnedDetail && !pinnedDetail.connected && (
+						pinnedNodeOnline ? (
+							<p className="text-xs text-amber-500 mt-0.5">
+								⚠ <b>{runnerNode}</b> is online, but this agent isn't attached to it yet. Restart <code className="text-accent">pags up</code> on that machine (it picks up newly-subscribed agents on start), or pick another machine above.
+							</p>
+						) : (
+							<p className="text-xs text-amber-500 mt-0.5">
+								⚠ <b>{runnerNode}</b> isn't connected. This agent's runner tasks won't run until you start <code className="text-accent">pags up</code> on it, or pick another machine above.
+							</p>
+						)
 					)}
 					{runnerNodeMsg && <p className="text-xs text-muted mt-0.5">{runnerNodeMsg}</p>}
 				</div>
@@ -1123,4 +1152,13 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			</div>
 		</div>
 	);
+}
+
+/** Label a machine in the "Runs on" picker from its live state: attached (blank),
+ *  online but this agent isn't attached, or fully offline. */
+function nodeLabel(detail?: { connected: boolean; nodeOnline?: boolean }): string {
+	if (!detail) return "";
+	if (detail.connected) return "";
+	if (detail.nodeOnline) return " (online · agent not attached)";
+	return " (offline)";
 }
