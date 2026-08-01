@@ -150,3 +150,25 @@ export function matchVoiceCommand(text: string): VoiceCommand | null {
 		.trim();
 	return REPEAT_PHRASES.has(t) ? "repeat" : null;
 }
+
+/**
+ * Classify a browser SpeechRecognition / STT error (issue: voice error-log spam).
+ * - "soft"           → no-speech / empty: not an error, just recycle the mic.
+ * - "mic-unavailable"→ permission denied or no capture device. A user-ENVIRONMENT
+ *   state, not a platform bug: stop the loop (don't retry into a dead mic) and show a
+ *   clear hint — do NOT flood the durable error log.
+ * - "error"          → a genuine failure (Whisper 400/401, etc.) worth reporting.
+ */
+export type VoiceErrorKind = "soft" | "mic-unavailable" | "error";
+const MIC_UNAVAILABLE = new Set(["not-allowed", "service-not-allowed", "audio-capture"]);
+export function classifyVoiceError(err: string | null | undefined): VoiceErrorKind {
+	if (!err || err === "no-speech") return "soft";
+	if (MIC_UNAVAILABLE.has(err)) return "mic-unavailable";
+	return "error";
+}
+/** Human hint for a mic-unavailable error code. */
+export function micUnavailableMessage(err: string): string {
+	return err === "audio-capture"
+		? "No microphone found — check your device."
+		: "Microphone blocked — allow mic access in your browser settings.";
+}

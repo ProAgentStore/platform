@@ -146,3 +146,26 @@ describe("resolveVoiceStatus", () => {
 			.toMatchObject({ label: "Speaking…", tone: "speak" });
 	});
 });
+
+import { classifyVoiceError, micUnavailableMessage } from "./convo.js";
+
+describe("classifyVoiceError", () => {
+	it("treats no-speech / empty as soft (recycle, no report)", () => {
+		expect(classifyVoiceError(null)).toBe("soft");
+		expect(classifyVoiceError("")).toBe("soft");
+		expect(classifyVoiceError("no-speech")).toBe("soft");
+	});
+	it("treats mic permission / capture codes as mic-unavailable (stop, no report)", () => {
+		expect(classifyVoiceError("not-allowed")).toBe("mic-unavailable");
+		expect(classifyVoiceError("service-not-allowed")).toBe("mic-unavailable");
+		expect(classifyVoiceError("audio-capture")).toBe("mic-unavailable");
+	});
+	it("treats genuine failures as error (report)", () => {
+		expect(classifyVoiceError("Whisper error 400: ...")).toBe("error");
+		expect(classifyVoiceError("aborted")).toBe("error");
+	});
+	it("gives a device-specific hint", () => {
+		expect(micUnavailableMessage("audio-capture")).toMatch(/microphone found/i);
+		expect(micUnavailableMessage("not-allowed")).toMatch(/blocked/i);
+	});
+});

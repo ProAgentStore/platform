@@ -6,7 +6,7 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
-import { decideRestart, matchVoiceCommand, resolveVoiceMode, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, type VoiceMode } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -597,10 +597,23 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// voice tail). NOT an error: clear the "Transcribing…" placeholder so it
 				// doesn't hang, unpause, and let the mic recycle (hands-free reopens via
 				// onEnd; other modes just go idle). No scary message, no durable-log entry.
-				if (!err || err === "no-speech") {
+				const kind = classifyVoiceError(err ? String(err) : null);
+				if (kind === "soft") {
 					flushSync(() => setInterim((cur) => (cur === "Transcribing…" ? "" : cur)));
 					pausedForThinkingRef.current = false;
 					if (!convoOnRef.current) setMicOn(false);
+					return;
+				}
+				if (kind === "mic-unavailable") {
+					// User-environment (mic blocked / no device), NOT a platform bug. Stop the
+					// loop so we don't retry into a dead mic and flood the durable log; show a
+					// clear one-time hint. No reportClientError.
+					const msg = `⚠ ${micUnavailableMessage(String(err))}`;
+					flushSync(() => setInterim(msg));
+					pausedForThinkingRef.current = false;
+					setConvoOn(false);
+					setMicOn(false);
+					setTimeout(() => setInterim((cur) => (cur === msg ? "" : cur)), 6000);
 					return;
 				}
 				if (err) {
