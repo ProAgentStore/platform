@@ -15,6 +15,8 @@ export interface Env {
 	JOB_APPLY: Workflow;
 	/** Remote LLM brain that drives a local coding CLI toward an objective (AgentCoder port). */
 	CODING_SESSION: Workflow;
+	/** Durable runner for declarative data pipelines (issue #97) — walks a pipeline's steps. */
+	PIPELINE_RUN: Workflow;
 	/** WebSocket relay DO — one per instance, bridges cloud→runner without tunnels. */
 	RELAY: DurableObjectNamespace;
 	GITHUB_CLIENT_ID: string;

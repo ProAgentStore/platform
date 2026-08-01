@@ -85,6 +85,12 @@ name = "pags-coding-session"
 binding = "CODING_SESSION"
 class_name = "CodingSessionWorkflow"
 
+# Durable runner for declarative data pipelines (issue #97).
+[[workflows]]
+name = "pags-pipeline-run"
+binding = "PIPELINE_RUN"
+class_name = "PipelineRunWorkflow"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["AgentDO"]

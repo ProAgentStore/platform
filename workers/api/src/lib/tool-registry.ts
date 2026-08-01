@@ -64,10 +64,36 @@ export type RegistryTool = ToolDef;
 
 /**
  * First-party registry tools that are NOT provided by a connector (base/standard/runtime
- * tiers). Empty for now — kept so the REGISTRY can carry non-connector tools without
- * changing its shape.
+ * tiers). `run_pipeline` (issue #97) lets an agent start a declarative pipeline the owner
+ * has declared on the instance ("sweep Sydney" → run the `leads` pipeline with city=Sydney).
  */
-const FIRST_PARTY_TOOLS: ToolDef[] = [];
+const FIRST_PARTY_TOOLS: ToolDef[] = [
+	{
+		name: "run_pipeline",
+		description:
+			"Run a declarative data pipeline that the owner has configured on this agent. Pass the pipeline `name` and any `params` (e.g. {city:\"Sydney\"}). The pipeline runs durably in the background (source → transform → sink); it does not return results inline — tell the user it's started.",
+		tier: "base",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				name: { type: "string", description: "Name of a pipeline configured on this instance." },
+				params: { type: "object", description: "Run parameters passed to the pipeline (JSON object)." },
+			},
+			required: ["name"],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "run_pipeline needs an owned instance context.", success: false };
+			const name = String(input.name ?? "");
+			if (!name) return { content: "Pipeline name is required.", success: false };
+			const params = (input.params && typeof input.params === "object" && !Array.isArray(input.params) ? input.params : {}) as Record<string, unknown>;
+			// Deferred import avoids a cycle (pipeline.ts imports this module for the registry).
+			const { startPipelineRun } = await import("./pipeline-run-start.js");
+			const started = await startPipelineRun(ctx.env, ctx.instanceId, ctx.userId, name, params, "chat");
+			if (!started.ok) return { content: started.error, success: false };
+			return { content: `Started pipeline "${name}" (run ${started.runId}). It runs in the background; check the trace/board for progress.`, success: true };
+		},
+	},
+];
 
 // The tool REGISTRY, keyed by name: every connector's tools (flattened from the connector
 // registry, with connector/tier/scope stamped) plus first-party tools. Add a connector =

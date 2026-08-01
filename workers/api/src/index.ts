@@ -50,6 +50,8 @@ export { AgentDO } from "./agent-do.js";
 export { JobApplyWorkflow } from "./workflows/job-apply.js";
 // Re-export the coding-orchestrator Workflow class for wrangler (AgentCoder port)
 export { CodingSessionWorkflow } from "./workflows/coding-session.js";
+// Re-export the declarative-pipeline Workflow class for wrangler (issue #97)
+export { PipelineRunWorkflow } from "./workflows/pipeline-run.js";
 // Re-export the WebSocket relay DO for wrangler
 export { RelayDO } from "./relay-do.js";
 
