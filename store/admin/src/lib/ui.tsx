@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 export function Panel({ title, children, right }: { title?: string; children: ReactNode; right?: ReactNode }) {
 	return (
@@ -48,6 +48,58 @@ export function SplitBar({ platform, byok }: { platform: number; byok: number })
 			<div className="flex justify-between text-xs text-muted mt-1.5">
 				<span><span className="text-accent">■</span> Platform-paid {pPct}%</span>
 				<span><span className="text-blue">■</span> BYOK {100 - pPct}%</span>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * Interactive daily bar chart with exact values: hover a bar to read its date +
+ * value (+ optional secondary metric) in the caption; shows the peak by default,
+ * plus total, a y-axis max label, and the first/last date on the x-axis.
+ */
+export function BarChart({
+	points,
+	format,
+	height = 150,
+	secondaryLabel,
+	secondaryFormat,
+}: {
+	points: Array<{ date: string; value: number; secondary?: number }>;
+	format: (n: number) => string;
+	height?: number;
+	secondaryLabel?: string;
+	secondaryFormat?: (n: number) => string;
+}) {
+	const [hi, setHi] = useState<number | null>(null);
+	if (!points.length) return <Empty label="No data in this window." />;
+	const max = Math.max(1, ...points.map((p) => p.value));
+	const total = points.reduce((s, p) => s + p.value, 0);
+	const peak = points.reduce((b, p, i, a) => (p.value > a[b].value ? i : b), 0);
+	const sel = points[hi ?? peak];
+	const md = (d: string) => (d || "").slice(5); // MM-DD
+	const secTxt = sel.secondary != null && secondaryLabel ? ` · ${(secondaryFormat ?? String)(sel.secondary)} ${secondaryLabel}` : "";
+	return (
+		<div>
+			<div className="flex items-baseline justify-between mb-2 text-sm">
+				<span><span className="text-muted">{md(sel.date)}</span> <span className="font-semibold">{format(sel.value)}</span><span className="text-muted-soft">{secTxt}</span>{hi == null ? <span className="text-muted-soft"> (peak)</span> : null}</span>
+				<span className="text-xs text-muted-soft">total {format(total)}</span>
+			</div>
+			<div className="relative flex items-end gap-px border-l border-b border-line pl-1" style={{ height }}>
+				<span className="absolute -top-0.5 right-1 text-[10px] text-muted-soft">{format(max)}</span>
+				{points.map((p, i) => (
+					<div key={p.date} className="flex-1 flex items-end h-full min-w-0" onMouseEnter={() => setHi(i)} onMouseLeave={() => setHi(null)}>
+						<div
+							className={`w-full rounded-t-sm ${i === (hi ?? peak) ? "bg-accent" : "bg-accent/55 hover:bg-accent"}`}
+							style={{ height: `${Math.max(2, (p.value / max) * 100)}%` }}
+							title={`${p.date}: ${format(p.value)}${secTxt}`}
+						/>
+					</div>
+				))}
+			</div>
+			<div className="flex justify-between text-[10px] text-muted-soft mt-1">
+				<span>{md(points[0].date)}</span>
+				<span>{md(points[points.length - 1].date)}</span>
 			</div>
 		</div>
 	);

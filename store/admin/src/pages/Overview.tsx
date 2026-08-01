@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, fmtInt, fmtUsd } from "../lib/api";
-import { ErrorBox, Loading, Panel, Stat, TrendBars } from "../lib/ui";
+import { BarChart, ErrorBox, Loading, Panel, Stat } from "../lib/ui";
 
 interface Overview {
 	users: number;
@@ -13,7 +13,7 @@ interface Overview {
 	platformSpend30dMicros: number;
 }
 interface Spending {
-	daily: Array<{ date: string; costMicros: number }>;
+	daily: Array<{ date: string; costMicros: number; calls: number }>;
 	byok: { costMicros: number };
 	platformAiEnabled: boolean;
 }
@@ -45,9 +45,19 @@ export default function OverviewPage() {
 				<Stat label="AI calls (24h)" value={fmtInt(o.aiCalls24h)} />
 				<Stat label="Platform AI" value={s.platformAiEnabled ? "ON" : "OFF"} />
 			</div>
-			<Panel title="AI spend — last 30 days">
-				<TrendBars points={s.daily} />
-			</Panel>
+			<div className="grid md:grid-cols-2 gap-4">
+				<Panel title="AI spend — last 30 days">
+					<BarChart
+						points={s.daily.map((d) => ({ date: d.date, value: d.costMicros, secondary: d.calls }))}
+						format={fmtUsd}
+						secondaryLabel="calls"
+						secondaryFormat={fmtInt}
+					/>
+				</Panel>
+				<Panel title="AI calls — last 30 days">
+					<BarChart points={s.daily.map((d) => ({ date: d.date, value: d.calls }))} format={fmtInt} />
+				</Panel>
+			</div>
 			<p className="text-sm text-muted">
 				Platform-paid AI is <strong className={s.platformAiEnabled ? "text-green" : "text-muted"}>{s.platformAiEnabled ? "ON" : "OFF"}</strong>.
 				See <em>Errors</em> to learn from recurring failures, <em>Spending</em>/<em>Usage</em> for cost, <em>Terminals</em> for connected CLIs, and <em>Audit</em> for the admin action log.
