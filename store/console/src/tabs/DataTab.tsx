@@ -59,6 +59,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [hidden, setHidden] = useState<Set<string>>(new Set());
 	const [showCols, setShowCols] = useState(false);
 	const [filters, setFilters] = useState<Record<string, string>>({});
+	const [showControls, setShowControls] = useState(false);
 
 	const loadCollections = useCallback(async () => {
 		try {
@@ -198,107 +199,122 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 
 	return (
 		<div className="text-sm">
-			<div className="flex flex-wrap items-center gap-2 mb-3">
-				<select
-					value={selected}
-					onChange={(e) => {
-						setSelected(e.target.value);
-						setSortBy("");
-						setQ("");
-						setFilters({});
-						setHidden(new Set());
-					}}
-					className="border rounded px-2 py-1"
-				>
-					{collections.length === 0 && <option value="">No collections</option>}
-					{collections.map((c) => (
-						<option key={c.name} value={c.name}>
-							{c.name}
-							{typeof c.recordCount === "number" ? ` (${c.recordCount})` : ""}
-						</option>
-					))}
-				</select>
-
-				{hasStatus && (
-					<div className="inline-flex rounded border overflow-hidden">
-						{(["table", "board"] as const).map((v) => (
-							<button
-								key={v}
-								type="button"
-								onClick={() => setView(v)}
-								className={`px-2 py-1 text-xs ${view === v ? "bg-accent text-white" : ""}`}
-							>
-								{v === "table" ? "Table" : "Board"}
-							</button>
-						))}
-					</div>
-				)}
-
-				<input
-					value={q}
-					onChange={(e) => setQ(e.target.value)}
-					placeholder="Filter…"
-					className="border rounded px-2 py-1 flex-1 min-w-40"
-				/>
-
-				{Object.keys(facetValues).map((f) => (
+			<div className="mb-3">
+				<div className="flex flex-wrap items-center gap-2">
 					<select
-						key={f}
-						value={filters[f] || ""}
-						onChange={(e) => setFilters((p) => ({ ...p, [f]: e.target.value }))}
-						className="border rounded px-1 py-1 text-xs"
+						value={selected}
+						onChange={(e) => {
+							setSelected(e.target.value);
+							setSortBy("");
+							setQ("");
+							setFilters({});
+							setHidden(new Set());
+						}}
+						className="border rounded px-2 py-1"
 					>
-						<option value="">{f}: all</option>
-						{facetValues[f].map((v) => (
-							<option key={v} value={v}>
-								{v}
+						{collections.length === 0 && <option value="">No collections</option>}
+						{collections.map((c) => (
+							<option key={c.name} value={c.name}>
+								{c.name}
+								{typeof c.recordCount === "number" ? ` (${c.recordCount})` : ""}
 							</option>
 						))}
 					</select>
-				))}
 
-				<div className="relative">
-					<button type="button" onClick={() => setShowCols((s) => !s)} className="border rounded px-2 py-1 text-xs">
-						Columns ▾
-					</button>
-					{showCols && (
-						<div className="absolute z-10 mt-1 bg-white border rounded shadow p-2 max-h-64 overflow-auto text-xs">
-							{allColumns.map((c) => (
-								<label key={c} className="flex items-center gap-1.5 py-0.5 whitespace-nowrap cursor-pointer">
-									<input
-										type="checkbox"
-										checked={!hidden.has(c)}
-										onChange={() =>
-											setHidden((h) => {
-												const n = new Set(h);
-												n.has(c) ? n.delete(c) : n.add(c);
-												return n;
-											})
-										}
-									/>
-									{c}
-								</label>
+					{hasStatus && (
+						<div className="inline-flex rounded border overflow-hidden">
+							{(["table", "board"] as const).map((v) => (
+								<button
+									key={v}
+									type="button"
+									onClick={() => setView(v)}
+									className={`px-2 py-1 text-xs ${view === v ? "bg-accent text-white" : ""}`}
+								>
+									{v === "table" ? "Table" : "Board"}
+								</button>
 							))}
 						</div>
 					)}
+
+					<span className="text-muted-soft whitespace-nowrap">
+						{rows.length} of {records.length}
+					</span>
+
+					<button
+						type="button"
+						onClick={() => setShowControls((s) => !s)}
+						className="border rounded px-2 py-1 text-xs ml-auto"
+					>
+						{showControls ? "Hide controls ▲" : "Controls ▾"}
+					</button>
 				</div>
 
-				<button type="button" onClick={exportCsv} className="border rounded px-2 py-1 text-xs">
-					CSV
-				</button>
-				<span className="text-muted-soft whitespace-nowrap">
-					{rows.length} of {records.length}
-				</span>
-				<button
-					type="button"
-					onClick={() => {
-						loadCollections();
-						if (selected) loadRecords(selected);
-					}}
-					className="border rounded px-2 py-1 text-xs"
-				>
-					Refresh
-				</button>
+				{showControls && (
+					<div className="flex flex-wrap items-center gap-2 mt-2 border-t pt-2">
+						<input
+							value={q}
+							onChange={(e) => setQ(e.target.value)}
+							placeholder="Filter…"
+							className="border rounded px-2 py-1 flex-1 min-w-40"
+						/>
+
+						{Object.keys(facetValues).map((f) => (
+							<select
+								key={f}
+								value={filters[f] || ""}
+								onChange={(e) => setFilters((p) => ({ ...p, [f]: e.target.value }))}
+								className="border rounded px-1 py-1 text-xs"
+							>
+								<option value="">{f}: all</option>
+								{facetValues[f].map((v) => (
+									<option key={v} value={v}>
+										{v}
+									</option>
+								))}
+							</select>
+						))}
+
+						<div className="relative">
+							<button type="button" onClick={() => setShowCols((s) => !s)} className="border rounded px-2 py-1 text-xs">
+								Columns ▾
+							</button>
+							{showCols && (
+								<div className="absolute z-10 mt-1 bg-white border rounded shadow p-2 max-h-64 overflow-auto text-xs">
+									{allColumns.map((c) => (
+										<label key={c} className="flex items-center gap-1.5 py-0.5 whitespace-nowrap cursor-pointer">
+											<input
+												type="checkbox"
+												checked={!hidden.has(c)}
+												onChange={() =>
+													setHidden((h) => {
+														const n = new Set(h);
+														n.has(c) ? n.delete(c) : n.add(c);
+														return n;
+													})
+												}
+											/>
+											{c}
+										</label>
+									))}
+								</div>
+							)}
+						</div>
+
+						<button type="button" onClick={exportCsv} className="border rounded px-2 py-1 text-xs">
+							CSV
+						</button>
+						<button
+							type="button"
+							onClick={() => {
+								loadCollections();
+								if (selected) loadRecords(selected);
+							}}
+							className="border rounded px-2 py-1 text-xs"
+						>
+							Refresh
+						</button>
+					</div>
+				)}
 			</div>
 
 			{error && <div className="text-red-500 mb-2">{error}</div>}
