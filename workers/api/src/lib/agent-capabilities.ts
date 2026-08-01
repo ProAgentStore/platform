@@ -240,6 +240,34 @@ export function sanitizeToolList(value: unknown): string[] | undefined {
 }
 
 const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "repo"]);
+const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding"]);
+const KNOWN_WORKFLOWS = new Set(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES"]);
+
+/** The narrow, validated capabilities a creator declares (subset of AgentCapabilities;
+ *  boardColumns/customSurfaces/settingsSchema are validated where they are read). */
+export interface DeclaredCapabilities {
+	surfaces: AgentSurface[];
+	runtime: AgentRuntimeKind;
+	workflow: AgentCapabilities["workflow"];
+	tools?: string[];
+}
+
+/** Validate a raw declared-capabilities object (as a creator submits it) into the
+ *  narrow shape stored under config.capabilities: unknown surfaces/runtime/workflow are
+ *  dropped, tools go through sanitizeToolList. Never throws — coerces to safe defaults. */
+export function sanitizeDeclaredCapabilities(value: unknown): DeclaredCapabilities {
+	const o = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+	const surfaces = Array.isArray(o.surfaces)
+		? o.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface))
+		: [];
+	const runtime = KNOWN_RUNTIMES.has(o.runtime as Exclude<AgentRuntimeKind, null>)
+		? (o.runtime as AgentRuntimeKind)
+		: null;
+	const workflow = KNOWN_WORKFLOWS.has(o.workflow as string)
+		? (o.workflow as AgentCapabilities["workflow"])
+		: null;
+	return { surfaces, runtime, workflow, tools: sanitizeToolList(o.tools) };
+}
 
 /** Minimal shape we need off an `agents` row to resolve capabilities. */
 export interface AgentLike {
