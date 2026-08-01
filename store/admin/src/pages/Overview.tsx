@@ -50,7 +50,7 @@ export default function OverviewPage() {
 			</Panel>
 			<p className="text-sm text-muted">
 				Platform-paid AI is <strong className={s.platformAiEnabled ? "text-green" : "text-muted"}>{s.platformAiEnabled ? "ON" : "OFF"}</strong>.
-				See <em>Spending</em> for the platform-vs-BYOK breakdown, <em>Agents</em> for the catalog, and <em>Activity</em> for errors + the admin audit log.
+				See <em>Errors</em> to learn from recurring failures, <em>Spending</em>/<em>Usage</em> for cost, <em>Terminals</em> for connected CLIs, and <em>Audit</em> for the admin action log.
 			</p>
 		</div>
 	);

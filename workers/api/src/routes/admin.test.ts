@@ -226,6 +226,19 @@ describe("new operator views (#31/#33)", () => {
 		expect(res.status).toBe(200);
 		expect((await res.json() as any).errors[0].message).toBe("boom");
 	});
+
+	it("GET /v1/admin/errors/summary groups into signatures", async () => {
+		const errorRows = [
+			{ id: "e1", created_at: "2026-08-01 10:00:00", user_id: "u1", source: "job-apply", status: 504, message: "timeout after 25s", context: null },
+			{ id: "e2", created_at: "2026-08-01 09:00:00", user_id: "u2", source: "job-apply", status: 504, message: "timeout after 9s", context: null },
+		];
+		const { app, env } = testApp({ errorRows });
+		const res = await req(app, env, "/v1/admin/errors/summary", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		const b = (await res.json()) as any;
+		expect(b.signatures[0].count).toBe(2);
+		expect(b.signatures[0].users).toBe(2);
+	});
 });
 
 describe("GET /v1/admin/usage", () => {

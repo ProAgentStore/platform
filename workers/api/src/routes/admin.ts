@@ -1,7 +1,8 @@
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { HttpError, isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
 import { getOverviewStats, getUserDetail, listAdminAudit, listAgents, listInstances, listUsers } from "../lib/admin.js";
-import { listErrors } from "../lib/error-log.js";
+import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
 import { groupTerminalNodes } from "./terminals.js";
 import { relayConnected } from "../lib/runner-client.js";
@@ -176,16 +177,48 @@ adminRoutes.get("/terminals", async (c) => {
 	return c.json({ count: nodes.length, nodes });
 });
 
-/** GET /v1/admin/errors?source=&limit= — cross-user error log (newest first). */
+/**
+ * GET /v1/admin/errors?source=&q=&status=&since=&limit= — cross-user error feed,
+ * newest first. `q` matches the message, `status` an HTTP code, `since` = days back.
+ */
 adminRoutes.get("/errors", async (c) => {
 	await requireAdmin(c);
-	const errors = await listErrors(c.env, {
-		all: true,
-		source: c.req.query("source") || undefined,
-		limit: Number(c.req.query("limit")) || 100,
-	});
+	const { sql, binds } = errorQuery(c, Math.min(Number(c.req.query("limit")) || 200, 500));
+	const errors = (await c.env.DB.prepare(sql).bind(...binds).all<RawError>()).results ?? [];
 	return c.json({ count: errors.length, errors });
 });
+
+/**
+ * GET /v1/admin/errors/summary?since=&source= — GROUPED signatures: each recurring
+ * exception with its count, distinct affected users, first/last seen, and a sample.
+ * This is the "learn from recurring mistakes" view.
+ */
+adminRoutes.get("/errors/summary", async (c) => {
+	await requireAdmin(c);
+	// Pull a generous window, then group in-process (pure + tested).
+	const { sql, binds } = errorQuery(c, 2000);
+	const rows = (await c.env.DB.prepare(sql).bind(...binds).all<RawError>()).results ?? [];
+	const signatures = summarizeErrors(rows);
+	return c.json({ total: rows.length, signatures });
+});
+
+/** Build a filtered cross-user error_log query from request params (parameterized). */
+function errorQuery(c: Context<{ Bindings: Env }>, limit: number): { sql: string; binds: unknown[] } {
+	const where: string[] = [];
+	const binds: unknown[] = [];
+	const source = c.req.query("source");
+	const q = c.req.query("q");
+	const status = Number(c.req.query("status"));
+	const since = Number(c.req.query("since"));
+	if (source) { binds.push(source); where.push(`source = ?`); }
+	if (q) { binds.push(`%${q}%`); where.push(`message LIKE ?`); }
+	if (status) { binds.push(status); where.push(`status = ?`); }
+	if (since) { binds.push(new Date(Date.now() - since * 86_400_000).toISOString().slice(0, 19).replace("T", " ")); where.push(`created_at >= ?`); }
+	const sql = `SELECT id, created_at, user_id, source, status, message, context FROM error_log${
+		where.length ? ` WHERE ${where.join(" AND ")}` : ""
+	} ORDER BY created_at DESC LIMIT ${Math.max(1, limit)}`;
+	return { sql, binds };
+}
 
 /**
  * GET /v1/admin/users?search=&limit=&offset= — all users with rollup counts

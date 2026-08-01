@@ -1,33 +1,22 @@
 import { useEffect, useState } from "react";
-import { Activity as ActivityIcon, BarChart3, Bot, LayoutDashboard, TerminalSquare, Users as UsersIcon } from "lucide-react";
+import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { api, captureOAuthSession, getToken, signIn } from "./lib/api";
+import Layout from "./components/Layout";
 import Overview from "./pages/Overview";
+import Errors from "./pages/Errors";
 import Users from "./pages/Users";
-import Spending from "./pages/Spending";
+import UserDetail from "./pages/UserDetail";
 import Agents from "./pages/Agents";
-import Activity from "./pages/Activity";
+import Instances from "./pages/Instances";
 import Terminals from "./pages/Terminals";
-
-type Nav = "overview" | "users" | "agents" | "terminals" | "spending" | "activity";
-const NAV: Array<{ id: Nav; label: string; icon: typeof LayoutDashboard }> = [
-	{ id: "overview", label: "Overview", icon: LayoutDashboard },
-	{ id: "users", label: "Users", icon: UsersIcon },
-	{ id: "agents", label: "Agents", icon: Bot },
-	{ id: "terminals", label: "Terminals", icon: TerminalSquare },
-	{ id: "spending", label: "Spending", icon: BarChart3 },
-	{ id: "activity", label: "Activity", icon: ActivityIcon },
-];
+import Usage from "./pages/Usage";
+import Spending from "./pages/Spending";
+import Audit from "./pages/Audit";
 
 type Gate = "loading" | "anon" | "denied" | "ok";
 
-function navFromHash(): Nav {
-	const h = window.location.hash.replace(/^#\/?/, "");
-	return (NAV.find((n) => n.id === h)?.id) || "overview";
-}
-
 export default function App() {
 	const [gate, setGate] = useState<Gate>("loading");
-	const [nav, setNav] = useState<Nav>(navFromHash());
 
 	useEffect(() => {
 		captureOAuthSession();
@@ -35,12 +24,6 @@ export default function App() {
 		api<{ admin: boolean }>("/v1/admin/me")
 			.then((r) => setGate(r.admin ? "ok" : "denied"))
 			.catch(() => setGate("anon"));
-	}, []);
-
-	useEffect(() => {
-		const onHash = () => setNav(navFromHash());
-		window.addEventListener("hashchange", onHash);
-		return () => window.removeEventListener("hashchange", onHash);
 	}, []);
 
 	if (gate === "loading") return <Centered>Checking admin access…</Centered>;
@@ -58,35 +41,23 @@ export default function App() {
 	if (gate === "denied") return <Centered><span className="text-red">Admin access required.</span></Centered>;
 
 	return (
-		<div>
-			<header className="sticky top-0 z-40 h-12 px-4 flex items-center gap-4 border-b border-line bg-paper">
-				<span className="font-display font-bold text-red">⚡ Admin</span>
-				<nav className="flex gap-1 ml-2">
-					{NAV.map((n) => {
-						const Icon = n.icon;
-						const active = nav === n.id;
-						return (
-							<a
-								key={n.id}
-								href={`#/${n.id}`}
-								className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm ${active ? "bg-accent-soft text-accent" : "text-muted hover:text-ink hover:bg-panel-hover"}`}
-							>
-								<Icon size={15} /> <span className="hidden sm:inline">{n.label}</span>
-							</a>
-						);
-					})}
-				</nav>
-				<a href="/console/" className="ml-auto text-sm text-muted hover:text-ink">Console →</a>
-			</header>
-			<main className="max-w-5xl mx-auto p-4">
-				{nav === "overview" && <Overview />}
-				{nav === "users" && <Users />}
-				{nav === "agents" && <Agents />}
-				{nav === "terminals" && <Terminals />}
-				{nav === "spending" && <Spending />}
-				{nav === "activity" && <Activity />}
-			</main>
-		</div>
+		<BrowserRouter basename="/admin">
+			<Routes>
+				<Route element={<Layout />}>
+					<Route index element={<Overview />} />
+					<Route path="errors" element={<Errors />} />
+					<Route path="users" element={<Users />} />
+					<Route path="users/:id" element={<UserDetail />} />
+					<Route path="agents" element={<Agents />} />
+					<Route path="instances" element={<Instances />} />
+					<Route path="terminals" element={<Terminals />} />
+					<Route path="usage" element={<Usage />} />
+					<Route path="spending" element={<Spending />} />
+					<Route path="audit" element={<Audit />} />
+					<Route path="*" element={<Overview />} />
+				</Route>
+			</Routes>
+		</BrowserRouter>
 	);
 }
 
