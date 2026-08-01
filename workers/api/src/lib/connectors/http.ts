@@ -44,7 +44,7 @@ function interpolateDeep(value: unknown, inputs: Record<string, unknown>): unkno
 //                                → [{id, name, site}, …] pulling each field's dotted sub-path
 // Returns undefined for a path that doesn't resolve (rather than throwing) so a partial
 // response maps to nulls, not an error.
-function getPath(obj: unknown, path: string): unknown {
+export function getPath(obj: unknown, path: string): unknown {
 	if (!path) return obj;
 	let cur: unknown = obj;
 	for (const seg of path.split(".")) {

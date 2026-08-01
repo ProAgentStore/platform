@@ -7,6 +7,7 @@ import type { Env } from "../types.js";
 import { connectorTools, getConnector } from "./connectors/registry.js";
 import { connectorClient, type ConnectorClient } from "./connectors/client.js";
 import { hasConsent } from "./connector-consent.js";
+import { STEP_TOOLS } from "./steps.js";
 
 export interface RegistryToolCtx {
 	env: Env;
@@ -93,6 +94,9 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			return { content: `Started pipeline "${name}" (run ${started.runId}). It runs in the background; check the trace/board for progress.`, success: true };
 		},
 	},
+	// Core pipeline step library (issue #96): map / filter / dedupe_upsert / fan_out /
+	// http_reachable / geocode — standard-tier, composed by the pipeline runner (#97).
+	...STEP_TOOLS,
 ];
 
 // The tool REGISTRY, keyed by name: every connector's tools (flattened from the connector

@@ -35,14 +35,15 @@ describe("tool registry", () => {
 		expect(def?.jsonSchema).toBe(getRegistryTool("github_workflow_runs")?.jsonSchema);
 	});
 
-	it("every registry tool declares a jsonSchema and a tier", () => {
+	it("every registry tool declares a jsonSchema and a tier; connector-tier tools name a connector", () => {
 		for (const t of registryTools()) {
 			expect(t.jsonSchema.type).toBe("object");
 			expect(t.jsonSchema.properties).toEqual(expect.any(Object));
 			expect(["base", "standard", "runtime", "connector"]).toContain(t.tier);
-			// Connector-tier tools name their connector; first-party tools (e.g. run_pipeline,
-			// issue #97) don't — the registry now carries both.
+			// Connector-provided tools name their connector; first-party tools (run_pipeline #97,
+			// standard-tier step tools #96) do not.
 			if (t.tier === "connector") expect(typeof t.connector).toBe("string");
+			else expect(t.connector).toBeUndefined();
 		}
 	});
 
