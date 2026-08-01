@@ -682,6 +682,25 @@ export function useVoice(instanceId: string | undefined, opts: {
 		});
 	}, [ensureTts]);
 
+	// ── Screen Wake Lock (hands-free) ────────────────────────────────────────────
+	// The one thing iOS actually lets a PWA do to "keep talking": hold a screen wake
+	// lock so the display doesn't dim/lock mid-conversation and suspend the page + mic.
+	// It CANNOT keep listening once you switch apps or lock manually — WebKit suspends
+	// the web context and revokes the mic; there is no background audio-input API on the
+	// web. The best we can do on returning to the app is re-acquire the lock and restart
+	// the mic (below), since iOS killed it while we were away.
+	const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
+	const acquireWakeLock = useCallback(async () => {
+		if (wakeLockRef.current) return;
+		const nav = navigator as Navigator & { wakeLock?: { request: (t: "screen") => Promise<{ release: () => Promise<void> }> } };
+		try { if (nav.wakeLock?.request) wakeLockRef.current = await nav.wakeLock.request("screen"); }
+		catch { /* unsupported / denied — hands-free still works while the app is foreground */ }
+	}, []);
+	const releaseWakeLock = useCallback(() => {
+		try { void wakeLockRef.current?.release(); } catch { /* already gone */ }
+		wakeLockRef.current = null;
+	}, []);
+
 	const toggleConvo = useCallback(async () => {
 		if (convoOn) {
 			// Turn OFF synchronously: flip the ref NOW so any in-flight onEnd handler or
@@ -696,6 +715,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			ttsRef.current?.cancel();
 			setSpeaking(false);
 			stopAudioMonitor();
+			releaseWakeLock();
 			setConvoOn(false);
 			setTalking(false);
 			setMicOn(false);
@@ -715,9 +735,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 			setConvoOn(true);
 			setSpeakOn(true);
 			setMicOn(true);
+			void acquireWakeLock(); // keep the screen awake so hands-free doesn't get suspended
 			playListeningChime();
 		} catch { setConvoOn(false); }
-	}, [convoOn, makeStt, startAudioMonitor, stopAudioMonitor, ensureTts]);
+	}, [convoOn, makeStt, startAudioMonitor, stopAudioMonitor, ensureTts, acquireWakeLock, releaseWakeLock]);
 
 	/** Stop speaking immediately (tap a message to interrupt). */
 	const cancelSpeak = useCallback(() => {
@@ -795,6 +816,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 		return () => document.removeEventListener("keydown", onKey);
 	}, [cancelSpeak]);
 
+	// Returning to the app after a background trip: the browser auto-releases the wake
+	// lock when hidden, and iOS suspends the page + revokes the mic. So on becoming
+	// visible again during hands-free, re-acquire the lock and restart listening — the
+	// loop was killed while we were away. (There is no way to keep it running in the
+	// background; this just recovers cleanly instead of wedging silent.)
+	useEffect(() => {
+		const onVisible = () => {
+			if (document.visibilityState !== "visible" || !convoOnRef.current) return;
+			void acquireWakeLock();
+			if (!mutedRef.current && !pausedForThinkingRef.current) void startListening();
+		};
+		document.addEventListener("visibilitychange", onVisible);
+		return () => document.removeEventListener("visibilitychange", onVisible);
+	}, [acquireWakeLock, startListening]);
+
 	// Tear everything down on unmount — otherwise leaving the page mid-conversation
 	// keeps the recognizer listening, the TTS speaking, and the mic stream + rAF loop alive.
 	useEffect(() => () => {
@@ -807,7 +843,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		gateRef.current?.stop();
 		ttsRef.current?.dispose(); // close the TTS AudioContext, not just cancel — else it leaks
 		stopAudioMonitor();
-	}, [stopAudioMonitor]);
+		releaseWakeLock();
+	}, [stopAudioMonitor, releaseWakeLock]);
 
 	const toggleMute = useCallback(() => {
 		if (muted) {
