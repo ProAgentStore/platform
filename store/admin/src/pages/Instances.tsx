@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 
@@ -23,7 +24,7 @@ export default function Instances() {
 							<tbody>
 								{data.instances.map((i) => (
 									<tr key={i.id} className="border-b border-line/50">
-										<td className="py-1.5">{i.agent_name || "—"}</td>
+										<td className="py-1.5"><Link to={`/instances/${i.id}`} className="text-accent hover:underline">{i.agent_name || i.id}</Link></td>
 										<td>{i.owner_login || "—"}</td>
 										<td>{badge(i.status)}</td>
 										<td className="text-muted">{i.created_at?.slice(0, 10)}</td>

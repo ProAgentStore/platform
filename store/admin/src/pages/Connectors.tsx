@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { api } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 
@@ -41,7 +42,7 @@ export default function Connectors() {
 						{connectors.map((c) => (
 							<div key={c.connector} className="border-b border-line/50 pb-2">
 								<div className="flex items-center gap-2">
-									<span className="font-semibold">{c.connector}</span>
+									<Link to={`/connectors/${encodeURIComponent(c.connector)}`} className="font-semibold text-accent hover:underline">{c.connector}</Link>
 									{c.hasWrite && <span className="text-xs text-yellow">write</span>}
 								</div>
 								<div className="flex flex-wrap gap-1.5 mt-1">

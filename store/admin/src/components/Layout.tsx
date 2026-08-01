@@ -1,16 +1,19 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, AlertTriangle, BarChart3, Bot, Boxes, Gauge, LayoutDashboard, Plug, TerminalSquare, Users as UsersIcon } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, Bot, Boxes, Gauge, LayoutDashboard, Plug, ScrollText, Siren, TerminalSquare, Users as UsersIcon, Zap } from "lucide-react";
 
 const NAV = [
 	{ to: "/", label: "Overview", icon: LayoutDashboard, end: true },
+	{ to: "/ops", label: "Ops", icon: Siren },
 	{ to: "/errors", label: "Errors", icon: AlertTriangle },
 	{ to: "/users", label: "Users", icon: UsersIcon },
 	{ to: "/agents", label: "Agents", icon: Bot },
 	{ to: "/instances", label: "Instances", icon: Boxes },
 	{ to: "/terminals", label: "Terminals", icon: TerminalSquare },
 	{ to: "/connectors", label: "Connectors", icon: Plug },
+	{ to: "/triggers", label: "Triggers", icon: Zap },
 	{ to: "/usage", label: "Usage", icon: Gauge },
 	{ to: "/spending", label: "Spending", icon: BarChart3 },
+	{ to: "/mcp-audit", label: "MCP audit", icon: ScrollText },
 	{ to: "/audit", label: "Audit", icon: Activity },
 ];
 

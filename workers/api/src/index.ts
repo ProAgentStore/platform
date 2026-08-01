@@ -32,6 +32,12 @@ import { terminalRoutes } from "./routes/terminals.js";
 import { usageRoutes } from "./routes/usage.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
+import { adminInstanceDetailRoutes } from "./routes/admin-instance-detail.js";
+import { adminTraceRoutes } from "./routes/admin-trace.js";
+import { adminCodingSessionRoutes } from "./routes/admin-coding-session.js";
+import { adminMcpAuditRoutes } from "./routes/admin-mcp-audit.js";
+import { adminOpsRoutes } from "./routes/admin-ops.js";
+import { adminTriggersRoutes } from "./routes/admin-triggers.js";
 import { toolRoutes } from "./routes/tools.js";
 import { cloudflareAccessGate } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
@@ -125,6 +131,12 @@ app.route("/v1/errors", errorRoutes); // GET /v1/errors — durable error log re
 app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try, /webhook/:id/ingest
 app.route("/v1/billing", billingRoutes);
 app.route("/v1/admin", adminRoutes); // operator portal: /me, /audit (+ users, agents, usage, moderation)
+app.route("/v1/admin", adminInstanceDetailRoutes); // /instances/:id/detail
+app.route("/v1/admin", adminTraceRoutes); // /trace/:instanceId
+app.route("/v1/admin", adminCodingSessionRoutes); // /coding-sessions/:sid
+app.route("/v1/admin", adminMcpAuditRoutes); // /mcp-audit
+app.route("/v1/admin", adminOpsRoutes); // /ops
+app.route("/v1/admin", adminTriggersRoutes); // /triggers
 
 app.get("/health", (c) => c.json({ ok: true, service: "proagentstore-api" }));
 

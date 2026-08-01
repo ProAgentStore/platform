@@ -67,6 +67,9 @@ export interface Env {
 	META_ACCESS_TOKEN?: string;
 	WHATSAPP_PHONE_NUMBER_ID?: string;
 	META_IG_ID?: string;
+	/** MCP worker's audit KV (read-only from the API worker) — powers the admin MCP-audit
+	 *  page. Same namespace the MCP worker writes to; optional so it's inert if unbound. */
+	OAUTH_KV?: KVNamespace;
 }
 
 export interface SessionPayload {

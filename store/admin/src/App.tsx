@@ -11,9 +11,17 @@ import AgentDetail from "./pages/AgentDetail";
 import Instances from "./pages/Instances";
 import Terminals from "./pages/Terminals";
 import Connectors from "./pages/Connectors";
+import ConnectorDetail from "./pages/ConnectorDetail";
 import Usage from "./pages/Usage";
 import Spending from "./pages/Spending";
 import Audit from "./pages/Audit";
+import InstanceDetail from "./pages/InstanceDetail";
+import TraceView from "./pages/TraceView";
+import SessionDetail from "./pages/SessionDetail";
+import McpAudit from "./pages/McpAudit";
+import Ops from "./pages/Ops";
+import Triggers from "./pages/Triggers";
+import ErrorSignature from "./pages/ErrorSignature";
 
 type Gate = "loading" | "anon" | "denied" | "ok";
 
@@ -48,13 +56,21 @@ export default function App() {
 				<Route element={<Layout />}>
 					<Route index element={<Overview />} />
 					<Route path="errors" element={<Errors />} />
+					<Route path="errors/:key" element={<ErrorSignature />} />
 					<Route path="users" element={<Users />} />
 					<Route path="users/:id" element={<UserDetail />} />
 					<Route path="agents" element={<Agents />} />
 					<Route path="agents/:id" element={<AgentDetail />} />
 					<Route path="instances" element={<Instances />} />
+					<Route path="instances/:id" element={<InstanceDetail />} />
+					<Route path="instances/:instanceId/trace" element={<TraceView />} />
 					<Route path="terminals" element={<Terminals />} />
+					<Route path="coding-sessions/:sid" element={<SessionDetail />} />
 					<Route path="connectors" element={<Connectors />} />
+					<Route path="connectors/:connector" element={<ConnectorDetail />} />
+					<Route path="ops" element={<Ops />} />
+					<Route path="triggers" element={<Triggers />} />
+					<Route path="mcp-audit" element={<McpAudit />} />
 					<Route path="usage" element={<Usage />} />
 					<Route path="spending" element={<Spending />} />
 					<Route path="audit" element={<Audit />} />

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../lib/api";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 
@@ -18,6 +19,8 @@ export default function Errors() {
 	const [feed, setFeed] = useState<RawErr[] | null>(null);
 	const [err, setErr] = useState("");
 	const [openSig, setOpenSig] = useState<Signature | null>(null);
+	const navigate = useNavigate();
+	void openSig; void setOpenSig; // drawer retained but grouped rows now deep-link to the signature page
 
 	useEffect(() => { const t = setTimeout(() => setQDebounced(q.trim()), 300); return () => clearTimeout(t); }, [q]);
 
@@ -77,7 +80,7 @@ export default function Errors() {
 							</tr></thead>
 							<tbody>
 								{sigs.map((s) => (
-									<tr key={s.key} className="border-b border-line/50 hover:bg-panel-hover cursor-pointer align-top" onClick={() => setOpenSig(s)}>
+									<tr key={s.key} className="border-b border-line/50 hover:bg-panel-hover cursor-pointer align-top" onClick={() => navigate(`/errors/${encodeURIComponent(s.key)}`)}>
 										<td className="py-1.5 font-semibold">{s.count}×</td>
 										<td className="text-accent whitespace-nowrap">{s.source}</td>
 										<td className="max-w-[420px]"><div className="truncate">{s.sample}</div><div className="text-xs text-muted-soft truncate">{s.pattern}</div></td>

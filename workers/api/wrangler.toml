@@ -47,6 +47,11 @@ migrations_dir = "migrations"
 binding = "STORAGE"
 bucket_name = "pags-agents"
 
+# MCP worker's audit KV — read-only here to power the admin MCP-audit page.
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "0a52222c4d0c45b3bba496357d2c8b99"
+
 [[durable_objects.bindings]]
 name = "AGENT"
 class_name = "AgentDO"
