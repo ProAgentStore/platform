@@ -51,6 +51,10 @@ jobs:
         working-directory: store/console
         run: npx vite build
 
+      - name: Build admin React app
+        working-directory: store/admin
+        run: npx vite build
+
       - name: Build host pages
         working-directory: workers/host
         run: node build.js

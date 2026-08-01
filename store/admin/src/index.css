@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+/* Design tokens — shared with the console (store/console/src/index.css). */
+@theme {
+	--color-paper: #0a0a0a;
+	--color-panel: #141414;
+	--color-panel-hover: #1a1a1a;
+	--color-ink: #fafafa;
+	--color-ink-strong: #fff;
+	--color-muted: #a3a3a3;
+	--color-muted-soft: #737373;
+	--color-accent: #7c3aed;
+	--color-accent-hover: #6d28d9;
+	--color-accent-soft: rgba(124, 58, 237, 0.15);
+	--color-line: #303030;
+	--color-line-strong: #404040;
+	--color-green: #22c55e;
+	--color-red: #ef4444;
+	--color-yellow: #eab308;
+	--color-blue: #3b82f6;
+	--font-body: "Manrope", system-ui, sans-serif;
+	--font-display: "Fraunces", Georgia, serif;
+	--font-mono: "SF Mono", ui-monospace, Menlo, monospace;
+}
+
+@layer base {
+	body {
+		font-family: var(--font-body);
+		background: var(--color-paper);
+		color: var(--color-ink);
+		-webkit-font-smoothing: antialiased;
+		min-height: 100dvh;
+	}
+	::selection {
+		background: var(--color-accent);
+		color: #fff;
+	}
+	a:not([class]) {
+		color: var(--color-accent);
+	}
+	button,
+	input,
+	select,
+	a {
+		touch-action: manipulation;
+	}
+	input,
+	select {
+		width: 100%;
+		background: var(--color-paper);
+		border: 1px solid var(--color-line);
+		border-radius: 0.5rem;
+		padding: 0.5rem 0.75rem;
+		color: var(--color-ink);
+		font-size: 0.88rem;
+	}
+	input:focus,
+	select:focus {
+		outline: none;
+		border-color: var(--color-accent);
+		box-shadow: 0 0 0 3px var(--color-accent-soft);
+	}
+}

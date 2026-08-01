@@ -4,3 +4,4 @@ packages:
   - 'agents/job-application-assistant'
   - 'agents/coder/web'
   - 'store/console'
+  - 'store/admin'

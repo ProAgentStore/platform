@@ -151,6 +151,11 @@ export default {
 			return new Response(consolePage, { headers: CONSOLE_HEADERS });
 		}
 
+		// Admin SPA deep links (/admin/*) — serve the app shell (client-side routed).
+		if (path.startsWith("/admin/") && !path.includes(".")) {
+			return new Response(adminPage, { headers: CONSOLE_HEADERS });
+		}
+
 		// JS assets
 		if (path === "/widget.js") return new Response(widgetJs, { headers: JS_HEADERS });
 		if (path === "/auth-widget.js") return new Response(authWidgetJs, { headers: JS_HEADERS });

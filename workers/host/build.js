@@ -44,6 +44,31 @@ const consoleHtml = `<!DOCTYPE html>
 </body>
 </html>`;
 
+// ── Admin: React app built by Vite (same pattern as the console) ────────────
+const adminDir = path.join(storeDir, "admin");
+const adminBundleJs = fs.readFileSync(path.join(adminDir, "dist", "assets", "bundle.js"), "utf-8");
+const adminBundleCss = fs.readFileSync(path.join(adminDir, "dist", "assets", "index.css"), "utf-8");
+const adminHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — ProAgentStore</title>
+  <meta name="description" content="ProAgentStore operator console.">
+  <meta name="robots" content="noindex,nofollow">
+  <meta name="theme-color" content="#7c3aed">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>${adminBundleCss}</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module">${adminBundleJs}</script>
+</body>
+</html>`;
+
 function walkFiles(dir) {
 	const out = [];
 	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -111,7 +136,7 @@ const pages = {
 	widgetJs: fs.readFileSync(path.join(storeDir, "widget.js"), "utf-8"),
 	authWidgetJs: fs.readFileSync(path.join(storeDir, "auth-widget.js"), "utf-8"),
 	swJs: fs.readFileSync(path.join(storeDir, "sw.js"), "utf-8"),
-	adminPage: fs.readFileSync(path.join(storeDir, "admin", "index.html"), "utf-8"),
+	adminPage: adminHtml,
 	notFoundPage: fs.readFileSync(path.join(storeDir, "404.html"), "utf-8"),
 	changelogPage: fs.readFileSync(path.join(storeDir, "changelog", "index.html"), "utf-8"),
 	openapiYaml: fs.readFileSync(path.join(storeDir, "openapi.yaml"), "utf-8"),
