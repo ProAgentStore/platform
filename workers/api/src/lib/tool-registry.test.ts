@@ -4,6 +4,17 @@ import type { Env } from "../types.js";
 
 const envNoGithub = {} as unknown as Env; // githubAppConfigured() → false
 
+/** Env whose consent lookup returns `granted` for every (instance,connector,write). */
+function envWithConsent(granted: boolean): Env {
+	return {
+		DB: {
+			prepare(_sql: string) {
+				return { bind() { return { first: async () => (granted ? { ok: 1 } : null) }; } };
+			},
+		},
+	} as unknown as Env;
+}
+
 describe("tool registry", () => {
 	it("registers the GitHub connector tools", () => {
 		const names = registryToolNameSet();
@@ -37,6 +48,26 @@ describe("tool registry", () => {
 
 	it("getRegistryTool returns the tool with its scope", () => {
 		expect(getRegistryTool("github_workflow_runs")?.scope).toBe("read");
+		expect(getRegistryTool("github_create_issue")?.scope).toBe("write");
 		expect(getRegistryTool("does_not_exist")).toBeUndefined();
+	});
+
+	it("blocks a WRITE tool without consent (fail-closed)", async () => {
+		const r = await runRegistryTool("github_create_issue", { env: envWithConsent(false), userId: "u1", instanceId: "i1" }, { repo: "o/n", title: "hi" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/isn't permitted|not permitted|consent/i);
+	});
+
+	it("blocks a WRITE tool when there's no instance context (fail-closed)", async () => {
+		const r = await runRegistryTool("github_create_issue", { env: envWithConsent(true), userId: "u1" }, { repo: "o/n", title: "hi" });
+		expect(r.success).toBe(false);
+	});
+
+	it("passes the consent gate for a WRITE tool when granted (then fails later on not-connected)", async () => {
+		const r = await runRegistryTool("github_create_issue", { env: envWithConsent(true), userId: "u1", instanceId: "i1" }, { repo: "o/n", title: "hi" });
+		// Gate passed → handler ran → GitHub not configured in this env → its own error,
+		// NOT the consent error.
+		expect(r.content).not.toMatch(/isn't permitted/i);
+		expect(r.content).toMatch(/not connected|not configured/i);
 	});
 });

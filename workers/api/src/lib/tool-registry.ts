@@ -5,6 +5,7 @@
 // STORAGE_TOOLS catalog is untouched; registry tools are dispatched alongside them.
 import type { Env } from "../types.js";
 import { GITHUB_TOOLS } from "./connectors/github.js";
+import { hasConsent } from "./connector-consent.js";
 
 export interface RegistryToolCtx {
 	env: Env;
@@ -71,6 +72,15 @@ export async function runRegistryTool(
 ): Promise<{ name: string; content: string; success: boolean }> {
 	const tool = REGISTRY.get(name);
 	if (!tool) return { name, content: `Unknown tool: ${name}`, success: false };
+	// Write-consent gate (issue #90): a write tool needs explicit per-instance consent
+	// for its connector. Fail-closed — no instance context or no consent → refused.
+	if (tool.scope === "write" && !(await hasConsent(ctx.env, ctx.instanceId, tool.connector, "write"))) {
+		return {
+			name,
+			content: `Writing via the ${tool.connector} connector isn't permitted for this agent. Enable write access for ${tool.connector} in the instance's Connections settings, then try again.`,
+			success: false,
+		};
+	}
 	try {
 		const r = await tool.handler(ctx, input || {});
 		return { name, content: r.content, success: r.success };

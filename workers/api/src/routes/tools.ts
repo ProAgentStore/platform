@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { getRegistryTool, registryTools, runRegistryTool } from "../lib/tool-registry.js";
+import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import type { Env } from "../types.js";
 
 /**
@@ -36,4 +37,27 @@ toolRoutes.post("/:id/tools/:name", async (c) => {
 	const input = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const result = await runRegistryTool(name, { env: c.env, userId: session.uid, instanceId }, input);
 	return c.json(result);
+});
+
+/** GET /v1/instances/:id/connectors/consent — write-consents granted on this instance. */
+toolRoutes.get("/:id/connectors/consent", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	return c.json({ consents: await listConsents(c.env, c.req.param("id")) });
+});
+
+/**
+ * PUT /v1/instances/:id/connectors/:connector/consent { enabled } — grant/revoke
+ * write consent for a connector (issue #90). Owner-scoped. Scope is "write" (reads
+ * never need consent).
+ */
+toolRoutes.put("/:id/connectors/:connector/consent", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const connector = c.req.param("connector");
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
+	if (body.enabled) await setConsent(c.env, instanceId, session.uid, connector, "write");
+	else await revokeConsent(c.env, instanceId, connector, "write");
+	return c.json({ ok: true, connector, scope: "write", enabled: !!body.enabled });
 });

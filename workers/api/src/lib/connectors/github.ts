@@ -98,4 +98,32 @@ export const GITHUB_TOOLS: RegistryTool[] = [
 			return issue ? { content: JSON.stringify(issue, null, 2), success: true } : { content: `Issue #${num} not found in ${repo}.`, success: false };
 		},
 	},
+	{
+		name: "github_create_issue",
+		connector: "github",
+		scope: "write",
+		description: "Open a new GitHub issue in a repo. WRITE — requires the GitHub connector's write consent for this instance.",
+		parameters: {
+			repo: { type: "string", description: 'The repository, "owner/name".', required: true },
+			title: { type: "string", description: "Issue title.", required: true },
+			body: { type: "string", description: "Issue body (markdown)." },
+			labels: { type: "string", description: "Comma-separated labels to apply." },
+		},
+		handler: async (ctx, input) => {
+			const repo = String(input.repo || "");
+			const title = String(input.title || "").trim();
+			if (!title) return { content: "An issue `title` is required.", success: false };
+			const r = await resolveRepo(ctx, repo);
+			if ("error" in r) return { content: r.error, success: false };
+			const labels = String(input.labels || "").split(",").map((s) => s.trim()).filter(Boolean);
+			const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+				method: "POST",
+				headers: { ...GH(r.token), "Content-Type": "application/json" },
+				body: JSON.stringify({ title, body: input.body ? String(input.body) : undefined, ...(labels.length ? { labels } : {}) }),
+			});
+			if (!res.ok) return { content: `GitHub returned ${res.status} creating the issue in ${repo}`, success: false };
+			const data = (await res.json()) as { number?: number; html_url?: string };
+			return { content: `Opened issue #${data.number} — ${data.html_url}`, success: true };
+		},
+	},
 ];

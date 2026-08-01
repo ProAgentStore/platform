@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { HttpError, isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
 import { getOverviewStats, getUserDetail, listAdminAudit, listAgents, listInstances, listUsers } from "../lib/admin.js";
 import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
+import { listAllConsents } from "../lib/connector-consent.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
 import { groupTerminalNodes } from "./terminals.js";
 import { relayConnected } from "../lib/runner-client.js";
@@ -85,6 +86,12 @@ adminRoutes.get("/audit", async (c) => {
 		limit: Number(c.req.query("limit")) || undefined,
 	});
 	return c.json({ count: rows.length, audit: rows });
+});
+
+/** GET /v1/admin/connectors — every connector write-consent across all users (visibility, #90). */
+adminRoutes.get("/connectors", async (c) => {
+	await requireAdmin(c);
+	return c.json({ consents: await listAllConsents(c.env) });
 });
 
 /** GET /v1/admin/overview — one-shot dashboard counts (users/agents/instances/errors/spend). */
