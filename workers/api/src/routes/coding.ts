@@ -448,6 +448,55 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployment", async (c) => {
 });
 
 /**
+ * Paginated list of recent GitHub Actions runs for a repo — the Build Status panel's
+ * data source (build history). Plural sibling of `/deployment` (which returns only the
+ * latest). Same graceful-degradation contract: `{ available:false }` (never a 500) for
+ * local repos, non-GitHub repos, or when the GitHub App isn't installed. Auth is the
+ * GitHub App installation token (server-side, never exposed to the browser). No new
+ * storage: GitHub is the source of truth (ETag/KV caching is deferred to CODER-002).
+ * `?page` (≥1, default 1) + `?perPage` (1..50, default 20). (CODER-001, #77)
+ */
+codingRoutes.get("/:instanceId/coding/repos/:repoId/deployments", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	if (!repo) throw new HttpError(404, "Repo not found");
+	const full = repo.githubRepo;
+	if (!full?.includes("/") || !githubAppConfigured(c.env)) return c.json({ available: false });
+	const owner = full.split("/")[0];
+	const token = await installationTokenForOwner(c.env, uid, owner).catch(() => null);
+	if (!token) return c.json({ available: false });
+	const page = Math.max(1, Number.parseInt(c.req.query("page") || "1", 10) || 1);
+	const perPage = Math.min(50, Math.max(1, Number.parseInt(c.req.query("perPage") || "20", 10) || 20));
+	try {
+		const res = await fetch(`https://api.github.com/repos/${full}/actions/runs?per_page=${perPage}&page=${page}`, {
+			headers: {
+				Authorization: `token ${token}`,
+				Accept: "application/vnd.github+json",
+				"X-GitHub-Api-Version": "2022-11-28",
+				"User-Agent": "proagentstore-coding/1.0",
+			},
+		});
+		if (!res.ok) return c.json({ available: false });
+		const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
+		const runs = (data.workflow_runs ?? []).map((run) => ({
+			status: run.status, // queued | in_progress | completed
+			conclusion: run.conclusion ?? null, // success | failure | cancelled | null
+			name: run.name ?? "",
+			runNumber: run.run_number ?? null,
+			url: run.html_url ?? "",
+			branch: run.head_branch ?? "",
+			sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
+			updatedAt: run.updated_at ?? "",
+		}));
+		// "There may be more" signal without parsing the Link header: a full page implies a next.
+		const nextPage = runs.length === perPage ? page + 1 : undefined;
+		return c.json(nextPage ? { available: true, runs, nextPage } : { available: true, runs });
+	} catch {
+		return c.json({ available: false });
+	}
+});
+
+/**
  * GitHub issues for a repo (read-only, cloud→GitHub — works on any runner). Public
  * repos work unauthenticated; private repos need the GitHub App installed for the owner.
  * 400 for local-only repos (no `github_repo`); the Issues panel hides in that case.
