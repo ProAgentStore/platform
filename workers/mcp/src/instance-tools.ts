@@ -1672,6 +1672,70 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"get_instance_board_config",
+		"Read a private instance's board configuration: its columns, the preferred view (kanban | list), whether the columns are a per-instance override or the agent's own, and the agent's default columns. Pair with set_instance_board_config to customize the board.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+		},
+		async ({ token, instance_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(`/v1/instances/${instance_id}/board-config`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
+		"set_instance_board_config",
+		"Customize a private instance's board: replace its columns and/or set the default view (kanban | list). Columns are ordered; each card lands in the first column whose `statuses` include its status, else the column marked `catchAll`. Pass columns:[] (or omit and set view only) to keep columns; the console UI, MCP, and the agent itself all write through here. This is a per-instance override — it does not change the agent template.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			columns: z
+				.array(
+					z.object({
+						id: z.string().describe("Stable column id (also a movable status target)."),
+						title: z.string().describe("Column header shown to the user."),
+						color: z.string().optional().describe("Hex dot color, e.g. #22c55e."),
+						statuses: z.array(z.string()).optional().describe("Task statuses that live in this column."),
+						catchAll: z.boolean().optional().describe("Set on ONE column to hold any unmatched status."),
+					}),
+				)
+				.optional()
+				.describe("Full ordered column list (replaces the current override). Empty array or null resets to the agent's columns."),
+			view: z.enum(["kanban", "list"]).optional().describe("Default view for the console board."),
+			reset: z.boolean().optional().describe("Set true to drop the per-instance column override (fall back to the agent's columns)."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, columns, view, reset, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const payload: Record<string, unknown> = {};
+			if (reset) payload.columns = null;
+			else if (columns !== undefined) payload.columns = columns;
+			if (view) payload.view = view;
+			const input = { instance_id, columns: reset ? null : columns, view };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_board_config", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_board_config", "customize instance board", input, {
+					endpoint: `/v1/instances/${instance_id}/board-config`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/board-config`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify(payload) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_board_config", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"hint_instance_task",
 		"Attach a hint to a runtime task (guidance the agent reads on its next step, e.g. answering a blocked task's question).",
 		{

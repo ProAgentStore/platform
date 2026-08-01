@@ -4,6 +4,7 @@ import { HttpError, isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
 import { getOverviewStats, getUserDetail, listAdminAudit, listAgents, listInstances, listUsers } from "../lib/admin.js";
 import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
 import { listAllConsents } from "../lib/connector-consent.js";
+import { registryTools } from "../lib/tool-registry.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
 import { groupTerminalNodes } from "./terminals.js";
 import { relayConnected } from "../lib/runner-client.js";
@@ -88,10 +89,24 @@ adminRoutes.get("/audit", async (c) => {
 	return c.json({ count: rows.length, audit: rows });
 });
 
-/** GET /v1/admin/connectors — every connector write-consent across all users (visibility, #90). */
+/**
+ * GET /v1/admin/connectors — connector visibility (#90): the available connector
+ * catalog (each connector + its tools/scopes) and every per-user write-consent.
+ */
 adminRoutes.get("/connectors", async (c) => {
 	await requireAdmin(c);
-	return c.json({ consents: await listAllConsents(c.env) });
+	const catalog = new Map<string, Array<{ name: string; scope: string }>>();
+	for (const t of registryTools()) {
+		const arr = catalog.get(t.connector) ?? [];
+		arr.push({ name: t.name, scope: t.scope });
+		catalog.set(t.connector, arr);
+	}
+	const connectors = [...catalog.entries()].map(([connector, tools]) => ({
+		connector,
+		tools,
+		hasWrite: tools.some((t) => t.scope === "write"),
+	}));
+	return c.json({ connectors, consents: await listAllConsents(c.env) });
 });
 
 /** GET /v1/admin/overview — one-shot dashboard counts (users/agents/instances/errors/spend). */

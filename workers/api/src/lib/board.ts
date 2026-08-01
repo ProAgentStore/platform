@@ -1,6 +1,53 @@
 import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
-import { agentCapabilities, type BoardColumn } from "./agent-capabilities.js";
+import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "./agent-capabilities.js";
+
+/** How the board can be viewed in the console. Persisted per-instance so the choice
+ *  follows the user across devices and is settable via UI, MCP, and the agent itself. */
+export type BoardView = "kanban" | "list";
+
+/** The resolved board configuration for one instance: which columns it shows, the
+ *  preferred view, where the columns came from, and the agent's own default columns
+ *  (so an editor can offer "reset to the agent's columns"). */
+export interface BoardConfig {
+	columns: BoardColumn[];
+	view: BoardView;
+	/** "instance" = a per-instance override is set; "agent" = the agent's declared/default columns. */
+	source: "instance" | "agent";
+	/** The agent-level columns, regardless of any instance override. */
+	agentColumns: BoardColumn[];
+}
+
+function parseJson(value: unknown): Record<string, unknown> {
+	if (typeof value !== "string" || !value) return {};
+	try { const o = JSON.parse(value); return o && typeof o === "object" ? (o as Record<string, unknown>) : {}; }
+	catch { return {}; }
+}
+
+/**
+ * Resolve an instance's board columns + view. A per-instance override (stored in
+ * `agent_instances.config.boardColumns` / `.boardView`) wins over the agent's declared
+ * columns, which in turn fall back to the per-surface default. This single resolver is
+ * shared by the board reader, the config route, MCP, and the agent tool so they can't drift.
+ */
+export async function boardConfigForInstance(env: Env, instanceId: string, userId: string): Promise<BoardConfig> {
+	const row = await env.DB.prepare(
+		`SELECT a.slug AS slug, a.category AS category, a.config AS agent_config, i.config AS instance_config
+     FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+     WHERE i.id = ?1 AND i.user_id = ?2`,
+	).bind(instanceId, userId).first<{ slug: string; category: string; agent_config: string; instance_config: string }>();
+
+	const agentColumns = agentCapabilities({ slug: row?.slug, category: row?.category, config: row?.agent_config }).boardColumns;
+	const instCfg = parseJson(row?.instance_config);
+	const override = sanitizeBoardColumns(instCfg.boardColumns);
+	const view: BoardView = instCfg.boardView === "list" ? "list" : "kanban";
+	return {
+		columns: override ?? agentColumns,
+		view,
+		source: override ? "instance" : "agent",
+		agentColumns,
+	};
+}
 
 /**
  * The single agent work board — the canonical builder shared by the console, the
@@ -38,6 +85,8 @@ export interface BoardItemView {
 export interface InstanceBoard {
 	columns: BoardColumn[];
 	items: BoardItemView[];
+	/** The preferred view (kanban | list) — the console renders this by default. */
+	view: BoardView;
 	/** True when the runtime-task window was hit — older jobs may be missing. */
 	truncated: boolean;
 }
@@ -177,25 +226,22 @@ function stamp(task: RawTask): number {
 	return Number.isNaN(n) ? 0 : n;
 }
 
-/** Resolve the agent's declared board columns for an instance (per-surface default). */
+/** Resolve the effective board columns for an instance (per-instance override → agent
+ *  declared → per-surface default). Thin wrapper over {@link boardConfigForInstance}. */
 export async function columnsForInstance(env: Env, instanceId: string, userId: string): Promise<BoardColumn[]> {
-	const row = await env.DB.prepare(
-		`SELECT a.slug AS slug, a.category AS category, a.config AS config
-     FROM agent_instances i JOIN agents a ON a.id = i.agent_id
-     WHERE i.id = ?1 AND i.user_id = ?2`,
-	).bind(instanceId, userId).first<{ slug: string; category: string; config: string }>();
-	return agentCapabilities({ slug: row?.slug, category: row?.category, config: row?.config }).boardColumns;
+	return (await boardConfigForInstance(env, instanceId, userId)).columns;
 }
 
 /** Build the instance's single work board: configured columns + one card per job. */
 export async function buildInstanceBoard(env: Env, instanceId: string, userId: string): Promise<InstanceBoard> {
-	const [tasks, overlayRows, columns] = await Promise.all([
+	const [tasks, overlayRows, boardCfg] = await Promise.all([
 		mirroredRuntimeTasks(env, instanceId, userId, BOARD_TASK_LIMIT),
 		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
 			.all<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>(),
-		columnsForInstance(env, instanceId, userId),
+		boardConfigForInstance(env, instanceId, userId),
 	]);
+	const { columns, view } = boardCfg;
 
 	const overlay = new Map<string, { user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>();
 	for (const r of overlayRows.results ?? []) overlay.set(r.job_key, r);
@@ -254,7 +300,85 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 
 	items.sort((a, b) => Date.parse(b.updatedAt || "") - Date.parse(a.updatedAt || ""));
 
-	return { columns, items, truncated: tasks.length >= BOARD_TASK_LIMIT };
+	return { columns, items, view, truncated: tasks.length >= BOARD_TASK_LIMIT };
+}
+
+/** A patch to an instance's board config. `columns: null` (or an empty/invalid array)
+ *  clears the override so the board falls back to the agent's columns. */
+export interface BoardConfigPatch {
+	columns?: BoardColumn[] | null;
+	view?: BoardView;
+}
+
+/** At most this many columns per board — a sane ceiling shared by every editor. */
+export const MAX_BOARD_COLUMNS = 20;
+
+/**
+ * Set an instance's per-instance board override (columns and/or view). The single
+ * writer behind the console editor, the MCP `set_instance_board_config` tool, and the
+ * agent's own `configure_board` tool. Returns the freshly-resolved {@link BoardConfig}.
+ * Ownership must already be verified by the caller.
+ */
+export async function setInstanceBoardConfig(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	patch: BoardConfigPatch,
+): Promise<BoardConfig> {
+	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+		.bind(instanceId, userId)
+		.first<{ config: string }>();
+	const cfg = parseJson(row?.config);
+	if (patch.columns !== undefined) {
+		const clean = patch.columns === null ? undefined : sanitizeBoardColumns(patch.columns);
+		if (clean && clean.length) cfg.boardColumns = clean.slice(0, MAX_BOARD_COLUMNS);
+		else delete cfg.boardColumns; // null / empty / invalid → reset to the agent's columns
+	}
+	if (patch.view === "list" || patch.view === "kanban") cfg.boardView = patch.view;
+	await env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, userId)
+		.run();
+	return boardConfigForInstance(env, instanceId, userId);
+}
+
+/**
+ * The agent's own `configure_board` tool: parse the model's arguments (a `columns`
+ * JSON array, a `view`, or `reset`) and apply them to this instance's board. Returns
+ * a short human-readable result for the tool log. This is the "customizable by the
+ * agent itself" path — it writes through the same {@link setInstanceBoardConfig}.
+ */
+export async function configureBoardForAgent(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	input: Record<string, unknown>,
+): Promise<{ content: string; success: boolean }> {
+	const patch: BoardConfigPatch = {};
+	if (input.reset === true || input.reset === "true") {
+		patch.columns = null;
+	} else if (typeof input.columns === "string" && input.columns.trim()) {
+		try {
+			const parsed = JSON.parse(input.columns);
+			if (!Array.isArray(parsed)) return { content: "`columns` must be a JSON array of {id,title,color?,statuses?,catchAll?}.", success: false };
+			patch.columns = parsed as BoardColumn[];
+		} catch {
+			return { content: "`columns` must be valid JSON — an array of {id,title,color?,statuses?,catchAll?}.", success: false };
+		}
+	} else if (Array.isArray(input.columns)) {
+		patch.columns = input.columns as BoardColumn[];
+	}
+	if (input.view === "list" || input.view === "kanban") patch.view = input.view;
+	if (patch.columns === undefined && patch.view === undefined) {
+		return { content: "Nothing to change — provide `columns` (JSON array), `view` (kanban|list), or reset:true.", success: false };
+	}
+	if (patch.columns && patch.columns.length && !sanitizeBoardColumns(patch.columns)) {
+		return { content: "Each column needs at least an `id` and a `title`.", success: false };
+	}
+	const cfg = await setInstanceBoardConfig(env, instanceId, userId, patch);
+	return {
+		content: `Board updated. View: ${cfg.view}. Columns (${cfg.columns.length}, source: ${cfg.source}): ${cfg.columns.map((c) => c.title).join(", ")}.`,
+		success: true,
+	};
 }
 
 /** Snapshot fields so a moved card can stand alone once its runs are gone. */

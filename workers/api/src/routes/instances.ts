@@ -4,7 +4,8 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
-import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, columnsForInstance } from "../lib/board.js";
+import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, columnsForInstance, boardConfigForInstance, setInstanceBoardConfig } from "../lib/board.js";
+import type { BoardColumn } from "../lib/agent-capabilities.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
@@ -747,6 +748,36 @@ instanceRoutes.post("/:instanceId/board/status", async (c) => {
 	};
 	await setBoardItemStatus(c.env, instanceId, session.uid, jobKey, status || null, meta);
 	return c.json({ ok: true });
+});
+
+/**
+ * Read this instance's board configuration — the columns it shows, the preferred
+ * view (kanban | list), whether the columns are a per-instance override or the
+ * agent's own, and the agent's default columns (for a "reset" affordance). Backs the
+ * console column editor + view toggle and the MCP `get_instance_board_config` tool.
+ */
+instanceRoutes.get("/:instanceId/board-config", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json(await boardConfigForInstance(c.env, instanceId, session.uid));
+});
+
+/**
+ * Set a per-instance board override: custom columns and/or the default view. This is
+ * the owner-editable, per-instance layer over the agent's declared columns — settable
+ * from the console UI, the MCP tool, and the agent's own `configure_board` tool.
+ * `columns: null` (or an empty array) resets to the agent's columns.
+ */
+instanceRoutes.put("/:instanceId/board-config", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { columns?: unknown; view?: unknown };
+	const patch: { columns?: BoardColumn[] | null; view?: "kanban" | "list" } = {};
+	if ("columns" in body) patch.columns = body.columns === null ? null : (body.columns as BoardColumn[]);
+	if (body.view === "kanban" || body.view === "list") patch.view = body.view;
+	return c.json(await setInstanceBoardConfig(c.env, instanceId, session.uid, patch));
 });
 
 /** Create a task on my registered runtime. */

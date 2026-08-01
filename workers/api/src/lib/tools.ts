@@ -134,6 +134,16 @@ export const AGENT_TOOLS: ToolDef[] = [
 			},
 		},
 	},
+	{
+		name: "configure_board",
+		description:
+			"Customize your own work board — the kanban shown in the console. Set `columns` to a JSON array of {id,title,color?,statuses?,catchAll?} to replace the columns (ordered; each card lands in the first column whose `statuses` include its status, else the column with catchAll:true). Set `view` to 'kanban' or 'list' to change the default view. Set reset:true to drop your custom columns and use the agent's defaults. Do this when the user asks to add/rename/reorder columns or switch views.",
+		parameters: {
+			columns: { type: "string", description: 'JSON array of columns, e.g. [{"id":"todo","title":"To do","color":"#eab308","statuses":["queued"]},{"id":"done","title":"Done","color":"#22c55e","statuses":["completed"],"catchAll":true}]' },
+			view: { type: "string", description: "Default board view: 'kanban' or 'list'." },
+			reset: { type: "boolean", description: "Set true to remove custom columns and fall back to the agent's default columns." },
+		},
+	},
 ];
 
 /** One-line snapshot of all memory keys, appended to write/delete results so the

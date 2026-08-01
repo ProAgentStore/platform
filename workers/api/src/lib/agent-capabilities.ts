@@ -126,8 +126,10 @@ export function defaultBoardColumns(surfaces: AgentSurface[]): BoardColumn[] {
 	return surfaces.includes("apply") ? APPLY_BOARD_COLUMNS : DEFAULT_BOARD_COLUMNS;
 }
 
-/** Validate a declared board-columns array (each needs id + title). */
-function sanitizeBoardColumns(value: unknown): BoardColumn[] | undefined {
+/** Validate a declared board-columns array (each needs id + title). Exported so the
+ *  per-instance board-config override (lib/board.ts + the console/MCP/agent editors)
+ *  validates columns through the exact same rules as an agent's declared columns. */
+export function sanitizeBoardColumns(value: unknown): BoardColumn[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const out: BoardColumn[] = [];
 	for (const v of value) {

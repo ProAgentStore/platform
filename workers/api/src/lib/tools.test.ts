@@ -22,8 +22,12 @@ function mockDoStorage() {
 }
 
 describe("tool definitions", () => {
-	it("defines 10 tools", () => {
-		expect(AGENT_TOOLS).toHaveLength(10);
+	it("defines 11 tools", () => {
+		expect(AGENT_TOOLS).toHaveLength(11);
+	});
+
+	it("includes the self-configuration tool", () => {
+		expect(AGENT_TOOLS.map((t) => t.name)).toContain("configure_board");
 	});
 
 	it("all tools have name, description, and parameters", () => {

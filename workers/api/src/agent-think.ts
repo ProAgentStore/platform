@@ -4,6 +4,7 @@ import type { AgentMessage, AgentState, AgentTask, MemoryEntry } from "./agent-t
 import { TOOL_CAPABLE_MODELS } from "./agent-do-prompt.js";
 import { buildAgentToolDefinitions, storageToolNameSet, toolNamesFor } from "./agent-do-tools.js";
 import { registryToolNameSet, runRegistryTool } from "./lib/tool-registry.js";
+import { configureBoardForAgent } from "./lib/board.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
 import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
@@ -413,7 +414,15 @@ export async function runAgentThink(opts: {
 			executedCalls.add(signature);
 			executedThisRound++;
 			let toolResult: ToolCallResult;
-			if (registryToolNames.has(tc.name)) {
+			if (tc.name === "configure_board") {
+				// The agent reshaping its OWN board (columns/view). Needs D1 + the owner's
+				// uid — the instance DO is keyed per instance, so state.agentId IS the
+				// instance id here (see the chat context above). No uid = no owner to scope to.
+				const r = userId
+					? await configureBoardForAgent(env, state.agentId, userId, (tc.arguments ?? {}) as Record<string, unknown>)
+					: { content: "Board can only be customized for a signed-in owner.", success: false };
+				toolResult = { name: tc.name, content: r.content, success: r.success };
+			} else if (registryToolNames.has(tc.name)) {
 					toolResult = await runRegistryTool(tc.name, { env, userId, agentId: state.agentId, instanceId: state.agentId }, (tc.arguments ?? {}) as Record<string, unknown>);
 				} else if (storageToolNames.has(tc.name)) {
 				toolResult = await executeStorageTool(

@@ -22,6 +22,8 @@ const BASE = [
 	"get_activity",
 	"get_user_context",
 	"set_user_preference",
+	// Every agent owns a work board; let it reshape its own columns/view on request.
+	"configure_board",
 ] as const;
 
 /** Read the vector knowledge base (RAG). Only agents that HAVE an index get these. */
