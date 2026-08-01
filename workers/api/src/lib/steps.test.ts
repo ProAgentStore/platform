@@ -11,6 +11,7 @@ const dedupeT = getRegistryTool("dedupe_upsert")!;
 const fanOutT = getRegistryTool("fan_out")!;
 const reachableT = getRegistryTool("http_reachable")!;
 const geocodeT = getRegistryTool("geocode")!;
+const extractT = getRegistryTool("extract_contacts")!;
 
 const baseCtx = { env: {} as any } as RegistryToolCtx;
 
@@ -22,8 +23,8 @@ afterEach(() => vi.restoreAllMocks());
 
 // ── registration ──────────────────────────────────────────────────────────────
 describe("step library — registration", () => {
-	it("registers all six steps as standard-tier, non-connector tools", () => {
-		for (const t of [mapT, filterT, dedupeT, fanOutT, reachableT, geocodeT]) {
+	it("registers all steps as standard-tier, non-connector tools", () => {
+		for (const t of [mapT, filterT, dedupeT, fanOutT, reachableT, geocodeT, extractT]) {
 			expect(t).toBeDefined();
 			expect(t.tier).toBe("standard");
 			expect(t.connector).toBeUndefined();
@@ -338,6 +339,60 @@ describe("geocode", () => {
 		const ctx = { env: {} as any, connectorClient: (() => ({}) as unknown as ConnectorClient) as any } as RegistryToolCtx;
 		const r = await geocodeT.handler(ctx, { address: "x", provider: "bing" });
 		expect(r.success).toBe(false);
+	});
+});
+
+// ── 7. extract_contacts ──────────────────────────────────────────────────────────
+describe("extract_contacts", () => {
+	it("pulls instagram/facebook/email from web_search-style rows", async () => {
+		const rows = [
+			{ title: "Blue Bottle Cafe (@bluebottle_syd) • Instagram", link: "https://www.instagram.com/bluebottle_syd/", snippet: "Newtown, Sydney" },
+			{ title: "Blue Bottle Cafe | Facebook", link: "https://www.facebook.com/BlueBottleNewtown", snippet: "Cafe in Newtown" },
+			{ title: "Contact us", link: "https://bluebottle.example/contact", snippet: "Email hello@bluebottle.example or call…" },
+		];
+		const r = await extractT.handler(baseCtx, { items: rows });
+		expect(parse(r.content)).toMatchObject({
+			instagram: "https://instagram.com/bluebottle_syd",
+			facebook: "https://facebook.com/BlueBottleNewtown",
+			email: "hello@bluebottle.example",
+			precision: "best-effort",
+		});
+	});
+
+	it("accepts the web_search {results:[…]} envelope directly", async () => {
+		const searchOutput = {
+			query: "cafe newtown instagram",
+			count: 1,
+			results: [{ title: "x", link: "https://instagram.com/some_cafe", snippet: "mailto:owner@cafe.test" }],
+		};
+		const r = await extractT.handler(baseCtx, { items: searchOutput });
+		const out = parse(r.content);
+		expect(out.instagram).toBe("https://instagram.com/some_cafe");
+		expect(out.email).toBe("owner@cafe.test"); // mailto: preferred
+	});
+
+	it("ignores non-profile IG paths and share/login FB paths", async () => {
+		const rows = [
+			{ link: "https://www.instagram.com/p/ABC123/", snippet: "a post, not a profile" },
+			{ link: "https://www.facebook.com/sharer/sharer.php?u=x", snippet: "a share link" },
+			{ link: "https://instagram.com/realbiz", snippet: "the actual profile" },
+		];
+		const out = parse((await extractT.handler(baseCtx, { items: rows })).content);
+		expect(out.instagram).toBe("https://instagram.com/realbiz");
+		expect(out.facebook).toBeNull(); // only a share link was present
+	});
+
+	it("missing fields → null (best-effort, no false positives)", async () => {
+		const out = parse((await extractT.handler(baseCtx, { items: [{ title: "no socials here", link: "https://example.com", snippet: "nothing" }] })).content);
+		expect(out).toMatchObject({ instagram: null, facebook: null, email: null });
+	});
+
+	it("honors the `fields` subset", async () => {
+		const rows = [{ link: "https://instagram.com/biz", snippet: "hi@biz.test facebook.com/biz" }];
+		const out = parse((await extractT.handler(baseCtx, { items: rows, fields: ["email"] })).content);
+		expect(out.email).toBe("hi@biz.test");
+		expect(out.instagram).toBeNull();
+		expect(out.facebook).toBeNull();
 	});
 });
 
