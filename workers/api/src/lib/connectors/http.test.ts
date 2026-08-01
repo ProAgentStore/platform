@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRegistryTool } from "../tool-registry.js";
 import type { RegistryToolCtx } from "../tool-registry.js";
 import type { ConnectorClient } from "./client.js";
+import { getPath } from "./http.js";
 
 // The http_request tool, resolved from the registry (proves it's registered → callable via
 // runtime, MCP proxy, and POST …/tools/http_request with no bespoke route).
@@ -36,6 +37,38 @@ function safeParse(s: string): any {
 		return undefined;
 	}
 }
+
+describe("getPath — type-predicate array selection (#116)", () => {
+	// Google returns addressComponents as an array of {longText, types:[…]}.
+	const comps = [
+		{ longText: "Newtown", types: ["locality", "political"] },
+		{ longText: "New South Wales", types: ["administrative_area_level_1", "political"] },
+		{ longText: "Australia", types: ["country", "political"] },
+	];
+	const rec = { addressComponents: comps };
+
+	it("selects the element whose types[] contains the token, then continues the sub-path", () => {
+		expect(getPath(rec, "addressComponents[types~=locality].longText")).toBe("Newtown");
+		expect(getPath(rec, "addressComponents[types~=administrative_area_level_1].longText")).toBe("New South Wales");
+		expect(getPath(rec, "addressComponents[types~=country].longText")).toBe("Australia");
+	});
+
+	it("returns undefined when no element matches the predicate", () => {
+		expect(getPath(rec, "addressComponents[types~=sublocality].longText")).toBeUndefined();
+	});
+
+	it("matches a scalar field too (not only arrays)", () => {
+		const arr = { parts: [{ kind: "a", v: 1 }, { kind: "b", v: 2 }] };
+		expect(getPath(arr, "parts[kind~=b].v")).toBe(2);
+	});
+
+	it("plain dotted/index grammar still works (backward compatible)", () => {
+		expect(getPath({ a: { b: [10, 20] } }, "a.b.1")).toBe(20);
+		expect(getPath(comps, "0.longText")).toBe("Newtown");
+		// the old (broken) shape without a predicate still resolves to undefined, not a throw.
+		expect(getPath(comps, "locality")).toBeUndefined();
+	});
+});
 
 describe("http_request — registration & schema", () => {
 	it("is registered as an http-connector, read-scoped tool", () => {

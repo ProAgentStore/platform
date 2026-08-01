@@ -3,7 +3,7 @@
   "params": {
     "city": { "type": "string", "description": "City to sweep, e.g. \"Sydney, NSW\" — geocoded to the search centre." },
     "type": { "type": "string", "description": "Google Places includedType, e.g. \"cafe\" / \"restaurant\"." },
-    "radius": { "type": "number", "description": "searchNearby radius in metres around the centre (e.g. 900)." }
+    "radius": { "type": "number", "description": "searchNearby radius in metres around each grid cell (e.g. 900)." }
   },
   "steps": [
     {
@@ -14,8 +14,19 @@
       }
     },
     {
+      "tool": "fan_out",
+      "bind": "grid",
+      "inputs": {
+        "mode": "grid",
+        "center": { "lat": { "$ref": "geo.lat" }, "lng": { "$ref": "geo.lng" } },
+        "extentKm": 2,
+        "stepKm": 1
+      }
+    },
+    {
       "tool": "http_request",
-      "bind": "places",
+      "bind": "pages",
+      "forEach": { "$ref": "grid.cells" },
       "inputs": {
         "method": "POST",
         "url": "https://places.googleapis.com/v1/places:searchNearby",
@@ -29,7 +40,7 @@
           "maxResultCount": 20,
           "locationRestriction": {
             "circle": {
-              "center": { "latitude": { "$ref": "geo.lat" }, "longitude": { "$ref": "geo.lng" } },
+              "center": { "latitude": { "$param": "item.lat" }, "longitude": { "$param": "item.lng" } },
               "radius": { "$param": "radius" }
             }
           }
@@ -38,26 +49,47 @@
       }
     },
     {
+      "tool": "flatten",
+      "bind": "flat",
+      "inputs": {
+        "items": { "$ref": "pages" },
+        "path": "data"
+      }
+    },
+    {
       "tool": "map",
       "bind": "shaped",
       "inputs": {
-        "items": { "$ref": "places.data" },
-        "derive": { "category": { "$param": "type" }, "status": "new", "website_status": "none" },
+        "items": { "$ref": "flat.items" },
+        "derive": { "category": { "$param": "type" }, "status": "new" },
         "extract": {
-          "country": "addressComponents.country",
-          "state": "addressComponents.state",
-          "city": "addressComponents.locality",
-          "suburb": "addressComponents.suburb"
+          "country": "addressComponents[types~=country].longText",
+          "state": "addressComponents[types~=administrative_area_level_1].longText",
+          "city": "addressComponents[types~=locality].longText",
+          "suburb": "addressComponents[types~=sublocality].longText"
         }
+      }
+    },
+    {
+      "tool": "enrich",
+      "bind": "enriched",
+      "inputs": {
+        "items": { "$ref": "shaped.items" },
+        "tool": "http_reachable",
+        "input": { "url": { "$item": "websiteUri" } },
+        "as": "reachable",
+        "concurrency": 4
       }
     },
     {
       "tool": "filter",
       "bind": "leads",
       "inputs": {
-        "items": { "$ref": "shaped.items" },
+        "items": { "$ref": "enriched.items" },
+        "any": true,
         "where": [
-          { "field": "websiteUri", "op": "missing" }
+          { "field": "websiteUri", "op": "missing" },
+          { "field": "reachable.ok", "op": "eq", "value": false }
         ]
       }
     },

@@ -42,14 +42,37 @@ function interpolateDeep(value: unknown, inputs: Record<string, unknown>): unkno
 //   • array-projection         "places[].displayName.text"      → map each element to that sub-path
 //   • projection with reshape  "places[].{id,name:displayName.text,site:websiteUri}"
 //                                → [{id, name, site}, …] pulling each field's dotted sub-path
+//   • type-predicate select    "addressComponents[types~=locality].longText"  → in an ARRAY of
+//                                typed components, pick the element whose `types` (array or
+//                                scalar) contains the token, then continue the sub-path (#116).
+//                                General for any "array of typed components" API (Google, etc.).
 // Returns undefined for a path that doesn't resolve (rather than throwing) so a partial
 // response maps to nulls, not an error.
+
+// One segment with a type-predicate filter, e.g. "addressComponents[types~=locality]".
+const PREDICATE_SEG = /^([\w-]+)\[([\w-]+)~=([^\]]+)\]$/;
+
+/** Does `field`'s value (an array, or a scalar) contain `token`? Used by the [k~=v] predicate. */
+function fieldContains(el: unknown, field: string, token: string): boolean {
+	if (el === null || typeof el !== "object") return false;
+	const v = (el as Record<string, unknown>)[field];
+	if (Array.isArray(v)) return v.some((x) => String(x) === token);
+	return v !== undefined && v !== null && String(v) === token;
+}
+
 export function getPath(obj: unknown, path: string): unknown {
 	if (!path) return obj;
 	let cur: unknown = obj;
 	for (const seg of path.split(".")) {
 		if (cur === null || cur === undefined) return undefined;
-		if (Array.isArray(cur)) {
+		const pred = PREDICATE_SEG.exec(seg);
+		if (pred) {
+			// `name[key~=token]`: read `name` off the current object (an array of components),
+			// then select the element whose `key` contains `token`.
+			const [, name, key, token] = pred;
+			const arr = typeof cur === "object" && !Array.isArray(cur) ? (cur as Record<string, unknown>)[name] : undefined;
+			cur = Array.isArray(arr) ? arr.find((el) => fieldContains(el, key, token)) : undefined;
+		} else if (Array.isArray(cur)) {
 			const idx = Number(seg);
 			cur = Number.isInteger(idx) ? cur[idx] : undefined;
 		} else if (typeof cur === "object") {

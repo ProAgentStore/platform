@@ -75,6 +75,21 @@ describe("resolveInputValue / resolveInputs", () => {
 	it("resolves $param:item to the fan-out item", () => {
 		expect(resolveInputValue({ $param: "item" }, { ...scope, item: { n: 1 } })).toEqual({ n: 1 });
 	});
+
+	it("resolves $param:'item.<path>' to a dotted field of the fan-out item (#114)", () => {
+		const s = { ...scope, item: { lat: -33.9, lng: 151.1, websiteUri: "https://x.example" } };
+		expect(resolveInputValue({ $param: "item.lat" }, s)).toBe(-33.9);
+		expect(resolveInputValue({ $param: "item.websiteUri" }, s)).toBe("https://x.example");
+		// whole item still works, and a nested dotted path resolves too.
+		expect(resolveInputValue({ $param: "item" }, s)).toEqual(s.item);
+		const nested = { ...scope, item: { location: { lat: 1, lng: 2 } } };
+		expect(resolveInputValue({ $param: "item.location.lng" }, nested)).toBe(2);
+	});
+
+	it("$param:'item.<path>' is undefined when there is no item scope (backward compatible)", () => {
+		// Outside a forEach body, `item.foo` is just a (missing) param name — never crashes.
+		expect(resolveInputValue({ $param: "item.lat" }, scope)).toBeUndefined();
+	});
 });
 
 describe("executePipelineStep — dispatches via runRegistryTool + threads outputs", () => {
