@@ -1,15 +1,19 @@
 import { useEffect, useState } from "react";
-import { BarChart3, LayoutDashboard, Users as UsersIcon } from "lucide-react";
+import { Activity as ActivityIcon, BarChart3, Bot, LayoutDashboard, Users as UsersIcon } from "lucide-react";
 import { api, captureOAuthSession, getToken, signIn } from "./lib/api";
 import Overview from "./pages/Overview";
 import Users from "./pages/Users";
 import Spending from "./pages/Spending";
+import Agents from "./pages/Agents";
+import Activity from "./pages/Activity";
 
-type Nav = "overview" | "users" | "spending";
+type Nav = "overview" | "users" | "agents" | "spending" | "activity";
 const NAV: Array<{ id: Nav; label: string; icon: typeof LayoutDashboard }> = [
 	{ id: "overview", label: "Overview", icon: LayoutDashboard },
 	{ id: "users", label: "Users", icon: UsersIcon },
+	{ id: "agents", label: "Agents", icon: Bot },
 	{ id: "spending", label: "Spending", icon: BarChart3 },
+	{ id: "activity", label: "Activity", icon: ActivityIcon },
 ];
 
 type Gate = "loading" | "anon" | "denied" | "ok";
@@ -75,7 +79,9 @@ export default function App() {
 			<main className="max-w-5xl mx-auto p-4">
 				{nav === "overview" && <Overview />}
 				{nav === "users" && <Users />}
+				{nav === "agents" && <Agents />}
 				{nav === "spending" && <Spending />}
+				{nav === "activity" && <Activity />}
 			</main>
 		</div>
 	);

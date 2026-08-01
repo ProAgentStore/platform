@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { HttpError, isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
-import { getUserDetail, listAdminAudit, listUsers } from "../lib/admin.js";
+import { getOverviewStats, getUserDetail, listAdminAudit, listAgents, listInstances, listUsers } from "../lib/admin.js";
+import { listErrors } from "../lib/error-log.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
 import type { Env } from "../types.js";
 
@@ -80,6 +81,42 @@ adminRoutes.get("/audit", async (c) => {
 		limit: Number(c.req.query("limit")) || undefined,
 	});
 	return c.json({ count: rows.length, audit: rows });
+});
+
+/** GET /v1/admin/overview — one-shot dashboard counts (users/agents/instances/errors/spend). */
+adminRoutes.get("/overview", async (c) => {
+	await requireAdmin(c);
+	return c.json(await getOverviewStats(c.env));
+});
+
+/** GET /v1/admin/agents?search=&limit=&offset= — all agents (incl. drafts) + owner + instance count. */
+adminRoutes.get("/agents", async (c) => {
+	await requireAdmin(c);
+	return c.json(await listAgents(c.env, {
+		search: c.req.query("search") || undefined,
+		limit: Number(c.req.query("limit")) || undefined,
+		offset: Number(c.req.query("offset")) || undefined,
+	}));
+});
+
+/** GET /v1/admin/instances?limit=&offset= — all subscriptions across tenants. */
+adminRoutes.get("/instances", async (c) => {
+	await requireAdmin(c);
+	return c.json(await listInstances(c.env, {
+		limit: Number(c.req.query("limit")) || undefined,
+		offset: Number(c.req.query("offset")) || undefined,
+	}));
+});
+
+/** GET /v1/admin/errors?source=&limit= — cross-user error log (newest first). */
+adminRoutes.get("/errors", async (c) => {
+	await requireAdmin(c);
+	const errors = await listErrors(c.env, {
+		all: true,
+		source: c.req.query("source") || undefined,
+		limit: Number(c.req.query("limit")) || 100,
+	});
+	return c.json({ count: errors.length, errors });
 });
 
 /**

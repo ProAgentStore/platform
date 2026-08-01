@@ -2,46 +2,55 @@ import { useEffect, useState } from "react";
 import { api, fmtInt, fmtUsd } from "../lib/api";
 import { ErrorBox, Loading, Panel, Stat, TrendBars } from "../lib/ui";
 
+interface Overview {
+	users: number;
+	agents: number;
+	agentsPublished: number;
+	instancesActive: number;
+	errors24h: number;
+	aiCalls24h: number;
+	spend30dMicros: number;
+	platformSpend30dMicros: number;
+}
 interface Spending {
-	totals: { costMicros: number; calls: number };
 	daily: Array<{ date: string; costMicros: number }>;
 	byok: { costMicros: number };
 	platformAiEnabled: boolean;
-	platformPaid: { costMicros: number };
 }
-interface UsersResp { total: number }
 
-export default function Overview() {
-	const [spend, setSpend] = useState<Spending | null>(null);
-	const [users, setUsers] = useState<UsersResp | null>(null);
+export default function OverviewPage() {
+	const [o, setO] = useState<Overview | null>(null);
+	const [s, setS] = useState<Spending | null>(null);
 	const [err, setErr] = useState("");
 
 	useEffect(() => {
 		Promise.all([
+			api<Overview>("/v1/admin/overview"),
 			api<Spending>("/v1/admin/spending?range=30d"),
-			api<UsersResp>("/v1/admin/users?limit=1"),
-		])
-			.then(([s, u]) => { setSpend(s); setUsers(u); })
-			.catch((e) => setErr(e.message));
+		]).then(([ov, sp]) => { setO(ov); setS(sp); }).catch((e) => setErr(e.message));
 	}, []);
 
 	if (err) return <ErrorBox message={err} />;
-	if (!spend || !users) return <Loading />;
+	if (!o || !s) return <Loading />;
 
 	return (
 		<div>
 			<div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-				<Stat label="Platform-paid AI (30d, est.)" value={fmtUsd(spend.platformPaid.costMicros)} accent />
-				<Stat label="BYOK spend (30d)" value={fmtUsd(spend.byok.costMicros)} />
-				<Stat label="AI calls (30d)" value={fmtInt(spend.totals.calls)} />
-				<Stat label="Users" value={fmtInt(users.total)} />
+				<Stat label="Users" value={fmtInt(o.users)} />
+				<Stat label="Agents" value={`${fmtInt(o.agents)} (${o.agentsPublished} pub)`} />
+				<Stat label="Active instances" value={fmtInt(o.instancesActive)} />
+				<Stat label="Errors (24h)" value={fmtInt(o.errors24h)} accent={o.errors24h > 0} />
+				<Stat label="Platform-paid AI (30d, est.)" value={fmtUsd(o.platformSpend30dMicros)} accent />
+				<Stat label="BYOK spend (30d)" value={fmtUsd(s.byok.costMicros)} />
+				<Stat label="AI calls (24h)" value={fmtInt(o.aiCalls24h)} />
+				<Stat label="Platform AI" value={s.platformAiEnabled ? "ON" : "OFF"} />
 			</div>
 			<Panel title="AI spend — last 30 days">
-				<TrendBars points={spend.daily} />
+				<TrendBars points={s.daily} />
 			</Panel>
 			<p className="text-sm text-muted">
-				Platform-paid AI is currently <strong className={spend.platformAiEnabled ? "text-green" : "text-muted"}>{spend.platformAiEnabled ? "ON" : "OFF"}</strong>.
-				See <em>Spending</em> for the platform-vs-BYOK breakdown and <em>Users</em> for per-account detail.
+				Platform-paid AI is <strong className={s.platformAiEnabled ? "text-green" : "text-muted"}>{s.platformAiEnabled ? "ON" : "OFF"}</strong>.
+				See <em>Spending</em> for the platform-vs-BYOK breakdown, <em>Agents</em> for the catalog, and <em>Activity</em> for errors + the admin audit log.
 			</p>
 		</div>
 	);

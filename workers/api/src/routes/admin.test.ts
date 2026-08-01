@@ -11,7 +11,7 @@ const TEST_SECRET = "test-secret";
  * returns for the live-role check; `allowlist` seeds ADMIN_ALLOWLIST; `audit` is
  * the rows the audit query returns.
  */
-function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allowlist?: string; audit?: unknown[]; usageRows?: unknown[]; platformAiEnabled?: boolean; userRows?: unknown[]; userCount?: number; userDetail?: unknown } = {}) {
+function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allowlist?: string; audit?: unknown[]; usageRows?: unknown[]; platformAiEnabled?: boolean; userRows?: unknown[]; userCount?: number; userDetail?: unknown; agentRows?: unknown[]; agentCount?: number; instanceRows?: unknown[]; errorRows?: unknown[] } = {}) {
 	const app = new Hono();
 	app.route("/v1/admin", adminRoutes);
 	app.onError((err, c) => {
@@ -21,7 +21,10 @@ function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allow
 	// Route a query to the right canned result by inspecting its SQL.
 	const firstFor = (sql: string) => {
 		if (sql.includes("SELECT roles, github_login FROM users")) return { roles: opts.dbRoles ?? null, github_login: opts.dbLogin ?? null };
+		if (sql.includes("COUNT(*) AS n FROM agents")) return { n: opts.agentCount ?? (opts.agentRows?.length ?? 0) };
 		if (sql.includes("COUNT(*) AS n FROM users")) return { n: opts.userCount ?? (opts.userRows?.length ?? 0) };
+		if (sql.includes("COUNT(*) AS n FROM agent_instances")) return { n: opts.instanceRows?.length ?? 0 };
+		if (sql.includes("COUNT(*) AS n") || sql.includes("SUM(cost_micros)")) return { n: 0 }; // other overview counts
 		if (sql.includes("FROM users u WHERE u.id")) return opts.userDetail ?? null; // getUserDetail main row
 		return null;
 	};
@@ -31,6 +34,9 @@ function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allow
 		if (sql.includes("FROM users u")) return { results: opts.userRows ?? [] }; // listUsers page
 		if (sql.includes("FROM ai_usage u")) return { results: opts.usageRows ?? [] };
 		if (sql.includes("admin_audit_log")) return { results: opts.audit ?? [] };
+		if (sql.includes("FROM agents a")) return { results: opts.agentRows ?? [] };
+		if (sql.includes("FROM agent_instances i")) return { results: opts.instanceRows ?? [] };
+		if (sql.includes("FROM error_log")) return { results: opts.errorRows ?? [] };
 		return { results: [] }; // agents/instances/keys/errors sub-queries in getUserDetail
 	};
 	const env = {
@@ -168,6 +174,46 @@ describe("GET /v1/admin/users/:id", () => {
 		expect(body.user.github_login).toBe("alice");
 		expect(body.agents).toEqual([]);
 		expect(body.recentErrors).toEqual([]);
+	});
+});
+
+describe("new operator views (#31/#33)", () => {
+	it("GET /v1/admin/overview → 403 non-admin, stats for admin", async () => {
+		const denied = testApp({ dbRoles: '["user"]' });
+		expect((await req(denied.app, denied.env, "/v1/admin/overview", await token("u2", ["user"]))).status).toBe(403);
+		const { app, env } = testApp({ userCount: 5, agentCount: 3 });
+		const res = await req(app, env, "/v1/admin/overview", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		const b = (await res.json()) as any;
+		expect(b.users).toBe(5);
+		expect(b.agents).toBe(3);
+		expect(b).toHaveProperty("platformSpend30dMicros");
+	});
+
+	it("GET /v1/admin/agents lists agents with owner + instance count", async () => {
+		const agentRows = [{ id: "a1", slug: "coder", name: "Coder", category: "code", model: "claude-sonnet-4-6", visibility: "published", status: "active", created_at: "2026-08-01 00:00:00", owner_login: "alice", instances: 4 }];
+		const { app, env } = testApp({ agentRows });
+		const res = await req(app, env, "/v1/admin/agents", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		const b = (await res.json()) as any;
+		expect(b.agents[0].slug).toBe("coder");
+		expect(b.agents[0].instances).toBe(4);
+	});
+
+	it("GET /v1/admin/instances → 403 non-admin, list for admin", async () => {
+		const denied = testApp({ dbRoles: '["user"]' });
+		expect((await req(denied.app, denied.env, "/v1/admin/instances", await token("u2", ["user"]))).status).toBe(403);
+		const { app, env } = testApp({ instanceRows: [{ id: "i1", agent_id: "a1", agent_name: "Coder", owner_login: "alice", status: "active", created_at: "2026-08-01 00:00:00" }] });
+		const res = await req(app, env, "/v1/admin/instances", await token("u1", ["admin"]));
+		expect((await res.json() as any).instances[0].agent_name).toBe("Coder");
+	});
+
+	it("GET /v1/admin/errors returns the cross-user log", async () => {
+		const errorRows = [{ id: "e1", created_at: "2026-08-01 00:00:00", user_id: "u9", source: "auth", status: 500, message: "boom" }];
+		const { app, env } = testApp({ errorRows });
+		const res = await req(app, env, "/v1/admin/errors", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		expect((await res.json() as any).errors[0].message).toBe("boom");
 	});
 });
 

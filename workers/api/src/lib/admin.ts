@@ -106,6 +106,111 @@ export async function listUsers(
 	return { users: (listRes.results ?? []).map(shapeUser), total: countRes?.n ?? 0 };
 }
 
+// ── Agents & Instances (operator cross-tenant views) ───────────────────────
+
+export interface AdminAgentRow {
+	id: string;
+	slug: string;
+	name: string;
+	category: string;
+	model: string;
+	visibility: string;
+	status: string;
+	created_at: string;
+	owner_login: string | null;
+	instances: number;
+}
+
+export async function listAgents(
+	env: Env,
+	opts: { search?: string; limit?: number; offset?: number } = {},
+): Promise<{ agents: AdminAgentRow[]; total: number }> {
+	const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+	const offset = Math.max(opts.offset ?? 0, 0);
+	const search = opts.search?.trim();
+	let sql = `SELECT a.id, a.slug, a.name, a.category, a.model, a.visibility, a.status, a.created_at,
+	        u.github_login AS owner_login,
+	        (SELECT COUNT(*) FROM agent_instances i WHERE i.agent_id = a.id AND i.status = 'active') AS instances
+	 FROM agents a LEFT JOIN users u ON u.id = a.owner_id`;
+	let countSql = "SELECT COUNT(*) AS n FROM agents a";
+	const binds: unknown[] = [];
+	const cbinds: unknown[] = [];
+	if (search) {
+		const like = `%${search}%`;
+		const cond = " WHERE a.slug LIKE ? OR a.name LIKE ? OR u.github_login LIKE ?";
+		sql += cond;
+		countSql = "SELECT COUNT(*) AS n FROM agents a LEFT JOIN users u ON u.id = a.owner_id" + cond;
+		binds.push(like, like, like);
+		cbinds.push(like, like, like);
+	}
+	sql += " ORDER BY a.created_at DESC LIMIT ? OFFSET ?";
+	binds.push(limit, offset);
+	const [rows, count] = await Promise.all([
+		env.DB.prepare(sql).bind(...binds).all<AdminAgentRow>(),
+		env.DB.prepare(countSql).bind(...cbinds).first<{ n: number }>(),
+	]);
+	return { agents: rows.results ?? [], total: count?.n ?? 0 };
+}
+
+export interface AdminInstanceRow {
+	id: string;
+	agent_id: string;
+	agent_name: string | null;
+	owner_login: string | null;
+	status: string;
+	created_at: string;
+}
+
+export async function listInstances(
+	env: Env,
+	opts: { limit?: number; offset?: number } = {},
+): Promise<{ instances: AdminInstanceRow[]; total: number }> {
+	const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+	const offset = Math.max(opts.offset ?? 0, 0);
+	const [rows, count] = await Promise.all([
+		env.DB.prepare(
+			`SELECT i.id, i.agent_id, a.name AS agent_name, u.github_login AS owner_login, i.status, i.created_at
+			 FROM agent_instances i
+			 LEFT JOIN agents a ON a.id = i.agent_id
+			 LEFT JOIN users u ON u.id = i.user_id
+			 ORDER BY i.created_at DESC LIMIT ? OFFSET ?`,
+		).bind(limit, offset).all<AdminInstanceRow>(),
+		env.DB.prepare("SELECT COUNT(*) AS n FROM agent_instances").first<{ n: number }>(),
+	]);
+	return { instances: rows.results ?? [], total: count?.n ?? 0 };
+}
+
+// ── Overview stats (one round-trip for the dashboard header) ────────────────
+
+export interface AdminOverviewStats {
+	users: number;
+	agents: number;
+	agentsPublished: number;
+	instancesActive: number;
+	errors24h: number;
+	aiCalls24h: number;
+	spend30dMicros: number;
+	platformSpend30dMicros: number;
+}
+
+export async function getOverviewStats(env: Env): Promise<AdminOverviewStats> {
+	const d1 = sinceTs(1);
+	const d30 = sinceTs(30);
+	const one = async (sql: string, ...b: unknown[]) =>
+		(await env.DB.prepare(sql).bind(...b).first<{ n: number }>())?.n ?? 0;
+	const [users, agents, agentsPublished, instancesActive, errors24h, aiCalls24h, spend30d, platformSpend30d] = await Promise.all([
+		one("SELECT COUNT(*) AS n FROM users"),
+		one("SELECT COUNT(*) AS n FROM agents"),
+		one("SELECT COUNT(*) AS n FROM agents WHERE visibility = 'published'"),
+		one("SELECT COUNT(*) AS n FROM agent_instances WHERE status = 'active'"),
+		one("SELECT COUNT(*) AS n FROM error_log WHERE created_at >= ?", d1),
+		one("SELECT COUNT(*) AS n FROM ai_usage WHERE created_at >= ?", d1),
+		one("SELECT COALESCE(SUM(cost_micros),0) AS n FROM ai_usage WHERE created_at >= ?", d30),
+		one("SELECT COALESCE(SUM(cost_micros),0) AS n FROM ai_usage WHERE provider = 'platform' AND created_at >= ?", d30),
+	]);
+	return { users, agents, agentsPublished, instancesActive, errors24h, aiCalls24h, spend30dMicros: spend30d, platformSpend30dMicros: platformSpend30d };
+}
+
 export interface AdminUserDetail {
 	user: AdminUserRow;
 	agents: Array<{ id: string; slug: string; name: string; visibility: string; status: string; created_at: string }>;
