@@ -219,6 +219,18 @@ describe("new operator views (#31/#33)", () => {
 		expect(Array.isArray(b.nodes)).toBe(true);
 	});
 
+	it("GET /v1/admin/connectors returns the catalog + consents (403 non-admin)", async () => {
+		const denied = testApp({ dbRoles: '["user"]' });
+		expect((await req(denied.app, denied.env, "/v1/admin/connectors", await token("u2", ["user"]))).status).toBe(403);
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/admin/connectors", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		const b = (await res.json()) as any;
+		expect(b).toHaveProperty("connectors");
+		expect(b).toHaveProperty("consents");
+		expect(b.connectors.map((c: any) => c.connector)).toContain("github");
+	});
+
 	it("GET /v1/admin/errors returns the cross-user log", async () => {
 		const errorRows = [{ id: "e1", created_at: "2026-08-01 00:00:00", user_id: "u9", source: "auth", status: 500, message: "boom" }];
 		const { app, env } = testApp({ errorRows });

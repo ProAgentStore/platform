@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { Activity, AlertTriangle, BarChart3, Bot, Boxes, Gauge, LayoutDashboard, TerminalSquare, Users as UsersIcon } from "lucide-react";
+import { Activity, AlertTriangle, BarChart3, Bot, Boxes, Gauge, LayoutDashboard, Plug, TerminalSquare, Users as UsersIcon } from "lucide-react";
 
 const NAV = [
 	{ to: "/", label: "Overview", icon: LayoutDashboard, end: true },
@@ -8,6 +8,7 @@ const NAV = [
 	{ to: "/agents", label: "Agents", icon: Bot },
 	{ to: "/instances", label: "Instances", icon: Boxes },
 	{ to: "/terminals", label: "Terminals", icon: TerminalSquare },
+	{ to: "/connectors", label: "Connectors", icon: Plug },
 	{ to: "/usage", label: "Usage", icon: Gauge },
 	{ to: "/spending", label: "Spending", icon: BarChart3 },
 	{ to: "/audit", label: "Audit", icon: Activity },

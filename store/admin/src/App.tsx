@@ -9,6 +9,7 @@ import UserDetail from "./pages/UserDetail";
 import Agents from "./pages/Agents";
 import Instances from "./pages/Instances";
 import Terminals from "./pages/Terminals";
+import Connectors from "./pages/Connectors";
 import Usage from "./pages/Usage";
 import Spending from "./pages/Spending";
 import Audit from "./pages/Audit";
@@ -51,6 +52,7 @@ export default function App() {
 					<Route path="agents" element={<Agents />} />
 					<Route path="instances" element={<Instances />} />
 					<Route path="terminals" element={<Terminals />} />
+					<Route path="connectors" element={<Connectors />} />
 					<Route path="usage" element={<Usage />} />
 					<Route path="spending" element={<Spending />} />
 					<Route path="audit" element={<Audit />} />
