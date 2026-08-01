@@ -49,6 +49,39 @@ const FULL: readonly string[] = [
 	...CODING,
 ];
 
+// ── The tool catalog (data) ──────────────────────────────────────────────────
+// The open, data-driven vocabulary a creator picks from when declaring an agent's
+// `capabilities.tools`. Enumerable so the authoring UI (#55) and the pre-review
+// safety scanner (#54) can list/reason about what an agent may do — instead of the
+// tool set being implied by a hardcoded per-surface `switch`. Deliberately EXCLUDES
+// the permission-gated `find_confirmation_link` (granted only via user permission,
+// never by declaration) and the legacy `submit_job_application` (superseded by the
+// apply workflow).
+
+/** One selectable group in the catalog. `base` is always granted; the rest are opt-in. */
+export interface ToolCatalogGroup {
+	id: string;
+	label: string;
+	tools: readonly string[];
+	/** base = always granted · standard = creator-selectable · runtime = needs a local runner. */
+	tier: "base" | "standard" | "runtime";
+}
+
+export const TOOL_CATALOG: readonly ToolCatalogGroup[] = [
+	{ id: "base", label: "Memory, tasks, web fetch & context", tools: BASE, tier: "base" },
+	{ id: "kb_read", label: "Knowledge base — read (RAG)", tools: KB_READ, tier: "standard" },
+	{ id: "kb_write", label: "Knowledge base — write", tools: KB_WRITE, tier: "standard" },
+	{ id: "files", label: "File storage", tools: FILES, tier: "standard" },
+	{ id: "collections", label: "Structured collections", tools: COLLECTIONS, tier: "standard" },
+	{ id: "coding", label: "Live coding session", tools: CODING, tier: "runtime" },
+];
+
+/** Tool names a creator may grant via `capabilities.tools` (everything non-`base` in
+ *  the catalog). BASE is always added on top, so it's intentionally excluded here. */
+export const CREATOR_SELECTABLE_TOOLS: ReadonlySet<string> = new Set(
+	TOOL_CATALOG.filter((g) => g.tier !== "base").flatMap((g) => g.tools),
+);
+
 /**
  * The tool names an agent may use, resolved from its capabilities:
  *
@@ -58,8 +91,19 @@ const FULL: readonly string[] = [
  *   coding tools ONLY. Withholding `search_knowledge` is what stops the empty-index
  *   hallucination at the source, not just in the prompt.
  * - **everything else** (apply, insurance, generic, unknown): the FULL set, unchanged.
+ *
+ * A declared `capabilities.tools` allowlist takes precedence over all of the above:
+ * the agent gets exactly those catalog tools plus the universal BASE facilities. This
+ * is the data-driven path that lets a third-party creator scope tools without a code
+ * change; the per-surface cases remain the default for agents that don't declare one.
  */
 export function toolNamesFor(capabilities?: AgentCapabilities): Set<string> {
+	const declared = capabilities?.tools;
+	if (declared && declared.length) {
+		const set = new Set<string>(BASE);
+		for (const name of declared) if (CREATOR_SELECTABLE_TOOLS.has(name)) set.add(name);
+		return set;
+	}
 	const surfaces = capabilities?.surfaces ?? [];
 	if (surfaces.includes("repo")) return new Set<string>([...BASE, ...KB_READ]);
 	if (surfaces.includes("coding")) return new Set<string>([...BASE, ...CODING]);

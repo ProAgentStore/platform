@@ -77,6 +77,12 @@ export interface AgentCapabilities {
 	runtime: AgentRuntimeKind;
 	/** Brain workflow binding name, when the agent has an autonomous loop. */
 	workflow: "JOB_APPLY" | "CODING_SESSION" | "INSURANCE_QUOTES" | null;
+	/** Declared tool allowlist — names from the platform tool catalog (see
+	 *  agent-do-tools `TOOL_CATALOG`). When present it is AUTHORITATIVE: the agent gets
+	 *  exactly these catalog tools plus the universal BASE facilities, replacing the
+	 *  per-surface default. Absent → the surface-derived default applies. This is the
+	 *  open, data-driven vocabulary a third-party creator scopes without a code change. */
+	tools?: string[];
 	/** Phase 3: agent-published UIs the console loads dynamically from bundles. */
 	customSurfaces?: CustomSurface[];
 	/** The agent's single work board columns — declared, else a per-surface default. */
@@ -210,6 +216,29 @@ export function sanitizeSettingsSchema(value: unknown): SettingsField[] | undefi
 	return out.length ? out : undefined;
 }
 
+const MAX_DECLARED_TOOLS = 40;
+const TOOL_NAME_RE = /^[a-z][a-z0-9_]{1,48}$/;
+
+/** Validate a declared tool allowlist: an array of tool-name strings, deduped and
+ *  capped. Names are intersected with the real catalog at runtime (agent-do-tools
+ *  `toolNamesFor`), so an unknown/ungrantable name here is simply ignored — this only
+ *  trims obvious junk before it reaches config. Exported so create/update-agent routes
+ *  can sanitize with the same rules. */
+export function sanitizeToolList(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const v of value) {
+		if (out.length >= MAX_DECLARED_TOOLS) break;
+		if (typeof v !== "string") continue;
+		const name = v.trim();
+		if (!TOOL_NAME_RE.test(name) || seen.has(name)) continue;
+		seen.add(name);
+		out.push(name);
+	}
+	return out.length ? out : undefined;
+}
+
 const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "repo"]);
 
 /** Minimal shape we need off an `agents` row to resolve capabilities. */
@@ -245,6 +274,9 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 	// so the seed migrations' json_set('$.settingsSchema', …) is unconditionally
 	// idempotent. Honored in every path, like customSurfaces.
 	const settingsSchema = sanitizeSettingsSchema(cfg.settingsSchema);
+	// Declared tool allowlist (sibling of surfaces under config.capabilities). Honored in
+	// every path; runtime intersects it with the real catalog (agent-do-tools).
+	const tools = sanitizeToolList((declared as Record<string, unknown> | undefined)?.tools);
 
 	if (declared && Array.isArray(declared.surfaces)) {
 		const surfaces = declared.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface));
@@ -252,6 +284,7 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 			surfaces,
 			runtime: declared.runtime ?? null,
 			workflow: declared.workflow ?? null,
+			tools,
 			customSurfaces,
 			boardColumns: declaredColumns ?? defaultBoardColumns(surfaces),
 			settingsSchema,
@@ -269,7 +302,7 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 	} else {
 		base = { surfaces: [], runtime: null, workflow: null };
 	}
-	return { ...base, customSurfaces, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema };
+	return { ...base, tools, customSurfaces, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema };
 }
 
 /** True if the agent opts into a given console surface. */
