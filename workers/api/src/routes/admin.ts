@@ -3,6 +3,9 @@ import { HttpError, isAdmin, requireAdmin, requireUser } from "../lib/auth.js";
 import { getOverviewStats, getUserDetail, listAdminAudit, listAgents, listInstances, listUsers } from "../lib/admin.js";
 import { listErrors } from "../lib/error-log.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
+import { groupTerminalNodes } from "./terminals.js";
+import { relayConnected } from "../lib/runner-client.js";
+import { lastTerminal } from "../lib/coding-timeline.js";
 import type { Env } from "../types.js";
 
 /** UTC "YYYY-MM-DD" for `daysAgo` days before today (0 = today). */
@@ -106,6 +109,71 @@ adminRoutes.get("/instances", async (c) => {
 		limit: Number(c.req.query("limit")) || undefined,
 		offset: Number(c.req.query("offset")) || undefined,
 	}));
+});
+
+/**
+ * GET /v1/admin/terminals — EVERY connected CLI (machine running `pags up`) across
+ * ALL users: machine, owner, runner version, live/offline, the instances/sessions it
+ * serves, and the last terminal tail for active coding sessions (the "logs" peek).
+ * Reuses the proven per-user grouping (groupTerminalNodes) once per owner so two users'
+ * same-hostname machines never merge.
+ */
+adminRoutes.get("/terminals", async (c) => {
+	await requireAdmin(c);
+	type NRow = { user_id: string; owner_login: string | null } & Parameters<typeof groupTerminalNodes>[0][number];
+	type SRow = { user_id: string } & Parameters<typeof groupTerminalNodes>[1][number];
+
+	const nodeRows = (await c.env.DB.prepare(
+		`SELECT n.instance_id, n.runner_node, n.placement, n.runner_version, n.status, n.last_seen_at, n.updated_at,
+		        n.user_id, u.github_login AS owner_login,
+		        i.config AS instance_config, a.name AS agent_name, a.slug AS agent_slug,
+		        a.category AS agent_category, a.config AS agent_config
+		 FROM instance_runtime_nodes n
+		 JOIN agent_instances i ON i.id = n.instance_id
+		 LEFT JOIN agents a ON a.id = i.agent_id
+		 LEFT JOIN users u ON u.id = n.user_id
+		 ORDER BY n.runner_node ASC, n.updated_at DESC`,
+	).all<NRow>()).results ?? [];
+
+	const sessionRows = (await c.env.DB.prepare(
+		`SELECT s.id, s.instance_id, s.repo_id, s.runner_node, s.client_type, s.status, s.issue_number, s.issue_title, s.updated_at,
+		        s.user_id, r.name AS repo_name
+		 FROM coding_sessions s
+		 LEFT JOIN coding_repos r ON r.id = s.repo_id
+		 WHERE s.runner_node IS NOT NULL AND s.runner_node != ''
+		 ORDER BY s.updated_at DESC`,
+	).all<SRow>()).results ?? [];
+
+	// Group per owner (reuse the proven pure grouping), then stamp owner onto each node.
+	const owners = new Set(nodeRows.map((r) => r.user_id));
+	const nodes: Array<ReturnType<typeof groupTerminalNodes>[number] & { ownerLogin: string | null; userId: string }> = [];
+	for (const uid of owners) {
+		const login = nodeRows.find((r) => r.user_id === uid)?.owner_login ?? null;
+		const grouped = groupTerminalNodes(
+			nodeRows.filter((r) => r.user_id === uid),
+			sessionRows.filter((r) => r.user_id === uid),
+		);
+		for (const n of grouped) nodes.push({ ...n, ownerLogin: login, userId: uid });
+	}
+
+	// Live status (cap total relay checks so a big fleet can't fan out unbounded).
+	let checked = 0;
+	await Promise.all(nodes.map(async (n) => {
+		const checks = await Promise.all(n.instances.map(async (i) => {
+			if (checked++ > 80) return false;
+			return relayConnected(c.env, i.instanceId, n.node).catch(() => false);
+		}));
+		n.instances.forEach((i, idx) => { i.connected = checks[idx] ?? false; });
+		n.connected = checks.some(Boolean);
+	}));
+
+	// Terminal tail (the "logs" peek) for active sessions, capped.
+	const active = nodes.flatMap((n) => n.sessions.filter((s) => s.status === "active")).slice(0, 20);
+	const tails = new Map<string, string | null>();
+	await Promise.all(active.map(async (s) => { tails.set(s.sessionId, await lastTerminal(c.env, s.sessionId).catch(() => null)); }));
+	for (const n of nodes) for (const s of n.sessions) s.terminalTail = tails.get(s.sessionId) ?? s.terminalTail ?? null;
+
+	return c.json({ count: nodes.length, nodes });
 });
 
 /** GET /v1/admin/errors?source=&limit= — cross-user error log (newest first). */

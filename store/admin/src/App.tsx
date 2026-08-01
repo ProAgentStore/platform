@@ -1,17 +1,19 @@
 import { useEffect, useState } from "react";
-import { Activity as ActivityIcon, BarChart3, Bot, LayoutDashboard, Users as UsersIcon } from "lucide-react";
+import { Activity as ActivityIcon, BarChart3, Bot, LayoutDashboard, TerminalSquare, Users as UsersIcon } from "lucide-react";
 import { api, captureOAuthSession, getToken, signIn } from "./lib/api";
 import Overview from "./pages/Overview";
 import Users from "./pages/Users";
 import Spending from "./pages/Spending";
 import Agents from "./pages/Agents";
 import Activity from "./pages/Activity";
+import Terminals from "./pages/Terminals";
 
-type Nav = "overview" | "users" | "agents" | "spending" | "activity";
+type Nav = "overview" | "users" | "agents" | "terminals" | "spending" | "activity";
 const NAV: Array<{ id: Nav; label: string; icon: typeof LayoutDashboard }> = [
 	{ id: "overview", label: "Overview", icon: LayoutDashboard },
 	{ id: "users", label: "Users", icon: UsersIcon },
 	{ id: "agents", label: "Agents", icon: Bot },
+	{ id: "terminals", label: "Terminals", icon: TerminalSquare },
 	{ id: "spending", label: "Spending", icon: BarChart3 },
 	{ id: "activity", label: "Activity", icon: ActivityIcon },
 ];
@@ -80,6 +82,7 @@ export default function App() {
 				{nav === "overview" && <Overview />}
 				{nav === "users" && <Users />}
 				{nav === "agents" && <Agents />}
+				{nav === "terminals" && <Terminals />}
 				{nav === "spending" && <Spending />}
 				{nav === "activity" && <Activity />}
 			</main>

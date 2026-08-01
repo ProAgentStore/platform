@@ -208,6 +208,17 @@ describe("new operator views (#31/#33)", () => {
 		expect((await res.json() as any).instances[0].agent_name).toBe("Coder");
 	});
 
+	it("GET /v1/admin/terminals → 403 non-admin, node list for admin", async () => {
+		const denied = testApp({ dbRoles: '["user"]' });
+		expect((await req(denied.app, denied.env, "/v1/admin/terminals", await token("u2", ["user"]))).status).toBe(403);
+		const { app, env } = testApp(); // no runtime nodes → empty
+		const res = await req(app, env, "/v1/admin/terminals", await token("u1", ["admin"]));
+		expect(res.status).toBe(200);
+		const b = (await res.json()) as any;
+		expect(b).toHaveProperty("nodes");
+		expect(Array.isArray(b.nodes)).toBe(true);
+	});
+
 	it("GET /v1/admin/errors returns the cross-user log", async () => {
 		const errorRows = [{ id: "e1", created_at: "2026-08-01 00:00:00", user_id: "u9", source: "auth", status: 500, message: "boom" }];
 		const { app, env } = testApp({ errorRows });
