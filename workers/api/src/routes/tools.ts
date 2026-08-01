@@ -5,6 +5,7 @@ import { getRegistryTool, registryTools, runRegistryTool, type JsonSchema } from
 import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { validatePipeline, type PipelineDef } from "../lib/pipeline.js";
+import { listRuns } from "../lib/pipeline-runs.js";
 import type { Env } from "../types.js";
 
 /**
@@ -120,6 +121,25 @@ toolRoutes.post("/:id/pipelines/:name/run", async (c) => {
 	const started = await startPipelineRun(c.env, instanceId, session.uid, name, params, "api");
 	if (!started.ok) throw new HttpError(404, started.error);
 	return c.json({ ok: true, runId: started.runId, workflowId: started.workflowId });
+});
+
+/**
+ * GET /v1/instances/:id/pipeline-runs — run observability (#98). Lists this instance's
+ * pipeline runs (most recent first) with counts + status, owner-scoped. `pipeline` narrows
+ * to one pipeline's history; `limit` caps rows. Per-record audit rides on each record's
+ * `audit` field in the sink collection (read via the collections/records routes).
+ */
+toolRoutes.get("/:id/pipeline-runs", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const runs = await listRuns(c.env, {
+		userId: session.uid,
+		instanceId,
+		pipeline: c.req.query("pipeline") || undefined,
+		limit: Number(c.req.query("limit")) || 50,
+	});
+	return c.json({ runs });
 });
 
 /** GET /v1/instances/:id/connectors/consent — write-consents granted on this instance. */

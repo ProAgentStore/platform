@@ -6,7 +6,7 @@ import { toolRoutes } from "./tools.js";
 
 const SECRET = "test-secret";
 
-function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknown) => Promise<{ id: string }> } = { owned: true }) {
+function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknown) => Promise<{ id: string }>; runs?: unknown[] } = { owned: true }) {
 	const app = new Hono();
 	app.route("/v1/instances", toolRoutes);
 	app.onError((err, c) => {
@@ -29,6 +29,9 @@ function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknow
 									: null,
 							// logEvent (pipeline audit) does a .run() insert — must not throw.
 							run: async () => ({}),
+							// listRuns (#98) reads via .all(); return the seeded runs for the
+							// pipeline_runs query, empty otherwise.
+							all: async () => ({ results: sql.includes("FROM pipeline_runs") ? opts.runs ?? [] : [] }),
 						};
 					},
 				};
@@ -192,5 +195,25 @@ describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
 		expect(arg.params.params).toEqual({ repo: "owner/name" });
 		expect(arg.params.trigger).toBe("api");
 		expect(arg.params.userId).toBe("u1");
+	});
+});
+
+describe("GET /v1/instances/:id/pipeline-runs (issue #98)", () => {
+	it("404s when the instance isn't owned", async () => {
+		const { app, env } = testApp({ owned: false });
+		const res = await req(app, env, "/v1/instances/i1/pipeline-runs", {}, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	it("lists the owner's runs with counts + parsed params", async () => {
+		const runs = [{ run_id: "r1", user_id: "u1", instance_id: "i1", pipeline: "leads", trigger: "api", status: "completed", params: '{"city":"Sydney"}', started_at: 5, finished_at: 9, seen: 3, added: 2, skipped: 1, errors: 0, detail: null }];
+		const { app, env } = testApp({ owned: true, runs });
+		const res = await req(app, env, "/v1/instances/i1/pipeline-runs", {}, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.runs).toHaveLength(1);
+		expect(body.runs[0].pipeline).toBe("leads");
+		expect(body.runs[0].seen).toBe(3);
+		expect(body.runs[0].params).toEqual({ city: "Sydney" });
 	});
 });

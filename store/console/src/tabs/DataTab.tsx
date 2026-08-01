@@ -20,6 +20,20 @@ interface Rec {
 	createdAt?: string;
 	updatedAt?: string;
 }
+// A pipeline run record (issue #98) — GET /v1/instances/:id/pipeline-runs.
+interface Run {
+	run_id: string;
+	pipeline: string;
+	trigger: string;
+	status: string;
+	started_at: number;
+	finished_at: number | null;
+	seen: number;
+	added: number;
+	skipped: number;
+	errors: number;
+	detail: string | null;
+}
 
 const PIPELINE = ["new", "contacted", "won", "dead"];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
@@ -32,6 +46,11 @@ const STATUS_CLASS: Record<string, string> = {
 	dead: "bg-gray-200 text-gray-600",
 	none: "bg-green-100 text-green-700",
 	unreachable: "bg-amber-100 text-amber-700",
+	// Pipeline run statuses (issue #98).
+	running: "bg-blue-100 text-blue-700",
+	completed: "bg-green-100 text-green-700",
+	failed: "bg-red-100 text-red-700",
+	interrupted: "bg-amber-100 text-amber-700",
 };
 
 function Badge({ value }: { value: string }) {
@@ -40,10 +59,10 @@ function Badge({ value }: { value: string }) {
 }
 
 function fmtDateTime(v: unknown): string {
-	const s = String(v ?? "");
-	if (!s) return "";
-	const d = new Date(s);
-	return Number.isNaN(d.getTime()) ? s : d.toLocaleString();
+	if (v == null || v === "") return "";
+	// Accept ms-epoch numbers (pipeline run timestamps) as well as date strings.
+	const d = typeof v === "number" ? new Date(v) : new Date(String(v));
+	return Number.isNaN(d.getTime()) ? String(v) : d.toLocaleString();
 }
 
 export default function DataTab({ instanceId }: { instanceId: string }) {
@@ -61,6 +80,10 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 	const [filters, setFilters] = useState<Record<string, string>>({});
 	const [showControls, setShowControls] = useState(false);
 	const [detail, setDetail] = useState<Rec | null>(null);
+	// Run observability (issue #98): a "Runs" section over pipeline-run records.
+	const [surface, setSurface] = useState<"records" | "runs">("records");
+	const [runs, setRuns] = useState<Run[]>([]);
+	const [runsLoading, setRunsLoading] = useState(false);
 
 	const loadCollections = useCallback(async () => {
 		try {
@@ -91,12 +114,26 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		[instanceId],
 	);
 
+	const loadRuns = useCallback(async () => {
+		setRunsLoading(true);
+		try {
+			const d = await api<{ runs?: Run[] }>(`/v1/instances/${instanceId}/pipeline-runs?limit=100`);
+			setRuns(d.runs || []);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : "Failed to load runs");
+		}
+		setRunsLoading(false);
+	}, [instanceId]);
+
 	useEffect(() => {
 		loadCollections();
 	}, [loadCollections]);
 	useEffect(() => {
 		if (selected) loadRecords(selected);
 	}, [selected, loadRecords]);
+	useEffect(() => {
+		if (surface === "runs") loadRuns();
+	}, [surface, loadRuns]);
 
 	const collection = collections.find((c) => c.name === selected);
 	const allColumns = useMemo(
@@ -203,6 +240,20 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		<div className="text-sm">
 			<div className="mb-3">
 				<div className="flex flex-wrap items-center gap-2">
+					<div className="inline-flex rounded border overflow-hidden">
+						{(["records", "runs"] as const).map((v) => (
+							<button
+								key={v}
+								type="button"
+								onClick={() => setSurface(v)}
+								className={`px-2 py-1 text-xs ${surface === v ? "bg-accent text-white" : ""}`}
+							>
+								{v === "records" ? "Records" : "Runs"}
+							</button>
+						))}
+					</div>
+					{surface === "records" && (
+					<>
 					<select
 						value={selected}
 						onChange={(e) => {
@@ -249,9 +300,16 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					>
 						{showControls ? "Hide controls ▲" : "Controls ▾"}
 					</button>
+					</>
+					)}
+					{surface === "runs" && (
+						<button type="button" onClick={loadRuns} className="border rounded px-2 py-1 text-xs ml-auto">
+							Refresh
+						</button>
+					)}
 				</div>
 
-				{showControls && (
+				{surface === "records" && showControls && (
 					<div className="flex flex-wrap items-center gap-2 mt-2 border-t pt-2">
 						<input
 							value={q}
@@ -321,7 +379,43 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 
 			{error && <div className="text-red-500 mb-2">{error}</div>}
 
-			{loading ? (
+			{surface === "runs" ? (
+				runsLoading ? (
+					<p className="text-center py-5 text-muted-soft">Loading…</p>
+				) : runs.length === 0 ? (
+					<p className="text-muted-soft py-5">No pipeline runs yet.</p>
+				) : (
+					<div className="overflow-auto border rounded">
+						<table className="w-full border-collapse">
+							<thead>
+								<tr>
+									{["pipeline", "started", "status", "seen", "added", "skipped", "errors", "trigger"].map((h) => (
+										<th key={h} className="text-left px-2 py-1 border-b whitespace-nowrap sticky top-0 bg-white">
+											{h}
+										</th>
+									))}
+								</tr>
+							</thead>
+							<tbody>
+								{runs.map((r) => (
+									<tr key={r.run_id} className="border-b hover:bg-black/5" title={r.detail || ""}>
+										<td className="px-2 py-1 whitespace-nowrap">{r.pipeline}</td>
+										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{fmtDateTime(r.started_at)}</td>
+										<td className="px-2 py-1">
+											<Badge value={r.status} />
+										</td>
+										<td className="px-2 py-1 text-right">{r.seen}</td>
+										<td className="px-2 py-1 text-right">{r.added}</td>
+										<td className="px-2 py-1 text-right">{r.skipped}</td>
+										<td className={`px-2 py-1 text-right ${r.errors ? "text-red-600 font-medium" : ""}`}>{r.errors}</td>
+										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{r.trigger}</td>
+									</tr>
+								))}
+							</tbody>
+						</table>
+					</div>
+				)
+			) : loading ? (
 				<p className="text-center py-5 text-muted-soft">Loading…</p>
 			) : collections.length === 0 ? (
 				<p className="text-muted-soft py-5">This agent has no data collections yet.</p>
@@ -405,7 +499,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						onClick={(e) => e.stopPropagation()}
 					>
 						<div className="flex items-center justify-between mb-3">
-							<h3 className="font-semibold text-base">{String(detail.data.name ?? "Lead")}</h3>
+							<h3 className="font-semibold text-base">{String(detail.data.name ?? detail.data.title ?? detail.id ?? "Record")}</h3>
 							<button type="button" onClick={() => setDetail(null)} className="text-muted-soft">
 								✕
 							</button>

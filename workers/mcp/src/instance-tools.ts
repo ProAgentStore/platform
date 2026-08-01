@@ -684,6 +684,26 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"list_pipeline_runs",
+		"List an instance's declarative-pipeline runs (issue #98) — for each run: which pipeline, when it started/finished, its status, and its counts (seen/added/skipped/errors). This is the run-level observability surface; for the per-output-record audit trail (what the pipeline saw + decided for each record), read the sink collection's records — each carries an `audit` field. Filter by pipeline name; limit caps rows (most recent first).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("The instance (agent) whose pipeline runs to list."),
+			pipeline: z.string().optional().describe("Narrow to one pipeline's run history."),
+			limit: z.number().int().min(1).max(500).optional().describe("Most-recent runs to return (default 50)."),
+		},
+		async ({ token, instance_id, pipeline, limit }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const qs = new URLSearchParams();
+			if (pipeline) qs.set("pipeline", pipeline);
+			if (limit) qs.set("limit", String(limit));
+			const data = await authedCall(`/v1/instances/${encodeURIComponent(instance_id)}/pipeline-runs${qs.toString() ? `?${qs.toString()}` : ""}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"add_instance_knowledge",
 		"Add user-specific knowledge to your private subscribed instance. This does not alter the creator's template agent.",
 		{
