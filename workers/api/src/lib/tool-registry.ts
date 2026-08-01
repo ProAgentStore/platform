@@ -4,9 +4,8 @@
 // instead of the current triple-definition. Additive: the legacy AGENT_TOOLS /
 // STORAGE_TOOLS catalog is untouched; registry tools are dispatched alongside them.
 import type { Env } from "../types.js";
-import { GITHUB_TOOLS } from "./connectors/github.js";
-import { TMUX_TOOLS } from "./connectors/tmux.js";
-import { META_TOOLS } from "./connectors/meta.js";
+import { connectorTools, getConnector } from "./connectors/registry.js";
+import { connectorClient, type ConnectorClient } from "./connectors/client.js";
 import { hasConsent } from "./connector-consent.js";
 
 export interface RegistryToolCtx {
@@ -14,6 +13,13 @@ export interface RegistryToolCtx {
 	userId?: string;
 	agentId?: string;
 	instanceId?: string;
+	/**
+	 * The connector client factory (issue #86) — handlers call
+	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
+	 * grant/scope, instead of importing token-minting fns directly. Injected by
+	 * runRegistryTool; optional so tests can construct a ctx without it.
+	 */
+	connectorClient?: (provider: string) => ConnectorClient;
 }
 
 export interface RegistryToolResult {
@@ -56,9 +62,18 @@ export interface ToolDef {
  */
 export type RegistryTool = ToolDef;
 
-// All connectors' tools, keyed by name. Add a connector = add its tools array here.
+/**
+ * First-party registry tools that are NOT provided by a connector (base/standard/runtime
+ * tiers). Empty for now — kept so the REGISTRY can carry non-connector tools without
+ * changing its shape.
+ */
+const FIRST_PARTY_TOOLS: ToolDef[] = [];
+
+// The tool REGISTRY, keyed by name: every connector's tools (flattened from the connector
+// registry, with connector/tier/scope stamped) plus first-party tools. Add a connector =
+// add it to CONNECTORS in connectors/registry.ts.
 const REGISTRY: ReadonlyMap<string, ToolDef> = new Map(
-	[...GITHUB_TOOLS, ...TMUX_TOOLS, ...META_TOOLS].map((t) => [t.name, t] as const),
+	[...connectorTools(), ...FIRST_PARTY_TOOLS].map((t) => [t.name, t] as const),
 );
 
 export function getRegistryTool(name: string): ToolDef | undefined {
@@ -103,6 +118,14 @@ export async function runRegistryTool(
 ): Promise<{ name: string; content: string; success: boolean }> {
 	const tool = REGISTRY.get(name);
 	if (!tool) return { name, content: `Unknown tool: ${name}`, success: false };
+	// Scope enforcement (issue #86): a write-scoped tool on a read-only connector is
+	// unreachable — reject before consent/handler so the abstraction can't be bypassed.
+	if (tool.scope === "write" && tool.connector) {
+		const conn = getConnector(tool.connector);
+		if (conn && !conn.scopes.write) {
+			return { name, content: `The ${conn.id} connector is read-only — "${name}" cannot run.`, success: false };
+		}
+	}
 	// Write-consent gate (issue #90): a write tool needs explicit per-instance consent
 	// for its connector. Fail-closed — no connector, no instance context, or no consent
 	// → refused. (A write-scoped tool without a connector can't be consented to, so it's
@@ -118,7 +141,13 @@ export async function runRegistryTool(
 		}
 	}
 	try {
-		const r = await tool.handler(ctx, input || {});
+		// Inject the connector-client factory so handlers mint tokens + enforce grant/scope
+		// through the ONE path (issue #86) instead of importing token fns directly.
+		const handlerCtx: RegistryToolCtx = {
+			...ctx,
+			connectorClient: ctx.connectorClient ?? ((provider: string) => connectorClient(ctx.env, provider, { userId: ctx.userId, instanceId: ctx.instanceId })),
+		};
+		const r = await tool.handler(handlerCtx, input || {});
 		return { name, content: r.content, success: r.success };
 	} catch (err) {
 		return { name, content: `Error: ${err instanceof Error ? err.message : String(err)}`, success: false };

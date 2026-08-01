@@ -1,7 +1,10 @@
 import { HttpError } from "./auth.js";
 import type { Env } from "../types.js";
 
-export type ConnectorProvider = "google_drive" | "zoho_workdrive";
+// Widened to `string` (#86): connectors now cover resource types beyond drive/workdrive
+// (repos, spreadsheets, …). The known ingest providers stay documented for reference.
+// Known values: "google_drive" | "zoho_workdrive" | (any connector id with grantModel:"instance-resource").
+export type ConnectorProvider = string;
 
 export interface ConnectorGrant {
 	id: string;
