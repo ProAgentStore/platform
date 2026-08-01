@@ -3,6 +3,8 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { getRegistryTool, registryTools, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
 import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
+import { startPipelineRun } from "../lib/pipeline-run-start.js";
+import { validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import type { Env } from "../types.js";
 
 /**
@@ -77,6 +79,47 @@ toolRoutes.post("/:id/tools/:name", async (c) => {
 	if (invalid) throw new HttpError(400, invalid);
 	const result = await runRegistryTool(name, { env: c.env, userId: session.uid, instanceId }, input);
 	return c.json(result);
+});
+
+/**
+ * GET /v1/instances/:id/pipelines — declarative pipelines (#97) configured on this
+ * instance. Definitions live in the instance's `config.pipelines` (data, not code).
+ */
+toolRoutes.get("/:id/pipelines", async (c) => {
+	const session = await requireUser(c);
+	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	let cfg: Record<string, unknown> = {};
+	try {
+		cfg = JSON.parse(instance.config || "{}") as Record<string, unknown>;
+	} catch {
+		/* malformed config → no pipelines */
+	}
+	const pipelines = (cfg.pipelines && typeof cfg.pipelines === "object" ? cfg.pipelines : {}) as Record<string, PipelineDef>;
+	const list = Object.entries(pipelines).map(([name, def]) => ({
+		name,
+		steps: Array.isArray(def?.steps) ? def.steps.length : 0,
+		sink: def?.sink?.collection,
+		valid: validatePipeline(def) === null,
+	}));
+	return c.json({ pipelines: list });
+});
+
+/**
+ * POST /v1/instances/:id/pipelines/:name/run { params } — start a durable pipeline run
+ * (#97). Owner-scoped (requireOwnedInstance) + audited (startPipelineRun logs
+ * pipeline.requested with the caller's uid). Kicks the PipelineRunWorkflow and returns the
+ * run + workflow ids; results land in the trace/collection, not inline.
+ */
+toolRoutes.post("/:id/pipelines/:name/run", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const name = c.req.param("name");
+	const body = (await c.req.json().catch(() => ({}))) as { params?: Record<string, unknown> };
+	const params = body.params && typeof body.params === "object" && !Array.isArray(body.params) ? body.params : {};
+	const started = await startPipelineRun(c.env, instanceId, session.uid, name, params, "api");
+	if (!started.ok) throw new HttpError(404, started.error);
+	return c.json({ ok: true, runId: started.runId, workflowId: started.workflowId });
 });
 
 /** GET /v1/instances/:id/connectors/consent — write-consents granted on this instance. */

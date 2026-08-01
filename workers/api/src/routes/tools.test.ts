@@ -6,13 +6,14 @@ import { toolRoutes } from "./tools.js";
 
 const SECRET = "test-secret";
 
-function testApp(opts: { owned?: boolean } = { owned: true }) {
+function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknown) => Promise<{ id: string }> } = { owned: true }) {
 	const app = new Hono();
 	app.route("/v1/instances", toolRoutes);
 	app.onError((err, c) => {
 		if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
 		throw err;
 	});
+	const config = opts.config ?? "{}";
 	const env = {
 		SESSION_SIGNING_KEY: SECRET,
 		// githubAppConfigured() → false (no GITHUB_APP_ID), so github tools return a
@@ -23,17 +24,24 @@ function testApp(opts: { owned?: boolean } = { owned: true }) {
 					bind() {
 						return {
 							first: async () =>
-								sql.includes("FROM agent_instances") && opts.owned
-									? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}", created_at: "", updated_at: "" }
+								sql.includes("FROM agent_instances") && (opts.owned ?? true)
+									? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config, created_at: "", updated_at: "" }
 									: null,
+							// logEvent (pipeline audit) does a .run() insert — must not throw.
+							run: async () => ({}),
 						};
 					},
 				};
 			},
 		},
+		// Durable pipeline runner (issue #97) — stubbed to capture .create() calls.
+		PIPELINE_RUN: { create: opts.create ?? (async () => ({ id: "wf-test" })) },
 	};
 	return { app, env };
 }
+
+// A valid stored pipeline whose step uses a real registry tool (so validatePipeline passes).
+const STORED_PIPELINE = { pipelines: { sweep: { name: "sweep", steps: [{ tool: "github_workflow_runs", inputs: { repo: { $param: "repo" } }, bind: "runs" }], sink: { collection: "results" } } } };
 
 const tok = (uid: string) => signSession(uid, SECRET, { roles: ["user"] });
 const req = (app: Hono, env: unknown, path: string, init: RequestInit, t: string) =>
@@ -134,5 +142,55 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		expect(body.success).toBe(true);
 		expect(JSON.parse(body.content).data).toEqual([{ id: "p1", name: "Cafe" }]);
 		fetchSpy.mockRestore();
+	});
+});
+
+describe("GET /v1/instances/:id/pipelines (issue #97)", () => {
+	it("lists pipelines declared in the instance config", async () => {
+		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE) });
+		const res = await req(app, env, "/v1/instances/i1/pipelines", {}, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.pipelines).toHaveLength(1);
+		expect(body.pipelines[0]).toMatchObject({ name: "sweep", steps: 1, sink: "results", valid: true });
+	});
+
+	it("404s when the instance isn't owned", async () => {
+		const { app, env } = testApp({ owned: false });
+		const res = await req(app, env, "/v1/instances/i1/pipelines", {}, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+});
+
+describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
+	it("owner-gated: 404s when the instance isn't owned (never kicks the workflow)", async () => {
+		const create = vi.fn(async () => ({ id: "wf" }));
+		const { app, env } = testApp({ owned: false, config: JSON.stringify(STORED_PIPELINE), create });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/sweep/run", { method: "POST", body: "{}" }, await tok("u1"));
+		expect(res.status).toBe(404);
+		expect(create).not.toHaveBeenCalled();
+	});
+
+	it("404s an unknown pipeline name", async () => {
+		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE) });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/nope/run", { method: "POST", body: "{}" }, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	it("kicks the durable workflow with the def + params and returns run ids", async () => {
+		const create = vi.fn(async () => ({ id: "wf-99" }));
+		const { app, env } = testApp({ config: JSON.stringify(STORED_PIPELINE), create });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/sweep/run", { method: "POST", body: JSON.stringify({ params: { repo: "owner/name" } }) }, await tok("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.ok).toBe(true);
+		expect(body.workflowId).toBe("wf-99");
+		expect(body.runId).toBeTruthy();
+		expect(create).toHaveBeenCalledTimes(1);
+		const arg = create.mock.calls[0][0] as any;
+		expect(arg.params.pipeline.name).toBe("sweep");
+		expect(arg.params.params).toEqual({ repo: "owner/name" });
+		expect(arg.params.trigger).toBe("api");
+		expect(arg.params.userId).toBe("u1");
 	});
 });

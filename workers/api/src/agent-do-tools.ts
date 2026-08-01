@@ -24,6 +24,8 @@ const BASE = [
 	"set_user_preference",
 	// Every agent owns a work board; let it reshape its own columns/view on request.
 	"configure_board",
+	// Start a declarative data pipeline the owner configured on this instance (#97).
+	"run_pipeline",
 ] as const;
 
 /** Read the vector knowledge base (RAG). Only agents that HAVE an index get these. */
