@@ -1,0 +1,79 @@
+{
+  "name": "lead-finder",
+  "params": {
+    "city": { "type": "string", "description": "City to sweep, e.g. \"Sydney, NSW\" — geocoded to the search centre." },
+    "type": { "type": "string", "description": "Google Places includedType, e.g. \"cafe\" / \"restaurant\"." },
+    "radius": { "type": "number", "description": "searchNearby radius in metres around the centre (e.g. 900)." }
+  },
+  "steps": [
+    {
+      "tool": "geocode",
+      "bind": "geo",
+      "inputs": {
+        "address": { "$param": "city" }
+      }
+    },
+    {
+      "tool": "http_request",
+      "bind": "places",
+      "inputs": {
+        "method": "POST",
+        "url": "https://places.googleapis.com/v1/places:searchNearby",
+        "headers": {
+          "Content-Type": "application/json",
+          "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.location,places.googleMapsUri,places.addressComponents"
+        },
+        "auth": { "mode": "api-key", "key": { "in": "header", "name": "X-Goog-Api-Key" } },
+        "body": {
+          "includedTypes": [{ "$param": "type" }],
+          "maxResultCount": 20,
+          "locationRestriction": {
+            "circle": {
+              "center": { "latitude": { "$ref": "geo.lat" }, "longitude": { "$ref": "geo.lng" } },
+              "radius": { "$param": "radius" }
+            }
+          }
+        },
+        "responseMap": "places[].{place_id:id,name:displayName.text,address:formattedAddress,phone:nationalPhoneNumber,websiteUri:websiteUri,lat:location.latitude,lng:location.longitude,maps_url:googleMapsUri,addressComponents:addressComponents}"
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "shaped",
+      "inputs": {
+        "items": { "$ref": "places.data" },
+        "derive": { "category": { "$param": "type" }, "status": "new", "website_status": "none" },
+        "extract": {
+          "country": "addressComponents.country",
+          "state": "addressComponents.state",
+          "city": "addressComponents.locality",
+          "suburb": "addressComponents.suburb"
+        }
+      }
+    },
+    {
+      "tool": "filter",
+      "bind": "leads",
+      "inputs": {
+        "items": { "$ref": "shaped.items" },
+        "where": [
+          { "field": "websiteUri", "op": "missing" }
+        ]
+      }
+    },
+    {
+      "tool": "dedupe_upsert",
+      "bind": "stored",
+      "inputs": {
+        "items": { "$ref": "leads.items" },
+        "collection": "leads",
+        "key": "place_id",
+        "mode": "update"
+      }
+    }
+  ],
+  "sink": {
+    "collection": "leads",
+    "keyField": "place_id"
+  }
+}
