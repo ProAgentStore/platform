@@ -993,11 +993,23 @@ export class AgentDO extends DurableObject<Env> {
 
 	/** Alarm: advance one repo-ingestion tick, reschedule while work remains. */
 	async alarm(): Promise<void> {
-		const state = await this.getState();
-		if (!state) return;
-		const engine = this.getStorageEngine(state.agentId);
-		const didWork = await repoAlarmTick(this.ctx.storage, engine, this.repoFetchers());
-		if (didWork) await this.ctx.storage.setAlarm(Date.now() + 50);
+		// The DO alarm (repo-ingest state machine) doesn't go through app.onError, so a
+		// crash would only hit the ephemeral console + a silent CF retry. Persist it with
+		// a stack, then rethrow so CF still retries the alarm.
+		try {
+			const state = await this.getState();
+			if (!state) return;
+			const engine = this.getStorageEngine(state.agentId);
+			const didWork = await repoAlarmTick(this.ctx.storage, engine, this.repoFetchers());
+			if (didWork) await this.ctx.storage.setAlarm(Date.now() + 50);
+		} catch (err) {
+			await logError(this.env, {
+				source: "alarm",
+				message: `DO alarm crashed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500),
+				context: { stack: err instanceof Error ? String(err.stack || "").slice(0, 1500) : undefined },
+			}).catch(() => undefined);
+			throw err;
+		}
 	}
 
 	// ── Collections ───────────────────────────────────────────────────────────

@@ -58,7 +58,7 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				await logEvent(this.env, { source: "apply", event: "apply.interrupted", message: `apply interrupted by a deploy, resuming: ${msg}`.slice(0, 200), userId, instanceId, traceId: taskId }).catch(() => undefined);
 				throw err;
 			}
-			await logError(this.env, { source: "job-apply", userId, status: 500, message: `apply workflow crashed: ${msg}`, context: { instanceId, taskId, url: job?.url } });
+			await logError(this.env, { source: "job-apply", userId, status: 500, message: `apply workflow crashed: ${msg}`, context: { instanceId, taskId, url: job?.url, stack: err instanceof Error ? String(err.stack || "").slice(0, 1500) : undefined } });
 			// Best-effort: don't leave the task stuck "running" after a crash.
 			try {
 				const conn = await getBoundRunnerConn(this.env, instanceId, userId);
