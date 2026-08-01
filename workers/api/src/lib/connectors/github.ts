@@ -4,7 +4,7 @@
 // the repos the owner's installation covers. Writes (create issue/PR, trigger) come
 // later behind consent (#90). These replace Coder's hard-wired GH logic over time.
 import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
-import { githubAppConfigured, installationTokenForOwner } from "../github-app.js";
+import { githubAppConfigured } from "../github-app.js";
 import { listIssues, readIssue } from "../github-issues.js";
 
 const GH = (token: string) => ({
@@ -19,12 +19,18 @@ function ownerOf(repo: string): string {
 	return p.length === 2 && p[0] && p[1] ? p[0] : "";
 }
 
-/** Resolve an installation token for the repo's owner, or a helpful error string. */
+/**
+ * Resolve an installation token for the repo's owner, or a helpful error string. Auth is
+ * minted via the connectorClient (issue #86): `token({resourceId: repo})` runs the same
+ * installationTokenForOwner path (the "github" connector is auth:"app"), so behaviour is
+ * identical — same token, same scoping. The platform-configured + owner-parse checks stay
+ * here so their user-facing messages are unchanged.
+ */
 async function resolveRepo(ctx: RegistryToolCtx, repo: string): Promise<{ token: string } | { error: string }> {
 	if (!githubAppConfigured(ctx.env)) return { error: "GitHub is not connected on this platform (GitHub App not configured)." };
 	const owner = ownerOf(repo);
 	if (!owner) return { error: `Invalid repo "${repo}" — use the form "owner/name".` };
-	const token = await installationTokenForOwner(ctx.env, ctx.userId ?? "", owner).catch(() => null);
+	const token = await ctx.connectorClient?.("github").token({ resourceId: repo }).catch(() => null);
 	if (!token) return { error: `No GitHub access for "${owner}". Install/authorize the ProAgentStore GitHub App for that account, then try again.` };
 	return { token };
 }

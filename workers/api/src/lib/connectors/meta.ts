@@ -14,8 +14,12 @@ import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
 
 const GRAPH = "https://graph.facebook.com/v20.0";
 
-function metaToken(ctx: RegistryToolCtx): string | null {
-	return ctx.env.META_ACCESS_TOKEN?.trim() || null;
+// Auth via the connectorClient (issue #86): the "meta" connector is auth:"token" backed
+// by the platform env META_ACCESS_TOKEN, so token() returns exactly what the old inline
+// `ctx.env.META_ACCESS_TOKEN?.trim()` did. Caught to null so the handlers keep emitting
+// their combined "not configured" message (which also names the missing phone/IG id).
+async function metaToken(ctx: RegistryToolCtx): Promise<string | null> {
+	return (await ctx.connectorClient?.("meta").token().catch(() => null)) || null;
 }
 
 async function graphPost(token: string, path: string, body: unknown): Promise<{ ok: true; data: unknown } | { ok: false; error: string }> {
@@ -49,7 +53,7 @@ export const META_TOOLS: ToolDef[] = [
 			required: ["to"],
 		},
 		handler: async (ctx, input) => {
-			const token = metaToken(ctx);
+			const token = await metaToken(ctx);
 			const phoneId = ctx.env.WHATSAPP_PHONE_NUMBER_ID?.trim();
 			if (!token || !phoneId) return { content: "WhatsApp Business API not configured (set META_ACCESS_TOKEN + WHATSAPP_PHONE_NUMBER_ID after Meta app review).", success: false };
 			const to = String(input.to || "").replace(/[^\d+]/g, "");
@@ -93,7 +97,7 @@ export const META_TOOLS: ToolDef[] = [
 			required: ["recipient_id", "text"],
 		},
 		handler: async (ctx, input) => {
-			const token = metaToken(ctx);
+			const token = await metaToken(ctx);
 			const igId = ctx.env.META_IG_ID?.trim();
 			if (!token || !igId) return { content: "Instagram messaging not configured (set META_ACCESS_TOKEN + META_IG_ID after Meta app review).", success: false };
 			const recipient = String(input.recipient_id || "").trim();
