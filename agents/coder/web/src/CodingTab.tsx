@@ -535,6 +535,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					<button type="button" onClick={() => setView("terminal")} title="Terminal" aria-label="Terminal" aria-pressed={view === "terminal"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}><SquareTerminal size={14} /><span className="hidden sm:inline">Terminal</span></button>
 				</div>
 				<div className="ml-auto flex gap-1 shrink-0">
+					{/* Agent settings = the instance-level Settings tab. While a coding session is
+					    open, CodingTab overrides the parent header (which holds the tab bar), so this
+					    is the way back to it. Labeled on desktop (primary), and in the mobile menu. */}
+					<button type="button" onClick={() => navigate(`/instances/${instanceId}/settings`)} title="Agent settings" aria-label="Agent settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Settings size={13} /><span>Settings</span></button>
 					<div className="relative">
 						<button type="button" onClick={() => setSessionMenuOpen((v) => !v)} title="Session settings" aria-label="Session settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent sm:hidden"><Settings size={13} /></button>
 						<button type="button" onClick={() => setSettingsRepoId(openRepo?.id || openSession.repoId)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block"><Settings size={13} /></button>
@@ -542,6 +546,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 							<>
 								<button type="button" aria-label="Close session menu" onClick={() => setSessionMenuOpen(false)} className="fixed inset-0 z-40 cursor-default sm:hidden" />
 								<div className="absolute right-0 top-full mt-1 z-50 min-w-44 bg-panel border border-line rounded-lg shadow-lg py-1 sm:hidden">
+									<button type="button" onClick={() => { setSessionMenuOpen(false); navigate(`/instances/${instanceId}/settings`); }} className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"><Settings size={14} /> Agent settings</button>
 									<button type="button" onClick={() => { setSessionMenuOpen(false); setSettingsRepoId(openRepo?.id || openSession.repoId); }} className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"><Settings size={14} /> Repo settings</button>
 									<div className="border-t border-line my-1" />
 									<button type="button" onClick={() => { setSessionMenuOpen(false); endSession(); }} className="w-full text-left px-3 py-2 text-sm text-red hover:bg-red/10 flex items-center gap-2"><Square size={14} /> Stop session</button>
