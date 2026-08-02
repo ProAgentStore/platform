@@ -347,6 +347,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const pendingTextRef = useRef("");
 	const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const silenceMsRef = useRef(1500);
+	// Hands-free max recording duration: force-end the turn after this long regardless, so an
+	// open/runaway mic can't record forever (configurable in Settings → Voice).
+	const maxDictationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const maxDictationMsRef = useRef(60000);
+	// The current handleResult's `finalize`, stashed so the max-duration timer can end the turn
+	// the same way the silence timer does (honor command/stop-word, else send the pending text).
+	const finalizeRef = useRef<(msg: string) => void>(() => {});
 	// Whisper (AI) STT has no streaming results, so in conversation mode we detect the
 	// end of a turn from the mic level ourselves (VAD), then stop → transcribe → send.
 	const sttIsWhisperRef = useRef(false);
@@ -378,6 +385,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	useEffect(() => {
 		getVoiceConfig(instanceId).then((c) => {
 			silenceMsRef.current = c.silenceMs;
+			maxDictationMsRef.current = c.maxDictationMs;
 			sttIsWhisperRef.current = c.sttProvider === "openai";
 			vadSensitivityRef.current = c.sensitivity;
 			commandsEnabledRef.current = c.commandsEnabled;
@@ -416,8 +424,25 @@ export function useVoice(instanceId: string | undefined, opts: {
 			setMicOn(true);
 			if (convoOnRef.current && !idleRecycleRef.current) playListeningChime();
 			idleRecycleRef.current = false;
+			// Arm the hands-free max-duration cap: force-end the turn after maxDictationMs so an
+			// open mic can't record forever. Re-armed each time the mic opens; cleared when a
+			// turn finalizes. Whisper: stop the recorder (→ transcribe buffered audio → normal
+			// send). Browser dictation: finalize the pending text (or just stop if none).
+			if (maxDictationTimerRef.current) { clearTimeout(maxDictationTimerRef.current); maxDictationTimerRef.current = null; }
+			if (convoOnRef.current) {
+				maxDictationTimerRef.current = setTimeout(() => {
+					maxDictationTimerRef.current = null;
+					if (sttIsWhisperRef.current) {
+						if (sttRef.current?.listening) sttRef.current.stop();
+					} else {
+						const msg = pendingTextRef.current.trim();
+						if (msg) finalizeRef.current(msg);
+						else flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+					}
+				}, maxDictationMsRef.current);
+			}
 		} catch {}
-	}, [startAudioMonitor, readGuard]);
+	}, [startAudioMonitor, stopAudioMonitor, readGuard]);
 
 	// Speak text on demand (e.g. tap a message/translation to hear it), regardless of
 	// whether an auto-speak/hands-free mode is active. maybeSpeakResponse is gated on
@@ -577,6 +602,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// stop-word early-flush so all three behave identically.
 			const finalize = (msg: string) => {
 				if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+				if (maxDictationTimerRef.current) { clearTimeout(maxDictationTimerRef.current); maxDictationTimerRef.current = null; }
 				pendingTextRef.current = "";
 				if (commandsEnabledRef.current) {
 					const cmd = matchVoiceCommand(msg, cmdWords, voiceLangRef.current);
@@ -599,6 +625,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				});
 				emitSendRef.current(t);
 			};
+			finalizeRef.current = finalize; // so the max-duration timer can end the turn identically
 			// Whisper: `text` is the full transcribed turn (our VAD already detected the
 			// pause). Send it straight away — no interim accumulation or debounce.
 			if (sttIsWhisperRef.current) {
@@ -673,6 +700,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		try {
 			const c = await getVoiceConfig(instanceId);
 			silenceMsRef.current = c.silenceMs;
+			maxDictationMsRef.current = c.maxDictationMs;
 			sttIsWhisperRef.current = c.sttProvider === "openai";
 			vadSensitivityRef.current = c.sensitivity;
 			commandsEnabledRef.current = c.commandsEnabled;

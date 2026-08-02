@@ -14,6 +14,9 @@ interface VoiceConfig {
 	/** Conversation mode: how long (ms) to wait after you stop talking before
 	 *  sending — higher = more tolerant of mid-sentence pauses. */
 	silenceMs: number;
+	/** Hands-free max recording duration (ms): stop listening + submit after this long
+	 *  regardless, so a runaway/open mic can't record forever. Default 60000 (60s). */
+	maxDictationMs: number;
 	/** Mic sensitivity for silence detection (0.4–2): higher = more sensitive
 	 *  (needs a smaller gap above the noise floor to count as speech). Default 1. */
 	sensitivity: number;
@@ -72,6 +75,7 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		speed: clamp(vs.speed, 25, 400, 100),
 		language: (vs.language as string) || "en-US",
 		silenceMs: clamp(vs.silenceMs, 500, 6000, 1500),
+		maxDictationMs: clamp(vs.maxDictationMs, 10000, 300000, 60000),
 		sensitivity: clamp(vs.sensitivity, 0.4, 2, 1),
 		commandsEnabled: vs.commandsEnabled !== false,
 		keepAwake: vs.keepAwake !== false,

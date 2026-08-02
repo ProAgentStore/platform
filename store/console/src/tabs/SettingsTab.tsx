@@ -112,6 +112,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		: machines;
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
 	const [silenceMs, setSilenceMs] = useState(1500);
+	const [maxDictationMs, setMaxDictationMs] = useState(60000);
 	const [sensitivity, setSensitivity] = useState(1);
 	const [sttMode, setSttMode] = useState("browser");
 	const [ttsProvider, setTtsProvider] = useState("browser");
@@ -198,6 +199,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				const vs = d.voiceSettings || {};
 				setVoiceSettings(vs);
 				if (typeof vs.silenceMs === "number") setSilenceMs(vs.silenceMs);
+				if (typeof vs.maxDictationMs === "number") setMaxDictationMs(vs.maxDictationMs);
 				if (typeof vs.sensitivity === "number") setSensitivity(vs.sensitivity);
 				if (typeof vs.sttMode === "string") setSttMode(vs.sttMode);
 				if (typeof vs.provider === "string") setTtsProvider(vs.provider);
@@ -1081,6 +1083,24 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						<option value={4000}>Patient — 4s pause</option>
 					</select>
 					{voiceMsg && <span className="text-sm text-muted">{voiceMsg}</span>}
+				</div>
+
+				<label htmlFor="voice-max-dictation" className="block text-sm font-semibold mb-1 mt-4">Max dictation time</label>
+				<p className="text-xs text-muted mb-2">
+					Hands-free stops listening and submits after this long, no matter what — so an open mic can't record forever.
+				</p>
+				<div className="flex items-center gap-2 flex-wrap">
+					<select
+						id="voice-max-dictation"
+						value={maxDictationMs}
+						onChange={(e) => { setMaxDictationMs(Number(e.target.value)); saveVoice({ maxDictationMs: Number(e.target.value) }); }}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+					>
+						<option value={30000}>30 seconds</option>
+						<option value={60000}>1 minute</option>
+						<option value={120000}>2 minutes</option>
+						<option value={300000}>5 minutes</option>
+					</select>
 				</div>
 
 				{/* Mic sensitivity — only Whisper (AI) uses the mic-level pause detector. */}

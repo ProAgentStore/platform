@@ -67,6 +67,18 @@ export default function CopilotView({
 		if (voice.mode === "ptt") voice.toggleTalk();
 		else if (voice.mode === "handsfree") voice.cancelSpeak();
 	};
+	// Computed once so the message list reserves bottom padding (pb-16) whenever the floating
+	// status pill is visible — otherwise the pill overlaps (and blocks selecting/copying) the
+	// last message.
+	const voiceStatus = resolveVoiceStatus({
+		mode: voice.mode,
+		thinking: summaryBusy,
+		transcribing: voice.interim === "Transcribing…",
+		talking: voice.talking,
+		listening: voice.micOn,
+		speaking: voice.speaking,
+		muted: voice.muted,
+	});
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
 			{/* Input bar — top, always visible. Compact input, big controls. */}
@@ -229,7 +241,7 @@ export default function CopilotView({
 				aria-label={voice.mode === "ptt" ? "Tap to talk" : voice.mode === "handsfree" ? "Interrupt speech" : "Message thread"}
 				onClick={(e) => handleThreadTap(e.target)}
 				onKeyDown={activateOnKeyboard(() => handleThreadTap(document.activeElement))}
-				className={`flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll transition-shadow ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
+				className={`flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
 			>
 				{summaryHistory.map((m) => {
 					// Tool calls: collapsed chip
@@ -264,9 +276,8 @@ export default function CopilotView({
 							role="button"
 							tabIndex={0}
 							onClick={(e) => e.stopPropagation()}
-							onDoubleClick={() => playMessage(instanceId, m, voice.speak)}
 							onKeyDown={activateOnKeyboard(() => playMessage(instanceId, m, voice.speak))}
-							className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
+							className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text ${
 								m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 									: "bg-panel border border-line self-start rounded-bl-sm"
 							}`}
@@ -287,15 +298,7 @@ export default function CopilotView({
 			{/* Live voice status — the OBVIOUS "it heard you / is working" signal. Walks
 			    Listening → Transcribing → Working, and is the tap target in Tap-to-talk. */}
 			{(() => {
-				const s = resolveVoiceStatus({
-					mode: voice.mode,
-					thinking: summaryBusy,
-					transcribing: voice.interim === "Transcribing…",
-					talking: voice.talking,
-					listening: voice.micOn,
-					speaking: voice.speaking,
-					muted: voice.muted,
-				});
+				const s = voiceStatus;
 				if (!s) return null;
 				const cls = s.tone === "work" ? "bg-accent text-white ring-4 ring-accent/25 animate-pulse"
 					: s.tone === "speak" ? "bg-accent text-white ring-4 ring-accent/25"

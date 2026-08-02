@@ -609,12 +609,12 @@ export default function InstanceDetail() {
 									<div
 										key={m.id || m.createdAt || i}
 										// Keep a bubble tap from bubbling to the chat-container tap handler — in
-										// Tap-to-talk that would churn the mic (and fire a phantom empty turn) on
-										// every double-tap-to-replay; in Hands-free it would reopen the mic into
-										// the replay audio. Double-tap still replays via onDoubleClick.
+										// Tap-to-talk that would churn the mic (and fire a phantom empty turn); in
+										// Hands-free it would reopen the mic into the replay audio. NOTE: no
+										// onDoubleClick here — it hijacked double-click-to-select-a-word and blocked
+										// copying the text. Replay lives on the always-visible speaker button below.
 										onClick={(e) => e.stopPropagation()}
-										onDoubleClick={() => playMessage(m)}
-										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-pointer ${
+										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text ${
 											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 												: "bg-panel border border-line self-start rounded-bl-sm"
 										}`}

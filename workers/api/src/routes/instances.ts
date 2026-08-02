@@ -523,6 +523,8 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 	// Conversation mode: ms of silence after you stop talking before the message is
 	// sent. Higher = more tolerant of mid-sentence pauses.
 	const silenceMs = typeof body.silenceMs === "number" ? Math.max(500, Math.min(6000, Math.round(body.silenceMs))) : 1500;
+	// Hands-free max recording duration (ms): stop + submit after this long regardless. 10s–5min.
+	const maxDictationMs = typeof body.maxDictationMs === "number" ? Math.max(10000, Math.min(300000, Math.round(body.maxDictationMs))) : 60000;
 	// Speech recognition: "browser" dictation (default) or "openai" Whisper (AI).
 	const sttMode = body.sttMode === "openai" ? "openai" : "browser";
 	// Mic sensitivity for Whisper silence detection (0.4–2): higher = more sensitive
@@ -532,6 +534,7 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		provider,
 		speed,
 		silenceMs,
+		maxDictationMs,
 		sttMode,
 		sensitivity,
 		openai: body.openai && typeof body.openai === "object" ? body.openai : undefined,

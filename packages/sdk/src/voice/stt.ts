@@ -144,6 +144,10 @@ export class VoiceStt {
 		// discard it and create a fresh one.
 		if (this._rec) {
 			try {
+				// Re-apply the configured language before EVERY start — never leave it at the
+				// browser/OS-locale default (which auto-detects and can transcribe/translate to
+				// the wrong language).
+				this._rec.lang = this.language;
 				this._rec.start();
 				return;
 			} catch {
@@ -179,6 +183,9 @@ export class VoiceStt {
 		rec.onend = () => {
 			if (this.listening) {
 				try {
+					// continuous mode ends and we auto-restart — re-apply the language each time
+					// so a restart never reverts to the browser's default/auto-detect locale.
+					rec.lang = this.language;
 					rec.start();
 					restartFails = 0;
 				} catch {
