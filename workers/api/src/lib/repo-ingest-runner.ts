@@ -187,6 +187,10 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 			if (files.length === 0) {
 				await saveJob(store, job, { status: "error", error: "No indexable text files found in this repository.", finishedAt: f.now() });
 			} else if (await getRepoJob(store, job.key).then((c) => c?.startedAt === job?.startedAt)) {
+				// Clear any staging left over from a PRIOR run evicted mid-transition — otherwise a
+				// re-fetch with fewer files orphans the old higher-indexed rifile:{key}:{M+1..N}
+				// keys forever (only reclaimed on re-index/remove). (#23)
+				await deleteAll(store, `rifile:${job.key}:`);
 				for (let i = 0; i < files.length; i++) await store.put(`rifile:${job.key}:${i}`, files[i]);
 				const advanced = await saveJob(store, job, {
 					status: "indexing",

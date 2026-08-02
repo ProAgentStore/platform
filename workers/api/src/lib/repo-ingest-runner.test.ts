@@ -108,6 +108,20 @@ describe("repo-ingest-runner", () => {
 		expect(engine.vectorized).toHaveLength(0); // nothing pretended to index
 	});
 
+	it("clears staged files orphaned by a prior evicted run on re-fetch (#23)", async () => {
+		const store = memStore();
+		const engine = fakeEngine();
+		const f = fakeFetchers(FILES); // 2 files → stages rifile:…:0, :1
+		// A prior run staged more files then was evicted before advancing — leave an orphan.
+		await store._m.set("rifile:octo/demo:99", { path: "old/gone.ts", content: "orphan" });
+		await addRepo(store, engine, { ref, repoUrl: "octo/demo", now: "t0" });
+		await repoAlarmTick(store, engine, f); // fetching tick: must clear the orphan before staging
+		expect([...store._m.keys()]).not.toContain("rifile:octo/demo:99");
+		await drain(store, engine, f);
+		expect((await getRepoJob(store, "octo/demo"))?.status).toBe("done");
+		expect([...store._m.keys()].some((k) => k.startsWith("rifile:"))).toBe(false); // all consumed, none left
+	});
+
 	it("indexes multiple repos, one at a time, until all done", async () => {
 		const store = memStore();
 		const engine = fakeEngine();
