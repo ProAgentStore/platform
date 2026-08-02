@@ -1,7 +1,8 @@
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
+import ErrorBoundary from "./ErrorBoundary";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge } from "lucide-react";
@@ -20,6 +21,7 @@ const navItems = [
 export default function Layout() {
 	const { user } = useAuth();
 	const navigate = useNavigate();
+	const location = useLocation();
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [unreadCount, setUnreadCount] = useState(0);
 	const menuRef = useRef<HTMLElement>(null);
@@ -150,7 +152,9 @@ export default function Layout() {
 			</header>
 			{user && <PushPrompt />}
 			<main className={`flex-1 min-h-0 flex flex-col ${navHidden ? "overflow-hidden" : "overflow-auto"}`}>
-				<Outlet />
+				<ErrorBoundary resetKey={location.pathname}>
+						<Outlet />
+					</ErrorBoundary>
 			</main>
 		</div>
 	);
