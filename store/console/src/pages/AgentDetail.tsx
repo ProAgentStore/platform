@@ -58,15 +58,46 @@ export default function AgentDetail() {
 	// Versions
 	const [versions, setVersions] = useState<{ id: string; version_num: number; description: string; created_at: string }[]>([]);
 
+	// Declarative capabilities (#141) — the closed-enum power fields that make an agent
+	// authorable as data (e.g. a Coder-equivalent = surfaces:[coding] + runtime:coding +
+	// workflow:CODING_SESSION). customSurfaces (code bundles) stay in their own editor below.
+	const [capSurfaces, setCapSurfaces] = useState<string[]>([]);
+	const [capRuntime, setCapRuntime] = useState("");
+	const [capWorkflow, setCapWorkflow] = useState("");
+	const [capToolsText, setCapToolsText] = useState("");
+	type CapsResp = { customSurfaces?: Array<Omit<CSurface, "clientId">>; surfaces?: string[]; runtime?: string | null; workflow?: string | null; tools?: string[] };
+	const applyCaps = useCallback((d: CapsResp) => {
+		setCapSurfaces(Array.isArray(d.surfaces) ? d.surfaces : []);
+		setCapRuntime(d.runtime ?? "");
+		setCapWorkflow(d.workflow ?? "");
+		setCapToolsText((d.tools || []).join(" "));
+	}, []);
+	const saveCapabilities = async () => {
+		const tools = capToolsText.split(/[\s,]+/).map((t) => t.trim()).filter(Boolean);
+		try {
+			// Send ONLY the power fields — no customSurfaces key, so the guarded PUT leaves
+			// existing bundles untouched.
+			const d = await api<CapsResp>(`/v1/agents/${id}/capabilities`, {
+				method: "PUT",
+				body: JSON.stringify({ surfaces: capSurfaces, runtime: capRuntime || null, workflow: capWorkflow || null, tools }),
+			});
+			applyCaps(d);
+			alert("Capabilities saved. New subscribers get them immediately; existing instances on their next load.");
+		} catch (e) {
+			alert(e instanceof Error ? e.message : String(e));
+		}
+	};
+
 	// Custom surfaces (Phase 3 — agent-published UIs)
 	type CSurface = { clientId: string; id: string; label: string; icon?: string; bundleUrl: string };
 	const [surfaces, setSurfaces] = useState<CSurface[]>([]);
 	const loadSurfaces = useCallback(async () => {
 		try {
-			const d = await api<{ customSurfaces?: Array<Omit<CSurface, "clientId">> }>(`/v1/agents/${id}/capabilities`);
+			const d = await api<CapsResp>(`/v1/agents/${id}/capabilities`);
 			setSurfaces((d.customSurfaces || []).map((s) => ({ ...s, clientId: localRowId() })));
+			applyCaps(d);
 		} catch { /* none */ }
-	}, [id]);
+	}, [id, applyCaps]);
 	const saveSurfaces = async () => {
 		const clean = surfaces
 			.filter((s) => s.id.trim() && s.label.trim() && /^https:\/\//.test(s.bundleUrl.trim()))
@@ -378,6 +409,51 @@ export default function AgentDetail() {
 						<div className="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
 							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Visibility</span><select value={sVis} onChange={e => setSVis(e.target.value)}><option value="draft">Draft</option><option value="published">Published</option><option value="unlisted">Unlisted</option></select></label>
 							<label className="flex flex-col gap-1"><span className="text-xs text-muted font-semibold">Model</span><select value={sModel} onChange={e => setSModel(e.target.value)}>{MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}</select></label>
+						</div>
+					</div>
+
+					{/* Declarative capabilities (#141) */}
+					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
+						<h3 className="text-base font-semibold mb-1">Capabilities</h3>
+						<p className="text-xs text-muted mb-3">Declare what this agent is, as data — no code change. E.g. a coding agent = surface <code>coding</code> + runtime <code>coding</code> + workflow <code>CODING_SESSION</code>. These drive the console tabs, the runner runtime, and the brain workflow.</p>
+						<div className="flex flex-col gap-3">
+							<div>
+								<div className="text-xs font-semibold mb-1">Surfaces <span className="text-muted-soft font-normal">(console tabs)</span></div>
+								<div className="flex flex-wrap gap-2">
+									{["apply", "coding", "insurance", "repo"].map((s) => (
+										<label key={s} className="flex items-center gap-1.5 text-sm border border-line rounded-lg px-2.5 py-1 cursor-pointer">
+											<input type="checkbox" checked={capSurfaces.includes(s)} onChange={(e) => setCapSurfaces((cur) => e.target.checked ? [...cur, s] : cur.filter((x) => x !== s))} />
+											{s}
+										</label>
+									))}
+								</div>
+							</div>
+							<div className="flex gap-3 flex-wrap">
+								<label className="flex flex-col gap-1 text-xs font-semibold">
+									Runtime <span className="text-muted-soft font-normal">(local runner)</span>
+									<select value={capRuntime} onChange={(e) => setCapRuntime(e.target.value)} className="bg-paper border border-line rounded px-2 py-1 text-sm font-normal">
+										<option value="">none</option>
+										<option value="browser">browser</option>
+										<option value="coding">coding</option>
+									</select>
+								</label>
+								<label className="flex flex-col gap-1 text-xs font-semibold">
+									Workflow <span className="text-muted-soft font-normal">(autonomous brain)</span>
+									<select value={capWorkflow} onChange={(e) => setCapWorkflow(e.target.value)} className="bg-paper border border-line rounded px-2 py-1 text-sm font-normal">
+										<option value="">none</option>
+										<option value="JOB_APPLY">JOB_APPLY</option>
+										<option value="CODING_SESSION">CODING_SESSION</option>
+										<option value="INSURANCE_QUOTES">INSURANCE_QUOTES</option>
+									</select>
+								</label>
+							</div>
+							<label className="flex flex-col gap-1 text-xs font-semibold">
+								Tool allowlist <span className="text-muted-soft font-normal">(space/comma-separated; empty = per-surface default. Unknown names are ignored.)</span>
+								<input value={capToolsText} onChange={(e) => setCapToolsText(e.target.value)} placeholder="search_knowledge read_knowledge github_create_issue" className="bg-paper border border-line rounded px-2 py-1 text-sm font-mono font-normal" />
+							</label>
+						</div>
+						<div className="flex gap-2 mt-3">
+							<button type="button" onClick={saveCapabilities} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save capabilities</button>
 						</div>
 					</div>
 

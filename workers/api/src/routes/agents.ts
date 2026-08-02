@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
+import { sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { lintAgentClaims } from "../lib/agent-claims-lint.js";
 import { HttpError, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
@@ -296,6 +296,7 @@ agentRoutes.post("/", async (c) => {
 		model?: string;
 		personality?: string;
 		goal?: string;
+		capabilities?: unknown;
 	}>();
 
 	if (!body.slug || !body.name) {
@@ -334,6 +335,16 @@ agentRoutes.post("/", async (c) => {
 		)
 		.run();
 
+	// Declarative capabilities at creation (#141): a Coder-equivalent can be stamped out
+	// as pure data — {surfaces,runtime,workflow,tools} — with no platform code change.
+	// Validated against the closed enums; customSurfaces/settingsSchema keep their own routes.
+	const declaredCaps = sanitizeDeclaredCapabilities(body.capabilities);
+	if (Object.keys(declaredCaps).length > 0) {
+		await c.env.DB.prepare("UPDATE agents SET config = ?1 WHERE id = ?2")
+			.bind(JSON.stringify({ capabilities: declaredCaps }), id)
+			.run();
+	}
+
 	// Initialize the agent's Durable Object with personality, goal, memory
 	const doId = c.env.AGENT.idFromName(id);
 	const stub = c.env.AGENT.get(doId);
@@ -351,9 +362,9 @@ agentRoutes.post("/", async (c) => {
 	);
 
 	// Catalog claims lint (#66): loudly (but non-blockingly) warn when the description promises a
-	// runtime capability a fresh agent (no runtime/workflow yet) can't back — the creator should
-	// wire the capability or rewrite the copy before publishing.
-	const claimWarnings = lintAgentClaims({ description: body.description, capabilities: { runtime: null, workflow: null } });
+	// runtime capability the declared capabilities can't back — the creator should wire the
+	// capability or rewrite the copy before publishing.
+	const claimWarnings = lintAgentClaims({ description: body.description, capabilities: { runtime: declaredCaps.runtime ?? null, workflow: declaredCaps.workflow ?? null } });
 
 	return c.json(claimWarnings.length ? { id, slug: body.slug, warnings: claimWarnings } : { id, slug: body.slug }, 201);
 });
@@ -416,12 +427,20 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 		throw new HttpError(403, "Not your agent");
 	}
 	let customSurfaces: unknown = [];
+	let surfaces: unknown = [];
+	let runtime: unknown = null;
+	let workflow: unknown = null;
+	let tools: unknown = [];
 	try {
 		const config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {};
 		const caps = config.capabilities as Record<string, unknown> | undefined;
 		customSurfaces = Array.isArray(caps?.customSurfaces) ? caps.customSurfaces : [];
+		surfaces = Array.isArray(caps?.surfaces) ? caps.surfaces : [];
+		runtime = caps?.runtime ?? null;
+		workflow = caps?.workflow ?? null;
+		tools = Array.isArray(caps?.tools) ? caps.tools : [];
 	} catch { /* malformed config */ }
-	return c.json({ customSurfaces });
+	return c.json({ customSurfaces, surfaces, runtime, workflow, tools });
 });
 
 /** Declare the agent's custom (published) console surfaces — owner only. Stored in
@@ -436,29 +455,44 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 	if (row.owner_id !== session.uid && !session.roles.includes("admin")) {
 		throw new HttpError(403, "Not your agent");
 	}
-	const body = (await c.req.json().catch(() => ({}))) as { customSurfaces?: unknown };
-	// Validate: each surface needs id + label and an https bundle URL (it loads as CODE
-	// into the console origin, so reject http/javascript/relative URLs).
-	const customSurfaces = Array.isArray(body.customSurfaces)
-		? body.customSurfaces.flatMap((v) => {
-				if (!v || typeof v !== "object") return [];
-				const o = v as Record<string, unknown>;
-				const sid = typeof o.id === "string" ? o.id.trim() : "";
-				const label = typeof o.label === "string" ? o.label.trim() : "";
-				const bundleUrl = typeof o.bundleUrl === "string" ? o.bundleUrl.trim() : "";
-				if (!sid || !label || !/^https:\/\//.test(bundleUrl)) return [];
-				return [{ id: sid, label, bundleUrl, ...(typeof o.icon === "string" && o.icon ? { icon: o.icon } : {}) }];
-			})
-		: [];
+	const body = (await c.req.json().catch(() => ({}))) as { customSurfaces?: unknown } & Record<string, unknown>;
 	let config: Record<string, unknown> = {};
 	try { config = row.config ? (JSON.parse(row.config) as Record<string, unknown>) : {}; } catch { config = {}; }
 	const caps = (config.capabilities && typeof config.capabilities === "object" ? config.capabilities : {}) as Record<string, unknown>;
-	caps.customSurfaces = customSurfaces;
+
+	// customSurfaces load as CODE into the console origin — only overwrite when the key is
+	// present (so a capabilities-only PATCH doesn't wipe them), and require an https bundle URL.
+	if (Array.isArray(body.customSurfaces)) {
+		caps.customSurfaces = body.customSurfaces.flatMap((v) => {
+			if (!v || typeof v !== "object") return [];
+			const o = v as Record<string, unknown>;
+			const sid = typeof o.id === "string" ? o.id.trim() : "";
+			const label = typeof o.label === "string" ? o.label.trim() : "";
+			const bundleUrl = typeof o.bundleUrl === "string" ? o.bundleUrl.trim() : "";
+			if (!sid || !label || !/^https:\/\//.test(bundleUrl)) return [];
+			return [{ id: sid, label, bundleUrl, ...(typeof o.icon === "string" && o.icon ? { icon: o.icon } : {}) }];
+		});
+	}
+
+	// The declarative power fields (#141) — closed-enum validated, merged per-key so an
+	// editor can PATCH just what it changed.
+	const declared = sanitizeDeclaredCapabilities(body);
+	if (declared.surfaces !== undefined) caps.surfaces = declared.surfaces;
+	if ("runtime" in declared) caps.runtime = declared.runtime;
+	if ("workflow" in declared) caps.workflow = declared.workflow;
+	if (declared.tools !== undefined) caps.tools = declared.tools;
+
 	config.capabilities = caps;
 	await c.env.DB.prepare("UPDATE agents SET config = ?1, updated_at = datetime('now') WHERE id = ?2")
 		.bind(JSON.stringify(config), id)
 		.run();
-	return c.json({ customSurfaces });
+	return c.json({
+		customSurfaces: caps.customSurfaces ?? [],
+		surfaces: caps.surfaces ?? [],
+		runtime: caps.runtime ?? null,
+		workflow: caps.workflow ?? null,
+		tools: caps.tools ?? [],
+	});
 });
 
 /** Read the agent's declared subscriber-settings schema (owner only). */

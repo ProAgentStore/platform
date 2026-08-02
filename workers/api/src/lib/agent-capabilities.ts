@@ -242,6 +242,45 @@ export function sanitizeToolList(value: unknown): string[] | undefined {
 }
 
 const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "repo"]);
+/** Closed enums for the WRITABLE power fields. A creator can only declare capabilities
+ *  the platform already implements — no arbitrary code, so the blast radius is bounded
+ *  (unlike customSurfaces, which loads a code bundle and stays on its own guarded path). */
+const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding"]);
+const KNOWN_WORKFLOWS = new Set(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES"]);
+
+/** The subset of capabilities a creator declares through the create/update routes:
+ *  the closed-enum power fields + the tool allowlist. customSurfaces/settingsSchema/
+ *  boardColumns are owned by their own routes/validators and are NOT part of this. */
+export interface DeclaredCapabilities {
+	surfaces?: AgentSurface[];
+	runtime?: AgentRuntimeKind;
+	workflow?: AgentCapabilities["workflow"];
+	tools?: string[];
+}
+
+/**
+ * Validate the writable capability fields from an untrusted request body. Only keys
+ * actually present in the input appear in the result (so a partial PATCH merges
+ * cleanly); unknown enum values are dropped to their safe default (same philosophy as
+ * the read-side filter in `agentCapabilities`). This is the one validator the create +
+ * update-agent routes share — the minimum that makes capabilities authorable as data.
+ */
+export function sanitizeDeclaredCapabilities(input: unknown): DeclaredCapabilities {
+	const o = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+	const out: DeclaredCapabilities = {};
+	if (Array.isArray(o.surfaces)) {
+		out.surfaces = [...new Set(o.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface)))];
+	}
+	if ("runtime" in o) {
+		out.runtime = KNOWN_RUNTIMES.has(o.runtime as Exclude<AgentRuntimeKind, null>) ? (o.runtime as AgentRuntimeKind) : null;
+	}
+	if ("workflow" in o) {
+		out.workflow = typeof o.workflow === "string" && KNOWN_WORKFLOWS.has(o.workflow) ? (o.workflow as AgentCapabilities["workflow"]) : null;
+	}
+	// Presence of a tools array (even empty → clear) is honored; junk → [].
+	if (Array.isArray(o.tools)) out.tools = sanitizeToolList(o.tools) ?? [];
+	return out;
+}
 
 /** Minimal shape we need off an `agents` row to resolve capabilities. */
 export interface AgentLike {

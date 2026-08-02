@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCapabilities, hasSurface, sanitizeSettingsSchema, sanitizeToolList } from "./agent-capabilities.js";
+import { agentCapabilities, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList } from "./agent-capabilities.js";
 
 describe("agentCapabilities", () => {
 	it("uses declared config.capabilities when present", () => {
@@ -153,6 +153,66 @@ describe("agentCapabilities", () => {
 			expect(sanitizeToolList("nope")).toBeUndefined();
 			expect(sanitizeToolList([])).toBeUndefined();
 			expect(sanitizeToolList([1, 2, 3])).toBeUndefined();
+		});
+	});
+
+	describe("sanitizeDeclaredCapabilities (#141 authoring path)", () => {
+		it("passes through valid closed-enum fields", () => {
+			expect(
+				sanitizeDeclaredCapabilities({
+					surfaces: ["coding"],
+					runtime: "coding",
+					workflow: "CODING_SESSION",
+					tools: ["list_coding_repos", "read_terminal"],
+				}),
+			).toEqual({
+				surfaces: ["coding"],
+				runtime: "coding",
+				workflow: "CODING_SESSION",
+				tools: ["list_coding_repos", "read_terminal"],
+			});
+		});
+
+		it("drops unknown surfaces and dedupes", () => {
+			expect(sanitizeDeclaredCapabilities({ surfaces: ["coding", "bogus", "coding", "repo"] }).surfaces).toEqual([
+				"coding",
+				"repo",
+			]);
+		});
+
+		it("coerces an unknown runtime/workflow to null (but keeps the key when present)", () => {
+			expect(sanitizeDeclaredCapabilities({ runtime: "gpu", workflow: "DO_EVERYTHING" })).toEqual({
+				runtime: null,
+				workflow: null,
+			});
+			expect(sanitizeDeclaredCapabilities({ runtime: null, workflow: null })).toEqual({
+				runtime: null,
+				workflow: null,
+			});
+		});
+
+		it("only includes keys that were provided (clean partial PATCH)", () => {
+			expect(sanitizeDeclaredCapabilities({ surfaces: ["repo"] })).toEqual({ surfaces: ["repo"] });
+			expect(sanitizeDeclaredCapabilities({})).toEqual({});
+			expect(sanitizeDeclaredCapabilities(null)).toEqual({});
+			expect(sanitizeDeclaredCapabilities("nope")).toEqual({});
+		});
+
+		it("honors an empty tools array as an explicit clear", () => {
+			expect(sanitizeDeclaredCapabilities({ tools: [] })).toEqual({ tools: [] });
+			expect(sanitizeDeclaredCapabilities({ tools: ["Bad Name", 3] })).toEqual({ tools: [] });
+		});
+
+		it("round-trips through agentCapabilities to a working Coder-equivalent", () => {
+			const declared = sanitizeDeclaredCapabilities({
+				surfaces: ["coding"],
+				runtime: "coding",
+				workflow: "CODING_SESSION",
+			});
+			const caps = agentCapabilities({ slug: "my-clone", config: JSON.stringify({ capabilities: declared }) });
+			expect(caps.surfaces).toEqual(["coding"]);
+			expect(caps.runtime).toBe("coding");
+			expect(caps.workflow).toBe("CODING_SESSION");
 		});
 	});
 });

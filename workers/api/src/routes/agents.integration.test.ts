@@ -368,4 +368,47 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		expect(body.customSurfaces).toHaveLength(1);
 		expect(body.customSurfaces[0].id).toBe("s1");
 	});
+
+	it("POST /agents persists declarative capabilities (#141 — a Coder-equivalent as data)", async () => {
+		const { app, env, writes } = buildApp();
+		const res = await json(app, env, "POST", "/v1/agents", {
+			slug: "my-coder", name: "My Coder",
+			capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", tools: ["list_coding_repos", "bogus tool"] },
+		}, await tokenFor("creatorUid", ["creator"]));
+		expect(res.status).toBe(201);
+		const cfgWrite = writes.find((w) => w.sql.includes("UPDATE agents SET config"));
+		expect(cfgWrite).toBeTruthy();
+		const caps = JSON.parse(cfgWrite!.args[0] as string).capabilities;
+		expect(caps.surfaces).toEqual(["coding"]);
+		expect(caps.runtime).toBe("coding");
+		expect(caps.workflow).toBe("CODING_SESSION");
+		expect(caps.tools).toEqual(["list_coding_repos"]); // "bogus tool" dropped by sanitizer
+	});
+
+	it("PUT capabilities merges power fields, coerces unknown enums, and preserves customSurfaces", async () => {
+		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: JSON.stringify({ capabilities: { customSurfaces: [{ id: "notes", label: "Notes", bundleUrl: "https://cdn.example.com/n.js" }] } }) }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1/capabilities", {
+			surfaces: ["coding", "bogus"], runtime: "gpu", workflow: "CODING_SESSION", tools: ["read_terminal"],
+		}, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.surfaces).toEqual(["coding"]); // unknown surface dropped
+		expect(body.runtime).toBeNull(); // unknown runtime → null
+		expect(body.workflow).toBe("CODING_SESSION");
+		expect(body.tools).toEqual(["read_terminal"]);
+		// A capabilities-only PATCH must NOT wipe the pre-existing code-bundle surfaces.
+		expect(body.customSurfaces).toHaveLength(1);
+		const upd = writes.find((w) => w.sql.includes("UPDATE agents SET config"));
+		const merged = JSON.parse(upd!.args[0] as string);
+		expect(merged.capabilities.customSurfaces[0].id).toBe("notes");
+	});
+
+	it("GET capabilities returns the declared power fields", async () => {
+		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: JSON.stringify({ capabilities: { surfaces: ["repo"], runtime: null, workflow: null, tools: ["search_knowledge"] } }) }] });
+		const res = await get(app, env, "/v1/agents/a1/capabilities", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as any;
+		expect(body.surfaces).toEqual(["repo"]);
+		expect(body.tools).toEqual(["search_knowledge"]);
+	});
 });
