@@ -15,6 +15,10 @@ interface OAuthState {
 	/** Which caller started this flow (from `app_id`). `pags-mcp` gets a one-time code back
 	 *  instead of the raw session token in the URL (#25). */
 	appId?: string;
+	/** Set for the LINK flow: record the GitHub username onto THIS account (no sign-in /
+	 *  session switch). Uses the same /github/callback so the OAuth App's one registered
+	 *  redirect URI still matches. */
+	linkUid?: string;
 }
 
 /**
@@ -115,29 +119,38 @@ authRoutes.get("/github/callback", async (c) => {
 		})
 	).json<{ id: number; login: string; avatar_url: string; name: string }>();
 
+	// LINK flow: record the GitHub username onto the account named in the signed state —
+	// do NOT mint a session or switch accounts. Bounce back with ?github_linked=<login>.
+	if (state.linkUid) {
+		if (!ghUser.login) return c.text("could not read GitHub login", 502);
+		await c.env.DB.prepare("UPDATE users SET linked_github_login = ?1, updated_at = datetime('now') WHERE id = ?2")
+			.bind(ghUser.login, state.linkUid)
+			.run();
+		const redirect = new URL(state.returnTo);
+		redirect.searchParams.set("github_linked", ghUser.login);
+		return c.redirect(redirect.toString());
+	}
+
 	const uid = String(ghUser.id);
 	const roles = await upsertUser(c.env, uid, ghUser.login, ghUser.name, ghUser.avatar_url);
 	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles });
 	return c.redirect(await bounceBackUrl(c.env, state.returnTo, session, state.appId));
 });
 
-/** State for LINKING a GitHub identity to an existing account (vs. signing in). Carries the
- *  current account's uid so the callback records the GitHub username onto THAT account. */
-interface LinkState { returnTo: string; exp: number; linkUid: string }
-
 /**
  * GET /v1/auth/github/link/start — begin linking a GitHub identity to the CURRENT account
  * (Bearer). Unlike /github/start (which signs in and would create a SEPARATE github: account),
  * this records the GitHub username onto the signed-in account so a Google user can authorize
- * the GitHub App / verify org membership without abandoning their instances. Returns the
- * consent URL as JSON so the console can navigate to it (the caller holds a Bearer, not a cookie).
+ * the GitHub App / verify org membership without abandoning their instances. Reuses the shared
+ * /github/callback (state carries `linkUid`) so the OAuth App's one registered redirect URI still
+ * matches. Returns the consent URL as JSON — the caller holds a Bearer, not a cookie.
  */
 authRoutes.get("/github/link/start", async (c) => {
 	const session = await requireUser(c);
 	const returnTo = c.req.query("return_to") ?? "";
 	if (!returnTo || !isAllowedReturnTo(returnTo)) return c.json({ error: "return_to not allowed" }, 400);
 	if (!c.env.GITHUB_CLIENT_ID) return c.json({ error: "GitHub OAuth not configured" }, 501);
-	const state = await signPayload<LinkState>(
+	const state = await signPayload<OAuthState>(
 		{ returnTo, exp: Math.floor(Date.now() / 1000) + 600, linkUid: session.uid },
 		c.env.SESSION_SIGNING_KEY,
 	);
@@ -145,44 +158,8 @@ authRoutes.get("/github/link/start", async (c) => {
 	url.searchParams.set("client_id", c.env.GITHUB_CLIENT_ID);
 	url.searchParams.set("scope", "read:user");
 	url.searchParams.set("state", state);
-	url.searchParams.set("redirect_uri", new URL("/v1/auth/github/link/callback", c.req.url).toString());
+	url.searchParams.set("redirect_uri", new URL("/v1/auth/github/callback", c.req.url).toString());
 	return c.json({ url: url.toString() });
-});
-
-/**
- * GET /v1/auth/github/link/callback — GitHub redirects here after the user authorizes the link.
- * The signed `state` names the account to write to (linkUid) — we do NOT mint a new session or
- * switch accounts; we only set `linked_github_login` on that account, then bounce back.
- */
-authRoutes.get("/github/link/callback", async (c) => {
-	const code = c.req.query("code");
-	const stateRaw = c.req.query("state");
-	if (!code || !stateRaw) return c.text("missing code or state", 400);
-	const state = await verifyPayload<LinkState>(stateRaw, c.env.SESSION_SIGNING_KEY);
-	if (!state || !state.linkUid || state.exp < Math.floor(Date.now() / 1000)) return c.text("invalid or expired state", 400);
-	if (!isAllowedReturnTo(state.returnTo)) return c.text("return_to not allowed", 400);
-
-	const tokenRes = await fetch("https://github.com/login/oauth/access_token", {
-		method: "POST",
-		headers: { "Content-Type": "application/json", Accept: "application/json" },
-		body: JSON.stringify({ client_id: c.env.GITHUB_CLIENT_ID, client_secret: c.env.GITHUB_CLIENT_SECRET, code }),
-	});
-	const tokenData = await tokenRes.json<{ access_token?: string; error?: string }>();
-	if (!tokenData.access_token) {
-		const reason = tokenData.error ?? "no token";
-		await logError(c.env, { source: "auth", status: 401, message: `GitHub link failed: ${reason}`, context: { flow: "link" } });
-		return c.text(`GitHub link failed: ${reason}`, 401);
-	}
-	const ghUser = await (
-		await fetch("https://api.github.com/user", { headers: { Authorization: `Bearer ${tokenData.access_token}`, "User-Agent": "ProAgentStore" } })
-	).json<{ login: string }>();
-	if (!ghUser.login) return c.text("could not read GitHub login", 502);
-	await c.env.DB.prepare("UPDATE users SET linked_github_login = ?1, updated_at = datetime('now') WHERE id = ?2")
-		.bind(ghUser.login, state.linkUid)
-		.run();
-	const redirect = new URL(state.returnTo);
-	redirect.searchParams.set("github_linked", ghUser.login);
-	return c.redirect(redirect.toString());
 });
 
 /** GET /v1/auth/google/start — redirect to Google's OAuth consent. */

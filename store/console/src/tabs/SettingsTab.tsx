@@ -139,6 +139,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [trFontSize, setTrFontSize] = useState("medium");
 	const [trLanguages, setTrLanguages] = useState<Array<{ name: string; tag: string }>>([]);
 	const [trMsg, setTrMsg] = useState("");
+	// Account-level GitHub identity link (for Coder build status / repo access). Google
+	// sign-in leaves github_login = your email, which can't authorize the GitHub App —
+	// linking records your real GitHub username without switching accounts.
+	const [githubLinked, setGithubLinked] = useState<string | null>(null);
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
 	const [emailMsg, setEmailMsg] = useState("");
@@ -305,6 +309,32 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			setVoiceMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
+
+	// Link a real GitHub username to this account (account-level). Full-page redirect
+	// (not a popup) — the callback sets linked_github_login then bounces back with
+	// ?github_linked=<login>, which the effect below reads.
+	const connectGithub = async () => {
+		try {
+			const returnTo = window.location.origin + window.location.pathname;
+			const { url } = await api<{ url: string }>(`/v1/auth/github/link/start?return_to=${encodeURIComponent(returnTo)}`);
+			window.location.href = url;
+		} catch (e) {
+			alert(e instanceof Error ? e.message : "Couldn't start GitHub link");
+		}
+	};
+
+	// Load the current GitHub link state, and surface the link-callback's return param.
+	useEffect(() => {
+		const params = new URLSearchParams(window.location.search);
+		const justLinked = params.get("github_linked");
+		if (justLinked) {
+			setGithubLinked(justLinked);
+			params.delete("github_linked");
+			const q = params.toString();
+			window.history.replaceState({}, "", window.location.pathname + (q ? `?${q}` : ""));
+		}
+		api<{ githubLinked?: string | null }>("/v1/auth/me").then((d) => setGithubLinked(d.githubLinked ?? null)).catch(() => {});
+	}, []);
 
 	const connectGmail = async () => {
 		try {
@@ -769,6 +799,21 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{workdriveStatus && !workdriveStatus.configured && (
 					<p className="text-xs text-red mb-2">Zoho WorkDrive connection isn’t configured on this deployment yet.</p>
 				)}
+
+				{/* GitHub identity — account-level. Needed for Coder build status + repo access
+				    (esp. if you signed in with Google, whose github_login is your email). */}
+				<div className="flex items-start justify-between gap-3 mb-3">
+					<div className="text-sm min-w-0">
+						<span className="font-semibold">GitHub</span>{" "}
+						{githubLinked
+							? <span className="text-green">· connected as {githubLinked}</span>
+							: <span className="text-muted">· not connected</span>}
+						<p className="text-[0.7rem] text-muted-soft mt-0.5">Links your GitHub username so the Coder can show build status and reach your repos. Account-level — applies to all your agents.</p>
+					</div>
+					<button type="button" onClick={connectGithub} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold shrink-0">
+						{githubLinked ? "Reconnect" : "Connect GitHub"}
+					</button>
+				</div>
 
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<div className="text-sm">
