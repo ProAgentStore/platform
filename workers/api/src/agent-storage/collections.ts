@@ -3,7 +3,7 @@
  * unique constraints, a dedup guard, and CRUD/query over records.
  */
 import type { ActivityEvent, CollectionField, CollectionRecord, CollectionSchema, VectorMeta } from "../agent-storage-types.js";
-import { encodeIndexValue, validateRecord } from "../agent-storage-utils.js";
+import { encodeIndexValue, inferCollectionFields, validateRecord } from "../agent-storage-utils.js";
 import { type AgentStorageBaseCtor, MAX_COLLECTION_RECORDS, MAX_COLLECTIONS } from "./base.js";
 
 /** Sibling methods this group relies on (provided by earlier layers). */
@@ -90,8 +90,12 @@ export function withCollections<TBase extends AgentStorageBaseCtor & GConstructo
 			data: Record<string, unknown>,
 			userId?: string,
 		): Promise<CollectionRecord> {
-			const schema = await this.collectionGet(collection);
-			if (!schema) throw new Error(`Collection "${collection}" not found`);
+			// Auto-create the collection on first insert (schema inferred from the data)
+			// instead of failing — a common agent flow inserts before ever calling
+			// create_collection (issue #140).
+			const schema =
+				(await this.collectionGet(collection)) ??
+				(await this.collectionCreate(collection, inferCollectionFields(data)));
 			if (schema.recordCount >= MAX_COLLECTION_RECORDS) {
 				throw new Error(`Collection "${collection}" is full (max ${MAX_COLLECTION_RECORDS} records)`);
 			}

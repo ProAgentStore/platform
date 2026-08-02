@@ -111,6 +111,33 @@ describe("storage tools", () => {
 		expect(parsed.records[0].data.company).toBe("Acme");
 	});
 
+	it("insert_record auto-creates the collection on first insert (issue #140)", async () => {
+		const engine = makeEngine();
+
+		// No create_collection first — this used to fail with "not found".
+		const insertResult = await executeStorageTool(
+			{ name: "insert_record", input: { collection: "applications", data: JSON.stringify({ company: "Kula AI", url: "https://example.com", status: "queued", attempts: 2 }) } },
+			engine,
+		);
+		expect(insertResult.success).toBe(true);
+		expect(insertResult.content).toContain("inserted");
+
+		// The collection now exists with an inferred schema, and the data round-trips.
+		const schema = await engine.collectionGet("applications");
+		expect(schema).not.toBeNull();
+		expect(schema?.fields.find((f) => f.name === "company")?.type).toBe("string");
+		expect(schema?.fields.find((f) => f.name === "attempts")?.type).toBe("number");
+
+		const queryResult = await executeStorageTool(
+			{ name: "query_records", input: { collection: "applications" } },
+			engine,
+		);
+		const parsed = JSON.parse(queryResult.content);
+		expect(parsed.total).toBe(1);
+		expect(parsed.records[0].data.company).toBe("Kula AI");
+		expect(parsed.records[0].data.status).toBe("queued");
+	});
+
 	it("list_collections shows created collections", async () => {
 		const engine = makeEngine();
 		await engine.collectionCreate("tasks", [{ name: "title", type: "string" }]);

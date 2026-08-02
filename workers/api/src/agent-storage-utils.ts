@@ -1,4 +1,4 @@
-import type { CollectionSchema } from "./agent-storage-types.js";
+import type { CollectionField, CollectionSchema } from "./agent-storage-types.js";
 import { extractText as extractPdfTextWithPdfJs } from "unpdf";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -90,6 +90,21 @@ export function validateRecord(
 	}
 
 	return result;
+}
+
+/**
+ * Infer a collection schema from a record's data, so `insert_record` into a
+ * not-yet-created collection can auto-create one instead of failing (issue #140).
+ * Types are best-effort; no field is indexed/unique/required (a forgiving default).
+ */
+export function inferCollectionFields(data: Record<string, unknown>): CollectionField[] {
+	return Object.entries(data).map(([name, value]): CollectionField => {
+		let type: CollectionField["type"] = "string";
+		if (typeof value === "number") type = "number";
+		else if (typeof value === "boolean") type = "boolean";
+		else if (value !== null && typeof value === "object") type = "json";
+		return { name, type };
+	});
 }
 
 export function isTextMimeType(mimeType: string): boolean {
