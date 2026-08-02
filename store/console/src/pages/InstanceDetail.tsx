@@ -5,12 +5,38 @@ import type { Instance, Message } from "../lib/types";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
-import { Copy, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2 } from "lucide-react";
+import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2 } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import DynamicSurface from "../components/DynamicSurface";
 import GlossedMessage from "../components/GlossedMessage";
+
+/**
+ * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
+ * (no hover there); hover-revealed from `sm` up. Shows a green check for 1.5s after copying.
+ */
+function CopyButton({ text }: { text: string }) {
+	const [copied, setCopied] = useState(false);
+	return (
+		<button
+			type="button"
+			onClick={(e) => {
+				e.stopPropagation();
+				navigator.clipboard.writeText(text).then(() => {
+					setCopied(true);
+					setTimeout(() => setCopied(false), 1500);
+				}).catch(() => {});
+			}}
+			onDoubleClick={(e) => e.stopPropagation()}
+			title={copied ? "Copied" : "Copy"}
+			aria-label="Copy message"
+			className="absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
+		>
+			{copied ? <Check size={16} className="text-green" /> : <Copy size={16} />}
+		</button>
+	);
+}
 
 // A built-in SurfaceId or a custom (agent-published) surface id.
 type Tab = string;
@@ -417,10 +443,6 @@ export default function InstanceDetail() {
 		}
 	};
 
-	const copyMsgText = async (raw: string) => {
-		await navigator.clipboard.writeText(raw);
-	};
-
 	const isApply = surfaces.includes("apply");
 	// Tabs are derived from the surface registry filtered by this instance's capabilities.
 	const tabDefs = useMemo(
@@ -619,7 +641,7 @@ export default function InstanceDetail() {
 												: "bg-panel border border-line self-start rounded-bl-sm"
 										}`}
 									>
-										<button type="button" onClick={(e) => { e.stopPropagation(); copyMsgText(m.content); }} onDoubleClick={(e) => e.stopPropagation()} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
+										<CopyButton text={m.content} />
 										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (

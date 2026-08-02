@@ -2,7 +2,7 @@ import { type KeyboardEvent, type RefObject, useState } from "react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
-import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown } from "lucide-react";
+import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown } from "lucide-react";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
  *  the text via TTS. Owner-scoped fetch of the R2 blob. */
@@ -31,6 +31,32 @@ type Voice = ReturnType<typeof import("@proagentstore/sdk/hooks").useVoice>;
 type Loop = ReturnType<typeof import("./use-coding-loop").useCodingLoop>;
 type Message = { role: string; content: string; time?: string; audioKey?: string };
 type LoopPreset = { id: string; label: string; objective: string };
+
+/**
+ * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
+ * (no hover there); hover-revealed from `sm` up. Shows a green check for 1.5s after copying.
+ */
+function CopyButton({ text }: { text: string }) {
+	const [copied, setCopied] = useState(false);
+	return (
+		<button
+			type="button"
+			onClick={(e) => {
+				e.stopPropagation();
+				navigator.clipboard.writeText(text).then(() => {
+					setCopied(true);
+					setTimeout(() => setCopied(false), 1500);
+				}).catch(() => {});
+			}}
+			onDoubleClick={(e) => e.stopPropagation()}
+			title={copied ? "Copied" : "Copy"}
+			aria-label="Copy message"
+			className="absolute top-1 right-1.5 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 p-1 rounded bg-black/40 text-muted hover:text-accent transition-opacity"
+		>
+			{copied ? <Check size={16} className="text-green" /> : <Copy size={16} />}
+		</button>
+	);
+}
 
 /** Co-pilot view: voice + loop controls, the instruction input, and the message thread. */
 export default function CopilotView({
@@ -290,7 +316,7 @@ export default function CopilotView({
 									: "bg-panel border border-line self-start rounded-bl-sm"
 							}`}
 						>
-							<button type="button" onClick={(e) => { e.stopPropagation(); navigator.clipboard.writeText(m.content); }} onDoubleClick={(e) => e.stopPropagation()} className="absolute top-1 right-1.5 opacity-0 group-hover:opacity-100 text-[0.65rem] px-1.5 py-0.5 rounded bg-black/50 text-muted transition-opacity" title="Copy"><Copy size={12} /></button>
+							<CopyButton text={m.content} />
 							{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.time && <span className="font-normal opacity-80">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Co-pilot<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(instanceId, m, voice.speak); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.time && <span className="font-normal text-muted">{formatDateTime(m.time)}</span>}</div>}
 							{m.role === "assistant" ? (
