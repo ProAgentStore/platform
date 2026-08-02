@@ -355,6 +355,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const vadSensitivityRef = useRef(1);
 	// Whether hands-free voice commands (e.g. "repeat") are honored (from settings).
 	const commandsEnabledRef = useRef(true);
+	// Latch: a command/stop-word fired from an INTERIM transcript, so the trailing FINAL of
+	// the same utterance must be swallowed (not re-fired / re-sent). Reset on that final, and
+	// on each new STT session (in case the mic stopped before a final arrived).
+	const handledUtteranceRef = useRef(false);
 	// Settings → Voice toggle: hold a screen wake lock during hands-free (default on).
 	const keepAwakeRef = useRef(true);
 	// Settings → Voice: custom hands-free command keywords (empty ⇒ built-in defaults;
@@ -528,6 +532,43 @@ export function useVoice(instanceId: string | undefined, opts: {
 		//    turned off) must not fall through and send a turn the user already abandoned.
 		if (shouldIgnoreResult(readGuard(), Date.now())) return;
 
+		// A command already fired from an interim this utterance — swallow the trailing final
+		// (and any interims between) so it can't double-fire or send the command as a message.
+		// The FINAL closes the utterance and re-arms detection for the next one.
+		if (handledUtteranceRef.current) {
+			if (isFinal) handledUtteranceRef.current = false;
+			return;
+		}
+
+		// Real-time keyword detection: fire a repeat/mute command the INSTANT a partial
+		// transcript is the command, instead of waiting for the final result or the silence
+		// timer. Matching is whole-utterance (matchVoiceCommand) against the turn-so-far
+		// (accumulated finals in browser-dictation + this partial), so precision is preserved —
+		// a normal sentence that merely contains the word is never hijacked. Works for every
+		// configured command keyword (built-in repeat/mute per language + user overrides) and in
+		// both conversation and push-to-talk. A final-only result (no interim) still falls
+		// through to the existing final-path handling below.
+		if (!isFinal && commandsEnabledRef.current) {
+			const pending = convoOnRef.current && !sttIsWhisperRef.current ? pendingTextRef.current : "";
+			const combined = `${pending} ${text}`.trim();
+			const cmd = combined
+				? matchVoiceCommand(combined, { repeat: repeatWordsRef.current, mute: muteWordsRef.current }, voiceLangRef.current)
+				: null;
+			if (cmd) {
+				handledUtteranceRef.current = true;
+				if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+				pendingTextRef.current = "";
+				if (cmd === "repeat") {
+					flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+					repeatLastRef.current();
+				} else {
+					flushSync(() => setInterim(""));
+					muteFromCommandRef.current();
+				}
+				return;
+			}
+		}
+
 		// Conversation mode.
 		if (convoOnRef.current) {
 			const cmdWords = { repeat: repeatWordsRef.current, mute: muteWordsRef.current };
@@ -585,6 +626,17 @@ export function useVoice(instanceId: string | undefined, opts: {
 					return;
 				}
 			}
+			// Real-time stop-word: end the turn the moment "…copy" appears in a PARTIAL, without
+			// waiting for its final. Latch so the trailing final is swallowed; finalize strips the
+			// stop-word and sends what came before (or nothing if the stop-word was said alone).
+			if (!isFinal && text.trim() && stopWordsRef.current.length) {
+				const combinedNow = `${pendingTextRef.current} ${text}`.trim();
+				if (stripStopWord(combinedNow, stopWordsRef.current).ended) {
+					handledUtteranceRef.current = true;
+					finalize(combinedNow);
+					return;
+				}
+			}
 			flushSync(() => setInterim(`${pendingTextRef.current}${isFinal ? "" : ` ${text}`}`.trim()));
 			if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 			silenceTimerRef.current = setTimeout(() => {
@@ -630,6 +682,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			stopWordsRef.current = c.stopWords;
 			voiceLangRef.current = c.language;
 		} catch {}
+		// Fresh session — re-arm interim keyword detection (covers the case where a command
+		// muted/stopped the mic before its final result ever arrived to reset the latch).
+		handledUtteranceRef.current = false;
 		const stt = await createStt(instanceId, {
 			transcribePrompt: transcribePromptRef.current,
 			onResult: handleResult,
