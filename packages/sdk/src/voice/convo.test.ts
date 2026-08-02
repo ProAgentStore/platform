@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, stripStopWord } from "./convo.js";
+import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -215,5 +215,25 @@ describe("classifyVoiceError", () => {
 	it("gives a device-specific hint", () => {
 		expect(micUnavailableMessage("audio-capture")).toMatch(/microphone found/i);
 		expect(micUnavailableMessage("not-allowed")).toMatch(/blocked/i);
+	});
+});
+
+describe("transcriptLanguageMismatch (#126 — never assume a different language)", () => {
+	it("flags a foreign-script transcript against a Latin-configured language", () => {
+		expect(transcriptLanguageMismatch("안녕하세요 반갑습니다", "en-US")).toBe(true); // Korean vs English
+		expect(transcriptLanguageMismatch("こんにちは、元気ですか", "es-ES")).toBe(true); // Japanese vs Spanish
+	});
+	it("does NOT flag the configured language", () => {
+		expect(transcriptLanguageMismatch("let's fix the bug now", "en-US")).toBe(false);
+		expect(transcriptLanguageMismatch("안녕하세요 반갑습니다", "ko-KR")).toBe(false); // Korean IS configured
+		expect(transcriptLanguageMismatch("你好，我们开始吧", "zh-CN")).toBe(false); // Han IS configured
+	});
+	it("does not flag a mostly-matching sentence with a stray foreign glyph", () => {
+		expect(transcriptLanguageMismatch("open the file 你 now please", "en-US")).toBe(false); // 1 foreign of many
+	});
+	it("stays quiet on too-little signal or an unknown configured language", () => {
+		expect(transcriptLanguageMismatch("네", "en-US")).toBe(false); // 1 letter — not enough signal
+		expect(transcriptLanguageMismatch("", "en-US")).toBe(false);
+		expect(transcriptLanguageMismatch("안녕하세요", "xx-YY")).toBe(false); // unmapped language → never flag
 	});
 });

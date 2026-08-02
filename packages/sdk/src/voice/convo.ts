@@ -132,6 +132,39 @@ function langKey(lang?: string): string {
 	return (lang || "en").slice(0, 2).toLowerCase();
 }
 
+/** The script a configured language is written in — for language-confirmation (#126). A
+ *  configured language pins its script; a transcript in a different script is a mis-detection,
+ *  not a real language switch. Languages we can't map return null (never flagged). */
+const SCRIPT_BY_LANG: Record<string, RegExp> = {
+	en: /\p{Script=Latin}/u,
+	es: /\p{Script=Latin}/u,
+	fr: /\p{Script=Latin}/u,
+	de: /\p{Script=Latin}/u,
+	it: /\p{Script=Latin}/u,
+	pt: /\p{Script=Latin}/u,
+	zh: /\p{Script=Han}/u,
+	ja: /\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}/u,
+	ko: /\p{Script=Hangul}/u,
+	hi: /\p{Script=Devanagari}/u,
+};
+
+/**
+ * Does a transcript look like a DIFFERENT language than the configured one (#126)? Judged by
+ * script, not content: if the configured language expects Latin but the transcript is mostly
+ * Hangul/Kana/Han, the STT mis-detected the language — the app should ask rather than respond
+ * in it. Conservative: returns false for an unknown configured language, empty/too-short text,
+ * or when at most half the letters are foreign (so a stray glyph never trips it). Pure + tested.
+ */
+export function transcriptLanguageMismatch(text: string, lang?: string): boolean {
+	const expected = SCRIPT_BY_LANG[langKey(lang)];
+	if (!expected) return false; // language we don't map → never flag
+	const letters = (text || "").replace(/[^\p{L}]/gu, ""); // drop spaces/digits/punct/emoji
+	if (letters.length < 2) return false; // too little signal to judge
+	let foreign = 0;
+	for (const ch of letters) if (!expected.test(ch)) foreign++;
+	return foreign > letters.length / 2; // majority in another script → mis-detection
+}
+
 /** Normalize a transcript for matching: lowercase, strip punctuation (Latin + CJK +
  *  inverted Spanish), collapse whitespace. Shared by every matcher so they agree. */
 function normalizeTranscript(text: string): string {

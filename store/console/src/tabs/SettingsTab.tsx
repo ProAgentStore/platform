@@ -120,6 +120,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [speed, setSpeed] = useState(100);
 	const [language, setLanguage] = useState("en-US");
 	const [commandsEnabled, setCommandsEnabled] = useState(true);
+	const [confirmLanguage, setConfirmLanguage] = useState(true);
 	const [repeatWords, setRepeatWords] = useState("");
 	const [muteWords, setMuteWords] = useState("");
 	const [stopWords, setStopWords] = useState("");
@@ -207,6 +208,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				if (typeof vs.speed === "number") setSpeed(vs.speed);
 				if (typeof vs.language === "string") setLanguage(vs.language);
 				if (typeof vs.commandsEnabled === "boolean") setCommandsEnabled(vs.commandsEnabled);
+				if (typeof vs.confirmLanguage === "boolean") setConfirmLanguage(vs.confirmLanguage);
 				if (Array.isArray(vs.repeatWords)) setRepeatWords((vs.repeatWords as string[]).join(", "));
 				if (Array.isArray(vs.muteWords)) setMuteWords((vs.muteWords as string[]).join(", "));
 				if (Array.isArray(vs.stopWords)) setStopWords((vs.stopWords as string[]).join(", "));
@@ -1186,6 +1188,20 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				</div>
 
 				<div className="border-t border-line my-3" />
+
+				<div className="block text-sm font-semibold mb-1">Confirm my language</div>
+				<p className="text-xs text-muted mb-2">
+					Lock speech recognition to your set language. If a phrase is briefly mis-heard as another language (e.g. Korean or Japanese), it's ignored and you're asked to repeat — the agent never responds in a language you didn't choose. Turn off to allow any detected language through.
+				</p>
+				<label className="flex items-center gap-2 text-sm cursor-pointer mb-3">
+					<input
+						type="checkbox"
+						checked={confirmLanguage}
+						onChange={(e) => { setConfirmLanguage(e.target.checked); saveVoice({ confirmLanguage: e.target.checked }); }}
+						className="w-4 h-4 accent-accent"
+					/>
+					Ignore speech detected as a different language
+				</label>
 
 				<div className="block text-sm font-semibold mb-1">Keep screen awake</div>
 				<p className="text-xs text-muted mb-2">

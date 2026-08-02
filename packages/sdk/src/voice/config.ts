@@ -33,6 +33,10 @@ interface VoiceConfig {
 	/** Say this word/phrase while the agent is speaking to immediately halt playback
 	 *  (e.g. "stop stop"). Empty ⇒ off. Per-instance. Case-insensitive substring match. */
 	stopSpeechKeyword: string;
+	/** Lock STT to the configured language (#126): a transcript detected as a DIFFERENT
+	 *  language is treated as a mis-detection and NOT sent — the user is asked to repeat,
+	 *  instead of the agent responding in the wrong language. Default on. */
+	confirmLanguage: boolean;
 }
 
 /** Parse a keywords setting stored as an array OR a comma-separated string into a
@@ -88,6 +92,7 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		muteWords: parseWords(vs.muteWords),
 		stopWords: parseWords(vs.stopWords),
 		stopSpeechKeyword: typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword.trim().slice(0, 40) : "",
+		confirmLanguage: vs.confirmLanguage !== false, // default ON
 	};
 }
 

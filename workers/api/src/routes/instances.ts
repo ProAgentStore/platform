@@ -551,6 +551,9 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		stopWords: parseVoiceWords(body.stopWords),
 		// Say this word/phrase while the agent is speaking to halt playback (empty ⇒ off).
 		stopSpeechKeyword: typeof body.stopSpeechKeyword === "string" ? body.stopSpeechKeyword.trim().slice(0, 40) : "",
+		// Lock STT to the configured language; a mis-detected other-language transcript is not
+		// sent — the user is asked to repeat instead. Default ON (#126).
+		confirmLanguage: body.confirmLanguage !== false,
 	};
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	cfg.voiceSettings = settings;

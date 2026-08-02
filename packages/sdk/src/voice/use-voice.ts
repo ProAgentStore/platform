@@ -6,7 +6,7 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, stripStopWord, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
 import type { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -322,6 +322,17 @@ export function useVoice(instanceId: string | undefined, opts: {
 			pausedForThinkingRef.current = false;
 			return;
 		}
+		// Language lock (#126): a transcript detected as a DIFFERENT language than configured is
+		// a mis-detection (Whisper briefly hearing Korean/Japanese). Do NOT send it — that made
+		// the agent respond in a language the user never chose. Drop it and nudge them to repeat
+		// in their language, instead of assuming. Never auto-switches languages.
+		if (confirmLanguageRef.current && transcriptLanguageMismatch(text, voiceLangRef.current)) {
+			lastAudioBlobRef.current = null;
+			pausedForThinkingRef.current = false;
+			flushSync(() => setInterim("Didn't catch your language — please say that again."));
+			setTimeout(() => setInterim((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
+			return;
+		}
 		const blob = lastAudioBlobRef.current;
 		lastAudioBlobRef.current = null;
 		// Only attach a replay audioKey when there's ACTUAL audio bytes. A zero-byte blob
@@ -382,6 +393,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Say this (normalized) word/phrase while the agent is speaking to halt playback. Empty ⇒
 	// off; when set, the recognizer is kept alive through TTS so it can hear it.
 	const stopSpeechKeywordRef = useRef("");
+	// Lock STT to the configured language (#126): drop a transcript detected as another language
+	// rather than sending it (which made the agent reply in the wrong language). Default on.
+	const confirmLanguageRef = useRef(true);
 	// True while reopening the mic after an idle recycle — suppresses the "your turn"
 	// chime (there was no agent turn, so a chime every idle window would be confusing).
 	const idleRecycleRef = useRef(false);
@@ -403,6 +417,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			muteWordsRef.current = c.muteWords;
 			stopWordsRef.current = c.stopWords;
 			stopSpeechKeywordRef.current = c.stopSpeechKeyword;
+			confirmLanguageRef.current = c.confirmLanguage;
 			voiceLangRef.current = c.language;
 		}).catch(() => {});
 	}, [instanceId]);
@@ -735,6 +750,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			muteWordsRef.current = c.muteWords;
 			stopWordsRef.current = c.stopWords;
 			stopSpeechKeywordRef.current = c.stopSpeechKeyword;
+			confirmLanguageRef.current = c.confirmLanguage;
 			voiceLangRef.current = c.language;
 		} catch {}
 		// Fresh session — re-arm interim keyword detection (covers the case where a command
