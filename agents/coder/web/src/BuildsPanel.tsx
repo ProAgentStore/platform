@@ -91,8 +91,6 @@ export default function BuildsPanel({ instanceId }: { instanceId: string }) {
 	useEffect(() => { load(); }, [load]);
 	usePolling(load, 20000, true);
 
-	const anyGithub = builds.some((b) => b.available);
-
 	return (
 		<div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-2 sm:px-4 sm:py-3">
 			<div className="bg-panel border border-line rounded-xl p-3">
@@ -108,11 +106,10 @@ export default function BuildsPanel({ instanceId }: { instanceId: string }) {
 						</p>
 					) : builds.length === 0 ? (
 						<p className="text-center py-4 text-muted-soft text-sm">No repos yet. Add one from the Repos tab.</p>
-					) : !anyGithub ? (
-						<p className="text-center py-4 text-muted-soft text-sm">
-							No GitHub-connected repos. Add a repo by <code>owner/repo</code> to see its build status here.
-						</p>
 					) : (
+						// Always render a row per repo — each self-describes availability (a repo that's
+						// local, non-GitHub, or awaiting the GitHub App shows "Not available" rather than
+						// being hidden behind a misleading "no GitHub repos" message).
 						builds.map((b) => {
 							const state = buildState(b.run);
 							return (

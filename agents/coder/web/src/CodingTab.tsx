@@ -541,6 +541,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 							<button type="button" aria-label="Close menu" onClick={() => setRepoMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
 							<div className="absolute top-full left-0 mt-1 z-50 min-w-52 max-h-72 overflow-auto bg-panel border border-line rounded-lg shadow-lg py-1">
 								<button type="button" onClick={() => { setRepoMenuOpen(false); closeTerminal(); }} className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"><ArrowLeft size={12} /> All repos</button>
+								{/* Reach the Builds status view from inside a session (otherwise it's only on the
+								    landing view, which the auto-open-session flow skips past). */}
+								<button type="button" onClick={() => { setRepoMenuOpen(false); setLandingView("builds"); closeTerminal(); }} className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"><Hammer size={12} /> Build status</button>
 								<div className="border-t border-line my-1" />
 								{reposRef.current.map((r) => {
 									const st = repoStatuses[r.id];
