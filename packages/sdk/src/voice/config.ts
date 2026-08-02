@@ -111,6 +111,24 @@ export async function getVoiceConfig(
 		} catch {}
 	}
 
+	// Hands-free control words live in the GLOBAL user profile so they apply across every
+	// agent/repo. Use them as the default; a per-instance value (already in `vs`) still wins.
+	try {
+		const p = await api<{ profile?: Record<string, string> }>("/v1/profile");
+		const prof = p.profile || {};
+		const fromProfile: Array<[string, string]> = [
+			["repeatWords", "voiceRepeatWords"],
+			["muteWords", "voiceMuteWords"],
+			["stopWords", "voiceStopWords"],
+			["stopSpeechKeyword", "voiceStopSpeechKeyword"],
+		];
+		for (const [vsKey, profKey] of fromProfile) {
+			const inst = vs[vsKey];
+			const instSet = Array.isArray(inst) ? inst.length > 0 : typeof inst === "string" ? inst.trim() !== "" : inst != null;
+			if (!instSet && prof[profKey]) vs[vsKey] = prof[profKey]; // profile default (parseWords accepts the string)
+		}
+	} catch {}
+
 	// We only need to know the key EXISTS — the actual requests go through the key
 	// proxy, which injects it server-side. So check presence via /status instead of
 	// revealing the raw key to the browser (which would be an exfiltration target).

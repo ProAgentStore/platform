@@ -1165,7 +1165,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 
 				{/* Configurable command keywords. Comma-separated. Repeat/mute obey the toggle
 				    above; the stop-word works whenever it's set. */}
-				<div className="grid gap-2.5 mt-3">
+				<p className="text-[0.7rem] text-muted-soft mt-3">These <b>override</b> your global voice commands (Profile → Hands-free voice commands) for this agent only. Leave blank to use your profile default.</p>
+				<div className="grid gap-2.5 mt-2">
 					<label className="block">
 						<span className="block text-xs font-semibold mb-0.5">Repeat keywords</span>
 						<input value={repeatWords} onChange={(e) => setRepeatWords(e.target.value)} onBlur={() => saveVoice({ repeatWords })} placeholder="repeat, say again  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />

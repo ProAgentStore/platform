@@ -125,8 +125,9 @@ export default function Profile() {
 
 	if (!user) return null;
 
-	const identityFields = cpFields.filter(f => f.group !== "preferences");
+	const identityFields = cpFields.filter(f => f.group !== "preferences" && f.group !== "voice");
 	const prefFields = cpFields.filter(f => f.group === "preferences");
+	const voiceFields = cpFields.filter(f => f.group === "voice");
 
 	return (
 		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
@@ -231,6 +232,19 @@ export default function Profile() {
 										<label key={f.key} className="flex flex-col gap-1">
 											<span className="text-xs text-muted font-semibold">{f.label}</span>
 											<input value={cpValues[f.key] || ""} onChange={e => setCpValues(p => ({ ...p, [f.key]: e.target.value }))} />
+										</label>
+									))}
+								</div>
+							</>
+						)}
+						{voiceFields.length > 0 && (
+							<>
+								<div className="mt-3 font-bold text-sm">Hands-free voice commands <span className="font-normal text-muted text-xs">— global; apply to every agent &amp; repo (a per-agent value overrides)</span></div>
+								<div className="grid grid-cols-2 gap-2 mt-1 max-sm:grid-cols-1">
+									{voiceFields.map(f => (
+										<label key={f.key} className="flex flex-col gap-1">
+											<span className="text-xs text-muted font-semibold">{f.label}</span>
+											<input value={cpValues[f.key] || ""} onChange={e => setCpValues(p => ({ ...p, [f.key]: e.target.value }))} placeholder="comma-separated" />
 										</label>
 									))}
 								</div>

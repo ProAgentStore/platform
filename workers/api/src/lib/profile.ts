@@ -10,8 +10,9 @@ export interface ProfileFieldDef {
 	label: string; // human label (console + prompts)
 	/** Private fields are gated behind per-instance consent (Phase 2). */
 	private: boolean;
-	/** Grouping for the UI: "identity" (candidate info) or "preferences" (what they want). */
-	group?: "identity" | "preferences";
+	/** Grouping for the UI: "identity" (candidate info), "preferences" (what they want), or
+	 *  "voice" (global hands-free control words). */
+	group?: "identity" | "preferences" | "voice";
 }
 
 /**
@@ -38,6 +39,12 @@ export const PROFILE_FIELDS: ProfileFieldDef[] = [
 	{ key: "targetLocations", label: "Target locations", private: false, group: "preferences" },
 	{ key: "workType", label: "Work type (Remote / Hybrid / Onsite)", private: false, group: "preferences" },
 	{ key: "openToRelocation", label: "Open to relocation? (Yes / No)", private: false, group: "preferences" },
+	// Hands-free voice control words — GLOBAL (apply across every agent/repo). Stored in
+	// `custom` (no migration); a per-instance value still overrides these. Comma-separated.
+	{ key: "voiceRepeatWords", label: "Repeat command words (blank = built-in defaults)", private: false, group: "voice" },
+	{ key: "voiceMuteWords", label: "Mute command words (blank = built-in defaults)", private: false, group: "voice" },
+	{ key: "voiceStopWords", label: "Stop-word — finish my turn (blank = off)", private: false, group: "voice" },
+	{ key: "voiceStopSpeechKeyword", label: "Stop-speech keyword — interrupt the agent (blank = off)", private: false, group: "voice" },
 ];
 
 const COL_BY_KEY = new Map(PROFILE_FIELDS.filter((f) => f.column).map((f) => [f.key, f.column as string]));
