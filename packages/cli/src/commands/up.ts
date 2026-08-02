@@ -14,7 +14,7 @@ const CLI_VERSION = (createRequire(import.meta.url)("../package.json") as { vers
  */
 async function stopRunnerProcesses(): Promise<boolean> {
 	if (process.platform === "win32") return false;
-	const { execSync } = await import("node:child_process");
+	const { execFileSync } = await import("node:child_process");
 	const patterns = [
 		"dist/browser-runner/index.js",
 		"browser-runner/src/index",
@@ -23,7 +23,9 @@ async function stopRunnerProcesses(): Promise<boolean> {
 	let stopped = false;
 	for (const p of patterns) {
 		try {
-			execSync(`pkill -f ${JSON.stringify(p)}`, { stdio: "ignore" });
+			// execFileSync (argv, no shell) — the pattern never touches a shell, so there's
+			// no command-injection surface even if a pattern ever becomes dynamic.
+			execFileSync("pkill", ["-f", p], { stdio: "ignore" });
 			stopped = true;
 		} catch {
 			/* nothing matched — fine */
