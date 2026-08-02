@@ -36,9 +36,12 @@ export async function verifyMcpSession(
 		new TextEncoder().encode(data),
 	);
 	if (!valid) return null;
-	const payload: McpSessionPayload = JSON.parse(
-		new TextDecoder().decode(unb64url(data)),
-	);
+	let payload: McpSessionPayload;
+	try {
+		payload = JSON.parse(new TextDecoder().decode(unb64url(data)));
+	} catch {
+		return null;
+	}
 	if (payload.exp < Math.floor(Date.now() / 1000)) return null;
 	return payload;
 }

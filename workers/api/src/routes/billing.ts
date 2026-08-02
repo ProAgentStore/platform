@@ -81,7 +81,12 @@ billingRoutes.post("/webhook", async (c) => {
 	const body = await c.req.text();
 	const valid = await verifyWebhookSignature(body, sig, c.env.STRIPE_WEBHOOK_SECRET);
 	if (!valid) return c.json({ error: "Invalid signature" }, 401);
-	const event = JSON.parse(body) as { type: string; data: { object: Record<string, unknown> } };
+	let event: { type: string; data: { object: Record<string, unknown> } };
+	try {
+		event = JSON.parse(body);
+	} catch {
+		return c.json({ error: "Invalid payload" }, 400);
+	}
 	await handleStripeEvent(c.env.DB, event);
 	return c.json({ received: true });
 });
