@@ -402,6 +402,47 @@ codingRoutes.put("/:instanceId/coding/repos/:repoId/instructions", async (c) => 
 	return c.json({ instructions });
 });
 
+/** GitHub API headers for an installation token. */
+function githubHeaders(token: string): Record<string, string> {
+	return {
+		Authorization: `token ${token}`,
+		Accept: "application/vnd.github+json",
+		"X-GitHub-Api-Version": "2022-11-28",
+		"User-Agent": "proagentstore-coding/1.0",
+	};
+}
+
+/** Map one raw GitHub Actions run into the compact BuildRun the console consumes. */
+function mapWorkflowRun(run: Record<string, unknown>): BuildRun {
+	return {
+		status: run.status, // queued | in_progress | completed
+		conclusion: run.conclusion ?? null, // success | failure | cancelled | null
+		name: run.name ?? "",
+		runNumber: typeof run.run_number === "number" ? run.run_number : null,
+		url: typeof run.html_url === "string" ? run.html_url : "",
+		branch: typeof run.head_branch === "string" ? run.head_branch : "",
+		sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
+		updatedAt: typeof run.updated_at === "string" ? run.updated_at : "",
+	};
+}
+
+/**
+ * Latest GitHub Actions run for an `owner/repo`, for a verified installation. Returns
+ * `{ available:false }` (never throws) for a non-GitHub repo, a missing/failed installation
+ * token, or a GitHub error — so the aggregate below can degrade per-repo. Shared by /builds.
+ */
+async function latestRunFor(env: Env, uid: string, full: string | undefined): Promise<{ available: boolean; run: BuildRun | null }> {
+	if (!full?.includes("/") || !githubAppConfigured(env)) return { available: false, run: null };
+	const owner = full.split("/")[0];
+	const token = await installationTokenForOwner(env, uid, owner).catch(() => null);
+	if (!token) return { available: false, run: null };
+	const res = await fetch(`https://api.github.com/repos/${full}/actions/runs?per_page=1`, { headers: githubHeaders(token) });
+	if (!res.ok) return { available: false, run: null };
+	const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
+	const run = data.workflow_runs?.[0];
+	return { available: true, run: run ? mapWorkflowRun(run) : null };
+}
+
 /**
  * Latest GitHub Actions run for a repo — so the console can show build/deploy
  * status (running / failed / live) independently of the agent. OPTIONAL: returns
@@ -473,26 +514,11 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployments", async (c) => {
 	const perPage = Math.min(50, Math.max(1, Number.parseInt(c.req.query("perPage") || "20", 10) || 20));
 	try {
 		const res = await fetch(`https://api.github.com/repos/${full}/actions/runs?per_page=${perPage}&page=${page}`, {
-			headers: {
-				Authorization: `token ${token}`,
-				Accept: "application/vnd.github+json",
-				"X-GitHub-Api-Version": "2022-11-28",
-				"User-Agent": "proagentstore-coding/1.0",
-			},
+			headers: githubHeaders(token),
 		});
 		if (!res.ok) return c.json({ available: false });
 		const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
-		const runs: BuildRun[] = (data.workflow_runs ?? []).map((run) => ({
-			status: run.status, // queued | in_progress | completed
-			conclusion: run.conclusion ?? null, // success | failure | cancelled | null
-			name: run.name ?? "",
-			runNumber: typeof run.run_number === "number" ? run.run_number : null,
-			url: typeof run.html_url === "string" ? run.html_url : "",
-			branch: typeof run.head_branch === "string" ? run.head_branch : "",
-			sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
-			updatedAt: typeof run.updated_at === "string" ? run.updated_at : "",
-		}));
-		// "There may be more" signal without parsing the Link header: a full page implies a next.
+		const runs: BuildRun[] = (data.workflow_runs ?? []).map(mapWorkflowRun);
 		// "There may be more" signal without parsing the Link header: a full live page implies a next.
 		const nextPage = runs.length === perPage ? page + 1 : undefined;
 
@@ -514,6 +540,37 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployments", async (c) => {
 	} catch {
 		return c.json({ available: false });
 	}
+});
+
+/**
+ * Aggregate latest build per repo for an instance — ONE call for the Build Status panel
+ * instead of N per-repo /deployments requests. Fans out to GitHub with bounded concurrency;
+ * a repo that fails degrades to `{ available:false }` for that repo only, never failing the
+ * whole response. Non-GitHub / local repos are listed as `available:false` (not hidden) so
+ * the panel can still show them. Drill-down to full history stays on /deployments. (CODER-003, #79)
+ */
+codingRoutes.get("/:instanceId/coding/builds", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repos = await listRepos(c.env, instanceId, uid);
+	const ghRepos = repos.filter((r) => r.githubRepo?.includes("/"));
+
+	// Bounded concurrency keeps us well under GitHub's rate limit even with many repos.
+	const CONCURRENCY = 6;
+	const byRepo = new Map<string, { available: boolean; run: BuildRun | null }>();
+	for (let i = 0; i < ghRepos.length; i += CONCURRENCY) {
+		const batch = ghRepos.slice(i, i + CONCURRENCY);
+		const settled = await Promise.allSettled(batch.map((r) => latestRunFor(c.env, uid, r.githubRepo)));
+		settled.forEach((s, j) => {
+			byRepo.set(batch[j].id, s.status === "fulfilled" ? s.value : { available: false, run: null });
+		});
+	}
+
+	// Preserve the instance's repo order; non-GitHub repos fall through to available:false.
+	const builds = repos.map((r) => {
+		const res = byRepo.get(r.id);
+		return { repoId: r.id, repoName: r.name, available: res?.available ?? false, run: res?.run ?? null };
+	});
+	return c.json({ builds });
 });
 
 /**
