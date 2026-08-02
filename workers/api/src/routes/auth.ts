@@ -3,6 +3,7 @@ import { isSubscriptionActive, subFromUserRow } from "../lib/billing.js";
 import { signPayload, signSession, verifyPayload, verifySession } from "../lib/session.js";
 import { isAllowedReturnTo } from "../lib/origins.js";
 import { logError } from "../lib/error-log.js";
+import { mintMcpAuthCode, exchangeMcpAuthCode } from "../lib/mcp-auth-codes.js";
 import type { Env } from "../types.js";
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
@@ -10,6 +11,25 @@ export const authRoutes = new Hono<{ Bindings: Env }>();
 interface OAuthState {
 	returnTo: string;
 	exp: number;
+	/** Which caller started this flow (from `app_id`). `pags-mcp` gets a one-time code back
+	 *  instead of the raw session token in the URL (#25). */
+	appId?: string;
+}
+
+/**
+ * Bounce back to `returnTo` with the minted session. For the MCP flow (#25) the raw session
+ * token must NEVER travel in the URL (logs / Referer / history) — hand back a single-use code
+ * the MCP worker exchanges server-to-server. Every other caller (the same-origin console) keeps
+ * the existing `?session=`.
+ */
+async function bounceBackUrl(env: Env, returnTo: string, session: string, appId?: string): Promise<string> {
+	const redirect = new URL(returnTo);
+	if (appId === "pags-mcp") {
+		redirect.searchParams.set("code", await mintMcpAuthCode(env, session));
+	} else {
+		redirect.searchParams.set("session", session);
+	}
+	return redirect.toString();
 }
 
 /** Upsert a user row and return their roles. Shared by both providers. */
@@ -45,7 +65,7 @@ authRoutes.get("/github/start", async (c) => {
 	if (!c.env.GITHUB_CLIENT_ID) return c.text("GitHub OAuth not configured", 501);
 
 	const state = await signPayload<OAuthState>(
-		{ returnTo, exp: Math.floor(Date.now() / 1000) + 600 },
+		{ returnTo, exp: Math.floor(Date.now() / 1000) + 600, appId: c.req.query("app_id") },
 		c.env.SESSION_SIGNING_KEY,
 	);
 	const url = new URL("https://github.com/login/oauth/authorize");
@@ -97,9 +117,7 @@ authRoutes.get("/github/callback", async (c) => {
 	const uid = String(ghUser.id);
 	const roles = await upsertUser(c.env, uid, ghUser.login, ghUser.name, ghUser.avatar_url);
 	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles });
-	const redirect = new URL(state.returnTo);
-	redirect.searchParams.set("session", session);
-	return c.redirect(redirect.toString());
+	return c.redirect(await bounceBackUrl(c.env, state.returnTo, session, state.appId));
 });
 
 /** GET /v1/auth/google/start — redirect to Google's OAuth consent. */
@@ -110,7 +128,7 @@ authRoutes.get("/google/start", async (c) => {
 	if (!c.env.GOOGLE_CLIENT_ID) return c.text("Google login not configured yet", 501);
 
 	const state = await signPayload<OAuthState>(
-		{ returnTo, exp: Math.floor(Date.now() / 1000) + 600 },
+		{ returnTo, exp: Math.floor(Date.now() / 1000) + 600, appId: c.req.query("app_id") },
 		c.env.SESSION_SIGNING_KEY,
 	);
 	const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
@@ -167,9 +185,21 @@ authRoutes.get("/google/callback", async (c) => {
 	const uid = `google:${gUser.id}`;
 	const roles = await upsertUser(c.env, uid, gUser.email, gUser.name, gUser.picture);
 	const session = await signSession(uid, c.env.SESSION_SIGNING_KEY, { roles });
-	const redirect = new URL(state.returnTo);
-	redirect.searchParams.set("session", session);
-	return c.redirect(redirect.toString());
+	return c.redirect(await bounceBackUrl(c.env, state.returnTo, session, state.appId));
+});
+
+/**
+ * POST /v1/auth/mcp/exchange { code } — swap a one-time MCP auth code for its session,
+ * server-to-server, so the session token never travels in a URL (#25). Fail-closed: a missing,
+ * malformed, unknown, expired, or already-used code all return a bare 400.
+ */
+authRoutes.post("/mcp/exchange", async (c) => {
+	const body = await c.req.json<{ code?: string }>().catch(() => ({}) as { code?: string });
+	const code = body.code;
+	if (!code || typeof code !== "string") return c.json({ error: "code required" }, 400);
+	const session = await exchangeMcpAuthCode(c.env, code);
+	if (!session) return c.json({ error: "invalid or expired code" }, 400);
+	return c.json({ session });
 });
 
 function parseJsonOrNull(value: string | null | undefined): unknown {

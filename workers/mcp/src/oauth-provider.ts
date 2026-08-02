@@ -282,11 +282,12 @@ async function oauthCallback(
 	const url = new URL(request.url);
 	const nonce = url.searchParams.get("nonce");
 	const apiBaseUrl = apiBase(env);
-	// PAGS's own auth backend returns ?session=<pags_session> directly — no FAS exchange.
-	const session = url.searchParams.get("session");
+	// The auth backend hands back a single-use `?code=` (never the raw session token in the URL,
+	// which leaks to logs / Referer / history — #25). We exchange it server-to-server below.
+	const code = url.searchParams.get("code");
 
-	if (!nonce || !session) {
-		return new Response("missing nonce or session", { status: 400 });
+	if (!nonce || !code) {
+		return new Response("missing nonce or code", { status: 400 });
 	}
 
 	// Browser binding: the nonce must match the cookie set at /authorize, proving this is
@@ -300,6 +301,19 @@ async function oauthCallback(
 	const reqRaw = await env.OAUTH_KV?.get(`authreq:${nonce}`);
 	if (!reqRaw) return new Response("invalid or expired nonce", { status: 400 });
 	await env.OAUTH_KV?.delete(`authreq:${nonce}`);
+
+	// Exchange the one-time code for the session — POST, server-to-server. The token exists only
+	// in this response body, never a URL. Single-use + 60s TTL, enforced by the API.
+	const exRes = await fetch(`${apiBaseUrl}/v1/auth/mcp/exchange`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ code }),
+	}).catch(() => null);
+	const exBody = exRes?.ok ? await exRes.json<{ session?: string }>().catch(() => ({ session: undefined })) : { session: undefined };
+	const session = exBody.session;
+	if (!session) {
+		return new Response("invalid or expired code", { status: 400 });
+	}
 
 	if (!(await validatePagsSession(apiBaseUrl, session))) {
 		return new Response("invalid session", { status: 400 });

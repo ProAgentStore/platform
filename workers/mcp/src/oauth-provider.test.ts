@@ -270,13 +270,17 @@ describe("loginHandler /oauth/callback", () => {
 		);
 		const env = makeEnv({ OAUTH_KV: kv }, { completeAuthorization });
 
-		const fetchSpy = vi
-			.spyOn(globalThis, "fetch")
-			.mockResolvedValue(new Response("{}", { status: 200 }));
+		// Two server-to-server calls now: exchange the one-time ?code= for the session (#25),
+		// then validate it. The token never travels in the callback URL.
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const u = String(input instanceof Request ? input.url : input);
+			if (u.includes("/v1/auth/mcp/exchange")) return new Response(JSON.stringify({ session: "pags-session" }), { status: 200 });
+			return new Response("{}", { status: 200 }); // /v1/auth/me
+		});
 
 		const res = await run(
 			env,
-			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&session=pags-session",
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&code=one-time-code",
 			{ headers: { Cookie: "pags_authnonce=nonce-1" } },
 		);
 
@@ -302,13 +306,16 @@ describe("loginHandler /oauth/callback", () => {
 		const kv = makeKv({
 			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
 		});
-		const fetchSpy = vi
-			.spyOn(globalThis, "fetch")
-			.mockResolvedValue(new Response("nope", { status: 401 }));
+		// Code exchange succeeds, but the session then fails /v1/auth/me validation.
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+			const u = String(input instanceof Request ? input.url : input);
+			if (u.includes("/v1/auth/mcp/exchange")) return new Response(JSON.stringify({ session: "bad-session" }), { status: 200 });
+			return new Response("nope", { status: 401 }); // /v1/auth/me
+		});
 
 		const res = await run(
 			makeEnv({ OAUTH_KV: kv }),
-			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&session=bad-session",
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&code=one-time-code",
 			{ headers: { Cookie: "pags_authnonce=nonce-1" } },
 		);
 
@@ -316,6 +323,19 @@ describe("loginHandler /oauth/callback", () => {
 
 		expect(res.status).toBe(400);
 		await expect(res.text()).resolves.toContain("invalid session");
+	});
+
+	it("rejects an invalid/expired one-time code (exchange 400)", async () => {
+		const kv = makeKv({ "authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ) });
+		const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("nope", { status: 400 }));
+		const res = await run(
+			makeEnv({ OAUTH_KV: kv }),
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&code=stale-code",
+			{ headers: { Cookie: "pags_authnonce=nonce-1" } },
+		);
+		fetchSpy.mockRestore();
+		expect(res.status).toBe(400);
+		await expect(res.text()).resolves.toContain("invalid or expired code");
 	});
 
 	it("rejects a callback whose nonce is not bound to the browser cookie", async () => {
@@ -326,14 +346,14 @@ describe("loginHandler /oauth/callback", () => {
 		// (or a different one) — must be rejected before any session is honored.
 		const res = await run(
 			makeEnv({ OAUTH_KV: kv }),
-			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&session=pags-session",
+			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1&code=one-time-code",
 			{ headers: { Cookie: "pags_authnonce=someone-elses-nonce" } },
 		);
 		expect(res.status).toBe(400);
 		await expect(res.text()).resolves.toContain("not bound to this browser");
 	});
 
-	it("rejects a callback that is missing the session", async () => {
+	it("rejects a callback that is missing the code", async () => {
 		const kv = makeKv({
 			"authreq:nonce-1": JSON.stringify(DEFAULT_AUTH_REQ),
 		});
@@ -342,6 +362,6 @@ describe("loginHandler /oauth/callback", () => {
 			"https://mcp.proagentstore.online/oauth/callback?nonce=nonce-1",
 		);
 		expect(res.status).toBe(400);
-		await expect(res.text()).resolves.toContain("missing nonce or session");
+		await expect(res.text()).resolves.toContain("missing nonce or code");
 	});
 });
