@@ -824,6 +824,32 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	return c.json({ ...(snap as object), runnerConnected: true });
 });
 
+/**
+ * Aggregate live status for ALL of this instance's active coding sessions in ONE call —
+ * status only (runState), no terminal panes — so the console can poll once instead of N
+ * per-session /capture calls. Owner-scoped; bounded fan-out to the runner. (CODER-006, #82)
+ */
+codingRoutes.get("/:instanceId/coding/status", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const sessions = (await listSessions(c.env, instanceId, uid)).filter((s) => s.status === "active");
+	const runnerConnected = await relayConnected(c.env, instanceId, null).catch(() => false);
+	const CONCURRENCY = 6;
+	const out: Array<{ sessionId: string; repoId: string; runState: string; runnerConnected: boolean }> = [];
+	for (let i = 0; i < sessions.length; i += CONCURRENCY) {
+		const batch = sessions.slice(i, i + CONCURRENCY);
+		const settled = await Promise.allSettled(
+			batch.map(async (s) => {
+				const conn = await getSessionRunnerConn(c.env, instanceId, uid, s);
+				if (!conn) return { sessionId: s.id, repoId: s.repoId, runState: "idle", runnerConnected: false };
+				const snap = await callRunner<{ runState?: string }>(conn, "/coding/capture", { sessionId: s.id }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
+				return { sessionId: s.id, repoId: s.repoId, runState: snap?.runState || "idle", runnerConnected: true };
+			}),
+		);
+		for (const r of settled) if (r.status === "fulfilled") out.push(r.value);
+	}
+	return c.json({ runnerConnected, sessions: out });
+});
+
 /** Persist a system/status message to the coding timeline (loop events, errors). */
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/system-message", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
