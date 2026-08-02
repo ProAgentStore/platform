@@ -21,7 +21,8 @@
 			"!workers/host/src/pages.ts",
 			"!store/docs",
 			"!**/*.min.js",
-			"!**/*.min.css"
+			"!**/*.min.css",
+			"!**/*.css"
 		]
 	},
 	"overrides": [
