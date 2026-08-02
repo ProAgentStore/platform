@@ -5,7 +5,7 @@ import type { Instance, Message } from "../lib/types";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
-import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2 } from "lucide-react";
+import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
@@ -69,6 +69,17 @@ export default function InstanceDetail() {
 	const [input, setInput] = useState("");
 	const [thinking, setThinking] = useState(false);
 	const chatRef = useRef<HTMLDivElement>(null);
+	// Smart auto-scroll (#132): auto-scroll to the newest message ONLY while the user is at the
+	// bottom. The moment they scroll up, auto-scroll pauses and a jump-to-bottom button appears
+	// (even behind the voice pill). A ref mirrors the state so the message effects read it live
+	// without a dependency (appending a message doesn't fire onScroll, so it stays accurate).
+	const [atBottom, setAtBottom] = useState(true);
+	const atBottomRef = useRef(true);
+	atBottomRef.current = atBottom;
+	const scrollChatToBottom = () => {
+		const el = chatRef.current;
+		if (el) { el.scrollTop = el.scrollHeight; setAtBottom(true); }
+	};
 	const PAGE = 20;
 
 	// Runtime status
@@ -199,7 +210,7 @@ export default function InstanceDetail() {
 	// Scroll to bottom only when NEW messages are added (not when loading older)
 	const prevCountRef = useRef(0);
 	useEffect(() => {
-		if (messages.length > prevCountRef.current && !loadingMore) {
+		if (messages.length > prevCountRef.current && !loadingMore && atBottomRef.current) {
 			requestAnimationFrame(() => {
 				if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
 			});
@@ -331,7 +342,9 @@ export default function InstanceDetail() {
 	// nudge to the bottom so the last message rises clear of the pill immediately.
 	const pillVisible = !!voiceStatus;
 	useEffect(() => {
-		if (pillVisible && chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+		// Only nudge to the bottom for the pill's reserved space when the user is AT the bottom —
+		// don't yank them down mid-read just because voice status appeared (#132).
+		if (pillVisible && atBottomRef.current && chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
 	}, [pillVisible]);
 
 	// Only ONE replay at a time: a new double-tap (or word tap) cuts off the previous
@@ -595,6 +608,7 @@ export default function InstanceDetail() {
 								if (voice.mode === "ptt") voice.toggleTalk();
 								else if (voice.mode === "handsfree") voice.cancelSpeak();
 							}}
+							onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}
 							className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
 						>
 							{hasMore && (
@@ -662,6 +676,20 @@ export default function InstanceDetail() {
 								);
 							})}
 						</div>
+						{/* Jump to latest — shown whenever the user has scrolled up off the bottom.
+						    z-30 so it sits ABOVE the voice pill (never hidden by Listening/Talking),
+						    bottom-right so it doesn't clash with the centered pill (#132). */}
+						{!atBottom && (
+							<button
+								type="button"
+								onClick={scrollChatToBottom}
+								aria-label="Scroll to latest"
+								title="Scroll to latest"
+								className="absolute bottom-3 right-3 z-30 flex items-center justify-center w-9 h-9 rounded-full bg-panel border border-line shadow-lg text-muted hover:text-accent hover:border-accent transition-colors"
+							>
+								<ChevronDown size={18} />
+							</button>
+						)}
 						{/* Live voice status — the OBVIOUS "it took over and is working" signal.
 						    Walks Listening → Transcribing → Working so there's never a silent gap
 						    between you finishing and the reply arriving. Doubles as the tap target

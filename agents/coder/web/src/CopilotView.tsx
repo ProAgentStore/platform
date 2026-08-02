@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type RefObject, useState } from "react";
+import { type KeyboardEvent, type RefObject, useState, useEffect } from "react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
@@ -100,6 +100,13 @@ export default function CopilotView({
 		const el = threadRef.current;
 		if (el) { el.scrollTop = el.scrollHeight; setAtBottom(true); }
 	};
+	// Smart auto-scroll (#132): follow new messages ONLY while the user is at the bottom.
+	// Scrolled up → don't yank them down; the jump button is shown instead. (The old
+	// unconditional auto-scroll lived in CodingTab and ignored the user's scroll position.)
+	// biome-ignore lint/correctness/useExhaustiveDependencies: intentionally re-run on new messages; atBottom is read live.
+	useEffect(() => {
+		if (atBottom && threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
+	}, [summaryHistory]);
 	// Computed once so the message list reserves bottom padding (pb-16) whenever the floating
 	// status pill is visible — otherwise the pill overlaps (and blocks selecting/copying) the
 	// last message.

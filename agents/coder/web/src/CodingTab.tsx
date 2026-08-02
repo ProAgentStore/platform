@@ -205,11 +205,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	usePolling(pollSummary, 4500, !!openSession && view === "summary");
 
-	// Scroll on new messages (co-pilot)
-	useEffect(() => {
-		if (summaryHistory.length < 0) return;
-		if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
-	}, [summaryHistory]);
+	// Co-pilot auto-scroll now lives in CopilotView, gated on the user's scroll position (#132)
+	// — a new message no longer yanks the view down while the user is reading history.
 
 	// Auto-scroll terminal when new output arrives or view switches to terminal
 	useEffect(() => {
