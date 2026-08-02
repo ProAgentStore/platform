@@ -32,6 +32,7 @@ function fakeEngine(throwOnPath?: string) {
 	const vectorized: string[] = [];
 	const cleared: Array<string | undefined> = [];
 	const engine: RepoEngine & { vectorized: string[]; cleared: Array<string | undefined> } = {
+		indexingEnabled: true,
 		vectorized,
 		cleared,
 		async vectorizeRepoFile(key, path) {
@@ -94,6 +95,19 @@ describe("repo-ingest-runner", () => {
 		expect([...store._m.keys()].some((k) => k.startsWith("rifile:"))).toBe(false);
 	});
 
+	it("fails the job (not a false 'done') when indexing is disabled (#22)", async () => {
+		const store = memStore();
+		const engine = fakeEngine();
+		Object.assign(engine, { indexingEnabled: false }); // e.g. PLATFORM_AI_ENABLED off — RAG unavailable
+		const f = fakeFetchers(FILES);
+		await addRepo(store, engine, { ref, repoUrl: "octo/demo", now: "t0" });
+		await drain(store, engine, f);
+		const job = await getRepoJob(store, "octo/demo");
+		expect(job?.status).toBe("error");
+		expect(job?.error).toMatch(/indexing is disabled/i);
+		expect(engine.vectorized).toHaveLength(0); // nothing pretended to index
+	});
+
 	it("indexes multiple repos, one at a time, until all done", async () => {
 		const store = memStore();
 		const engine = fakeEngine();
@@ -138,6 +152,7 @@ describe("repo-ingest-runner", () => {
 		const seen = new Set<string>();
 		const vectorized: string[] = [];
 		const engine: RepoEngine & { vectorized: string[] } = {
+			indexingEnabled: true,
 			vectorized,
 			async vectorizeRepoFile(key, path) {
 				if (path === "src/a.ts" && !seen.has(path)) { seen.add(path); return -1; }

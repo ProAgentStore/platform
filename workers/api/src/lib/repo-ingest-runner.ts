@@ -50,6 +50,9 @@ export interface RepoStore {
 
 /** Minimal storage-engine surface the runner needs. */
 export interface RepoEngine {
+	/** RAG available (Vectorize + AI). When false, indexing no-ops — the runner fails the job
+	 *  with a clear message instead of marking it "done" with 0 vectors (#22). */
+	readonly indexingEnabled: boolean;
 	vectorizeRepoFile(key: string, path: string, content: string): Promise<number>;
 	clearRepoVectors(key?: string): Promise<void>;
 	logEvent(type: string, userId: string | undefined, data: Record<string, unknown>): Promise<unknown>;
@@ -171,6 +174,13 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 
 	try {
 		if (job.status === "fetching") {
+			// RAG unavailable (e.g. PLATFORM_AI_ENABLED off) → indexing silently no-ops. Fail
+			// the job with a clear message rather than marching to "done" with 0 vectors and a
+			// green "Ready (N files)" over a dead index (#22).
+			if (!engine.indexingEnabled) {
+				await saveJob(store, job, { status: "error", error: "Repo indexing is disabled on this deployment (platform AI is off) — the repo can't be made searchable.", finishedAt: f.now() });
+				return true; // tick handled — job failed clearly, nothing more to index
+			}
 			const meta = await f.fetchRepoMeta(ref, job.token);
 			const tar = await f.fetchRepoTarball(ref, job.branch || meta?.defaultBranch || undefined, job.token);
 			const { files, skipped } = f.extractTextFiles(tar, { maxFiles: REPO_MAX_FILES, maxFileBytes: REPO_MAX_FILE_BYTES, maxTotalBytes: REPO_MAX_TOTAL_BYTES });

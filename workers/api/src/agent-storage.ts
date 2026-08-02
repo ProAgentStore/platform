@@ -63,6 +63,17 @@ export class AgentStorageEngine {
 	// ── Vector Storage ────────────────────────────────────────────────────────
 
 	/**
+	 * Whether embedding/RAG is actually available (both the Vectorize index and the platform
+	 * AI binding present). When false — e.g. PLATFORM_AI_ENABLED is off — vectorizeStore /
+	 * vectorSearch / vectorizeRepoFile no-op instead of throwing, so callers MUST check this
+	 * before reporting a KB add / repo index as "indexed" — otherwise ingest looks green while
+	 * RAG is dead (#22). See handleAddKnowledge + the repo-ingest runner.
+	 */
+	get indexingEnabled(): boolean {
+		return !!(this.vectorize && this.ai);
+	}
+
+	/**
 	 * Embed and store text chunks in Vectorize for semantic retrieval.
 	 */
 	async vectorizeStore(

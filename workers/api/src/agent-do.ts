@@ -791,15 +791,21 @@ export class AgentDO extends DurableObject<Env> {
 		const state = await this.getState();
 		if (state) {
 			const engine = this.getStorageEngine(state.agentId);
-			try {
-				await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`);
-			} catch (err) {
+			// Indexing off (no Vectorize/AI binding, e.g. PLATFORM_AI_ENABLED=false): vectorizeStore
+			// no-ops WITHOUT throwing, so report vectorized:false rather than a false green (#22).
+			if (!engine.indexingEnabled) {
 				vectorized = false;
-				await logError(this.env, {
-					source: "knowledge-vectorize",
-					message: `knowledge doc saved but not searchable: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-					context: { agentId: state.agentId, docId: doc.id },
-				}).catch(() => undefined);
+			} else {
+				try {
+					await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`);
+				} catch (err) {
+					vectorized = false;
+					await logError(this.env, {
+						source: "knowledge-vectorize",
+						message: `knowledge doc saved but not searchable: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+						context: { agentId: state.agentId, docId: doc.id },
+					}).catch(() => undefined);
+				}
 			}
 			await engine.logEvent("knowledge.added", undefined, {
 				docId: doc.id,
@@ -839,7 +845,9 @@ export class AgentDO extends DurableObject<Env> {
 		const state = await this.getState();
 		if (state) {
 			const engine = this.getStorageEngine(state.agentId);
-			try {
+			if (!engine.indexingEnabled) {
+				vectorized = false; // indexing off (#22) — don't claim a searchable update
+			} else try {
 				await engine.vectorDelete("knowledge", decodedId).catch(() => undefined);
 				await engine.vectorizeStore("knowledge", decodedId, `${updated.title}\n\n${updated.content}`);
 			} catch (err) {
