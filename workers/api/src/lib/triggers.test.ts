@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { HttpError } from "./auth.js";
 import { encryptKey } from "./crypto.js";
 import { dispatchTrigger, nextRunAt, normalizeSchedule, publicWebhookUrl, type TriggerRow } from "./triggers.js";
+import { startPipelineRun } from "./pipeline-run-start.js";
 import type { Env } from "../types.js";
+
+// #92: dispatchTrigger's run_pipeline branch calls startPipelineRun (which loads the pipeline
+// from instance config + kicks the durable workflow). Stub it here to unit-test the wiring.
+vi.mock("./pipeline-run-start.js", () => ({ startPipelineRun: vi.fn() }));
 
 const TEST_KEK = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
@@ -185,5 +190,75 @@ describe("trigger schedules", () => {
 			source: "drive",
 			sourceUrl: "https://docs.google.com/document/d/file123456789",
 		});
+	});
+});
+
+describe("trigger actions: run_pipeline + insert_record (#92)", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	function baseEnv() {
+		const agentRequests: Request[] = [];
+		const DB = {
+			prepare() {
+				const stmt = {
+					bind: () => stmt,
+					first: async () => null,
+					all: async () => ({ results: [] }),
+					run: async () => ({}),
+				};
+				return stmt;
+			},
+		};
+		const AGENT = {
+			idFromName: (name: string) => ({ name }),
+			get: () => ({ fetch: async (req: Request) => { agentRequests.push(req); return Response.json({ id: "rec-1" }, { status: 201 }); } }),
+		};
+		return { env: { DB, AGENT } as unknown as Env, agentRequests };
+	}
+
+	const pipelineTrigger = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "run_pipeline" });
+	const recordTrigger = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "insert_record" });
+
+	it("run_pipeline kicks startPipelineRun with the configured pipeline + 'trigger' source", async () => {
+		const { env } = baseEnv();
+		(startPipelineRun as Mock).mockResolvedValue({ ok: true, runId: "run-abcdef12", workflowId: "wf-1" });
+		const res = await dispatchTrigger(env, pipelineTrigger({ pipeline: "lead-sweep" }), "cron", { city: "Austin" });
+		expect(res.ok).toBe(true);
+		// The whole point of #92: cron/webhook → durable pipeline, pipeline resolved by NAME from
+		// config (data-driven, no capability-union edit), payload passed through as run params.
+		expect(startPipelineRun).toHaveBeenCalledWith(env, "inst-1", "user-1", "lead-sweep", { city: "Austin" }, "trigger");
+	});
+
+	it("run_pipeline surfaces a missing/invalid pipeline as a failed run (throws)", async () => {
+		const { env } = baseEnv();
+		(startPipelineRun as Mock).mockResolvedValue({ ok: false, error: "No pipeline named \"ghost\" is configured" });
+		await expect(dispatchTrigger(env, pipelineTrigger({ pipeline: "ghost" }), "cron", {})).rejects.toThrow(/No pipeline named/);
+	});
+
+	it("run_pipeline without a pipeline name refuses rather than guessing", async () => {
+		const { env } = baseEnv();
+		await expect(dispatchTrigger(env, pipelineTrigger({}), "cron", {})).rejects.toThrow(/requires config\.pipeline/);
+	});
+
+	it("insert_record posts the payload (minus the routing key) as a record to the collection", async () => {
+		const { env, agentRequests } = baseEnv();
+		await dispatchTrigger(env, recordTrigger({ collection: "leads" }), "webhook", { collection: "leads", name: "Acme", email: "a@b.co" });
+		expect(agentRequests).toHaveLength(1);
+		expect(agentRequests[0].url).toBe("https://agent/collections/leads/records");
+		const body = await agentRequests[0].clone().json() as { data: Record<string, unknown> };
+		// The 'collection' routing key is stripped; the rest is the record.
+		expect(body).toEqual({ data: { name: "Acme", email: "a@b.co" } });
+	});
+
+	it("insert_record prefers an explicit `record` object when present", async () => {
+		const { env, agentRequests } = baseEnv();
+		await dispatchTrigger(env, recordTrigger({ collection: "leads" }), "webhook", { record: { name: "Beta" }, ignored: "meta" });
+		const body = await agentRequests[0].clone().json() as { data: Record<string, unknown> };
+		expect(body).toEqual({ data: { name: "Beta" } });
+	});
+
+	it("insert_record without a collection refuses", async () => {
+		const { env } = baseEnv();
+		await expect(dispatchTrigger(env, recordTrigger({}), "webhook", { name: "x" })).rejects.toThrow(/requires config\.collection/);
 	});
 });

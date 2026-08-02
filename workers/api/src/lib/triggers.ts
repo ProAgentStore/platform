@@ -10,6 +10,7 @@ import {
 	type DriveFile,
 } from "./drive.js";
 import { logEvent } from "./events.js";
+import { startPipelineRun } from "./pipeline-run-start.js";
 import {
 	exportWorkDriveFile,
 	listWorkDriveFolder,
@@ -20,7 +21,7 @@ import {
 import type { Env } from "../types.js";
 
 export type TriggerType = "webhook" | "cron";
-export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector";
+export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record";
 export type TriggerEventType = TriggerType | "manual";
 
 export interface TriggerRow {
@@ -53,9 +54,13 @@ export interface TriggerConfig {
 	folderId?: string;
 	limit?: number;
 	query?: string;
+	/** run_pipeline: the name of the declarative pipeline (from instance config) to run. */
+	pipeline?: string;
+	/** insert_record: the target collection for a webhook → collection ingest. */
+	collection?: string;
 }
 
-const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector"]);
+const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record"]);
 const TYPES = new Set<TriggerType>(["webhook", "cron"]);
 const MAX_PAYLOAD_CHARS = 16_000;
 
@@ -68,7 +73,7 @@ export function assertTriggerType(value: unknown): TriggerType {
 
 export function assertTriggerAction(value: unknown): TriggerAction {
 	if (typeof value !== "string" || !ACTIONS.has(value as TriggerAction)) {
-		throw new HttpError(400, "trigger action must be create_task, add_knowledge, log_event, or sync_connector");
+		throw new HttpError(400, "trigger action must be create_task, add_knowledge, log_event, sync_connector, run_pipeline, or insert_record");
 	}
 	return value as TriggerAction;
 }
@@ -193,6 +198,8 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			folderId: typeof parsed.folderId === "string" ? parsed.folderId.slice(0, 500) : undefined,
 			limit: typeof parsed.limit === "number" ? Math.max(1, Math.min(Math.trunc(parsed.limit), 20)) : undefined,
 			query: typeof parsed.query === "string" ? parsed.query.slice(0, 200) : undefined,
+			pipeline: typeof parsed.pipeline === "string" ? parsed.pipeline.slice(0, 200) : undefined,
+			collection: typeof parsed.collection === "string" ? parsed.collection.slice(0, 200) : undefined,
 		};
 	} catch {
 		return {};
@@ -266,6 +273,30 @@ export async function dispatchTrigger(
 			if (!res.ok) throw new Error(`knowledge dispatch failed (${res.status})`);
 		} else if (trigger.action === "sync_connector") {
 			resultPayload = await syncConnectorTrigger(env, trigger, config);
+		} else if (trigger.action === "run_pipeline") {
+			// #92: a cron/webhook trigger kicks a durable, resumable per-instance pipeline
+			// (escapes the 30s DO limit; reads/writes the instance's collections). The pipeline
+			// is DATA — loaded by name from instance config via startPipelineRun — so adding a
+			// new pipeline type never touches the closed `workflow` capability union.
+			const name = stringValue(payloadRecord(payload).pipeline) || config.pipeline || "";
+			if (!name) throw new Error("run_pipeline requires config.pipeline (the pipeline name)");
+			const res = await startPipelineRun(env, trigger.instance_id, trigger.user_id, name, payloadRecord(payload), "trigger");
+			if (!res.ok) throw new Error(res.error);
+			resultPayload = { pipeline: name, runId: res.runId, workflowId: res.workflowId };
+		} else if (trigger.action === "insert_record") {
+			// #92 (webhook → collection): the simple ingest case. The record is an explicit
+			// `record`/`data` object in the payload, else the whole payload minus the routing key.
+			const body = payloadRecord(payload);
+			const collection = stringValue(body.collection) || config.collection || "";
+			if (!collection) throw new Error("insert_record requires config.collection");
+			const data = isRecord(body.record) ? body.record : isRecord(body.data) ? body.data : omitKey(body, "collection");
+			const res = await stub.fetch(new Request(`https://agent/collections/${encodeURIComponent(collection)}/records`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ data }),
+			}));
+			if (!res.ok) throw new Error(`record insert failed (${res.status})`);
+			resultPayload = { collection };
 		}
 
 		await env.DB.prepare(
@@ -341,6 +372,15 @@ function payloadRecord(payload: unknown): Record<string, unknown> {
 	return payload && typeof payload === "object" && !Array.isArray(payload) ? payload as Record<string, unknown> : {};
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function omitKey(obj: Record<string, unknown>, key: string): Record<string, unknown> {
+	const { [key]: _omit, ...rest } = obj;
+	return rest;
+}
+
 function stringValue(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
@@ -351,9 +391,11 @@ function stringifyPayload(payload: unknown): string {
 }
 
 function successMessage(action: TriggerAction, payload: unknown): string {
-	if (action !== "sync_connector") return `${action} dispatched`;
 	const result = payloadRecord(payload);
-	return `connector sync imported ${Number(result.imported || 0)} file(s), skipped ${Number(result.skipped || 0)}`;
+	if (action === "sync_connector") return `connector sync imported ${Number(result.imported || 0)} file(s), skipped ${Number(result.skipped || 0)}`;
+	if (action === "run_pipeline") return `started pipeline "${stringValue(result.pipeline) || "?"}" (run ${stringValue(result.runId).slice(0, 8)})`;
+	if (action === "insert_record") return `inserted a record into "${stringValue(result.collection) || "?"}"`;
+	return `${action} dispatched`;
 }
 
 interface SyncItem {
