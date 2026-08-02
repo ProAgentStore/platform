@@ -94,3 +94,22 @@ export function rateLimitStrict() {
 		await next();
 	};
 }
+
+/**
+ * Dedicated admin bucket (issue #109) — a second gate in front of /v1/admin/* on top
+ * of the general 240/min. An authenticated admin SPA legitimately polls (Terminals live
+ * status), so authed users get 120/min; but an UNauthenticated prober falls through to an
+ * `ip:` subject, and we clamp that to 20/min so the admin surface isn't a 240/min
+ * enumeration budget. Complements the requireAdmin role check and the CF Access perimeter.
+ */
+export function rateLimitAdmin() {
+	return async (c: Context<{ Bindings: Env }>, next: Next) => {
+		const who = await subject(c);
+		const limit = who.startsWith("u:") ? 120 : 20;
+		const { allowed, remaining } = getRateLimit(`admin:${who}`, limit);
+		c.header("X-RateLimit-Limit", String(limit));
+		c.header("X-RateLimit-Remaining", String(remaining));
+		if (!allowed) return deny(c);
+		await next();
+	};
+}

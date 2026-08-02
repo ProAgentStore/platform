@@ -39,10 +39,17 @@ const GH_HEADERS = (token: string | null) => ({
 	"User-Agent": "proagentstore-coding/1.0",
 });
 
-/** Owner login from an "owner/repo" string; "" when malformed. */
-function ownerOf(githubRepo: string): string {
-	const parts = githubRepo.split("/");
-	return parts.length === 2 && parts[0] ? parts[0] : "";
+// Valid GitHub owner/repo segments are [A-Za-z0-9._-] only. Validating the charset here
+// (defense-in-depth, matching connectors/github.ts) means the segments are safe to embed
+// in the api.github.com path regardless of caller — a crafted value like
+// "owner/name?per_page=100" can't smuggle a query/path into an authenticated request.
+const SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+/** Parse "owner/repo" into validated, URL-safe segments; null when malformed. */
+function parseRepo(githubRepo: string): { owner: string; name: string } | null {
+	const parts = String(githubRepo || "").split("/");
+	if (parts.length !== 2 || !SEGMENT.test(parts[0]) || !SEGMENT.test(parts[1])) return null;
+	return { owner: parts[0], name: parts[1] };
 }
 
 /** GitHub returns PRs from the issues endpoint too — they carry a `pull_request` field. */
@@ -85,15 +92,15 @@ const BODY_CAP = 8 * 1024;
  * failure (no App, no install, GitHub error, malformed repo).
  */
 export async function listIssues(env: Env, userId: string, githubRepo: string, opts: ListIssuesOpts = {}): Promise<IssueSummary[]> {
-	const owner = ownerOf(githubRepo);
-	if (!owner) return [];
+	const parsed = parseRepo(githubRepo);
+	if (!parsed) return [];
 	try {
-		const token = await installationTokenForOwner(env, userId, owner);
+		const token = await installationTokenForOwner(env, userId, parsed.owner);
 		const state = opts.state ?? "open";
 		const perPage = Math.min(Math.max(opts.limit ?? 30, 1), 100);
 		const params = new URLSearchParams({ state, per_page: String(perPage), sort: "updated", direction: "desc" });
 		if (opts.labels) params.set("labels", opts.labels);
-		const res = await fetch(`https://api.github.com/repos/${githubRepo}/issues?${params.toString()}`, { headers: GH_HEADERS(token) });
+		const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues?${params.toString()}`, { headers: GH_HEADERS(token) });
 		if (!res.ok) return [];
 		const data = (await res.json()) as RawIssue[];
 		if (!Array.isArray(data)) return [];
@@ -105,11 +112,11 @@ export async function listIssues(env: Env, userId: string, githubRepo: string, o
 
 /** Read one issue's detail (with a capped body). Returns null if it's a PR or not found. */
 export async function readIssue(env: Env, userId: string, githubRepo: string, number: number): Promise<IssueDetail | null> {
-	const owner = ownerOf(githubRepo);
-	if (!owner || !Number.isFinite(number)) return null;
+	const parsed = parseRepo(githubRepo);
+	if (!parsed || !Number.isFinite(number)) return null;
 	try {
-		const token = await installationTokenForOwner(env, userId, owner);
-		const res = await fetch(`https://api.github.com/repos/${githubRepo}/issues/${number}`, { headers: GH_HEADERS(token) });
+		const token = await installationTokenForOwner(env, userId, parsed.owner);
+		const res = await fetch(`https://api.github.com/repos/${encodeURIComponent(parsed.owner)}/${encodeURIComponent(parsed.name)}/issues/${Number(number)}`, { headers: GH_HEADERS(token) });
 		if (!res.ok) return null;
 		const raw = (await res.json()) as RawIssue;
 		if (raw.pull_request) return null; // it's a PR, not an issue

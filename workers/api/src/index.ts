@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
 import { logUnhandled } from "./lib/on-error.js";
-import { rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
+import { rateLimitAdmin, rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
 import { agentRoutes } from "./routes/agents.js";
 import { agentBuilderRoutes } from "./routes/agent-builder.js";
 import { batchRoutes } from "./routes/batch.js";
@@ -99,6 +99,9 @@ app.use("/v1/keys/*/reveal", rateLimitStrict()); // hands out a raw decrypted ke
 // (defense-in-depth). Inert until CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set;
 // the admin ROLE is still enforced per-handler behind this.
 app.use("/v1/admin/*", cloudflareAccessGate());
+// Dedicated admin throttle (issue #109): clamps unauthenticated enumeration hard while
+// leaving room for the authenticated admin SPA's polling. Behind the CF Access gate.
+app.use("/v1/admin/*", rateLimitAdmin());
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 
