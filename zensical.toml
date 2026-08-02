@@ -11,6 +11,7 @@ nav = [
   { "Connectors" = "connectors.md" },
   { "Triggers" = "triggers.md" },
   { "MCP" = "mcp.md" },
+  { "Voice" = "voice.md" },
   { "Browser Runtime" = "browser-runtime.md" },
   { "Coder Multi-Machine" = "coder-multi-machine.md" },
   { "Architecture" = "architecture.md" },
