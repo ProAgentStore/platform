@@ -519,6 +519,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	// Push session header override to parent when session is open
 	const openRepo = openSession ? repos.find((r) => getActiveSession(r.id)?.id === openSession.id) : null;
+	// Status of the currently-open session, for the header badge (CODER-005). A primitive
+	// string (not the repoStatuses object) so the header effect re-pushes only when the status
+	// actually changes — depending on the object would re-fire every 3s poll (a render storm).
+	const openStatus = openSession
+		? repoStatuses[openSession.repoId] || (runnerOnline === false ? "offline" : "idle")
+		: "idle";
 	// biome-ignore lint/correctness/useExhaustiveDependencies: event handlers intentionally read current component state; the header only needs to refresh when visible header state changes.
 	useEffect(() => {
 		if (!openSession || !onHeaderOverride) return;
@@ -554,6 +560,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						</>
 					)}
 				</div>
+				<AgentStatusBadge status={openStatus} />
 				{/* Icon-only on mobile (saves space); icon + label from sm up. */}
 				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
 					<button type="button" onClick={() => setView("summary")} title="Co-pilot" aria-label="Co-pilot" aria-pressed={view === "summary"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}><Eye size={14} /><span className="hidden sm:inline">Co-pilot</span></button>
@@ -590,7 +597,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		// Deps so this only re-runs when the header's VISIBLE content changes. With no
 		// deps it was a render storm: each run handed setChildHeader a fresh element →
 		// re-rendered the parent → this child → effect again, continuously.
-	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen]);
+	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen, openStatus]);
 
 	const settingsModal = settingsRepoId
 		? (() => {
@@ -702,5 +709,31 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				/>
 			)}
 		</div>
+	);
+}
+
+/**
+ * Working / Idle / Error badge for the open session (CODER-005). Derived from the session's
+ * runState (`repoStatuses`) + runner connectivity. Compact on mobile: the coloured dot is
+ * always shown (with a tooltip); the text label appears from `sm` up so it fits the 48px header.
+ */
+function AgentStatusBadge({ status }: { status: string }) {
+	const working = status === "thinking" || status === "working";
+	const error = status === "offline";
+	const label = working ? "Working" : error ? "Error" : "Idle";
+	const base = "inline-flex items-center gap-1 text-[0.6rem] font-bold px-1.5 py-0.5 rounded shrink-0";
+	if (working) {
+		return (
+			<span className={`${base} bg-amber-500/15 text-amber-600`} title={label}>
+				<span className="inline-block w-2 h-2 border-2 border-amber-500/40 border-t-amber-600 rounded-full animate-spin" />
+				<span className="hidden sm:inline">{label}</span>
+			</span>
+		);
+	}
+	return (
+		<span className={`${base} ${error ? "bg-red/15 text-red" : "bg-green/15 text-green"}`} title={label}>
+			<span className={`w-2 h-2 rounded-full ${error ? "bg-red" : "bg-green"}`} />
+			<span className="hidden sm:inline">{label}</span>
+		</span>
 	);
 }
