@@ -46,8 +46,12 @@ export default function Errors() {
 	// Source options: derive from whatever we've loaded (best-effort).
 	const sources = useMemo(() => {
 		const s = new Set<string>();
-		(sigs || []).forEach((x) => s.add(x.source));
-		(feed || []).forEach((x) => s.add(x.source));
+		(sigs || []).forEach((x) => {
+			s.add(x.source);
+		});
+		(feed || []).forEach((x) => {
+			s.add(x.source);
+		});
 		return [...s].sort();
 	}, [sigs, feed]);
 
@@ -58,8 +62,8 @@ export default function Errors() {
 
 			<div className="flex flex-wrap items-center gap-2 mb-4">
 				<div className="inline-flex rounded-lg border border-line overflow-hidden text-sm">
-					<button onClick={() => setView("grouped")} className={`px-3 py-1.5 ${view === "grouped" ? "bg-accent text-white" : "text-muted hover:bg-panel-hover"}`}>Grouped</button>
-					<button onClick={() => setView("feed")} className={`px-3 py-1.5 ${view === "feed" ? "bg-accent text-white" : "text-muted hover:bg-panel-hover"}`}>Feed</button>
+					<button type="button" onClick={() => setView("grouped")} className={`px-3 py-1.5 ${view === "grouped" ? "bg-accent text-white" : "text-muted hover:bg-panel-hover"}`}>Grouped</button>
+					<button type="button" onClick={() => setView("feed")} className={`px-3 py-1.5 ${view === "feed" ? "bg-accent text-white" : "text-muted hover:bg-panel-hover"}`}>Feed</button>
 				</div>
 				<select value={since} onChange={(e) => setSince(e.target.value)} className="!w-auto text-sm">
 					{RANGES.map((r) => <option key={r.l} value={r.v}>{r.l}</option>)}
@@ -109,15 +113,16 @@ export default function Errors() {
 
 function FeedRow({ e }: { e: RawErr }) {
 	const [open, setOpen] = useState(false);
+	const toggle = () => setOpen(!open);
 	return (
 		<div className="border-b border-line/50 pb-1.5">
-			<div className="flex gap-2 text-xs text-muted cursor-pointer" onClick={() => setOpen(!open)}>
+			<button type="button" className="w-full text-left flex gap-2 text-xs text-muted cursor-pointer" onClick={toggle}>
 				<span>{e.created_at?.slice(5, 16)}</span>
 				<span className="text-accent">{e.source}</span>
 				{e.status != null && <span className={statusColor(e.status)}>{e.status}</span>}
 				{e.user_id && <span className="truncate max-w-[140px]">{e.user_id}</span>}
-			</div>
-			<div className="break-words text-sm cursor-pointer" onClick={() => setOpen(!open)}>{e.message}</div>
+			</button>
+			<button type="button" className="w-full text-left break-words text-sm cursor-pointer" onClick={toggle}>{e.message}</button>
 			{open && e.context && <ContextBlock context={e.context} />}
 		</div>
 	);
@@ -133,14 +138,15 @@ function SignatureDrawer({ sig, qs, onClose }: { sig: Signature; qs: string; onC
 		api<{ errors: RawErr[] }>(`/v1/admin/errors?${p.toString()}`).then((r) => setRows(r.errors)).catch(() => setRows([]));
 	}, [sig, qs]);
 	return (
-		<div className="fixed inset-0 bg-black/60 flex justify-end z-50" onClick={onClose}>
-			<div className="bg-panel border-l border-line w-full max-w-2xl h-dvh overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
+		<div className="fixed inset-0 flex justify-end z-50">
+			<button type="button" aria-label="Close drawer" className="absolute inset-0 bg-black/60" onClick={onClose} />
+			<div className="relative bg-panel border-l border-line w-full max-w-2xl h-dvh overflow-y-auto p-5">
 				<div className="flex items-start justify-between mb-2">
 					<div>
 						<div className="text-xs text-accent">{sig.source}</div>
 						<h2 className="font-semibold">{sig.sample}</h2>
 					</div>
-					<button onClick={onClose} className="text-muted hover:text-ink text-xl leading-none">×</button>
+					<button type="button" onClick={onClose} className="text-muted hover:text-ink text-xl leading-none">×</button>
 				</div>
 				<div className="text-sm text-muted mb-4">
 					<b className="text-ink">{sig.count}×</b> · {sig.users} user(s) · first {sig.firstSeen?.slice(0, 16)} · last {sig.lastSeen?.slice(0, 16)}

@@ -17,6 +17,7 @@ export default function Terminals() {
 		setErr("");
 		api<{ nodes: TNode[] }>("/v1/admin/terminals").then((r) => setNodes(r.nodes)).catch((e) => setErr(e.message));
 	};
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mount-once poller; `load` is recreated each render so listing it would reset the interval every render
 	useEffect(() => {
 		load();
 		const t = setInterval(load, 10000); // refresh liveness + tails

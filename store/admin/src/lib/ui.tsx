@@ -88,6 +88,7 @@ export function BarChart({
 			<div className="relative flex items-end gap-px border-l border-b border-line pl-1" style={{ height }}>
 				<span className="absolute -top-0.5 right-1 text-[10px] text-muted-soft">{format(max)}</span>
 				{points.map((p, i) => (
+					// biome-ignore lint/a11y/noStaticElementInteractions: hover-only chart-bar highlight, no click action; the same value is exposed natively via the inner bar's title attribute
 					<div key={p.date} className="flex-1 flex items-end h-full min-w-0" onMouseEnter={() => setHi(i)} onMouseLeave={() => setHi(null)}>
 						<div
 							className={`w-full rounded-t-sm ${i === (hi ?? peak) ? "bg-accent" : "bg-accent/55 hover:bg-accent"}`}

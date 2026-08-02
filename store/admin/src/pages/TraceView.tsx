@@ -54,7 +54,9 @@ export default function TraceView() {
 	// Source options: derive from whatever we've loaded (best-effort).
 	const sources = useMemo(() => {
 		const s = new Set<string>();
-		(events || []).forEach((x) => s.add(x.source));
+		(events || []).forEach((x) => {
+			s.add(x.source);
+		});
 		return [...s].sort();
 	}, [events]);
 
@@ -99,17 +101,18 @@ export default function TraceView() {
 function TraceRow({ e }: { e: TraceEvent }) {
 	const [open, setOpen] = useState(false);
 	const hasContext = !!e.context && e.context !== "null";
+	const toggle = () => setOpen(!open);
 	return (
 		<div className="border-b border-line/50 pb-1.5">
-			<div className="flex flex-wrap gap-2 text-xs text-muted cursor-pointer" onClick={() => setOpen(!open)}>
+			<button type="button" className="w-full text-left flex flex-wrap gap-2 text-xs text-muted cursor-pointer" onClick={toggle}>
 				<span className="whitespace-nowrap">{e.created_at?.slice(5, 19)}</span>
 				<span className="text-accent">{e.source}</span>
 				<span className={levelColor(e.level)}>{e.level}</span>
 				<span className="text-ink">{e.event}</span>
 				{e.trace_id && <span className="truncate max-w-[160px] font-mono text-muted-soft">{e.trace_id}</span>}
 				{e.user_id && <span className="truncate max-w-[140px]">{e.user_id}</span>}
-			</div>
-			{e.message && <div className="break-words text-sm cursor-pointer" onClick={() => setOpen(!open)}>{e.message}</div>}
+			</button>
+			{e.message && <button type="button" className="w-full text-left break-words text-sm cursor-pointer" onClick={toggle}>{e.message}</button>}
 			{open && hasContext && <ContextBlock context={e.context as string} />}
 		</div>
 	);

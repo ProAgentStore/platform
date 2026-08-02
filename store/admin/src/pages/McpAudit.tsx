@@ -47,9 +47,9 @@ export default function McpAudit() {
 			.catch((e) => setErr(e.message));
 	}
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: load once on mount; `load` is recreated each render so listing it would refetch on every render
 	useEffect(() => {
 		load();
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
 	return (
@@ -74,6 +74,7 @@ export default function McpAudit() {
 					className="bg-surface border border-line rounded px-2 py-1 text-sm"
 				/>
 				<button
+					type="button"
 					onClick={load}
 					className="bg-accent/10 text-accent border border-accent/30 rounded px-3 py-1 text-sm font-medium"
 				>
@@ -101,7 +102,8 @@ export default function McpAudit() {
 							</thead>
 							<tbody>
 								{events.map((e, i) => (
-									<tr key={`${e.time ?? i}-${i}`} className="border-b border-line/50">
+									// biome-ignore lint/suspicious/noArrayIndexKey: append-only audit feed with no unique id; distinct events can share the same timestamp/tool/subject, so the row index is the only stable disambiguator
+									<tr key={`${e.time ?? ""}-${e.tool ?? ""}-${e.subject ?? ""}-${i}`} className="border-b border-line/50">
 										<td className="py-1.5 text-muted whitespace-nowrap">{e.time?.slice(0, 16) ?? "—"}</td>
 										<td className="truncate max-w-[160px]">{e.subject ?? "—"}</td>
 										<td className="text-accent">{e.tool ?? "—"}</td>

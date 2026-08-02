@@ -42,8 +42,8 @@ export default function App() {
 			<div className="space-y-3 text-center">
 				<p className="text-muted">Sign in to access the operator console.</p>
 				<div className="flex gap-2 justify-center">
-					<button onClick={() => signIn("google")} className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-semibold">Sign in with Google</button>
-					<button onClick={() => signIn("github")} className="px-4 py-2 rounded-lg border border-line hover:bg-panel-hover text-sm font-semibold">GitHub</button>
+					<button type="button" onClick={() => signIn("google")} className="px-4 py-2 rounded-lg bg-accent hover:bg-accent-hover text-white text-sm font-semibold">Sign in with Google</button>
+					<button type="button" onClick={() => signIn("github")} className="px-4 py-2 rounded-lg border border-line hover:bg-panel-hover text-sm font-semibold">GitHub</button>
 				</div>
 			</div>
 		</Centered>

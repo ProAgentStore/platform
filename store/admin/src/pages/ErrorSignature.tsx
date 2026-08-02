@@ -109,7 +109,7 @@ function OccurrenceRow({ e }: { e: RawErr }) {
 			<div className="break-words mb-1">{e.message}</div>
 			{e.context && (
 				<>
-					<button onClick={() => setOpen(!open)} className="text-xs text-accent hover:underline">{open ? "Hide" : "Show"} context</button>
+					<button type="button" onClick={() => setOpen(!open)} className="text-xs text-accent hover:underline">{open ? "Hide" : "Show"} context</button>
 					{open && <ContextBlock context={e.context} />}
 				</>
 			)}
