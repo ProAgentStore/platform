@@ -223,6 +223,249 @@ describe("http_request — SSRF safety (uses safeFetch)", () => {
 	});
 });
 
+describe("http_request — {{param}} interpolation (deeper coverage)", () => {
+	it("URL-encodes query values containing reserved characters", async () => {
+		const { calls } = mockFetch(200, {});
+		await run({
+			url: "https://api.example.com/search",
+			query: { q: "{{term}}", tag: "{{tag}}" },
+			inputs: { term: "a & b/c?d=1", tag: "c++ #1" },
+		});
+		const u = new URL(calls[0].url);
+		// The searchParams round-trip proves the raw value survives, and the serialized
+		// string is percent-encoded (no literal '&'/' '/'#' bleeding into the query).
+		expect(u.searchParams.get("q")).toBe("a & b/c?d=1");
+		expect(u.searchParams.get("tag")).toBe("c++ #1");
+		const qs = calls[0].url.split("?")[1];
+		expect(qs).not.toContain(" "); // no raw spaces (encoded as '+' by URLSearchParams)
+		expect(qs).toContain("%26"); // the '&' in the term is encoded, not a param separator
+		expect(qs).toContain("%3F"); // the '?' in the term is encoded, not a fragment/query break
+	});
+
+	it("interpolates {{param}} inside base and path (not just url)", async () => {
+		const { calls } = mockFetch(200, {});
+		await run({
+			base: "https://{{host}}",
+			path: "{{ver}}/users/{{id}}",
+			inputs: { host: "api.example.com", ver: "v2", id: "42" },
+		});
+		expect(calls).toHaveLength(1);
+		expect(calls[0].url).toBe("https://api.example.com/v2/users/42");
+	});
+
+	it("supports dotted placeholder names verbatim (no nested lookup)", async () => {
+		// interpolate's regex allows [\w.]; a key like "a.b" is looked up literally in inputs.
+		const { calls } = mockFetch(200, {});
+		await run({ url: "https://api.example.com/x?p={{a.b}}", inputs: { "a.b": "flat" } });
+		expect(calls[0].url).toContain("p=flat");
+		expect(calls[0].url).not.toContain("{{");
+	});
+
+	it("coerces non-string inputs (numbers/booleans) to strings in the body", async () => {
+		const { calls } = mockFetch(200, {});
+		await run({
+			method: "POST",
+			url: "https://api.example.com/x",
+			body: { n: "{{count}}", flag: "{{on}}", nested: { deep: "{{count}}" } },
+			inputs: { count: 7, on: true },
+		});
+		const sent = JSON.parse(calls[0].init.body as string);
+		expect(sent.n).toBe("7");
+		expect(sent.flag).toBe("true");
+		expect(sent.nested.deep).toBe("7");
+	});
+});
+
+describe("http_request — responseMap extraction (deeper coverage)", () => {
+	it("projects a single sub-path from each array element", async () => {
+		mockFetch(200, { places: [{ websiteUri: "https://a" }, { websiteUri: "https://b" }] });
+		const r = await run({ url: "https://x.example/y", responseMap: "places[].websiteUri" });
+		expect(r.success).toBe(true);
+		expect(r.parsed.data).toEqual(["https://a", "https://b"]);
+	});
+
+	it("returns each element itself when the projection is empty (array[])", async () => {
+		mockFetch(200, { items: [{ a: 1 }, { a: 2 }] });
+		const r = await run({ url: "https://x.example/y", responseMap: "items[]" });
+		expect(r.parsed.data).toEqual([{ a: 1 }, { a: 2 }]);
+	});
+
+	it("fills missing reshape sub-paths with null (partial rows don't error)", async () => {
+		mockFetch(200, { rows: [{ id: "1", name: "A" }, { id: "2" }] });
+		const r = await run({
+			url: "https://x.example/y",
+			responseMap: "rows[].{id,name,site:links.web}",
+		});
+		expect(r.parsed.data).toEqual([
+			{ id: "1", name: "A", site: null },
+			{ id: "2", name: null, site: null },
+		]);
+	});
+
+	it("returns [] when the array path does not resolve to an array", async () => {
+		mockFetch(200, { places: { notAnArray: true } });
+		const r = await run({ url: "https://x.example/y", responseMap: "places[].id" });
+		expect(r.parsed.data).toEqual([]);
+	});
+
+	it("resolves a type-predicate select through responseMap end-to-end (#116)", async () => {
+		mockFetch(200, {
+			addressComponents: [
+				{ longText: "Newtown", types: ["locality", "political"] },
+				{ longText: "Australia", types: ["country", "political"] },
+			],
+		});
+		const r = await run({
+			url: "https://x.example/geocode",
+			responseMap: "addressComponents[types~=country].longText",
+		});
+		expect(r.success).toBe(true);
+		expect(r.parsed.data).toBe("Australia");
+	});
+
+	it("maps an unresolved dotted path to null (partial response, not an error)", async () => {
+		mockFetch(200, { candidates: [] });
+		const r = await run({ url: "https://x.example/y", responseMap: "candidates.0.content" });
+		expect(r.success).toBe(true);
+		expect(r.parsed.status).toBe(200);
+		expect(r.parsed.data).toBeUndefined();
+	});
+});
+
+describe("http_request — pagination descriptor (deeper coverage)", () => {
+	it("reads a nested (dotted) next-cursor path and echoes the cursor type", async () => {
+		mockFetch(200, { meta: { paging: { next: "CURSOR_X" } }, items: [1, 2] });
+		const r = await run({
+			url: "https://api.example.com/list",
+			pagination: { type: "cursor", path: "meta.paging.next" },
+		});
+		expect(r.parsed.nextCursor).toBe("CURSOR_X");
+		expect(r.parsed.paginationType).toBe("cursor");
+	});
+
+	it("pagination reads the RAW body, independent of an applied responseMap", async () => {
+		// responseMap collapses `data` to just the ids, but the cursor still comes off raw.
+		mockFetch(200, { rows: [{ id: "a" }, { id: "b" }], nextPageToken: "PAGE9" });
+		const r = await run({
+			url: "https://api.example.com/list",
+			responseMap: "rows[].id",
+			pagination: { type: "nextPageToken", path: "nextPageToken" },
+		});
+		expect(r.parsed.data).toEqual(["a", "b"]);
+		expect(r.parsed.nextCursor).toBe("PAGE9");
+	});
+});
+
+describe("http_request — upstream error & malformed-body handling", () => {
+	it("marks a non-ok upstream status as failure but still returns {status, data}", async () => {
+		mockFetch(404, { error: "not found" });
+		const r = await run({ url: "https://api.example.com/missing" });
+		expect(r.success).toBe(false);
+		expect(r.parsed.status).toBe(404);
+		expect(r.parsed.data).toEqual({ error: "not found" });
+	});
+
+	it("surfaces a 500 upstream status as failure with the parsed error body", async () => {
+		mockFetch(500, { message: "boom" });
+		const r = await run({ url: "https://api.example.com/x", responseMap: "message" });
+		expect(r.success).toBe(false);
+		expect(r.parsed.status).toBe(500);
+		expect(r.parsed.data).toBe("boom");
+	});
+
+	it("keeps a malformed (non-JSON) body as a raw text string", async () => {
+		mockFetch(200, "<html>not json</html>");
+		const r = await run({ url: "https://api.example.com/x" });
+		expect(r.success).toBe(true);
+		expect(r.parsed.status).toBe(200);
+		expect(r.parsed.data).toBe("<html>not json</html>");
+	});
+
+	it("a responseMap over a non-JSON body extracts nothing (no crash)", async () => {
+		mockFetch(200, "plain text");
+		const r = await run({ url: "https://api.example.com/x", responseMap: "some.path" });
+		expect(r.success).toBe(true);
+		// getPath over a string returns undefined → data omitted from JSON output.
+		expect(r.parsed.data).toBeUndefined();
+		expect(r.parsed.status).toBe(200);
+	});
+});
+
+describe("http_request — auth secrecy invariants (vault key never crosses a boundary)", () => {
+	function ctxWithKey(key: string): RegistryToolCtx {
+		const client = { token: async () => key } as unknown as ConnectorClient;
+		return { env: {} as any, connectorClient: () => client } as RegistryToolCtx;
+	}
+
+	it("never places the vault key into the request BODY or non-auth headers", async () => {
+		const { calls } = mockFetch(200, { ok: true });
+		await run(
+			{
+				method: "POST",
+				url: "https://places.googleapis.com/v1/x",
+				auth: { mode: "api-key", key: { in: "header", name: "X-Goog-Api-Key" } },
+				headers: { "X-Other": "public" },
+				body: { textQuery: "cafes" },
+			},
+			ctxWithKey("TOPSECRET"),
+		);
+		const h = calls[0].init.headers as Headers;
+		expect(h.get("X-Goog-Api-Key")).toBe("TOPSECRET"); // only in the configured slot
+		expect(h.get("X-Other")).toBe("public");
+		expect(calls[0].init.body as string).not.toContain("TOPSECRET");
+		// The URL (query-string) must not carry a header-mode key.
+		expect(calls[0].url).not.toContain("TOPSECRET");
+	});
+
+	it("does not require the key to appear in the tool input schema (it is vault-sourced)", () => {
+		// The schema exposes only an `auth` descriptor — there is deliberately no key/value/secret field.
+		const props = Object.keys(httpRequest.jsonSchema.properties);
+		expect(props).toContain("auth");
+		expect(props).not.toContain("key");
+		expect(props).not.toContain("apiKey");
+		expect(props).not.toContain("secret");
+	});
+
+	it("errors (not throws) when api-key mode omits the key name", async () => {
+		const { calls } = mockFetch(200, {});
+		const r = await run(
+			{ url: "https://api.example.com/x", auth: { mode: "api-key", key: { in: "header" } } },
+			ctxWithKey("SHOULD_NOT_BE_USED"),
+		);
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/name is required/i);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("does not leak the vault key when the upstream call fails (error content stays clean)", async () => {
+		mockFetch(500, { error: "upstream down" });
+		const r = await run(
+			{ url: "https://api.example.com/x", auth: { mode: "api-key", key: { in: "query", name: "key" } } },
+			ctxWithKey("LEAKME"),
+		);
+		expect(r.success).toBe(false);
+		expect(r.parsed.status).toBe(500);
+		expect(r.content).not.toContain("LEAKME");
+	});
+});
+
+describe("http_request — auth mode:none (no credential injected)", () => {
+	it("makes the request with no auth header/param when auth is omitted", async () => {
+		const { calls } = mockFetch(200, {});
+		// A ctx that would throw if connectorClient were ever touched — proves it isn't.
+		const ctx = {
+			env: {} as any,
+			connectorClient: () => {
+				throw new Error("connectorClient must not be called for mode:none");
+			},
+		} as unknown as RegistryToolCtx;
+		const r = await run({ url: "https://api.example.com/public", auth: { mode: "none" } }, ctx);
+		expect(r.success).toBe(true);
+		expect(calls).toHaveLength(1);
+		expect((calls[0].init.headers as Headers).has("X-Goog-Api-Key")).toBe(false);
+	});
+});
+
 describe("http_request — Google Places searchText, purely as config (the #95 proof)", () => {
 	it("expresses a full Places searchText call — url, key-from-vault, JSON body, responseMap — with zero bespoke code", async () => {
 		const placesResponse = {
