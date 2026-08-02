@@ -62,6 +62,15 @@ export interface TtsOptions {
 	technical?: boolean;
 }
 
+/**
+ * Every live VoiceTts registers here so speech can be made globally exclusive (#127).
+ * Two mounted hooks — e.g. the Assistant chat and the coding Co-pilot — each own a
+ * separate queue AND (for OpenAI) a separate AudioContext, so without a cross-instance
+ * guard they speak over each other ("two simultaneous voices"). Whichever instance
+ * starts speaking silences the others first, so only ONE voice is ever audible.
+ */
+const liveTts = new Set<VoiceTts>();
+
 export class VoiceTts {
 	provider: string;
 	apiKey: string;
@@ -83,6 +92,12 @@ export class VoiceTts {
 		this.speed = opts.speed || 100;
 		this.language = opts.language || "en-US";
 		this.technical = opts.technical === true;
+		liveTts.add(this);
+	}
+
+	/** Stop every OTHER live instance so this one is the single audible voice (#127). */
+	private _silenceOthers() {
+		for (const t of liveTts) if (t !== this && (t.speaking || t._processing)) t.cancel();
 	}
 
 	/**
@@ -94,6 +109,9 @@ export class VoiceTts {
 		if (!text?.trim()) return;
 		const clean = cleanForSpeech(String(text), { technical: this.technical });
 		if (!clean) return;
+		// Claim the floor: cut off any other instance mid-utterance BEFORE we queue ours,
+		// so the Assistant and the Co-pilot never talk over each other (#127).
+		this._silenceOthers();
 		this._queue.push({ text: clean, lang: opts.lang });
 		if (this._processing) return; // a turn is already draining the queue
 		this._processing = true;
@@ -159,6 +177,7 @@ export class VoiceTts {
 	 *  before `new AudioContext()` throws and TTS stops working entirely. */
 	dispose() {
 		this.cancel();
+		liveTts.delete(this);
 		if (this._audioCtx) {
 			this._audioCtx.close().catch(() => {});
 			this._audioCtx = null;

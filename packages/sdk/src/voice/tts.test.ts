@@ -157,6 +157,50 @@ describe("VoiceTts.unlock", () => {
 	});
 });
 
+describe("VoiceTts global exclusivity (#127 — never two voices at once)", () => {
+	afterEach(() => { vi.unstubAllGlobals(); });
+
+	/** A browser synth whose utterances hang (onend never fires) so `speaking` stays true. */
+	const hangingSynth = () => {
+		const synth = { cancel: vi.fn(), resume() {}, getVoices: () => [], speak: vi.fn() };
+		vi.stubGlobal("window", { speechSynthesis: synth });
+		vi.stubGlobal("speechSynthesis", synth);
+		vi.stubGlobal("SpeechSynthesisUtterance", class {
+			text: string; lang = ""; voice: unknown = null; rate = 1;
+			onend: (() => void) | null = null; onerror: (() => void) | null = null;
+			constructor(t: string) { this.text = t; }
+		});
+		return synth;
+	};
+
+	it("a second instance speaking cancels the first — only one stays active", async () => {
+		hangingSynth();
+		const a = new VoiceTts("browser");
+		const b = new VoiceTts("browser");
+		// A starts (its utterance hangs, so it remains 'speaking').
+		void a.speak("first message from the assistant");
+		expect(a.speaking).toBe(true);
+		// B claims the floor — A must be silenced.
+		void b.speak("second message from the co-pilot");
+		expect(a.speaking).toBe(false);
+		expect(b.speaking).toBe(true);
+		a.dispose();
+		b.dispose();
+	});
+
+	it("dispose() unregisters, so a disposed instance is never touched again", async () => {
+		hangingSynth();
+		const a = new VoiceTts("browser");
+		void a.speak("hello");
+		a.dispose();
+		expect(a.speaking).toBe(false);
+		// A new instance speaking must not throw reaching into the disposed one.
+		const b = new VoiceTts("browser");
+		expect(() => void b.speak("hi")).not.toThrow();
+		b.dispose();
+	});
+});
+
 describe("VoiceTts OpenAI playback — iOS AudioContext recovery", () => {
 	afterEach(() => { vi.unstubAllGlobals(); });
 
