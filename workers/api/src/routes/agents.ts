@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
+import { lintAgentClaims } from "../lib/agent-claims-lint.js";
 import { HttpError, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
@@ -349,7 +350,12 @@ agentRoutes.post("/", async (c) => {
 		}),
 	);
 
-	return c.json({ id, slug: body.slug }, 201);
+	// Catalog claims lint (#66): loudly (but non-blockingly) warn when the description promises a
+	// runtime capability a fresh agent (no runtime/workflow yet) can't back — the creator should
+	// wire the capability or rewrite the copy before publishing.
+	const claimWarnings = lintAgentClaims({ description: body.description, capabilities: { runtime: null, workflow: null } });
+
+	return c.json(claimWarnings.length ? { id, slug: body.slug, warnings: claimWarnings } : { id, slug: body.slug }, 201);
 });
 
 /** Update agent (owner only). */
