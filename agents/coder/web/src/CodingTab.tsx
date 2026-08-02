@@ -10,7 +10,8 @@ import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
 import RepoSettingsModal from "./RepoSettingsModal";
 import EnginesModal from "./EnginesModal";
-import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus } from "lucide-react";
+import BuildsPanel from "./BuildsPanel";
+import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer } from "lucide-react";
 
 interface Props {
 	instanceId: string;
@@ -80,6 +81,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [showAddRepo, setShowAddRepo] = useState(false);
 	const [settingsRepoId, setSettingsRepoId] = useState<string | null>(null);
 	const [showEngines, setShowEngines] = useState(false);
+	// Landing view toggle: the repos list vs. the Builds status panel (CODER-004).
+	const [landingView, setLandingView] = useState<"repos" | "builds">("repos");
 	const [loopPresets] = useState([
 		{ id: "bugs", label: "Fix bugs", objective: "Find and fix all bugs. Run tests after each fix. Commit when all pass." },
 		{ id: "quality", label: "Quality check", objective: "Run a full code quality audit: type check, lint, find code smells, dead code, and fix issues found. Commit improvements." },
@@ -649,28 +652,45 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		);
 	}
 
-	// ── Repos list view ──
+	// ── Repos list / Builds view ──
 	return (
-		<>
-			<ReposList
-				instanceId={instanceId}
-				repos={repos}
-				sessions={sessions}
-				repoStatuses={repoStatuses}
-				runnerOnline={runnerOnline}
-				showAddRepo={showAddRepo}
-				setShowAddRepo={setShowAddRepo}
-				addRepoInput={addRepoInput}
-				setAddRepoInput={setAddRepoInput}
-				addRepo={addRepo}
-				openTerminal={openTerminal}
-				startSession={startSession}
-				setSettingsRepoId={setSettingsRepoId}
-				repoLabel={repoLabel}
-				getActiveSession={getActiveSession}
-				onWorkOnIssue={workOnIssue}
-				onOpenEngines={() => setShowEngines(true)}
-			/>
+		<div className="flex flex-col h-full">
+			{/* Repos | Builds toggle (mirrors the Co-pilot | Terminal segmented control). */}
+			<div className="px-2 pt-2 sm:px-4 sm:pt-3">
+				<div className="inline-flex border border-line rounded-lg overflow-hidden shrink-0">
+					<button type="button" onClick={() => setLandingView("repos")} aria-pressed={landingView === "repos"}
+						className={`flex items-center gap-1 px-2.5 py-1 text-xs font-bold ${landingView === "repos" ? "bg-accent-soft text-accent" : "text-muted hover:text-accent"}`}>
+						<FolderGit2 size={13} /> Repos
+					</button>
+					<button type="button" onClick={() => setLandingView("builds")} aria-pressed={landingView === "builds"}
+						className={`flex items-center gap-1 px-2.5 py-1 text-xs font-bold ${landingView === "builds" ? "bg-accent-soft text-accent" : "text-muted hover:text-accent"}`}>
+						<Hammer size={13} /> Builds
+					</button>
+				</div>
+			</div>
+			{landingView === "repos" ? (
+				<ReposList
+					instanceId={instanceId}
+					repos={repos}
+					sessions={sessions}
+					repoStatuses={repoStatuses}
+					runnerOnline={runnerOnline}
+					showAddRepo={showAddRepo}
+					setShowAddRepo={setShowAddRepo}
+					addRepoInput={addRepoInput}
+					setAddRepoInput={setAddRepoInput}
+					addRepo={addRepo}
+					openTerminal={openTerminal}
+					startSession={startSession}
+					setSettingsRepoId={setSettingsRepoId}
+					repoLabel={repoLabel}
+					getActiveSession={getActiveSession}
+					onWorkOnIssue={workOnIssue}
+					onOpenEngines={() => setShowEngines(true)}
+				/>
+			) : (
+				<BuildsPanel instanceId={instanceId} />
+			)}
 			{settingsModal}
 			{showEngines && (
 				<EnginesModal
@@ -681,6 +701,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					onSaved={loadCoding}
 				/>
 			)}
-		</>
+		</div>
 	);
 }
