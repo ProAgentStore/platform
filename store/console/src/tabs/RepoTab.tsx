@@ -100,7 +100,7 @@ export default function RepoTab({ instanceId }: Props) {
 	};
 
 	return (
-		<div className="max-w-2xl mx-auto">
+		<div className="w-full max-w-2xl mx-auto">
 			{/* Add a repository */}
 			<div className="bg-panel border border-line rounded-xl p-5 mb-4">
 				<h3 className="text-base font-bold mb-1">Add a repository</h3>

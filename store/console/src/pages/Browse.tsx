@@ -63,7 +63,7 @@ export default function Browse() {
 	};
 
 	return (
-		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<div className="w-full max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<div className="flex justify-between items-center mb-1">
 				<h2 className="text-[1.1rem] font-semibold">Browse agents</h2>
 			</div>

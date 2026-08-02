@@ -39,7 +39,7 @@ export default function Terminals() {
 	usePolling(load, 5000, true);
 
 	return (
-		<div className="max-w-[1040px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<div className="w-full max-w-[1040px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<div className="flex justify-between items-center mb-1">
 				<div className="flex items-center gap-2.5">
 					<Terminal size={20} className="text-accent" />

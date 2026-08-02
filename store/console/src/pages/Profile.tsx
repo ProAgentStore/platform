@@ -130,7 +130,7 @@ export default function Profile() {
 	const voiceFields = cpFields.filter(f => f.group === "voice");
 
 	return (
-		<div className="max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<div className="w-full max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<div className="flex justify-between items-center mb-6">
 				<h1 className="font-display text-xl font-bold">Profile</h1>
 				<button type="button" onClick={() => navigate(-1)} className="text-sm px-3 py-1.5 rounded-xl border border-line text-muted hover:border-accent hover:text-accent font-semibold">&larr; Back</button>

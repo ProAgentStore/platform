@@ -119,7 +119,7 @@ export default function Usage() {
 	const empty = !!data && totals && totals.calls === 0;
 
 	return (
-		<div className="max-w-[1040px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<div className="w-full max-w-[1040px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
 			<div className="flex justify-between items-center mb-1">
 				<div className="flex items-center gap-2.5">
 					<BarChart3 size={20} className="text-accent" />
