@@ -83,6 +83,32 @@ describe("agent tool definition helpers", () => {
 		expect(names.has("fetch_url")).toBe(true);
 	});
 
+	it("Coder with declared github tools (#130) gets them + keeps the coding invariant, no KB", () => {
+		// The migration-0054 shape: coding surface + a declared allowlist of the GitHub
+		// connector's issue tools. The co-pilot must be OFFERED the github tools so it can
+		// file issues directly, while the #119 CODING delegation invariant still holds.
+		const coder: AgentCapabilities = {
+			...caps(["coding"]),
+			runtime: "coding",
+			workflow: "CODING_SESSION",
+			tools: ["github_create_issue", "github_list_issues", "github_read_issue"],
+		};
+		const names = toolNamesFor(coder);
+		// The gap #130 closes: the github tools are now available to the tool loop.
+		expect(names.has("github_create_issue")).toBe(true);
+		expect(names.has("github_list_issues")).toBe(true);
+		expect(names.has("github_read_issue")).toBe(true);
+		// The #119 coding delegation invariant is NON-negotiable, even under a declared list.
+		expect(names.has("send_to_cli")).toBe(true);
+		expect(names.has("read_terminal")).toBe(true);
+		expect(names.has("list_coding_repos")).toBe(true);
+		// Still no empty-index KB tools (declaring github must not reopen that hole).
+		expect(names.has("search_knowledge")).toBe(false);
+		// And the definitions build (create_issue's write schema passes through).
+		const def = buildAgentToolDefinitions({ capabilities: coder }).find((t) => t.function.name === "github_create_issue");
+		expect(def?.function.parameters.properties).toHaveProperty("repo");
+	});
+
 	it("every agent type can delete memory (needed to consolidate duplicate keys)", () => {
 		for (const c of [caps([]), caps(["coding"]), caps(["repo"]), caps(["apply"]), undefined]) {
 			expect(toolNamesFor(c).has("delete_memory")).toBe(true);
