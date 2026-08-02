@@ -460,14 +460,19 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				visibility: z.string().optional(),
 				model: z.string().optional(),
 				capabilities: z
-					.object({
-						surfaces: z.array(z.string()).optional(),
-						runtime: z.enum(["browser", "coding"]).nullable().optional(),
-						workflow: z.enum(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES"]).nullable().optional(),
-						tools: z.array(z.string()).optional(),
-					})
+					.union([
+						z.object({
+							surfaces: z.array(z.string()).optional(),
+							runtime: z.enum(["browser", "coding"]).nullable().optional(),
+							workflow: z.enum(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES"]).nullable().optional(),
+							tools: z.array(z.string()).optional(),
+						}),
+						// Some MCP clients stringify nested object args — accept a JSON string too
+						// (parsed below). The API route re-validates it, so this is just transport.
+						z.string(),
+					])
 					.optional()
-					.describe("Declarative capabilities (surfaces/runtime/workflow/tools); only the keys you send change."),
+					.describe("Declarative capabilities (surfaces/runtime/workflow/tools); only the keys you send change. Object, or a JSON string of the same."),
 				dry_run: z.boolean().optional(),
 			},
 			async ({ token, agent_id, dry_run, ...updates }) => {
@@ -476,6 +481,11 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				const body: Record<string, unknown> = {};
 				for (const [k, v] of Object.entries(updates)) {
 					if (v) body[k] = v;
+				}
+				// Coerce a stringified capabilities object (MCP-client quirk) back to an object;
+				// the API's sanitizeDeclaredCapabilities validates it regardless.
+				if (typeof body.capabilities === "string") {
+					try { body.capabilities = JSON.parse(body.capabilities); } catch { return text("Error: capabilities must be a JSON object or valid JSON string."); }
 				}
 				const input = { agent_id, ...body };
 				const denied = await requirePermission(this.safety(token), "write", "update_agent", input);
