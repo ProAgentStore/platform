@@ -30,7 +30,7 @@ ADMIN_ALLOWLIST = "serge.the.dev@gmail.com,serge-ivo"
 # Experimental (#103): browser connector registry tools (browser_navigate/snapshot/act).
 # Unset = inert (fail-closed). First-party/self-use ONLY — do NOT enable for third-party
 # creators until the browser trust model (#75). Uncomment to turn on.
-# BROWSER_TOOLS_ENABLED = "1"
+BROWSER_TOOLS_ENABLED = "1"
 # Google Drive / Docs connector:
 # GOOGLE_CLIENT_ID = "…"        # Google OAuth web client id.
 # GOOGLE_CLIENT_SECRET is a Worker secret.

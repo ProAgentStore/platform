@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
+import { sanitizeDeclaredCapabilities } from "../lib/agent-capabilities.js";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 import { agentRoutes } from "./agents.js";
@@ -225,5 +226,55 @@ describe("agent update SQL builder", () => {
 
 		expect(params).toEqual(["agent-id", "published"]);
 		expect(sets[1]).toBe("visibility = ?2");
+	});
+});
+
+describe("agent update capabilities merge (#141 update path)", () => {
+	// Mirror the route's merge: patch the validated power fields into config.capabilities
+	// while preserving sibling keys other routes own (customSurfaces).
+	function mergeCaps(existingConfig: Record<string, unknown>, rawCaps: unknown) {
+		const declared = sanitizeDeclaredCapabilities(rawCaps);
+		const config = { ...existingConfig };
+		const caps = (config.capabilities && typeof config.capabilities === "object" ? config.capabilities : {}) as Record<string, unknown>;
+		Object.assign(caps, declared);
+		config.capabilities = caps;
+		return config;
+	}
+
+	it("attaches browser tools + runtime as data", () => {
+		const config = mergeCaps({}, {
+			runtime: "browser",
+			tools: ["browser_navigate", "browser_snapshot", "browser_act"],
+		});
+		expect(config.capabilities).toMatchObject({
+			runtime: "browser",
+			tools: ["browser_navigate", "browser_snapshot", "browser_act"],
+		});
+	});
+
+	it("preserves sibling capability keys (customSurfaces) on a patch", () => {
+		const existing = { capabilities: { customSurfaces: [{ id: "x", label: "X", bundleUrl: "https://e/x.js" }] } };
+		const config = mergeCaps(existing, { tools: ["browser_snapshot"] });
+		const caps = config.capabilities as Record<string, unknown>;
+		expect(caps.tools).toEqual(["browser_snapshot"]);
+		expect(caps.customSurfaces).toHaveLength(1);
+	});
+
+	it("drops unknown runtimes to null (closed enum)", () => {
+		const config = mergeCaps({}, { runtime: "root-shell" });
+		expect((config.capabilities as Record<string, unknown>).runtime).toBeNull();
+	});
+
+	it("appends config as the last positional param", () => {
+		// only capabilities sent → column loop adds nothing; config is the sole payload set
+		const sets: string[] = ["updated_at = datetime('now')"];
+		const params: unknown[] = [];
+		const config = mergeCaps({}, { tools: ["browser_navigate"] });
+		params.push(JSON.stringify(config));
+		sets.push(`config = ?${params.length + 1}`);
+		params.unshift("agent-id");
+		expect(sets).toEqual(["updated_at = datetime('now')", "config = ?2"]);
+		expect(params[0]).toBe("agent-id");
+		expect(JSON.parse(params[1] as string).capabilities.tools).toEqual(["browser_navigate"]);
 	});
 });

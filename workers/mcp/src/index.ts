@@ -451,7 +451,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"update_agent",
-			"Update an agent's settings",
+			"Update an agent's settings. `capabilities` declares the agent's power fields as data (#141): surfaces, runtime (browser|coding|null), workflow, and the tools[] allowlist (e.g. browser_navigate/browser_snapshot/browser_act to make it a browser agent). Patch-merged + validated server-side.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				agent_id: z.string(),
@@ -459,6 +459,15 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				description: z.string().optional(),
 				visibility: z.string().optional(),
 				model: z.string().optional(),
+				capabilities: z
+					.object({
+						surfaces: z.array(z.string()).optional(),
+						runtime: z.enum(["browser", "coding"]).nullable().optional(),
+						workflow: z.enum(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES"]).nullable().optional(),
+						tools: z.array(z.string()).optional(),
+					})
+					.optional()
+					.describe("Declarative capabilities (surfaces/runtime/workflow/tools); only the keys you send change."),
 				dry_run: z.boolean().optional(),
 			},
 			async ({ token, agent_id, dry_run, ...updates }) => {

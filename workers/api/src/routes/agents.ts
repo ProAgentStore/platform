@@ -405,6 +405,22 @@ agentRoutes.put("/:id", async (c) => {
 		}
 	}
 
+	// Declarative-capabilities update path (#141 wired create; this is the matching
+	// update). Patch-merge the validated power fields (surfaces/runtime/workflow/tools)
+	// into config.capabilities, preserving sibling keys other routes own (customSurfaces).
+	// Only keys present in the body change. Runtime/workflow trust-gating is #142.
+	if ("capabilities" in body) {
+		const declaredCaps = sanitizeDeclaredCapabilities(body.capabilities);
+		const cfgRow = await c.env.DB.prepare("SELECT config FROM agents WHERE id = ?1").bind(id).first<{ config: string | null }>();
+		let config: Record<string, unknown> = {};
+		try { config = cfgRow?.config ? (JSON.parse(cfgRow.config) as Record<string, unknown>) : {}; } catch { config = {}; }
+		const caps = (config.capabilities && typeof config.capabilities === "object" ? config.capabilities : {}) as Record<string, unknown>;
+		Object.assign(caps, declaredCaps);
+		config.capabilities = caps;
+		params.push(JSON.stringify(config));
+		sets.push(`config = ?${params.length + 1}`);
+	}
+
 	if (sets.length === 1) throw new HttpError(400, "Nothing to update");
 
 	params.unshift(id); // ?1
