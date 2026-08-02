@@ -1,0 +1,164 @@
+import { Hono } from "hono";
+import { describe, expect, it } from "vitest";
+import { HttpError } from "../lib/auth.js";
+import { signSession } from "../lib/session.js";
+import { toolRoutes } from "./tools.js";
+import type { Env } from "../types.js";
+
+/**
+ * INTEGRATION test: drives the real tool route handlers end-to-end through the Hono
+ * app — auth (verifySession) → ownership gate (requireOwnedInstance, mock D1) →
+ * the real connector-tool registry / connector-consent lib → JSON response. No handler
+ * internals are stubbed; only the D1 boundary is mocked (canned rows + recorded writes).
+ */
+
+const SECRET = "integration-secret";
+
+interface Write { sql: string; args: unknown[] }
+
+/**
+ * @param owns  the (instanceId,userId) pairs that resolve to an owned instance row.
+ * @param consents  rows returned by the consents SELECT.
+ */
+function buildApp(opts: { owns?: Array<[string, string]>; consents?: unknown[] } = {}) {
+	const writes: Write[] = [];
+	const owns = new Set((opts.owns ?? []).map(([i, u]) => `${i}::${u}`));
+
+	const env = {
+		SESSION_SIGNING_KEY: SECRET,
+		DB: {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async first() {
+								// requireOwnedInstance: SELECT … FROM agent_instances WHERE id=?1 AND user_id=?2
+								if (sql.includes("FROM agent_instances")) {
+									const [id, uid] = args as [string, string];
+									if (!owns.has(`${id}::${uid}`)) return null;
+									return { id, agent_id: "a1", user_id: uid, status: "active", config: "{}", created_at: "", updated_at: "" };
+								}
+								return null;
+							},
+							async all() {
+								if (sql.includes("instance_connector_consent")) return { results: opts.consents ?? [] };
+								return { results: [] };
+							},
+							async run() { writes.push({ sql, args }); return { meta: { changes: 1 } }; },
+						};
+					},
+				};
+			},
+		},
+	} as unknown as Env;
+
+	const app = new Hono<{ Bindings: Env }>();
+	app.route("/v1/instances", toolRoutes);
+	app.onError((err, c) => {
+		if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
+		throw err;
+	});
+	return { app, env, writes };
+}
+
+const tokenFor = (uid: string) => signSession(uid, SECRET, { roles: ["user"] });
+
+function get(app: Hono, env: unknown, path: string, tok?: string) {
+	return app.request(path, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
+}
+function put(app: Hono, env: unknown, path: string, body: unknown, tok: string) {
+	return app.request(path, { method: "PUT", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
+}
+
+describe("GET /v1/instances/:id/tools (integration)", () => {
+	it("401s without a bearer token (auth boundary)", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await get(app, env, "/v1/instances/inst-1/tools");
+		expect(res.status).toBe(401);
+	});
+
+	it("404s when the caller does not own the instance (ownership boundary)", async () => {
+		const { app, env } = buildApp({ owns: [] }); // u1 owns nothing
+		const res = await get(app, env, "/v1/instances/inst-1/tools", await tokenFor("u1"));
+		expect(res.status).toBe(404);
+		expect((await res.json() as any).error).toContain("Instance not found");
+	});
+
+	it("returns the real connector-tool registry with schemas for the owner", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await get(app, env, "/v1/instances/inst-1/tools", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { tools: Array<{ name: string; connector: string; scope?: string; jsonSchema: unknown }> };
+		expect(Array.isArray(body.tools)).toBe(true);
+		expect(body.tools.length).toBeGreaterThan(0);
+		// Every tool carries the fields the client relies on.
+		for (const t of body.tools) {
+			expect(typeof t.name).toBe("string");
+			expect(t.jsonSchema).toBeTruthy();
+		}
+		// A known connector tool from the registry is present with its connector stamped.
+		const gh = body.tools.find((t) => t.name === "github_create_issue");
+		expect(gh).toBeTruthy();
+		expect(gh!.connector).toBe("github");
+	});
+});
+
+describe("POST /v1/instances/:id/tools/:name (integration)", () => {
+	it("404s for an unknown tool name", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await app.request("/v1/instances/inst-1/tools/no_such_tool", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tokenFor("u1")}`, "Content-Type": "application/json" },
+			body: "{}",
+		}, env);
+		expect(res.status).toBe(404);
+		expect((await res.json() as any).error).toContain("Unknown tool");
+	});
+
+	it("400s when required schema fields are missing (real schema validation)", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		// github_create_issue requires fields; sending {} must fail validation before dispatch.
+		const res = await app.request("/v1/instances/inst-1/tools/github_create_issue", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tokenFor("u1")}`, "Content-Type": "application/json" },
+			body: "{}",
+		}, env);
+		expect(res.status).toBe(400);
+		expect((await res.json() as any).error).toContain("Missing required field");
+	});
+});
+
+describe("consent routes (integration, cross-boundary write + read)", () => {
+	it("PUT grants write consent → persists an INSERT and echoes enabled:true", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { enabled: true }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ ok: true, connector: "github", scope: "write", enabled: true });
+		const insert = writes.find((w) => w.sql.includes("INSERT INTO instance_connector_consent"));
+		expect(insert).toBeTruthy();
+		expect(insert!.args).toEqual(["inst-1", "u1", "github", "write"]);
+	});
+
+	it("PUT with enabled:false issues a DELETE (revoke)", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { enabled: false }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect((await res.json() as any).enabled).toBe(false);
+		expect(writes.some((w) => w.sql.includes("DELETE FROM instance_connector_consent"))).toBe(true);
+	});
+
+	it("GET lists the instance's consents (owner-scoped)", async () => {
+		const rows = [{ instance_id: "inst-1", user_id: "u1", connector: "github", scope: "write", created_at: "2026-08-01" }];
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], consents: rows });
+		const res = await get(app, env, "/v1/instances/inst-1/connectors/consent", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ consents: rows });
+	});
+
+	it("blocks consent writes on an unowned instance (404 before any DB write)", async () => {
+		const { app, env, writes } = buildApp({ owns: [] });
+		const res = await put(app, env, "/v1/instances/inst-1/connectors/github/consent", { enabled: true }, await tokenFor("u1"));
+		expect(res.status).toBe(404);
+		expect(writes).toHaveLength(0);
+	});
+});
