@@ -324,9 +324,16 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					// summary; we only need it here to show + speak (avoids a duplicate bubble).
 					body: JSON.stringify({ finished: true, persist: false }),
 				});
-				if (summary.reply) {
-					setSummaryHistory((prev) => [...prev, { role: "assistant", content: summary.reply! }]);
-					voiceRef.current.maybeSpeakResponse(summary.reply);
+				// Always surface a closing message when the engine goes idle. Previously, if
+				// /explain returned an empty reply the session ended SILENTLY (no bubble) — the
+				// "session-end message sometimes not shown" bug (#122). Fall back to a clear
+				// system note so the user never just sees the agent go quiet.
+				const reply = summary.reply?.trim();
+				if (reply) {
+					setSummaryHistory((prev) => [...prev, { role: "assistant", content: reply }]);
+					voiceRef.current.maybeSpeakResponse(reply);
+				} else {
+					setSummaryHistory((prev) => [...prev, { role: "system", content: "The engine finished and is now idle. Open the Terminal view for the full output." }]);
 				}
 			} catch {
 				setSummaryHistory((prev) => [...prev, { role: "system", content: "Lost connection to the Engine — check your runner." }]);
