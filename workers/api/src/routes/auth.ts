@@ -156,8 +156,10 @@ authRoutes.get("/github/link/start", async (c) => {
 	const returnTo = c.req.query("return_to") ?? "";
 	if (!returnTo || !isAllowedReturnTo(returnTo)) return c.json({ error: "return_to not allowed" }, 400);
 	if (!c.env.GITHUB_CLIENT_ID) return c.json({ error: "GitHub OAuth not configured" }, 501);
+	// 30 min (not the sign-in flow's 10): the consent page can take a while when you
+	// click "Grant" on many orgs one by one, and an expired state 400s at the callback.
 	const state = await signPayload<OAuthState>(
-		{ returnTo, exp: Math.floor(Date.now() / 1000) + 600, linkUid: session.uid },
+		{ returnTo, exp: Math.floor(Date.now() / 1000) + 1800, linkUid: session.uid },
 		c.env.SESSION_SIGNING_KEY,
 	);
 	const url = new URL("https://github.com/login/oauth/authorize");
