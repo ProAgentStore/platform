@@ -49,6 +49,7 @@ import {
 } from "./lib/user-ai.js";
 import { safeFetch, SsrfError } from "./lib/ssrf.js";
 import { logError } from "./lib/error-log.js";
+import { isTransientInfraError } from "./lib/on-error.js";
 import type { Env } from "./types.js";
 
 export type {
@@ -278,6 +279,20 @@ export class AgentDO extends DurableObject<Env> {
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			console.error("AgentDO error:", message);
+			// Last-resort persistence for any DO endpoint that isn't chat (chat logs in its
+			// own catch): the route returns this 500 without throwing, so app.onError never
+			// sees it. Skip transient infra (DO reset on deploy — self-heals, not a bug).
+			if (!isTransientInfraError(err)) {
+				await logError(this.env, {
+					source: "agent-do",
+					status: 500,
+					message: message.slice(0, 500),
+					context: {
+						path,
+						stack: err instanceof Error ? String(err.stack || "").slice(0, 1800) : undefined,
+					},
+				}).catch(() => undefined);
+			}
 			return json({ error: message }, 500);
 		}
 	}
@@ -386,6 +401,23 @@ export class AgentDO extends DurableObject<Env> {
 					: 500;
 			await this.ctx.storage.put("state", { ...state, status: "error" });
 			this.broadcast({ type: "status", status: "error", error: errMsg });
+
+			// Persist genuine chat failures so they surface in the owner's /v1/errors and
+			// agent_trace — not only as an in-conversation "Error:" line. The route returns
+			// this 500 without throwing, so app.onError never sees it; log it here or it's
+			// invisible. Skip transient infra (DO reset on deploy — self-heals, not a bug).
+			if (!isTransientInfraError(err)) {
+				await logError(this.env, {
+					source: "chat",
+					status,
+					message: errMsg.slice(0, 500),
+					userId: userId ?? null,
+					context: {
+						instanceId: state.agentId,
+						stack: err instanceof Error ? String(err.stack || "").slice(0, 1800) : undefined,
+					},
+				}).catch(() => undefined);
+			}
 
 			// #24: a late-round failure can leave earlier side effects already committed
 			// (memory writes, created tasks, inserted records). Surface that completed work

@@ -280,6 +280,23 @@ export async function runAgentThink(opts: {
 				? "Use them to check your repositories, read the live terminal, and manage your memory and tasks."
 				: "Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
 		systemPrompt += "\n\nYou have tools available. " + toolBlurb;
+
+		// Explicitly name the CONNECTOR tools this agent actually has (GitHub, tmux, HTTP,
+		// web search, Meta messaging). Function-calling models see the tool schemas, but
+		// without being told, agents deflect or route around them — the Coder ran
+		// `gh issue create` in a terminal instead of calling its github_create_issue tool.
+		// Listed dynamically from the agent's own capability set, so every agent is told
+		// exactly what external actions it can take directly.
+		const enabledNames = toolNamesFor(capabilities);
+		const connectorTools = registryTools().filter((t) => t.connector && enabledNames.has(t.name));
+		if (connectorTools.length) {
+			systemPrompt +=
+				"\n\nCONNECTED TOOLS — external actions you can take DIRECTLY by calling the tool" +
+				" (never tell the user to do it themselves, and never route it through a terminal/CLI):\n" +
+				connectorTools
+					.map((t) => `- ${t.name}${t.scope === "write" ? " [write — needs the connector's consent]" : ""}: ${t.description}`)
+					.join("\n");
+		}
 	}
 
 	// A "technical" response style needs the opposite of the default plain-speech
@@ -311,7 +328,8 @@ export async function runAgentThink(opts: {
 			systemPrompt +=
 				"\n\nSTYLE: You are a precise code explainer helping a developer understand their repositories." +
 				"\n- You do NOT have a searchable code index. Do not fabricate code findings. You read live coding sessions, not a vector code index (that is the Repo Chat agent) — so if the user asks about indexing, just explain that plainly; never invent an indexing status, and never retract a correct summary you already gave as if it were fabricated." +
-				"\n- Base answers on the Attached Repositories and live terminal snapshots above. To read, search, edit, or fix code, the developer works in the Coding tab (a session with the engine; the local runner must be online via `pags up`) — from this chat you explain and summarize, you do not drive the engine or run commands." +
+				"\n- Base answers on the Attached Repositories and live terminal snapshots above. To read, search, edit, or fix code, the developer works in the Coding tab (a session with the engine; the local runner must be online via `pags up`) — from this chat you explain and summarize, you do not drive the engine." +
+				"\n- BUT you CAN still use your own tools directly from this chat — e.g. file a GitHub issue with github_create_issue, or list/read issues and CI status. That is not 'driving the engine'; if the user asks you to open/track an issue, just call the tool and do it (do NOT shell out to a terminal or tell them to run `gh`)." +
 				"\n- If asked to find or fix something in the code from this chat, say that work runs in the Coding tab and offer to summarize what the current session is doing." +
 				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
 		} else {

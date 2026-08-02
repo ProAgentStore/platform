@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { logUnhandled } from "./on-error.js";
+import { isTransientInfraError, logUnhandled } from "./on-error.js";
 import { HttpError } from "./auth.js";
 import type { Env } from "../types.js";
 
@@ -70,5 +70,31 @@ describe("logUnhandled", () => {
 		await logUnhandled(env, "plain string boom", req);
 		const binds = errorLogBinds();
 		expect(binds[0][4]).toBe("plain string boom");
+	});
+
+	it("attributes the failure to the signed-in user", async () => {
+		const { env, errorLogBinds } = mockEnv();
+		await logUnhandled(env, new Error("boom"), { ...req, userId: "google:123" });
+		// error_log INSERT binds: [id, userId, source, status, message, contextJSON]
+		expect(errorLogBinds()[0][1]).toBe("google:123");
+	});
+
+	it("skips transient infra errors (DO reset on deploy) — not a bug", async () => {
+		const { env, errorLogBinds } = mockEnv();
+		await logUnhandled(env, new Error("Durable Object reset because its code was updated."), req);
+		expect(errorLogBinds().length).toBe(0);
+	});
+});
+
+describe("isTransientInfraError", () => {
+	it("matches the platform's transient infra messages", () => {
+		expect(isTransientInfraError(new Error("Durable Object reset because its code was updated."))).toBe(true);
+		expect(isTransientInfraError(new Error("Durable Object is overloaded."))).toBe(true);
+		expect(isTransientInfraError(new Error("Network connection lost."))).toBe(true);
+	});
+	it("does not match real bugs", () => {
+		expect(isTransientInfraError(new Error("Cannot read properties of undefined"))).toBe(false);
+		expect(isTransientInfraError(new HttpError(500, "boom"))).toBe(false);
+		expect(isTransientInfraError("some string")).toBe(false);
 	});
 });
