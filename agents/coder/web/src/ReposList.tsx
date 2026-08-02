@@ -1,6 +1,11 @@
+import { useState, useRef, useEffect } from "react";
+import { api } from "@proagentstore/sdk/client";
+import { createTts, type VoiceTts } from "@proagentstore/sdk/hooks";
 import type { CodingRepo, CodingSession } from "./types";
-import { Settings, Cpu } from "lucide-react";
+import { Settings, Cpu, Play, Square, Loader2 } from "lucide-react";
 import RepoIssues from "./RepoIssues";
+
+type TimelineEntry = { type?: string; content?: string; text?: string };
 
 /** The all-repos landing view: add-repo form, runner CTA, and one row per repo. */
 export default function ReposList({
@@ -28,6 +33,43 @@ export default function ReposList({
 	onWorkOnIssue: (repo: CodingRepo, issue: { number: number; title: string }) => void;
 	onOpenEngines: () => void;
 }) {
+	// Overview play button (#124): speak a repo's last co-pilot (assistant) message with the
+	// instance's TTS voice — without opening the session. Single-flight: only ONE repo plays at
+	// a time (a new play or a second click on the same repo stops the current one).
+	const ttsRef = useRef<VoiceTts | null>(null);
+	const playGenRef = useRef(0);
+	const [audio, setAudio] = useState<{ id: string; phase: "loading" | "playing" } | null>(null);
+	useEffect(() => () => { ttsRef.current?.cancel(); }, []); // stop on unmount
+
+	// Prefer the live session; fall back to any (e.g. ended) session for the repo.
+	const sessionFor = (repoId: string) => getActiveSession(repoId) || sessions.find((s) => s.repoId === repoId);
+
+	const togglePlay = async (repo: CodingRepo) => {
+		if (audio?.id === repo.id) { ttsRef.current?.cancel(); setAudio(null); return; } // same button → stop
+		const session = sessionFor(repo.id);
+		if (!session) return;
+		const myGen = ++playGenRef.current; // supersede any in-flight/playing repo
+		ttsRef.current?.cancel();
+		setAudio({ id: repo.id, phase: "loading" });
+		let text = "";
+		try {
+			const d = await api<{ chat?: TimelineEntry[]; timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/sessions/${session.id}/timeline`);
+			const msgs = (d.chat || d.timeline || []).filter((e) => e.type === "chat_assistant");
+			const last = msgs[msgs.length - 1];
+			text = (last?.content || last?.text || "").trim();
+		} catch {}
+		if (playGenRef.current !== myGen) return; // another repo took over during the fetch
+		if (!text) { setAudio(null); return; } // no assistant message yet — nothing to play
+		setAudio({ id: repo.id, phase: "playing" });
+		try {
+			const tts = ttsRef.current ?? (ttsRef.current = await createTts(instanceId));
+			if (playGenRef.current !== myGen) return;
+			await tts.unlock(); // iOS: prime inside the click gesture
+			await tts.speak(text); // resolves when playback ends
+		} catch {}
+		if (playGenRef.current === myGen) setAudio(null); // finished/failed (not superseded)
+	};
+
 	const activeCount = sessions.filter((s) => s.status === "active").length;
 	return (
 		<div className="px-2 py-2 sm:px-4 sm:py-3 overflow-auto flex-1">
@@ -106,6 +148,21 @@ export default function ReposList({
 											) : (
 												<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
 											)}
+											{(() => {
+												const phase = audio?.id === r.id ? audio.phase : null;
+												return (
+													<button
+														type="button"
+														onClick={() => togglePlay(r)}
+														disabled={!sessionFor(r.id)}
+														title={phase === "playing" ? "Stop" : phase === "loading" ? "Loading…" : "Play last message"}
+														aria-label={phase === "playing" ? "Stop playback" : "Play last message"}
+														className={`text-xs px-1.5 py-1 rounded-md border text-muted disabled:opacity-40 ${phase ? "border-accent text-accent" : "border-line hover:border-accent hover:text-accent"}`}
+													>
+														{phase === "loading" ? <Loader2 size={14} className="animate-spin" /> : phase === "playing" ? <Square size={14} /> : <Play size={14} />}
+													</button>
+												);
+											})()}
 											<button type="button" onClick={() => setSettingsRepoId(r.id)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={14} /></button>
 										</div>
 									</div>
