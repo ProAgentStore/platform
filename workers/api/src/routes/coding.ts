@@ -19,6 +19,7 @@ import {
 	listRepos,
 	listSessions,
 	reassignSessionNode,
+	reconcileOrphanedSessions,
 	updateRepo,
 	updateRepoClone,
 } from "../lib/coding-store.js";
@@ -1427,7 +1428,32 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 		for (const t of diagData.tracked) trackedIds.add(t.sessionId);
 	}
 
+	// Self-heal (#139): the runner is confirmed reachable, so any D1-`active` session it
+	// isn't tracking is a genuine orphan (runner restart / machine reboot left the tmux
+	// gone). Mark those ended so they stop showing as active forever and can't be reused
+	// as dead sessions — instead of only detecting them and telling the user to kill each
+	// by hand. Grace-windowed inside the store so a just-spawned session isn't reaped.
+	let reconciled = new Set<string>();
+	if (effectivelyReachable) {
+		reconciled = new Set(await reconcileOrphanedSessions(env, instanceId, uid, trackedIds).catch(() => []));
+	}
+
 	const sessions = dbSessions.map((s) => {
+		// Reflect a just-reconciled orphan as ended (D1 was updated above).
+		if (reconciled.has(s.id)) {
+			const repo = dbRepos.find((r) => r.id === s.repoId);
+			return {
+				id: s.id, repoId: s.repoId, repoName: repo?.name ?? s.repoId,
+				status: "ended" as const, clientType: s.clientType,
+				launchCommand: s.launchCommand ?? null, tmuxSession: s.tmuxSession ?? null,
+				startedAt: s.startedAt, endedAt: new Date().toISOString(), live: null,
+				issue: null, reconciled: true,
+			};
+		}
+		return mapDiagSession(s);
+	});
+
+	function mapDiagSession(s: (typeof dbSessions)[number]) {
 		const tracked = diagData?.tracked?.find((t) => t.sessionId === s.id);
 		const repo = dbRepos.find((r) => r.id === s.repoId);
 		return {
@@ -1455,7 +1481,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 					? "dead: tracked but CLI process exited"
 					: null,
 		};
-	});
+	}
 
 	const repos = dbRepos.map((r) => {
 		const activeSessions = sessions.filter((s) => s.repoId === r.id && s.status === "active");

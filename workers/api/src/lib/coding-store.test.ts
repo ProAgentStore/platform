@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { suspendSessionsFromOtherNodes, resumeSessionsForNode, reassignSessionNode } from "./coding-store.js";
+import { suspendSessionsFromOtherNodes, resumeSessionsForNode, reassignSessionNode, reconcileOrphanedSessions } from "./coding-store.js";
 import type { CodingSessionStatus } from "./coding-types.js";
 import type { Env } from "../types.js";
 
@@ -72,5 +72,46 @@ describe("coding-store session lifecycle (node-owned suspend/resume)", () => {
 		const { env, writes } = mockEnv();
 		await reassignSessionNode(env, "inst-1", "user-1", "csess-9", "   ");
 		expect(writes[0].args).toEqual(["csess-9", "inst-1", "user-1", null]);
+	});
+});
+
+describe("reconcileOrphanedSessions (#139)", () => {
+	// Env whose SELECT returns candidate active sessions past the grace window, and whose
+	// UPDATEs are recorded so we can assert exactly which sessions got reaped.
+	function reconcileEnv(candidateIds: string[]): { env: Env; updates: Write[] } {
+		const updates: Write[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async run() { if (sql.includes("UPDATE")) updates.push({ sql, args }); return { meta: { changes: 1 } }; },
+							async all() { return { results: candidateIds.map((id) => ({ id })) }; },
+							async first() { return null; },
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as Env, updates };
+	}
+
+	it("ends active sessions the runner is NOT tracking, and leaves the live ones alone", async () => {
+		const { env, updates } = reconcileEnv(["a", "b", "c"]);
+		const reaped = await reconcileOrphanedSessions(env, "inst-1", "user-1", ["b"]); // runner tracks only b
+		expect(reaped.sort()).toEqual(["a", "c"]);
+		expect(updates).toHaveLength(2); // one endSession UPDATE each for a + c
+		for (const u of updates) {
+			expect(u.sql).toContain("status = ?4"); // endSession sets status via bind
+			expect(u.sql).toContain("status = 'active'"); // guarded WHERE clause
+		}
+		expect(updates.flatMap((u) => u.args)).toEqual(expect.arrayContaining(["a", "c"]));
+	});
+
+	it("reaps nothing when the runner is tracking every candidate", async () => {
+		const { env, updates } = reconcileEnv(["a", "b"]);
+		const reaped = await reconcileOrphanedSessions(env, "inst-1", "user-1", ["a", "b"]);
+		expect(reaped).toEqual([]);
+		expect(updates).toHaveLength(0);
 	});
 });

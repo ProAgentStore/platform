@@ -367,3 +367,34 @@ export async function endSession(env: Env, instanceId: string, userId: string, s
 		.run();
 	return (res.meta.changes ?? 0) > 0;
 }
+
+/**
+ * Reconcile stale "active" sessions against the runner's live tmux set (#139). When the
+ * runner is reachable but reports NO live tmux for a D1-`active` session, that session was
+ * orphaned by a runner restart / machine reboot — mark it `ended` so it stops showing as
+ * active forever and can't be handed back by getActiveSessionForRepo as a dead session.
+ * A short grace window (updated_at older than 3 minutes) protects a just-created session
+ * whose pane hasn't spawned yet. ONLY call when the runner is confirmed reachable —
+ * otherwise "not tracked" just means the runner is offline, not that the session died.
+ * Returns the ids that were reaped.
+ */
+export async function reconcileOrphanedSessions(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	liveSessionIds: Iterable<string>,
+): Promise<string[]> {
+	const live = new Set(liveSessionIds);
+	const { results } = await env.DB.prepare(
+		`SELECT id FROM coding_sessions
+		 WHERE instance_id = ?1 AND user_id = ?2 AND status = 'active'
+		   AND updated_at < datetime('now', '-3 minutes')`,
+	)
+		.bind(instanceId, userId)
+		.all<{ id: string }>();
+	const orphaned = (results ?? []).map((r) => r.id).filter((id) => !live.has(id));
+	for (const id of orphaned) {
+		await endSession(env, instanceId, userId, id, "ended");
+	}
+	return orphaned;
+}

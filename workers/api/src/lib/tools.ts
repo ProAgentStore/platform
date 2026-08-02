@@ -335,7 +335,14 @@ export async function executeTool(
 				const text = await res.text();
 				const truncated =
 					text.length > 4000 ? `${text.slice(0, 4000)}...[truncated]` : text;
-				return { name: call.name, content: truncated, success: res.ok };
+				// On a failure, lead with the HTTP status so the agent (and the durable log)
+				// know HOW it failed — a bare "Internal Server Error" body hid that it was a
+				// 500 vs a 4xx, which let an agent misread it as "queued".
+				return {
+					name: call.name,
+					content: res.ok ? truncated : `HTTP ${res.status} ${res.statusText}: ${truncated || "(no response body)"}`,
+					success: res.ok,
+				};
 			}
 
 			case "store_file": {
