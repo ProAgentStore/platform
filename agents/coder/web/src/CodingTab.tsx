@@ -221,7 +221,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	}, [terminalText, termAutoScroll, view]);
 
+	// Auto-open runs at most ONCE per mount. Any open/close latches this so a later `sessions`
+	// refresh (loadCoding on start/end/add) can't re-run the restore effect and re-open a
+	// session the user has since closed (or yank them off the Terminal view).
+	const autoOpenedRef = useRef(false);
 	const openTerminal = useCallback(async (session: CodingSession) => {
+		autoOpenedRef.current = true;
 		setOpenSession(session);
 		saveLastRepo(instanceId, session.repoId); // remember this repo for next visit
 		setView("summary");
@@ -261,7 +266,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// was last working on (persisted). With neither, land on the repo LIST view (openSession
 	// stays null) rather than auto-opening whatever active session happens to be first — that
 	// yanked users into a session they didn't ask for.
-	const autoOpenedRef = useRef(false);
 	useEffect(() => {
 		if (autoOpenedRef.current || !sessions.length) return;
 		let target: CodingSession | undefined;
@@ -279,6 +283,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	}, [sessions, initialSessionId, instanceId, openTerminal]);
 
 	const closeTerminal = useCallback(() => {
+		autoOpenedRef.current = true; // stay on the list — don't let a sessions refresh re-open
 		setOpenSession(null);
 		setSummaryHistory([]);
 		navigate(`/instances/${instanceId}/coding`, { replace: true });
