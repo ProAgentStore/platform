@@ -635,8 +635,8 @@ export default function InstanceDetail() {
 								// Regular system messages (loop status, etc.)
 								if (m.role === "system") {
 									return (
-										<div key={m.id || m.createdAt || i} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15">
-											<span className="whitespace-pre-wrap">{m.content}</span>
+										<div key={m.id || m.createdAt || i} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]">
+											<span className="whitespace-pre-wrap break-words">{m.content}</span>
 										</div>
 									);
 								}
@@ -670,7 +670,7 @@ export default function InstanceDetail() {
 												onSpeak={speakTap}
 											/>
 										) : (
-											<span className="whitespace-pre-wrap">{m.content}</span>
+											<span className="whitespace-pre-wrap break-words">{m.content}</span>
 										)}
 									</div>
 								);

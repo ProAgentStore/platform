@@ -303,8 +303,8 @@ export default function CopilotView({
 					}
 					if (m.role === "system") {
 						return (
-							<div key={messageKey(m)} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15">
-								<span className="whitespace-pre-wrap">{m.content}</span>
+							<div key={messageKey(m)} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]">
+								<span className="whitespace-pre-wrap break-words">{m.content}</span>
 							</div>
 						);
 					}
@@ -330,7 +330,7 @@ export default function CopilotView({
 								/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd escapes raw content before adding controlled markup. */
 								<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
 							) : (
-								<span className="whitespace-pre-wrap">{m.content}</span>
+								<span className="whitespace-pre-wrap break-words">{m.content}</span>
 							)}
 						</div>
 					);
