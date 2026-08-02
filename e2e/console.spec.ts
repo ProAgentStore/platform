@@ -748,8 +748,9 @@ test.describe("ProAgentStore Console smoke", () => {
 		});
 
 		await page.goto("/console/instances/inst-1");
-		// Navigate to Coding tab, then open Terminal
+		// Coding tab now defaults to the repo list — open the active session first, then Terminal.
 		await page.getByRole("button", { name: "Coding" }).click();
+		await page.getByRole("button", { name: "Open", exact: true }).click();
 		await page.getByRole("button", { name: "Terminal", exact: true }).click();
 		const termInput = page.getByPlaceholder(/message to the (CLI|Engine)/i);
 		await termInput.fill("git status");
@@ -781,6 +782,7 @@ test.describe("ProAgentStore Console smoke", () => {
 		});
 		await page.goto("/console/instances/inst-1");
 		await page.getByRole("button", { name: "Coding" }).click();
+		await page.getByRole("button", { name: "Open", exact: true }).click();
 		await page.getByRole("button", { name: "Terminal", exact: true }).click();
 
 		// Prompt line should be cyan
