@@ -259,6 +259,14 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
 		}
 	}
+	if (req.method === "POST" && path === "/coding/git-remote") {
+		const b = await readJson<{ sessionId?: string; workDir?: string }>(req);
+		try {
+			return json(res, 200, runner.coding.gitRemote(b));
+		} catch (e: unknown) {
+			return json(res, 400, { error: e instanceof Error ? e.message : String(e) });
+		}
+	}
 	if (req.method === "POST" && path === "/coding/tree") {
 		const b = await readJson<{ sessionId?: string; workDir?: string; path?: string; maxDepth?: number; maxEntries?: number }>(req);
 		try {

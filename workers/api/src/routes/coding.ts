@@ -367,6 +367,39 @@ codingRoutes.post("/:instanceId/coding/repos", async (c) => {
 	return c.json({ repo }, 201);
 });
 
+/**
+ * Auto-associate a LOCAL-PATH repo with its GitHub owner/repo by reading the local
+ * checkout's `origin` remote via the runner — so build status can query Actions for a
+ * repo you run from a local checkout (which otherwise has no githubRepo). Idempotent:
+ * returns the existing githubRepo if already set; { githubRepo: null } (never a 500) when
+ * there's no runner, no origin, or the origin isn't a GitHub URL.
+ */
+codingRoutes.post("/:instanceId/coding/repos/:repoId/detect-github", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	if (!repo) throw new HttpError(404, "Repo not found");
+	if (repo.githubRepo) return c.json({ githubRepo: repo.githubRepo, detected: false });
+	if (!repo.workdir) return c.json({ githubRepo: null, reason: "not a local repo" });
+	const conn = await getBoundRunnerConn(c.env, instanceId, uid);
+	if (!conn) return c.json({ githubRepo: null, reason: "runner offline" });
+	let remote: string | null = null;
+	try {
+		const r = await callRunner<{ remote?: string | null }>(conn, "/coding/git-remote", { workDir: repo.workdir }, { timeoutMs: READ_TIMEOUT_MS });
+		remote = r.remote ?? null;
+	} catch {
+		return c.json({ githubRepo: null, reason: "could not read remote" });
+	}
+	// Parse owner/repo from an https or ssh GitHub remote (same shape as the clone-URL path).
+	const m = remote?.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i);
+	const githubRepo = m ? m[1] : null;
+	if (githubRepo) {
+		await c.env.DB.prepare("UPDATE coding_repos SET github_repo = ?1, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4")
+			.bind(githubRepo, repo.id, instanceId, uid)
+			.run();
+	}
+	return c.json({ githubRepo, detected: !!githubRepo });
+});
+
 codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const repoId = c.req.param("repoId");

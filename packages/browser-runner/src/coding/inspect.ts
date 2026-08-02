@@ -102,6 +102,23 @@ export function runRepoGit(workDir: string, cmd: GitCmd, opts: { path?: string; 
 	return { cmd, output: truncated ? out.slice(0, cap) : out, truncated };
 }
 
+/** Read the repo's `origin` remote URL — used to auto-associate a local checkout with its
+ *  GitHub repo (so build status can query Actions). Fixed argv, no shell, no user input;
+ *  returns null when it's not a git repo or has no `origin` remote. */
+export function readGitRemoteOrigin(workDir: string): string | null {
+	if (!existsSync(resolve(workDir, ".git"))) return null;
+	try {
+		const out = execFileSync("git", ["config", "--get", "remote.origin.url"], {
+			cwd: workDir,
+			encoding: "utf-8",
+			timeout: 10_000,
+		});
+		return out.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
 const IGNORE_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", ".turbo", "coverage", ".wrangler"]);
 
 /** Bounded recursive file tree (names/type/size only — no contents). */

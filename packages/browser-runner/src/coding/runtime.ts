@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 import type { ClientType } from "./handlers.js";
-import { type GitCmd, InspectError, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
+import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
 import { ensureRepo, sanitizeSessionName } from "./tmux.js";
 
 /**
@@ -100,6 +100,12 @@ export class CodingRuntime {
 	/** Bounded recursive file tree of the session's repo (names/type/size only). */
 	tree(input: { sessionId?: string; workDir?: string; path?: string; maxDepth?: number; maxEntries?: number }) {
 		return repoTree(this.resolveWorkDir(input), input.path, input.maxDepth, input.maxEntries);
+	}
+
+	/** Read the local checkout's `origin` remote URL — lets PAGS auto-associate a
+	 *  local-path repo with its GitHub owner/repo (so build status can query Actions). */
+	gitRemote(input: { sessionId?: string; workDir?: string }) {
+		return { remote: readGitRemoteOrigin(this.resolveWorkDir(input)) };
 	}
 
 	static taskTypes(): string[] {

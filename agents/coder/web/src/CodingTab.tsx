@@ -112,6 +112,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		onSend: (text, meta) => sendInstructionRef.current(text, meta?.audioKey),
 	});
 
+	// Auto-associate local checkouts with their GitHub owner/repo (attempted once each per
+	// mount) so build status shows for repos run from a local path. No-op when offline.
+	const detectAttemptedRef = useRef<Set<string>>(new Set());
+
 	const loadCoding = useCallback(async () => {
 		try {
 			const [repoData, sessionData, engineData] = await Promise.all([
@@ -119,10 +123,29 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				api<{ sessions: CodingSession[] }>(`/v1/instances/${instanceId}/coding/sessions`),
 				api<{ engines: CodingEngine[]; defaultEngineId?: string }>(`/v1/instances/${instanceId}/coding/engines`),
 			]);
-			setRepos(repoData.repos || []);
+			const repos = repoData.repos || [];
+			setRepos(repos);
 			setSessions(sessionData.sessions || []);
 			setEngines(engineData.engines || []);
 			if (engineData.defaultEngineId) setDefaultEngine(engineData.defaultEngineId);
+
+			// Local repos with no GitHub association → ask the runner to read their `origin`
+			// remote and store owner/repo, so the Builds panel can query Actions for them.
+			const needDetect = repos.filter((r) => r.workdir && !r.githubRepo && !detectAttemptedRef.current.has(r.id));
+			if (needDetect.length) {
+				let found = false;
+				await Promise.all(needDetect.map(async (r) => {
+					detectAttemptedRef.current.add(r.id);
+					try {
+						const d = await api<{ githubRepo?: string | null }>(`/v1/instances/${instanceId}/coding/repos/${r.id}/detect-github`, { method: "POST" });
+						if (d.githubRepo) found = true;
+					} catch { /* offline / non-github — leave as local-only */ }
+				}));
+				if (found) {
+					const fresh = await api<{ repos: CodingRepo[] }>(`/v1/instances/${instanceId}/coding/repos`).catch(() => null);
+					if (fresh?.repos) setRepos(fresh.repos);
+				}
+			}
 		} catch {}
 	}, [instanceId]);
 
