@@ -2,7 +2,7 @@ import { type KeyboardEvent, type RefObject, useState } from "react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
-import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot } from "lucide-react";
+import { Trash2, Copy, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown } from "lucide-react";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
  *  the text via TTS. Owner-scoped fetch of the R2 blob. */
@@ -66,6 +66,13 @@ export default function CopilotView({
 		if ((target as HTMLElement | null)?.closest("button, a, summary, input, textarea")) return;
 		if (voice.mode === "ptt") voice.toggleTalk();
 		else if (voice.mode === "handsfree") voice.cancelSpeak();
+	};
+	// Show a "scroll to bottom" affordance when the user has scrolled up off the newest
+	// message. Updated from the thread's scroll event; jumping to the bottom hides it again.
+	const [atBottom, setAtBottom] = useState(true);
+	const scrollThreadToBottom = () => {
+		const el = threadRef.current;
+		if (el) { el.scrollTop = el.scrollHeight; setAtBottom(true); }
 	};
 	// Computed once so the message list reserves bottom padding (pb-16) whenever the floating
 	// status pill is visible — otherwise the pill overlaps (and blocks selecting/copying) the
@@ -241,6 +248,7 @@ export default function CopilotView({
 				aria-label={voice.mode === "ptt" ? "Tap to talk" : voice.mode === "handsfree" ? "Interrupt speech" : "Message thread"}
 				onClick={(e) => handleThreadTap(e.target)}
 				onKeyDown={activateOnKeyboard(() => handleThreadTap(document.activeElement))}
+				onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}
 				className={`flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
 			>
 				{summaryHistory.map((m) => {
@@ -295,6 +303,18 @@ export default function CopilotView({
 					);
 				})}
 			</div>
+			{/* Scroll-to-latest — appears only when scrolled up off the newest message. */}
+			{!atBottom && (
+				<button
+					type="button"
+					onClick={scrollThreadToBottom}
+					aria-label="Scroll to latest"
+					title="Scroll to latest"
+					className="absolute bottom-3 right-3 z-30 flex items-center justify-center w-9 h-9 rounded-full bg-panel border border-line shadow-lg text-muted hover:text-accent hover:border-accent transition-colors"
+				>
+					<ArrowDown size={16} />
+				</button>
+			)}
 			{/* Live voice status — the OBVIOUS "it heard you / is working" signal. Walks
 			    Listening → Transcribing → Working, and is the tap target in Tap-to-talk. */}
 			{(() => {
