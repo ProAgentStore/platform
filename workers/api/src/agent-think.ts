@@ -311,6 +311,17 @@ export async function runAgentThink(opts: {
 		: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.";
 
 	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'.";
+
+	// HONESTY / grounding. Real chats showed an agent tell the user a post was
+	// "successfully queued" when the tool had returned a 500, and another address the
+	// user by an invented name. Ground every claim in actual results — a false success
+	// is worse than a reported failure.
+	systemPrompt +=
+		"\n\nHONESTY: Ground every statement in what actually happened. If a tool call returned an" +
+		" error or did not complete, say so plainly — NEVER claim an action succeeded (posted, queued," +
+		" sent, saved, filed, created) when its tool result was an error. Never invent results, statuses," +
+		" or facts about the user such as their name. If something failed, report the failure and what" +
+		" you'll do next.";
 		if (technical && repoChatStyle) {
 			// Repo Chat genuinely HAS a vector index of the code (RAG context injected
 			// above), so grounding answers in "the indexed code" is correct here.
