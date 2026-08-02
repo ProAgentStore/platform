@@ -19,6 +19,18 @@ interface Props {
 	onHeaderOverride?: (content: ReactNode | null) => void;
 }
 
+// Remember the repo the user was last working on, per instance, so returning to the Coding
+// tab (without a deep-linked session in the URL) restores THAT repo instead of defaulting to
+// whichever active session happens to be first in the list. Keyed by repoId (stable — a
+// session can end/restart with a new id, but the repo persists).
+const lastRepoKey = (instanceId: string) => `coder:lastRepo:${instanceId}`;
+function saveLastRepo(instanceId: string, repoId: string) {
+	try { localStorage.setItem(lastRepoKey(instanceId), repoId); } catch { /* storage unavailable */ }
+}
+function loadLastRepo(instanceId: string): string | null {
+	try { return localStorage.getItem(lastRepoKey(instanceId)); } catch { return null; }
+}
+
 interface TimelineEntry {
 	role?: string;
 	type?: string;
@@ -211,6 +223,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	const openTerminal = useCallback(async (session: CodingSession) => {
 		setOpenSession(session);
+		saveLastRepo(instanceId, session.repoId); // remember this repo for next visit
 		setView("summary");
 		setSummaryHistory([]);
 		navigate(`/instances/${instanceId}/coding/${session.id}`, { replace: true });
@@ -244,18 +257,26 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	}, [instanceId, navigate]);
 
-	// Auto-open session on mount — prefer URL session, fall back to first active.
+	// Auto-open a session on mount ONLY for a deep link (URL session id) or the repo the user
+	// was last working on (persisted). With neither, land on the repo LIST view (openSession
+	// stays null) rather than auto-opening whatever active session happens to be first — that
+	// yanked users into a session they didn't ask for.
 	const autoOpenedRef = useRef(false);
 	useEffect(() => {
 		if (autoOpenedRef.current || !sessions.length) return;
-		const target = initialSessionId
-			? sessions.find((s) => s.id === initialSessionId)
-			: sessions.find((s) => s.status === "active");
+		let target: CodingSession | undefined;
+		if (initialSessionId) {
+			target = sessions.find((s) => s.id === initialSessionId);
+		} else {
+			// Restore the last-used repo IF it still has an active session; otherwise show the list.
+			const lastRepo = loadLastRepo(instanceId);
+			target = lastRepo ? sessions.find((s) => s.repoId === lastRepo && s.status === "active") : undefined;
+		}
 		if (target) {
 			autoOpenedRef.current = true;
 			openTerminal(target);
 		}
-	}, [sessions, initialSessionId, openTerminal]);
+	}, [sessions, initialSessionId, instanceId, openTerminal]);
 
 	const closeTerminal = useCallback(() => {
 		setOpenSession(null);
