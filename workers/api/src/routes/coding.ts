@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
+import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type BuildRun } from "../lib/build-history.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
 import { getUserProviderKey, runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
@@ -452,9 +453,12 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployment", async (c) => {
  * data source (build history). Plural sibling of `/deployment` (which returns only the
  * latest). Same graceful-degradation contract: `{ available:false }` (never a 500) for
  * local repos, non-GitHub repos, or when the GitHub App isn't installed. Auth is the
- * GitHub App installation token (server-side, never exposed to the browser). No new
- * storage: GitHub is the source of truth (ETag/KV caching is deferred to CODER-002).
+ * GitHub App installation token (server-side, never exposed to the browser).
  * `?page` (≥1, default 1) + `?perPage` (1..50, default 20). (CODER-001, #77)
+ *
+ * Page 1 also merges a durable KV build-history log (survives GitHub retention / transient
+ * failures), persists best-effort, and supports conditional requests via a weak ETag —
+ * `If-None-Match` on an unchanged latest build returns 304. (CODER-002, #78)
  */
 codingRoutes.get("/:instanceId/coding/repos/:repoId/deployments", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
@@ -478,18 +482,34 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployments", async (c) => {
 		});
 		if (!res.ok) return c.json({ available: false });
 		const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
-		const runs = (data.workflow_runs ?? []).map((run) => ({
+		const runs: BuildRun[] = (data.workflow_runs ?? []).map((run) => ({
 			status: run.status, // queued | in_progress | completed
 			conclusion: run.conclusion ?? null, // success | failure | cancelled | null
 			name: run.name ?? "",
-			runNumber: run.run_number ?? null,
-			url: run.html_url ?? "",
-			branch: run.head_branch ?? "",
+			runNumber: typeof run.run_number === "number" ? run.run_number : null,
+			url: typeof run.html_url === "string" ? run.html_url : "",
+			branch: typeof run.head_branch === "string" ? run.head_branch : "",
 			sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
-			updatedAt: run.updated_at ?? "",
+			updatedAt: typeof run.updated_at === "string" ? run.updated_at : "",
 		}));
 		// "There may be more" signal without parsing the Link header: a full page implies a next.
+		// "There may be more" signal without parsing the Link header: a full live page implies a next.
 		const nextPage = runs.length === perPage ? page + 1 : undefined;
+
+		// Page 1 is the panel's freshness poll: merge live runs with the durable KV history
+		// (so history survives GitHub retention + transient failures), persist best-effort, and
+		// support conditional requests — an unchanged latest build short-circuits to 304. Deeper
+		// pages are live GitHub only (immutable deep history), no merge/ETag. (CODER-002, #78)
+		if (page === 1) {
+			const stored = await readBuildHistory(c.env, instanceId, repo.id);
+			const merged = mergeRuns(stored, runs);
+			await persistBuildHistory(c.env, instanceId, repo.id, merged); // best-effort, never throws
+			const etag = computeETag(merged);
+			if (c.req.header("If-None-Match") === etag) return c.body(null, 304, { ETag: etag });
+			return c.json(nextPage ? { available: true, runs: merged, nextPage } : { available: true, runs: merged }, 200, {
+				ETag: etag,
+			});
+		}
 		return c.json(nextPage ? { available: true, runs, nextPage } : { available: true, runs });
 	} catch {
 		return c.json({ available: false });
