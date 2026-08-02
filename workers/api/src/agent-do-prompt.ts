@@ -9,6 +9,11 @@ export const DEPRECATED_MODELS = new Set([
 	"@cf/qwen/qwen1.5-14b-chat-awq",
 ]);
 
+/** A tool-capable Cloudflare Workers-AI model — the target when auto-upgrading off a
+ *  non-tool-capable model so tools aren't silently dropped (#100). Same model the
+ *  agent-builder scaffolder already uses. */
+export const TOOL_CAPABLE_CF_DEFAULT = "@cf/meta/llama-4-scout-17b-16e-instruct";
+
 /** Models that support structured function calling (tool_calls in response). */
 export const TOOL_CAPABLE_MODELS = new Set([
 	"@cf/meta/llama-3.3-70b-instruct-fp8-fast",
@@ -21,6 +26,20 @@ export const TOOL_CAPABLE_MODELS = new Set([
 	"claude-haiku-4-5",
 	"claude-sonnet-4-5-20250514",
 ]);
+
+/**
+ * Resolve the model to actually run a chat turn with. A non-tool-capable model silently
+ * drops ALL tools (memory, collections, fetch_url, …) — the footgun where a structured-data
+ * agent created on the default 3B model couldn't query its own collection (#100). When the
+ * agent has tools available but its model can't call them, upgrade to a tool-capable CF model
+ * for the turn instead of running tool-less. Pure + deterministic (state is not mutated).
+ */
+export function resolveModelForTools(model: string, hasTools: boolean): { model: string; upgraded: boolean } {
+	if (hasTools && !TOOL_CAPABLE_MODELS.has(model)) {
+		return { model: TOOL_CAPABLE_CF_DEFAULT, upgraded: true };
+	}
+	return { model, upgraded: false };
+}
 
 export function defaultGuardrails(input?: Partial<Guardrails>): Guardrails {
 	return {

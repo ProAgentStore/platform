@@ -1,7 +1,7 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { AgentStorageEngine } from "./agent-storage.js";
 import type { AgentMessage, AgentState, AgentTask, MemoryEntry } from "./agent-types.js";
-import { TOOL_CAPABLE_MODELS } from "./agent-do-prompt.js";
+import { TOOL_CAPABLE_MODELS, resolveModelForTools } from "./agent-do-prompt.js";
 import { buildAgentToolDefinitions, storageToolNameSet, toolNamesFor } from "./agent-do-tools.js";
 import { registryToolNameSet, runRegistryTool } from "./lib/tool-registry.js";
 import { configureBoardForAgent } from "./lib/board.js";
@@ -258,7 +258,19 @@ export async function runAgentThink(opts: {
 		} catch {}
 	}
 
-	const useTools = TOOL_CAPABLE_MODELS.has(state.model);
+	// #100: a non-tool-capable model silently drops ALL tools (memory, collections, fetch_url,
+	// …). If this agent has tools available, upgrade to a tool-capable model for THIS turn
+	// rather than running tool-less — the footgun where a collections agent on the default 3B
+	// model couldn't read its own records. State is not mutated (per-turn only); every agent has
+	// BASE tools, so a genuinely tool-less agent (empty set) is the only thing left un-upgraded.
+	const wantsTools = toolNamesFor(capabilities).size > 0;
+	const { model: effectiveModel, upgraded: modelUpgraded } = resolveModelForTools(state.model, wantsTools);
+	if (modelUpgraded) {
+		console.warn(
+			`[agent ${state.agentId}] model "${state.model}" is not tool-capable; auto-upgraded to "${effectiveModel}" so its tools work (#100).`,
+		);
+	}
+	const useTools = TOOL_CAPABLE_MODELS.has(effectiveModel);
 	if (useTools) {
 		// Describe the tools this agent ACTUALLY has (they are capability-gated below), so
 		// a Coder isn’t told to "search your knowledge" when it has no index to search.
@@ -345,7 +357,7 @@ export async function runAgentThink(opts: {
 		const result = (await runUserWorkersAi(
 			env,
 			userId,
-			state.model,
+			effectiveModel,
 			{ messages: aiMessages },
 			{ kind: "chat", instanceId: state.agentId },
 		)) as { response?: string };
@@ -377,7 +389,7 @@ export async function runAgentThink(opts: {
 			rawResult = (await runUserWorkersAi(
 				env,
 				userId,
-				state.model,
+				effectiveModel,
 				{ messages: aiMessages, tools },
 				{ kind: "chat", instanceId: state.agentId },
 			)) as Record<string, unknown>;
@@ -463,7 +475,7 @@ export async function runAgentThink(opts: {
 		final = (await runUserWorkersAi(
 			env,
 			userId,
-			state.model,
+			effectiveModel,
 			{ messages: aiMessages },
 			{ kind: "chat", instanceId: state.agentId },
 		)) as { response?: string };

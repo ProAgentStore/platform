@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { AgentState } from "./agent-types.js";
 import {
 	DEFAULT_MODEL,
+	TOOL_CAPABLE_CF_DEFAULT,
+	TOOL_CAPABLE_MODELS,
 	buildSystemPrompt,
 	defaultGuardrails,
 	ensureStateDefaults,
+	resolveModelForTools,
 } from "./agent-do-prompt.js";
 
 describe("agent prompt helpers", () => {
@@ -88,5 +91,41 @@ describe("agent prompt helpers", () => {
 		expect(prompt).toContain("Keep responses under 500 characters.");
 		expect(prompt).toContain("Always cite which knowledge base document");
 		expect(prompt).toContain("persistent memory and tasks");
+	});
+
+	describe("resolveModelForTools (#100 — non-tool-capable model must not silently drop tools)", () => {
+		it("upgrades the default 3B model to a tool-capable CF model when the agent has tools", () => {
+			// The exact footgun: an agent created without an explicit model gets DEFAULT_MODEL
+			// (a non-tool-capable 3B), which silently disabled ALL its tools.
+			expect(TOOL_CAPABLE_MODELS.has(DEFAULT_MODEL)).toBe(false); // guards the premise
+			const { model, upgraded } = resolveModelForTools(DEFAULT_MODEL, true);
+			expect(upgraded).toBe(true);
+			expect(model).toBe(TOOL_CAPABLE_CF_DEFAULT);
+			expect(TOOL_CAPABLE_MODELS.has(model)).toBe(true); // the upgraded model can call tools
+		});
+
+		it("leaves an already tool-capable model untouched", () => {
+			const { model, upgraded } = resolveModelForTools("claude-sonnet-4-6", true);
+			expect(upgraded).toBe(false);
+			expect(model).toBe("claude-sonnet-4-6");
+		});
+
+		it("leaves a tool-capable CF model untouched", () => {
+			const { model, upgraded } = resolveModelForTools(TOOL_CAPABLE_CF_DEFAULT, true);
+			expect(upgraded).toBe(false);
+			expect(model).toBe(TOOL_CAPABLE_CF_DEFAULT);
+		});
+
+		it("does NOT upgrade a genuinely tool-less agent (empty tool set)", () => {
+			const { model, upgraded } = resolveModelForTools(DEFAULT_MODEL, false);
+			expect(upgraded).toBe(false);
+			expect(model).toBe(DEFAULT_MODEL);
+		});
+
+		it("upgrades any unknown/non-tool-capable model when tools are needed", () => {
+			const { model, upgraded } = resolveModelForTools("@cf/some/unknown-model", true);
+			expect(upgraded).toBe(true);
+			expect(model).toBe(TOOL_CAPABLE_CF_DEFAULT);
+		});
 	});
 });
