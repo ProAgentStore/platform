@@ -402,10 +402,12 @@ codingRoutes.put("/:instanceId/coding/repos/:repoId/instructions", async (c) => 
 	return c.json({ instructions });
 });
 
-/** GitHub API headers for an installation token. */
-function githubHeaders(token: string): Record<string, string> {
+/** GitHub API headers. With a token = authenticated (installation token); without = an
+ *  UNAUTHENTICATED request (public repos only, ~60/hr shared IP limit) — never send a token
+ *  on that path. */
+function githubHeaders(token?: string): Record<string, string> {
 	return {
-		Authorization: `token ${token}`,
+		...(token ? { Authorization: `token ${token}` } : {}),
 		Accept: "application/vnd.github+json",
 		"X-GitHub-Api-Version": "2022-11-28",
 		"User-Agent": "proagentstore-coding/1.0",
@@ -506,15 +508,19 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployments", async (c) => {
 	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 	if (!repo) throw new HttpError(404, "Repo not found");
 	const full = repo.githubRepo;
-	if (!full?.includes("/") || !githubAppConfigured(c.env)) return c.json({ available: false });
+	if (!full?.includes("/")) return c.json({ available: false });
 	const owner = full.split("/")[0];
-	const token = await installationTokenForOwner(c.env, uid, owner).catch(() => null);
-	if (!token) return c.json({ available: false });
+	// Prefer the GitHub App installation token; if the App isn't configured/installed, fall back
+	// to an UNAUTHENTICATED request — public repos' Actions runs are readable without auth
+	// (~60/hr shared IP; private repos will 404 → available:false). This makes builds show for
+	// public repos with no App installed. Only the per-repo /deployments path uses this fallback;
+	// the aggregate /builds does NOT (its fan-out would burn the unauth budget). (CODER-010, #121)
+	const token = githubAppConfigured(c.env) ? await installationTokenForOwner(c.env, uid, owner).catch(() => null) : null;
 	const page = Math.max(1, Number.parseInt(c.req.query("page") || "1", 10) || 1);
 	const perPage = Math.min(50, Math.max(1, Number.parseInt(c.req.query("perPage") || "20", 10) || 20));
 	try {
 		const res = await fetch(`https://api.github.com/repos/${full}/actions/runs?per_page=${perPage}&page=${page}`, {
-			headers: githubHeaders(token),
+			headers: githubHeaders(token ?? undefined),
 		});
 		if (!res.ok) return c.json({ available: false });
 		const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
