@@ -256,6 +256,46 @@ export async function authorizeInstallation(
 	return { ok: true };
 }
 
+/**
+ * Bind EVERY installed org (and matching personal account) the user is a member of, verified
+ * by the USER'S OWN OAuth token (`read:org`) rather than the App's Members permission. This is
+ * what lets a Google-signed-in user light up all their orgs after one `Connect GitHub` — no
+ * per-org "approve Members:read" step (which GitHub gates behind sudo-mode). Membership is the
+ * user attesting their own orgs, which is a sound authorization basis for minting THEIR tokens.
+ * Returns the org/account logins that were bound.
+ */
+export async function bindMemberOrgInstallations(
+	env: Env,
+	userId: string,
+	githubLogin: string,
+	userAccessToken: string,
+): Promise<string[]> {
+	const installs = await listInstallations(env).catch(() => [] as GhInstallation[]);
+	const bound: string[] = [];
+	for (const inst of installs) {
+		const login = inst.account.login;
+		const isOrg = (inst.account.type || "User").toLowerCase() === "organization";
+		let ok = false;
+		if (!isOrg) {
+			ok = login.toLowerCase() === githubLogin.toLowerCase(); // personal install
+		} else {
+			try {
+				const res = await fetch(
+					`https://api.github.com/user/memberships/orgs/${encodeURIComponent(login)}`,
+					{ headers: GH_HEADERS(userAccessToken) },
+				);
+				if (res.ok) ok = ((await res.json()) as { state?: string }).state === "active";
+			} catch { ok = false; }
+		}
+		if (!ok) continue;
+		const minted = await mintInstallationToken(env, inst.id);
+		if (!minted) continue;
+		await cacheInstallationToken(env, userId, inst.id, minted.token, minted.expiresAt, { login, type: inst.account.type });
+		bound.push(login);
+	}
+	return bound;
+}
+
 /** The installations this user has a *verified* binding to (from our DB, not the global App list). */
 export async function listUserInstallations(
 	env: Env,

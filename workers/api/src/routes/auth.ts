@@ -3,6 +3,7 @@ import { isSubscriptionActive, subFromUserRow } from "../lib/billing.js";
 import { signPayload, signSession, verifyPayload, verifySession } from "../lib/session.js";
 import { isAllowedReturnTo } from "../lib/origins.js";
 import { requireUser } from "../lib/auth.js";
+import { bindMemberOrgInstallations } from "../lib/github-app.js";
 import { logError } from "../lib/error-log.js";
 import { mintMcpAuthCode, exchangeMcpAuthCode } from "../lib/mcp-auth-codes.js";
 import type { Env } from "../types.js";
@@ -126,8 +127,13 @@ authRoutes.get("/github/callback", async (c) => {
 		await c.env.DB.prepare("UPDATE users SET linked_github_login = ?1, updated_at = datetime('now') WHERE id = ?2")
 			.bind(ghUser.login, state.linkUid)
 			.run();
+		// Auto-bind every installed org (+ personal account) this user belongs to, verified
+		// by their read:org token — so all their orgs light up from one Connect, no per-org
+		// Members:read/sudo approval. Best-effort: a failure just leaves them to bind later.
+		const bound = await bindMemberOrgInstallations(c.env, state.linkUid, ghUser.login, tokenData.access_token).catch(() => [] as string[]);
 		const redirect = new URL(state.returnTo);
 		redirect.searchParams.set("github_linked", ghUser.login);
+		if (bound.length) redirect.searchParams.set("github_bound", String(bound.length));
 		return c.redirect(redirect.toString());
 	}
 
@@ -156,7 +162,9 @@ authRoutes.get("/github/link/start", async (c) => {
 	);
 	const url = new URL("https://github.com/login/oauth/authorize");
 	url.searchParams.set("client_id", c.env.GITHUB_CLIENT_ID);
-	url.searchParams.set("scope", "read:user");
+	// read:org so the callback can verify + auto-bind every org you're a member of, using
+	// YOUR token — no per-org App "Members:read" approval (which GitHub gates behind sudo).
+	url.searchParams.set("scope", "read:user read:org");
 	url.searchParams.set("state", state);
 	url.searchParams.set("redirect_uri", new URL("/v1/auth/github/callback", c.req.url).toString());
 	return c.json({ url: url.toString() });

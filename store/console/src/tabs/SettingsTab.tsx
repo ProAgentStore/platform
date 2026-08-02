@@ -143,6 +143,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	// sign-in leaves github_login = your email, which can't authorize the GitHub App —
 	// linking records your real GitHub username without switching accounts.
 	const [githubLinked, setGithubLinked] = useState<string | null>(null);
+	const [githubMsg, setGithubMsg] = useState("");
 	const [emailStatus, setEmailStatus] = useState<{ connected: boolean; configured: boolean; email?: string | null } | null>(null);
 	const [emailPermission, setEmailPermission] = useState<boolean | null>(null);
 	const [emailMsg, setEmailMsg] = useState("");
@@ -329,7 +330,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		const justLinked = params.get("github_linked");
 		if (justLinked) {
 			setGithubLinked(justLinked);
+			const bound = params.get("github_bound");
+			if (bound) setGithubMsg(`Connected as ${justLinked} — ${bound} org${bound === "1" ? "" : "s"} linked. Build status will show for their repos.`);
 			params.delete("github_linked");
+			params.delete("github_bound");
 			const q = params.toString();
 			window.history.replaceState({}, "", window.location.pathname + (q ? `?${q}` : ""));
 		}
@@ -814,6 +818,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						{githubLinked ? "Reconnect" : "Connect GitHub"}
 					</button>
 				</div>
+				{githubMsg && <p className="text-xs text-green mb-3 -mt-1">{githubMsg}</p>}
 
 				<div className="flex items-center justify-between gap-3 mb-3">
 					<div className="text-sm">
