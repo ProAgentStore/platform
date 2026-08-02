@@ -18,7 +18,10 @@
 			"!**/dist",
 			"!**/.wrangler",
 			"!**/.vibe-check",
-			"!workers/host/src/pages.ts"
+			"!workers/host/src/pages.ts",
+			"!store/docs",
+			"!**/*.min.js",
+			"!**/*.min.css"
 		]
 	},
 	"overrides": [

@@ -70,7 +70,7 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
 }
 </style>
 <script>
-(function(){function init(){var h=document.querySelector("header");if(!h)return;var nav=h.querySelector("nav");if(!nav||h.querySelector(".m-menu-btn"))return;var b=document.createElement("button");b.className="m-menu-btn";b.setAttribute("aria-label","Menu");b.type="button";b.textContent="☰";b.addEventListener("click",function(e){e.stopPropagation();h.classList.toggle("m-open");b.textContent=h.classList.contains("m-open")?"✕":"☰";});nav.parentNode.insertBefore(b,nav);function close(){h.classList.remove("m-open");b.textContent="☰";}document.addEventListener("click",close);nav.addEventListener("click",close);}if(document.readyState!=="loading")init();else document.addEventListener("DOMContentLoaded",init);})();
+(()=> {function init(){var h=document.querySelector("header");if(!h)return;var nav=h.querySelector("nav");if(!nav||h.querySelector(".m-menu-btn"))return;var b=document.createElement("button");b.className="m-menu-btn";b.setAttribute("aria-label","Menu");b.type="button";b.textContent="☰";b.addEventListener("click",(e)=> {e.stopPropagation();h.classList.toggle("m-open");b.textContent=h.classList.contains("m-open")?"✕":"☰";});nav.parentNode.insertBefore(b,nav);function close(){h.classList.remove("m-open");b.textContent="☰";}document.addEventListener("click",close);nav.addEventListener("click",close);}if(document.readyState!=="loading")init();else document.addEventListener("DOMContentLoaded",init);})();
 </script>
 </head>
 <body>

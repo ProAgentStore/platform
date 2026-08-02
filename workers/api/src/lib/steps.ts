@@ -454,7 +454,7 @@ export const STEP_TOOLS: ToolDef[] = [
 			const itemsPath = typeof input.itemsPath === "string" && input.itemsPath ? input.itemsPath : "data";
 			const maxPages = Math.min(Number(input.maxPages) || 5, 50);
 			const aggregated: unknown[] = [];
-			let cursor: unknown = undefined;
+			let cursor: unknown ;
 			let pages = 0;
 			for (; pages < maxPages; pages++) {
 				const inputs = isRecord(reqTemplate.inputs) ? { ...(reqTemplate.inputs as Record<string, unknown>) } : {};
