@@ -30,7 +30,7 @@ curl https://mcp.proagentstore.online/health
 Expected response:
 
 ```json
-{"ok":true,"service":"proagentstore-mcp","tools":26}
+{"ok":true,"service":"proagentstore-mcp","tools":41}
 ```
 
 ## Skills and Plugins
@@ -107,40 +107,54 @@ That response means the instance runtime path is working and correctly refusing 
 
 ## MCP Tool Groups
 
+The server now registers ~100 tools (about 101 registrations across `index.ts`,
+`instance-tools.ts`, and `storage-tools.ts`). The `/health` liveness marker reports a
+static `tools` count (currently 41) — it is a heartbeat, not an authoritative inventory;
+grep `workers/mcp/src/*.ts` for the full, current surface. The families below are a
+representative slice, not the complete list.
+
 Creator tools:
 
-- `create_agent`
-- `scaffold_agent`
-- `update_agent`
-- `my_agents`
-- `list_agent_files`
-- `read_agent_file`
-- `write_agent_file`
-- `batch_write_agent_files`
-- `trigger_agent_deploy`
-- `agent_deploy_status`
-- `add_knowledge`
-- `list_knowledge`
-- `agent_analytics`
+- `create_agent`, `scaffold_agent`, `update_agent`, `my_agents`
+- `list_agent_files`, `read_agent_file`, `write_agent_file`, `batch_write_agent_files`
+- `trigger_agent_deploy`, `agent_deploy_status`
+- `add_knowledge`, `list_knowledge`, `search_agent_knowledge`, `agent_analytics`
 
 User runtime tools:
 
-- `subscribe_agent`
-- `my_instances`
-- `chat_with_instance`
-- `instance_messages`
-- `add_instance_knowledge`
-- `list_instance_knowledge`
-- `delete_instance_knowledge`
-- `cancel_instance`
+- `subscribe_agent`, `my_instances`, `chat_with_instance`, `instance_messages`
+- `add_instance_knowledge`, `list_instance_knowledge`, `delete_instance_knowledge`, `search_instance_knowledge`
+- `rename_instance`, `cancel_instance`, `register_instance_runtime`, `instance_runtime_status`
+
+Storage / knowledge / RAG:
+
+- `create_collection`, `list_instance_collections`, `insert_record`/`insert_instance_record`, `query_records`/`query_instance_records`, `update_record`
+- `list_instance_files`, `upload_agent_file`, `delete_instance_file`
+- `vector_stats`, `search_instance_knowledge`
+- memory: `get_instance_memory`, `write_instance_memory`, `delete_instance_memory`
+
+Coding (the Coder agent):
+
+- `coding_repos_list`, `coding_repo_add`, `coding_sessions_list`
+- `coding_session_capture`/`message`/`end`/`restart`/`fresh`
+- `coding_loop_start`/`stop`/`status`, `coding_overseer`, `coding_diagnostics`
+
+Repo Chat, triggers, board, settings, trace:
+
+- `ingest_repo`, `ingest_repo_status`, `remove_repo`
+- `list_instance_triggers`, `create_instance_trigger`, `run_instance_trigger`, `delete_instance_trigger`, `list_instance_trigger_events`
+- `instance_board`, `set_board_item_status`, `get_instance_board_config`, `set_instance_board_config`
+- `get_instance_settings`/`set_instance_settings`, `get_instance_instructions`/`set_instance_instructions`, `get_translation_config`/`set_translation_config`
+- `agent_trace` (unified run timeline — primary debug tool), `instance_activity`, `mcp_audit_log`
+
+Apply, account, usage:
+
+- `apply_to_job`, `upload_resume`, `get_apply_tips`, `get_profile`/`update_profile`
+- `billing_status`, `keys_status`, `email_status`, `usage_summary`
 
 Discovery/reference tools:
 
-- `list_agents`
-- `agent_info`
-- `chat_with_agent`
-- `platform_guide`
-- `sdk_reference`
+- `list_agents`, `agent_info`, `chat_with_agent`, `platform_guide`, `sdk_reference`
 
 ## Live Test Record
 
@@ -163,7 +177,7 @@ Status: active
 
 Verified live:
 
-- MCP exposed 26 tools.
+- MCP exposed its tool set (26 at the time of this 2026-06-11 record; ~100 today — see MCP Tool Groups above).
 - Required instance tools were present.
 - `subscribe_agent` returned the existing active instance.
 - `add_instance_knowledge` saved a document to that private instance.

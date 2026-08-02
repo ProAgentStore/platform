@@ -4,7 +4,7 @@ This document is the current architecture map and assessment for the ProAgentSto
 platform repo. It is intended to be the first place to look before changing core
 runtime, storage, MCP, console, connector, or agent infrastructure.
 
-Status: current as of 2026-07-11.
+Status: current as of 2026-08-02.
 
 ## Executive Summary
 
@@ -159,7 +159,7 @@ The API worker is a Hono app. It mounts route modules for:
 - Instance storage: documents, files, collections, search, activity, summaries
 - Runtime: `/v1/relay`, runtime registration/status/task mirrors
 - Coding: `/v1/instances/:id/coding/...`
-- Connectors: Gmail, Google Drive, Zoho WorkDrive
+- Connectors: `/v1/github` (GitHub App), `/v1/drive` (Google Drive), `/v1/workdrive` (Zoho WorkDrive), `/v1/email` (Gmail, apply-flow reads); registry connectors (github, http, meta, web-search, tmux, browser) are dispatched through the tool loop, not per-connector routes
 - Keys: BYOK key vault and key proxy
 - Billing, notifications, push, dashboard, errors
 
@@ -403,44 +403,81 @@ update?" ambiguity.
 
 ## Connectors
 
-Current connectors:
+There are two connector layers, added at different times for different jobs.
 
-- Gmail: OAuth, email permission toggle, apply-flow email reads.
-- Google Drive: OAuth, file search, text/document import into knowledge.
+### Ingest connectors (knowledge import)
+
+The original layer — OAuth providers whose files are imported into an instance's
+knowledge:
+
+- Gmail: OAuth, email permission toggle, apply-flow email reads (`/v1/email`).
+- Google Drive: OAuth, file search, text/document import into knowledge (`/v1/drive`).
 - Zoho WorkDrive: OAuth, folder browsing, paginated import of supported
-  text-like files into knowledge.
+  text-like files into knowledge (`/v1/workdrive`).
 
 Connector tokens are stored in `user_api_keys` with encrypted refresh tokens.
 OAuth connections are account-level, but Drive/WorkDrive access is narrowed per
-agent instance through `instance_connector_grants`. A user connects Google or
-Zoho once, then grants individual agent instances access to specific folders.
-Folder grants authorize that folder and descendants. Knowledge imports for those
-providers must pass through an instance grant before files are copied into that
-instance's documents.
+agent instance through `instance_connector_grants` (grantModel `instance-resource`).
+A user connects Google or Zoho once, then grants individual agent instances access
+to specific folders; folder grants authorize that folder and descendants.
 
-### Assessment
+### Connector + tool registry framework (issues #84–#90)
 
-The connector model is useful and consistent with the Knowledge product. The
-implementation now has an explicit authorization split:
+The "recommended extraction" this doc once called for is now built: a **declared
+connector registry** (`workers/api/src/lib/connectors/registry.ts`). A connector is
+declared once — `{ id, label, auth, scopes: {read, write}, grantModel, tools }` — and
+everything else derives from it (the tool catalog groups, the `connectorClient` auth
+dispatch, capability-based gating). Adding a connector = one registry entry, no bespoke
+routes.
 
-- `user_api_keys`: who connected the external account.
-- `instance_connector_grants`: which agent instance may browse/import from which
-  external roots.
-- Agent knowledge docs: copied content the agent can use after import.
+Registered connectors (`CONNECTORS`):
 
-There is still enough OAuth and token-vault duplication to justify a small
-shared connector service.
+| id | auth | scopes | notes |
+|---|---|---|---|
+| `github` | app (GitHub-App installation token) | read+write | issues + workflow runs; `github_create_issue` is write |
+| `http` | token (vault key) | read+write | generic HTTP/REST — call any API as config |
+| `web-search` | token (vault key) | read | Google Custom Search |
+| `meta` | token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |
+| `tmux` | none (runner relay) | read+write | drive shells/CLIs on the user's machine |
+| `browser` | none (runner relay) | read+write | experimental (`BROWSER_TOOLS_ENABLED`); `browser_navigate`/`browser_snapshot`/`browser_act` |
 
-Recommended extraction:
+Auth is minted through the single `connectorClient(env, provider, {userId, instanceId})`
+path (`connectors/client.ts`): app-installation token, OAuth refresh→access, a vault key,
+or none (local relay). A connector's tools auto-register in the unified **tool registry**
+(`tool-registry.ts`) and are offered to an agent only when declared in
+`capabilities.tools` (`agent-do-tools.ts` `toolNamesFor`). The AgentDO chat loop dispatches
+them via `runRegistryTool` (`agent-think.ts`), the SAME path used by pipelines and the
+generic tool-call API — so auth/grant/scope are enforced identically everywhere.
 
-- OAuth state signing and verification.
-- Encrypted refresh-token get/upsert/delete/status helpers.
-- Connector config status.
-- Import-to-knowledge helper.
-- Shared "supported text-like import" rules.
+**Write-consent gating (#90).** Every `scope:"write"` connector tool is refused unless the
+instance has explicit write-consent for that connector (`instance_connector_consent`,
+migration 0051, `connector-consent.ts`). `runRegistryTool` checks consent BEFORE dispatch,
+fail-closed. Read-only connectors reject write-scoped token requests outright. This is what
+makes `github_create_issue`, `browser_*`, and Meta messaging safe to expose — the model can
+only write where the owner consented.
 
-Avoid a heavy provider abstraction. Provider APIs differ too much. Share only
-the platform mechanics.
+## Pipelines (issues #94–#98)
+
+A declarative, no-code data-pipeline runner: configure (not code) a
+source→transform→sink agent. A pipeline is an ordered list of steps, each a registry
+tool dispatched through the same `runRegistryTool` path (so connector auth/grant/consent
+are enforced identically to a direct tool call). Outputs thread between steps by named
+`bind`; a step input references a prior output or a run parameter via a `$`-prefixed ref;
+`forEach` fans a step out over an array result; the optional `sink` upserts final records
+into an instance collection.
+
+- **Definition + validation**: `lib/pipeline.ts` (`loadPipeline` reads the named pipeline
+  from `agent_instances.config.pipelines`, `validatePipeline`). The pipeline is DATA, not
+  code — a new pipeline is a config edit, never a capability-union change.
+- **Durable runner**: `workflows/pipeline-run.ts` (`PipelineRunWorkflow`, `[[workflows]]
+  PIPELINE_RUN`) walks the steps each in its own `step.do`, so a run is resumable past the
+  30s DO limit (same machinery as JobApply/CodingSession). Connector tokens are re-minted
+  inside each step, never captured across steps, so a resume re-authenticates.
+- **Kick paths**: the LLM-callable `run_pipeline` tool, `POST /v1/instances/:id/pipelines/:name/run`,
+  and cron/webhook triggers (`run_pipeline` trigger action, #92) all funnel through the one
+  `startPipelineRun` helper (`lib/pipeline-run-start.ts`).
+- **Observability (#98)**: every run opens a row (`pipeline_runs`, migration 0052) at kick
+  with a per-record audit trail; `GET /v1/instances/:id/pipeline-runs` + MCP `list_pipeline_runs`.
 
 ## AI and BYOK
 

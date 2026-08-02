@@ -1,10 +1,51 @@
 # Connectors
 
-ProAgentStore connectors are account-level integrations with per-agent grants.
+ProAgentStore has two connector layers, for two different jobs.
 
-The user connects Google Drive, Google Docs, Zoho WorkDrive, Gmail, or another provider to their ProAgentStore account. After connection, the user chooses which agents can access which folders, shared drives, or provider resources.
+1. **Ingest connectors** (this page's original subject): account-level OAuth providers —
+   **Google Drive / Google Docs** and **Zoho WorkDrive** — whose files are imported into an
+   agent instance's knowledge, narrowed by per-folder grants. (Gmail is a related OAuth
+   integration used by the apply flow to read verification emails; it is not a knowledge-ingest
+   connector.)
+2. **Registry connectors** (the tool framework, issues #84–#90): a declared registry of
+   integrations an agent drives as **tools** — GitHub, HTTP/REST, Web Search, Meta, tmux, and
+   the experimental browser. See [Registry connectors](#registry-connectors) below.
 
-## Recommended Permission Model
+## Registry connectors
+
+A registry connector is declared ONCE in `workers/api/src/lib/connectors/registry.ts` as
+`{ id, label, auth, scopes: {read, write}, grantModel, tools }`; the tool catalog, the
+`connectorClient` auth dispatch, and capability-based gating all derive from that single entry.
+An agent gets a connector's tools only when it declares them in `capabilities.tools`.
+
+| Connector | Auth | Scopes | Tools (examples) |
+|---|---|---|---|
+| `github` | GitHub-App installation token | read + write | `github_list_issues`, `github_read_issue`, `github_create_issue` (write), `github_workflow_runs` |
+| `http` | vault API key | read + write | `http_request` (call any REST API as configuration) |
+| `web-search` | vault API key | read | `web_search` (Google Custom Search) |
+| `meta` | platform token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |
+| `tmux` | none (runner relay) | read + write | `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write) |
+| `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
+
+**Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:
+a GitHub-App installation token, an OAuth refresh→access exchange, a key from the user's BYOK
+vault (`user_api_keys`), or none for local relay connectors (tmux/browser reach the user's
+machine over the WebSocket relay — machine ownership is already enforced by the relay-token
+handshake).
+
+**Write-consent gating (#90).** Every `scope:"write"` connector tool is refused unless the
+instance has explicit write-consent for that connector (`instance_connector_consent`, migration
+0051). `runRegistryTool` checks consent *before* dispatch, fail-closed; read-only connectors
+reject write-scoped calls outright. So `github_create_issue`, Meta messaging, and `browser_*`
+can only write where the instance owner has granted that connector's write scope. Reads
+(`github_list_issues`, `browser_snapshot`, …) need only the connector granted / the runner online.
+
+**The browser connector is experimental** and additionally gated behind the API worker's
+`BROWSER_TOOLS_ENABLED` env flag (fail-closed when unset) — first-party / self-use only until the
+browser trust model lands. It bridges the runner's real-Chrome hands (`/browser/snapshot` +
+`/browser/act`) into the registry so a config/data agent can drive a browser without bespoke code.
+
+## Recommended Permission Model (ingest connectors)
 
 Connect providers to the account, not to individual agents.
 

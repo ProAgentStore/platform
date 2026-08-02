@@ -1,8 +1,12 @@
 # Coder agent — local vs cloud placement (design)
 
-> **Status:** design, captured 2026-06-26. Forward-looking; gated on the CF Sandbox
-> SDK (beta) and on the current agents being solid first. See
-> `cloudflare-agent-stack-2026.md` §2.
+> **Status:** design only — NOT implemented as of 2026-08-02. The shipped Coder is
+> **local-runner-only**: `CodingSessionWorkflow` resolves a local runner via the relay
+> (`getRunnerConn`) and has no cloud/`managed` code path; the `instance_runtimes.placement`
+> column exists but nothing routes on it, and there is no Cloudflare Sandbox integration in
+> `workers/api/src`. The GCP cloud-VM roadmap was dropped (CF has no persistent shell host —
+> self-hosted runner only). This doc is forward-looking design, gated on the CF Sandbox SDK
+> (beta) and on the current agents being solid first. See `cloudflare-agent-stack-2026.md` §2.
 
 Goal: let a coding session run **on the user's machine** (today) OR **in the cloud**
 (new) — a per-session/per-repo choice. Maps onto the existing

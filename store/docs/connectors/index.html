@@ -263,10 +263,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
 
         <li class="md-nav__item">
-  <a href="#recommended-permission-model" class="md-nav__link">
+  <a href="#registry-connectors" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Recommended Permission Model
+        Registry connectors
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#recommended-permission-model-ingest-connectors" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Recommended Permission Model (ingest connectors)
       </span>
     </span>
   </a>
@@ -544,10 +555,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
 
         <li class="md-nav__item">
-  <a href="#recommended-permission-model" class="md-nav__link">
+  <a href="#registry-connectors" class="md-nav__link">
     <span class="md-ellipsis">
       <span class="md-typeset">
-        Recommended Permission Model
+        Registry connectors
+      </span>
+    </span>
+  </a>
+
+</li>
+
+        <li class="md-nav__item">
+  <a href="#recommended-permission-model-ingest-connectors" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Recommended Permission Model (ingest connectors)
       </span>
     </span>
   </a>
@@ -636,9 +658,86 @@
 
 
 <h1 id="connectors">Connectors<a class="headerlink" href="#connectors" title="Permanent link">&para;</a></h1>
-<p>ProAgentStore connectors are account-level integrations with per-agent grants.</p>
-<p>The user connects Google Drive, Google Docs, Zoho WorkDrive, Gmail, or another provider to their ProAgentStore account. After connection, the user chooses which agents can access which folders, shared drives, or provider resources.</p>
-<h2 id="recommended-permission-model">Recommended Permission Model<a class="headerlink" href="#recommended-permission-model" title="Permanent link">&para;</a></h2>
+<p>ProAgentStore has two connector layers, for two different jobs.</p>
+<ol>
+<li><strong>Ingest connectors</strong> (this page's original subject): account-level OAuth providers —
+   <strong>Google Drive / Google Docs</strong> and <strong>Zoho WorkDrive</strong> — whose files are imported into an
+   agent instance's knowledge, narrowed by per-folder grants. (Gmail is a related OAuth
+   integration used by the apply flow to read verification emails; it is not a knowledge-ingest
+   connector.)</li>
+<li><strong>Registry connectors</strong> (the tool framework, issues #84–#90): a declared registry of
+   integrations an agent drives as <strong>tools</strong> — GitHub, HTTP/REST, Web Search, Meta, tmux, and
+   the experimental browser. See <a href="#registry-connectors">Registry connectors</a> below.</li>
+</ol>
+<h2 id="registry-connectors">Registry connectors<a class="headerlink" href="#registry-connectors" title="Permanent link">&para;</a></h2>
+<p>A registry connector is declared ONCE in <code>workers/api/src/lib/connectors/registry.ts</code> as
+<code>{ id, label, auth, scopes: {read, write}, grantModel, tools }</code>; the tool catalog, the
+<code>connectorClient</code> auth dispatch, and capability-based gating all derive from that single entry.
+An agent gets a connector's tools only when it declares them in <code>capabilities.tools</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Connector</th>
+<th>Auth</th>
+<th>Scopes</th>
+<th>Tools (examples)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>github</code></td>
+<td>GitHub-App installation token</td>
+<td>read + write</td>
+<td><code>github_list_issues</code>, <code>github_read_issue</code>, <code>github_create_issue</code> (write), <code>github_workflow_runs</code></td>
+</tr>
+<tr>
+<td><code>http</code></td>
+<td>vault API key</td>
+<td>read + write</td>
+<td><code>http_request</code> (call any REST API as configuration)</td>
+</tr>
+<tr>
+<td><code>web-search</code></td>
+<td>vault API key</td>
+<td>read</td>
+<td><code>web_search</code> (Google Custom Search)</td>
+</tr>
+<tr>
+<td><code>meta</code></td>
+<td>platform token (<code>META_ACCESS_TOKEN</code>)</td>
+<td>write</td>
+<td><code>whatsapp_send_message</code>, <code>instagram_send_dm</code></td>
+</tr>
+<tr>
+<td><code>tmux</code></td>
+<td>none (runner relay)</td>
+<td>read + write</td>
+<td><code>tmux_list_sessions</code>, <code>tmux_capture_pane</code>, <code>tmux_run_command</code> (write)</td>
+</tr>
+<tr>
+<td><code>browser</code></td>
+<td>none (runner relay)</td>
+<td>read + write</td>
+<td><code>browser_snapshot</code>, <code>browser_navigate</code> (write), <code>browser_act</code> (write) — experimental</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Auth</strong> is minted through one path — <code>connectorClient(env, provider, {userId, instanceId})</code>:
+a GitHub-App installation token, an OAuth refresh→access exchange, a key from the user's BYOK
+vault (<code>user_api_keys</code>), or none for local relay connectors (tmux/browser reach the user's
+machine over the WebSocket relay — machine ownership is already enforced by the relay-token
+handshake).</p>
+<p><strong>Write-consent gating (#90).</strong> Every <code>scope:"write"</code> connector tool is refused unless the
+instance has explicit write-consent for that connector (<code>instance_connector_consent</code>, migration
+0051). <code>runRegistryTool</code> checks consent <em>before</em> dispatch, fail-closed; read-only connectors
+reject write-scoped calls outright. So <code>github_create_issue</code>, Meta messaging, and <code>browser_*</code>
+can only write where the instance owner has granted that connector's write scope. Reads
+(<code>github_list_issues</code>, <code>browser_snapshot</code>, …) need only the connector granted / the runner online.</p>
+<p><strong>The browser connector is experimental</strong> and additionally gated behind the API worker's
+<code>BROWSER_TOOLS_ENABLED</code> env flag (fail-closed when unset) — first-party / self-use only until the
+browser trust model lands. It bridges the runner's real-Chrome hands (<code>/browser/snapshot</code> +
+<code>/browser/act</code>) into the registry so a config/data agent can drive a browser without bespoke code.</p>
+<h2 id="recommended-permission-model-ingest-connectors">Recommended Permission Model (ingest connectors)<a class="headerlink" href="#recommended-permission-model-ingest-connectors" title="Permanent link">&para;</a></h2>
 <p>Connect providers to the account, not to individual agents.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>User account
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  -&gt; provider connection

@@ -22,7 +22,7 @@ ProAgentStore Workflow
   -> Playwright browser or tmux CLI
 ```
 
-Cloudflare Tunnel remains a fallback/debug path for older runtime registrations, but the default model is outbound WebSocket relay.
+The outbound WebSocket relay is the only transport. The earlier Cloudflare Tunnel / cloudflared modes were removed — there is no tunnel fallback, no `--tunnel` flag, and no public inbound server. The runner mints a short-lived, instance-scoped relay token and opens `wss://…/v1/relay/:instanceId/connect`; the relay DO is keyed per (instance, node) and hibernates when idle.
 
 ## Brain vs Hands
 

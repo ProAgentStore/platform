@@ -572,7 +572,7 @@
 <p>Creators publish agent templates. Users subscribe to private agent instances. Each instance keeps user-specific state, knowledge, memory, credentials, and runtime tasks. The console, API, MCP server, connectors, and local runner all operate on that same private instance model.</p>
 <h2 id="start-here">Start Here<a class="headerlink" href="#start-here" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="connectors/">Connectors</a>: connect Google Drive, Google Docs, and Zoho WorkDrive at the account level, then grant selected folders or shared drives to agents.</li>
+<li><a href="connectors/">Connectors</a>: two layers — <em>ingest</em> connectors (Google Drive, Google Docs, Zoho WorkDrive) imported into knowledge via per-folder grants, and <em>registry</em> connectors an agent drives as tools (GitHub, HTTP/REST, Web Search, Meta, tmux, and the experimental browser), with per-instance write-consent gating.</li>
 <li><a href="triggers/">Triggers</a>: configure webhooks and cron schedules for private agent instances.</li>
 <li><a href="mcp/">MCP</a>: connect Codex, Claude Code, Cursor, and other MCP clients to the official ProAgentStore MCP server.</li>
 <li><a href="browser-runtime/">Browser Runtime</a>: run local browser and CLI capabilities with <code>pags up</code>.</li>

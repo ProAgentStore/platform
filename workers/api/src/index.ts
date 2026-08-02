@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HttpError } from "./lib/auth.js";
-import { logUnhandled } from "./lib/on-error.js";
+import { isTransientInfraError, logUnhandled } from "./lib/on-error.js";
+import { verifySession } from "./lib/session.js";
 import { rateLimitAdmin, rateLimitDefault, rateLimitStrict } from "./lib/rate-limit.js";
 import { agentRoutes } from "./routes/agents.js";
 import { agentBuilderRoutes } from "./routes/agent-builder.js";
@@ -149,12 +150,29 @@ app.get("/health", (c) => c.json({ ok: true, service: "proagentstore-api" }));
 // ── Global error handler ───────────────────────────────────────────────────
 
 app.onError(async (err, c) => {
+	// Transient infra (DO reset on deploy, overload) isn't a bug — don't log it as a 500;
+	// tell the client to retry. This is what the two "chat → 500" reports actually were.
+	if (isTransientInfraError(err)) {
+		return c.json({ error: "The service is updating — please try again in a moment." }, 503);
+	}
+	// Attribute the failure to the signed-in user (when the request carries a valid
+	// session) so it appears in THEIR /v1/errors view, not just the admin all-scope read.
+	const uid = await uidFromRequest(c);
 	// Persist the exception (full message + stack for real bugs) so it shows up in the
-	// admin Errors view instead of vanishing into the ephemeral worker console.
-	await logUnhandled(c.env, err, { path: c.req.path, method: c.req.method });
+	// user's + admin Errors view instead of vanishing into the ephemeral worker console.
+	await logUnhandled(c.env, err, { path: c.req.path, method: c.req.method, userId: uid });
 	if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
 	return c.json({ error: "Internal server error" }, 500);
 });
+
+/** Best-effort uid from the request's bearer token — null if absent/invalid. Mirrors
+ *  the rate-limiter's subject(); never throws so the error path can't break. */
+async function uidFromRequest(c: { req: { header: (n: string) => string | undefined }; env: Env }): Promise<string | null> {
+	const header = c.req.header("Authorization");
+	if (!header?.startsWith("Bearer ")) return null;
+	const session = await verifySession(header.slice(7), c.env.SESSION_SIGNING_KEY).catch(() => null);
+	return session?.uid ?? null;
+}
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 

@@ -627,7 +627,7 @@
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  -&gt; local browser runner
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  -&gt; Playwright browser or tmux CLI
 </span></code></pre></div>
-<p>Cloudflare Tunnel remains a fallback/debug path for older runtime registrations, but the default model is outbound WebSocket relay.</p>
+<p>The outbound WebSocket relay is the only transport. The earlier Cloudflare Tunnel / cloudflared modes were removed — there is no tunnel fallback, no <code>--tunnel</code> flag, and no public inbound server. The runner mints a short-lived, instance-scoped relay token and opens <code>wss://…/v1/relay/:instanceId/connect</code>; the relay DO is keyed per (instance, node) and hibernates when idle.</p>
 <h2 id="brain-vs-hands">Brain vs Hands<a class="headerlink" href="#brain-vs-hands" title="Permanent link">&para;</a></h2>
 <p>The workflow brain runs in ProAgentStore. The hands run locally.</p>
 <table>
