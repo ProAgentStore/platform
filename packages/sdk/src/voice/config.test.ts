@@ -46,10 +46,10 @@ describe("resolveVoiceConfig — clamping", () => {
 		expect(resolveVoiceConfig({ silenceMs: "nope" }, false).silenceMs).toBe(1500);
 	});
 
-	it("clamps sensitivity to 0.4–2 and defaults to 1", () => {
+	it("clamps sensitivity to 0.4–2 and defaults to a conservative 0.8", () => {
 		expect(resolveVoiceConfig({ sensitivity: 0 }, false).sensitivity).toBe(0.4);
 		expect(resolveVoiceConfig({ sensitivity: 5 }, false).sensitivity).toBe(2);
-		expect(resolveVoiceConfig({}, false).sensitivity).toBe(1);
+		expect(resolveVoiceConfig({}, false).sensitivity).toBe(0.8);
 	});
 
 	it("defaults voice + language", () => {

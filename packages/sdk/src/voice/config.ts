@@ -79,7 +79,9 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		language: (vs.language as string) || "en-US",
 		silenceMs: clamp(vs.silenceMs, 500, 6000, 1500),
 		maxDictationMs: clamp(vs.maxDictationMs, 10000, 300000, 60000),
-		sensitivity: clamp(vs.sensitivity, 0.4, 2, 1),
+		// Conservative default (0.8, was 1): lower = needs a clearer gap above the noise floor,
+		// so background noise is less likely to be treated as speech. Raise it for a soft voice.
+		sensitivity: clamp(vs.sensitivity, 0.4, 2, 0.8),
 		commandsEnabled: vs.commandsEnabled !== false,
 		keepAwake: vs.keepAwake !== false,
 		repeatWords: parseWords(vs.repeatWords),

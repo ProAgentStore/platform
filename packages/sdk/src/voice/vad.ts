@@ -39,8 +39,13 @@ export interface VadConfig {
 	idleMs?: number;
 }
 
-/** Minimum peak to count as real speech rather than room noise. */
-const VOICE_FLOOR = 0.05;
+/** Minimum peak (0–1 RMS) to count as real speech rather than room noise. Conservative on
+ *  purpose: typical room/keyboard/fan noise sits around ~0.05–0.08, so a floor below that let
+ *  background noise register as speech — which (a) triggered transcription of nothing and
+ *  (b) kept steady noise "speaking" so the turn never ended (the mic-never-stops bug). Real
+ *  speech peaks well above this (~0.15–0.4). Users who need to pick up a very soft voice raise
+ *  Mic sensitivity. */
+const VOICE_FLOOR = 0.1;
 
 /**
  * Should the automatic end-of-turn VAD run this frame? Only in Whisper hands-free, and

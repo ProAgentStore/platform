@@ -529,7 +529,8 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 	const sttMode = body.sttMode === "openai" ? "openai" : "browser";
 	// Mic sensitivity for Whisper silence detection (0.4–2): higher = more sensitive
 	// (quiet mics); lower = needs louder speech (noisy environments).
-	const sensitivity = typeof body.sensitivity === "number" ? Math.max(0.4, Math.min(2, body.sensitivity)) : 1;
+	// Conservative default (0.8): lower = less likely to treat background noise as speech.
+	const sensitivity = typeof body.sensitivity === "number" ? Math.max(0.4, Math.min(2, body.sensitivity)) : 0.8;
 	const settings = {
 		provider,
 		speed,

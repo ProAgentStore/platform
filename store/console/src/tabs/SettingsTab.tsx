@@ -1110,7 +1110,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					<div className="mt-4">
 						<label htmlFor="voice-sensitivity" className="block text-sm font-semibold mb-1">Mic sensitivity</label>
 						<p className="text-xs text-muted mb-2">
-							If it keeps listening and never sends, your mic is noisy — lower this. If it cuts you off too soon, raise it.
+							How readily background sound counts as speech. Lower = ignores more room/keyboard/fan noise (recommended). Raise it only if it cuts you off or misses a soft voice. If it keeps listening and never sends, lower it.
 						</p>
 						<select
 							id="voice-sensitivity"
@@ -1118,7 +1118,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							onChange={(e) => { setSensitivity(Number(e.target.value)); saveVoice({ sensitivity: Number(e.target.value) }); }}
 							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
 						>
-							<option value={0.6}>Low — noisy mic / room</option>
+							<option value={0.6}>Low — very noisy room</option>
+							<option value={0.8}>Standard — filters background noise (recommended)</option>
 							<option value={1}>Normal</option>
 							<option value={1.5}>High — quiet mic / soft voice</option>
 						</select>

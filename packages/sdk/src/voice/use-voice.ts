@@ -494,13 +494,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// own voice. Critical for push-to-talk + auto-speak, where the recognizer keeps
 		// running (it only flips micOn) and would otherwise hear the agent and reply to
 		// itself. In conversation mode it's already paused; this just double-ensures it.
-		// EXCEPTION: when a stop-speech keyword is configured in a listening mode, keep the
-		// recognizer running THROUGH the TTS so the user can say it to interrupt — every
-		// non-keyword result is still dropped as echo by the guard in handleResult; only the
-		// keyword acts (halts playback). Default (no keyword) is unchanged: hard-stop as before.
-		const listenForStopKeyword = !!stopSpeechKeywordRef.current && convoOnRef.current;
+		// NOTE: we ALWAYS stop here — a previous experiment kept the recognizer alive through
+		// TTS (for the stop-speech keyword) and left the mic effectively never stopping. The
+		// stop-keyword now just fires on the first transcript after playback instead.
 		pausedForThinkingRef.current = true;
-		if (!listenForStopKeyword && sttRef.current?.listening) sttRef.current.stop();
+		if (sttRef.current?.listening) sttRef.current.stop();
 		setMicOn(false);
 		setSpeaking(true);
 		try {
