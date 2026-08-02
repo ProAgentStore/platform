@@ -18,6 +18,12 @@ const RESTART_DELAY_MS = 350;
 // ECHO_GUARD_MS + all input guards now live in ./machine.ts (the pure, tested interaction
 // model) so the decisions are made ONE way instead of re-derived inline at every call site.
 
+// Single hands-free session across the ENTIRE app. Every view (InstanceDetail, CopilotView,
+// ReposList, …) has its own useVoice instance; this module-level slot is the shared coordinator
+// so starting hands-free anywhere stops any other hands-free already running. Holds the current
+// session's teardown callback, keyed by a stable per-hook token so a hook never stops itself.
+let activeHandsFree: { token: object; stop: () => void } | null = null;
+
 /**
  * Unlock browser Text-to-Speech synchronously inside a user gesture. iOS/Safari
  * won't speak an utterance that's queued LATER (e.g. an async agent reply) unless
@@ -849,25 +855,45 @@ export function useVoice(instanceId: string | undefined, opts: {
 		wakeLockRef.current = null;
 	}, []);
 
+	// Full hands-free teardown — flip the ref FIRST (so any in-flight onEnd handler or queued
+	// restart timer sees convo is off and does NOT re-open the mic; state updates the ref only
+	// on the next render — too late), then stop the mic, TTS, timers, wake lock, and state.
+	// Extracted so the single-hands-free coordinator can call it to stop another view's session.
+	const stopConvo = useCallback(() => {
+		convoOnRef.current = false;
+		manualTalkRef.current = false;
+		pausedForThinkingRef.current = true;
+		if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+		if (maxDictationTimerRef.current) { clearTimeout(maxDictationTimerRef.current); maxDictationTimerRef.current = null; }
+		pendingTextRef.current = "";
+		sttRef.current?.stop();
+		ttsRef.current?.cancel();
+		setSpeaking(false);
+		stopAudioMonitor();
+		releaseWakeLock();
+		setConvoOn(false);
+		setTalking(false);
+		setMicOn(false);
+		setInterim("");
+	}, [stopAudioMonitor, releaseWakeLock]);
+	const stopConvoRef = useRef(stopConvo);
+	stopConvoRef.current = stopConvo;
+
+	// One hands-free session app-wide: entering hands-free stops any OTHER active session first,
+	// then claims the shared slot; leaving it (or unmounting) releases the slot. Keyed on convoOn
+	// so it fires for EVERY entry path (toggleConvo, setVoiceMode, unmount) across all views.
+	const selfTokenRef = useRef({});
+	// biome-ignore lint/correctness/useExhaustiveDependencies: selfTokenRef/stopConvoRef are stable refs; only convoOn should retrigger this.
+	useEffect(() => {
+		if (!convoOn) return;
+		if (activeHandsFree && activeHandsFree.token !== selfTokenRef.current) activeHandsFree.stop();
+		activeHandsFree = { token: selfTokenRef.current, stop: () => stopConvoRef.current() };
+		return () => { if (activeHandsFree?.token === selfTokenRef.current) activeHandsFree = null; };
+	}, [convoOn]);
+
 	const toggleConvo = useCallback(async () => {
 		if (convoOn) {
-			// Turn OFF synchronously: flip the ref NOW so any in-flight onEnd handler or
-			// queued restart timer sees convo is off and does NOT re-open the mic. (State
-			// updates the ref only on the next render — too late, the mic restarts.)
-			convoOnRef.current = false;
-			manualTalkRef.current = false;
-			pausedForThinkingRef.current = true;
-			if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-			pendingTextRef.current = "";
-			sttRef.current?.stop();
-			ttsRef.current?.cancel();
-			setSpeaking(false);
-			stopAudioMonitor();
-			releaseWakeLock();
-			setConvoOn(false);
-			setTalking(false);
-			setMicOn(false);
-			setInterim("");
+			stopConvo();
 			return;
 		}
 		try { getAudioCtx().resume(); } catch {}
@@ -886,7 +912,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			void acquireWakeLock(); // keep the screen awake so hands-free doesn't get suspended
 			playListeningChime();
 		} catch { setConvoOn(false); }
-	}, [convoOn, makeStt, startAudioMonitor, stopAudioMonitor, ensureTts, acquireWakeLock, releaseWakeLock]);
+	}, [convoOn, stopConvo, makeStt, startAudioMonitor, ensureTts, acquireWakeLock]);
 
 	/** Stop speaking immediately (tap a message to interrupt). */
 	const cancelSpeak = useCallback(() => {
