@@ -353,7 +353,7 @@ export default function CopilotView({
 				const StatusIcon = s.icon === "spin" ? Loader2 : s.icon === "speak" ? Volume2 : Mic;
 				return (
 					<div className="absolute left-0 right-0 bottom-3 flex justify-center px-4 pointer-events-none z-20">
-						<button type="button" onClick={s.tap ? voice.toggleTalk : undefined} disabled={!s.tap} aria-live="polite" className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm shadow-lg transition-all ${cls} ${s.tap ? "cursor-pointer" : "cursor-default"}`}>
+						<button type="button" onClick={s.tap ? (s.tone === "speak" ? voice.cancelSpeak : voice.toggleTalk) : undefined} disabled={!s.tap} aria-live="polite" className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm shadow-lg transition-all ${cls} ${s.tap ? "cursor-pointer" : "cursor-default"}`}>
 							<StatusIcon size={16} className={s.icon === "spin" ? "animate-spin" : ""} />
 							{s.label}
 						</button>

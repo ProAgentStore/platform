@@ -88,7 +88,9 @@ export function resolveVoiceStatus(input: {
 	if (thinking) return { label: "Working on it…", tone: "work", spin: true, tap: false, icon: "spin" };
 	// Agent talking back — surface in EVERY mode (incl. a manual replay in text chat) so
 	// it's obvious the mic is not listening to you right now (the self-transcription worry).
-	if (speaking) return { label: "Speaking…", tone: "speak", spin: false, tap: false, icon: "speak" };
+	// Tappable so the user can cut the reply off (the pill's onClick routes a `speak`-tone tap
+	// to cancelSpeak, not toggleTalk).
+	if (speaking) return { label: "Speaking · tap to stop", tone: "speak", spin: false, tap: true, icon: "speak" };
 	if (mode === "text") return null;
 	if (transcribing) return { label: "Transcribing…", tone: "work", spin: true, tap: false, icon: "spin" };
 	if (talking) return { label: "Listening — tap to send", tone: "live", spin: false, tap: true, icon: "mic" };

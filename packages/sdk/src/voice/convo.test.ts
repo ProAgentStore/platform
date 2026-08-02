@@ -178,10 +178,10 @@ describe("resolveVoiceStatus", () => {
 			.toMatchObject({ label: "Working on it…" });
 	});
 
-	it("shows 'Speaking…' while the agent talks — in EVERY mode, so the mic clearly isn't hot", () => {
+	it("Speaking shows in EVERY mode (mic clearly isn't hot) and is tappable to stop TTS (#128)", () => {
 		for (const mode of ["text", "ptt", "handsfree"] as const) {
 			expect(resolveVoiceStatus({ ...base, mode, speaking: true }))
-				.toMatchObject({ label: "Speaking…", tone: "speak", spin: false, tap: false, icon: "speak" });
+				.toMatchObject({ label: "Speaking · tap to stop", tone: "speak", spin: false, tap: true, icon: "speak" });
 		}
 	});
 
@@ -191,7 +191,7 @@ describe("resolveVoiceStatus", () => {
 			.toMatchObject({ label: "Working on it…" });
 		// While speaking, the mic is off — must not read "Transcribing…"/"Listening…".
 		expect(resolveVoiceStatus({ ...base, mode: "handsfree", speaking: true, transcribing: true, listening: true }))
-			.toMatchObject({ label: "Speaking…", tone: "speak" });
+			.toMatchObject({ label: "Speaking · tap to stop", tone: "speak" });
 	});
 });
 
