@@ -75,10 +75,14 @@ githubRoutes.get("/callback", async (c) => {
 	// installation_id query param is attacker-controlled, so it must be proven —
 	// not trusted — before we mint/cache a token for it. This is the only path
 	// that creates a github_installations row.
-	const user = await c.env.DB.prepare("SELECT github_login FROM users WHERE id = ?1")
+	// Prefer the explicitly LINKED GitHub username over github_login: Google sign-in stores
+	// the user's email in github_login (migration 0049), which can't verify org membership.
+	// `linked_github_login` (set via /v1/auth/github/link) holds the real GitHub login.
+	const user = await c.env.DB.prepare("SELECT github_login, linked_github_login FROM users WHERE id = ?1")
 		.bind(session.uid)
-		.first<{ github_login: string | null }>();
-	const result = await authorizeInstallation(c.env, session.uid, user?.github_login ?? null, installationId);
+		.first<{ github_login: string | null; linked_github_login: string | null }>();
+	const login = user?.linked_github_login ?? user?.github_login ?? null;
+	const result = await authorizeInstallation(c.env, session.uid, login, installationId);
 	if (!result.ok) return c.json({ ok: false, error: result.reason, installationId }, 403);
 	return c.json({ ok: true, installationId });
 });

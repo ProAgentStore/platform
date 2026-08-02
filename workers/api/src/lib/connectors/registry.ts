@@ -4,6 +4,7 @@
 // Adding a connector = add an entry here; no bespoke routes.
 import type { Env } from "../../types.js";
 import type { ToolDef } from "../tool-registry.js";
+import { BROWSER_TOOLS } from "./browser.js";
 import { GITHUB_TOOLS } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { META_TOOLS } from "./meta.js";
@@ -69,6 +70,17 @@ export const CONNECTORS: Connector[] = [
 		scopes: { read: true, write: true },
 		grantModel: "user",
 		tools: TMUX_TOOLS,
+	},
+	{
+		id: "browser",
+		label: "Browser (local runner, experimental)",
+		// auth:"none" — reached over the runner relay like tmux; no cloud credential. The tools
+		// are additionally inert unless env BROWSER_TOOLS_ENABLED is set (first-party/self-use
+		// only, #103) and writes need the instance's "browser" write-consent (#90).
+		auth: "none",
+		scopes: { read: true, write: true },
+		grantModel: "user",
+		tools: BROWSER_TOOLS,
 	},
 	{
 		id: "http",

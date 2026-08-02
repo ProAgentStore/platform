@@ -11,6 +11,10 @@ export interface Env {
 	 * LLM chat is always BYOK regardless of this flag.
 	 */
 	PLATFORM_AI_ENABLED?: string;
+	/** Experimental (#103): when "1"/"true", the browser connector's registry tools
+	 *  (browser_navigate / browser_snapshot / browser_act) are live. Unset = inert
+	 *  (fail-closed) — first-party/self-use only until the browser trust model (#75). */
+	BROWSER_TOOLS_ENABLED?: string;
 	/** Remote LLM brain that drives the runner through a job application. */
 	JOB_APPLY: Workflow;
 	/** Remote LLM brain that drives a local coding CLI toward an objective (AgentCoder port). */
