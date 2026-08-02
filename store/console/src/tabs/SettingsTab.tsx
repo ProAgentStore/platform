@@ -123,6 +123,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [repeatWords, setRepeatWords] = useState("");
 	const [muteWords, setMuteWords] = useState("");
 	const [stopWords, setStopWords] = useState("");
+	const [stopSpeechKeyword, setStopSpeechKeyword] = useState("");
 	const [keepAwake, setKeepAwake] = useState(true);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	const [voiceMsg, setVoiceMsg] = useState("");
@@ -209,6 +210,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				if (Array.isArray(vs.repeatWords)) setRepeatWords((vs.repeatWords as string[]).join(", "));
 				if (Array.isArray(vs.muteWords)) setMuteWords((vs.muteWords as string[]).join(", "));
 				if (Array.isArray(vs.stopWords)) setStopWords((vs.stopWords as string[]).join(", "));
+				if (typeof vs.stopSpeechKeyword === "string") setStopSpeechKeyword(vs.stopSpeechKeyword);
 				if (typeof vs.keepAwake === "boolean") setKeepAwake(vs.keepAwake);
 				const oa = vs.openai as Record<string, unknown> | undefined;
 				if (oa && typeof oa.voice === "string") setTtsVoice(oa.voice);
@@ -1174,6 +1176,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						<span className="block text-xs font-semibold mb-0.5">Stop-word — finish my turn</span>
 						<input value={stopWords} onChange={(e) => setStopWords(e.target.value)} onBlur={() => saveVoice({ stopWords })} placeholder="e.g. copy, over  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
 						<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it at the end (“…do it, <b>copy</b>”) to send immediately without waiting for a pause — it's stripped from your message. Off by default since it's an everyday word.</span>
+					</label>
+					<label className="block">
+						<span className="block text-xs font-semibold mb-0.5">Stop-speech keyword — interrupt the agent</span>
+						<input value={stopSpeechKeyword} onChange={(e) => setStopSpeechKeyword(e.target.value)} onBlur={() => saveVoice({ stopSpeechKeyword })} placeholder="e.g. stop stop  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+						<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it <b>while the agent is talking</b> to halt playback immediately (hands-free keeps listening through TTS when this is set). Off by default; pick a distinctive phrase so the agent's own speech can't trigger it.</span>
 					</label>
 				</div>
 

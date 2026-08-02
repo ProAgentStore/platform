@@ -30,6 +30,9 @@ interface VoiceConfig {
 	repeatWords: string[];
 	muteWords: string[];
 	stopWords: string[];
+	/** Say this word/phrase while the agent is speaking to immediately halt playback
+	 *  (e.g. "stop stop"). Empty ⇒ off. Per-instance. Case-insensitive substring match. */
+	stopSpeechKeyword: string;
 }
 
 /** Parse a keywords setting stored as an array OR a comma-separated string into a
@@ -82,6 +85,7 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		repeatWords: parseWords(vs.repeatWords),
 		muteWords: parseWords(vs.muteWords),
 		stopWords: parseWords(vs.stopWords),
+		stopSpeechKeyword: typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword.trim().slice(0, 40) : "",
 	};
 }
 

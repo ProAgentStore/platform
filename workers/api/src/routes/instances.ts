@@ -548,6 +548,8 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		repeatWords: parseVoiceWords(body.repeatWords),
 		muteWords: parseVoiceWords(body.muteWords),
 		stopWords: parseVoiceWords(body.stopWords),
+		// Say this word/phrase while the agent is speaking to halt playback (empty ⇒ off).
+		stopSpeechKeyword: typeof body.stopSpeechKeyword === "string" ? body.stopSpeechKeyword.trim().slice(0, 40) : "",
 	};
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	cfg.voiceSettings = settings;

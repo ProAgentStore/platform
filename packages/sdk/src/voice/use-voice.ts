@@ -373,6 +373,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const repeatWordsRef = useRef<string[]>([]);
 	const muteWordsRef = useRef<string[]>([]);
 	const stopWordsRef = useRef<string[]>([]);
+	// Say this (normalized) word/phrase while the agent is speaking to halt playback. Empty ⇒
+	// off; when set, the recognizer is kept alive through TTS so it can hear it.
+	const stopSpeechKeywordRef = useRef("");
 	// True while reopening the mic after an idle recycle — suppresses the "your turn"
 	// chime (there was no agent turn, so a chime every idle window would be confusing).
 	const idleRecycleRef = useRef(false);
@@ -393,6 +396,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			repeatWordsRef.current = c.repeatWords;
 			muteWordsRef.current = c.muteWords;
 			stopWordsRef.current = c.stopWords;
+			stopSpeechKeywordRef.current = c.stopSpeechKeyword;
 			voiceLangRef.current = c.language;
 		}).catch(() => {});
 	}, [instanceId]);
@@ -490,8 +494,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// own voice. Critical for push-to-talk + auto-speak, where the recognizer keeps
 		// running (it only flips micOn) and would otherwise hear the agent and reply to
 		// itself. In conversation mode it's already paused; this just double-ensures it.
+		// EXCEPTION: when a stop-speech keyword is configured in a listening mode, keep the
+		// recognizer running THROUGH the TTS so the user can say it to interrupt — every
+		// non-keyword result is still dropped as echo by the guard in handleResult; only the
+		// keyword acts (halts playback). Default (no keyword) is unchanged: hard-stop as before.
+		const listenForStopKeyword = !!stopSpeechKeywordRef.current && convoOnRef.current;
 		pausedForThinkingRef.current = true;
-		if (sttRef.current?.listening) sttRef.current.stop();
+		if (!listenForStopKeyword && sttRef.current?.listening) sttRef.current.stop();
 		setMicOn(false);
 		setSpeaking(true);
 		try {
@@ -549,6 +558,19 @@ export function useVoice(instanceId: string | undefined, opts: {
 	muteFromCommandRef.current = muteFromCommand;
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
+		// Stop-speech keyword: checked FIRST, BEFORE the echo/paused guard below — because while
+		// the agent is speaking that guard would otherwise drop every result as echo. If the
+		// configured keyword appears (case-insensitive substring) while TTS is playing, halt
+		// playback + clear the queue immediately. Only acts when the agent is actually speaking,
+		// so a false match just ends the agent's own turn early (contained). Opt-in per instance.
+		const stopKw = stopSpeechKeywordRef.current.toLowerCase();
+		if (stopKw && ttsRef.current?.speaking && text.toLowerCase().includes(stopKw)) {
+			ttsRef.current.cancel(); // cancel current + any queued utterances
+			setSpeaking(false);
+			speakEndedAtRef.current = Date.now();
+			flushSync(() => setInterim(""));
+			return;
+		}
 		// Ignore results the interaction model says we can't act on right now:
 		//  - ECHO (ALL MODES): while the agent speaks OR within its ~0.8s echo tail — it's
 		//    the agent's own voice, not you (the "it transcribes what it's saying" fix). A
@@ -708,6 +730,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			repeatWordsRef.current = c.repeatWords;
 			muteWordsRef.current = c.muteWords;
 			stopWordsRef.current = c.stopWords;
+			stopSpeechKeywordRef.current = c.stopSpeechKeyword;
 			voiceLangRef.current = c.language;
 		} catch {}
 		// Fresh session — re-arm interim keyword detection (covers the case where a command
