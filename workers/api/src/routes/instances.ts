@@ -505,7 +505,9 @@ instanceRoutes.get("/:instanceId/trace", async (c) => {
 
 /** Normalize a keywords field (array OR comma-separated string) → a clean short list. */
 function parseVoiceWords(v: unknown): string[] {
-	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+	// Split on comma / newline / semicolon — NOT space (a phrase can be multi-word, e.g.
+	// "mute mic"). Mirrors parseWords in packages/sdk/src/voice/config.ts.
+	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
 	return list.filter((x): x is string => typeof x === "string").map((s) => s.trim().slice(0, 40)).filter(Boolean).slice(0, 20);
 }
 
@@ -1044,7 +1046,17 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 		)
 		.run();
 
-	const data = await doRes.json();
+	// The AgentDO's own catch returns JSON, but a hard crash (CPU limit / isolate
+	// reset mid-response) makes the platform return a NON-JSON body. Parsing that
+	// blindly threw a SyntaxError that surfaced as an opaque, untraced 500 — the
+	// exact shape of the invisible "chat → 500" reports. Read text, then parse.
+	const raw = await doRes.text();
+	let data: unknown;
+	try {
+		data = raw ? JSON.parse(raw) : {};
+	} catch {
+		data = { error: raw.slice(0, 500) || `Agent did not return a valid response (${doRes.status})` };
+	}
 	if (doRes.ok) {
 		// Trace the turn (in → tools → out) grouped by one turn id so agent_trace
 		// shows what the agent was asked, which tools it ran, and what it replied.
@@ -1077,7 +1089,7 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 			{ provider: "cloudflare" },
 		);
 	}
-	return c.json(data, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
+	return c.json(data as Record<string, unknown>, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
 });
 
 /** Loop orchestrator — BYOK Claude decides next action for an autonomous loop. */

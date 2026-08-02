@@ -59,8 +59,16 @@ chatRoutes.post("/:id/chat", async (c) => {
 		.bind(crypto.randomUUID(), agent.id, session.uid)
 		.run();
 
-	const data = await doRes.json();
-	return c.json(data, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
+	// A hard DO crash (CPU limit / isolate reset) returns a non-JSON body; parsing it
+	// blindly threw a SyntaxError that became an opaque 500. Read text, then parse.
+	const raw = await doRes.text();
+	let data: unknown;
+	try {
+		data = raw ? JSON.parse(raw) : {};
+	} catch {
+		data = { error: raw.slice(0, 500) || `Agent did not return a valid response (${doRes.status})` };
+	}
+	return c.json(data as Record<string, unknown>, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
 });
 
 /** WebSocket upgrade for real-time chat. */

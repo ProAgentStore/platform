@@ -164,6 +164,16 @@ describe("POST /v1/agents/:id/chat (auth + ownership)", () => {
 		expect(res.status).toBe(429);
 		expect((await res.json() as any).error).toBe("rate limited");
 	});
+
+	it("does not throw an opaque 500 when the DO returns a non-JSON body (hard crash)", async () => {
+		const { app, env, setDoResponse } = buildApp([{ id: "a1", owner_id: "u1", name: "A" }]);
+		// Simulate a platform-level DO crash: a non-JSON 500 body (was → SyntaxError → generic 500).
+		setDoResponse(() => new Response("Error: Worker exceeded CPU time limit.", { status: 500 }));
+		const res = await json(app, env, "POST", "/v1/agents/a1/chat", { message: "hi" }, await tokenFor("u1"));
+		expect(res.status).toBe(500);
+		// The real DO body is surfaced (traceable) instead of a masked "Internal server error".
+		expect((await res.json() as any).error).toContain("CPU time");
+	});
 });
 
 describe("GET /v1/agents/:id/ws (WebSocket auth boundary)", () => {
