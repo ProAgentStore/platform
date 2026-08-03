@@ -8,6 +8,7 @@ import { BROWSER_TOOLS } from "./browser.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { META_CONNECTOR } from "./meta.js";
+import { GOOGLE_SHEETS_CONNECTOR } from "./google-sheets.js";
 import { TMUX_TOOLS } from "./tmux.js";
 import { WEB_SEARCH_CONNECTOR } from "./web-search.js";
 
@@ -97,6 +98,10 @@ export const CONNECTORS: Connector[] = [
 	// data (`WEB_SEARCH_MANIFEST`), compiled to this Connector; the tool keeps its custom output
 	// via the manifest `handler` escape hatch. Behavior-identical to the old hand-written form.
 	WEB_SEARCH_CONNECTOR,
+	// google_sheets (#89): the first oauth2 manifest connector — connected via the generic
+	// /v1/connectors/:id/oauth flow (#147), read + append rows. Inert until the Google OAuth app
+	// has the spreadsheets scope + the connector callback registered.
+	GOOGLE_SHEETS_CONNECTOR,
 ];
 
 const BY_ID: ReadonlyMap<string, Connector> = new Map(CONNECTORS.map((c) => [c.id, c] as const));
