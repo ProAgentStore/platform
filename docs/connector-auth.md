@@ -152,6 +152,16 @@ Reading the tickets against the code turned up drift worth fixing:
 - **#143** should absorb `dcr-oauth2` as Phase 2b; it is a precondition for Phase 3, not an
   extra.
 
+## Tracking
+
+| Work | Ticket |
+|---|---|
+| `dcr-oauth2` — discovery + DCR + PKCE | ProAgentStore/platform#180 |
+| Unattended credential survivability | ProAgentStore/platform#181 |
+| Console UI for connections + delivery outbox | ProAgentStore/platform#182 |
+| Unify trigger retries onto the outbox | ProAgentStore/platform#17 (re-scoped) |
+| `refresh_token` grant on the MCP OAuth provider | freewebstore-online/platform#114 |
+
 ## Recommendation
 
 1. Add `dcr-oauth2` to the connector auth model (discovery + DCR + PKCE, grant keyed by resource
