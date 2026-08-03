@@ -36,34 +36,36 @@ export interface ConnectorClient {
 	fetch(url: string, init?: RequestInit, opts?: TokenOpts): Promise<Response>;
 }
 
-// OAuth token endpoints per provider, so the generalized minter (extracted from
-// mintDriveAccessToken) can refresh any oauth connector. Keyed by connector id.
-const OAUTH_TOKEN_ENDPOINTS: Record<string, string> = {
-	google_drive: "https://oauth2.googleapis.com/token",
-};
-
 interface OauthClientCreds {
 	clientId?: string;
 	clientSecret?: string;
+	tokenUrl?: string;
 }
 
-function oauthCreds(env: Env, connectorId: string): OauthClientCreds {
-	switch (connectorId) {
-		case "google_drive":
-			return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET };
-		default:
-			return {};
+/** Resolve a connector's OAuth token endpoint + client credentials. Manifest connectors carry
+ *  their config on `Connector.oauth` (endpoint + env-var names for the credentials); the hand-
+ *  written google_drive connector keeps its hardcoded creds. `resolveOauthConfig` is exported so
+ *  the generic authorize/callback route (routes/connectors.ts) resolves the same way. */
+export function resolveOauthConfig(env: Env, connectorId: string): OauthClientCreds {
+	if (connectorId === "google_drive") {
+		return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, tokenUrl: "https://oauth2.googleapis.com/token" };
 	}
+	const oauth = getConnector(connectorId)?.oauth;
+	if (!oauth) return {};
+	const e = env as unknown as Record<string, string | undefined>;
+	return {
+		clientId: oauth.clientIdEnv ? e[oauth.clientIdEnv] : undefined,
+		clientSecret: oauth.secretEnv ? e[oauth.secretEnv] : undefined,
+		tokenUrl: oauth.tokenUrl,
+	};
 }
 
 /**
- * Generalized OAuth access-token minter — the mintDriveAccessToken pattern, switched on
- * the provider's token endpoint + client credentials. Refreshes a stored refresh token
- * into a short-lived access token.
+ * Generalized OAuth access-token minter — refreshes a stored refresh token into a short-lived
+ * access token, using the connector's manifest-declared token endpoint + client credentials.
  */
 async function mintOauthAccessToken(env: Env, connectorId: string, refreshToken: string): Promise<string> {
-	const endpoint = OAUTH_TOKEN_ENDPOINTS[connectorId];
-	const { clientId, clientSecret } = oauthCreds(env, connectorId);
+	const { clientId, clientSecret, tokenUrl: endpoint } = resolveOauthConfig(env, connectorId);
 	if (!endpoint || !clientId || !clientSecret) {
 		throw new HttpError(500, `OAuth is not configured for the ${connectorId} connector on this deployment`);
 	}

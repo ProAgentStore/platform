@@ -61,7 +61,10 @@ export type ManifestAuth =
 	| { type: "api-key"; key: { in: "header" | "query"; name: string } }
 	/** A platform-wide token from a Worker env var (e.g. META_ACCESS_TOKEN). Built-in only. */
 	| { type: "platform-token"; tokenEnv: EnvTokenKey }
-	| { type: "oauth2"; authUrl: string; tokenUrl: string; scopes?: string[]; secretRef?: string };
+	/** OAuth2 authorization-code flow. `clientIdEnv`/`secretEnv` name Worker env vars holding
+	 *  the client credentials — built-in manifests only (sanitize strips them so an untrusted
+	 *  manifest can't point at platform secrets). */
+	| { type: "oauth2"; authUrl: string; tokenUrl: string; scopes?: string[]; clientIdEnv?: string; secretEnv?: string };
 
 export interface ConnectorManifest {
 	id: string;
@@ -171,6 +174,9 @@ export function compileConnector(
 		label: m.label,
 		auth: connectorAuthKind(m.auth),
 		...(m.auth.type === "platform-token" ? { tokenEnv: m.auth.tokenEnv } : {}),
+		...(m.auth.type === "oauth2"
+			? { oauth: { authUrl: m.auth.authUrl, tokenUrl: m.auth.tokenUrl, scopes: m.auth.scopes, clientIdEnv: m.auth.clientIdEnv, secretEnv: m.auth.secretEnv } }
+			: {}),
 		scopes: {
 			read: tools.some((t) => t.scope === "read"),
 			write: tools.some((t) => t.scope === "write"),
@@ -212,12 +218,15 @@ export function sanitizeConnectorManifest(raw: unknown): ConnectorManifest | nul
 		const authUrl = typeof rawAuth.authUrl === "string" ? rawAuth.authUrl : "";
 		const tokenUrl = typeof rawAuth.tokenUrl === "string" ? rawAuth.tokenUrl : "";
 		if (!/^https:\/\//.test(authUrl) || !/^https:\/\//.test(tokenUrl)) return null;
+		// NOTE: clientIdEnv/secretEnv are intentionally NOT copied — a creator manifest can
+		// declare the OAuth endpoints but never point at platform env secrets; an operator wires
+		// the credentials for a reviewed connector. So a sanitized oauth2 connector is inert
+		// until credentials are attached.
 		auth = {
 			type: "oauth2",
 			authUrl,
 			tokenUrl,
 			scopes: Array.isArray(rawAuth.scopes) ? rawAuth.scopes.filter((s): s is string => typeof s === "string") : undefined,
-			secretRef: typeof rawAuth.secretRef === "string" ? rawAuth.secretRef : undefined,
 		};
 	} else {
 		auth = { type: authType as "none" | "app" };

@@ -33,6 +33,16 @@ export interface Connector {
 	grantModel: "user" | "instance-resource";
 	/** For auth:"token" connectors backed by a platform env var (e.g. Meta). */
 	tokenEnv?: EnvTokenKey;
+	/** For auth:"oauth" connectors: the OAuth2 config (from the manifest) that drives the
+	 *  generic authorize/callback/refresh flow. `clientIdEnv`/`secretEnv` name the Worker env
+	 *  vars holding the client credentials (resolved server-side, never in the manifest). */
+	oauth?: {
+		authUrl: string;
+		tokenUrl: string;
+		scopes?: string[];
+		clientIdEnv?: string;
+		secretEnv?: string;
+	};
 	/** The tools this connector provides. Their `connector`/`tier`/`scope` are stamped from here. */
 	tools: ToolDef[];
 }
