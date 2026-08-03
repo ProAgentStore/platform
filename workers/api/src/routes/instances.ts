@@ -851,6 +851,36 @@ instanceRoutes.post("/:instanceId/tasks", async (c) => {
 });
 
 /**
+ * Create a board ticket DIRECTLY — no runner required (#150 P3). The normal POST
+ * /tasks delegates to a live local runner and mirrors its response, so runner-less
+ * agents (pipelines, standalone workers, config agents) could never put work on the
+ * board. This inserts a ticket straight into instance_runtime_tasks via mirrorRuntimeTask,
+ * carrying its `reasoning` (the *why*, rendered on the card). Owner-authenticated.
+ */
+instanceRoutes.post("/:instanceId/tasks/direct", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = await c.req
+		.json<{ title?: string; reasoning?: string; description?: string; status?: string; type?: string; id?: string }>()
+		.catch(() => ({}) as Record<string, never>);
+	if (!body.title || typeof body.title !== "string") return c.json({ error: "title required" }, 400);
+	const now = new Date().toISOString();
+	const task = {
+		id: typeof body.id === "string" && body.id ? body.id.slice(0, 200) : crypto.randomUUID(),
+		type: typeof body.type === "string" && body.type ? body.type.slice(0, 120) : "ticket",
+		status: typeof body.status === "string" && body.status ? body.status.slice(0, 80) : "completed",
+		title: body.title.slice(0, 200),
+		description: typeof body.description === "string" ? body.description.slice(0, 2000) : "",
+		reasoning: typeof body.reasoning === "string" ? body.reasoning.slice(0, 8000) : "",
+		createdAt: now,
+		updatedAt: now,
+	};
+	await mirrorRuntimeTask(c.env, instanceId, session.uid, task);
+	return c.json(task, 201);
+});
+
+/**
  * Start the remote LLM brain on a job application. Kicks off the JobApplyWorkflow
  * which drives the connected runner page-by-page (snapshot → Claude → act),
  * handing off to a human only for a CAPTCHA. Returns the workflow instance id.

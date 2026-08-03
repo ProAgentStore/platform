@@ -408,3 +408,40 @@ describe("PUT/GET /v1/instances/:id/runner-node (integration — the 'runs on' p
 		expect(writes.some((w) => w.sql.includes("UPDATE agent_instances"))).toBe(false);
 	});
 });
+
+describe("POST /v1/instances/:id/tasks/direct (runner-less board ticket, #150 P3)", () => {
+	it("401s without a bearer token", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		expect((await post(app, env, "/v1/instances/inst-1/tasks/direct", { title: "x" }, "")).status).toBe(401);
+	});
+
+	it("404s + no write when the caller doesn't own the instance", async () => {
+		const { app, env, writes } = buildApp({ owns: [] });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/direct", { title: "x" }, await tokenFor("u1"));
+		expect(res.status).toBe(404);
+		expect(writes.some((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"))).toBe(false);
+	});
+
+	it("400s without a title", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		expect((await post(app, env, "/v1/instances/inst-1/tasks/direct", { reasoning: "why" }, await tokenFor("u1"))).status).toBe(400);
+	});
+
+	it("creates a board ticket with reasoning — NO runner needed — and persists the reasoning in the payload", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await post(
+			app,
+			env,
+			"/v1/instances/inst-1/tasks/direct",
+			{ title: "Palm Tree Kiosk", reasoning: "No website field → qualified lead", status: "completed" },
+			await tokenFor("u1"),
+		);
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { title: string; reasoning: string; status: string };
+		expect(body).toMatchObject({ title: "Palm Tree Kiosk", reasoning: "No website field → qualified lead", status: "completed" });
+		const insert = writes.find((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"));
+		expect(insert).toBeTruthy();
+		// mirrorRuntimeTask binds the whole task JSON as the payload — reasoning must be in it.
+		expect(insert?.args.some((a) => typeof a === "string" && a.includes("No website field → qualified lead"))).toBe(true);
+	});
+});
