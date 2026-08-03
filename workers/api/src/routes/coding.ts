@@ -23,7 +23,8 @@ import {
 	updateRepo,
 	updateRepoClone,
 } from "../lib/coding-store.js";
-import { getRuntime, getRuntimeForNode, normalizeRunnerNode } from "./instances-runtime.js";
+import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask } from "./instances-runtime.js";
+import { logEvent } from "../lib/events.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
@@ -1019,6 +1020,64 @@ async function driveClaude(
 }
 
 /**
+ * The observable board-task record for a delegated goal (#155). Pure + exported so the shape
+ * (attributed to the Overseer on the user's behalf; `delegation` type; a `running` card that the
+ * Pilot later flips to `completed`/`failed`) is locked by tests. Never a user turn.
+ */
+export function delegationTaskRecord(opts: { id: string; repoName: string; objective: string; status: "running" | "completed" | "failed"; now: string }): Record<string, unknown> {
+	const label = opts.objective.length > 120 ? `${opts.objective.slice(0, 117)}…` : opts.objective;
+	return {
+		id: opts.id,
+		type: "delegation",
+		status: opts.status,
+		title: `Delegated: ${label}`.slice(0, 200),
+		reasoning: `Overseer delegated on your behalf → ${opts.repoName}: ${opts.objective}`.slice(0, 8000),
+		createdAt: opts.now,
+		updatedAt: opts.now,
+	};
+}
+
+/**
+ * Delegate a GOAL to the durable Pilot (#155). Unlike `driveClaude` (a one-shot instruction +
+ * a finish-watcher), this hands the objective to the autonomous CodingSessionWorkflow — which
+ * owns the snapshot→decide→act loop and stuck/needs_input escalation — and records an
+ * OBSERVABLE board task so the delegation is trackable (board card + trace + session thread),
+ * not a line buried in one repo's thread. Attributed as an agent action on the user's behalf,
+ * never as a user turn. The Pilot flips the task to completed/failed at its terminal state.
+ */
+async function delegateGoal(
+	c: Context<{ Bindings: Env }>,
+	instanceId: string,
+	uid: string,
+	session: { id: string; clientType: CodingGoal["clientType"]; runnerNode?: string | null },
+	repo: { id: string; name: string; githubRepo?: string | null; instructions?: string | null; cloneUrl?: string | null; branch?: string | null },
+	objective: string,
+): Promise<{ delegated: true; reply: string; taskId: string }> {
+	const taskId = `deleg-${crypto.randomUUID()}`;
+	const now = new Date().toISOString();
+	const label = objective.length > 120 ? `${objective.slice(0, 117)}…` : objective;
+	// 1) Observable board task (running), attributed to the Overseer on the user's behalf.
+	await mirrorRuntimeTask(c.env, instanceId, uid, delegationTaskRecord({ id: taskId, repoName: repo.name, objective, status: "running", now })).catch(() => undefined);
+	// 2) Unified trace + the target session thread (visible, as an agent action).
+	await logEvent(c.env, { source: "coding", event: "delegate", message: `Overseer → ${repo.name}: ${label}`, userId: uid, instanceId, traceId: taskId }).catch(() => undefined);
+	await appendTimeline(c.env, { sessionId: session.id, instanceId, userId: uid, type: "chat_assistant", content: `On it — delegated to ${repo.name}: ${label} (tracking on the board)` }).catch(() => undefined);
+	// 3) Hand the GOAL to the durable Pilot (objective mode owns the loop + escalation).
+	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
+	const combined = [instanceInstructions, repo.instructions].filter(Boolean).join("\n\n");
+	const goal: CodingGoal = { objective, repo: repo.name, clientType: session.clientType, specialInstructions: combined || undefined };
+	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
+	const token = owner ? await installationTokenForOwner(c.env, uid, owner).catch(() => null) : null;
+	await c.env.CODING_SESSION.create({
+		params: {
+			instanceId, userId: uid, sessionId: session.id, repoId: repo.id,
+			runnerNode: session.runnerNode ?? null, cloneUrl: repo.cloneUrl ?? undefined,
+			branch: repo.branch || undefined, token: token ?? undefined, goal, boardTaskId: taskId,
+		},
+	});
+	return { delegated: true, reply: `On it — delegated to ${repo.name}; track it on the board.`, taskId };
+}
+
+/**
  * The Agent chat (Step 1 of #3): ONE input that either answers from the terminal +
  * history, or DELEGATES to Claude Code via the `drive_claude` tool — the LLM
  * decides. `@claude`/`/run` forces delegation. This tool-loop is the reusable core
@@ -1145,11 +1204,14 @@ codingRoutes.post("/:instanceId/coding/overseer", async (c) => {
 	const repoId = call && typeof call.arguments?.repoId === "string" ? (call.arguments.repoId as string) : "";
 	const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";
 	if (repoId && instruction) {
+		const repo = repoById.get(repoId);
+		const repoName = repo?.name ?? "that repo";
 		const active = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
-		const repoName = repoById.get(repoId)?.name ?? "that repo";
-		if (!active) return c.json({ delegated: false, reply: `${repoName} has no live session — open it (or tap Start) first, then I can drive it.` });
-		const r = await driveClaude(c, instanceId, uid, active.id, instruction);
-		return c.json({ delegated: true, repoId, reply: `${repoName}: ${r.reply}` });
+		if (!active || !repo) return c.json({ delegated: false, reply: `${repoName} has no live session — open it (or tap Start) first, then I can drive it.` });
+		// #155: delegate the GOAL to the durable Pilot + record an observable board task,
+		// instead of a fire-and-forget one-shot with no follow-through.
+		const r = await delegateGoal(c, instanceId, uid, active, repo, instruction);
+		return c.json({ delegated: true, repoId, taskId: r.taskId, reply: `${repoName}: ${r.reply}` });
 	}
 	return c.json({ delegated: false, reply: res.response || "(no response)" });
 });

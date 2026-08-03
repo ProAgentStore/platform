@@ -40,6 +40,12 @@ export interface CodingSessionParams {
 	mode?: "watch";
 	/** This watcher's id — only the one currently stamped on the session notifies. */
 	watchId?: string;
+	/**
+	 * When set, this run is a delegated GOAL (e.g. the Overseer handing work to this Pilot on
+	 * the user's behalf, #155). The Pilot updates this board task's status at its terminal
+	 * state (done/error) so the delegation is observable on the board, not just in the thread.
+	 */
+	boardTaskId?: string;
 }
 
 /** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
@@ -202,6 +208,29 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				await notifyUser(env, userId, "coding", title, body, codingDeepLink(instanceId, repoId)).catch(() => undefined);
 				return null;
 			});
+			// #155: close out the observable delegation task on the board (if this was a
+			// delegated goal) so its status reflects the real outcome, not a stuck "running".
+			// Inline upsert into instance_runtime_tasks (the board's source) — same shape as
+			// mirrorRuntimeTask, kept here so the workflow doesn't import a routes module.
+			if (event.payload.boardTaskId) {
+				await step.do("delegation-task-done", async () => {
+					const ok = result.outcome !== "failed" && result.outcome !== "max_steps";
+					const task = {
+						id: event.payload.boardTaskId,
+						type: "delegation",
+						status: ok ? "completed" : "failed",
+						title: `Delegated: ${goal.objective}`.slice(0, 200),
+						reasoning: `Overseer delegated on your behalf. Outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`.slice(0, 8000),
+						updatedAt: new Date().toISOString(),
+					};
+					await env.DB.prepare(
+						`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
+						 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
+						 ON CONFLICT(id) DO UPDATE SET type = excluded.type, status = excluded.status, payload = excluded.payload, updated_at = excluded.updated_at`,
+					).bind(event.payload.boardTaskId, instanceId, userId, task.type, task.status, JSON.stringify(task)).run().catch(() => undefined);
+					return null;
+				});
+			}
 		}
 		return result;
 	}

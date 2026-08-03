@@ -1,5 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { type CodingEngine, deriveClientType, engineAuthFor, pickNextIssue } from "./coding.js";
+import { type CodingEngine, delegationTaskRecord, deriveClientType, engineAuthFor, pickNextIssue } from "./coding.js";
+
+describe("delegationTaskRecord (#155 — observable delegation task)", () => {
+	const base = { id: "deleg-1", repoName: "pags/platform", objective: "add a health check to the api worker", now: "2026-08-03T00:00:00.000Z" };
+
+	it("is a 'delegation' card attributed to the Overseer on the user's behalf", () => {
+		const t = delegationTaskRecord({ ...base, status: "running" });
+		expect(t.type).toBe("delegation");
+		expect(t.status).toBe("running");
+		expect(t.id).toBe("deleg-1");
+		expect(String(t.title)).toMatch(/^Delegated:/);
+		expect(String(t.reasoning)).toContain("Overseer delegated on your behalf");
+		expect(String(t.reasoning)).toContain("pags/platform");
+		// Carries the goal so the board card shows WHAT was delegated — never framed as a user turn.
+		expect(String(t.reasoning)).toContain(base.objective);
+	});
+
+	it("supports the Pilot's terminal transitions (completed / failed)", () => {
+		expect(delegationTaskRecord({ ...base, status: "completed" }).status).toBe("completed");
+		expect(delegationTaskRecord({ ...base, status: "failed" }).status).toBe("failed");
+	});
+
+	it("truncates a long objective in the title but keeps the full goal in reasoning", () => {
+		const long = "x".repeat(400);
+		const t = delegationTaskRecord({ ...base, objective: long, status: "running" });
+		expect(String(t.title).length).toBeLessThanOrEqual(200);
+		expect(String(t.reasoning)).toContain(long.slice(0, 200)); // full objective preserved (up to the 8k cap)
+	});
+});
 
 describe("pickNextIssue (issues-mode Loop objective source)", () => {
 	const issues = [{ number: 7 }, { number: 3 }, { number: 12 }];
