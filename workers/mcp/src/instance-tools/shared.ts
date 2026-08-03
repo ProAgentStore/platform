@@ -25,6 +25,10 @@ export const triggerConfigSchema = z.object({
 	folder_id: z.string().optional(),
 	limit: z.number().int().min(1).max(20).optional(),
 	query: z.string().optional(),
+	pipeline: z.string().optional(),
+	collection: z.string().optional(),
+	url: z.string().optional().describe("run_browse: the start URL for the scheduled browser task."),
+	dry_run: z.boolean().optional().describe("run_browse: walk the flow but block the committing clicks."),
 }).optional();
 
 export interface InstanceSummary {
@@ -68,6 +72,10 @@ export function normalizeTriggerConfig(
 	if (config.folder_id !== undefined) out.folderId = config.folder_id;
 	if (config.limit !== undefined) out.limit = config.limit;
 	if (config.query !== undefined) out.query = config.query;
+	if (config.pipeline !== undefined) out.pipeline = config.pipeline;
+	if (config.collection !== undefined) out.collection = config.collection;
+	if (config.url !== undefined) out.url = config.url;
+	if (config.dry_run !== undefined) out.dryRun = config.dry_run;
 	return out;
 }
 

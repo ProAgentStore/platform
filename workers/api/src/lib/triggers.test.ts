@@ -3,11 +3,16 @@ import { HttpError } from "./auth.js";
 import { encryptKey } from "./crypto.js";
 import { dispatchTrigger, nextRunAt, normalizeSchedule, publicWebhookUrl, type TriggerRow } from "./triggers.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
+import { startBrowserTask } from "../routes/instances-browse.js";
 import type { Env } from "../types.js";
 
 // #92: dispatchTrigger's run_pipeline branch calls startPipelineRun (which loads the pipeline
 // from instance config + kicks the durable workflow). Stub it here to unit-test the wiring.
 vi.mock("./pipeline-run-start.js", () => ({ startPipelineRun: vi.fn() }));
+// #172: the run_browse branch fires startBrowserTask (starts the BROWSER_TASK workflow) and,
+// on a skip, notifyUser. Stub both to unit-test the wiring without the real browser stack.
+vi.mock("../routes/instances-browse.js", () => ({ startBrowserTask: vi.fn() }));
+vi.mock("../routes/push.js", () => ({ notifyUser: vi.fn(async () => undefined) }));
 
 const TEST_KEK = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
@@ -260,5 +265,55 @@ describe("trigger actions: run_pipeline + insert_record (#92)", () => {
 	it("insert_record without a collection refuses", async () => {
 		const { env } = baseEnv();
 		await expect(dispatchTrigger(env, recordTrigger({}), "webhook", { name: "x" })).rejects.toThrow(/requires config\.collection/);
+	});
+});
+
+describe("trigger action: run_browse (#172)", () => {
+	afterEach(() => vi.clearAllMocks());
+
+	function baseEnv() {
+		const DB = {
+			prepare() {
+				const stmt = { bind: () => stmt, first: async () => null, all: async () => ({ results: [] }), run: async () => ({}) };
+				return stmt;
+			},
+		};
+		const AGENT = { idFromName: (name: string) => ({ name }), get: () => ({ fetch: async () => Response.json({}, { status: 200 }) }) };
+		return { DB, AGENT } as unknown as Env;
+	}
+	const browseTrigger = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "run_browse" });
+
+	it("fires startBrowserTask with the configured url + dryRun", async () => {
+		const env = baseEnv();
+		(startBrowserTask as Mock).mockResolvedValue({ workflowId: "wf-1", taskId: "task-1" });
+		const res = await dispatchTrigger(env, browseTrigger({ url: "https://x.test/go", dryRun: true }), "cron", {});
+		expect(res.ok).toBe(true);
+		expect(startBrowserTask).toHaveBeenCalledWith(env, "inst-1", "user-1", { url: "https://x.test/go", dryRun: true });
+	});
+
+	it("without a url refuses rather than guessing", async () => {
+		const env = baseEnv();
+		await expect(dispatchTrigger(env, browseTrigger({}), "cron", {})).rejects.toThrow(/requires config\.url/);
+	});
+
+	it("SKIPS (does not fail the trigger) when the runner is offline (503)", async () => {
+		const env = baseEnv();
+		(startBrowserTask as Mock).mockRejectedValue(Object.assign(new Error("No runner connected. Start it with: pags up"), { status: 503 }));
+		// A scheduled run with no runner online is a skip, not a failure — dispatch resolves ok.
+		const res = await dispatchTrigger(env, browseTrigger({ url: "https://x.test/go" }), "cron", {});
+		expect(res.ok).toBe(true);
+	});
+
+	it("SKIPS when a run is already in progress (409)", async () => {
+		const env = baseEnv();
+		(startBrowserTask as Mock).mockRejectedValue(Object.assign(new Error("A run is already in progress"), { status: 409 }));
+		const res = await dispatchTrigger(env, browseTrigger({ url: "https://x.test/go" }), "cron", {});
+		expect(res.ok).toBe(true);
+	});
+
+	it("a real error (not 503/409) still fails the trigger", async () => {
+		const env = baseEnv();
+		(startBrowserTask as Mock).mockRejectedValue(Object.assign(new Error("boom"), { status: 500 }));
+		await expect(dispatchTrigger(env, browseTrigger({ url: "https://x.test/go" }), "cron", {})).rejects.toThrow(/boom/);
 	});
 });

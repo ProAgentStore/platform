@@ -44,7 +44,7 @@ interface ConnectorGrant {
 	resourceUrl?: string | null;
 }
 
-type TriggerActionType = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record";
+type TriggerActionType = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse";
 type ConnectorProviderType = "google_drive" | "zoho_workdrive";
 
 interface InstanceTrigger {
@@ -179,6 +179,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [triggerName, setTriggerName] = useState("");
 	const [triggerType, setTriggerType] = useState<"webhook" | "cron">("webhook");
 	const [triggerAction, setTriggerAction] = useState<TriggerActionType>("create_task");
+	const [browseTriggerUrl, setBrowseTriggerUrl] = useState("");
 	const [triggerSchedule, setTriggerSchedule] = useState("@daily");
 	const [triggerConnectorProvider, setTriggerConnectorProvider] = useState<ConnectorProviderType>("google_drive");
 	const [triggerConnectorGrantId, setTriggerConnectorGrantId] = useState("");
@@ -542,11 +543,17 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setTriggerMsg("Enter the target collection for the record.");
 				return;
 			}
+			const browseUrl = browseTriggerUrl.trim();
+			if (triggerAction === "run_browse" && !/^https?:\/\//.test(browseUrl)) {
+				setTriggerMsg("Enter the start URL for the browser task (http/https).");
+				return;
+			}
 			const name = triggerName.trim() || (
 				triggerAction === "sync_connector"
 					? `${triggerConnectorProvider === "google_drive" ? "Google Drive" : "WorkDrive"} sync`
 					: triggerAction === "run_pipeline" ? `Run ${pipeline}`
 					: triggerAction === "insert_record" ? `Insert into ${collection}`
+					: triggerAction === "run_browse" ? "Scheduled browser run"
 					: triggerType === "webhook" ? "Inbound webhook" : "Scheduled run"
 			);
 			await api("/v1/triggers", {
@@ -561,7 +568,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						triggerAction === "sync_connector" ? { provider: triggerConnectorProvider, grantId: syncGrantId }
 							: triggerAction === "run_pipeline" ? { pipeline }
 								: triggerAction === "insert_record" ? { collection }
-									: undefined,
+									: triggerAction === "run_browse" ? { url: browseUrl }
+										: undefined,
 				}),
 			});
 			setTriggerName("");
@@ -1051,6 +1059,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							<option value="sync_connector">Sync folder</option>
 							<option value="run_pipeline">Run pipeline</option>
 							<option value="insert_record">Insert record</option>
+							<option value="run_browse">Run browser task</option>
 							<option value="log_event">Log event</option>
 						</select>
 					</label>
@@ -1107,6 +1116,15 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							<span className="text-xs font-semibold">Target collection</span>
 							<input value={triggerCollection} onChange={(e) => setTriggerCollection(e.target.value)} placeholder="collection name" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
 							<span className="text-[0.7rem] text-muted">Webhook/cron payload is inserted as a record into this collection (an explicit <code>record</code> field wins).</span>
+						</label>
+					</div>
+				)}
+				{triggerAction === "run_browse" && (
+					<div className="grid grid-cols-1 gap-2 items-end mb-4">
+						<label className="flex flex-col gap-1">
+							<span className="text-xs font-semibold">Start URL</span>
+							<input value={browseTriggerUrl} onChange={(e) => setBrowseTriggerUrl(e.target.value)} placeholder="https://www.facebook.com/friends/requests" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
+							<span className="text-[0.7rem] text-muted">On schedule, drives the browser (via <code>pags up</code>) toward this agent's objective from this URL. Runner must be online at run time, or the run is skipped.</span>
 						</label>
 					</div>
 				)}

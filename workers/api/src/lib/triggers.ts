@@ -18,10 +18,12 @@ import {
 	workDriveFolderContainsFile,
 	type WorkDriveFile,
 } from "./workdrive.js";
+import { startBrowserTask } from "../routes/instances-browse.js";
+import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
 export type TriggerType = "webhook" | "cron";
-export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record";
+export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse";
 export type TriggerEventType = TriggerType | "manual";
 
 export interface TriggerRow {
@@ -58,9 +60,12 @@ export interface TriggerConfig {
 	pipeline?: string;
 	/** insert_record: the target collection for a webhook → collection ingest. */
 	collection?: string;
+	/** run_browse: the start URL for the scheduled browser task (#172), + optional dry-run. */
+	url?: string;
+	dryRun?: boolean;
 }
 
-const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record"]);
+const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse"]);
 const TYPES = new Set<TriggerType>(["webhook", "cron"]);
 const MAX_PAYLOAD_CHARS = 16_000;
 
@@ -73,7 +78,7 @@ export function assertTriggerType(value: unknown): TriggerType {
 
 export function assertTriggerAction(value: unknown): TriggerAction {
 	if (typeof value !== "string" || !ACTIONS.has(value as TriggerAction)) {
-		throw new HttpError(400, "trigger action must be create_task, add_knowledge, log_event, sync_connector, run_pipeline, or insert_record");
+		throw new HttpError(400, "trigger action must be create_task, add_knowledge, log_event, sync_connector, run_pipeline, insert_record, or run_browse");
 	}
 	return value as TriggerAction;
 }
@@ -200,6 +205,8 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			query: typeof parsed.query === "string" ? parsed.query.slice(0, 200) : undefined,
 			pipeline: typeof parsed.pipeline === "string" ? parsed.pipeline.slice(0, 200) : undefined,
 			collection: typeof parsed.collection === "string" ? parsed.collection.slice(0, 200) : undefined,
+			url: typeof parsed.url === "string" ? parsed.url.slice(0, 2000) : undefined,
+			dryRun: parsed.dryRun === true ? true : undefined,
 		};
 	} catch {
 		return {};
@@ -233,6 +240,105 @@ export async function recordTriggerEvent(
 	return id;
 }
 
+/**
+ * Execute ONE trigger action against a target instance and return its result payload.
+ * Extracted from dispatchTrigger so the SAME action handlers (create_task / insert_record /
+ * run_pipeline / add_knowledge / sync_connector) power the agent-to-agent "connection" pump
+ * (lib/connections.ts): a connection is just a (source event → target action) edge, delivered
+ * by calling this with a synthetic target. `target` only needs {action, name, instance_id,
+ * user_id}; a real TriggerRow satisfies it. Throws on any dispatch failure (caller records it).
+ */
+export async function executeTriggerAction(
+	env: Env,
+	target: Pick<TriggerRow, "action" | "name" | "instance_id" | "user_id"> & Partial<TriggerRow>,
+	config: TriggerConfig,
+	sourceType: TriggerEventType,
+	payload: unknown,
+): Promise<unknown> {
+	const stub = env.AGENT.get(env.AGENT.idFromName(target.instance_id));
+	let resultPayload: unknown = payload;
+	if (target.action === "create_task") {
+		const body = payloadRecord(payload);
+		const title = stringValue(body.title) || config.title || `${target.name} trigger`;
+		const description = stringValue(body.description) || stringValue(body.content) || config.description || stringifyPayload(payload);
+		const res = await stub.fetch(new Request("https://agent/tasks", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ title, description }),
+		}));
+		if (!res.ok) throw new Error(`task dispatch failed (${res.status})`);
+	} else if (target.action === "add_knowledge") {
+		const body = payloadRecord(payload);
+		const content = stringValue(body.content) || stringValue(body.text) || stringifyPayload(payload);
+		if (!content.trim()) throw new Error("knowledge trigger payload has no content");
+		const title = stringValue(body.title) || config.title || `${target.name} ${new Date().toISOString()}`;
+		const res = await stub.fetch(new Request("https://agent/knowledge", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				title,
+				content: content.slice(0, 100_000),
+				source: config.source || sourceType,
+				sourceUrl: stringValue(body.sourceUrl) || config.sourceUrl,
+			}),
+		}));
+		if (!res.ok) throw new Error(`knowledge dispatch failed (${res.status})`);
+	} else if (target.action === "sync_connector") {
+		resultPayload = await syncConnectorTrigger(env, target as TriggerRow, config);
+	} else if (target.action === "run_pipeline") {
+		// #92: a cron/webhook trigger kicks a durable, resumable per-instance pipeline
+		// (escapes the 30s DO limit; reads/writes the instance's collections). The pipeline
+		// is DATA — loaded by name from instance config via startPipelineRun — so adding a
+		// new pipeline type never touches the closed `workflow` capability union.
+		const name = stringValue(payloadRecord(payload).pipeline) || config.pipeline || "";
+		if (!name) throw new Error("run_pipeline requires config.pipeline (the pipeline name)");
+		const res = await startPipelineRun(env, target.instance_id, target.user_id, name, payloadRecord(payload), "trigger");
+		if (!res.ok) throw new Error(res.error);
+		resultPayload = { pipeline: name, runId: res.runId, workflowId: res.workflowId };
+	} else if (target.action === "insert_record") {
+		// #92 (webhook → collection): the simple ingest case. The record is an explicit
+		// `record`/`data` object in the payload, else the whole payload minus the routing key.
+		const body = payloadRecord(payload);
+		const collection = stringValue(body.collection) || config.collection || "";
+		if (!collection) throw new Error("insert_record requires config.collection");
+		const data = isRecord(body.record) ? body.record : isRecord(body.data) ? body.data : omitKey(body, "collection");
+		const res = await stub.fetch(new Request(`https://agent/collections/${encodeURIComponent(collection)}/records`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ data }),
+		}));
+		if (!res.ok) throw new Error(`record insert failed (${res.status})`);
+		resultPayload = { collection };
+	} else if (target.action === "run_browse") {
+		// #172: schedule a generic browser task — fire the BROWSER_TASK workflow at the
+		// configured start URL. Runner-offline (503) or a run already active (409) aren't
+		// trigger failures — the user's machine just isn't ready this tick; record a skip +
+		// notify and try again next schedule (so failure_count stays 0).
+		const url = stringValue(payloadRecord(payload).url) || config.url || "";
+		if (!url) throw new Error("run_browse requires config.url (the start URL)");
+		try {
+			const res = await startBrowserTask(env, target.instance_id, target.user_id, { url, dryRun: config.dryRun === true });
+			resultPayload = { workflowId: res.workflowId, taskId: res.taskId, url };
+		} catch (e) {
+			const status = (e as { status?: number })?.status;
+			if (status !== 503 && status !== 409) throw e;
+			const offline = status === 503;
+			resultPayload = { skipped: true, reason: offline ? "runner offline" : "a run is already in progress", url };
+			await notifyUser(
+				env,
+				target.user_id,
+				"trigger",
+				"⏭️ Scheduled run skipped",
+				offline
+					? `${target.name}: your runner is offline — run \`pags up\`. It'll try again next schedule.`
+					: `${target.name}: a run is already in progress; skipping this one.`,
+				`/console/instances/${target.instance_id}/board`,
+			).catch(() => undefined);
+		}
+	}
+	return resultPayload;
+}
+
 export async function dispatchTrigger(
 	env: Env,
 	trigger: TriggerRow,
@@ -243,61 +349,7 @@ export async function dispatchTrigger(
 	const traceId = `trigger:${trigger.id}:${Date.now()}`;
 	try {
 		const config = parseConfig(trigger.config);
-		const stub = env.AGENT.get(env.AGENT.idFromName(trigger.instance_id));
-		let resultPayload: unknown = payload;
-		if (trigger.action === "create_task") {
-			const body = payloadRecord(payload);
-			const title = stringValue(body.title) || config.title || `${trigger.name} trigger`;
-			const description = stringValue(body.description) || stringValue(body.content) || config.description || stringifyPayload(payload);
-			const res = await stub.fetch(new Request("https://agent/tasks", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ title, description }),
-			}));
-			if (!res.ok) throw new Error(`task dispatch failed (${res.status})`);
-		} else if (trigger.action === "add_knowledge") {
-			const body = payloadRecord(payload);
-			const content = stringValue(body.content) || stringValue(body.text) || stringifyPayload(payload);
-			if (!content.trim()) throw new Error("knowledge trigger payload has no content");
-			const title = stringValue(body.title) || config.title || `${trigger.name} ${new Date().toISOString()}`;
-			const res = await stub.fetch(new Request("https://agent/knowledge", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					title,
-					content: content.slice(0, 100_000),
-					source: config.source || sourceType,
-					sourceUrl: stringValue(body.sourceUrl) || config.sourceUrl,
-				}),
-			}));
-			if (!res.ok) throw new Error(`knowledge dispatch failed (${res.status})`);
-		} else if (trigger.action === "sync_connector") {
-			resultPayload = await syncConnectorTrigger(env, trigger, config);
-		} else if (trigger.action === "run_pipeline") {
-			// #92: a cron/webhook trigger kicks a durable, resumable per-instance pipeline
-			// (escapes the 30s DO limit; reads/writes the instance's collections). The pipeline
-			// is DATA — loaded by name from instance config via startPipelineRun — so adding a
-			// new pipeline type never touches the closed `workflow` capability union.
-			const name = stringValue(payloadRecord(payload).pipeline) || config.pipeline || "";
-			if (!name) throw new Error("run_pipeline requires config.pipeline (the pipeline name)");
-			const res = await startPipelineRun(env, trigger.instance_id, trigger.user_id, name, payloadRecord(payload), "trigger");
-			if (!res.ok) throw new Error(res.error);
-			resultPayload = { pipeline: name, runId: res.runId, workflowId: res.workflowId };
-		} else if (trigger.action === "insert_record") {
-			// #92 (webhook → collection): the simple ingest case. The record is an explicit
-			// `record`/`data` object in the payload, else the whole payload minus the routing key.
-			const body = payloadRecord(payload);
-			const collection = stringValue(body.collection) || config.collection || "";
-			if (!collection) throw new Error("insert_record requires config.collection");
-			const data = isRecord(body.record) ? body.record : isRecord(body.data) ? body.data : omitKey(body, "collection");
-			const res = await stub.fetch(new Request(`https://agent/collections/${encodeURIComponent(collection)}/records`, {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ data }),
-			}));
-			if (!res.ok) throw new Error(`record insert failed (${res.status})`);
-			resultPayload = { collection };
-		}
+		const resultPayload = await executeTriggerAction(env, trigger, config, sourceType, payload);
 
 		await env.DB.prepare(
 			"UPDATE agent_triggers SET last_run_at = datetime('now'), failure_count = 0, last_error = NULL, updated_at = datetime('now') WHERE id = ?1",
@@ -395,6 +447,7 @@ function successMessage(action: TriggerAction, payload: unknown): string {
 	if (action === "sync_connector") return `connector sync imported ${Number(result.imported || 0)} file(s), skipped ${Number(result.skipped || 0)}`;
 	if (action === "run_pipeline") return `started pipeline "${stringValue(result.pipeline) || "?"}" (run ${stringValue(result.runId).slice(0, 8)})`;
 	if (action === "insert_record") return `inserted a record into "${stringValue(result.collection) || "?"}"`;
+	if (action === "run_browse") return result.skipped ? `browser run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started browser run (task ${stringValue(result.taskId).slice(0, 8)})`;
 	return `${action} dispatched`;
 }
 

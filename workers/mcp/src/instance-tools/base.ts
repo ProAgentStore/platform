@@ -854,7 +854,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			instance_id: z.string(),
 			name: z.string().describe("Human-readable trigger name."),
 			type: z.enum(["webhook", "cron"]).describe("Webhook exposes a capability URL; cron runs on a schedule."),
-			action: z.enum(["create_task", "add_knowledge", "log_event", "sync_connector"]),
+			action: z.enum(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse"]),
 			schedule: z.string().optional().describe("Required for cron. Examples: @daily, @hourly, every 15 minutes, 0 8 * * *"),
 			config: triggerConfigSchema,
 			dry_run: z.boolean().optional(),
