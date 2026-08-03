@@ -114,10 +114,11 @@ export class LocalRunner {
 		if (normalized.title) card.title = normalized.title;
 		if (normalized.subtitle) card.subtitle = normalized.subtitle;
 		if (normalized.description) card.description = normalized.description;
-		// Agent-driven applications are steered by the remote Workflow brain via the
-		// /browser/* endpoints — the runner never auto-executes them. The task exists
-		// for the console board, the activity trace, and takeover keying.
-		if (normalized.type === "job.apply_agent") {
+		// Agent-driven browser tasks (job applications AND generic browser tasks) are
+		// steered by the remote Workflow brain via the /browser/* endpoints — the runner
+		// never auto-executes them. The task exists for the console board, the activity
+		// trace, and takeover keying.
+		if (normalized.type === "job.apply_agent" || normalized.type === "browser.task") {
 			const task: RunnerTask = {
 				id: `task_${crypto.randomUUID()}`,
 				type: normalized.type,
@@ -129,7 +130,8 @@ export class LocalRunner {
 				updatedAt: now,
 			};
 			this.store.putTask(task);
-			this.addTaskEvent(task, "task.created", "Job application started (agent-driven)", { status: "running", url: normalized.input.url });
+			const startedMsg = normalized.type === "browser.task" ? "Browser task started (agent-driven)" : "Job application started (agent-driven)";
+			this.addTaskEvent(task, "task.created", startedMsg, { status: "running", url: normalized.input.url });
 			return task;
 		}
 		const requiresApproval =

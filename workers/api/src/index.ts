@@ -54,6 +54,8 @@ export { JobApplyWorkflow } from "./workflows/job-apply.js";
 export { CodingSessionWorkflow } from "./workflows/coding-session.js";
 // Re-export the declarative-pipeline Workflow class for wrangler (issue #97)
 export { PipelineRunWorkflow } from "./workflows/pipeline-run.js";
+// Re-export the generic browser-task Workflow class for wrangler (#69/#71)
+export { BrowserTaskWorkflow } from "./workflows/browser-task.js";
 // Re-export the WebSocket relay DO for wrangler
 export { RelayDO } from "./relay-do.js";
 

@@ -11,6 +11,7 @@ import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
 import { parseLoopDecision } from "../lib/loop-decide.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
+import { registerBrowseRoutes } from "./instances-browse.js";
 import { attachGlossesToMessages, registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
 import { instanceCapFor, isEntitled, isPaywallEnforced, requirePro } from "../lib/billing.js";
@@ -678,6 +679,7 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 // Human-takeover proxies, Special Instructions, learned tips, and the ask-and-hold
 // input channel live in instances-apply.ts to keep this file focused.
 registerApplyRoutes(instanceRoutes);
+registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);
 

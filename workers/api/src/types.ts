@@ -21,6 +21,8 @@ export interface Env {
 	CODING_SESSION: Workflow;
 	/** Durable runner for declarative data pipelines (issue #97) — walks a pipeline's steps. */
 	PIPELINE_RUN: Workflow;
+	/** Generic browser brain (#69/#71): drives the runner toward an objective on any site. */
+	BROWSER_TASK: Workflow;
 	/** WebSocket relay DO — one per instance, bridges cloud→runner without tunnels. */
 	RELAY: DurableObjectNamespace;
 	GITHUB_CLIENT_ID: string;

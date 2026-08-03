@@ -95,6 +95,12 @@ name = "pags-pipeline-run"
 binding = "PIPELINE_RUN"
 class_name = "PipelineRunWorkflow"
 
+# Generic browser brain (#69/#71): drives the runner toward an objective on any site.
+[[workflows]]
+name = "pags-browser-task"
+binding = "BROWSER_TASK"
+class_name = "BrowserTaskWorkflow"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["AgentDO"]

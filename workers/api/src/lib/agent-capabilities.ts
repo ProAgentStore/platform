@@ -76,7 +76,7 @@ export interface AgentCapabilities {
 	/** Local runner runtime the brain drives. */
 	runtime: AgentRuntimeKind;
 	/** Brain workflow binding name, when the agent has an autonomous loop. */
-	workflow: "JOB_APPLY" | "CODING_SESSION" | "INSURANCE_QUOTES" | null;
+	workflow: "JOB_APPLY" | "CODING_SESSION" | "INSURANCE_QUOTES" | "BROWSER_TASK" | null;
 	/** Declared tool allowlist — names from the platform tool catalog (see
 	 *  agent-do-tools `TOOL_CATALOG`). When present it is AUTHORITATIVE: the agent gets
 	 *  exactly these catalog tools plus the universal BASE facilities, replacing the
@@ -246,7 +246,7 @@ const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "r
  *  the platform already implements — no arbitrary code, so the blast radius is bounded
  *  (unlike customSurfaces, which loads a code bundle and stays on its own guarded path). */
 const KNOWN_RUNTIMES = new Set<Exclude<AgentRuntimeKind, null>>(["browser", "coding"]);
-const KNOWN_WORKFLOWS = new Set(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES"]);
+const KNOWN_WORKFLOWS = new Set(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES", "BROWSER_TASK"]);
 
 /** The subset of capabilities a creator declares through the create/update routes:
  *  the closed-enum power fields + the tool allowlist. customSurfaces/settingsSchema/

@@ -86,6 +86,18 @@ describe("LocalRunner", () => {
 		expect(task.requiresApproval).toBe(true);
 	});
 
+	it("treats browser.task as agent-driven (running, not auto-run)", () => {
+		// The generic browser workflow steers this via /browser/*; the runner must NOT
+		// auto-execute it (no runTask) — it lands 'running' like job.apply_agent.
+		const task = runner.createTask({
+			type: "browser.task",
+			input: { url: "https://example.com/x", objective: "do the thing" },
+		});
+		expect(task.status).toBe("running");
+		expect(task.requiresApproval).toBe(false);
+		expect(runner.store.getTask(task.id)?.status).toBe("running");
+	});
+
 	it("does not share empty store arrays across fresh data directories", () => {
 		const otherDir = mkdtempSync(join(tmpdir(), "pags-runner-other-"));
 		try {

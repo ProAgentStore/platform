@@ -464,7 +464,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 						z.object({
 							surfaces: z.array(z.string()).optional(),
 							runtime: z.enum(["browser", "coding"]).nullable().optional(),
-							workflow: z.enum(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES"]).nullable().optional(),
+							workflow: z.enum(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTES", "BROWSER_TASK"]).nullable().optional(),
 							tools: z.array(z.string()).optional(),
 						}),
 						// Some MCP clients stringify nested object args — accept a JSON string too
