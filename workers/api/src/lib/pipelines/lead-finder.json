@@ -101,7 +101,8 @@
         "items": { "$ref": "leads.items" },
         "collection": "leads",
         "key": "place_id",
-        "mode": "update"
+        "mode": "update",
+        "emit": "lead.created"
       }
     }
   ],
