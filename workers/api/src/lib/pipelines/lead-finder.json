@@ -61,6 +61,7 @@
       "bind": "shaped",
       "inputs": {
         "items": { "$ref": "flat.items" },
+        "keep": ["place_id", "name", "address", "phone", "websiteUri", "lat", "lng", "maps_url"],
         "derive": { "category": { "$param": "type" }, "status": "new" },
         "extract": {
           "country": "addressComponents[types~=country].longText",
