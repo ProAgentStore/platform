@@ -155,3 +155,54 @@ describe("meta connector (WhatsApp + Instagram)", () => {
 		expect(r.content).toMatch(/not configured/i);
 	});
 });
+
+/** Consent granted to exactly ONE instance id; records which id was actually asked about. */
+function envConsentOnlyFor(instanceId: string): { env: Env; asked: string[] } {
+	const asked: string[] = [];
+	const env = {
+		DB: {
+			prepare(_sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						asked.push(String(args[0]));
+						return { first: async () => (args[0] === instanceId ? { ok: 1 } : null) };
+					},
+				};
+			},
+		},
+	} as unknown as Env;
+	return { env, asked };
+}
+
+describe("execution authority at the consent gate (#185)", () => {
+	const WRITE_TOOL = "github_create_issue";
+	const SUPERVISOR = "sup-1";
+	const SUBORDINATE = "sub-1";
+
+	it("DOWN-LENDING is refused: a consented supervisor cannot enable a write for an unconsented subordinate", async () => {
+		// The exact bypass this rule exists to stop — wire a low-trust agent beneath a
+		// high-trust one and it would inherit reach by configuration alone.
+		const { env, asked } = envConsentOnlyFor(SUPERVISOR);
+		const r = await runRegistryTool(WRITE_TOOL, { env, userId: "u1", instanceId: SUBORDINATE, onBehalfOf: SUPERVISOR }, {});
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/isn't permitted|not permitted|consent/i);
+		// Consent was evaluated against the EXECUTOR, never the asker.
+		expect(asked).toContain(SUBORDINATE);
+		expect(asked).not.toContain(SUPERVISOR);
+	});
+
+	it("UP-BORROWING is refused: a supervisor gains nothing from a consented subordinate", async () => {
+		const { env, asked } = envConsentOnlyFor(SUBORDINATE);
+		const r = await runRegistryTool(WRITE_TOOL, { env, userId: "u1", instanceId: SUPERVISOR, onBehalfOf: SUBORDINATE }, {});
+		expect(r.success).toBe(false);
+		expect(asked).toContain(SUPERVISOR);
+		expect(asked).not.toContain(SUBORDINATE);
+	});
+
+	it("the subordinate's OWN consent still works — containment is not a blanket denial", async () => {
+		const { env } = envConsentOnlyFor(SUBORDINATE);
+		const r = await runRegistryTool(WRITE_TOOL, { env, userId: "u1", instanceId: SUBORDINATE, onBehalfOf: SUPERVISOR }, {});
+		// Past the consent gate (it fails later on not-connected), which is the point.
+		expect(r.content).not.toMatch(/isn't permitted/i);
+	});
+});

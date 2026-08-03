@@ -4,6 +4,7 @@
 // instead of the current triple-definition. Additive: the legacy AGENT_TOOLS /
 // STORAGE_TOOLS catalog is untouched; registry tools are dispatched alongside them.
 import type { Env } from "../types.js";
+import { consentInstanceOf } from "./execution-authority.js";
 import { connectorTools, getConnector } from "./connectors/registry.js";
 import { connectorClient, type ConnectorClient } from "./connectors/client.js";
 import { hasConsent } from "./connector-consent.js";
@@ -20,6 +21,14 @@ export interface RegistryToolCtx {
 	 * otherwise undebuggable, because nothing links the source run to the run it set off.
 	 */
 	traceId?: string;
+	/**
+	 * Audit ONLY: the instance that asked for this work, when a supervisor delegated it (#185).
+	 * Never consulted for permission — consent and token-minting resolve against `instanceId`,
+	 * the EXECUTOR. If this were ever read as an authority, supervision would become a consent
+	 * bypass: wire a low-trust agent under a high-trust one and it inherits reach by
+	 * configuration alone. See lib/execution-authority.ts.
+	 */
+	onBehalfOf?: string;
 	/**
 	 * The connector client factory (issue #86) — handlers call
 	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
@@ -213,7 +222,10 @@ export async function runRegistryTool(
 	// → refused. (A write-scoped tool without a connector can't be consented to, so it's
 	// unreachable rather than silently ungated.)
 	if (tool.scope === "write") {
-		if (!tool.connector || !(await hasConsent(ctx.env, ctx.instanceId, tool.connector, "write"))) {
+		// #185: resolve the authority through the named helper rather than reading a field, so
+		// the "executor, never the asker" rule has one reviewable, tested place to live.
+		const authority = consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf });
+		if (!tool.connector || !(await hasConsent(ctx.env, authority || undefined, tool.connector, "write"))) {
 			const label = tool.connector ?? "this";
 			return {
 				name,
@@ -227,7 +239,9 @@ export async function runRegistryTool(
 		// through the ONE path (issue #86) instead of importing token fns directly.
 		const handlerCtx: RegistryToolCtx = {
 			...ctx,
-			connectorClient: ctx.connectorClient ?? ((provider: string) => connectorClient(ctx.env, provider, { userId: ctx.userId, instanceId: ctx.instanceId })),
+			// Tokens are minted for the EXECUTOR too (#185) — instance-resource grants must not
+			// follow the asker either, or up-borrowing would work where consent-bypass does not.
+			connectorClient: ctx.connectorClient ?? ((provider: string) => connectorClient(ctx.env, provider, { userId: ctx.userId, instanceId: consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf }) || undefined })),
 		};
 		const r = await tool.handler(handlerCtx, input || {});
 		return { name, content: r.content, success: r.success };
