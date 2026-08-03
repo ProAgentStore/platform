@@ -1,0 +1,149 @@
+# Supervision as a platform primitive
+
+> Status: proposal. Extends `coordination-primitives.md` (#154). That doc deferred cross-agent
+> delegation until "a real second consumer beyond Coder" existed. **It now does** — configurable
+> multi-layer supervision — so this picks up where the gate left off.
+
+## The observation
+
+Coder has a two-level hierarchy: an **Overseer** coordinates across repos and delegates to each
+repo's **Pilot**, which drives an **Engine**. That structure is correct. The problem is *where it
+lives*: inside the agent, not in the platform.
+
+Three places hardcode it:
+
+| Hardcoded as | Where | Consequence |
+|---|---|---|
+| The delegation target is a **repo** | `drive_claude(repoId, instruction)` | You cannot delegate to an *agent*. The type forbids it. |
+| The coordinator is a **route** | `POST /:instanceId/coding/overseer` | Supervision is code, not configuration. |
+| Depth is **fixed at 2** | Overseer → Pilot → Engine, by construction | No third layer is expressible. |
+
+There is no table anywhere describing *who supervises whom*. So supervision cannot be configured,
+cannot be inspected, and cannot be reused by a second agent. Every future agent that needs a
+coordinator would rebuild the Overseer.
+
+The fix is not to refactor Coder. It is to give the platform the primitive Coder is already an
+instance of — exactly the reasoning #154 applied to `delegate`, now carried one level up.
+
+## Two edge types, and we only have one
+
+PAGS has **choreography**: `agent_connections` (migration 0056) routes an emitted FACT to another
+instance. Deliberately decoupled — a producer must not know its consumers. That is the right model
+for the lead chain.
+
+Supervision is a **different edge**, and pretending it is the same one would be a mistake:
+
+| | Choreography (built) | Supervision (missing) |
+|---|---|---|
+| Verb | emit a **fact** | assign a **goal** |
+| Addressing | producer doesn't know the consumer | supervisor **names** the subordinate |
+| Result | nothing returns | a result returns; the supervisor is **accountable** for it |
+| Coupling | decoupled by design | directed and deliberately coupled |
+| Failure | dead-letter + replay | **escalate to the supervisor** |
+| Shape | fan-out | tree |
+
+Facts flow outward to whoever cares. Goals flow *down* a named tree and results flow *back up*.
+Modelling supervision as an event connection would lose the return path and the accountability,
+which are the entire point.
+
+What they **share** is the delivery substrate: both need at-least-once handoff, idempotency, and
+trace correlation. Migration 0058 already provides all three for connections. Supervision should
+reuse that outbox rather than grow a second reliability mechanism — the same argument that
+re-scoped #17.
+
+## The design
+
+**A supervision edge is configured data**, owner-scoped like connections:
+
+```
+supervisor_instance_id → subordinate_instance_id
+```
+
+`delegate(target, goal)` (#156) generalizes its target from `repoId` to an addressable
+supervisable entity — an instance, or a repo's Pilot. That single type change is what unlocks
+everything else; the rest is enforcement.
+
+A supervisor then works the way the Overseer already does, minus the hardcoding: it reads its
+subordinates' status, decides, delegates goals, and reports up. Depth becomes whatever the user
+configured. Coder's Overseer becomes *one configuration of the primitive* rather than the only
+instance of it.
+
+## What multi-layer makes newly dangerous
+
+Two levels in code are safe because a human wrote them. N levels by configuration are not. These
+are the hazards no existing ticket covers, and they are the reason this needs design rather than
+just un-deferring #159.
+
+**1. Cycles.** A supervises B supervises A is now reachable by *configuration*, not just by a code
+bug — and it is an unbounded loop that spends money. The graph must be validated as a DAG at
+wiring time. Same principle as validating connection filters at create time: reject the broken
+wiring when the human is present, not at 3am.
+
+**2. Cost multiplies with depth.** Every layer is an LLM. Fan-out 5 at 3 levels is 125 leaf runs
+from one delegation. A budget — remaining **depth** and remaining **spend** — must ride *down*
+with each delegation, be decremented at every hop, and refuse at zero. Without it a config typo
+is a billing incident, and the existing `ai_usage` ledger records the damage after the fact rather
+than preventing it.
+
+**3. Supervision must not escalate authority.** This is the security-critical one. A subordinate
+executes with **its own** consent-gated tools (migration 0051) and **its own** guardrails — never
+the supervisor's, and never a union of the two. Otherwise supervision becomes a consent bypass:
+wire a low-trust agent beneath a high-trust one and it inherits reach it was never granted. A
+delegation carries the *owner's* authority (both instances already belong to one user), plus a
+goal. It lends nothing. This is the same boundary #142 draws for creators declaring capabilities.
+
+**4. Goals must terminate.** A goal needs a completion predicate and a deadline, or supervisors
+wait forever and the board fills with permanent `running`. Fire-and-forget was #154's complaint
+about the old one-shot; "waits forever" is the opposite failure and just as real.
+
+**5. Escalation needs a ladder, not a broadcast.** When a subordinate hits `needs_human`, it
+should surface to its **supervisor** first — which may resolve it without waking anyone — and only
+reach the human after a bounded number of hops. Otherwise multi-layer supervision multiplies human
+interrupts, which is precisely backwards: the point of a hierarchy is to *absorb* interrupts.
+
+**6. Accountability must render as one tree.** The parent trace has to flow down every hop. This
+already exists for the pump (`traceId` → child run → a `chain.link` event under the parent) and
+should carry unchanged, so a three-level delegation reads as a single tree rather than five
+unrelated runs.
+
+## The other half: configuring a Coder at all
+
+"Configure a Coder agent" needs more than supervision. Status of the authoring path:
+
+- **#141 (closed)** — capabilities (`surfaces`/`runtime`/`workflow`/`tools`) are accepted and
+  validated on create + update. A Coder-*equivalent* can be stamped out from config.
+- **#142 (open)** — trust gating before a creator may declare `runtime`/`workflow`. Gates the
+  above for third parties.
+- **#160 (open, deferred)** — `capabilities.workflow` is still a **closed enum**
+  (`JOB_APPLY`/`CODING_SESSION`/`INSURANCE_QUOTES`) backed by code. You can *select* Coder's brain;
+  you cannot *define* one.
+
+So #160 is the real blocker on "configurable Coder," and supervision is the blocker on "Coder's
+hierarchy is platform-provided." They are independent and can proceed in parallel.
+
+## Sequencing
+
+1. **#156 — generalize `delegate(target, goal)`.** The target-type change (repoId → supervisable
+   entity). Everything else depends on it, and it is the smallest useful step.
+2. **Supervision graph as data** — the edge table, DAG validation, wiring API; reuse the 0058
+   outbox for handoff.
+3. **Budget + authority containment** — depth/spend flowing down, and the no-privilege-inheritance
+   rule. Do this *with* step 2, not after: both are cheap to build in and expensive to retrofit.
+4. **#157 — typed task/handoff model.** The result channel and the escalation ladder.
+5. **#159 — cross-agent delegation** falls out of 1–4 rather than being separate work.
+6. **#160 — retire the `workflow` enum**, which is what finally makes a Coder configurable.
+
+Coder stays the first consumer throughout: at each step its Overseer should be re-expressible in
+the primitive, and when it is, the hardcoded route comes out.
+
+## Tracking
+
+| Work | Ticket |
+|---|---|
+| Generalize `delegate(target, goal)` | #156 (un-deferred) |
+| Supervision graph as configured data | #183 |
+| Delegation budget — depth + spend | #184 |
+| Authority containment (no privilege inheritance) | #185 |
+| Typed task/handoff + escalation ladder | #157 |
+| Cross-agent delegation | #159 (un-deferred) |
+| Retire the `workflow` enum | #160 |
