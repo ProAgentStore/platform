@@ -112,6 +112,17 @@ const PROVIDERS: Provider[] = [
 		docsUrl: "",
 	},
 	{
+		// The outbound-MCP connector credential (user_api_keys provider "mcp"), read by
+		// lib/connectors/mcp.ts and sent as `Authorization: Bearer` to the MCP server the
+		// pipeline names. Not an AI provider and not proxyable — it's a BYOK access token for
+		// whichever MCP server the user configured, so no host/prefix and no live verify.
+		id: "mcp",
+		name: "MCP server (access token)",
+		host: null,
+		keyPrefix: "",
+		docsUrl: "",
+	},
+	{
 		// Claude Code sign-in for the Coder engine: a long-lived OAuth token from
 		// `claude setup-token` (works with a Pro/Max subscription). host:null — this is
 		// NOT proxyable; it's injected as CLAUDE_CODE_OAUTH_TOKEN into the runner's

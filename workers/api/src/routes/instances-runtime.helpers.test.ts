@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
-import { instanceRoutes } from "./instances.js";
+import { defaultPipelinesFor, instanceRoutes } from "./instances.js";
 import {
 	getRuntime,
 	getRuntimeNode,
@@ -236,6 +236,8 @@ function buildApp(opts: {
 	relayConnected?: boolean;
 	noRuntime?: boolean;
 	mirroredTask?: unknown;
+	/** Records PIPELINE_RUN.create calls so ticket-approval tests can assert the dispatch. */
+	pipelineRuns?: Array<Record<string, unknown>>;
 } = {}) {
 	const writes: Write[] = [];
 	const owns = new Set((opts.owns ?? []).map(([i, u]) => `${i}::${u}`));
@@ -279,6 +281,18 @@ function buildApp(opts: {
 		SESSION_SIGNING_KEY: SECRET,
 		KEY_ENCRYPTION_KEY: KEK,
 		RELAY: relayStub(opts.relayConnected ?? false),
+		PIPELINE_RUN: {
+			async create(args: { params: Record<string, unknown> }) {
+				opts.pipelineRuns?.push(args.params);
+				return { id: "wf-1" };
+			},
+		},
+		// executeTriggerAction resolves the instance DO up front (create_task/add_knowledge
+		// dispatch into it), so the binding must exist even for a run_pipeline ticket.
+		AGENT: {
+			idFromName: (n: string) => n,
+			get: () => ({ async fetch() { return new Response("{}", { status: 200 }); } }),
+		},
 		DB,
 	} as unknown as Env;
 
@@ -452,6 +466,125 @@ describe("POST /v1/instances/:id/tasks/direct (runner-less board ticket, #150 P3
 	});
 });
 
+describe("Actionable tickets — the runner-less approval gate", () => {
+	// A pipeline agent has no runner, so /approve's requireLiveRuntime could never serve it.
+	// An actionable ticket carries its own work and is run straight from the cloud.
+	const PIPELINE_CFG = JSON.stringify({ pipelines: { "site-builder": { name: "site-builder", steps: [{ tool: "map", inputs: {} }] } } });
+	const actionable = (over: Record<string, unknown> = {}) => ({
+		id: "t1",
+		title: "Build a site for Palm Tree Kiosk",
+		status: "needs_approval",
+		action: { action: "run_pipeline", config: { pipeline: "site-builder" }, params: { place_id: "p1" } },
+		...over,
+	});
+
+	it("creates an actionable ticket that defaults to needs_approval and persists its action", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await post(
+			app,
+			env,
+			"/v1/instances/inst-1/tasks/direct",
+			{ title: "Build a site", action: "run_pipeline", config: { pipeline: "site-builder" }, params: { place_id: "p1" } },
+			await tokenFor("u1"),
+		);
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { status: string; action: { action: string; config: { pipeline: string } } };
+		expect(body.status).toBe("needs_approval"); // it's waiting on a human, not a done record
+		expect(body.action).toEqual({ action: "run_pipeline", config: { pipeline: "site-builder" }, params: { place_id: "p1" } });
+		expect(writes.some((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"))).toBe(true);
+	});
+
+	it("a plain ticket still defaults to completed (unchanged behaviour)", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/direct", { title: "Found a lead" }, await tokenFor("u1"));
+		expect(((await res.json()) as { status: string }).status).toBe("completed");
+	});
+
+	it("400s an invalid action at CREATE time rather than storing a ticket that can never run", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/direct", { title: "x", action: "run_pipeline" }, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect(writes.some((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"))).toBe(false);
+	});
+
+	it("running an approved ticket dispatches its declared pipeline with its params", async () => {
+		const pipelineRuns: Array<Record<string, unknown>> = [];
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: actionable(), instanceConfig: PIPELINE_CFG, pipelineRuns });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/run", {}, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect((await res.json()) as { ok: boolean }).toMatchObject({ ok: true });
+		expect(pipelineRuns).toHaveLength(1);
+		expect(pipelineRuns[0]).toMatchObject({ instanceId: "inst-1", userId: "u1", params: { place_id: "p1" } });
+	});
+
+	it("/approve falls back to the same path — NO live runner required", async () => {
+		const pipelineRuns: Array<Record<string, unknown>> = [];
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: actionable(), instanceConfig: PIPELINE_CFG, pipelineRuns });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/approve", {}, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect(pipelineRuns).toHaveLength(1);
+	});
+
+	it("marks the ticket running before dispatch, then completed (the board shows progress)", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: actionable(), instanceConfig: PIPELINE_CFG, pipelineRuns: [] });
+		await post(app, env, "/v1/instances/inst-1/tasks/t1/run", {}, await tokenFor("u1"));
+		const claim = writes.find((w) => w.sql.includes("UPDATE instance_runtime_tasks SET status = 'running'"));
+		expect(claim).toBeTruthy(); // claimed atomically, so a double-click can't run it twice
+		const mirrors = writes.filter((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"));
+		expect(mirrors.some((w) => w.args.some((a) => typeof a === "string" && a.includes('"status":"completed"')))).toBe(true);
+	});
+
+	it("409s a ticket that was already decided", async () => {
+		const pipelineRuns: Array<Record<string, unknown>> = [];
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: actionable({ status: "completed" }), instanceConfig: PIPELINE_CFG, pipelineRuns });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/run", {}, await tokenFor("u1"));
+		expect(res.status).toBe(409);
+		expect(pipelineRuns).toHaveLength(0);
+	});
+
+	it("400s a plain ticket — there is nothing to run", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: { id: "t1", title: "Found a lead", status: "completed" } });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/run", {}, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+	});
+
+	it("404s an unknown ticket", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true });
+		expect((await post(app, env, "/v1/instances/inst-1/tasks/nope/run", {}, await tokenFor("u1"))).status).toBe(404);
+	});
+
+	it("404s + never dispatches for a non-owner", async () => {
+		const pipelineRuns: Array<Record<string, unknown>> = [];
+		const { app, env } = buildApp({ owns: [], mirroredTask: actionable(), instanceConfig: PIPELINE_CFG, pipelineRuns });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/run", {}, await tokenFor("u2"));
+		expect(res.status).toBe(404);
+		expect(pipelineRuns).toHaveLength(0);
+	});
+
+	it("ignores work supplied in the REQUEST — the stored action is the only work that runs", async () => {
+		const pipelineRuns: Array<Record<string, unknown>> = [];
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: actionable(), instanceConfig: PIPELINE_CFG, pipelineRuns });
+		await post(
+			app,
+			env,
+			"/v1/instances/inst-1/tasks/t1/run",
+			{ action: "run_pipeline", config: { pipeline: "something-else" }, params: { place_id: "attacker" } },
+			await tokenFor("u1"),
+		);
+		expect(pipelineRuns[0]).toMatchObject({ params: { place_id: "p1" } });
+		expect((pipelineRuns[0].pipeline as { name: string }).name).toBe("site-builder");
+	});
+
+	it("records the failure on the ticket when the action can't run", async () => {
+		// No such pipeline on the instance → startPipelineRun refuses; the ticket must say so.
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: actionable(), instanceConfig: "{}" });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/run", {}, await tokenFor("u1"));
+		expect(res.status).toBe(502);
+		const mirrors = writes.filter((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"));
+		expect(mirrors.some((w) => w.args.some((a) => typeof a === "string" && a.includes('"status":"failed"')))).toBe(true);
+	});
+});
+
 describe("GET /v1/instances/:id/tasks/:taskId (runner-less fallback, #150)", () => {
 	it("serves the mirrored ticket (with reasoning) when NO runtime is registered", async () => {
 		const ticket = { id: "t1", title: "Palm Tree Kiosk", reasoning: "1. discovered via Places\n2. no website → lead", status: "completed" };
@@ -467,5 +600,32 @@ describe("GET /v1/instances/:id/tasks/:taskId (runner-less fallback, #150)", () 
 		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true });
 		const res = await get(app, env, "/v1/instances/inst-1/tasks/missing", await tokenFor("u1"));
 		expect(res.status).toBe(404);
+	});
+});
+
+describe("defaultPipelinesFor — a pipeline agent arrives usable", () => {
+	const VALID = { name: "site-builder", steps: [{ tool: "map", inputs: {} }] };
+
+	it("copies the agent's declared pipelines", () => {
+		const out = defaultPipelinesFor(JSON.stringify({ pipelines: { "site-builder": VALID } }));
+		expect(out).toEqual({ "site-builder": VALID });
+	});
+
+	it("drops a definition the runner would reject, keeping the working ones", () => {
+		// A broken template def must not poison the subscriber's config — the runner would
+		// only fail later, at run time, with no clue where the bad def came from.
+		const out = defaultPipelinesFor(JSON.stringify({ pipelines: { good: VALID, bad: { name: "bad", steps: [] } } }));
+		expect(Object.keys(out)).toEqual(["good"]);
+	});
+
+	it("drops a definition naming a tool that doesn't exist", () => {
+		const out = defaultPipelinesFor(JSON.stringify({ pipelines: { bad: { name: "bad", steps: [{ tool: "no_such_tool" }] } } }));
+		expect(out).toEqual({});
+	});
+
+	it("returns {} for an agent with no pipelines, and for malformed config", () => {
+		expect(defaultPipelinesFor(JSON.stringify({ capabilities: {} }))).toEqual({});
+		expect(defaultPipelinesFor("{not json")).toEqual({});
+		expect(defaultPipelinesFor(null)).toEqual({});
 	});
 });

@@ -1,0 +1,62 @@
+{
+  "name": "site-deploy",
+  "params": {
+    "session_id": { "type": "string", "description": "Builder session from site-builder's create_site — what actually gets deployed." },
+    "place_id": { "type": "string", "description": "Google Places id, so the outcome lands back on the right lead." },
+    "mcpUrl": { "type": "string", "description": "Website-builder MCP endpoint (same one site-builder used)." },
+    "slug": { "type": "string", "description": "Site slug — lowercase letters, numbers, hyphens." },
+    "name": { "type": "string", "description": "Business display name." },
+    "category": { "type": "string", "description": "Site category chosen by the copy step." },
+    "description": { "type": "string", "description": "One-sentence site description." }
+  },
+  "steps": [
+    {
+      "tool": "mcp_call_tool",
+      "bind": "deployed",
+      "inputs": {
+        "url": { "$param": "mcpUrl" },
+        "tool": "deploy",
+        "args": {
+          "session_id": { "$param": "session_id" },
+          "id": { "$param": "slug" },
+          "name": { "$param": "name" },
+          "category": { "$param": "category" },
+          "description": { "$param": "description" }
+        }
+      }
+    },
+    {
+      "tool": "mcp_call_tool",
+      "bind": "status",
+      "inputs": {
+        "url": { "$param": "mcpUrl" },
+        "tool": "get_status",
+        "args": { "session_id": { "$param": "session_id" } }
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "record",
+      "inputs": {
+        "items": [{ "s": { "$ref": "status.data" }, "place_id": { "$param": "place_id" } }],
+        "extract": { "site_url": "s.url", "site_slug": "s.id" },
+        "keep": ["place_id"],
+        "derive": { "site_status": "live" }
+      }
+    },
+    {
+      "tool": "dedupe_upsert",
+      "bind": "stored",
+      "inputs": {
+        "items": { "$ref": "record.items" },
+        "collection": "sites",
+        "key": "place_id",
+        "mode": "update"
+      }
+    }
+  ],
+  "sink": {
+    "collection": "sites",
+    "keyField": "place_id"
+  }
+}

@@ -98,23 +98,93 @@ function runMap(item: unknown, cfg: {
 	if (cfg.keep) for (const k of cfg.keep) if (k in src) out[k] = src[k];
 	if (cfg.extract) for (const [toKey, fromPath] of Object.entries(cfg.extract)) setPath(out, toKey, getPath(src, fromPath) ?? null);
 	if (cfg.rename) for (const [fromPath, toKey] of Object.entries(cfg.rename)) setPath(out, toKey, getPath(src, fromPath) ?? null);
-	if (cfg.derive) for (const [toKey, val] of Object.entries(cfg.derive)) setPath(out, toKey, resolveDeriveValue(src, val));
+	// `derive` runs LAST and sees the source PLUS whatever extract/rename just produced —
+	// otherwise a `$format`/`$cond` could only reference raw input fields, which makes it
+	// useless in the common "reshape a nested API response, then compose a field from the
+	// flattened result" case. src stays in scope, so this only ever widens what's visible.
+	if (cfg.derive) {
+		const scope = { ...src, ...out };
+		for (const [toKey, val] of Object.entries(cfg.derive)) setPath(out, toKey, resolveDeriveValue(scope, val));
+	}
 	return out;
 }
 
 /**
- * A `derive` value is normally a constant. As a small conditional escape hatch it may be
- * `{ "$cond": {field,op,value?}, "then": …, "else": … }` — evaluated with the SAME predicate
- * ops as `filter` (missing/exists/falsy/eq/…), recursively (then/else may nest another
- * `$cond`). Lets a pipeline compute a classified field (e.g. website_status = none |
- * unreachable | reachable) without a new step. A plain object without `$cond` is a literal.
+ * A `derive` value is normally a constant. Two small escape hatches live in this slot:
+ *
+ *   • `{ "$cond": {field,op,value?}, "then": …, "else": … }` — evaluated with the SAME
+ *     predicate ops as `filter` (missing/exists/falsy/eq/…), recursively (then/else may nest
+ *     another `$cond`). Computes a classified field (e.g. website_status = none | unreachable
+ *     | reachable) without a new step.
+ *   • `{ "$format": "…{{field}}…" }` — composes a STRING from the record's own fields, using
+ *     the same `{{dotted.path}}` syntax `ai_generate` renders with. Missing fields collapse to
+ *     "" and the result is whitespace-tidied, so a partial record yields "Joe's Cafe Newtown"
+ *     rather than "Joe's Cafe  undefined". This is the only way a pipeline can build a string
+ *     out of other fields — needed wherever a step takes prose it can't template itself (a
+ *     search query, a ticket title). Deliberately here rather than as a `format` step: it is
+ *     the same "compute a field from this record" job `$cond` already does.
+ *
+ * A plain object with neither key is a literal.
  */
 function resolveDeriveValue(item: unknown, val: unknown): unknown {
 	if (isRecord(val) && isRecord(val.$cond)) {
 		const c = val.$cond as unknown as FilterClause;
 		return resolveDeriveValue(item, evalClause(item, c) ? val.then : val.else);
 	}
+	if (isRecord(val) && typeof val.$format === "string") return renderTemplate(val.$format, item);
 	return val;
+}
+
+/**
+ * Render `{{field}}` / `{{a.b}}` placeholders from a record — the same placeholder syntax
+ * `ai_generate` uses for its prompts. A missing/null field renders as "", and the runs of
+ * whitespace that leaves behind are collapsed so a gap doesn't show in the output. (The
+ * collapsing is why this isn't shared with `ai_generate`: a prompt's own spacing is
+ * deliberate, a composed string's is not.)
+ */
+export function renderTemplate(template: string, item: unknown): string {
+	return template
+		.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, k: string) => {
+			const v = getPath(item, k);
+			return v == null ? "" : String(v);
+		})
+		.replace(/[ \t]{2,}/g, " ")
+		.trim();
+}
+
+/**
+ * Parse a value that is *supposed* to be JSON but came from a language model. Handles the
+ * three shapes they actually emit: clean JSON, a ```json fenced block, and JSON with a
+ * sentence wrapped around it. Returns null when nothing parses (callers treat that as
+ * "this record's generation failed" rather than an error). A value that is ALREADY parsed
+ * (object/array) passes straight through.
+ */
+export function parseJsonLoose(value: unknown): unknown {
+	if (value === null || value === undefined) return null;
+	if (typeof value === "object") return value;
+	const raw = String(value).trim();
+	if (!raw) return null;
+	// Strip a fenced block: ```json … ``` or ``` … ```
+	const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i.exec(raw);
+	const body = (fenced ? fenced[1] : raw).trim();
+	const attempt = (s: string): unknown => {
+		try {
+			return JSON.parse(s);
+		} catch {
+			return undefined;
+		}
+	};
+	const direct = attempt(body);
+	if (direct !== undefined) return direct;
+	// Prose around the JSON — take the outermost {…} or […] span.
+	const first = body.search(/[{[]/);
+	if (first === -1) return null;
+	const opener = body[first];
+	const closer = opener === "{" ? "}" : "]";
+	const last = body.lastIndexOf(closer);
+	if (last <= first) return null;
+	const span = attempt(body.slice(first, last + 1));
+	return span === undefined ? null : span;
 }
 
 // ── 2. filter ──────────────────────────────────────────────────────────────
@@ -666,6 +736,68 @@ export const STEP_TOOLS: ToolDef[] = [
 				precision: "best-effort" as const,
 			};
 			return ok(JSON.stringify(out, null, 2));
+		},
+	},
+
+	// 7b ─ slice — bound a list. The library could reshape, filter, enrich and flatten a list
+	// but never CAP one, so any "top N" / "first few" intent had to be smuggled into a filter
+	// predicate or left unbounded — and an unbounded list feeding a per-item connector call
+	// (enrich / forEach) is an unbounded spend. Pure, no I/O.
+	{
+		name: "slice",
+		tier: "standard",
+		scope: "read",
+		description:
+			"Take a bounded window of a list (pure, no I/O). `limit` keeps at most that many records, `offset` skips that many first. The 'top N' primitive — cap a list before a per-item connector call (enrich / forEach) so a long source can't turn into unbounded spend. Returns {items, count, dropped}.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				items: { type: "array", description: "Records to take a window of." },
+				limit: { type: "number", description: "Max records to keep (default: all)." },
+				offset: { type: "number", description: "Records to skip first (default 0)." },
+			},
+			required: [],
+		},
+		handler: async (_ctx, input) => {
+			const items = asArray(input.items);
+			const offset = Math.max(0, Math.floor(Number(input.offset) || 0));
+			const limit = input.limit === undefined || input.limit === null ? items.length : Math.max(0, Math.floor(Number(input.limit) || 0));
+			const out = items.slice(offset, offset + limit);
+			return ok(JSON.stringify({ items: out, count: out.length, dropped: items.length - out.length }, null, 2));
+		},
+	},
+
+	// 7c ─ parse_json — turn a model's JSON reply into real fields. `ai_generate` writes raw
+	// TEXT, so a step that asks for structured output had no way to hand its fields to the
+	// next step; the alternative was one LLM call per field, which costs more AND loses
+	// coherence between fields that should read as one voice. Tolerates the ```json fence
+	// models add. A record whose field won't parse gets `null` — best-effort, like ai_generate.
+	{
+		name: "parse_json",
+		tier: "standard",
+		scope: "read",
+		description:
+			"Parse a JSON string field on each record into real structured data (pure, no I/O). Reads `field` (default \"text\" — what ai_generate writes) and writes the parsed value to `as` (default: back onto `field`). Strips a ```json code fence and any prose around the JSON. A value that won't parse becomes null rather than failing the batch, and is counted in `failed`. The companion to ai_generate when you asked the model for JSON.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				items: { type: "array", description: "Records carrying a JSON string field." },
+				field: { type: "string", description: 'Field holding the JSON string (default "text").' },
+				as: { type: "string", description: "Field to write the parsed value to (default: overwrite `field`)." },
+			},
+			required: [],
+		},
+		handler: async (_ctx, input) => {
+			const items = asArray(input.items).filter(isRecord) as Record<string, unknown>[];
+			const field = typeof input.field === "string" && input.field ? input.field : "text";
+			const as = typeof input.as === "string" && input.as ? input.as : field;
+			let failed = 0;
+			const out = items.map((item) => {
+				const parsed = parseJsonLoose(getPath(item, field));
+				if (parsed === null) failed++;
+				return { ...item, [as]: parsed };
+			});
+			return ok(JSON.stringify({ items: out, count: out.length, failed }, null, 2));
 		},
 	},
 

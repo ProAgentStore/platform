@@ -66,6 +66,10 @@ export interface TriggerConfig {
 	/** cron: randomise the fire time by ± this many minutes so runs don't land exactly on
 	 *  the dot (an automation fingerprint). 0/absent = fire on schedule. */
 	jitterMinutes?: number;
+	/** run_pipeline: static run params belonging to the WIRING rather than the event (e.g.
+	 *  which endpoint / which template). Merged UNDER the event payload, so a field present
+	 *  on the inbound record always wins. */
+	params?: Record<string, unknown>;
 }
 
 const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse"]);
@@ -307,7 +311,14 @@ export async function executeTriggerAction(
 		// new pipeline type never touches the closed `workflow` capability union.
 		const name = stringValue(payloadRecord(payload).pipeline) || config.pipeline || "";
 		if (!name) throw new Error("run_pipeline requires config.pipeline (the pipeline name)");
-		const res = await startPipelineRun(env, target.instance_id, target.user_id, name, payloadRecord(payload), "trigger");
+		// Run params = the trigger's STATIC params (config.params) overlaid with the event
+		// payload. A pipeline usually needs both: settings that belong to the wiring (which
+		// endpoint, which template) and data that belongs to the event (which lead). Without
+		// the static half, anything not present on the inbound record was unreachable — a
+		// connection can't inject config into someone else's payload.
+		const staticParams = isRecord(config.params) ? config.params : {};
+		const params = { ...staticParams, ...payloadRecord(payload) };
+		const res = await startPipelineRun(env, target.instance_id, target.user_id, name, params, "trigger");
 		if (!res.ok) throw new Error(res.error);
 		resultPayload = { pipeline: name, runId: res.runId, workflowId: res.workflowId };
 	} else if (target.action === "insert_record") {

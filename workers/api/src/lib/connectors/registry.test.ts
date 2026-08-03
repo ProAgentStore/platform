@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { CONNECTORS, connectorTools, getConnector } from "./registry.js";
 
 describe("connector registry", () => {
-	it("declares browser, github, google_sheets, http, meta, tmux, and web-search", () => {
+	it("declares browser, github, google_sheets, http, mcp, meta, tmux, and web-search", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
-		expect(ids).toEqual(["browser", "github", "google_sheets", "http", "meta", "tmux", "web-search"]);
+		expect(ids).toEqual(["browser", "github", "google_sheets", "http", "mcp", "meta", "tmux", "web-search"]);
 	});
 
 	it("browser is a no-auth local connector (relay-reached, like tmux), read+write", () => {
@@ -31,6 +31,30 @@ describe("connector registry", () => {
 		expect(http?.scopes).toEqual({ read: true, write: true });
 		expect(http?.grantModel).toBe("user");
 		expect(http?.tools.map((t) => t.name)).toEqual(["http_request"]);
+	});
+
+	it("mcp is a token-auth, read+write, user-grant connector with no tokenEnv (vault-backed)", () => {
+		const mcp = getConnector("mcp");
+		expect(mcp?.auth).toBe("token");
+		expect(mcp?.tokenEnv).toBeUndefined(); // no platform env → connectorClient reads the vault token
+		expect(mcp?.scopes).toEqual({ read: true, write: true });
+		expect(mcp?.grantModel).toBe("user");
+		expect(mcp?.tools.map((t) => t.name)).toEqual(["mcp_list_tools", "mcp_call_tool"]);
+	});
+
+	it("mcp_call_tool is write-scoped (a remote tool call can mutate) while discovery is read", () => {
+		const byName = new Map(connectorTools().map((t) => [t.name, t] as const));
+		expect(byName.get("mcp_call_tool")?.scope).toBe("write");
+		expect(byName.get("mcp_list_tools")?.scope).toBe("read");
+	});
+
+	it("the mcp connector hardcodes no server host — the endpoint is a tool input", () => {
+		// Store independence: a host baked in here would make some other service a runtime
+		// dependency of this Worker. The server must come from config/user data instead.
+		const mcp = getConnector("mcp");
+		const declared = JSON.stringify(mcp?.tools.map((t) => ({ d: t.description, s: t.jsonSchema })));
+		expect(declared).not.toMatch(/https:\/\/(?!example\.com)[a-z0-9.-]+\.[a-z]{2,}/i);
+		expect(mcp?.tools.every((t) => t.jsonSchema.required?.includes("url"))).toBe(true);
 	});
 
 	it("github is an app-auth, read+write, user-grant connector", () => {

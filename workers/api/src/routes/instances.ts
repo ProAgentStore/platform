@@ -9,6 +9,9 @@ import type { BoardColumn } from "../lib/agent-capabilities.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
 import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
+import { buildTicketAction, isRunnableStatus, readTicketAction, validateTicketAction } from "../lib/actionable-ticket.js";
+import { executeTriggerAction } from "../lib/triggers.js";
+import { validatePipeline } from "../lib/pipeline.js";
 import { parseLoopDecision } from "../lib/loop-decide.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import { registerBrowseRoutes } from "./instances-browse.js";
@@ -76,6 +79,29 @@ import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
+/**
+ * The pipelines an agent DECLARES as defaults (agents.config.pipelines), for copying into a
+ * new subscriber's instance config. Each definition is validated with the same
+ * `validatePipeline` the runner uses, so a template with a broken def hands its subscribers
+ * the working ones rather than a config the runner will reject later. Exported for tests.
+ */
+export function defaultPipelinesFor(agentConfig: string | null): Record<string, unknown> {
+	if (!agentConfig) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(agentConfig);
+	} catch {
+		return {};
+	}
+	const declared = isRecord(parsed) && isRecord(parsed.pipelines) ? parsed.pipelines : null;
+	if (!declared) return {};
+	const out: Record<string, unknown> = {};
+	for (const [name, def] of Object.entries(declared)) {
+		if (validatePipeline(def) === null) out[name] = def;
+	}
+	return out;
+}
+
 /** Subscribe to an agent — creates a personal instance with its own DO. */
 instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	const session = await requireUser(c);
@@ -120,7 +146,18 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 
 	// Create instance row. Second+ instances of the same agent get a numbered
 	// display name (stored in config.displayName; user-renameable).
-	const initialConfig = nth > 1 ? JSON.stringify({ displayName: `${agent.name} ${nth}` }) : "{}";
+	//
+	// An agent may also DECLARE default pipelines (agents.config.pipelines). For an agent
+	// whose whole behaviour IS its pipelines, those have to arrive with the subscription —
+	// loadPipeline reads the INSTANCE config, so without this a fresh subscriber gets an
+	// agent that can do nothing until they attach each pipeline by hand. Copied (not
+	// referenced) so the subscriber owns their copy and can edit it, which is the same
+	// template→instance rule the KB and identity already follow. Invalid defs are dropped
+	// rather than poisoning the instance config.
+	const initial: Record<string, unknown> = nth > 1 ? { displayName: `${agent.name} ${nth}` } : {};
+	const declaredPipelines = defaultPipelinesFor(agent.config);
+	if (Object.keys(declaredPipelines).length) initial.pipelines = declaredPipelines;
+	const initialConfig = JSON.stringify(initial);
 	await c.env.DB.prepare(
 		`INSERT INTO agent_instances (id, agent_id, user_id, status, config, created_at, updated_at)
      VALUES (?1, ?2, ?3, 'active', ?4, datetime('now'), datetime('now'))`,
@@ -853,6 +890,77 @@ instanceRoutes.post("/:instanceId/tasks", async (c) => {
 });
 
 /**
+ * Execute an actionable ticket's declared work and record the outcome on the ticket.
+ * Shared by the explicit `/tasks/:id/run` route and the runner-less fallback in
+ * `/tasks/:id/approve`, so both gates behave identically.
+ *
+ * The action comes from the STORED ticket, never from the request — approving picks whether
+ * the declared work runs, it can't substitute different work.
+ */
+async function runActionableTicket(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	taskId: string,
+): Promise<{ body: Record<string, unknown>; status: number }> {
+	const stored = await mirroredRuntimeTask(env, instanceId, userId, taskId);
+	if (!stored || !isRecord(stored)) return { body: { error: "Task not found" }, status: 404 };
+
+	const ticket = readTicketAction(stored);
+	if (!ticket) return { body: { error: "This ticket carries no action to run." }, status: 400 };
+	if (!isRunnableStatus(stored.status)) {
+		return { body: { error: `Ticket is ${String(stored.status)} — nothing left to approve.`, task: stored }, status: 409 };
+	}
+
+	// Claim it first so a double-click (or two console tabs) can't run the work twice.
+	const claimed = await env.DB.prepare(
+		`UPDATE instance_runtime_tasks SET status = 'running', updated_at = ?1
+     WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4 AND status = ?5`,
+	)
+		.bind(new Date().toISOString(), taskId, instanceId, userId, String(stored.status))
+		.run();
+	if ((claimed.meta?.changes ?? 0) === 0) {
+		return { body: { error: "Ticket was already picked up.", task: stored }, status: 409 };
+	}
+	await mirrorRuntimeTask(env, instanceId, userId, { ...stored, status: "running", updatedAt: new Date().toISOString() });
+
+	try {
+		const result = await executeTriggerAction(
+			env,
+			{ action: ticket.action, name: `ticket:${taskId}`, instance_id: instanceId, user_id: userId },
+			ticket.config,
+			"manual",
+			ticket.params,
+		);
+		const done = { ...stored, status: "completed", result, updatedAt: new Date().toISOString() };
+		await mirrorRuntimeTask(env, instanceId, userId, done);
+		await logEvent(env, {
+			source: "ticket",
+			event: "ticket.approved",
+			message: `approved ${ticket.action}${ticket.config.pipeline ? ` (${ticket.config.pipeline})` : ""}`,
+			userId,
+			instanceId,
+			context: { taskId, action: ticket.action },
+		});
+		return { body: { ok: true, task: done, result: result ?? null }, status: 200 };
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		const failed = { ...stored, status: "failed", error: message, updatedAt: new Date().toISOString() };
+		await mirrorRuntimeTask(env, instanceId, userId, failed);
+		await logEvent(env, {
+			source: "ticket",
+			event: "ticket.failed",
+			level: "error",
+			message,
+			userId,
+			instanceId,
+			context: { taskId, action: ticket.action },
+		});
+		return { body: { ok: false, error: message, task: failed }, status: 502 };
+	}
+}
+
+/**
  * Create a board ticket DIRECTLY — no runner required (#150 P3). The normal POST
  * /tasks delegates to a live local runner and mirrors its response, so runner-less
  * agents (pipelines, standalone workers, config agents) could never put work on the
@@ -864,22 +972,58 @@ instanceRoutes.post("/:instanceId/tasks/direct", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const body = await c.req
-		.json<{ title?: string; reasoning?: string; description?: string; status?: string; type?: string; id?: string }>()
+		.json<{
+			title?: string;
+			reasoning?: string;
+			description?: string;
+			status?: string;
+			type?: string;
+			id?: string;
+			action?: string;
+			config?: Record<string, unknown>;
+			params?: Record<string, unknown>;
+		}>()
 		.catch(() => ({}) as Record<string, never>);
 	if (!body.title || typeof body.title !== "string") return c.json({ error: "title required" }, 400);
+	// An ACTIONABLE ticket carries the work it stands for, so approving it can carry that
+	// work out (see lib/actionable-ticket.ts). Without this a runner-less agent could raise
+	// a ticket and nothing could ever act on it.
+	const actionError = validateTicketAction(body.action, body.config, body.params);
+	if (actionError) return c.json({ error: actionError }, 400);
+	const ticketAction = body.action ? buildTicketAction(body.action, body.config, body.params) : null;
 	const now = new Date().toISOString();
 	const task = {
 		id: typeof body.id === "string" && body.id ? body.id.slice(0, 200) : crypto.randomUUID(),
 		type: typeof body.type === "string" && body.type ? body.type.slice(0, 120) : "ticket",
-		status: typeof body.status === "string" && body.status ? body.status.slice(0, 80) : "completed",
+		// An actionable ticket defaults to needs_approval (it's waiting on you), while a plain
+		// informational ticket stays completed — it's a record, not pending work.
+		status: typeof body.status === "string" && body.status ? body.status.slice(0, 80) : ticketAction ? "needs_approval" : "completed",
 		title: body.title.slice(0, 200),
 		description: typeof body.description === "string" ? body.description.slice(0, 2000) : "",
 		reasoning: typeof body.reasoning === "string" ? body.reasoning.slice(0, 8000) : "",
+		...(ticketAction ? { action: ticketAction } : {}),
 		createdAt: now,
 		updatedAt: now,
 	};
 	await mirrorRuntimeTask(c.env, instanceId, session.uid, task);
 	return c.json(task, 201);
+});
+
+/**
+ * Run an actionable ticket — the runner-less approval gate. Reads the ticket's declared
+ * `action` (fixed when the agent created it; this route never accepts new work), executes it
+ * through the SAME executeTriggerAction path a trigger or connection uses, and moves the
+ * ticket to completed/failed. This is what lets a cloud-only agent ask "shall I?" on the
+ * board: `POST /tasks/:id/approve` needs a live runner, so before this a pipeline agent's
+ * ticket had no way to be carried out.
+ */
+instanceRoutes.post("/:instanceId/tasks/:taskId/run", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const out = await runActionableTicket(c.env, instanceId, session.uid, taskId);
+	return c.json(out.body, out.status as ContentfulStatusCode);
 });
 
 /**
@@ -923,6 +1067,15 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/approve", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
+	// A runner-less agent's ticket carries its own action — approve it here rather than
+	// demanding a live runner it will never have. Checked FIRST: an actionable ticket is
+	// self-contained, so there is nothing for a runner to approve even if one is connected.
+	const taskId = c.req.param("taskId");
+	const stored = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
+	if (readTicketAction(stored)) {
+		const out = await runActionableTicket(c.env, instanceId, session.uid, taskId);
+		return c.json(out.body, out.status as ContentfulStatusCode);
+	}
 	// Approving a paused task must reach the LIVE runner (the machine the task is running on),
 	// not the stale default row — otherwise approve silently no-ops on a multi-machine account.
 	const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);

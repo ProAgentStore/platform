@@ -530,3 +530,99 @@ describe("lead-finder expressible from the catalog (issue #94 acceptance)", () =
 		expect(calls.filter((c) => c.method === "POST").length).toBe(2);
 	});
 });
+
+// ── slice + parse_json + $format: the composition primitives the site-builder needed ────
+const sliceT = getRegistryTool("slice")!;
+const parseJsonT = getRegistryTool("parse_json")!;
+
+describe("slice", () => {
+	const items = [1, 2, 3, 4, 5].map((n) => ({ n }));
+
+	it("takes the first `limit` records and reports what it dropped", async () => {
+		const r = parse((await sliceT.handler(baseCtx, { items, limit: 2 })).content);
+		expect(r.items.map((i: { n: number }) => i.n)).toEqual([1, 2]);
+		expect(r).toMatchObject({ count: 2, dropped: 3 });
+	});
+
+	it("skips `offset` first", async () => {
+		const r = parse((await sliceT.handler(baseCtx, { items, offset: 3, limit: 10 })).content);
+		expect(r.items.map((i: { n: number }) => i.n)).toEqual([4, 5]);
+	});
+
+	it("passes everything through when no limit is given", async () => {
+		expect(parse((await sliceT.handler(baseCtx, { items })).content).count).toBe(5);
+	});
+
+	it("handles a shorter list, an empty list, and limit 0 without erroring", async () => {
+		expect(parse((await sliceT.handler(baseCtx, { items, limit: 99 })).content).count).toBe(5);
+		expect(parse((await sliceT.handler(baseCtx, { items: [], limit: 3 })).content).count).toBe(0);
+		expect(parse((await sliceT.handler(baseCtx, { items, limit: 0 })).content).count).toBe(0);
+	});
+});
+
+describe("parse_json", () => {
+	it("parses a clean JSON string into structured fields", async () => {
+		const r = parse((await parseJsonT.handler(baseCtx, { items: [{ text: '{"a":1}' }] })).content);
+		expect(r.items[0].text).toEqual({ a: 1 });
+		expect(r.failed).toBe(0);
+	});
+
+	it("strips the ```json fence models add", async () => {
+		const items = [{ out: '```json\n{"a":1}\n```' }];
+		const r = parse((await parseJsonT.handler(baseCtx, { items, field: "out", as: "parsed" })).content);
+		expect(r.items[0].parsed).toEqual({ a: 1 });
+		expect(r.items[0].out).toBe('```json\n{"a":1}\n```'); // the raw reply is kept
+	});
+
+	it("digs the JSON out of surrounding prose", async () => {
+		const items = [{ text: 'Sure! Here you go:\n{"a":[1,2]}\nHope that helps.' }];
+		expect(parse((await parseJsonT.handler(baseCtx, { items })).content).items[0].text).toEqual({ a: [1, 2] });
+	});
+
+	it("writes null and counts a failure instead of failing the batch", async () => {
+		const items = [{ text: "not json at all" }, { text: '{"ok":true}' }];
+		const r = parse((await parseJsonT.handler(baseCtx, { items })).content);
+		expect(r.items[0].text).toBeNull();
+		expect(r.items[1].text).toEqual({ ok: true });
+		expect(r).toMatchObject({ count: 2, failed: 1 });
+	});
+
+	it("passes an already-parsed value through", async () => {
+		const r = parse((await parseJsonT.handler(baseCtx, { items: [{ text: { a: 1 } }] })).content);
+		expect(r.items[0].text).toEqual({ a: 1 });
+	});
+});
+
+describe("map derive — $format (compose a string from other fields)", () => {
+	it("renders {{field}} from the record", async () => {
+		const items = [{ name: "Palm Tree Kiosk", suburb: "Bondi" }];
+		const r = parse((await mapT.handler(baseCtx, { items, derive: { q: { $format: "{{name}} {{suburb}} instagram" } } })).content);
+		expect(r.items[0].q).toBe("Palm Tree Kiosk Bondi instagram");
+	});
+
+	it("sees fields that `extract` just produced — derive runs last, over the reshaped record", async () => {
+		// The bug this closes: $format could only reference RAW input fields, so composing
+		// from a flattened API response (the normal case) silently produced a blank string.
+		const items = [{ d: { displayName: { text: "Palm Tree Kiosk" } } }];
+		const r = parse(
+			(await mapT.handler(baseCtx, {
+				items,
+				extract: { name: "d.displayName.text" },
+				keep: [],
+				derive: { title: { $format: "Deploy the site for {{name}}" } },
+			})).content,
+		);
+		expect(r.items[0].title).toBe("Deploy the site for Palm Tree Kiosk");
+	});
+
+	it("collapses the gap a missing field leaves behind", async () => {
+		const items = [{ name: "Joe's" }]; // no suburb
+		const r = parse((await mapT.handler(baseCtx, { items, derive: { q: { $format: "{{name}} {{suburb}} cafe" } } })).content);
+		expect(r.items[0].q).toBe("Joe's cafe");
+	});
+
+	it("still treats a plain object as a literal", async () => {
+		const r = parse((await mapT.handler(baseCtx, { items: [{ a: 1 }], derive: { meta: { kind: "x" } } })).content);
+		expect(r.items[0].meta).toEqual({ kind: "x" });
+	});
+});

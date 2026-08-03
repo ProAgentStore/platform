@@ -94,6 +94,52 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			return { content: `Started pipeline "${name}" (run ${started.runId}). It runs in the background; check the trace/board for progress.`, success: true };
 		},
 	},
+	{
+		name: "create_ticket",
+		description:
+			"Put a ticket on the board asking the owner to approve a piece of work. Give it a `title`, the `reasoning` (the WHY, shown on the card), and optionally the work itself — `action` (run_pipeline / insert_record / add_knowledge / create_task / run_browse) with its `config` and `params`. A ticket carrying an action sits in Needs-approval until the owner approves it, and approving RUNS exactly that action. Use this to pause for a human decision before doing something consequential; without an action it's an informational card.",
+		tier: "base",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				title: { type: "string", description: "Short card title, e.g. \"Deploy the site for Palm Tree Kiosk\"." },
+				reasoning: { type: "string", description: "Why this is being asked — rendered on the card so the decision is informed." },
+				description: { type: "string", description: "Optional longer detail." },
+				action: { type: "string", description: "Work to run on approval: run_pipeline | insert_record | add_knowledge | create_task | run_browse. Omit for an informational ticket." },
+				config: { type: "object", description: "Action config, e.g. {pipeline:\"site-deploy\"} for run_pipeline." },
+				params: { type: "object", description: "Payload handed to the action (the run params for run_pipeline)." },
+			},
+			required: ["title"],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "create_ticket needs an owned instance context.", success: false };
+			const title = String(input.title ?? "").trim();
+			if (!title) return { content: "Ticket title is required.", success: false };
+			// Deferred import keeps this module free of the routes/board import graph.
+			const { buildTicketAction, validateTicketAction } = await import("./actionable-ticket.js");
+			const invalid = validateTicketAction(input.action, input.config, input.params);
+			if (invalid) return { content: invalid, success: false };
+			const action = input.action ? buildTicketAction(String(input.action), input.config, input.params) : null;
+			const now = new Date().toISOString();
+			const task = {
+				id: crypto.randomUUID(),
+				type: "ticket",
+				status: action ? "needs_approval" : "completed",
+				title: title.slice(0, 200),
+				description: typeof input.description === "string" ? input.description.slice(0, 2000) : "",
+				reasoning: typeof input.reasoning === "string" ? input.reasoning.slice(0, 8000) : "",
+				...(action ? { action } : {}),
+				createdAt: now,
+				updatedAt: now,
+			};
+			const { mirrorRuntimeTask } = await import("../routes/instances-runtime.js");
+			await mirrorRuntimeTask(ctx.env, ctx.instanceId, ctx.userId, task);
+			return {
+				content: JSON.stringify({ ticketId: task.id, status: task.status, awaitingApproval: !!action }, null, 2),
+				success: true,
+			};
+		},
+	},
 	// Core pipeline step library (issue #96): map / filter / dedupe_upsert / fan_out /
 	// http_reachable / geocode — standard-tier, composed by the pipeline runner (#97).
 	...STEP_TOOLS,

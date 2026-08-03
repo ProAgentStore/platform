@@ -7,6 +7,7 @@ import type { ToolDef } from "../tool-registry.js";
 import { BROWSER_TOOLS } from "./browser.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
+import { MCP_TOOLS } from "./mcp.js";
 import { META_CONNECTOR } from "./meta.js";
 import { GOOGLE_SHEETS_CONNECTOR } from "./google-sheets.js";
 import { TMUX_TOOLS } from "./tmux.js";
@@ -93,6 +94,18 @@ export const CONNECTORS: Connector[] = [
 		scopes: { read: true, write: true },
 		grantModel: "user",
 		tools: HTTP_TOOLS,
+	},
+	{
+		id: "mcp",
+		label: "MCP server (generic, outbound)",
+		// auth:"token", no tokenEnv → connectorClient.token() reads the user's vault entry
+		// (user_api_keys, provider "mcp"); the tools send it as `Authorization: Bearer`.
+		// Deliberately generic: the SERVER is a tool input, so no sibling store or third
+		// party is a dependency of this Worker — a configured endpoint is user data.
+		auth: "token",
+		scopes: { read: true, write: true },
+		grantModel: "user",
+		tools: MCP_TOOLS,
 	},
 	// web-search is the first connector defined as a declarative manifest (#146) — its shape is
 	// data (`WEB_SEARCH_MANIFEST`), compiled to this Connector; the tool keeps its custom output
