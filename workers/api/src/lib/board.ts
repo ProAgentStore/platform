@@ -184,6 +184,10 @@ const TRACKING_PARAMS = new Set([
 
 /** A stable per-job key: the normalized job URL, else the task id (its own card). */
 export function jobKeyForTask(task: RawTask): string {
+	// Generic browser tasks recur at the SAME start URL (e.g. a periodic Facebook sweep),
+	// so URL-keying would collapse every run into one ever-growing card. Key each run by
+	// its task id → one card per run (a run history), not one card per URL.
+	if (task.type === "browser.task") return String(task.id ?? "");
 	const url = typeof task.input?.url === "string" ? task.input.url : "";
 	if (url) {
 		try {

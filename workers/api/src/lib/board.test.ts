@@ -14,6 +14,14 @@ describe("jobKeyForTask", () => {
 		expect(a).toBe(b);
 	});
 
+	it("gives each browser.task run its own card (never collapses a recurring same-URL sweep)", () => {
+		const a = jobKeyForTask({ id: "t1", type: "browser.task", input: { url: "https://www.facebook.com/friends/requests" } });
+		const b = jobKeyForTask({ id: "t2", type: "browser.task", input: { url: "https://www.facebook.com/friends/requests" } });
+		expect(a).toBe("t1");
+		expect(b).toBe("t2");
+		expect(a).not.toBe(b);
+	});
+
 	it("keeps different postings on the same host distinct", () => {
 		const a = jobKeyForTask({ id: "t1", input: { url: "https://jobs.example.com/JobA/1" } });
 		const b = jobKeyForTask({ id: "t2", input: { url: "https://jobs.example.com/JobB/2" } });
