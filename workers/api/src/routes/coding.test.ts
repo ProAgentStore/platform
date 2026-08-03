@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type CodingEngine, delegationTaskRecord, deriveClientType, engineAuthFor, pickNextIssue } from "./coding.js";
+import { type CodingEngine, deriveClientType, engineAuthFor, pickNextIssue } from "./coding.js";
+import { delegationTaskRecord } from "../lib/delegation.js";
 
 describe("delegationTaskRecord (#155 — observable delegation task)", () => {
 	const base = { id: "deleg-1", repoName: "pags/platform", objective: "add a health check to the api worker", now: "2026-08-03T00:00:00.000Z" };

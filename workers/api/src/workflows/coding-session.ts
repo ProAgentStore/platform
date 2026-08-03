@@ -14,6 +14,7 @@ import { getSession, getRepo, reassignSessionNode } from "../lib/coding-store.js
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../routes/coding.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
+import { delegationTaskRecord } from "../lib/delegation.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
@@ -215,14 +216,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			if (event.payload.boardTaskId) {
 				await step.do("delegation-task-done", async () => {
 					const ok = result.outcome !== "failed" && result.outcome !== "max_steps";
-					const task = {
-						id: event.payload.boardTaskId,
-						type: "delegation",
+					// Same shared record shape as the route that opened the card (#155) — only the
+					// status + outcome note change. Inline upsert keeps the workflow off a routes import.
+					const task = delegationTaskRecord({
+						id: event.payload.boardTaskId as string,
+						repoName: goal.repo,
+						objective: goal.objective,
 						status: ok ? "completed" : "failed",
-						title: `Delegated: ${goal.objective}`.slice(0, 200),
-						reasoning: `Overseer delegated on your behalf. Outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`.slice(0, 8000),
-						updatedAt: new Date().toISOString(),
-					};
+						now: new Date().toISOString(),
+						note: `outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`,
+					});
 					await env.DB.prepare(
 						`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
 						 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))

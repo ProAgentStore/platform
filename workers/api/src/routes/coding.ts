@@ -25,6 +25,7 @@ import {
 } from "../lib/coding-store.js";
 import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask } from "./instances-runtime.js";
 import { logEvent } from "../lib/events.js";
+import { delegationTaskRecord } from "../lib/delegation.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
@@ -1017,24 +1018,6 @@ async function driveClaude(
 	const reply = summary ? `On it — ${summary}` : "On it — working on that now.";
 	await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "chat_assistant", content: reply }).catch(() => undefined);
 	return { delegated: true, reply };
-}
-
-/**
- * The observable board-task record for a delegated goal (#155). Pure + exported so the shape
- * (attributed to the Overseer on the user's behalf; `delegation` type; a `running` card that the
- * Pilot later flips to `completed`/`failed`) is locked by tests. Never a user turn.
- */
-export function delegationTaskRecord(opts: { id: string; repoName: string; objective: string; status: "running" | "completed" | "failed"; now: string }): Record<string, unknown> {
-	const label = opts.objective.length > 120 ? `${opts.objective.slice(0, 117)}…` : opts.objective;
-	return {
-		id: opts.id,
-		type: "delegation",
-		status: opts.status,
-		title: `Delegated: ${label}`.slice(0, 200),
-		reasoning: `Overseer delegated on your behalf → ${opts.repoName}: ${opts.objective}`.slice(0, 8000),
-		createdAt: opts.now,
-		updatedAt: opts.now,
-	};
 }
 
 /**
