@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
+import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -94,6 +94,39 @@ describe("matchVoiceCommand", () => {
 		// A default that isn't in the custom list no longer matches.
 		expect(matchVoiceCommand("repeat", words)).toBeNull();
 		expect(matchVoiceCommand("mute", words)).toBeNull();
+	});
+
+	it("a multi-word mute PHRASE ('mute mute') matches as a whole phrase, not its halves", () => {
+		const words = { mute: ["mute mute"] };
+		// The whole phrase → match.
+		expect(matchVoiceCommand("mute mute", words)).toBe("mute");
+		expect(matchVoiceCommand("Mute mute.", words)).toBe("mute"); // punctuation/case-insensitive
+		// A multi-word phrase also fires when it appears as a contiguous whole-word run.
+		expect(matchVoiceCommand("okay mute mute now", words)).toBe("mute");
+		// Only HALF the phrase → must NOT match ("mute" alone is not "mute mute").
+		expect(matchVoiceCommand("mute", words)).toBeNull();
+		// A near-miss that isn't the contiguous phrase → no match.
+		expect(matchVoiceCommand("mute the mute button", words)).toBeNull();
+	});
+
+	it("a single-word phrase still requires the WHOLE utterance (precision preserved)", () => {
+		const words = { mute: ["hush"] };
+		expect(matchVoiceCommand("hush", words)).toBe("mute");
+		// Single word must not fire inside a sentence — otherwise it hijacks normal speech.
+		expect(matchVoiceCommand("please hush the alerts", words)).toBeNull();
+	});
+});
+
+describe("shouldRunControlListener (#153 — always-on control-word listener)", () => {
+	it("runs when voice is engaged AND the main recorder is idle (speaking / thinking / muted)", () => {
+		expect(shouldRunControlListener({ engaged: true, mainRecording: false })).toBe(true);
+	});
+	it("YIELDS while the main recorder is actively capturing (avoids two recognizers at once)", () => {
+		expect(shouldRunControlListener({ engaged: true, mainRecording: true })).toBe(false);
+	});
+	it("never runs when voice isn't engaged (plain text mode)", () => {
+		expect(shouldRunControlListener({ engaged: false, mainRecording: false })).toBe(false);
+		expect(shouldRunControlListener({ engaged: false, mainRecording: true })).toBe(false);
 	});
 });
 

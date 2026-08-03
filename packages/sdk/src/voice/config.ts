@@ -39,10 +39,12 @@ interface VoiceConfig {
 	confirmLanguage: boolean;
 }
 
-/** Parse a keywords setting stored as an array OR a comma-separated string into a
- *  clean list (trimmed, de-blanked). Tolerant so the UI can send either shape. */
+/** Parse a keywords setting stored as an array OR a delimited string into a clean list
+ *  (trimmed, de-blanked). Split on comma / newline / semicolon — NOT space, because a
+ *  valid phrase can be multi-word ("mute mic", "stop listening"). Tolerant so the UI can
+ *  send either shape and a stray newline/semicolon (or pasted list) still parses. */
 function parseWords(v: unknown): string[] {
-	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(",") : [];
+	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
 	return list.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean).slice(0, 20);
 }
 

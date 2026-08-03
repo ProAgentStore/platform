@@ -1,5 +1,62 @@
-import { describe, expect, it } from "vitest";
-import { resolveVoiceConfig, voiceWantsOpenAi } from "./config.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// getVoiceConfig does I/O (voice-settings + profile); mock the SDK api client so we can
+// unit-test the profile→muteWords merge (the #129 wiring, previously untested).
+vi.mock("../client.js", () => ({ api: vi.fn() }));
+import { api } from "../client.js";
+import { getVoiceConfig, invalidateVoiceConfig, resolveVoiceConfig, voiceWantsOpenAi } from "./config.js";
+
+const mockApi = api as unknown as ReturnType<typeof vi.fn>;
+function routeApi(map: Record<string, unknown>) {
+	mockApi.mockImplementation(async (path: string) => {
+		for (const [k, v] of Object.entries(map)) if (path.includes(k)) return v;
+		return {};
+	});
+}
+
+describe("getVoiceConfig — profile → control-words merge (#129)", () => {
+	afterEach(() => { invalidateVoiceConfig(); mockApi.mockReset(); });
+
+	it("uses the profile voiceMuteWords when the instance sets none", async () => {
+		routeApi({
+			"/voice-settings": { voiceSettings: { provider: "browser" } },
+			"/v1/profile": { profile: { voiceMuteWords: "shush, quiet please" } },
+		});
+		expect((await getVoiceConfig("inst-1")).muteWords).toEqual(["shush", "quiet please"]);
+	});
+
+	it("a non-empty per-instance muteWords overrides the profile default", async () => {
+		routeApi({
+			"/voice-settings": { voiceSettings: { provider: "browser", muteWords: ["foo"] } },
+			"/v1/profile": { profile: { voiceMuteWords: "shush" } },
+		});
+		expect((await getVoiceConfig("inst-2")).muteWords).toEqual(["foo"]);
+	});
+
+	it("an EMPTY instance array falls through to the profile (the common case)", async () => {
+		routeApi({
+			"/voice-settings": { voiceSettings: { provider: "browser", muteWords: [] } },
+			"/v1/profile": { profile: { voiceMuteWords: "shush" } },
+		});
+		expect((await getVoiceConfig("inst-3")).muteWords).toEqual(["shush"]);
+	});
+
+	it("merges repeat/stop words + stop-speech keyword from the profile too", async () => {
+		routeApi({
+			"/voice-settings": { voiceSettings: { provider: "browser" } },
+			"/v1/profile": { profile: { voiceRepeatWords: "again", voiceStopWords: "over", voiceStopSpeechKeyword: "hush" } },
+		});
+		const c = await getVoiceConfig("inst-4");
+		expect(c.repeatWords).toEqual(["again"]);
+		expect(c.stopWords).toEqual(["over"]);
+		expect(c.stopSpeechKeyword).toBe("hush");
+	});
+
+	it("no profile + no instance words ⇒ empty (matcher then uses the built-in defaults)", async () => {
+		routeApi({ "/voice-settings": { voiceSettings: { provider: "browser" } }, "/v1/profile": { profile: {} } });
+		expect((await getVoiceConfig("inst-5")).muteWords).toEqual([]);
+	});
+});
 
 describe("voiceWantsOpenAi", () => {
 	it("true when TTS provider is an openai variant", () => {
@@ -35,6 +92,21 @@ describe("resolveVoiceConfig — provider fallback", () => {
 
 	it("never leaks the key to the browser", () => {
 		expect(resolveVoiceConfig({ sttMode: "openai" }, true).apiKey).toBe("");
+	});
+
+	it("parses control words from an array OR a comma/newline/semicolon string, keeping multi-word phrases", () => {
+		expect(resolveVoiceConfig({ muteWords: ["mute mic", "shush"] }, false).muteWords).toEqual(["mute mic", "shush"]);
+		expect(resolveVoiceConfig({ muteWords: "shush, quiet please" }, false).muteWords).toEqual(["shush", "quiet please"]);
+		// A stray newline or semicolon (pasted list) still parses — space does NOT split, so
+		// "stop listening" stays one phrase.
+		expect(resolveVoiceConfig({ muteWords: "shush\nquiet; stop listening" }, false).muteWords).toEqual(["shush", "quiet", "stop listening"]);
+	});
+
+	it("does NOT split a multi-word phrase like 'mute mute' — spaces are preserved (#153)", () => {
+		// The delimiter parse splits on comma/newline/semicolon only; a two-word mute phrase
+		// stays a single phrase, so matchVoiceCommand can require the whole "mute mute".
+		expect(resolveVoiceConfig({ muteWords: "mute mute" }, false).muteWords).toEqual(["mute mute"]);
+		expect(resolveVoiceConfig({ muteWords: "mute mute, hush now" }, false).muteWords).toEqual(["mute mute", "hush now"]);
 	});
 });
 

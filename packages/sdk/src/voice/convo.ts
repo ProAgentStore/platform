@@ -196,22 +196,59 @@ const REPEAT_BY_LANG: Record<string, string[]> = {
 	hi: ["फिर से कहो", "दोबारा कहो"],
 };
 
+function escapeRegExp(s: string): string {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
- * Detect a hands-free voice COMMAND ("repeat" / "mute") in a finished transcript.
- * Matches only when the whole utterance IS the command (punctuation ignored), so a
- * normal sentence containing the word isn't hijacked. Built-in phrasings are scoped to
- * the agent's `lang` (the configured voice language) — an English agent won't trigger on
- * a Chinese phrase. Custom `words` from Settings REPLACE the built-ins and apply in any
- * language (the user chose them explicitly).
+ * Does an already-normalized transcript match a configured command phrase?
+ *  - A SINGLE-word phrase ("mute") must BE the whole utterance — precision, so "mute" never
+ *    fires inside "mute the alarm".
+ *  - A MULTI-word phrase ("mute mute", "stop listening") matches the whole utterance OR appears
+ *    as a contiguous whole-word run inside it ("okay mute mute now" → matches). Multi-word
+ *    phrases are distinctive enough that a whole-word substring match won't hijack normal speech,
+ *    and it's what makes a two-word wake/mute phrase usable in a longer utterance.
+ * "mute mute" is ONE two-word phrase (space-preserved by the delimiter parse), so "mute" alone
+ * — only half the phrase — does NOT match.
+ */
+export function phraseMatchesTranscript(normalizedTranscript: string, phrase: string): boolean {
+	const p = normalizeTranscript(phrase);
+	if (!p) return false;
+	if (normalizedTranscript === p) return true;
+	if (!p.includes(" ")) return false; // single word → whole-utterance only
+	return new RegExp(`(?:^| )${escapeRegExp(p)}(?: |$)`).test(normalizedTranscript);
+}
+
+/**
+ * Detect a hands-free voice COMMAND ("repeat" / "mute") in a transcript. A single-word command
+ * matches only when the whole utterance IS the command (punctuation ignored), so a normal
+ * sentence containing the word isn't hijacked; a multi-word command phrase also matches when it
+ * appears as a whole-word run inside the utterance (see {@link phraseMatchesTranscript}). Built-in
+ * phrasings are scoped to the agent's `lang` (the configured voice language) — an English agent
+ * won't trigger on a Chinese phrase. Custom `words` from Settings/Profile REPLACE the built-ins
+ * and apply in any language (the user chose them explicitly).
  */
 export function matchVoiceCommand(text: string, words?: VoiceCommandWords, lang?: string): VoiceCommand | null {
 	const t = normalizeTranscript(text);
 	const l = langKey(lang);
 	const repeat = words?.repeat?.length ? words.repeat : (REPEAT_BY_LANG[l] ?? REPEAT_BY_LANG.en);
 	const mute = words?.mute?.length ? words.mute : (MUTE_BY_LANG[l] ?? MUTE_BY_LANG.en);
-	if (new Set(repeat.map(normalizeTranscript)).has(t)) return "repeat";
-	if (new Set(mute.map(normalizeTranscript)).has(t)) return "mute";
+	if (repeat.some((p) => phraseMatchesTranscript(t, p))) return "repeat";
+	if (mute.some((p) => phraseMatchesTranscript(t, p))) return "mute";
 	return null;
+}
+
+/**
+ * Should the ALWAYS-ON background control-word listener be running right now (#153)? It's a
+ * lightweight dictation loop, SEPARATE from the main recording pipeline, whose only job is to
+ * catch a control word (mute / stop) at ANY moment — while TTS plays, while the agent is
+ * processing, while the mic is muted. It runs whenever voice is engaged BUT yields while the
+ * MAIN recorder is actively capturing a user turn (the main transcription path already checks
+ * control words then, and two concurrent recognizers on the same browser API fight). So:
+ *   engaged (voice mode, not plain text) AND NOT the main mic actively recording.
+ */
+export function shouldRunControlListener(s: { engaged: boolean; mainRecording: boolean }): boolean {
+	return s.engaged && !s.mainRecording;
 }
 
 /**

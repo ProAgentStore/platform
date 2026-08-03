@@ -6,8 +6,8 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
-import type { VoiceStt } from "./stt.js";
+import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, shouldRunControlListener, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
+import { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
 // ── Tunables (named, not scattered literals) ─────────────────────────────────
@@ -156,6 +156,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const [audioLevel, setAudioLevel] = useState(0);
 	const sttRef = useRef<VoiceStt | null>(null);
 	const ttsRef = useRef<VoiceTts | null>(null);
+	// Always-on background control-word recognizer (#153) — declared here so startListening can
+	// yield the mic to the main recorder synchronously. Wired below (ensureControlStt + effect).
+	const ctrlSttRef = useRef<VoiceStt | null>(null);
+	const ctrlWantRef = useRef(false);
 	// Browser-dictation SPEECH GATE (Whisper mode only). Runs alongside the recorder to
 	// (a) show live words as you speak and (b) confirm real speech happened this turn — so
 	// silence / keyboard clicks / background noise never get uploaded to Whisper (which
@@ -442,6 +446,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Open mic with chime
 	const startListening = useCallback(async () => {
 		if (!sttRef.current || !canOpenMic(readGuard())) return;
+		// Yield the mic: stop the background control listener BEFORE the main recorder opens so
+		// two recognizers never capture at once (#153). ctrlWantRef=false first, so its onEnd
+		// doesn't auto-restart it into the main capture; the reconcile effect re-arms it when the
+		// main mic later idles.
+		ctrlWantRef.current = false;
+		if (ctrlSttRef.current?.listening) { try { ctrlSttRef.current.stop(); } catch { /* already stopped */ } }
 		try {
 			await sttRef.current.start();
 			lastListenStartRef.current = Date.now();
@@ -565,16 +575,69 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// "mute" voice command → mute the mic until the user unmutes in the app (same as the
 	// Mute button). Flip the ref synchronously so in-flight results stop being processed.
+	// "mute" means "be quiet": it silences the AGENT too (cancel any in-flight/queued TTS),
+	// not just the user's mic — so it works as an interrupt while the agent is speaking (#153).
 	const muteFromCommand = useCallback(() => {
 		mutedRef.current = true;
 		setMuted(true);
 		sttRef.current?.stop();
+		ttsRef.current?.cancel(); // stop the agent mid-sentence + drop the queue
+		setSpeaking(false);
+		speakEndedAtRef.current = Date.now();
 		stopAudioMonitor();
 		setMicOn(false);
 		setInterim("");
 	}, [stopAudioMonitor]);
 	const muteFromCommandRef = useRef(muteFromCommand);
 	muteFromCommandRef.current = muteFromCommand;
+
+	// ── Always-on background control-word listener (#153) ──────────────────────────────────
+	// The mute (and stop-speech) commands used to be reachable ONLY inside the main
+	// transcription paths — i.e. only while the mic was actively recording a user turn. So
+	// while the agent was SPEAKING or PROCESSING (mic closed), "mute" could never fire. This is
+	// a lightweight, SEPARATE browser-dictation loop whose ONLY job is to catch a control word at
+	// ANY moment. It runs whenever voice is engaged but the main recorder is idle (see
+	// shouldRunControlListener), so it never fights the main pipeline. Null on browsers without
+	// Web Speech (e.g. iOS Safari) — the feature degrades to the existing in-turn detection.
+	// (ctrlSttRef / ctrlWantRef are declared up top so startListening can yield the mic.)
+
+	const handleControlResult = useCallback((text: string) => {
+		if (!text?.trim() || !commandsEnabledRef.current) return;
+		// Stop-speech keyword: interrupt the agent's TTS the instant it's heard (substring,
+		// case-insensitive) — only while actually speaking, so a stray match is contained.
+		const stopKw = stopSpeechKeywordRef.current.toLowerCase();
+		if (stopKw && ttsRef.current?.speaking && text.toLowerCase().includes(stopKw)) {
+			ttsRef.current.cancel();
+			setSpeaking(false);
+			speakEndedAtRef.current = Date.now();
+			return;
+		}
+		// Mute command — honored at ANY time (mutes the mic AND cancels TTS via muteFromCommand).
+		if (matchVoiceCommand(text, { mute: muteWordsRef.current }, voiceLangRef.current) === "mute") {
+			muteFromCommandRef.current();
+		}
+	}, []);
+	const handleControlResultRef = useRef(handleControlResult);
+	handleControlResultRef.current = handleControlResult;
+
+	/** Lazily build the dedicated control-word recognizer (browser Web Speech only — it must
+	 *  run alongside a Whisper main pipeline without a getUserMedia conflict, and yields to the
+	 *  main recognizer when the main path is browser dictation). Returns null when unsupported. */
+	const ensureControlStt = useCallback((): VoiceStt | null => {
+		if (typeof window === "undefined") return null;
+		if (!(window.SpeechRecognition || window.webkitSpeechRecognition)) return null;
+		if (!ctrlSttRef.current) {
+			ctrlSttRef.current = new VoiceStt("browser", {
+				language: voiceLangRef.current,
+				onResult: (text) => handleControlResultRef.current(text), // checks interim AND final
+				onError: () => { /* mic denied / no-speech — onEnd re-arms if still wanted */ },
+				onEnd: () => { if (ctrlWantRef.current) { try { ctrlSttRef.current?.start(); } catch { /* SR busy */ } } },
+			});
+		} else {
+			ctrlSttRef.current.language = voiceLangRef.current;
+		}
+		return ctrlSttRef.current;
+	}, []);
 
 	const handleResult = useCallback((text: string, isFinal: boolean) => {
 		// Stop-speech keyword: checked FIRST, BEFORE the echo/paused guard below — because while
@@ -1021,6 +1084,23 @@ export function useVoice(instanceId: string | undefined, opts: {
 		return () => document.removeEventListener("visibilitychange", onVisible);
 	}, [acquireWakeLock, startListening]);
 
+	// Reconcile the always-on control-word listener (#153) whenever voice-engagement or the main
+	// mic state changes. Engaged = ANY voice mode (hands-free continuous OR ptt); resolveVoiceMode
+	// maps convoOn→handsfree and speakOn→ptt, so `convoOn || speakOn` is exactly "not text". It
+	// runs while the agent speaks / thinks / is muted (mic closed) and yields to the main
+	// recognizer while the main path is actively capturing a turn (micOn). This is what makes the
+	// mute command interceptable at ANY moment, not just during active recording.
+	useEffect(() => {
+		const want = shouldRunControlListener({ engaged: convoOn || speakOn, mainRecording: micOn });
+		ctrlWantRef.current = want;
+		if (want) {
+			const stt = ensureControlStt();
+			if (stt && !stt.listening) { try { stt.start(); } catch { /* SR busy — onEnd re-arms */ } }
+		} else {
+			if (ctrlSttRef.current?.listening) { try { ctrlSttRef.current.stop(); } catch { /* already stopped */ } }
+		}
+	}, [convoOn, speakOn, micOn, ensureControlStt]);
+
 	// Tear everything down on unmount — otherwise leaving the page mid-conversation
 	// keeps the recognizer listening, the TTS speaking, and the mic stream + rAF loop alive.
 	useEffect(() => () => {
@@ -1031,6 +1111,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 		sttRef.current?.stop();
 		gateRef.current?.stop();
+		ctrlWantRef.current = false;
+		ctrlSttRef.current?.stop(); // stop the background control listener too
 		ttsRef.current?.dispose(); // close the TTS AudioContext, not just cancel — else it leaks
 		stopAudioMonitor();
 		releaseWakeLock();
