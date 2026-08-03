@@ -9,7 +9,7 @@ import { GITHUB_TOOLS } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { META_TOOLS } from "./meta.js";
 import { TMUX_TOOLS } from "./tmux.js";
-import { WEB_SEARCH_TOOLS } from "./web-search.js";
+import { WEB_SEARCH_CONNECTOR } from "./web-search.js";
 
 export interface Connector {
 	/** Stable id, also the `connector` stamped on its tools and the grants/consent key. */
@@ -93,17 +93,10 @@ export const CONNECTORS: Connector[] = [
 		grantModel: "user",
 		tools: HTTP_TOOLS,
 	},
-	{
-		id: "web-search",
-		label: "Web Search (Google Custom Search)",
-		// auth:"token", no tokenEnv → connectorClient.token() reads the user's vault key
-		// (user_api_keys, provider "web-search") — a separate slot from the http connector's
-		// key. web_search injects it into the request URL itself. Read-only (search only).
-		auth: "token",
-		scopes: { read: true, write: false },
-		grantModel: "user",
-		tools: WEB_SEARCH_TOOLS,
-	},
+	// web-search is the first connector defined as a declarative manifest (#146) — its shape is
+	// data (`WEB_SEARCH_MANIFEST`), compiled to this Connector; the tool keeps its custom output
+	// via the manifest `handler` escape hatch. Behavior-identical to the old hand-written form.
+	WEB_SEARCH_CONNECTOR,
 ];
 
 const BY_ID: ReadonlyMap<string, Connector> = new Map(CONNECTORS.map((c) => [c.id, c] as const));

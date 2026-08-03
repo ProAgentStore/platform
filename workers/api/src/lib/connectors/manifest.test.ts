@@ -100,6 +100,31 @@ describe("compileConnector", () => {
 	});
 });
 
+describe("compileConnector — handler escape hatch (#146)", () => {
+	const withHandler: ConnectorManifest = {
+		id: "custom",
+		label: "Custom",
+		auth: { type: "api-key", key: { in: "query", name: "key" } },
+		tools: [{ name: "custom_tool", description: "custom logic", scope: "read", handler: "doIt", params: { q: { type: "string", required: true } } }],
+	};
+
+	it("binds a named code handler instead of the request executor", async () => {
+		const doIt = vi.fn().mockResolvedValue({ content: "custom!", success: true });
+		const { tools } = compileConnector(withHandler, { doIt });
+		const r = await tools[0].handler(ctx(), { q: "x" });
+		expect(doIt).toHaveBeenCalledWith(expect.anything(), { q: "x" });
+		expect(r).toEqual({ content: "custom!", success: true });
+		expect(executeHttpRequest).not.toHaveBeenCalled(); // handler tool bypasses the request engine
+		// still stamped like any connector tool (schema/scope/connector)
+		expect(tools[0]).toMatchObject({ tier: "connector", connector: "custom", scope: "read" });
+		expect(tools[0].jsonSchema.required).toEqual(["q"]);
+	});
+
+	it("throws at compile time if the named handler isn't supplied", () => {
+		expect(() => compileConnector(withHandler, {})).toThrow(/unknown handler "doIt"/);
+	});
+});
+
 describe("sanitizeConnectorManifest", () => {
 	const valid = () => JSON.parse(JSON.stringify(SLACK));
 

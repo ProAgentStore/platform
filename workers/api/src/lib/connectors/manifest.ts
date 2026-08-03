@@ -41,7 +41,15 @@ export interface ManifestTool {
 	description: string;
 	/** read = safe; write = mutates (consent-gated, #90). Default read. */
 	scope?: "read" | "write";
-	request: ManifestToolRequest;
+	/** Configuration-as-data request (the default). Omitted for a `handler` tool. */
+	request?: ManifestToolRequest;
+	/**
+	 * Escape hatch (#146): the name of a code handler supplied to `compileConnector`, for the
+	 * rare tool whose logic isn't expressible as a request (custom output envelope, branching,
+	 * etc.). BUILT-IN manifests only — `sanitizeConnectorManifest` never emits this, so an
+	 * untrusted/creator manifest can't reference arbitrary code; those must be request-as-data.
+	 */
+	handler?: string;
 	params?: Record<string, ManifestToolParam>;
 }
 
@@ -115,10 +123,20 @@ function clampArgs(input: Record<string, unknown>, params: Record<string, Manife
  * Nothing downstream (catalog, capability gating, consent gate, the three surfaces) changes —
  * it only ever sees Connector/ToolDef.
  */
-export function compileConnector(m: ConnectorManifest): { connector: Connector; tools: ToolDef[] } {
+export function compileConnector(
+	m: ConnectorManifest,
+	handlers: Record<string, ToolDef["handler"]> = {},
+): { connector: Connector; tools: ToolDef[] } {
 	const reqAuth = requestAuth(m.auth);
 	const tools: ToolDef[] = m.tools.map((t): ToolDef => {
 		const scope = t.scope ?? "read";
+		// Escape-hatch tool: bind the named code handler (built-in manifests only).
+		if (t.handler) {
+			const fn = handlers[t.handler];
+			if (!fn) throw new Error(`Manifest ${m.id}: tool "${t.name}" references unknown handler "${t.handler}".`);
+			return { name: t.name, description: t.description, jsonSchema: toJsonSchema(t.params), tier: "connector", connector: m.id, scope, handler: fn };
+		}
+		const req = t.request ?? {};
 		return {
 			name: t.name,
 			description: t.description,
@@ -130,13 +148,13 @@ export function compileConnector(m: ConnectorManifest): { connector: Connector; 
 				executeHttpRequest(
 					ctx,
 					{
-						method: t.request.method ?? "GET",
-						...(t.request.url ? { url: t.request.url } : { base: m.baseUrl, path: t.request.path }),
-						query: t.request.query,
-						headers: t.request.headers,
-						body: t.request.body,
-						responseMap: t.request.responseMap,
-						pagination: t.request.pagination,
+						method: req.method ?? "GET",
+						...(req.url ? { url: req.url } : { base: m.baseUrl, path: req.path }),
+						query: req.query,
+						headers: req.headers,
+						body: req.body,
+						responseMap: req.responseMap,
+						pagination: req.pagination,
 						auth: reqAuth,
 						inputs: clampArgs(input, t.params),
 					},
