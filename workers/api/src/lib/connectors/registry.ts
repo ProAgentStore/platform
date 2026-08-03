@@ -5,9 +5,9 @@
 import type { Env } from "../../types.js";
 import type { ToolDef } from "../tool-registry.js";
 import { BROWSER_TOOLS } from "./browser.js";
-import { GITHUB_TOOLS } from "./github.js";
+import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
-import { META_TOOLS } from "./meta.js";
+import { META_CONNECTOR } from "./meta.js";
 import { TMUX_TOOLS } from "./tmux.js";
 import { WEB_SEARCH_CONNECTOR } from "./web-search.js";
 
@@ -38,7 +38,7 @@ export interface Connector {
 }
 
 /** Env keys usable as a platform token source (all `string | undefined`). */
-type EnvTokenKey = "META_ACCESS_TOKEN";
+export type EnvTokenKey = "META_ACCESS_TOKEN";
 
 // Assert a key of Env exists (compile-time guard for tokenEnv values).
 type _AssertEnvKey = EnvTokenKey extends keyof Env ? true : never;
@@ -46,23 +46,13 @@ const _assertEnvKey: _AssertEnvKey = true;
 void _assertEnvKey;
 
 export const CONNECTORS: Connector[] = [
-	{
-		id: "github",
-		label: "GitHub",
-		auth: "app",
-		scopes: { read: true, write: true },
-		grantModel: "user", // access scoped by the owner's GitHub-App installation, not a per-resource grant row
-		tools: GITHUB_TOOLS,
-	},
-	{
-		id: "meta",
-		label: "Meta (WhatsApp + Instagram)",
-		auth: "token",
-		scopes: { read: false, write: true },
-		grantModel: "user",
-		tokenEnv: "META_ACCESS_TOKEN",
-		tools: META_TOOLS,
-	},
+	// github is a declarative manifest (#146): shape as data, tools keep their custom logic
+	// (repo validation, per_page clamp, issue delegation, create-issue POST) via the handler
+	// escape hatch. auth "app" → GitHub-App installation token (owner-scoped).
+	GITHUB_CONNECTOR,
+	// meta is a declarative manifest (#146): shape as data, tools keep their Graph-API logic
+	// via the handler escape hatch. auth "platform-token" → Connector.auth "token" + tokenEnv.
+	META_CONNECTOR,
 	{
 		id: "tmux",
 		label: "tmux (local runner)",

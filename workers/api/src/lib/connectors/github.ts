@@ -1,9 +1,11 @@
-// GitHub connector — read-only tools any permitted agent can call (issue #88, first
-// customer of the connector/tool registry #85/#86). Backed by the existing GitHub-App
-// installation token (`installationTokenForOwner`), so access is naturally scoped to
-// the repos the owner's installation covers. Writes (create issue/PR, trigger) come
-// later behind consent (#90). These replace Coder's hard-wired GH logic over time.
+// GitHub connector — issue #88, first customer of the connector/tool registry #85/#86.
+// Defined as a declarative connector MANIFEST (#146): shape as data (GITHUB_MANIFEST), auth
+// "app" (GitHub-App installation token, so access is naturally scoped to the repos the owner's
+// installation covers). Each tool keeps its custom logic (repo validation, per_page clamp, issue
+// delegation, create-issue POST) via the manifest `handler` escape hatch.
 import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import { compileConnector, type ConnectorManifest } from "./manifest.js";
+import type { Connector } from "./registry.js";
 import { githubAppConfigured } from "../github-app.js";
 import { listIssues, readIssue } from "../github-issues.js";
 
@@ -40,121 +42,121 @@ async function resolveRepo(ctx: RegistryToolCtx, repo: string): Promise<{ token:
 	return { token };
 }
 
-export const GITHUB_TOOLS: ToolDef[] = [
-	{
-		name: "github_workflow_runs",
-		tier: "connector",
-		connector: "github",
-		scope: "read",
-		description: "List recent GitHub Actions workflow runs for a repo (status, conclusion, branch, url) — check CI / deploy status.",
-		jsonSchema: {
-			type: "object",
-			properties: {
-				repo: { type: "string", description: 'The repository, "owner/name".' },
+const workflowRunsHandler: ToolDef["handler"] = async (ctx, input) => {
+	const repo = String(input.repo || "");
+	const r = await resolveRepo(ctx, repo);
+	if ("error" in r) return { content: r.error, success: false };
+	const n = Math.min(Math.max(Number(input.per_page) || 5, 1), 20);
+	const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs?per_page=${n}`, { headers: GH(r.token) });
+	if (!res.ok) return { content: `GitHub returned ${res.status} for ${repo}`, success: false };
+	const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
+	const runs = (data.workflow_runs || []).map((run) => ({
+		status: run.status,
+		conclusion: run.conclusion ?? null,
+		name: run.name ?? "",
+		runNumber: run.run_number ?? null,
+		branch: run.head_branch ?? "",
+		sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
+		url: run.html_url ?? "",
+		updatedAt: run.updated_at ?? "",
+	}));
+	return { content: JSON.stringify(runs, null, 2), success: true };
+};
+
+const listIssuesHandler: ToolDef["handler"] = async (ctx, input) => {
+	const repo = String(input.repo || "");
+	const r = await resolveRepo(ctx, repo);
+	if ("error" in r) return { content: r.error, success: false };
+	const state = ["open", "closed", "all"].includes(String(input.state)) ? (input.state as "open" | "closed" | "all") : "open";
+	const issues = await listIssues(ctx.env, ctx.userId ?? "", repo, { state, labels: input.labels ? String(input.labels) : undefined, limit: 30 });
+	return { content: JSON.stringify(issues, null, 2), success: true };
+};
+
+const readIssueHandler: ToolDef["handler"] = async (ctx, input) => {
+	const repo = String(input.repo || "");
+	const r = await resolveRepo(ctx, repo);
+	if ("error" in r) return { content: r.error, success: false };
+	const num = Number(input.number);
+	if (!num) return { content: "An issue `number` is required.", success: false };
+	const issue = await readIssue(ctx.env, ctx.userId ?? "", repo, num);
+	return issue ? { content: JSON.stringify(issue, null, 2), success: true } : { content: `Issue #${num} not found in ${repo}.`, success: false };
+};
+
+const createIssueHandler: ToolDef["handler"] = async (ctx, input) => {
+	const repo = String(input.repo || "");
+	const title = String(input.title || "").trim();
+	if (!title) return { content: "An issue `title` is required.", success: false };
+	const r = await resolveRepo(ctx, repo);
+	if ("error" in r) return { content: r.error, success: false };
+	const labels = String(input.labels || "").split(",").map((s) => s.trim()).filter(Boolean);
+	const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
+		method: "POST",
+		headers: { ...GH(r.token), "Content-Type": "application/json" },
+		body: JSON.stringify({ title, body: input.body ? String(input.body) : undefined, ...(labels.length ? { labels } : {}) }),
+	});
+	if (!res.ok) return { content: `GitHub returned ${res.status} creating the issue in ${repo}`, success: false };
+	const data = (await res.json()) as { number?: number; html_url?: string };
+	return { content: `Opened issue #${data.number} — ${data.html_url}`, success: true };
+};
+
+export const GITHUB_MANIFEST: ConnectorManifest = {
+	id: "github",
+	label: "GitHub",
+	auth: { type: "app" },
+	tools: [
+		{
+			name: "github_workflow_runs",
+			scope: "read",
+			description: "List recent GitHub Actions workflow runs for a repo (status, conclusion, branch, url) — check CI / deploy status.",
+			handler: "github_workflow_runs",
+			params: {
+				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				per_page: { type: "number", description: "How many recent runs to return (default 5, max 20)." },
 			},
-			required: ["repo"],
 		},
-		handler: async (ctx, input) => {
-			const repo = String(input.repo || "");
-			const r = await resolveRepo(ctx, repo);
-			if ("error" in r) return { content: r.error, success: false };
-			const n = Math.min(Math.max(Number(input.per_page) || 5, 1), 20);
-			const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs?per_page=${n}`, { headers: GH(r.token) });
-			if (!res.ok) return { content: `GitHub returned ${res.status} for ${repo}`, success: false };
-			const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
-			const runs = (data.workflow_runs || []).map((run) => ({
-				status: run.status,
-				conclusion: run.conclusion ?? null,
-				name: run.name ?? "",
-				runNumber: run.run_number ?? null,
-				branch: run.head_branch ?? "",
-				sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
-				url: run.html_url ?? "",
-				updatedAt: run.updated_at ?? "",
-			}));
-			return { content: JSON.stringify(runs, null, 2), success: true };
-		},
-	},
-	{
-		name: "github_list_issues",
-		tier: "connector",
-		connector: "github",
-		scope: "read",
-		description: "List issues for a repo (excludes pull requests). Filter by state and labels.",
-		jsonSchema: {
-			type: "object",
-			properties: {
-				repo: { type: "string", description: 'The repository, "owner/name".' },
+		{
+			name: "github_list_issues",
+			scope: "read",
+			description: "List issues for a repo (excludes pull requests). Filter by state and labels.",
+			handler: "github_list_issues",
+			params: {
+				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
 				state: { type: "string", description: '"open" | "closed" | "all" (default open).' },
 				labels: { type: "string", description: "Comma-separated label filter." },
 			},
-			required: ["repo"],
 		},
-		handler: async (ctx, input) => {
-			const repo = String(input.repo || "");
-			const r = await resolveRepo(ctx, repo);
-			if ("error" in r) return { content: r.error, success: false };
-			const state = ["open", "closed", "all"].includes(String(input.state)) ? (input.state as "open" | "closed" | "all") : "open";
-			const issues = await listIssues(ctx.env, ctx.userId ?? "", repo, { state, labels: input.labels ? String(input.labels) : undefined, limit: 30 });
-			return { content: JSON.stringify(issues, null, 2), success: true };
-		},
-	},
-	{
-		name: "github_read_issue",
-		tier: "connector",
-		connector: "github",
-		scope: "read",
-		description: "Read one issue (title, body, labels, state) by number.",
-		jsonSchema: {
-			type: "object",
-			properties: {
-				repo: { type: "string", description: 'The repository, "owner/name".' },
-				number: { type: "number", description: "The issue number." },
+		{
+			name: "github_read_issue",
+			scope: "read",
+			description: "Read one issue (title, body, labels, state) by number.",
+			handler: "github_read_issue",
+			params: {
+				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
+				number: { type: "number", required: true, description: "The issue number." },
 			},
-			required: ["repo", "number"],
 		},
-		handler: async (ctx, input) => {
-			const repo = String(input.repo || "");
-			const r = await resolveRepo(ctx, repo);
-			if ("error" in r) return { content: r.error, success: false };
-			const num = Number(input.number);
-			if (!num) return { content: "An issue `number` is required.", success: false };
-			const issue = await readIssue(ctx.env, ctx.userId ?? "", repo, num);
-			return issue ? { content: JSON.stringify(issue, null, 2), success: true } : { content: `Issue #${num} not found in ${repo}.`, success: false };
-		},
-	},
-	{
-		name: "github_create_issue",
-		tier: "connector",
-		connector: "github",
-		scope: "write",
-		description: "Open a new GitHub issue in a repo. WRITE — requires the GitHub connector's write consent for this instance.",
-		jsonSchema: {
-			type: "object",
-			properties: {
-				repo: { type: "string", description: 'The repository, "owner/name".' },
-				title: { type: "string", description: "Issue title." },
+		{
+			name: "github_create_issue",
+			scope: "write",
+			description: "Open a new GitHub issue in a repo. WRITE — requires the GitHub connector's write consent for this instance.",
+			handler: "github_create_issue",
+			params: {
+				repo: { type: "string", required: true, description: 'The repository, "owner/name".' },
+				title: { type: "string", required: true, description: "Issue title." },
 				body: { type: "string", description: "Issue body (markdown)." },
 				labels: { type: "string", description: "Comma-separated labels to apply." },
 			},
-			required: ["repo", "title"],
 		},
-		handler: async (ctx, input) => {
-			const repo = String(input.repo || "");
-			const title = String(input.title || "").trim();
-			if (!title) return { content: "An issue `title` is required.", success: false };
-			const r = await resolveRepo(ctx, repo);
-			if ("error" in r) return { content: r.error, success: false };
-			const labels = String(input.labels || "").split(",").map((s) => s.trim()).filter(Boolean);
-			const res = await fetch(`https://api.github.com/repos/${repo}/issues`, {
-				method: "POST",
-				headers: { ...GH(r.token), "Content-Type": "application/json" },
-				body: JSON.stringify({ title, body: input.body ? String(input.body) : undefined, ...(labels.length ? { labels } : {}) }),
-			});
-			if (!res.ok) return { content: `GitHub returned ${res.status} creating the issue in ${repo}`, success: false };
-			const data = (await res.json()) as { number?: number; html_url?: string };
-			return { content: `Opened issue #${data.number} — ${data.html_url}`, success: true };
-		},
-	},
-];
+	],
+};
+
+const compiled = compileConnector(GITHUB_MANIFEST, {
+	github_workflow_runs: workflowRunsHandler,
+	github_list_issues: listIssuesHandler,
+	github_read_issue: readIssueHandler,
+	github_create_issue: createIssueHandler,
+});
+/** Tool defs (kept for direct-import tests). */
+export const GITHUB_TOOLS: ToolDef[] = compiled.tools;
+/** Compiled Connector — consumed by the registry exactly like a hand-written connector. */
+export const GITHUB_CONNECTOR: Connector = compiled.connector;

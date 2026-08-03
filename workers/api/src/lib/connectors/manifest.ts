@@ -6,7 +6,7 @@
 // which carries the SSRF guard, `{{param}}` interpolation, responseMap extraction, and pagination.
 //
 // Design + rationale: docs/connector-manifest.md.
-import type { Connector } from "./registry.js";
+import type { Connector, EnvTokenKey } from "./registry.js";
 import type { ToolDef, JsonSchema } from "../tool-registry.js";
 import { executeHttpRequest } from "./http.js";
 
@@ -59,6 +59,8 @@ export type ManifestAuth =
 	| { type: "none" }
 	| { type: "app" }
 	| { type: "api-key"; key: { in: "header" | "query"; name: string } }
+	/** A platform-wide token from a Worker env var (e.g. META_ACCESS_TOKEN). Built-in only. */
+	| { type: "platform-token"; tokenEnv: EnvTokenKey }
 	| { type: "oauth2"; authUrl: string; tokenUrl: string; scopes?: string[]; secretRef?: string };
 
 export interface ConnectorManifest {
@@ -80,15 +82,16 @@ function connectorAuthKind(auth: ManifestAuth): Connector["auth"] {
 		case "app": return "app";
 		case "oauth2": return "oauth";
 		case "api-key": return "token";
+		case "platform-token": return "token";
 		default: return "none";
 	}
 }
 
 /** The per-request auth passed to executeHttpRequest. api-key injects a vault key into the
- *  configured header/query; app/oauth2 send the minted token as `Authorization: Bearer`. */
+ *  configured header/query; app/oauth2/platform-token send the minted token as Bearer. */
 function requestAuth(auth: ManifestAuth): Record<string, unknown> {
 	if (auth.type === "api-key") return { mode: "api-key", key: auth.key };
-	if (auth.type === "app" || auth.type === "oauth2") return { mode: "bearer" };
+	if (auth.type === "app" || auth.type === "oauth2" || auth.type === "platform-token") return { mode: "bearer" };
 	return { mode: "none" };
 }
 
@@ -167,6 +170,7 @@ export function compileConnector(
 		id: m.id,
 		label: m.label,
 		auth: connectorAuthKind(m.auth),
+		...(m.auth.type === "platform-token" ? { tokenEnv: m.auth.tokenEnv } : {}),
 		scopes: {
 			read: tools.some((t) => t.scope === "read"),
 			write: tools.some((t) => t.scope === "write"),
