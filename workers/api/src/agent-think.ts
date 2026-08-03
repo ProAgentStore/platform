@@ -80,6 +80,30 @@ export async function runAgentThink(opts: {
 		systemPrompt += `\n\n## Subscriber Rules\nStanding rules your subscriber set for you — follow them:\n${subscriberRules}`;
 	}
 
+	// Configured declarative pipelines (config.pipelines, #97). Without this block the agent
+	// has a `run_pipeline` tool but is never told which pipelines exist or their names, so on
+	// "run it" it asks the user for a pipeline name it was never given. List them + params so
+	// the model can dispatch run_pipeline itself.
+	const pipelinesCfg = (instanceCfg.pipelines && typeof instanceCfg.pipelines === "object"
+		? instanceCfg.pipelines
+		: {}) as Record<string, { params?: Record<string, { description?: string }>; sink?: { collection?: string } }>;
+	const pipelineNames = Object.keys(pipelinesCfg);
+	if (pipelineNames.length) {
+		let block =
+			"\n\n## Available Pipelines\nYou can RUN these end-to-end with the `run_pipeline` tool — pass the exact `name` plus a `params` object. When the user asks you to run / sweep / find new data, pick the matching pipeline and call it yourself; do NOT ask them which pipeline or invent a name.";
+		for (const name of pipelineNames) {
+			const p = pipelinesCfg[name];
+			const params =
+				p?.params && typeof p.params === "object"
+					? Object.entries(p.params)
+							.map(([k, v]) => (v?.description ? `${k} (${v.description})` : k))
+							.join(", ")
+					: "";
+			block += `\n- **${name}** → writes results to the \`${p?.sink?.collection ?? "?"}\` collection. Params: ${params || "none"}.`;
+		}
+		systemPrompt += block;
+	}
+
 	// Retrieved RAG content is UNTRUSTED — it comes from documents, ingested URLs,
 	// repo files, and public webhook payloads, any of which an attacker can author.
 	// Fence it so the model treats it as data, not instructions: this is the front

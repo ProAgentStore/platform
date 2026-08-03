@@ -560,30 +560,35 @@ export const STEP_TOOLS: ToolDef[] = [
 			const provider = typeof input.provider === "string" && input.provider ? input.provider : "google";
 			if (provider !== "google") return fail(`Unsupported geocode provider: ${provider}`);
 
-			// Reuse the #95 http_request tool: it injects the vault api-key (X-Goog-Api-Key via
-			// the "http" connector), goes through safeFetch, and maps the response — no bespoke
-			// fetch/SSRF/key handling here.
+			// Use Places (New) Text Search — NOT the classic Geocoding API — so a key
+			// restricted to places.googleapis.com (what a lead-finding agent actually has)
+			// can resolve city → centre. Reuses the #95 http_request tool for vault api-key
+			// injection + safeFetch; no bespoke fetch/SSRF/key handling here.
 			const { runRegistryTool } = await import("./tool-registry.js");
 			const r = await runRegistryTool("http_request", ctx, {
-				method: "GET",
-				url: "https://maps.googleapis.com/maps/api/geocode/json",
-				query: { address: "{{address}}" },
-				inputs: { address },
-				auth: { mode: "api-key", key: { in: "query", name: "key" } },
+				method: "POST",
+				url: "https://places.googleapis.com/v1/places:searchText",
+				headers: {
+					"Content-Type": "application/json",
+					"X-Goog-FieldMask": "places.location,places.formattedAddress,places.addressComponents",
+				},
+				auth: { mode: "api-key", key: { in: "header", name: "X-Goog-Api-Key" } },
+				body: { textQuery: address },
 			});
 			if (!r.success) return fail(`geocode request failed: ${r.content}`);
 			const body = JSON.parse(r.content) as { data?: unknown };
-			const results = getPath(body.data, "results");
-			const top = Array.isArray(results) ? results[0] : undefined;
+			const places = getPath(body.data, "places");
+			const top = Array.isArray(places) ? places[0] : undefined;
 			if (!isRecord(top)) return fail(`No geocode result for "${address}".`);
 
-			const loc = getPath(top, "geometry.location");
-			const lat = isRecord(loc) ? Number(loc.lat) : NaN;
-			const lng = isRecord(loc) ? Number(loc.lng) : NaN;
-			const comps = Array.isArray(getPath(top, "address_components")) ? (getPath(top, "address_components") as Array<Record<string, unknown>>) : [];
+			const loc = getPath(top, "location");
+			const lat = isRecord(loc) ? Number(loc.latitude) : NaN;
+			const lng = isRecord(loc) ? Number(loc.longitude) : NaN;
+			// Places (New) addressComponents: { longText, shortText, types } (camelCase).
+			const comps = Array.isArray(getPath(top, "addressComponents")) ? (getPath(top, "addressComponents") as Array<Record<string, unknown>>) : [];
 			const byType = (t: string): string | null => {
 				const c = comps.find((x) => Array.isArray(x.types) && (x.types as string[]).includes(t));
-				return c ? String(c.long_name ?? "") : null;
+				return c ? String(c.longText ?? "") : null;
 			};
 			const out = {
 				lat: Number.isFinite(lat) ? lat : null,
@@ -591,7 +596,7 @@ export const STEP_TOOLS: ToolDef[] = [
 				country: byType("country"),
 				state: byType("administrative_area_level_1"),
 				locality: byType("locality") ?? byType("postal_town"),
-				formatted: typeof top.formatted_address === "string" ? top.formatted_address : null,
+				formatted: typeof top.formattedAddress === "string" ? top.formattedAddress : null,
 			};
 			return ok(JSON.stringify(out, null, 2));
 		},

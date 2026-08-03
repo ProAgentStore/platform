@@ -382,23 +382,28 @@ describe("http_reachable", () => {
 
 // ── 6. geocode ────────────────────────────────────────────────────────────────
 describe("geocode", () => {
-	it("extracts lat/lng/country/state/locality from a Google response (via http_request/#95)", async () => {
+	it("extracts lat/lng/country/state/locality from a Places Text Search response (via http_request/#95)", async () => {
 		// Mock the wire fetch that http_request → safeFetch performs; also confirm the vault
-		// key is injected (connectorClient.token() supplies it) into the query.
+		// key is injected (connectorClient.token() supplies it) as the X-Goog-Api-Key header
+		// and the address rides in the POST body — Places (New), not the classic Geocoding API.
 		let calledUrl = "";
-		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: any) => {
-			calledUrl = String(u);
+		let calledKey = "";
+		let calledBody = "";
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: any, init?: any) => {
+			const req = u instanceof Request ? u : new Request(String(u), init);
+			calledUrl = req.url;
+			calledKey = req.headers.get("X-Goog-Api-Key") || "";
+			calledBody = await req.clone().text().catch(() => "");
 			return new Response(JSON.stringify({
-				results: [{
-					formatted_address: "Sydney NSW, Australia",
-					geometry: { location: { lat: -33.8688, lng: 151.2093 } },
-					address_components: [
-						{ long_name: "Sydney", types: ["locality"] },
-						{ long_name: "New South Wales", types: ["administrative_area_level_1"] },
-						{ long_name: "Australia", types: ["country"] },
+				places: [{
+					formattedAddress: "Sydney NSW, Australia",
+					location: { latitude: -33.8688, longitude: 151.2093 },
+					addressComponents: [
+						{ longText: "Sydney", types: ["locality"] },
+						{ longText: "New South Wales", types: ["administrative_area_level_1"] },
+						{ longText: "Australia", types: ["country"] },
 					],
 				}],
-				status: "OK",
 			}), { status: 200, headers: { "Content-Type": "application/json" } });
 		});
 		const ctx = {
@@ -417,13 +422,14 @@ describe("geocode", () => {
 			lat: -33.8688, lng: 151.2093, country: "Australia", state: "New South Wales", locality: "Sydney",
 			formatted: "Sydney NSW, Australia",
 		});
-		expect(calledUrl).toContain("key=VAULT_KEY"); // vault key injected by #95's http_request
-		expect(calledUrl).toContain("address=Sydney");
+		expect(calledUrl).toContain("places:searchText");
+		expect(calledKey).toBe("VAULT_KEY"); // vault key injected as X-Goog-Api-Key header by #95's http_request
+		expect(calledBody).toContain("Sydney"); // textQuery in the POST body
 	});
 
 	it("no results → clean failure", async () => {
 		vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
-			new Response(JSON.stringify({ results: [], status: "ZERO_RESULTS" }), { status: 200, headers: { "Content-Type": "application/json" } }),
+			new Response(JSON.stringify({ places: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
 		);
 		const ctx = {
 			env: {} as any, instanceId: "inst1",
