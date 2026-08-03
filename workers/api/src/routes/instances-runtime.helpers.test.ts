@@ -234,6 +234,8 @@ function buildApp(opts: {
 	nodes?: unknown[];
 	instanceConfig?: string;
 	relayConnected?: boolean;
+	noRuntime?: boolean;
+	mirroredTask?: unknown;
 } = {}) {
 	const writes: Write[] = [];
 	const owns = new Set((opts.owns ?? []).map(([i, u]) => `${i}::${u}`));
@@ -253,9 +255,13 @@ function buildApp(opts: {
 								return { id, agent_id: "a1", user_id: uid, status: "active", config: opts.instanceConfig ?? "{}", created_at: "", updated_at: "" };
 							}
 							if (sql.includes("FROM instance_runtimes")) {
+								if (opts.noRuntime) return null; // runner-less agent (pipeline/config)
 								const [id, uid] = args as [string, string];
 								if (!owns.has(`${id}::${uid}`)) return null;
 								return mockRow({ instance_id: id, user_id: uid });
+							}
+							if (sql.includes("FROM instance_runtime_tasks")) {
+								return opts.mirroredTask ? { payload: JSON.stringify(opts.mirroredTask) } : null;
 							}
 							return null;
 						},
@@ -443,5 +449,23 @@ describe("POST /v1/instances/:id/tasks/direct (runner-less board ticket, #150 P3
 		expect(insert).toBeTruthy();
 		// mirrorRuntimeTask binds the whole task JSON as the payload — reasoning must be in it.
 		expect(insert?.args.some((a) => typeof a === "string" && a.includes("No website field → qualified lead"))).toBe(true);
+	});
+});
+
+describe("GET /v1/instances/:id/tasks/:taskId (runner-less fallback, #150)", () => {
+	it("serves the mirrored ticket (with reasoning) when NO runtime is registered", async () => {
+		const ticket = { id: "t1", title: "Palm Tree Kiosk", reasoning: "1. discovered via Places\n2. no website → lead", status: "completed" };
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true, mirroredTask: ticket });
+		const res = await get(app, env, "/v1/instances/inst-1/tasks/t1", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { title: string; reasoning: string };
+		expect(body.title).toBe("Palm Tree Kiosk");
+		expect(body.reasoning).toContain("no website → lead"); // the WHY reaches the detail page
+	});
+
+	it("404s (not a thrown 'Runtime not registered') when there's no runner AND no mirror", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], noRuntime: true });
+		const res = await get(app, env, "/v1/instances/inst-1/tasks/missing", await tokenFor("u1"));
+		expect(res.status).toBe(404);
 	});
 });

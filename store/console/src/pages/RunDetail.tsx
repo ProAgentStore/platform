@@ -306,7 +306,7 @@ export default function RunDetail() {
 			</div>
 
 			<div className="mb-4">
-				<h1 className="text-xl font-bold break-words">Run detail</h1>
+				<h1 className="text-xl font-bold break-words">{task?.title || "Run detail"}</h1>
 				<div className="flex items-center gap-2 flex-wrap mt-1 text-xs">
 					{status && <span className="px-2 py-0.5 rounded-full font-semibold bg-panel border border-line">{status === "needs_human" ? "Waiting for you" : status}</span>}
 					{attempt && attempt.total > 1 && (
@@ -318,6 +318,19 @@ export default function RunDetail() {
 				</div>
 				{url && <a href={url} target="_blank" rel="noreferrer" className="text-xs text-accent break-all hover:underline">{url}</a>}
 			</div>
+
+			{/* ── Ticket content: description + the WHY (reasoning/audit) ──────── */}
+			{(task?.description || task?.reasoning) && (
+				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-5">
+					{task?.description && <div className="text-sm text-ink mb-3 whitespace-pre-line break-words">{linkify(task.description)}</div>}
+					{task?.reasoning && (
+						<div>
+							<h2 className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-1.5">Why — what the agent did &amp; decided</h2>
+							<div className="text-sm text-ink whitespace-pre-line break-words leading-relaxed">{linkify(task.reasoning)}</div>
+						</div>
+					)}
+				</div>
+			)}
 
 			{needsHuman && kind === "value" && (
 				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">

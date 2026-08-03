@@ -101,6 +101,8 @@ export interface RuntimeTask {
 	status: string;
 	title?: string;
 	description?: string;
+	/** The *why* behind the ticket — pipeline/audit provenance, rendered on the detail page. */
+	reasoning?: string;
 	result?: string;
 	input?: Record<string, unknown>;
 	output?: Record<string, unknown>;

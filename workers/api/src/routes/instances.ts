@@ -887,28 +887,35 @@ instanceRoutes.post("/:instanceId/tasks/direct", async (c) => {
  * which drives the connected runner page-by-page (snapshot → Claude → act),
  * handing off to a human only for a CAPTCHA. Returns the workflow instance id.
  */
-/** Read a task from my registered runtime. */
+/**
+ * Read one task. If a live runner is registered we ask it (and re-mirror the fresh
+ * copy); otherwise — and on ANY runtime error — we serve the mirrored ticket from
+ * instance_runtime_tasks. Runner-less agents (pipelines, config agents) have no
+ * runtime at all, so requiring one here 404'd their tickets and the run-detail page
+ * came up empty; the mirrored row carries the full ticket (title/description/reasoning).
+ */
 instanceRoutes.get("/:instanceId/tasks/:taskId", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const runtime = await requireRuntime(c.env, instanceId, session.uid);
 	const taskId = c.req.param("taskId");
 	try {
+		const runtime = await requireRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(taskId)}`);
 		const payload = await runtimeJson(res);
 		if (res.ok) {
 			await mirrorRuntimeTasks(c.env, instanceId, session.uid, payload);
 			return c.json(payload, 200);
 		}
-		const mirrored = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
-		if (mirrored) return c.json({ ...(isRecord(mirrored) ? mirrored : {}), runtimeUnavailable: true });
+		const live = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
+		if (live) return c.json({ ...(isRecord(live) ? live : {}), runtimeUnavailable: true });
 		return c.json(payload, runtimeStatus(res, 200));
-	} catch (error) {
-		const mirrored = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
-		if (mirrored) return c.json({ ...(isRecord(mirrored) ? mirrored : {}), runtimeUnavailable: true });
-		throw error;
+	} catch {
+		/* no runtime registered, or the runner is unreachable → fall back to the mirror */
 	}
+	const mirrored = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
+	if (mirrored) return c.json(isRecord(mirrored) ? mirrored : {});
+	return c.json({ error: "Task not found" }, 404);
 });
 
 /** Approve a task waiting on local human approval. */
