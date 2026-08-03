@@ -80,10 +80,25 @@ wiring time. Same principle as validating connection filters at create time: rej
 wiring when the human is present, not at 3am.
 
 **2. Cost multiplies with depth.** Every layer is an LLM. Fan-out 5 at 3 levels is 125 leaf runs
-from one delegation. A budget — remaining **depth** and remaining **spend** — must ride *down*
-with each delegation, be decremented at every hop, and refuse at zero. Without it a config typo
-is a billing incident, and the existing `ai_usage` ledger records the damage after the fact rather
-than preventing it.
+from one delegation. Without a bound, a config typo is a billing incident — and `ai_usage` records
+the damage rather than preventing it (it is a ledger, not a control).
+
+Three things about the obvious design are wrong, and worth stating because the obvious design is
+what gets built by default:
+
+- **Depth bounds almost nothing.** A supervisor at depth 1 can re-delegate sequentially a thousand
+  times without ever increasing depth. Depth caps tree *height*, not work. Cost is the real
+  control, plus a delegation *count* (a cheap model spins many iterations before a cost cap bites).
+- **A budget "carried down and decremented at each hop" is a per-path copy** — five siblings each
+  receive the full allowance, so the tree total is `allowance × fanout^depth`: unbounded in exactly
+  the quantity being bounded. It must be a **shared pool scoped to the root**, drawn atomically.
+- **Check-then-go overshoots.** Cost is known only *after* a run, so N concurrent branches all pass
+  an optimistic check and overshoot by `N × run_cost` — the classic overbooking problem. Reserve a
+  bounded maximum before starting, settle the actual on completion, refund the remainder.
+
+And the scope is wider than supervision: cron triggers, webhook triggers, and connection deliveries
+all start work with no budget today. Budgeting only delegation plugs one hole in a boat. Retries
+draw from the pool too — the 0058 outbox retries up to five times, each re-running the action.
 
 **3. Supervision must not escalate authority.** This is the security-critical one. A subordinate
 executes with **its own** consent-gated tools (migration 0051) and **its own** guardrails — never
