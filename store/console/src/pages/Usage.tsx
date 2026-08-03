@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import Page from "../components/Page";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { BarChart3, RefreshCw } from "lucide-react";
@@ -119,7 +120,7 @@ export default function Usage() {
 	const empty = !!data && totals && totals.calls === 0;
 
 	return (
-		<div className="w-full max-w-[1040px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page width={1040}>
 			<div className="flex justify-between items-center mb-1">
 				<div className="flex items-center gap-2.5">
 					<BarChart3 size={20} className="text-accent" />
@@ -194,7 +195,7 @@ export default function Usage() {
 			) : (
 				<p className="text-center py-8 text-muted text-sm">Couldn’t load usage.</p>
 			)}
-		</div>
+		</Page>
 	);
 }
 

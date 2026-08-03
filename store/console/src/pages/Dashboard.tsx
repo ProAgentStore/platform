@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import Page from "../components/Page";
 import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Instance } from "../lib/types";
@@ -56,7 +57,7 @@ export default function Dashboard() {
 	}, [tab, loadDashboard]);
 
 	return (
-		<div className="w-full max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page>
 			{/* Agents */}
 			{tab === "agents" && (
 				<div>
@@ -171,7 +172,7 @@ export default function Dashboard() {
 					</div>
 				</div>
 			)}
-		</div>
+		</Page>
 	);
 }
 

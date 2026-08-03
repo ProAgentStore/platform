@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, getToken, API } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -294,7 +295,7 @@ export default function RunDetail() {
 	const url = String(task?.input?.url ?? "");
 
 	return (
-		<div className="w-full max-w-[1100px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page width={1100}>
 			<div className="flex items-center justify-between gap-2 mb-3">
 				<button type="button" onClick={() => navigate(-1)} className="flex items-center gap-1.5 text-sm text-muted hover:text-accent">
 					<ArrowLeft size={15} /> Back
@@ -423,6 +424,6 @@ export default function RunDetail() {
 					</div>
 				)}
 			</div>
-		</div>
+		</Page>
 	);
 }

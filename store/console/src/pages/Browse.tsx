@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import Page from "../components/Page";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Instance } from "../lib/types";
@@ -63,7 +64,7 @@ export default function Browse() {
 	};
 
 	return (
-		<div className="w-full max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page>
 			<div className="flex justify-between items-center mb-1">
 				<h2 className="text-[1.1rem] font-semibold">Browse agents</h2>
 			</div>
@@ -111,6 +112,6 @@ export default function Browse() {
 					})}
 				</div>
 			)}
-		</div>
+		</Page>
 	);
 }

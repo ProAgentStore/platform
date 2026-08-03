@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import Page from "../components/Page";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -39,7 +40,7 @@ export default function Terminals() {
 	usePolling(load, 5000, true);
 
 	return (
-		<div className="w-full max-w-[1040px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page width={1040}>
 			<div className="flex justify-between items-center mb-1">
 				<div className="flex items-center gap-2.5">
 					<Terminal size={20} className="text-accent" />
@@ -123,6 +124,6 @@ export default function Terminals() {
 					))}
 				</div>
 			)}
-		</div>
+		</Page>
 	);
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import Page from "../components/Page";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Notification } from "../lib/types";
@@ -29,7 +30,7 @@ export default function Notifications() {
 	};
 
 	return (
-		<div className="w-full max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page>
 			<div className="flex justify-between items-center mb-4">
 				<div className="flex items-center gap-3">
 					<button type="button" onClick={() => navigate(-1)} className="text-sm text-muted hover:text-ink">&larr;</button>
@@ -72,7 +73,7 @@ export default function Notifications() {
 					))}
 				</div>
 			)}
-		</div>
+		</Page>
 	);
 }
 

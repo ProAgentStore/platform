@@ -986,3 +986,46 @@ test.describe("ProAgentStore authenticated Console", () => {
 		await expect(page.getByRole("button", { name: "Delete Agent" })).toBeVisible();
 	});
 });
+
+test.describe("mobile — no horizontal overflow (regression guard for the missing-w-full bug)", () => {
+	// Phones. The bug (page container sizing to max-content instead of the viewport)
+	// only shows below the sm: breakpoint (640px) and needs real content to trigger.
+	test.use({ viewport: { width: 375, height: 812 } });
+
+	// Routes rendered with the mock's seeded content — empty pages can't reproduce the
+	// bug (their max-content is small), so we cover the content-bearing pages that had it.
+	const routes = [
+		"/console/", // agents grid
+		"/console/instances", // instances grid
+		"/console/agents/agent-1", // AgentDetail (the tab bar + header that overflowed)
+		"/console/agents/agent-1/settings",
+		"/console/instances/inst-1", // Assistant/chat
+		"/console/instances/inst-1/board", // apply board
+		"/console/instances/inst-1/knowledge",
+		"/console/instances/inst-1/settings",
+		"/console/profile",
+		"/console/notifications",
+	];
+
+	for (const route of routes) {
+		test(`no horizontal scroll at 375px — ${route}`, async ({ page }) => {
+			await mockSignedInConsole(page);
+			await page.goto(route);
+			await page.waitForLoadState("networkidle");
+			await page.locator("main").waitFor();
+			await page.waitForTimeout(300); // let async content settle
+
+			// <main> is the scroll region (the header nav is an intentional overflow-x-auto);
+			// a horizontal scrollbar there is exactly the user-visible bug.
+			const { mainOv, docOv } = await page.evaluate(() => {
+				const m = document.querySelector("main");
+				return {
+					mainOv: m ? m.scrollWidth - m.clientWidth : 0,
+					docOv: document.documentElement.scrollWidth - window.innerWidth,
+				};
+			});
+			expect(mainOv, `<main> overflows by ${mainOv}px at 375w on ${route}`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at 375w on ${route}`).toBeLessThanOrEqual(1);
+		});
+	}
+});

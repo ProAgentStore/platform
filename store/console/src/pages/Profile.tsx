@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import Page from "../components/Page";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import { api, getToken } from "@proagentstore/sdk/client";
@@ -130,7 +131,7 @@ export default function Profile() {
 	const voiceFields = cpFields.filter(f => f.group === "voice");
 
 	return (
-		<div className="w-full max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page>
 			<div className="flex justify-between items-center mb-6">
 				<h1 className="font-display text-xl font-bold">Profile</h1>
 				<button type="button" onClick={() => navigate(-1)} className="text-sm px-3 py-1.5 rounded-xl border border-line text-muted hover:border-accent hover:text-accent font-semibold">&larr; Back</button>
@@ -305,6 +306,6 @@ export default function Profile() {
 					<button type="button" onClick={() => { signOut(); navigate("/"); }} className="bg-red text-white text-sm px-4 py-2 rounded-xl font-semibold hover:opacity-90">Sign Out</button>
 				</div>
 			</div>
-		</div>
+		</Page>
 	);
 }

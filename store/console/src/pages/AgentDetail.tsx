@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
@@ -281,7 +282,7 @@ export default function AgentDetail() {
 	// Create mode — no id means /agents/new
 	if (!id) return <CreateAgent />;
 
-	if (!agent) return <div className="w-full max-w-[960px] mx-auto px-3 py-6 text-muted text-sm">Loading agent...</div>;
+	if (!agent) return <Page className="text-muted text-sm">Loading agent...</Page>;
 
 	const allTabs: { id: Tab; label: string }[] = [
 		{ id: "chat", label: "Chat" }, { id: "knowledge", label: "Knowledge" },
@@ -291,7 +292,7 @@ export default function AgentDetail() {
 	];
 
 	return (
-		<div className="w-full max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page>
 			<button type="button" onClick={() => navigate("/agents")} className="text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink"><ArrowLeft size={14} /> Back</button>
 
 			{/* Header */}
@@ -585,7 +586,7 @@ export default function AgentDetail() {
 			{tab === "ops" && (
 				<div className="text-center py-8 text-muted text-sm">Ops — API billing, deploy status, health checks. Full port coming soon.</div>
 			)}
-		</div>
+		</Page>
 	);
 }
 
@@ -656,7 +657,7 @@ function CreateAgent() {
 	};
 
 	return (
-		<div className="w-full max-w-[960px] mx-auto px-3 py-3 sm:px-6 sm:py-5">
+		<Page>
 			<button type="button" onClick={() => navigate("/agents")} className="text-sm text-muted mb-3 inline-flex items-center gap-1 hover:text-ink">&larr; Back</button>
 			<h2 className="font-display text-xl font-bold mb-2">Create Agent</h2>
 			<p className="text-sm text-muted mb-4">Describe what you want. ProAgentStore will choose the right creation path, then show a plan before anything is created.</p>
@@ -747,6 +748,6 @@ function CreateAgent() {
 					</div>
 				</div>
 			)}
-		</div>
+		</Page>
 	);
 }
