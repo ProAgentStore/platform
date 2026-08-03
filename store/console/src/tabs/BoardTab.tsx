@@ -31,6 +31,7 @@ interface BoardItem {
 	title: string;
 	subtitle: string;
 	description: string;
+	reasoning?: string;
 	url: string;
 	runStatus: string;
 	userStatus: string | null;
@@ -318,6 +319,12 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRe
 				<h3 className="text-sm font-bold mb-0.5 break-words pr-6">{item.title}</h3>
 				{item.subtitle && <p className="text-[0.7rem] text-muted-soft mb-1 line-clamp-1">{item.subtitle}</p>}
 				{item.description && <p className="text-xs text-muted line-clamp-2 mb-2">{item.description}</p>}
+				{item.reasoning && (
+					<div className="text-[0.7rem] text-muted bg-panel/50 border-l-2 border-accent/50 rounded-r px-2 py-1 mb-2 line-clamp-4 whitespace-pre-wrap break-words">
+						<span className="text-accent font-semibold">Why: </span>
+						{item.reasoning}
+					</div>
+				)}
 				<div className="flex gap-1.5 flex-wrap items-center text-[0.7rem]">
 					<span className={`px-1.5 py-0.5 rounded font-medium ${statusClass(item.status)}`}>{item.status}</span>
 					{item.userStatus && <span className="text-muted-soft" title={`Automation: ${item.runStatus}`}>moved</span>}

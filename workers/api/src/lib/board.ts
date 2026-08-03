@@ -71,6 +71,9 @@ export interface BoardItemView {
 	title: string;
 	subtitle: string;
 	description: string;
+	/** Why the agent did this — the decision/audit for the ticket, shown in the card.
+	 *  Carried in the runtime task's payload; absent for older/standalone cards. */
+	reasoning?: string;
 	url: string;
 	/** The newest run's status. */
 	runStatus: string;
@@ -101,6 +104,7 @@ interface RawTask {
 	title?: string;
 	subtitle?: string;
 	description?: string;
+	reasoning?: string;
 	result?: string;
 	input?: Record<string, unknown>;
 	output?: Record<string, unknown>;
@@ -269,6 +273,7 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 			title: label.title,
 			subtitle: label.subtitle,
 			description: taskDescription(rep),
+			reasoning: typeof rep.reasoning === "string" && rep.reasoning.trim() ? rep.reasoning : undefined,
 			url: typeof rep.input?.url === "string" ? rep.input.url : "",
 			runStatus,
 			userStatus,
