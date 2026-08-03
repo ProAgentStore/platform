@@ -365,6 +365,7 @@ export const STEP_TOOLS: ToolDef[] = [
 				collection: { type: "string", description: "Target instance collection name." },
 				key: { type: "string", description: "Field to dedupe on (should be unique/indexed on the collection)." },
 				mode: { type: "string", description: '"update" (default, update-in-place) or "skip" (skip-if-seen).' },
+				emit: { type: "string", description: "Optional event type to emit ONCE per NET-NEW inserted record (e.g. 'lead.created') — feeds agent-to-agent connections (lib/connections.ts). No-op when no connection is wired." },
 			},
 			required: ["collection", "key"],
 		},
@@ -373,12 +374,14 @@ export const STEP_TOOLS: ToolDef[] = [
 			const collection = String(input.collection || "");
 			const key = String(input.key || "");
 			const mode = input.mode === "skip" ? "skip" : "update";
+			const emit = typeof input.emit === "string" ? input.emit.trim() : "";
 			if (!collection || !key) return fail("collection and key are required.");
 			if (!ctx.env?.AGENT || !ctx.instanceId) return fail("No instance context — dedupe_upsert needs a running instance.");
 
 			const stub = ctx.env.AGENT.get(ctx.env.AGENT.idFromName(ctx.instanceId));
 			const base = `https://agent/collections/${encodeURIComponent(collection)}/records`;
 			let inserted = 0, updated = 0, skipped = 0;
+			const newRows: Record<string, unknown>[] = []; // net-new inserts — the emit payloads
 			for (const item of items) {
 				const kv = item[key];
 				if (kv === undefined || kv === null) { skipped++; continue; }
@@ -399,10 +402,21 @@ export const STEP_TOOLS: ToolDef[] = [
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ data: item }),
 					}));
-					if (res.ok) inserted++; else skipped++; // a 500 here = unique-constraint race; count as skipped
+					if (res.ok) { inserted++; newRows.push(item); } else skipped++; // a 500 here = unique-constraint race; count as skipped
 				}
 			}
-			return ok(JSON.stringify({ inserted, updated, skipped, total: items.length }, null, 2));
+			// Fire the agent-to-agent pump for each net-new record (deferred import breaks the
+			// steps → connections → triggers cycle). Best-effort: a delivery failure must never
+			// fail the sweep — it's logged to the trace by deliverEvent.
+			let emitted = 0;
+			if (emit && newRows.length && ctx.userId) {
+				try {
+					const { deliverEvent } = await import("./connections.js");
+					const r = await deliverEvent(ctx.env, ctx.instanceId, ctx.userId, emit, newRows);
+					emitted = r.delivered;
+				} catch { /* pump failure never breaks the sink */ }
+			}
+			return ok(JSON.stringify({ inserted, updated, skipped, total: items.length, ...(emit ? { emitted } : {}) }, null, 2));
 		},
 	},
 

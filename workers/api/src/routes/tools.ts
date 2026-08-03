@@ -6,6 +6,8 @@ import { listConsents, revokeConsent, setConsent } from "../lib/connector-consen
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import { listRuns } from "../lib/pipeline-runs.js";
+import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
+import type { TriggerAction } from "../lib/triggers.js";
 import type { Env } from "../types.js";
 
 /**
@@ -172,6 +174,49 @@ toolRoutes.get("/:id/pipeline-runs", async (c) => {
 		limit: Number(c.req.query("limit")) || 50,
 	});
 	return c.json({ runs });
+});
+
+/**
+ * Agent-to-agent connections (the "pump", lib/connections.ts). Scoped to the SOURCE instance
+ * (:id). A connection routes this instance's emitted events (e.g. "lead.created") into another
+ * of the caller's instances by running a trigger action — so one agent feeds another without
+ * sharing storage. Owner-scoped; createConnection verifies the caller owns BOTH instances.
+ */
+toolRoutes.get("/:id/connections", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json({ connections: await listConnections(c.env, session.uid, { sourceInstanceId: instanceId }) });
+});
+
+toolRoutes.post("/:id/connections", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as {
+		eventType?: string;
+		targetInstanceId?: string;
+		action?: string;
+		config?: Record<string, unknown>;
+	};
+	const res = await createConnection(c.env, session.uid, {
+		sourceInstanceId: instanceId,
+		eventType: String(body.eventType ?? ""),
+		targetInstanceId: String(body.targetInstanceId ?? ""),
+		action: body.action as TriggerAction,
+		config: body.config,
+	});
+	if (!res.ok) throw new HttpError(res.status as 400, res.error);
+	return c.json(res.connection, 201);
+});
+
+toolRoutes.delete("/:id/connections/:cid", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const removed = await deleteConnection(c.env, session.uid, c.req.param("cid"));
+	if (!removed) throw new HttpError(404, "connection not found");
+	return c.json({ ok: true });
 });
 
 /** GET /v1/instances/:id/connectors/consent — write-consents granted on this instance. */
