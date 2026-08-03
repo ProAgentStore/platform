@@ -3,7 +3,7 @@ import { type CodingEngine, deriveClientType, engineAuthFor, pickNextIssue } fro
 import { delegationTaskRecord } from "../lib/delegation.js";
 
 describe("delegationTaskRecord (#155 — observable delegation task)", () => {
-	const base = { id: "deleg-1", repoName: "pags/platform", objective: "add a health check to the api worker", now: "2026-08-03T00:00:00.000Z" };
+	const base = { id: "deleg-1", targetLabel: "pags/platform", objective: "add a health check to the api worker", now: "2026-08-03T00:00:00.000Z" };
 
 	it("is a 'delegation' card attributed to the Overseer on the user's behalf", () => {
 		const t = delegationTaskRecord({ ...base, status: "running" });

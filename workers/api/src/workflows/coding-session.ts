@@ -220,7 +220,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// status + outcome note change. Inline upsert keeps the workflow off a routes import.
 					const task = delegationTaskRecord({
 						id: event.payload.boardTaskId as string,
-						repoName: goal.repo,
+						targetLabel: goal.repo,
 						objective: goal.objective,
 						status: ok ? "completed" : "failed",
 						now: new Date().toISOString(),

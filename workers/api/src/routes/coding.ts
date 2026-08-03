@@ -27,6 +27,7 @@ import {
 import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask } from "./instances-runtime.js";
 import { logEvent } from "../lib/events.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
+import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetReason, type DelegationTarget } from "../lib/delegate-target.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
@@ -972,19 +973,36 @@ async function driveClaude(
  * not a line buried in one repo's thread. Attributed as an agent action on the user's behalf,
  * never as a user turn. The Pilot flips the task to completed/failed at its terminal state.
  */
-async function delegateGoal(
+type DelegationOutcome =
+	| { ok: true; taskId: string; reply: string; label: string }
+	| { ok: false; reply: string };
+
+async function delegateToTarget(
 	c: Context<{ Bindings: Env }>,
 	instanceId: string,
 	uid: string,
-	session: { id: string; clientType: CodingGoal["clientType"]; runnerNode?: string | null },
-	repo: { id: string; name: string; githubRepo?: string | null; instructions?: string | null; cloneUrl?: string | null; branch?: string | null },
+	target: DelegationTarget,
 	objective: string,
-): Promise<{ delegated: true; reply: string; taskId: string }> {
+): Promise<DelegationOutcome> {
+	// Refuse a parsed-but-not-runnable target explicitly (#156). Silently doing nothing would
+	// leave a board card that looks delegated and never moves.
+	if (!isExecutableTarget(target)) return { ok: false, reply: unsupportedTargetReason(target) };
+	// Only `repo` is executable today (guarded above). Resolving the target HERE rather than in
+	// the caller is the point of the change: a second target kind slots in without the route
+	// learning anything about it.
+	const repoId = targetId(target);
+	const repo = await getRepo(c.env, instanceId, uid, repoId);
+	const session = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
+	const targetLabel = repo?.name ?? "that repo";
+	if (!repo || !session) {
+		return { ok: false, reply: `${targetLabel} has no live session — open it (or tap Start) first, then I can drive it.` };
+	}
+
 	const taskId = `deleg-${crypto.randomUUID()}`;
 	const now = new Date().toISOString();
 	const label = objective.length > 120 ? `${objective.slice(0, 117)}…` : objective;
 	// 1) Observable board task (running), attributed to the Overseer on the user's behalf.
-	await mirrorRuntimeTask(c.env, instanceId, uid, delegationTaskRecord({ id: taskId, repoName: repo.name, objective, status: "running", now })).catch(() => undefined);
+	await mirrorRuntimeTask(c.env, instanceId, uid, delegationTaskRecord({ id: taskId, targetLabel: repo.name, objective, status: "running", now })).catch(() => undefined);
 	// 2) Unified trace + the target session thread (visible, as an agent action).
 	await logEvent(c.env, { source: "coding", event: "delegate", message: `Overseer → ${repo.name}: ${label}`, userId: uid, instanceId, traceId: taskId }).catch(() => undefined);
 	await appendTimeline(c.env, { sessionId: session.id, instanceId, userId: uid, type: "chat_assistant", content: `On it — delegated to ${repo.name}: ${label} (tracking on the board)` }).catch(() => undefined);
@@ -1001,7 +1019,7 @@ async function delegateGoal(
 			branch: repo.branch || undefined, token: token ?? undefined, goal, boardTaskId: taskId,
 		},
 	});
-	return { delegated: true, reply: `On it — delegated to ${repo.name}; track it on the board.`, taskId };
+	return { ok: true, taskId, label: targetLabel, reply: `On it — delegated to ${repo.name}; track it on the board.` };
 }
 
 /**
@@ -1128,17 +1146,16 @@ codingRoutes.post("/:instanceId/coding/overseer", async (c) => {
 	}, { kind: "overseer", instanceId }).catch(() => ({ response: "" }))) as { response?: string; tool_calls?: Array<{ name: string; arguments?: Record<string, unknown> }> };
 
 	const call = res.tool_calls?.find((t) => t.name === "drive_claude");
-	const repoId = call && typeof call.arguments?.repoId === "string" ? (call.arguments.repoId as string) : "";
+	// #156: the tool still speaks `repoId`, but the route no longer does — it hands an
+	// addressable TARGET to the delegate path, which owns resolution and the refusal cases.
+	const target = call ? parseDelegationTarget(call.arguments ?? {}) : null;
 	const instruction = call && typeof call.arguments?.instruction === "string" ? (call.arguments.instruction as string).trim() : "";
-	if (repoId && instruction) {
-		const repo = repoById.get(repoId);
-		const repoName = repo?.name ?? "that repo";
-		const active = await getActiveSessionForRepo(c.env, instanceId, uid, repoId);
-		if (!active || !repo) return c.json({ delegated: false, reply: `${repoName} has no live session — open it (or tap Start) first, then I can drive it.` });
+	if (target && instruction) {
 		// #155: delegate the GOAL to the durable Pilot + record an observable board task,
 		// instead of a fire-and-forget one-shot with no follow-through.
-		const r = await delegateGoal(c, instanceId, uid, active, repo, instruction);
-		return c.json({ delegated: true, repoId, taskId: r.taskId, reply: `${repoName}: ${r.reply}` });
+		const r = await delegateToTarget(c, instanceId, uid, target, instruction);
+		if (!r.ok) return c.json({ delegated: false, reply: r.reply });
+		return c.json({ delegated: true, repoId: targetId(target), taskId: r.taskId, reply: `${r.label}: ${r.reply}` });
 	}
 	return c.json({ delegated: false, reply: res.response || "(no response)" });
 });
