@@ -53,6 +53,11 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	// Only adopt the server's saved view on first load — otherwise every 2.5s poll
 	// would yank the user back out of a view they just toggled.
 	const viewInit = useRef(false);
+	// Browser-task Run control (#69/#71): shown only for a BROWSER_TASK agent.
+	const [isBrowseAgent, setIsBrowseAgent] = useState(false);
+	const [runUrl, setRunUrl] = useState("");
+	const [running, setRunning] = useState(false);
+	const [runMsg, setRunMsg] = useState("");
 
 	const cols = serverCols?.length ? serverCols : (columns?.length ? columns : GENERIC_COLUMNS);
 
@@ -79,6 +84,39 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 
 	useEffect(() => { loadBoard(); }, [loadBoard]);
 	usePolling(loadBoard, 2500);
+
+	// Detect a browser-task agent (show the Run control) + restore its last-used start URL.
+	useEffect(() => {
+		let alive = true;
+		(async () => {
+			try {
+				const d = await api<{ instances?: Array<{ id: string; capabilities?: { workflow?: string } }> }>("/v1/instances/my/instances");
+				const mine = (d.instances || []).find((i) => i.id === instanceId);
+				if (alive && mine?.capabilities?.workflow === "BROWSER_TASK") {
+					setIsBrowseAgent(true);
+					try { setRunUrl(localStorage.getItem(`browse-url:${instanceId}`) || ""); } catch { /* ignore */ }
+				}
+			} catch { /* ignore */ }
+		})();
+		return () => { alive = false; };
+	}, [instanceId]);
+
+	const runBrowse = useCallback(async (dryRun: boolean) => {
+		const url = runUrl.trim();
+		if (!url) { setRunMsg("Enter a start URL first."); return; }
+		try { localStorage.setItem(`browse-url:${instanceId}`, url); } catch { /* ignore */ }
+		setRunning(true);
+		setRunMsg(dryRun ? "Starting dry run…" : "Starting…");
+		try {
+			await api(`/v1/instances/${instanceId}/browse`, { method: "POST", body: JSON.stringify({ url, dryRun }) });
+			setRunMsg(dryRun ? "Dry run started — watch it here and in your browser." : "Run started — watch it here and in your browser.");
+			loadBoard();
+		} catch (e) {
+			setRunMsg(e instanceof Error ? e.message : "Failed to start");
+		} finally {
+			setRunning(false);
+		}
+	}, [instanceId, runUrl, loadBoard]);
 
 	// Bulk-clearable = terminal automation outcomes. Deliberately excludes `blocked`
 	// (needs you) and human pipeline stages (interview/offer/rejected) — mirrors the
@@ -178,6 +216,25 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 
 	return (
 		<div>
+			{isBrowseAgent && (
+				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3">
+					<h3 className="text-base font-bold mb-1">Run browser task</h3>
+					<p className="text-sm text-muted mb-2">
+						Runs on your connected machine's browser (needs <code>pags up</code> and you signed into the site). The agent drives the page toward its objective; a login/captcha pauses for your takeover.
+					</p>
+					<div className="flex gap-2 flex-wrap">
+						<input
+							value={runUrl}
+							onChange={(e) => setRunUrl(e.target.value)}
+							placeholder="Start URL, e.g. https://www.facebook.com/friends/requests"
+							className="flex-1 min-w-0 sm:min-w-[18rem] bg-paper border border-line rounded-lg px-3 py-2 text-sm"
+						/>
+						<button type="button" onClick={() => runBrowse(false)} disabled={running || !runUrl.trim()} className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-50">Run</button>
+						<button type="button" onClick={() => runBrowse(true)} disabled={running || !runUrl.trim()} className="text-sm px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-bold disabled:opacity-50">Dry run</button>
+					</div>
+					{runMsg && <p className="text-xs text-muted mt-2">{runMsg}</p>}
+				</div>
+			)}
 			<div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
 				<div>
 					<h3 className="text-base font-bold mb-0.5">Board</h3>
