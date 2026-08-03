@@ -539,7 +539,7 @@ test.describe("ProAgentStore Console smoke", () => {
 			],
 		});
 
-		await page.goto("/console/");
+		await page.goto("/console/agents");
 
 		await expect(page.getByText("Agents you've built")).toBeVisible();
 		await expect(page.getByText("Draft Agent")).toBeVisible();
@@ -593,6 +593,22 @@ test.describe("ProAgentStore Console smoke", () => {
 
 		// The knowledge tab should load — sub-tabs and heading are visible
 		await expect(page.getByRole("heading", { name: "Documents" })).toBeVisible();
+	});
+
+	test("root restores the last visited top-level screen, else defaults to Instances (#161)", async ({ page }) => {
+		await mockSignedInConsole(page);
+
+		// First visit with nothing stored → the default is Instances.
+		await page.goto("/console/");
+		await expect(page).toHaveURL(/\/console\/instances$/);
+
+		// Client-side nav to a top-level section records it as the last route (Layout effect).
+		await page.getByRole("link", { name: "My Agents" }).click();
+		await expect(page).toHaveURL(/\/console\/agents$/);
+
+		// Re-opening the root now restores Agents instead of the fixed default.
+		await page.goto("/console/");
+		await expect(page).toHaveURL(/\/console\/agents$/);
 	});
 
 	test("instance indexing page shows indexed, pending, and sync status", async ({ page }) => {
@@ -961,7 +977,7 @@ test.describe("ProAgentStore authenticated Console", () => {
 		page,
 	}) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/");
+		await page.goto("/console/agents");
 
 		await expect(page.getByText("Agents you've built")).toBeVisible();
 		await page.getByText("Ops Agent").click();
@@ -975,7 +991,7 @@ test.describe("ProAgentStore authenticated Console", () => {
 		page,
 	}) => {
 		await mockSignedInConsole(page);
-		await page.goto("/console/");
+		await page.goto("/console/agents");
 
 		await page.getByText("Ops Agent").click();
 		await page.getByRole("button", { name: "Settings", exact: true }).click();

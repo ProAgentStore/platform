@@ -13,6 +13,13 @@ import Notifications from "./pages/Notifications";
 import Terminals from "./pages/Terminals";
 import Usage from "./pages/Usage";
 import RunDetail from "./pages/RunDetail";
+import { resolveDefaultRoute } from "./lib/lastRoute";
+
+/** Root/unknown-path redirect: restore the last visited top-level screen (#161), else
+ *  Instances. Read at mount so a reload lands where the user left off. */
+function DefaultRedirect() {
+	return <Navigate to={resolveDefaultRoute()} replace />;
+}
 
 function AuthGate() {
 	const { user, loading } = useAuth();
@@ -30,7 +37,7 @@ function AuthGate() {
 	return (
 		<Routes>
 			<Route element={<Layout />}>
-				<Route index element={<Navigate to="instances" replace />} />
+				<Route index element={<DefaultRedirect />} />
 				<Route path="agents" element={<Dashboard />} />
 				<Route path="browse" element={<Browse />} />
 				<Route path="agents/new" element={<AgentDetail />} />
@@ -45,7 +52,7 @@ function AuthGate() {
 				<Route path="usage" element={<Usage />} />
 				<Route path="profile" element={<Profile />} />
 				<Route path="notifications" element={<Notifications />} />
-				<Route path="*" element={<Navigate to="instances" replace />} />
+				<Route path="*" element={<DefaultRedirect />} />
 			</Route>
 		</Routes>
 	);

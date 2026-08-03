@@ -7,6 +7,7 @@ import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
+import { rememberRoute } from "../lib/lastRoute";
 
 const navItems = [
 	{ to: "/agents", label: "My Agents", icon: Bot },
@@ -49,6 +50,9 @@ export default function Layout() {
 
 	useEffect(() => { loadBadge(); }, [loadBadge]);
 	usePolling(loadBadge, 30000, !!user);
+
+	// Remember the last visited top-level screen so a reload/re-open restores it (#161).
+	useEffect(() => { rememberRoute(location.pathname); }, [location.pathname]);
 
 	return (
 		<div className="flex flex-col h-dvh overflow-hidden">
