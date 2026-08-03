@@ -76,6 +76,25 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
 	const [runnerRefreshing, setRunnerRefreshing] = useState(false);
 	const [machines, setMachines] = useState<Machine[]>([]);
+	// Connector write-consent (#90): connectors this agent's tools can WRITE with, and
+	// which the owner has granted. A write tool (e.g. browser_navigate/act) refuses until
+	// its connector is granted here — the human gate for an agent acting AS the user.
+	const [writeConnectors, setWriteConnectors] = useState<string[]>([]);
+	const [grantedConnectors, setGrantedConnectors] = useState<string[]>([]);
+	const [consentMsg, setConsentMsg] = useState("");
+
+	// Toggle a connector's write consent (optimistic; reverts on failure).
+	const toggleConnectorConsent = async (connector: string, enabled: boolean) => {
+		setGrantedConnectors((g) => (enabled ? [...new Set([...g, connector])] : g.filter((c) => c !== connector)));
+		try {
+			await api(`/v1/instances/${instanceId}/connectors/${connector}/consent`, { method: "PUT", body: JSON.stringify({ enabled }) });
+			setConsentMsg(`${connector} write access ${enabled ? "granted" : "revoked"}`);
+			setTimeout(() => setConsentMsg(""), 2500);
+		} catch (e) {
+			setGrantedConnectors((g) => (enabled ? g.filter((c) => c !== connector) : [...new Set([...g, connector])]));
+			setConsentMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
 
 	// Re-check the runner (live RelayDO truth) on demand — used by the Refresh button and
 	// the tab-focus re-check, so a just-started/stopped `pags up` reflects without a reload.
@@ -191,6 +210,20 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			try {
 				const d = await api<{ nodes: Machine[] }>(`/v1/terminals/nodes`);
 				setMachines(d.nodes || []);
+			} catch {}
+			try {
+				// Which connectors can this agent WRITE with, and what's already granted?
+				// writeConnectors = the agent's declared tools ∩ the registry's write tools.
+				const [inst, toolsRes, consentRes] = await Promise.all([
+					api<{ instances?: Array<{ id: string; capabilities?: { tools?: string[] } }> }>("/v1/instances/my/instances"),
+					api<{ tools?: Array<{ name: string; connector: string; scope: string }> }>(`/v1/instances/${instanceId}/tools`),
+					api<{ consents?: Array<{ connector: string; scope: string }> }>(`/v1/instances/${instanceId}/connectors/consent`),
+				]);
+				const myTools = new Set((inst.instances || []).find((i) => i.id === instanceId)?.capabilities?.tools || []);
+				const writeConns = new Set<string>();
+				for (const t of toolsRes.tools || []) if (t.scope === "write" && myTools.has(t.name)) writeConns.add(t.connector);
+				setWriteConnectors([...writeConns]);
+				setGrantedConnectors((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
 			} catch {}
 			try {
 				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }> }>(`/v1/instances/${instanceId}/translation`);
@@ -793,6 +826,30 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				<p className="text-sm text-muted mb-3">
 					Connect accounts once, then grant this agent access to only the folders it should use.
 				</p>
+
+				{/* Connector write-consent (#90): the human gate for tools that act AS you
+				    (e.g. the browser agent's navigate/click/type). Off until you check it. */}
+				{writeConnectors.length > 0 && (
+					<div className="mb-3 pb-3 border-b border-line">
+						<div className="text-sm font-semibold mb-0.5">Agent write access</div>
+						<p className="text-[0.7rem] text-muted-soft mb-2">
+							Lets this agent act as you — click, type, and navigate — through the connector on your machine. Off by default; enable only what you want it to do.
+						</p>
+						{writeConnectors.map((connector) => (
+							<label key={connector} className="flex items-center gap-2 text-sm cursor-pointer mb-1.5">
+								<input
+									type="checkbox"
+									checked={grantedConnectors.includes(connector)}
+									onChange={(e) => toggleConnectorConsent(connector, e.target.checked)}
+									className="w-4 h-4 accent-accent"
+								/>
+								<span className="capitalize font-semibold">{connector}</span>
+								<span className="text-muted">write access</span>
+							</label>
+						))}
+						{consentMsg && <p className="text-xs text-green mt-1">{consentMsg}</p>}
+					</div>
+				)}
 
 				{emailStatus && !emailStatus.configured && (
 					<p className="text-xs text-red mb-2">Email connection isn’t configured on this deployment yet.</p>
