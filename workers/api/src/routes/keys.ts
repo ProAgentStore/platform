@@ -101,6 +101,17 @@ const PROVIDERS: Provider[] = [
 		docsUrl: "https://dash.cloudflare.com/profile/api-tokens",
 	},
 	{
+		// The generic HTTP-connector api-key slot (user_api_keys provider "http"), read by
+		// lib/connectors/http.ts for `auth: { mode: "api-key" }` requests — e.g. a
+		// declarative pipeline calling Google Places with X-Goog-Api-Key. Not an AI provider;
+		// it's a BYOK connector credential, so no host/prefix and no live verify.
+		id: "http",
+		name: "HTTP connector (API key)",
+		host: null,
+		keyPrefix: "",
+		docsUrl: "",
+	},
+	{
 		// Claude Code sign-in for the Coder engine: a long-lived OAuth token from
 		// `claude setup-token` (works with a Pro/Max subscription). host:null — this is
 		// NOT proxyable; it's injected as CLAUDE_CODE_OAUTH_TOKEN into the runner's
