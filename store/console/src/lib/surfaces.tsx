@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { CodingTab } from "@proagentstore/coder-web";
+import ActivityTab from "../tabs/ActivityTab";
 import BoardTab from "../tabs/BoardTab";
 import DataTab from "../tabs/DataTab";
 import IndexingTab from "../tabs/IndexingTab";
@@ -21,7 +22,7 @@ import type { BoardColumn, SettingsField } from "./types";
 // See ../../../PLAN-agent-os.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "indexing" | "knowledge" | "data" | "settings";
+export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "activity" | "indexing" | "knowledge" | "data" | "settings";
 
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
@@ -89,6 +90,17 @@ export const SURFACES: SurfaceDef[] = [
 		render: ({ instanceId, sessionId, setChildHeader }) => (
 			<CodingTab key={instanceId} instanceId={instanceId} initialSessionId={sessionId} onHeaderOverride={setChildHeader} />
 		),
+	},
+	{
+		id: "activity",
+		label: "Activity",
+		icon: "🪵",
+		// A live, readable timeline of everything the agent DID — tool calls, record
+		// writes, cron/webhook fires, summaries, errors — the process/reasoning log.
+		// Distinct from Board (runtime task jobs) and Data (end-result records).
+		show: () => true,
+		scroll: true,
+		render: ({ instanceId }) => <ActivityTab instanceId={instanceId} />,
 	},
 	{
 		id: "knowledge",
