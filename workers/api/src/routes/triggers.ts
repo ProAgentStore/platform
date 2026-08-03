@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
 import {
+	applyJitter,
 	assertTriggerAction,
 	assertTriggerType,
 	dispatchTrigger,
@@ -114,7 +115,7 @@ triggerRoutes.post("/", async (c) => {
 	const action = assertTriggerAction(body.action || "create_task");
 	const name = sanitizeTriggerName(body.name);
 	const schedule = type === "cron" ? normalizeSchedule(body.schedule) : null;
-	const next = schedule ? nextRunAt(schedule) : null;
+	const next = schedule ? applyJitter(nextRunAt(schedule), typeof body.config?.jitterMinutes === "number" ? body.config.jitterMinutes : undefined) : null;
 	const secret = type === "webhook" ? makeTriggerSecret() : null;
 	const id = crypto.randomUUID();
 	await c.env.DB.prepare(
@@ -158,7 +159,9 @@ triggerRoutes.put("/:id", async (c) => {
 	let next = trigger.next_run_at;
 	if (trigger.type === "cron" && body.schedule !== undefined) {
 		schedule = normalizeSchedule(body.schedule);
-		next = nextRunAt(schedule);
+		const cfgJitter = parseConfig(trigger.config).jitterMinutes;
+		const jm = body.config && typeof body.config.jitterMinutes === "number" ? body.config.jitterMinutes : (typeof cfgJitter === "number" ? cfgJitter : undefined);
+		next = applyJitter(nextRunAt(schedule), jm);
 	}
 	const secret = trigger.type === "webhook" && body.rotateSecret === true ? makeTriggerSecret() : trigger.secret_token;
 	await c.env.DB.prepare(

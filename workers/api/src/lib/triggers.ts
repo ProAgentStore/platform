@@ -63,6 +63,9 @@ export interface TriggerConfig {
 	/** run_browse: the start URL for the scheduled browser task (#172), + optional dry-run. */
 	url?: string;
 	dryRun?: boolean;
+	/** cron: randomise the fire time by ± this many minutes so runs don't land exactly on
+	 *  the dot (an automation fingerprint). 0/absent = fire on schedule. */
+	jitterMinutes?: number;
 }
 
 const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse"]);
@@ -159,6 +162,17 @@ function addMinutes(date: Date, minutes: number): Date {
 	return new Date(date.getTime() + minutes * 60_000);
 }
 
+/** Offset a scheduled time by a random ± jitter (minutes) so recurring runs don't fire
+ *  exactly on the dot — a cheap anti-pattern defense for automation. Clamped to ≥ 1 min
+ *  in the future so jitter can never schedule a run in the past. */
+export function applyJitter(iso: string, jitterMinutes?: number): string {
+	const j = typeof jitterMinutes === "number" && jitterMinutes > 0 ? Math.min(jitterMinutes, 720) : 0;
+	if (!j) return iso;
+	const offsetMs = (Math.random() * 2 - 1) * j * 60_000;
+	const floor = Date.now() + 60_000;
+	return new Date(Math.max(Date.parse(iso) + offsetMs, floor)).toISOString();
+}
+
 function nextDaily(base: Date, hour: number): Date {
 	const next = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), hour, 0, 0, 0));
 	if (next <= base) next.setUTCDate(next.getUTCDate() + 1);
@@ -207,6 +221,7 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			collection: typeof parsed.collection === "string" ? parsed.collection.slice(0, 200) : undefined,
 			url: typeof parsed.url === "string" ? parsed.url.slice(0, 2000) : undefined,
 			dryRun: parsed.dryRun === true ? true : undefined,
+			jitterMinutes: typeof parsed.jitterMinutes === "number" ? Math.max(0, Math.min(Math.trunc(parsed.jitterMinutes), 720)) : undefined,
 		};
 	} catch {
 		return {};
@@ -401,7 +416,7 @@ export async function runDueTriggers(env: Env, now = new Date(), limit = 25): Pr
 	let dispatched = 0;
 	let failed = 0;
 	for (const trigger of results ?? []) {
-		const next = trigger.schedule ? nextRunAt(trigger.schedule, now) : null;
+		const next = trigger.schedule ? applyJitter(nextRunAt(trigger.schedule, now), parseConfig(trigger.config).jitterMinutes) : null;
 		// Atomic claim (compare-and-swap on next_run_at): the "* * * * *" cron can have
 		// overlapping scheduled() invocations, and a plain WHERE id=? UPDATE let BOTH read the
 		// same due row and dispatch it → duplicate tasks/knowledge. Advance only if next_run_at

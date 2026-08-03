@@ -180,6 +180,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [triggerType, setTriggerType] = useState<"webhook" | "cron">("webhook");
 	const [triggerAction, setTriggerAction] = useState<TriggerActionType>("create_task");
 	const [browseTriggerUrl, setBrowseTriggerUrl] = useState("");
+	const [triggerJitter, setTriggerJitter] = useState("");
 	const [triggerSchedule, setTriggerSchedule] = useState("@daily");
 	const [triggerConnectorProvider, setTriggerConnectorProvider] = useState<ConnectorProviderType>("google_drive");
 	const [triggerConnectorGrantId, setTriggerConnectorGrantId] = useState("");
@@ -556,6 +557,15 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					: triggerAction === "run_browse" ? "Scheduled browser run"
 					: triggerType === "webhook" ? "Inbound webhook" : "Scheduled run"
 			);
+			const actionConfig =
+				triggerAction === "sync_connector" ? { provider: triggerConnectorProvider, grantId: syncGrantId }
+					: triggerAction === "run_pipeline" ? { pipeline }
+						: triggerAction === "insert_record" ? { collection }
+							: triggerAction === "run_browse" ? { url: browseUrl }
+								: undefined;
+			// Jitter is cron-only and applies to any action — merge it onto the action config.
+			const jitterMin = triggerType === "cron" && triggerJitter.trim() ? Math.max(0, Math.min(Math.trunc(Number(triggerJitter) || 0), 720)) : 0;
+			const config = jitterMin ? { ...(actionConfig || {}), jitterMinutes: jitterMin } : actionConfig;
 			await api("/v1/triggers", {
 				method: "POST",
 				body: JSON.stringify({
@@ -564,12 +574,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					type: triggerType,
 					action: triggerAction,
 					schedule: triggerType === "cron" ? triggerSchedule : undefined,
-					config:
-						triggerAction === "sync_connector" ? { provider: triggerConnectorProvider, grantId: syncGrantId }
-							: triggerAction === "run_pipeline" ? { pipeline }
-								: triggerAction === "insert_record" ? { collection }
-									: triggerAction === "run_browse" ? { url: browseUrl }
-										: undefined,
+					config,
 				}),
 			});
 			setTriggerName("");
@@ -1067,7 +1072,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 						<span className="text-xs font-semibold">Schedule</span>
 						<input disabled={triggerType !== "cron"} value={triggerSchedule} onChange={(e) => setTriggerSchedule(e.target.value)} placeholder="@daily" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full disabled:opacity-50" />
 					</label>
-					<button type="button" onClick={createTrigger} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold">Add</button>
+					<label className="flex flex-col gap-1">
+							<span className="text-xs font-semibold">Jitter ± min</span>
+							<input disabled={triggerType !== "cron"} value={triggerJitter} onChange={(e) => setTriggerJitter(e.target.value)} placeholder="0 (on the dot)" title="Randomise the fire time by ± this many minutes so it doesn't run exactly on schedule." className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full disabled:opacity-50" />
+						</label>
+						<button type="button" onClick={createTrigger} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold">Add</button>
 				</div>
 				{triggerAction === "sync_connector" && (
 					<div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-end mb-4">

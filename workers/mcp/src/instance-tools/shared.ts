@@ -29,6 +29,7 @@ export const triggerConfigSchema = z.object({
 	collection: z.string().optional(),
 	url: z.string().optional().describe("run_browse: the start URL for the scheduled browser task."),
 	dry_run: z.boolean().optional().describe("run_browse: walk the flow but block the committing clicks."),
+	jitter_minutes: z.number().int().min(0).max(720).optional().describe("cron: randomise the fire time by ± this many minutes (avoid firing exactly on the dot)."),
 }).optional();
 
 export interface InstanceSummary {
@@ -76,6 +77,7 @@ export function normalizeTriggerConfig(
 	if (config.collection !== undefined) out.collection = config.collection;
 	if (config.url !== undefined) out.url = config.url;
 	if (config.dry_run !== undefined) out.dryRun = config.dry_run;
+	if (config.jitter_minutes !== undefined) out.jitterMinutes = config.jitter_minutes;
 	return out;
 }
 

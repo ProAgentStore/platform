@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { HttpError } from "./auth.js";
 import { encryptKey } from "./crypto.js";
-import { dispatchTrigger, nextRunAt, normalizeSchedule, publicWebhookUrl, type TriggerRow } from "./triggers.js";
+import { applyJitter, dispatchTrigger, nextRunAt, normalizeSchedule, publicWebhookUrl, type TriggerRow } from "./triggers.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
 import { startBrowserTask } from "../routes/instances-browse.js";
 import type { Env } from "../types.js";
@@ -315,5 +315,23 @@ describe("trigger action: run_browse (#172)", () => {
 		const env = baseEnv();
 		(startBrowserTask as Mock).mockRejectedValue(Object.assign(new Error("boom"), { status: 500 }));
 		await expect(dispatchTrigger(env, browseTrigger({ url: "https://x.test/go" }), "cron", {})).rejects.toThrow(/boom/);
+	});
+});
+
+describe("applyJitter (#172 schedule jitter)", () => {
+	it("returns the exact time when jitter is 0 / absent", () => {
+		const iso = new Date(Date.now() + 3_600_000).toISOString();
+		expect(applyJitter(iso)).toBe(iso);
+		expect(applyJitter(iso, 0)).toBe(iso);
+	});
+
+	it("offsets within ± the jitter window and never schedules in the past", () => {
+		const base = Date.now() + 3_600_000;
+		const iso = new Date(base).toISOString();
+		for (let i = 0; i < 50; i++) {
+			const t = Date.parse(applyJitter(iso, 30));
+			expect(Math.abs(t - base)).toBeLessThanOrEqual(30 * 60_000 + 1000);
+			expect(t).toBeGreaterThan(Date.now());
+		}
 	});
 });
