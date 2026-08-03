@@ -124,6 +124,38 @@ toolRoutes.post("/:id/pipelines/:name/run", async (c) => {
 });
 
 /**
+ * PUT /v1/instances/:id/pipelines/:name — ATTACH (or replace) a declarative pipeline on
+ * this instance. Definitions live in `config.pipelines[name]` (data, not code) and are the
+ * only thing `run_pipeline`/…/run read — but nothing could set them per-instance, so a
+ * runner-less agent could never be made runnable. Owner-authenticated; the body IS the
+ * PipelineDef, rejected with 400 if `validatePipeline` fails.
+ */
+toolRoutes.put("/:id/pipelines/:name", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
+	const name = c.req.param("name");
+	const def = await c.req.json().catch(() => null);
+	const err = validatePipeline(def);
+	if (err !== null) throw new HttpError(400, `Invalid pipeline: ${typeof err === "string" ? err : JSON.stringify(err)}`);
+	let cfg: Record<string, unknown> = {};
+	try {
+		cfg = JSON.parse(instance.config || "{}") as Record<string, unknown>;
+	} catch {
+		cfg = {};
+	}
+	const pipelines = (cfg.pipelines && typeof cfg.pipelines === "object" ? cfg.pipelines : {}) as Record<string, unknown>;
+	pipelines[name] = def;
+	cfg.pipelines = pipelines;
+	const serialized = JSON.stringify(cfg);
+	if (serialized.length > 256_000) throw new HttpError(413, "Instance config too large");
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(serialized, instanceId, session.uid)
+		.run();
+	return c.json({ ok: true, name });
+});
+
+/**
  * GET /v1/instances/:id/pipeline-runs — run observability (#98). Lists this instance's
  * pipeline runs (most recent first) with counts + status, owner-scoped. `pipeline` narrows
  * to one pipeline's history; `limit` caps rows. Per-record audit rides on each record's

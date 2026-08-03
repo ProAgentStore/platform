@@ -198,6 +198,41 @@ describe("POST /v1/instances/:id/pipelines/:name/run (issue #97)", () => {
 	});
 });
 
+describe("PUT /v1/instances/:id/pipelines/:name (attach a pipeline — the missing write path)", () => {
+	const DEF = STORED_PIPELINE.pipelines.sweep;
+
+	it("owner-gated: 404s when the instance isn't owned", async () => {
+		const { app, env } = testApp({ owned: false });
+		const res = await req(app, env, "/v1/instances/i1/pipelines/lead_finder", { method: "PUT", body: JSON.stringify(DEF) }, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	it("400s an invalid pipeline definition", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/pipelines/lead_finder", { method: "PUT", body: JSON.stringify({ not: "a pipeline" }) }, await tok("u1"));
+		expect(res.status).toBe(400);
+	});
+
+	it("attaches a valid pipeline under the requested name → 200 (it can then be run)", async () => {
+		let written = "";
+		const create = async () => ({ id: "x" });
+		const { app, env } = testApp({ config: "{}", create });
+		// capture the config UPDATE the route performs
+		(env.DB as { prepare: (s: string) => unknown }).prepare = (sql: string) => ({
+			bind: (...args: unknown[]) => ({
+				first: async () => (sql.includes("FROM agent_instances") ? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}" } : null),
+				run: async () => { if (sql.includes("UPDATE agent_instances")) written = String(args[0]); return {}; },
+				all: async () => ({ results: [] }),
+			}),
+		});
+		const res = await req(app, env, "/v1/instances/i1/pipelines/lead_finder", { method: "PUT", body: JSON.stringify(DEF) }, await tok("u1"));
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ ok: true, name: "lead_finder" });
+		// the def landed under config.pipelines.lead_finder — where loadPipeline reads it
+		expect(JSON.parse(written).pipelines.lead_finder.name).toBe("sweep");
+	});
+});
+
 describe("GET /v1/instances/:id/pipeline-runs (issue #98)", () => {
 	it("404s when the instance isn't owned", async () => {
 		const { app, env } = testApp({ owned: false });
