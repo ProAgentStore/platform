@@ -23,10 +23,15 @@ function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknow
 				return {
 					bind() {
 						return {
-							first: async () =>
-								sql.includes("FROM agent_instances") && (opts.owned ?? true)
+							first: async () => {
+								// Supervision (#183): the read-back after INSERT.
+								if (sql.includes("FROM agent_supervision")) {
+									return { id: "sup1", user_id: "u1", supervisor_instance_id: "i1", subordinate_instance_id: "i2", enabled: 1, config: "{}", created_at: "", updated_at: "" };
+								}
+								return sql.includes("FROM agent_instances") && (opts.owned ?? true)
 									? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config, created_at: "", updated_at: "" }
-									: null,
+									: null;
+							},
 							// logEvent (pipeline audit) does a .run() insert — must not throw.
 							run: async () => ({}),
 							// listRuns (#98) reads via .all(); return the seeded runs for the
@@ -250,5 +255,49 @@ describe("GET /v1/instances/:id/pipeline-runs (issue #98)", () => {
 		expect(body.runs[0].pipeline).toBe("leads");
 		expect(body.runs[0].seen).toBe(3);
 		expect(body.runs[0].params).toEqual({ city: "Sydney" });
+	});
+});
+
+describe("supervision edges (#183)", () => {
+	const tok = () => signSession({ uid: "u1", roles: ["user"] }, SECRET);
+
+	const post = async (body: unknown, owned = true) => {
+		const { app, env } = testApp({ owned });
+		return app.request("/v1/instances/i1/supervision", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tok()}`, "Content-Type": "application/json" },
+			body: JSON.stringify(body),
+		}, env);
+	};
+
+	it("wires a supervisor over a subordinate", async () => {
+		const res = await post({ subordinateInstanceId: "i2" });
+		expect(res.status).toBe(201);
+		expect(await res.json()).toMatchObject({ supervisorInstanceId: "i1", subordinateInstanceId: "i2" });
+	});
+
+	it("refuses self-supervision at wiring time", async () => {
+		// The rule is enforced when the human is present, not discovered at 3am as an
+		// unbounded delegation loop that spends real money.
+		const res = await post({ subordinateInstanceId: "i1" });
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toContain("cannot supervise itself");
+	});
+
+	it("requires a subordinate", async () => {
+		expect((await post({})).status).toBe(400);
+	});
+
+	it("404s when the caller does not own the supervisor instance", async () => {
+		expect((await post({ subordinateInstanceId: "i2" }, false)).status).toBe(404);
+	});
+
+	it("lists a supervisor's edges", async () => {
+		const { app, env } = testApp();
+		const res = await app.request("/v1/instances/i1/supervision", {
+			headers: { Authorization: `Bearer ${await tok()}` },
+		}, env);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toHaveProperty("supervision");
 	});
 });

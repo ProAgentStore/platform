@@ -8,6 +8,7 @@ import { validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import { listRuns } from "../lib/pipeline-runs.js";
 import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
+import { listSupervision, createSupervision, deleteSupervision } from "../lib/supervision.js";
 import type { TriggerAction } from "../lib/triggers.js";
 import type { Env } from "../types.js";
 
@@ -281,4 +282,48 @@ toolRoutes.put("/:id/connectors/:connector/consent", async (c) => {
 	if (body.enabled) await setConsent(c.env, instanceId, session.uid, connector, "write");
 	else await revokeConsent(c.env, instanceId, connector, "write");
 	return c.json({ ok: true, connector, scope: "write", enabled: !!body.enabled });
+});
+
+/**
+ * Supervision edges (#183, migration 0060) — who supervises whom, as configured data rather
+ * than one agent's hardcoded structure. Scoped to the SUPERVISOR instance, mirroring how the
+ * connection routes scope to the source.
+ *
+ * Deliberately separate from /connections: that is choreography (emit a FACT, consumers unknown),
+ * this is delegation (name a subordinate, hand it a goal, own the result). Same delivery
+ * substrate, different edge.
+ */
+toolRoutes.get("/:id/supervision", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json({ supervision: await listSupervision(c.env, session.uid, { supervisorInstanceId: instanceId }) });
+});
+
+toolRoutes.post("/:id/supervision", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as {
+		subordinateInstanceId?: string;
+		config?: Record<string, unknown>;
+	};
+	// Every rejection here (cycle, tower, fan-out, two managers) is invisible at run time until
+	// it has already spent money, so it is surfaced now, while the human is looking at the form.
+	const res = await createSupervision(c.env, session.uid, {
+		supervisorInstanceId: instanceId,
+		subordinateInstanceId: String(body.subordinateInstanceId ?? ""),
+		config: body.config,
+	});
+	if (!res.ok) throw new HttpError(res.status as 400, res.error);
+	return c.json(res.supervision, 201);
+});
+
+toolRoutes.delete("/:id/supervision/:sid", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const removed = await deleteSupervision(c.env, session.uid, c.req.param("sid"));
+	if (!removed) throw new HttpError(404, "supervision link not found");
+	return c.json({ ok: true });
 });
