@@ -15,6 +15,12 @@ export interface RegistryToolCtx {
 	agentId?: string;
 	instanceId?: string;
 	/**
+	 * The run this tool call belongs to (a pipeline run id). Carried so a step that emits an
+	 * agent-to-agent event can stamp the emitting run onto the delivery — choreography is
+	 * otherwise undebuggable, because nothing links the source run to the run it set off.
+	 */
+	traceId?: string;
+	/**
 	 * The connector client factory (issue #86) — handlers call
 	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
 	 * grant/scope, instead of importing token-minting fns directly. Injected by

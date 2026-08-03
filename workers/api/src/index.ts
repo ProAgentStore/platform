@@ -44,6 +44,7 @@ import { toolRoutes } from "./routes/tools.js";
 import { connectorRoutes } from "./routes/connectors.js";
 import { cloudflareAccessGate } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
+import { runDueDeliveries } from "./lib/connections.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
@@ -189,6 +190,12 @@ export default {
 		// trigger sweep is visible in the admin Errors view instead of vanishing.
 		ctx.waitUntil(
 			runDueTriggers(env).catch((err) => logUnhandled(env, err, { path: "scheduled:triggers", method: "CRON" })),
+		);
+		// Retry agent-to-agent deliveries whose target failed (migration 0058). Separate
+		// waitUntil so a broken trigger sweep can't stop the pump from draining, and vice
+		// versa — these are independent failure domains.
+		ctx.waitUntil(
+			runDueDeliveries(env).catch((err) => logUnhandled(env, err, { path: "scheduled:deliveries", method: "CRON" })),
 		);
 	},
 };

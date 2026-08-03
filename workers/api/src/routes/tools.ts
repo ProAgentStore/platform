@@ -7,6 +7,7 @@ import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import { listRuns } from "../lib/pipeline-runs.js";
 import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
+import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import type { TriggerAction } from "../lib/triggers.js";
 import type { Env } from "../types.js";
 
@@ -208,6 +209,46 @@ toolRoutes.post("/:id/connections", async (c) => {
 	});
 	if (!res.ok) throw new HttpError(res.status as 400, res.error);
 	return c.json(res.connection, 201);
+});
+
+/**
+ * The pump's delivery log (migration 0058) — what each connection actually delivered, what is
+ * queued for retry, and what died. Without this a chain fails invisibly: the emitting agent
+ * looks fine, the consuming agent simply never ran, and nothing says why. Owner-scoped, and
+ * account-wide rather than per-connection because "what is stuck anywhere" is the question
+ * you actually have. Filter with ?status=pending|delivered|dead.
+ */
+toolRoutes.get("/:id/connections/deliveries", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const status = c.req.query("status");
+	const limit = Number(c.req.query("limit") ?? 50);
+	const rows = await listDeliveries(c.env, session.uid, { status: status || undefined, limit });
+	return c.json({
+		deliveries: rows.map((r) => ({
+			id: r.id,
+			connectionId: r.connection_id,
+			eventType: r.event_type,
+			action: r.action,
+			targetInstanceId: r.target_instance_id,
+			status: r.status,
+			attempts: r.attempts,
+			nextAttemptAt: r.next_attempt_at,
+			lastError: r.last_error,
+			traceId: r.trace_id,
+			createdAt: r.created_at,
+			updatedAt: r.updated_at,
+		})),
+	});
+});
+
+/** Re-arm a dead delivery. The manual escape hatch for "the dependency is back up now". */
+toolRoutes.post("/:id/connections/deliveries/:did/replay", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const ok = await replayDelivery(c.env, session.uid, c.req.param("did"));
+	if (!ok) throw new HttpError(404, "no dead delivery with that id");
+	return c.json({ ok: true, status: "pending" });
 });
 
 toolRoutes.delete("/:id/connections/:cid", async (c) => {

@@ -231,7 +231,37 @@ describe("trigger actions: run_pipeline + insert_record (#92)", () => {
 		expect(res.ok).toBe(true);
 		// The whole point of #92: cron/webhook → durable pipeline, pipeline resolved by NAME from
 		// config (data-driven, no capability-union edit), payload passed through as run params.
-		expect(startPipelineRun).toHaveBeenCalledWith(env, "inst-1", "user-1", "lead-sweep", { city: "Austin" }, "trigger");
+		// The trailing null is the parent trace: a cron/webhook trigger has no upstream run.
+		// It is non-null only when the CONNECTION pump delivered the event, which is what
+		// joins a chain's runs together.
+		expect(startPipelineRun).toHaveBeenCalledWith(env, "inst-1", "user-1", "lead-sweep", { city: "Austin" }, "trigger", null);
+	});
+
+	it("carries the emitting run into the child run when a CONNECTION delivered the event", async () => {
+		// Choreography's weak point: without this a chain is N runs with nothing joining them,
+		// and "why didn't outreach fire?" has no single place to look.
+		const { env } = baseEnv();
+		(startPipelineRun as Mock).mockResolvedValue({ ok: true, runId: "run-child", workflowId: "wf-2" });
+		await dispatchTrigger(env, pipelineTrigger({ pipeline: "draft_outreach", traceId: "run-parent" }), "webhook", { place_id: "p1" });
+		expect(startPipelineRun).toHaveBeenCalledWith(env, "inst-1", "user-1", "draft_outreach", { place_id: "p1" }, "trigger", "run-parent");
+	});
+
+	it("merges the connection's static params UNDER the event payload", async () => {
+		// Wiring-level config (which endpoint, which template) that the inbound record can't
+		// carry — but a field present on the record still wins.
+		const { env } = baseEnv();
+		(startPipelineRun as Mock).mockResolvedValue({ ok: true, runId: "run-child", workflowId: "wf-3" });
+		await dispatchTrigger(
+			env,
+			pipelineTrigger({ pipeline: "site-builder", params: { mcpUrl: "https://b.example/mcp", place_id: "from-config" } }),
+			"webhook",
+			{ place_id: "from-event" },
+		);
+		expect(startPipelineRun).toHaveBeenCalledWith(
+			env, "inst-1", "user-1", "site-builder",
+			{ mcpUrl: "https://b.example/mcp", place_id: "from-event" },
+			"trigger", null,
+		);
 	});
 
 	it("run_pipeline surfaces a missing/invalid pipeline as a failed run (throws)", async () => {

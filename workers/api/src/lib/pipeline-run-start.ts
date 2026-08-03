@@ -25,12 +25,21 @@ export async function startPipelineRun(
 	name: string,
 	params: Record<string, unknown>,
 	trigger: StartTrigger,
+	/** The run that CAUSED this one, when a connection delivered the event that started it.
+	 *  Kept so a chain (lead → site → outreach) can be followed across agents; choreography
+	 *  otherwise leaves N disconnected runs with nothing joining them. */
+	parentTraceId?: string | null,
 ): Promise<StartResult> {
 	const pipeline = await loadPipeline(env, instanceId, userId, name);
 	if (!pipeline) return { ok: false, error: `No pipeline named "${name}" is configured on this agent (or its definition is invalid).` };
 	const runId = crypto.randomUUID();
 	// Audit the start BEFORE the kick so a failed create still leaves a record of who asked.
-	await logEvent(env, { source: "pipeline", event: "pipeline.requested", message: `Start "${name}" via ${trigger}`, userId, instanceId, traceId: runId, context: { pipeline: name, trigger, params } }).catch(() => undefined);
+	await logEvent(env, { source: "pipeline", event: "pipeline.requested", message: `Start "${name}" via ${trigger}`, userId, instanceId, traceId: runId, context: { pipeline: name, trigger, params, ...(parentTraceId ? { parentTraceId } : {}) } }).catch(() => undefined);
+	// The join between the two runs, logged under the PARENT's trace so following the chain
+	// forward is one query: the parent's trace names the run it set off.
+	if (parentTraceId) {
+		await logEvent(env, { source: "connection", event: "chain.link", message: `${trigger} → "${name}" (run ${runId})`, userId, instanceId, traceId: parentTraceId, context: { pipeline: name, childRunId: runId, instanceId } }).catch(() => undefined);
+	}
 	// Open the run RECORD (issue #98) at kick, status 'running'. The workflow updates counts
 	// + closes it. Opening here (not in the workflow) means a run that fails to start still
 	// leaves a row, and the row exists before the first step runs.

@@ -218,6 +218,18 @@ function runFilter(item: unknown, where: FilterClause[], any: boolean): boolean 
 	return any ? where.some((c) => evalClause(item, c)) : where.every((c) => evalClause(item, c));
 }
 
+/**
+ * The `filter` step's predicate, reusable outside a pipeline. Exported so a CONNECTION can
+ * route on the same `[{field,op,value}]` vocabulary a pipeline filters with ("only leads in
+ * Sydney with rating >= 4") — one predicate language for the whole system rather than a
+ * second, subtly-different one for routing. Non-array `where` (or an empty one) matches
+ * everything, so an unfiltered connection behaves exactly as before.
+ */
+export function matchesWhere(item: unknown, where: unknown, any = false): boolean {
+	const clauses = (Array.isArray(where) ? where : []).filter(isRecord) as unknown as FilterClause[];
+	return runFilter(item, clauses, any);
+}
+
 // ── 4b. grid fan-out (pure) ──────────────────────────────────────────────────
 // Yield the cell centres of a square grid around a point: (2n+1)² cells stepping by
 // `stepKm` out to ±`extentKm`, converting km → degrees (lat: 111km/°, lng: scaled by
@@ -506,7 +518,7 @@ export const STEP_TOOLS: ToolDef[] = [
 			if (emit && payloads.length && ctx.userId) {
 				try {
 					const { deliverEvent } = await import("./connections.js");
-					const r = await deliverEvent(ctx.env, ctx.instanceId, ctx.userId, emit, payloads);
+					const r = await deliverEvent(ctx.env, ctx.instanceId, ctx.userId, emit, payloads, { traceId: ctx.traceId ?? null });
 					emitted = r.delivered;
 				} catch { /* pump failure never breaks the sink */ }
 			}

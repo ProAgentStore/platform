@@ -66,6 +66,9 @@ export interface TriggerConfig {
 	/** cron: randomise the fire time by ± this many minutes so runs don't land exactly on
 	 *  the dot (an automation fingerprint). 0/absent = fire on schedule. */
 	jitterMinutes?: number;
+	/** Set by the connection pump: the run that emitted the event, so the run this action
+	 *  starts can be joined to it in the trace. Not user-configured. */
+	traceId?: string;
 	/** run_pipeline: static run params belonging to the WIRING rather than the event (e.g.
 	 *  which endpoint / which template). Merged UNDER the event payload, so a field present
 	 *  on the inbound record always wins. */
@@ -226,6 +229,13 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			url: typeof parsed.url === "string" ? parsed.url.slice(0, 2000) : undefined,
 			dryRun: parsed.dryRun === true ? true : undefined,
 			jitterMinutes: typeof parsed.jitterMinutes === "number" ? Math.max(0, Math.min(Math.trunc(parsed.jitterMinutes), 720)) : undefined,
+			// parseConfig is a whitelist, so a field absent here is silently dropped. Both of
+			// these must survive it or run_pipeline behaves differently depending on whether the
+			// event arrived via a stored trigger (parsed here) or the connection pump (which
+			// passes its config object straight through) — the sort of split that is very hard
+			// to debug from the outside.
+			params: parsed.params && typeof parsed.params === "object" && !Array.isArray(parsed.params) ? (parsed.params as Record<string, unknown>) : undefined,
+			traceId: typeof parsed.traceId === "string" ? parsed.traceId.slice(0, 200) : undefined,
 		};
 	} catch {
 		return {};
@@ -318,7 +328,9 @@ export async function executeTriggerAction(
 		// connection can't inject config into someone else's payload.
 		const staticParams = isRecord(config.params) ? config.params : {};
 		const params = { ...staticParams, ...payloadRecord(payload) };
-		const res = await startPipelineRun(env, target.instance_id, target.user_id, name, params, "trigger");
+		// A connection stamps the emitting run onto config.traceId — carry it into the child run.
+		const parentTraceId = typeof config.traceId === "string" ? config.traceId : null;
+		const res = await startPipelineRun(env, target.instance_id, target.user_id, name, params, "trigger", parentTraceId);
 		if (!res.ok) throw new Error(res.error);
 		resultPayload = { pipeline: name, runId: res.runId, workflowId: res.workflowId };
 	} else if (target.action === "insert_record") {

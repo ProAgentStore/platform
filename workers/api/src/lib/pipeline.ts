@@ -219,6 +219,8 @@ export interface PipelineRunCtx {
 	env: Env;
 	userId: string;
 	instanceId: string;
+	/** The run id, forwarded to steps so an emitting step can stamp it on its deliveries. */
+	traceId?: string;
 }
 
 /**
@@ -238,7 +240,7 @@ export async function executePipelineStep(
 	params: Record<string, unknown>,
 ): Promise<StepResult> {
 	const bind = stepBind(step, index);
-	const registryCtx = { env: ctx.env, userId: ctx.userId, instanceId: ctx.instanceId };
+	const registryCtx = { env: ctx.env, userId: ctx.userId, instanceId: ctx.instanceId, traceId: ctx.traceId };
 
 	if (step.forEach !== undefined) {
 		const list = resolveInputValue(step.forEach, { outputs, params });
