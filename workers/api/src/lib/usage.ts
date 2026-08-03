@@ -14,6 +14,8 @@ export type UsageKind =
 	| "resume"
 	| "translate"
 	| "voice"
+	// Declarative pipeline LLM step (ai_generate) — e.g. the Outreach agent drafting per lead.
+	| "pipeline"
 	// Platform-paid internal AI (issue #44), billed to the platform, not BYOK.
 	| "embedding"
 	| "summary";

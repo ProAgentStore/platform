@@ -653,4 +653,60 @@ export const STEP_TOOLS: ToolDef[] = [
 			return ok(JSON.stringify(out, null, 2));
 		},
 	},
+
+	// 8 ─ ai_generate — the pipeline's LLM step. Draft text per record with the owner's BYOK
+	// model (Anthropic Claude, else their CF Workers AI) — no platform spend. For each item,
+	// render `prompt` ({{field}} from the item) and write the reply to `as`. The Outreach agent's
+	// "draft a message per lead" step. Best-effort per item (a failure leaves `as` empty).
+	{
+		name: "ai_generate",
+		tier: "standard",
+		scope: "read",
+		description:
+			"Generate text per record with the owner's BYOK model. For each item, render `prompt` ({{field}} / {{a.b}} interpolation from the item) and write the model's reply to the `as` field (default \"text\"). Optional `system` prompt, `model` (default claude-sonnet-4-6), `maxTokens` (default 500). The pipeline's LLM step — e.g. draft an outreach message per lead. Best-effort per item: a generation failure leaves `as` empty and never fails the batch.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				items: { type: "array", description: "Records to generate for (a single object is treated as one)." },
+				prompt: { type: "string", description: "User prompt; {{field}} / {{a.b}} interpolate from each item." },
+				system: { type: "string", description: "Optional system prompt (persona / rules)." },
+				as: { type: "string", description: 'Output field to write the generated text to (default "text").' },
+				model: { type: "string", description: "BYOK model id (default claude-sonnet-4-6)." },
+				maxTokens: { type: "number", description: "Max output tokens per item (default 500)." },
+			},
+			required: ["prompt"],
+		},
+		handler: async (ctx, input) => {
+			const items = asArray(input.items).filter(isRecord) as Record<string, unknown>[];
+			const template = String(input.prompt || "");
+			if (!template) return fail("prompt is required.");
+			if (!ctx.userId) return fail("ai_generate needs an owner context (BYOK model).");
+			const as = typeof input.as === "string" && input.as ? input.as : "text";
+			const system = typeof input.system === "string" ? input.system : "";
+			const model = typeof input.model === "string" && input.model ? input.model : "claude-sonnet-4-6";
+			const maxTokens = Number.isFinite(input.maxTokens) ? Number(input.maxTokens) : 500;
+			// Deferred import keeps steps.ts free of the user-ai import graph at module load.
+			const { runUserWorkersAi } = await import("./user-ai.js");
+			const render = (t: string, item: Record<string, unknown>): string =>
+				t.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, k: string) => {
+					const v = getPath(item, k);
+					return v == null ? "" : String(v);
+				});
+			const out: Record<string, unknown>[] = [];
+			let generated = 0;
+			for (const item of items) {
+				const messages: Array<{ role: string; content: string }> = [];
+				if (system) messages.push({ role: "system", content: render(system, item) });
+				messages.push({ role: "user", content: render(template, item) });
+				try {
+					const r = (await runUserWorkersAi(ctx.env, ctx.userId, model, { messages, maxTokens }, { kind: "pipeline", instanceId: ctx.instanceId })) as { response?: string };
+					out.push({ ...item, [as]: r.response || "" });
+					if (r.response) generated++;
+				} catch {
+					out.push({ ...item, [as]: "" }); // best-effort: never fail the batch
+				}
+			}
+			return ok(JSON.stringify({ items: out, count: out.length, generated }, null, 2));
+		},
+	},
 ];
