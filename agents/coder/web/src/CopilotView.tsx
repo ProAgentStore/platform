@@ -128,8 +128,9 @@ export default function CopilotView({
 	});
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
-			{/* Input bar — top, always visible. Compact input, big controls. */}
-			<div className="flex gap-1.5 px-2 pt-2 pb-1 shrink-0 items-center">
+			{/* Input bar — top, always visible. Compact input, big controls. relative z-10 keeps it
+			    above the floating status pill so nothing can intercept a tap on Send (#163). */}
+			<div className="relative z-10 flex gap-1.5 px-2 pt-2 pb-1 shrink-0 items-center">
 				<div className="flex-1 min-w-0 relative">
 					<input
 						value={voice.interim || chatInput}
@@ -148,8 +149,11 @@ export default function CopilotView({
 				<button type="button" onClick={openEdit} disabled={!!voice.interim} aria-label="Edit full message" title="Edit / preview the full message" className="px-3 py-2 border border-line text-muted hover:border-accent hover:text-accent rounded-lg font-bold disabled:opacity-40 shrink-0">
 					<Pencil size={17} />
 				</button>
-				<button type="button" onClick={sendInstruction} disabled={!!voice.interim} aria-label="Send" className="px-3 py-2 bg-accent text-white rounded-lg font-bold disabled:opacity-40 shrink-0">
-					<Send size={17} />
+				{/* Send: clickable in listening mode (only disabled while a reply is generating), with
+				    an immediate pressed state (active:scale-95) and a spinner while processing so a
+				    tap always gives visible feedback (#163). */}
+				<button type="button" onClick={sendInstruction} disabled={summaryBusy} aria-label={summaryBusy ? "Sending…" : "Send"} className="px-3 py-2 bg-accent text-white rounded-lg font-bold disabled:opacity-40 shrink-0 active:scale-95 transition-transform">
+					{summaryBusy ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
 				</button>
 			</div>
 			{/* Live transcript — show the user exactly what's being heard. */}
