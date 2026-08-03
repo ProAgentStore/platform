@@ -8,6 +8,7 @@ import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./registry.js";
 import { githubAppConfigured } from "../github-app.js";
 import { listIssues, readIssue } from "../github-issues.js";
+import { fetchWorkflowRuns, mapWorkflowRun } from "../github-actions.js";
 
 const GH = (token: string) => ({
 	Authorization: `token ${token}`,
@@ -47,19 +48,11 @@ const workflowRunsHandler: ToolDef["handler"] = async (ctx, input) => {
 	const r = await resolveRepo(ctx, repo);
 	if ("error" in r) return { content: r.error, success: false };
 	const n = Math.min(Math.max(Number(input.per_page) || 5, 1), 20);
-	const res = await fetch(`https://api.github.com/repos/${repo}/actions/runs?per_page=${n}`, { headers: GH(r.token) });
-	if (!res.ok) return { content: `GitHub returned ${res.status} for ${repo}`, success: false };
-	const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
-	const runs = (data.workflow_runs || []).map((run) => ({
-		status: run.status,
-		conclusion: run.conclusion ?? null,
-		name: run.name ?? "",
-		runNumber: run.run_number ?? null,
-		branch: run.head_branch ?? "",
-		sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
-		url: run.html_url ?? "",
-		updatedAt: run.updated_at ?? "",
-	}));
+	const res = await fetchWorkflowRuns(repo, r.token, { perPage: n });
+	if ("status" in res) {
+		return { content: res.status != null ? `GitHub returned ${res.status} for ${repo}` : `Could not reach GitHub for ${repo}`, success: false };
+	}
+	const runs = res.runs.map(mapWorkflowRun);
 	return { content: JSON.stringify(runs, null, 2), success: true };
 };
 

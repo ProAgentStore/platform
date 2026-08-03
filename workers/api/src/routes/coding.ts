@@ -4,6 +4,7 @@ import { requirePro } from "../lib/billing.js";
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
 import { githubAppConfigured, installationTokenForOwner } from "../lib/github-app.js";
 import { computeETag, mergeRuns, persistBuildHistory, readBuildHistory, type BuildRun } from "../lib/build-history.js";
+import { fetchWorkflowRuns, mapWorkflowRun } from "../lib/github-actions.js";
 import { listIssues, readIssue, type IssueDetail } from "../lib/github-issues.js";
 import { getUserProviderKey, runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
@@ -438,32 +439,6 @@ codingRoutes.put("/:instanceId/coding/repos/:repoId/instructions", async (c) => 
 	return c.json({ instructions });
 });
 
-/** GitHub API headers. With a token = authenticated (installation token); without = an
- *  UNAUTHENTICATED request (public repos only, ~60/hr shared IP limit) — never send a token
- *  on that path. */
-function githubHeaders(token?: string): Record<string, string> {
-	return {
-		...(token ? { Authorization: `token ${token}` } : {}),
-		Accept: "application/vnd.github+json",
-		"X-GitHub-Api-Version": "2022-11-28",
-		"User-Agent": "proagentstore-coding/1.0",
-	};
-}
-
-/** Map one raw GitHub Actions run into the compact BuildRun the console consumes. */
-function mapWorkflowRun(run: Record<string, unknown>): BuildRun {
-	return {
-		status: run.status, // queued | in_progress | completed
-		conclusion: run.conclusion ?? null, // success | failure | cancelled | null
-		name: run.name ?? "",
-		runNumber: typeof run.run_number === "number" ? run.run_number : null,
-		url: typeof run.html_url === "string" ? run.html_url : "",
-		branch: typeof run.head_branch === "string" ? run.head_branch : "",
-		sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
-		updatedAt: typeof run.updated_at === "string" ? run.updated_at : "",
-	};
-}
-
 /**
  * Latest GitHub Actions run for an `owner/repo`, for a verified installation. Returns
  * `{ available:false }` (never throws) for a non-GitHub repo, a missing/failed installation
@@ -474,11 +449,9 @@ async function latestRunFor(env: Env, uid: string, full: string | undefined): Pr
 	const owner = full.split("/")[0];
 	const token = await installationTokenForOwner(env, uid, owner).catch(() => null);
 	if (!token) return { available: false, run: null };
-	const res = await fetch(`https://api.github.com/repos/${full}/actions/runs?per_page=1`, { headers: githubHeaders(token) });
-	if (!res.ok) return { available: false, run: null };
-	const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
-	const run = data.workflow_runs?.[0];
-	return { available: true, run: run ? mapWorkflowRun(run) : null };
+	const res = await fetchWorkflowRuns(full, token, { perPage: 1 });
+	if ("status" in res) return { available: false, run: null };
+	return { available: true, run: res.runs[0] ? mapWorkflowRun(res.runs[0]) : null };
 }
 
 /**
@@ -496,35 +469,9 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployment", async (c) => {
 	const owner = full.split("/")[0];
 	const token = await installationTokenForOwner(c.env, uid, owner).catch(() => null);
 	if (!token) return c.json({ available: false });
-	try {
-		const res = await fetch(`https://api.github.com/repos/${full}/actions/runs?per_page=1`, {
-			headers: {
-				Authorization: `token ${token}`,
-				Accept: "application/vnd.github+json",
-				"X-GitHub-Api-Version": "2022-11-28",
-				"User-Agent": "proagentstore-coding/1.0",
-			},
-		});
-		if (!res.ok) return c.json({ available: false });
-		const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
-		const run = data.workflow_runs?.[0];
-		if (!run) return c.json({ available: true, run: null });
-		return c.json({
-			available: true,
-			run: {
-				status: run.status, // queued | in_progress | completed
-				conclusion: run.conclusion ?? null, // success | failure | cancelled | null
-				name: run.name ?? "",
-				runNumber: run.run_number ?? null,
-				url: run.html_url ?? "",
-				branch: run.head_branch ?? "",
-				sha: typeof run.head_sha === "string" ? run.head_sha.slice(0, 7) : "",
-				updatedAt: run.updated_at ?? "",
-			},
-		});
-	} catch {
-		return c.json({ available: false });
-	}
+	const res = await fetchWorkflowRuns(full, token, { perPage: 1 });
+	if ("status" in res) return c.json({ available: false });
+	return c.json({ available: true, run: res.runs[0] ? mapWorkflowRun(res.runs[0]) : null });
 });
 
 /**
@@ -555,12 +502,9 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployments", async (c) => {
 	const page = Math.max(1, Number.parseInt(c.req.query("page") || "1", 10) || 1);
 	const perPage = Math.min(50, Math.max(1, Number.parseInt(c.req.query("perPage") || "20", 10) || 20));
 	try {
-		const res = await fetch(`https://api.github.com/repos/${full}/actions/runs?per_page=${perPage}&page=${page}`, {
-			headers: githubHeaders(token ?? undefined),
-		});
-		if (!res.ok) return c.json({ available: false });
-		const data = (await res.json()) as { workflow_runs?: Array<Record<string, unknown>> };
-		const runs: BuildRun[] = (data.workflow_runs ?? []).map(mapWorkflowRun);
+		const res = await fetchWorkflowRuns(full, token ?? undefined, { perPage, page });
+		if ("status" in res) return c.json({ available: false });
+		const runs: BuildRun[] = res.runs.map(mapWorkflowRun);
 		// "There may be more" signal without parsing the Link header: a full live page implies a next.
 		const nextPage = runs.length === perPage ? page + 1 : undefined;
 
