@@ -2,7 +2,7 @@ import { type KeyboardEvent, type RefObject, useState, useEffect } from "react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
-import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown } from "lucide-react";
+import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
  *  the text via TTS. Owner-scoped fetch of the R2 blob. */
@@ -100,6 +100,13 @@ export default function CopilotView({
 		const el = threadRef.current;
 		if (el) { el.scrollTop = el.scrollHeight; setAtBottom(true); }
 	};
+	// Full-text edit/preview: the input is a single line, so a long composed/dictated message
+	// is hard to review. The Edit button opens a big textarea seeded with the current input;
+	// Apply writes it back, Cancel discards.
+	const [editOpen, setEditOpen] = useState(false);
+	const [editDraft, setEditDraft] = useState("");
+	const openEdit = () => { setEditDraft(chatInput); setEditOpen(true); };
+	const applyEdit = () => { setChatInput(editDraft); setEditOpen(false); };
 	// Smart auto-scroll (#132): follow new messages ONLY while the user is at the bottom.
 	// Scrolled up → don't yank them down; the jump button is shown instead. (The old
 	// unconditional auto-scroll lived in CodingTab and ignored the user's scroll position.)
@@ -138,6 +145,9 @@ export default function CopilotView({
 						</div>
 					)}
 				</div>
+				<button type="button" onClick={openEdit} disabled={!!voice.interim} aria-label="Edit full message" title="Edit / preview the full message" className="px-3 py-2 border border-line text-muted hover:border-accent hover:text-accent rounded-lg font-bold disabled:opacity-40 shrink-0">
+					<Pencil size={17} />
+				</button>
 				<button type="button" onClick={sendInstruction} disabled={!!voice.interim} aria-label="Send" className="px-3 py-2 bg-accent text-white rounded-lg font-bold disabled:opacity-40 shrink-0">
 					<Send size={17} />
 				</button>
@@ -368,6 +378,31 @@ export default function CopilotView({
 				);
 			})()}
 			</div>
+			{/* Full-text edit/preview modal — a large textarea to review + edit the whole message
+			    before sending. Apply writes it back to the input; Cancel (or backdrop) discards. */}
+			{editOpen && (
+				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setEditOpen(false)}>
+					{/* biome-ignore lint/a11y/noStaticElementInteractions: backdrop click closes; inner stop-propagation keeps clicks inside. */}
+					<div className="w-full max-w-3xl h-[80vh] flex flex-col bg-panel border border-line rounded-xl shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+						<div className="flex items-center justify-between px-4 py-3 border-b border-line shrink-0">
+							<span className="font-bold text-sm">Edit message</span>
+							<button type="button" onClick={() => setEditOpen(false)} aria-label="Close" className="text-muted hover:text-accent"><X size={18} /></button>
+						</div>
+						{/* biome-ignore lint/a11y/noAutofocus: opening the editor should focus the textarea. */}
+						<textarea
+							autoFocus
+							value={editDraft}
+							onChange={(e) => setEditDraft(e.target.value)}
+							placeholder="Review and edit your full message…"
+							className="flex-1 w-full resize-none bg-paper text-sm px-4 py-3 outline-none leading-relaxed"
+						/>
+						<div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-line shrink-0">
+							<button type="button" onClick={() => setEditOpen(false)} className="px-4 py-2 rounded-lg border border-line text-muted font-semibold text-sm hover:border-accent hover:text-accent active:scale-95 transition-transform">Cancel</button>
+							<button type="button" onClick={applyEdit} className="px-4 py-2 rounded-lg bg-accent text-white font-bold text-sm active:scale-95 transition-transform">Apply</button>
+						</div>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }
