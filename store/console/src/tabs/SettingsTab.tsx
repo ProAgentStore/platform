@@ -76,6 +76,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [runnerNodeMsg, setRunnerNodeMsg] = useState("");
 	const [runnerRefreshing, setRunnerRefreshing] = useState(false);
 	const [machines, setMachines] = useState<Machine[]>([]);
+	// Does this agent use a local runtime (browser/coding)? Only then is the Runner panel
+	// relevant. Default true (show) until we learn it's cloud-only, so it never flickers off
+	// for a runner agent. Set from capabilities.runtime.
+	const [agentNeedsRunner, setAgentNeedsRunner] = useState(true);
 	// Connector write-consent (#90): connectors this agent's tools can WRITE with, and
 	// which the owner has granted. A write tool (e.g. browser_navigate/act) refuses until
 	// its connector is granted here — the human gate for an agent acting AS the user.
@@ -221,11 +225,13 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				// Which connectors can this agent WRITE with, and what's already granted?
 				// writeConnectors = the agent's declared tools ∩ the registry's write tools.
 				const [inst, toolsRes, consentRes] = await Promise.all([
-					api<{ instances?: Array<{ id: string; capabilities?: { tools?: string[] } }> }>("/v1/instances/my/instances"),
+					api<{ instances?: Array<{ id: string; capabilities?: { tools?: string[]; runtime?: string | null } }> }>("/v1/instances/my/instances"),
 					api<{ tools?: Array<{ name: string; connector: string; scope: string }> }>(`/v1/instances/${instanceId}/tools`),
 					api<{ consents?: Array<{ connector: string; scope: string }> }>(`/v1/instances/${instanceId}/connectors/consent`),
 				]);
-				const myTools = new Set((inst.instances || []).find((i) => i.id === instanceId)?.capabilities?.tools || []);
+				const mine = (inst.instances || []).find((i) => i.id === instanceId);
+				setAgentNeedsRunner(mine?.capabilities?.runtime != null);
+				const myTools = new Set(mine?.capabilities?.tools || []);
 				const writeConns = new Set<string>();
 				for (const t of toolsRes.tools || []) if (t.scope === "write" && myTools.has(t.name)) writeConns.add(t.connector);
 				setWriteConnectors([...writeConns]);
@@ -763,7 +769,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{maintMsg && <div className="text-sm text-muted mt-2">{maintMsg}</div>}
 			</div>
 
-			{/* Runner info */}
+			{/* Runner info — only for agents that use a local runtime (browser/coding).
+			    Cloud-only agents (runtime:null) show a one-line note instead of the panel. */}
+			{agentNeedsRunner ? (
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<div className="flex items-center justify-between gap-2 mb-1">
 					<h3 className="text-base font-bold">Runner</h3>
@@ -840,6 +848,12 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					{runnerNodeMsg && <p className="text-xs text-muted mt-1">{runnerNodeMsg}</p>}
 				</div>
 			</div>
+			) : (
+				<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4 text-sm text-muted">
+					<h3 className="text-base font-bold mb-1">Runner</h3>
+					This agent runs entirely in the cloud — no local runner (<code className="text-accent">pags up</code>) needed.
+				</div>
+			)}
 
 			{/* Where things live */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
