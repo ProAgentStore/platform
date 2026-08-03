@@ -3,7 +3,7 @@ import { McpAgent } from "agents/mcp";
 import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
 import { apiCall, authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
-import { registerInstanceTools } from "./instance-tools.js";
+import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
 import {

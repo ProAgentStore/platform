@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerInstanceTools } from "./instance-tools.js";
+import { registerInstanceTools } from "./instance-tools/index.js";
 import type { McpEnv } from "./http.js";
 import type { SafetyContext } from "./safety.js";
 
