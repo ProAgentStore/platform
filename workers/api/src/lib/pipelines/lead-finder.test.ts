@@ -203,7 +203,7 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 	it("uses the full-sweep step chain (geocode→fan_out→http_request/forEach→flatten→map→enrich→filter→dedupe)", () => {
 		const def = leadFinder as unknown as PipelineDef;
 		expect(def.steps.map((s) => s.tool)).toEqual([
-			"geocode", "fan_out", "http_request", "flatten", "map", "enrich", "filter", "dedupe_upsert",
+			"geocode", "fan_out", "http_request", "flatten", "map", "enrich", "map", "filter", "dedupe_upsert",
 		]);
 		// the Places request runs once PER grid cell (forEach over grid.cells).
 		const places = def.steps.find((s) => s.tool === "http_request")!;
@@ -243,6 +243,15 @@ describe("lead-finder declarative pipeline (capstone #94 — FULL SWEEP)", () =>
 		const dead = enriched.find((r) => r.place_id === "ChIJ_dead_site")!;
 		expect(live.reachable).toMatchObject({ ok: true, code: 200 });
 		expect(dead.reachable).toMatchObject({ ok: false, code: null });
+
+		// classify: website_status derived (none | unreachable | reachable) via map `$cond`,
+		// and websiteUri renamed to website_url — so records match the `leads` collection
+		// schema + the agent's website_status counts.
+		const classified = (outputs.classified as { items: Array<Record<string, unknown>> }).items;
+		expect(classified.find((r) => r.place_id === "ChIJ_no_site")!.website_status).toBe("none");
+		expect(classified.find((r) => r.place_id === "ChIJ_dead_site")!.website_status).toBe("unreachable");
+		expect(classified.find((r) => r.place_id === "ChIJ_live_site")!.website_status).toBe("reachable");
+		expect(classified.find((r) => r.place_id === "ChIJ_live_site")!.website_url).toBe("https://beanmachine.example");
 
 		// filter (no-website OR unreachable): BOTH the no-website AND the dead-site survive;
 		// the live-site is excluded. This is the full epic filter, not just the "no-website" half.

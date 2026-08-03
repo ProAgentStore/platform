@@ -98,8 +98,23 @@ function runMap(item: unknown, cfg: {
 	if (cfg.keep) for (const k of cfg.keep) if (k in src) out[k] = src[k];
 	if (cfg.extract) for (const [toKey, fromPath] of Object.entries(cfg.extract)) setPath(out, toKey, getPath(src, fromPath) ?? null);
 	if (cfg.rename) for (const [fromPath, toKey] of Object.entries(cfg.rename)) setPath(out, toKey, getPath(src, fromPath) ?? null);
-	if (cfg.derive) for (const [toKey, val] of Object.entries(cfg.derive)) setPath(out, toKey, val);
+	if (cfg.derive) for (const [toKey, val] of Object.entries(cfg.derive)) setPath(out, toKey, resolveDeriveValue(src, val));
 	return out;
+}
+
+/**
+ * A `derive` value is normally a constant. As a small conditional escape hatch it may be
+ * `{ "$cond": {field,op,value?}, "then": …, "else": … }` — evaluated with the SAME predicate
+ * ops as `filter` (missing/exists/falsy/eq/…), recursively (then/else may nest another
+ * `$cond`). Lets a pipeline compute a classified field (e.g. website_status = none |
+ * unreachable | reachable) without a new step. A plain object without `$cond` is a literal.
+ */
+function resolveDeriveValue(item: unknown, val: unknown): unknown {
+	if (isRecord(val) && isRecord(val.$cond)) {
+		const c = val.$cond as unknown as FilterClause;
+		return resolveDeriveValue(item, evalClause(item, c) ? val.then : val.else);
+	}
+	return val;
 }
 
 // ── 2. filter ──────────────────────────────────────────────────────────────

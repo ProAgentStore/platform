@@ -61,7 +61,8 @@
       "bind": "shaped",
       "inputs": {
         "items": { "$ref": "flat.items" },
-        "keep": ["place_id", "name", "address", "phone", "websiteUri", "lat", "lng", "maps_url"],
+        "keep": ["place_id", "name", "address", "phone", "lat", "lng", "maps_url"],
+        "rename": { "websiteUri": "website_url" },
         "derive": { "category": { "$param": "type" }, "status": "new" },
         "extract": {
           "country": "addressComponents[types~=country].longText",
@@ -77,20 +78,36 @@
       "inputs": {
         "items": { "$ref": "shaped.items" },
         "tool": "http_reachable",
-        "input": { "url": { "$item": "websiteUri" } },
+        "input": { "url": { "$item": "website_url" } },
         "as": "reachable",
         "concurrency": 4
+      }
+    },
+    {
+      "tool": "map",
+      "bind": "classified",
+      "inputs": {
+        "items": { "$ref": "enriched.items" },
+        "derive": {
+          "website_status": {
+            "$cond": { "field": "website_url", "op": "missing" },
+            "then": "none",
+            "else": {
+              "$cond": { "field": "reachable.ok", "op": "falsy" },
+              "then": "unreachable",
+              "else": "reachable"
+            }
+          }
+        }
       }
     },
     {
       "tool": "filter",
       "bind": "leads",
       "inputs": {
-        "items": { "$ref": "enriched.items" },
-        "any": true,
+        "items": { "$ref": "classified.items" },
         "where": [
-          { "field": "websiteUri", "op": "missing" },
-          { "field": "reachable.ok", "op": "eq", "value": false }
+          { "field": "website_status", "op": "in", "value": ["none", "unreachable"] }
         ]
       }
     },
