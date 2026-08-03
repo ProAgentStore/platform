@@ -156,10 +156,9 @@ export default function CopilotView({
 					{summaryBusy ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
 				</button>
 			</div>
-			{/* Live transcript — show the user exactly what's being heard. */}
-			{voice.interim && (
-				<div className="px-3 py-1.5 shrink-0 text-sm text-accent font-semibold border-b border-line bg-accent-soft/40 truncate">🎙 {voice.interim}</div>
-			)}
+			{/* The live transcript is shown in the input field above (value={voice.interim || chatInput});
+			    the separate 🎙 strip that used to sit here was a redundant second copy of the same
+			    voice.interim — removed so there's a single transcript display. */}
 			{/* Controls bar — mode selector + actions (matches the Assistant tab). */}
 			<div className="flex flex-wrap gap-1.5 px-2 pt-0.5 pb-1.5 shrink-0 items-center">
 				{/* Three distinct interaction modes — one segmented control (was four
