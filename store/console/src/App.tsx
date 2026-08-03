@@ -30,7 +30,7 @@ function AuthGate() {
 	return (
 		<Routes>
 			<Route element={<Layout />}>
-				<Route index element={<Navigate to="agents" replace />} />
+				<Route index element={<Navigate to="instances" replace />} />
 				<Route path="agents" element={<Dashboard />} />
 				<Route path="browse" element={<Browse />} />
 				<Route path="agents/new" element={<AgentDetail />} />
@@ -45,7 +45,7 @@ function AuthGate() {
 				<Route path="usage" element={<Usage />} />
 				<Route path="profile" element={<Profile />} />
 				<Route path="notifications" element={<Notifications />} />
-				<Route path="*" element={<Navigate to="agents" replace />} />
+				<Route path="*" element={<Navigate to="instances" replace />} />
 			</Route>
 		</Routes>
 	);
