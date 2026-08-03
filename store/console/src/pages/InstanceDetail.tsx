@@ -69,6 +69,7 @@ export default function InstanceDetail() {
 	const [input, setInput] = useState("");
 	const [thinking, setThinking] = useState(false);
 	const chatRef = useRef<HTMLDivElement>(null);
+	const inputRef = useRef<HTMLTextAreaElement>(null);
 	// Smart auto-scroll (#132): auto-scroll to the newest message ONLY while the user is at the
 	// bottom. The moment they scroll up, auto-scroll pauses and a jump-to-bottom button appears
 	// (even behind the voice pill). A ref mirrors the state so the message effects read it live
@@ -115,6 +116,15 @@ export default function InstanceDetail() {
 		// basenames in the spoken reply instead of gutting them to "a file … a file".
 		technical: surfaces.includes("repo") || surfaces.includes("coding"),
 	});
+
+	// Auto-grow the chat input so the FULL live transcript (or a long typed message) is readable
+	// as it grows, instead of truncating to one line (#164). Caps at ~40vh, then scrolls.
+	useEffect(() => {
+		const el = inputRef.current;
+		if (!el) return;
+		el.style.height = "auto";
+		el.style.height = `${el.scrollHeight}px`;
+	}, [voice.interim, input]);
 
 	useEffect(() => {
 		if (!id) return;
@@ -513,15 +523,18 @@ export default function InstanceDetail() {
 				{tab === "chat" && (
 					<div className="flex flex-col flex-1 min-h-0 relative">
 						{/* Input bar — top */}
-						<div className="flex gap-1 sm:gap-1.5 px-2 pt-2 pb-1 shrink-0 items-center">
+						<div className="flex gap-1 sm:gap-1.5 px-2 pt-2 pb-1 shrink-0 items-end">
 							<div className="flex-1 min-w-0 relative">
-								<input
+								<textarea
+									ref={inputRef}
+									rows={1}
 									value={voice.interim || input}
 									onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
-									onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendMessage(); }}
+									// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
+									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voice.interim) { e.preventDefault(); sendMessage(); } }}
 									placeholder={voice.talking ? "Listening — tap to send" : voice.mode === "ptt" ? "Tap the chat to talk — or type" : voice.mode === "handsfree" ? (voice.micOn ? "Listening…" : "Hands-free — just talk") : isCoding ? "Ask about your repos..." : "Send a message..."}
 									readOnly={!!voice.interim}
-									className={`w-full bg-panel border rounded-xl px-4 py-2.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
+									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
 								/>
 								{voice.micOn && (
 									<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">

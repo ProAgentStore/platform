@@ -687,6 +687,24 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("Mock assistant reply")).toBeVisible();
 	});
 
+	test("chat input is a multi-line textarea that auto-grows with the message/transcript (#164)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1");
+
+		const box = page.getByPlaceholder(/Send a message|Ask about your repos/);
+		await expect(box).toBeVisible();
+		// It's a textarea (multi-line capable), not a single-line input — so the full live
+		// transcript / a long message is readable, not truncated to one line.
+		expect(await box.evaluate((el) => el.tagName)).toBe("TEXTAREA");
+
+		const before = (await box.boundingBox())!.height;
+		await box.fill("line one\nline two\nline three\nline four\nline five\nline six");
+		const after = (await box.boundingBox())!.height;
+		// The field grew to fit the content, and newlines are preserved.
+		expect(after).toBeGreaterThan(before);
+		expect(await box.inputValue()).toContain("\n");
+	});
+
 	test("instance chat has labeled voice controls with descriptive tooltips", async ({
 		page,
 	}) => {

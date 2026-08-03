@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type RefObject, useState, useEffect } from "react";
+import { type KeyboardEvent, type RefObject, useState, useEffect, useRef } from "react";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
@@ -100,13 +100,22 @@ export default function CopilotView({
 		const el = threadRef.current;
 		if (el) { el.scrollTop = el.scrollHeight; setAtBottom(true); }
 	};
-	// Full-text edit/preview: the input is a single line, so a long composed/dictated message
-	// is hard to review. The Edit button opens a big textarea seeded with the current input;
+	// Full-text edit/preview: the input auto-grows, but the Edit button still opens a big
+	// dedicated textarea (seeded with the current input) for reviewing/editing a long message;
 	// Apply writes it back, Cancel discards.
 	const [editOpen, setEditOpen] = useState(false);
 	const [editDraft, setEditDraft] = useState("");
 	const openEdit = () => { setEditDraft(chatInput); setEditOpen(true); };
 	const applyEdit = () => { setChatInput(editDraft); setEditOpen(false); };
+	// Auto-grow the input so the FULL live transcript (or a long typed message) is readable as
+	// it grows, instead of truncating to one line (#164). Caps at ~40vh, then scrolls.
+	const inputRef = useRef<HTMLTextAreaElement>(null);
+	useEffect(() => {
+		const el = inputRef.current;
+		if (!el) return;
+		el.style.height = "auto";
+		el.style.height = `${el.scrollHeight}px`;
+	}, [voice.interim, chatInput]);
 	// Smart auto-scroll (#132): follow new messages ONLY while the user is at the bottom.
 	// Scrolled up → don't yank them down; the jump button is shown instead. (The old
 	// unconditional auto-scroll lived in CodingTab and ignored the user's scroll position.)
@@ -130,15 +139,18 @@ export default function CopilotView({
 		<div className="flex flex-col flex-1 min-h-0">
 			{/* Input bar — top, always visible. Compact input, big controls. relative z-10 keeps it
 			    above the floating status pill so nothing can intercept a tap on Send (#163). */}
-			<div className="relative z-10 flex gap-1.5 px-2 pt-2 pb-1 shrink-0 items-center">
+			<div className="relative z-10 flex gap-1.5 px-2 pt-2 pb-1 shrink-0 items-end">
 				<div className="flex-1 min-w-0 relative">
-					<input
+					<textarea
+						ref={inputRef}
+						rows={1}
 						value={voice.interim || chatInput}
 						onChange={(e) => { if (!voice.interim) setChatInput(e.target.value); }}
-						onKeyDown={(e) => { if (e.key === "Enter" && !voice.interim) sendInstruction(); }}
+						// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
+						onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voice.interim) { e.preventDefault(); sendInstruction(); } }}
 						placeholder="Talk to Co-Pilot"
 						readOnly={!!voice.interim}
-						className={`w-full bg-panel border rounded-lg px-2.5 py-1.5 text-sm transition-colors ${voice.interim ? "border-accent text-accent font-semibold" : voice.micOn ? "border-green" : "border-line"}`}
+						className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-lg px-2.5 py-1.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent font-semibold" : voice.micOn ? "border-green" : "border-line"}`}
 					/>
 					{voice.micOn && (
 						<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
@@ -156,9 +168,10 @@ export default function CopilotView({
 					{summaryBusy ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
 				</button>
 			</div>
-			{/* The live transcript is shown in the input field above (value={voice.interim || chatInput});
-			    the separate 🎙 strip that used to sit here was a redundant second copy of the same
-			    voice.interim — removed so there's a single transcript display. */}
+			{/* The live transcript is shown in the auto-growing input above (value={voice.interim ||
+			    chatInput}) — it expands vertically so the FULL spoken text is readable in real time
+			    (#164), then scrolls past ~40vh. A single display: the old truncated 🎙 strip was a
+			    redundant second copy of the same voice.interim and was removed. */}
 			{/* Controls bar — mode selector + actions (matches the Assistant tab). */}
 			<div className="flex flex-wrap gap-1.5 px-2 pt-0.5 pb-1.5 shrink-0 items-center">
 				{/* Three distinct interaction modes — one segmented control (was four
