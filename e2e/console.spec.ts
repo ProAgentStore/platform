@@ -646,6 +646,31 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByRole("button", { name: "Run now" }).first()).toBeVisible();
 	});
 
+	test("trigger form exposes run_pipeline + insert_record with their config inputs (#134)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
+
+		// The Action dropdown is the one carrying the new run_pipeline option.
+		const action = page.locator("select").filter({ has: page.locator('option[value="run_pipeline"]') });
+		const addBtn = page.getByRole("button", { name: "Add", exact: true });
+
+		// run_pipeline → a pipeline-name input appears; an empty submit is validated (no broken trigger).
+		await action.selectOption("run_pipeline");
+		const pipelineInput = page.getByPlaceholder("a pipeline configured on this agent");
+		await expect(pipelineInput).toBeVisible();
+		await addBtn.click();
+		await expect(page.getByText(/name of the pipeline to run/i)).toBeVisible();
+		// With the name filled, the create succeeds.
+		await pipelineInput.fill("lead-sweep");
+		await addBtn.click();
+		await expect(page.getByText("Trigger created.")).toBeVisible();
+
+		// insert_record → a target-collection input appears.
+		await action.selectOption("insert_record");
+		await expect(page.getByPlaceholder("collection name")).toBeVisible();
+	});
+
 	test("instance chat sends messages and shows responses", async ({
 		page,
 	}) => {

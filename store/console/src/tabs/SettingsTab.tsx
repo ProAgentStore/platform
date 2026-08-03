@@ -44,7 +44,7 @@ interface ConnectorGrant {
 	resourceUrl?: string | null;
 }
 
-type TriggerActionType = "create_task" | "add_knowledge" | "log_event" | "sync_connector";
+type TriggerActionType = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record";
 type ConnectorProviderType = "google_drive" | "zoho_workdrive";
 
 interface InstanceTrigger {
@@ -182,6 +182,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [triggerSchedule, setTriggerSchedule] = useState("@daily");
 	const [triggerConnectorProvider, setTriggerConnectorProvider] = useState<ConnectorProviderType>("google_drive");
 	const [triggerConnectorGrantId, setTriggerConnectorGrantId] = useState("");
+	// run_pipeline / insert_record config inputs (#134): the pipeline name to run, or the
+	// target collection to insert into — required for those actions or the trigger is broken.
+	const [triggerPipeline, setTriggerPipeline] = useState("");
+	const [triggerCollection, setTriggerCollection] = useState("");
 	const triggerConnectorGrants = triggerConnectorProvider === "google_drive" ? driveGrants : workdriveGrants;
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: initial settings hydration calls the trigger loader once for this instance; trigger CRUD refreshes itself.
@@ -528,9 +532,21 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setTriggerMsg(`Grant a ${triggerConnectorProvider === "google_drive" ? "Google Drive" : "Zoho WorkDrive"} folder before creating a sync trigger.`);
 				return;
 			}
+			const pipeline = triggerPipeline.trim();
+			const collection = triggerCollection.trim();
+			if (triggerAction === "run_pipeline" && !pipeline) {
+				setTriggerMsg("Enter the name of the pipeline to run.");
+				return;
+			}
+			if (triggerAction === "insert_record" && !collection) {
+				setTriggerMsg("Enter the target collection for the record.");
+				return;
+			}
 			const name = triggerName.trim() || (
 				triggerAction === "sync_connector"
 					? `${triggerConnectorProvider === "google_drive" ? "Google Drive" : "WorkDrive"} sync`
+					: triggerAction === "run_pipeline" ? `Run ${pipeline}`
+					: triggerAction === "insert_record" ? `Insert into ${collection}`
 					: triggerType === "webhook" ? "Inbound webhook" : "Scheduled run"
 			);
 			await api("/v1/triggers", {
@@ -541,13 +557,16 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					type: triggerType,
 					action: triggerAction,
 					schedule: triggerType === "cron" ? triggerSchedule : undefined,
-					config: triggerAction === "sync_connector" ? {
-						provider: triggerConnectorProvider,
-						grantId: syncGrantId,
-					} : undefined,
+					config:
+						triggerAction === "sync_connector" ? { provider: triggerConnectorProvider, grantId: syncGrantId }
+							: triggerAction === "run_pipeline" ? { pipeline }
+								: triggerAction === "insert_record" ? { collection }
+									: undefined,
 				}),
 			});
 			setTriggerName("");
+			setTriggerPipeline("");
+			setTriggerCollection("");
 			setTriggerMsg("Trigger created.");
 			await loadTriggers();
 		} catch (e) {
@@ -1030,6 +1049,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							<option value="create_task">Create task</option>
 							<option value="add_knowledge">Add knowledge</option>
 							<option value="sync_connector">Sync folder</option>
+							<option value="run_pipeline">Run pipeline</option>
+							<option value="insert_record">Insert record</option>
 							<option value="log_event">Log event</option>
 						</select>
 					</label>
@@ -1068,6 +1089,24 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 									<option key={grant.id} value={grant.id}>{grant.resourceName}</option>
 								))}
 							</select>
+						</label>
+					</div>
+				)}
+				{triggerAction === "run_pipeline" && (
+					<div className="grid grid-cols-1 gap-2 items-end mb-4">
+						<label className="flex flex-col gap-1">
+							<span className="text-xs font-semibold">Pipeline name</span>
+							<input value={triggerPipeline} onChange={(e) => setTriggerPipeline(e.target.value)} placeholder="a pipeline configured on this agent" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
+							<span className="text-[0.7rem] text-muted">The trigger runs this declarative pipeline (from the agent's <code>config.pipelines</code>) on fire.</span>
+						</label>
+					</div>
+				)}
+				{triggerAction === "insert_record" && (
+					<div className="grid grid-cols-1 gap-2 items-end mb-4">
+						<label className="flex flex-col gap-1">
+							<span className="text-xs font-semibold">Target collection</span>
+							<input value={triggerCollection} onChange={(e) => setTriggerCollection(e.target.value)} placeholder="collection name" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
+							<span className="text-[0.7rem] text-muted">Webhook/cron payload is inserted as a record into this collection (an explicit <code>record</code> field wins).</span>
 						</label>
 					</div>
 				)}
