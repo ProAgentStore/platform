@@ -73,6 +73,7 @@ let upserted: Array<Record<string, unknown>> = [];
 let photoRequests: string[] = [];
 let searchQueries: string[] = [];
 let aiPrompts: string[] = [];
+let emits: Array<{ event: string; emitOn: string; payloads: Array<Record<string, unknown>> }> = [];
 
 const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<string, unknown>) => {
 	// ── real pure transforms (the logic under test) ───────────────────────
@@ -137,6 +138,7 @@ const runRegistryTool = vi.fn(async (name: string, ctx: unknown, input: Record<s
 	}
 	if (name === "dedupe_upsert") {
 		const items = (Array.isArray(input.items) ? input.items : []) as Array<Record<string, unknown>>;
+		emits.push({ event: String(input.emit ?? ""), emitOn: String(input.emitOn ?? "insert"), payloads: items });
 		upserted.push(...items);
 		return { name, content: JSON.stringify({ inserted: items.length, updated: 0, skipped: 0, total: items.length }), success: true };
 	}
@@ -169,6 +171,7 @@ beforeEach(() => {
 	photoRequests = [];
 	searchQueries = [];
 	aiPrompts = [];
+	emits = [];
 });
 
 /** Drive a whole JSON pipeline through the real runner, exactly as the durable runner does. */
@@ -344,5 +347,52 @@ describe("site-deploy — the approved half", () => {
 			.map((s) => (s.inputs as Record<string, { toString(): string }>).tool);
 		expect(builderTools).not.toContain("deploy");
 		expect(builderTools).not.toContain("push_update");
+	});
+});
+
+// ── the chain: Lead Finder → Site Builder → [approve] → deploy → Outreach ──────────────
+describe("the agent chain — what the next agent is handed", () => {
+	it("the ticket carries everything site-deploy needs, including the pitch details", async () => {
+		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
+		// The ticket is the ONLY carrier across the human gate: a field missing here is a
+		// field the outreach pitch can never mention.
+		expect(tickets[0].params).toMatchObject({
+			session_id: "sess-42",
+			place_id: "ChIJ_kiosk",
+			slug: "palm-tree-kiosk-bondi",
+			name: "Palm Tree Kiosk",
+			suburb: "Bondi",
+			address: "12 Beach Rd, Bondi NSW 2026, Australia",
+			phone: "0298004444",
+			email: "hello@palmtree.example",
+		});
+	});
+
+	it("the builder announces a DRAFT, and only on a net-new record", async () => {
+		await drivePipeline(siteBuilder as unknown as PipelineDef, PARAMS);
+		expect(emits.at(-1)).toMatchObject({ event: "site.drafted", emitOn: "insert" });
+	});
+
+	it("the deploy announces site.live on UPDATE — the record already exists, so insert-only would never fire", async () => {
+		await drivePipeline(siteDeploy as unknown as PipelineDef, {
+			session_id: "sess-42", place_id: "ChIJ_kiosk", mcpUrl: "https://builder.example.com/mcp",
+			slug: "palm-tree-kiosk-bondi", name: "Palm Tree Kiosk", category: "cafe",
+			description: "A casual beachfront cafe in Bondi.",
+			suburb: "Bondi", address: "12 Beach Rd, Bondi NSW 2026, Australia",
+			phone: "0298004444", email: "hello@palmtree.example",
+		});
+		const emitted = emits.at(-1)!;
+		expect(emitted.event).toBe("site.live");
+		expect(emitted.emitOn).toBe("both"); // site-builder inserted this record; deploy updates it
+		// The payload has to stand on its own — the outreach agent gets ONLY this.
+		expect(emitted.payloads[0]).toMatchObject({
+			place_id: "ChIJ_kiosk",
+			name: "Palm Tree Kiosk",
+			suburb: "Bondi",
+			phone: "0298004444",
+			email: "hello@palmtree.example",
+			site_url: "https://palm-tree-kiosk-bondi.freewebstore.online",
+			site_status: "live",
+		});
 	});
 });

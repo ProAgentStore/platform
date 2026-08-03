@@ -450,7 +450,8 @@ export const STEP_TOOLS: ToolDef[] = [
 				collection: { type: "string", description: "Target instance collection name." },
 				key: { type: "string", description: "Field to dedupe on (should be unique/indexed on the collection)." },
 				mode: { type: "string", description: '"update" (default, update-in-place) or "skip" (skip-if-seen).' },
-				emit: { type: "string", description: "Optional event type to emit ONCE per NET-NEW inserted record (e.g. 'lead.created') — feeds agent-to-agent connections (lib/connections.ts). No-op when no connection is wired." },
+				emit: { type: "string", description: "Optional event type to emit per record (e.g. 'lead.created') — feeds agent-to-agent connections (lib/connections.ts). No-op when no connection is wired." },
+				emitOn: { type: "string", description: '"insert" (default — only net-new records), "update" (only records that changed), or "both". Use "update" to signal a STATE CHANGE on a record that already exists, e.g. a site going live.' },
 			},
 			required: ["collection", "key"],
 		},
@@ -460,13 +461,20 @@ export const STEP_TOOLS: ToolDef[] = [
 			const key = String(input.key || "");
 			const mode = input.mode === "skip" ? "skip" : "update";
 			const emit = typeof input.emit === "string" ? input.emit.trim() : "";
+			// Which transitions the event fires on. Default "insert" — the original behaviour,
+			// which the lead-finder depends on. "update"/"both" exist because a CHAIN is made
+			// of state changes, not just first sightings: the second agent in a chain writes to
+			// a record the first one already created, so insert-only emit could never signal it
+			// (e.g. a site record going drafted → live).
+			const emitOn = input.emitOn === "update" || input.emitOn === "both" ? input.emitOn : "insert";
 			if (!collection || !key) return fail("collection and key are required.");
 			if (!ctx.env?.AGENT || !ctx.instanceId) return fail("No instance context — dedupe_upsert needs a running instance.");
 
 			const stub = ctx.env.AGENT.get(ctx.env.AGENT.idFromName(ctx.instanceId));
 			const base = `https://agent/collections/${encodeURIComponent(collection)}/records`;
 			let inserted = 0, updated = 0, skipped = 0;
-			const newRows: Record<string, unknown>[] = []; // net-new inserts — the emit payloads
+			const newRows: Record<string, unknown>[] = []; // net-new inserts
+			const changedRows: Record<string, unknown>[] = []; // updated-in-place records
 			for (const item of items) {
 				const kv = item[key];
 				if (kv === undefined || kv === null) { skipped++; continue; }
@@ -480,7 +488,7 @@ export const STEP_TOOLS: ToolDef[] = [
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ data: item }),
 					}));
-					if (res.ok) updated++; else skipped++;
+					if (res.ok) { updated++; changedRows.push(item); } else skipped++;
 				} else {
 					const res = await stub.fetch(new Request(base, {
 						method: "POST",
@@ -490,14 +498,15 @@ export const STEP_TOOLS: ToolDef[] = [
 					if (res.ok) { inserted++; newRows.push(item); } else skipped++; // a 500 here = unique-constraint race; count as skipped
 				}
 			}
-			// Fire the agent-to-agent pump for each net-new record (deferred import breaks the
-			// steps → connections → triggers cycle). Best-effort: a delivery failure must never
-			// fail the sweep — it's logged to the trace by deliverEvent.
+			// Fire the agent-to-agent pump for the selected transitions (deferred import breaks
+			// the steps → connections → triggers cycle). Best-effort: a delivery failure must
+			// never fail the sweep — it's logged to the trace by deliverEvent.
+			const payloads = emitOn === "insert" ? newRows : emitOn === "update" ? changedRows : [...newRows, ...changedRows];
 			let emitted = 0;
-			if (emit && newRows.length && ctx.userId) {
+			if (emit && payloads.length && ctx.userId) {
 				try {
 					const { deliverEvent } = await import("./connections.js");
-					const r = await deliverEvent(ctx.env, ctx.instanceId, ctx.userId, emit, newRows);
+					const r = await deliverEvent(ctx.env, ctx.instanceId, ctx.userId, emit, payloads);
 					emitted = r.delivered;
 				} catch { /* pump failure never breaks the sink */ }
 			}

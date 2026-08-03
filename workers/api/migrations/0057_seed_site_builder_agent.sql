@@ -488,6 +488,18 @@ INSERT OR IGNORE INTO agents (
               },
               "description": {
                 "$ref": "copy.items.0.copy.meta_description"
+              },
+              "suburb": {
+                "$ref": "copy.items.0.suburb"
+              },
+              "address": {
+                "$ref": "copy.items.0.address"
+              },
+              "phone": {
+                "$ref": "copy.items.0.phone"
+              },
+              "email": {
+                "$ref": "copy.items.0.email"
               }
             }
           }
@@ -529,7 +541,8 @@ INSERT OR IGNORE INTO agents (
             },
             "collection": "sites",
             "key": "place_id",
-            "mode": "update"
+            "mode": "update",
+            "emit": "site.drafted"
           }
         }
       ],
@@ -568,6 +581,22 @@ INSERT OR IGNORE INTO agents (
         "description": {
           "type": "string",
           "description": "One-sentence site description."
+        },
+        "suburb": {
+          "type": "string",
+          "description": "Suburb, carried through for the outreach pitch."
+        },
+        "address": {
+          "type": "string",
+          "description": "Street address, carried through for the outreach pitch."
+        },
+        "phone": {
+          "type": "string",
+          "description": "Phone, carried through for the outreach pitch."
+        },
+        "email": {
+          "type": "string",
+          "description": "Public email if one was found, carried through for the outreach pitch."
         }
       },
       "steps": [
@@ -624,6 +653,21 @@ INSERT OR IGNORE INTO agents (
                 },
                 "place_id": {
                   "$param": "place_id"
+                },
+                "name": {
+                  "$param": "name"
+                },
+                "suburb": {
+                  "$param": "suburb"
+                },
+                "address": {
+                  "$param": "address"
+                },
+                "phone": {
+                  "$param": "phone"
+                },
+                "email": {
+                  "$param": "email"
                 }
               }
             ],
@@ -632,7 +676,12 @@ INSERT OR IGNORE INTO agents (
               "site_slug": "s.id"
             },
             "keep": [
-              "place_id"
+              "place_id",
+              "name",
+              "suburb",
+              "address",
+              "phone",
+              "email"
             ],
             "derive": {
               "site_status": "live"
@@ -648,7 +697,9 @@ INSERT OR IGNORE INTO agents (
             },
             "collection": "sites",
             "key": "place_id",
-            "mode": "update"
+            "mode": "update",
+            "emit": "site.live",
+            "emitOn": "both"
           }
         }
       ],

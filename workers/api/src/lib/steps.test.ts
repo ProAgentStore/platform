@@ -626,3 +626,66 @@ describe("map derive — $format (compose a string from other fields)", () => {
 		expect(r.items[0].meta).toEqual({ kind: "x" });
 	});
 });
+
+describe("dedupe_upsert — emitOn (what makes an agent CHAIN possible)", () => {
+	/** Capture what the pump was handed, without touching the real connections module. */
+	async function emitFor(input: Record<string, unknown>, existing: Record<string, string> = {}) {
+		const { env } = mockAgentStub(existing);
+		const delivered: Array<{ event: string; payloads: unknown[] }> = [];
+		vi.doMock("./connections.js", () => ({
+			deliverEvent: async (_e: unknown, _i: string, _u: string, event: string, payloads: unknown[]) => {
+				delivered.push({ event, payloads });
+				return { connections: 1, delivered: payloads.length, failed: 0 };
+			},
+		}));
+		const ctx = { env, instanceId: "inst1", userId: "u1" } as RegistryToolCtx;
+		const r = await dedupeT.handler(ctx, input);
+		vi.doUnmock("./connections.js");
+		return { res: parse(r.content), delivered };
+	}
+
+	const ITEMS = [{ place_id: "p_new", name: "New" }, { place_id: "p_old", name: "Existing" }];
+
+	it("defaults to insert-only — the lead-finder's behaviour is unchanged", async () => {
+		const { res, delivered } = await emitFor({ collection: "leads", key: "place_id", items: ITEMS, emit: "lead.created" }, { p_old: "existing" });
+		expect(res).toMatchObject({ inserted: 1, updated: 1 });
+		expect(delivered[0].event).toBe("lead.created");
+		expect(delivered[0].payloads).toEqual([{ place_id: "p_new", name: "New" }]);
+	});
+
+	it('emitOn:"update" announces a STATE CHANGE on a record that already exists', async () => {
+		// The chain case: the second agent writes to a record the first one created, so
+		// insert-only emit could never signal it (a site going drafted → live).
+		const { delivered } = await emitFor(
+			{ collection: "sites", key: "place_id", items: [{ place_id: "p_old", site_status: "live" }], emit: "site.live", emitOn: "update" },
+			{ p_old: "existing" },
+		);
+		expect(delivered[0].payloads).toEqual([{ place_id: "p_old", site_status: "live" }]);
+	});
+
+	it('emitOn:"update" stays silent when nothing actually changed', async () => {
+		const { delivered } = await emitFor({ collection: "sites", key: "place_id", items: [{ place_id: "p_new" }], emit: "site.live", emitOn: "update" });
+		expect(delivered).toHaveLength(0); // it was an INSERT, not an update
+	});
+
+	it('emitOn:"both" covers either transition', async () => {
+		const { delivered } = await emitFor(
+			{ collection: "sites", key: "place_id", items: ITEMS, emit: "site.live", emitOn: "both" },
+			{ p_old: "existing" },
+		);
+		expect(delivered[0].payloads).toHaveLength(2);
+	});
+
+	it("an unknown emitOn falls back to insert rather than emitting everything", async () => {
+		const { delivered } = await emitFor(
+			{ collection: "sites", key: "place_id", items: ITEMS, emit: "x", emitOn: "whenever" },
+			{ p_old: "existing" },
+		);
+		expect(delivered[0].payloads).toHaveLength(1);
+	});
+
+	it("emits nothing at all when no event is declared", async () => {
+		const { delivered } = await emitFor({ collection: "leads", key: "place_id", items: ITEMS, emitOn: "both" }, { p_old: "existing" });
+		expect(delivered).toHaveLength(0);
+	});
+});
