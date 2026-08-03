@@ -152,11 +152,14 @@ interface ApiKeyAuth {
 	mode: "api-key";
 	key: { in: "header" | "query"; name: string };
 }
-type HttpAuth = { mode: "none" } | ApiKeyAuth;
+// "bearer": mint the connector's token via connectorClient and send it as
+// `Authorization: Bearer <token>` — the shape app/oauth manifest connectors use.
+type HttpAuth = { mode: "none" } | { mode: "bearer" } | ApiKeyAuth;
 
 function parseAuth(raw: unknown): HttpAuth {
 	if (!raw || typeof raw !== "object") return { mode: "none" };
 	const a = raw as Record<string, unknown>;
+	if (a.mode === "bearer") return { mode: "bearer" };
 	if (a.mode === "api-key") {
 		const key = a.key as Record<string, unknown> | undefined;
 		const where = key?.in === "query" ? "query" : "header";
@@ -204,80 +207,99 @@ export const HTTP_TOOLS: ToolDef[] = [
 			},
 			required: [],
 		},
-		handler: async (ctx: RegistryToolCtx, input) => {
-			const inputs = (input.inputs && typeof input.inputs === "object" && !Array.isArray(input.inputs)
-				? input.inputs
-				: {}) as Record<string, unknown>;
-
-			let auth: HttpAuth;
-			let url: string;
-			try {
-				auth = parseAuth(input.auth);
-				url = buildUrl(input, inputs);
-			} catch (e) {
-				return { content: e instanceof Error ? e.message : String(e), success: false };
-			}
-
-			const method = (typeof input.method === "string" ? input.method : "GET").toUpperCase();
-			const headers = new Headers();
-			if (input.headers && typeof input.headers === "object" && !Array.isArray(input.headers)) {
-				for (const [k, v] of Object.entries(interpolateDeep(input.headers, inputs) as Record<string, unknown>)) {
-					if (v !== undefined && v !== null) headers.set(k, String(v));
-				}
-			}
-
-			// Inject the vault API key into the configured header/query param. token() reads
-			// user_api_keys (provider "http") via the connectorClient — the value is used only
-			// on the wire, never returned or logged.
-			if (auth.mode === "api-key") {
-				const key = await ctx.connectorClient?.("http").token().catch(() => null);
-				if (!key) return { content: "No API key connected for the http connector — add one in the instance's Connections settings.", success: false };
-				if (auth.key.in === "header") {
-					headers.set(auth.key.name, key);
-				} else {
-					const u = new URL(url);
-					u.searchParams.set(auth.key.name, key);
-					url = u.toString();
-				}
-			}
-
-			let bodyStr: string | undefined;
-			if (method !== "GET" && method !== "HEAD" && input.body !== undefined && input.body !== null) {
-				bodyStr = JSON.stringify(interpolateDeep(input.body, inputs));
-				if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-			}
-
-			let res: Response;
-			try {
-				res = await safeFetch(url, { method, headers, body: bodyStr });
-			} catch (e) {
-				if (e instanceof SsrfError) return { content: `Blocked: ${e.message}`, success: false };
-				return { content: `Request failed: ${e instanceof Error ? e.message : String(e)}`, success: false };
-			}
-
-			const text = await res.text();
-			let raw: unknown = text;
-			try {
-				raw = JSON.parse(text);
-			} catch {
-				/* keep as text */
-			}
-
-			const responseMap = typeof input.responseMap === "string" ? input.responseMap : "";
-			const data = responseMap ? applyResponseMap(raw, responseMap) : raw;
-
-			const result: Record<string, unknown> = { status: res.status, data };
-			// pagination: surface the next-page marker so a source step can fan out.
-			if (input.pagination && typeof input.pagination === "object" && !Array.isArray(input.pagination)) {
-				const p = input.pagination as Record<string, unknown>;
-				const path = typeof p.path === "string" ? p.path : "";
-				const marker = path ? getPath(raw, path) : undefined;
-				result.nextCursor = marker ?? null;
-				result.paginationType = typeof p.type === "string" ? p.type : null;
-			}
-			if (responseMap && input.includeRaw === true) result.raw = raw;
-
-			return { content: JSON.stringify(result, null, 2), success: res.ok };
-		},
+		handler: (ctx: RegistryToolCtx, input) => executeHttpRequest(ctx, input),
 	},
 ];
+
+/**
+ * The shared request executor (issue #144). Runs a configuration-described HTTP call —
+ * `{{param}}` interpolation, api-key injection, SSRF-guarded fetch, responseMap extraction,
+ * pagination marker — and returns the standard `{ content, success }` ToolCallResult. This is
+ * the engine behind `http_request` AND every declarative connector-manifest tool
+ * (`compileConnector` → runs its tools through here). `opts.connectorId` selects which vault
+ * slot an `api-key` auth reads from (default "http") so a manifest connector uses its OWN key.
+ */
+export async function executeHttpRequest(
+	ctx: RegistryToolCtx,
+	input: Record<string, unknown>,
+	opts: { connectorId?: string } = {},
+): Promise<{ content: string; success: boolean }> {
+	const connectorId = opts.connectorId ?? "http";
+	const inputs = (input.inputs && typeof input.inputs === "object" && !Array.isArray(input.inputs)
+		? input.inputs
+		: {}) as Record<string, unknown>;
+
+	let auth: HttpAuth;
+	let url: string;
+	try {
+		auth = parseAuth(input.auth);
+		url = buildUrl(input, inputs);
+	} catch (e) {
+		return { content: e instanceof Error ? e.message : String(e), success: false };
+	}
+
+	const method = (typeof input.method === "string" ? input.method : "GET").toUpperCase();
+	const headers = new Headers();
+	if (input.headers && typeof input.headers === "object" && !Array.isArray(input.headers)) {
+		for (const [k, v] of Object.entries(interpolateDeep(input.headers, inputs) as Record<string, unknown>)) {
+			if (v !== undefined && v !== null) headers.set(k, String(v));
+		}
+	}
+
+	// Inject the vault API key into the configured header/query param. token() reads
+	// user_api_keys (provider = the connector id) via the connectorClient — the value is
+	// used only on the wire, never returned or logged.
+	if (auth.mode === "api-key") {
+		const key = await ctx.connectorClient?.(connectorId).token().catch(() => null);
+		if (!key) return { content: `No API key connected for the ${connectorId} connector — add one in the instance's Connections settings.`, success: false };
+		if (auth.key.in === "header") {
+			headers.set(auth.key.name, key);
+		} else {
+			const u = new URL(url);
+			u.searchParams.set(auth.key.name, key);
+			url = u.toString();
+		}
+	} else if (auth.mode === "bearer") {
+		const token = await ctx.connectorClient?.(connectorId).token().catch(() => null);
+		if (!token) return { content: `No credential connected for the ${connectorId} connector — connect it in the instance's Connections settings.`, success: false };
+		headers.set("Authorization", `Bearer ${token}`);
+	}
+
+	let bodyStr: string | undefined;
+	if (method !== "GET" && method !== "HEAD" && input.body !== undefined && input.body !== null) {
+		bodyStr = JSON.stringify(interpolateDeep(input.body, inputs));
+		if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+	}
+
+	let res: Response;
+	try {
+		res = await safeFetch(url, { method, headers, body: bodyStr });
+	} catch (e) {
+		if (e instanceof SsrfError) return { content: `Blocked: ${e.message}`, success: false };
+		return { content: `Request failed: ${e instanceof Error ? e.message : String(e)}`, success: false };
+	}
+
+	const text = await res.text();
+	let raw: unknown = text;
+	try {
+		raw = JSON.parse(text);
+	} catch {
+		/* keep as text */
+	}
+
+	const responseMap = typeof input.responseMap === "string" ? input.responseMap : "";
+	const data = responseMap ? applyResponseMap(raw, responseMap) : raw;
+
+	const result: Record<string, unknown> = { status: res.status, data };
+	// pagination: surface the next-page marker so a source step can fan out.
+	if (input.pagination && typeof input.pagination === "object" && !Array.isArray(input.pagination)) {
+		const p = input.pagination as Record<string, unknown>;
+		const path = typeof p.path === "string" ? p.path : "";
+		const marker = path ? getPath(raw, path) : undefined;
+		result.nextCursor = marker ?? null;
+		result.paginationType = typeof p.type === "string" ? p.type : null;
+	}
+	if (responseMap && input.includeRaw === true) result.raw = raw;
+
+	return { content: JSON.stringify(result, null, 2), success: res.ok };
+}
