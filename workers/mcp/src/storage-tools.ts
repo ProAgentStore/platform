@@ -213,6 +213,33 @@ export function registerStorageTools(
 		},
 	);
 
+	server.tool(
+		"create_instance_ticket",
+		"Put a ticket on an instance's kanban board — WITHOUT a runner. Each ticket carries a `reasoning` (the why behind the work), shown as the card's 'Why:' block. Use this to surface an agent's work as browsable, discrete tickets (vs. an infinite activity log). `status` maps to a board column (default 'completed' → Done).",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			title: z.string().describe("Short ticket title (what the work was)"),
+			reasoning: z.string().optional().describe("Why — the decision/audit, shown on the card"),
+			description: z.string().optional().describe("Optional one-line detail under the title"),
+			status: z.string().optional().describe("Board status → column (default 'completed')"),
+			type: z.string().optional().describe("Ticket type label (default 'ticket')"),
+		},
+		async ({ token, instance_id, title, reasoning, description, status, type }) => {
+			const t = tokenFor(token);
+			if (!t) return authRequired();
+			const denied = await requirePermission(safetyFor(token), "write", "create_instance_ticket", { instance_id });
+			if (denied) return denied;
+			const result = await authedCall(`/v1/instances/${instance_id}/tasks/direct`, t, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ title, reasoning, description, status, type }),
+			}, env);
+			await audit(safetyFor(token), { tool: "create_instance_ticket", action: "write", input: { instance_id, title } });
+			return jsonText(result);
+		},
+	);
+
 	// ── Files ────────────────────────────────────────────────────────────────
 
 	server.tool(
