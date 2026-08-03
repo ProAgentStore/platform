@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { CONNECTORS, connectorTools, getConnector } from "./registry.js";
 
 describe("connector registry", () => {
-	it("declares browser, github, http, meta, tmux, and web-search", () => {
+	it("declares browser, github, google_sheets, http, meta, tmux, and web-search", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
-		expect(ids).toEqual(["browser", "github", "http", "meta", "tmux", "web-search"]);
+		expect(ids).toEqual(["browser", "github", "google_sheets", "http", "meta", "tmux", "web-search"]);
 	});
 
 	it("browser is a no-auth local connector (relay-reached, like tmux), read+write", () => {
