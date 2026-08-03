@@ -45,6 +45,31 @@ can only write where the instance owner has granted that connector's write scope
 browser trust model lands. It bridges the runner's real-Chrome hands (`/browser/snapshot` +
 `/browser/act`) into the registry so a config/data agent can drive a browser without bespoke code.
 
+### Declarative connector manifests
+
+A connector no longer needs bespoke code. Most are now defined as a **manifest** —
+`{ id, label, auth, baseUrl, tools[] }` — compiled by `compileConnector` into the same
+`Connector`/`ToolDef` shape above (github, meta, and web-search are all manifests today). A tool
+is either **request-as-data** (`method`/`path`/`query`/`body` with `{{param}}` interpolation +
+`responseMap` extraction, run through the shared SSRF-guarded executor) or a named **handler**
+for the rare custom case. Manifest `auth` is one of `none` · `api-key` (vault key) · `platform-token`
+(a Worker env token) · `app` (GitHub-App) · `oauth2`.
+
+**Generic OAuth2** (`oauth2` connectors) uses one flow for every provider, driven by the manifest's
+`authUrl`/`tokenUrl`/`scopes` + the env-var names for the client credentials:
+
+```text
+GET    /v1/connectors/:id/oauth/start     → returns the provider authorize URL (signed state)
+GET    /v1/connectors/:id/oauth/callback  → exchanges the code, stores the refresh token (encrypted)
+GET    /v1/connectors/:id/oauth/status    → connected? configured?
+DELETE /v1/connectors/:id/oauth           → disconnect
+```
+
+So adding an OAuth SaaS (Slack, Sheets, Notion) is a manifest + an OAuth app whose redirect points
+at `/v1/connectors/<id>/oauth/callback` — no new route code. Client credentials live in Worker
+secrets (named by the manifest, resolved server-side); refresh tokens are envelope-encrypted under
+`KEY_ENCRYPTION_KEY`, exactly like the ingest connectors.
+
 ## Recommended Permission Model (ingest connectors)
 
 Connect providers to the account, not to individual agents.

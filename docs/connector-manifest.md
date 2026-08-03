@@ -1,13 +1,17 @@
 # Declarative connectors — the connector manifest
 
-> **Status:** **Phase 1 landed (2026-08)** — epic #143. The executor (`executeHttpRequest`,
-> #144), `compileConnector` + `sanitizeConnectorManifest` (#145), the per-tool `handler` escape
-> hatch, and the reference conversions of **web-search, github, and meta** to manifests (#146)
-> are all shipped and behavior-identical (173 connector tests green). Remaining: **#147** the
-> generic OAuth2 handler (unlocks Slack/Sheets/Notion as data-only manifests). The next
-> flexibility unlock after declarative agent capabilities landed (#141). Companion to
+> **Status:** **COMPLETE (2026-08)** — epic #143 fully landed. The executor
+> (`executeHttpRequest`, #144), `compileConnector` + `sanitizeConnectorManifest` (#145), the
+> per-tool `handler` escape hatch + the conversions of **web-search, github, and meta** to
+> manifests (#146), and the **generic OAuth2 handler** (`/v1/connectors/:id/oauth/*`, #147) are
+> all shipped and behavior-identical (174 connector tests green, api suite 1353). A connector is
+> now data: an api-key/bearer SaaS is a manifest object; an OAuth SaaS is a manifest + an OAuth
+> app registration — no bespoke route/tool code, no deploy per integration. This was the
+> flexibility unlock after declarative agent capabilities (#141). Companion to
 > [`agent-platform-strategy.md`](./agent-platform-strategy.md) (Tier‑1) and the gating plan in
-> [`third-party-agents-plan.md`](./third-party-agents-plan.md) (#51 "open tool catalog").
+> [`third-party-agents-plan.md`](./third-party-agents-plan.md) (#51 "open tool catalog"). The
+> remaining piece for *creator-supplied* manifests is the curated-review gate (#53/#54), tracked
+> in the third-party plan — the runtime substrate is done.
 
 ## The problem
 
