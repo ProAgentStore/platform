@@ -375,6 +375,35 @@ describe("write tools — scope gating + audit", () => {
 		expect(JSON.parse(call.body!)).toEqual({ key: "fav_color", type: "preference", content: "blue", source: "user" });
 	});
 
+	it("set_instance_model PUTs the model to the instance /state and audits (#151)", async () => {
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/state") && m === "PUT", { body: { ok: true } });
+		const res = await h.tools.get("set_instance_model")!.handler({
+			instance_id: "i1",
+			model: "@cf/meta/llama-4-scout-17b-16e-instruct",
+		});
+		const call = h.fetchStub.calls[0];
+		expect(call.url).toBe("https://api.test/v1/instances/i1/state");
+		expect(call.method).toBe("PUT");
+		expect(JSON.parse(call.body!)).toEqual({ model: "@cf/meta/llama-4-scout-17b-16e-instruct" });
+		expect((res as { content: { text: string }[] }).content[0].text).not.toContain("Error");
+		expect(h.auditEvents().some((e) => e.tool === "set_instance_model" && e.action === "completed")).toBe(true);
+	});
+
+	it("set_instance_model rejects an empty model without calling the API", async () => {
+		const h = setup();
+		const res = await h.tools.get("set_instance_model")!.handler({ instance_id: "i1", model: "   " });
+		expect((res as { content: { text: string }[] }).content[0].text).toContain("non-empty");
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+
+	it("set_instance_model is gated behind the write scope", async () => {
+		const h = setup({ scopes: ["read"] });
+		const res = await h.tools.get("set_instance_model")!.handler({ instance_id: "i1", model: "claude-sonnet-4-6" });
+		expect((res as { content: { text: string }[] }).content[0].text).toContain('requires MCP scope "write"');
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+
 	it("set_translation_config sends only the patched fields", async () => {
 		const h = setup();
 		h.fetchStub.respond((u) => u.endsWith("/translation"), { body: { ok: true } });

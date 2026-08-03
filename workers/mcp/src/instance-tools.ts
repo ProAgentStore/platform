@@ -1484,6 +1484,40 @@ export function registerInstanceTools(
 	);
 
 	server.tool(
+		"set_instance_model",
+		"Change a subscribed instance's chat model — the programmatic path to move an instance off a model stuck from a pre-fix subscribe (#151). An instance copies its model at subscribe and never re-reads the template, so a pre-fix instance can be frozen on a non-tool-capable model (it then confabulates instead of querying its collections). Recommended tool-capable Cloudflare models: @cf/meta/llama-4-scout-17b-16e-instruct (default), @cf/meta/llama-3.3-70b-instruct-fp8-fast, @cf/mistralai/mistral-small-3.1-24b-instruct, @cf/qwen/qwen2.5-coder-32b-instruct. BYOK Anthropic (e.g. claude-sonnet-4-6) is tool-capable and used when the owner has an Anthropic key.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			model: z.string().describe('The model id to set, e.g. "@cf/meta/llama-4-scout-17b-16e-instruct" or "claude-sonnet-4-6".'),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, model, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const m = String(model || "").trim();
+			if (!m) return jsonText({ error: "A non-empty `model` id is required." });
+			const input = { instance_id, model: m };
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_model", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "set_instance_model", `set instance model to ${m}`, input, {
+					endpoint: `/v1/instances/${instance_id}/state`,
+					method: "PUT",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/state`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ model: m }) },
+				env,
+			);
+			if (!(data as { error?: string }).error) await audit(safetyFor(token), { tool: "set_instance_model", action: "completed", input, result: data });
+			return jsonText(data);
+		},
+	);
+
+	server.tool(
 		"get_translation_config",
 		"Read a subscribed instance's translation display config (translation under messages, transliteration/pinyin, word-tap pronunciation, font size).",
 		{
