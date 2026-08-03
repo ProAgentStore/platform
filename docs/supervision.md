@@ -106,6 +106,56 @@ already exists for the pump (`traceId` → child run → a `chain.link` event un
 should carry unchanged, so a three-level delegation reads as a single tree rather than five
 unrelated runs.
 
+## The loop belongs to the platform too
+
+Supervision needs an autonomous worker to delegate *to*. Today that worker is half in the wrong
+place.
+
+The platform **already owns the thinking**: `POST /v1/instances/:id/loop-decide` lives in
+`routes/instances.ts` — not `coding.ts` — with a pure `lib/loop-decide.ts`. It is instance-scoped
+and agent-generic.
+
+The **browser owns the persistence**: `store/console/src/pages/InstanceDetail.tsx` polls that
+endpoint and sends the next instruction. Close the tab and an in-flight objective dies. Meanwhile
+the Pilot (`CodingSessionWorkflow`) is a durable server-side loop, but Coder-bound and tied to the
+`workflow` enum.
+
+Three overlapping mechanisms, and the decide step — the hard part — is already right. What is
+missing is a **durable, generic loop runner** any agent can use, with the Pilot as one
+configuration.
+
+Two consequences make this blocking rather than tidy-up:
+
+**You cannot budget a loop you do not own.** Every enforcement point the budget needs (#184) sits
+on the server side of a loop the server does not drive. So the platform loop is a *precondition*
+for budgets, not parallel work.
+
+**It is a straight UX improvement.** A durable loop survives tab close, phone lock and laptop
+sleep, and can be reattached from another device — and it makes `max iterations`, already in the
+Loop UI, meaningful rather than best-effort.
+
+Tracked in #158 (re-scoped and un-deferred).
+
+## Budgets without breaking what exists
+
+Coder already exposes a budget: the Loop's **`max iterations`**. So this generalizes a concept the
+product has taught rather than imposing a new one. Three conditions keep it from becoming an
+obstacle:
+
+1. **Attended work is not hard-capped.** When a human clicks Loop and watches, the human is the
+   circuit breaker. Hard stops belong on unattended paths (cron, webhook, delivery, sleeping
+   delegation); interactive paths get visibility, not enforcement. Chat and `/explain` are not
+   gated at all.
+2. **Exhaustion is a pause with a one-click raise, never a failure.** Stopping at iteration 30 and
+   losing the session is strictly worse than today's no-limit. Pause, keep the timeline, offer
+   "continue", resume without redoing work.
+3. **Defaults come from the ledger.** `ai_usage` separates `kind` (`coding`/`copilot`/`overseer`/
+   `chat`) with `cost_micros`. Set defaults above the 95th percentile of real sessions; the
+   acceptance test is "what fraction of historical sessions would this have interrupted?" — target
+   ~0.
+
+Design goal: **invisible in normal use, decisive in a runaway.**
+
 ## The other half: configuring a Coder at all
 
 "Configure a Coder agent" needs more than supervision. Status of the authoring path:
@@ -125,6 +175,8 @@ hierarchy is platform-provided." They are independent and can proceed in paralle
 
 1. **#156 — generalize `delegate(target, goal)`.** The target-type change (repoId → supervisable
    entity). Everything else depends on it, and it is the smallest useful step.
+1b. **#158 — platform-provided durable loop.** Supervision needs a worker to delegate to, and
+   budgets need a loop the server drives. Can proceed in parallel with #156.
 2. **Supervision graph as data** — the edge table, DAG validation, wiring API; reuse the 0058
    outbox for handoff.
 3. **Budget + authority containment** — depth/spend flowing down, and the no-privilege-inheritance
@@ -141,8 +193,9 @@ the primitive, and when it is, the hardcoded route comes out.
 | Work | Ticket |
 |---|---|
 | Generalize `delegate(target, goal)` | #156 (un-deferred) |
+| Platform-provided durable agent loop | #158 (re-scoped, un-deferred) |
 | Supervision graph as configured data | #183 |
-| Delegation budget — depth + spend | #184 |
+| Autonomous work budget — cost, count, depth | #184 |
 | Authority containment (no privilege inheritance) | #185 |
 | Typed task/handoff + escalation ladder | #157 |
 | Cross-agent delegation | #159 (un-deferred) |
