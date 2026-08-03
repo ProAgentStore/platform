@@ -25,8 +25,13 @@ Ready today for **first-party / curated** agents — three working paths (config
 `create_agent` + `agent-builder`; standalone-worker via `scaffold_agent` + templates;
 runtime-backed Tier-0 like coder/apply). What blocks *third parties*:
 
-1. **Capability vocabulary is a closed union** — `AgentSurface`/`workflow` in
-   `lib/agent-capabilities.ts` are hardcoded; a new agent shape needs a monorepo PR.
+1. **Capability *values* are still a closed union** — the capability *fields* are now
+   declarative and wired end-to-end (create + update accept/validate `capabilities` via
+   `sanitizeDeclaredCapabilities` + a claims lint, #141), but their *values* remain code-backed:
+   `workflow` is a fixed enum and connectors are hand-written modules — a genuinely new agent
+   shape (new autonomous loop, new integration) still needs a monorepo PR. Opening the vocabulary
+   = **declarative connectors** (see [`connector-manifest.md`](./connector-manifest.md)) +
+   retiring the `workflow` enum for composed steps/triggers.
 2. **No isolated code execution** — no Dynamic Workers; creator custom logic can't run safely.
 3. **No creator authoring UI** — creation is API/MCP only.
 4. **Metering/payouts incomplete** — in flight on `feat/admin-platform-metering` (#28–#46).
@@ -35,7 +40,7 @@ runtime-backed Tier-0 like coder/apply). What blocks *third parties*:
 
 | # | Workstream | Note |
 |---|---|---|
-| #51 | Tier-1: declarative agent schema + **open tool catalog** + shared runtime | **Partly landed** — tool catalog + per-agent `capabilities.tools` allowlist (PR #59, live) and `repo-chat` dogfooded onto it (PR #61, live). A formal `AgentDefinition` (PR #62) was prototyped then **removed as unwired dead code** — rebuild it *with* the create/update wiring. Remaining: wire create/update to accept a full definition + shared-runtime convergence. |
+| #51 | Tier-1: declarative agent schema + **open tool catalog** + shared runtime | **Mostly landed** — tool catalog + per-agent `capabilities.tools` allowlist (PR #59, live), `repo-chat` dogfooded onto it (PR #61, live), and create+update now accept/validate declarative `capabilities` (`sanitizeDeclaredCapabilities` + claims lint, #141). Remaining: **open the vocabulary** — declarative connectors ([`connector-manifest.md`](./connector-manifest.md)) + retire the `workflow` enum for composed steps/triggers — then shared-runtime convergence. |
 | #52 | **Tier-2: sandboxed creator code via Dynamic Workers** | **Critical path.** Worker Loader + scoped bindings + server-side secret injection; never `eval()` |
 | #53 | Curated publish + review pipeline | `draft → in_review → listed → suspended`; per-version review + rollback |
 | #54 | Automated pre-review safety scanning | Tool-scope, SSRF, secret-access, prompt-injection, cost-bomb heuristics → risk score |
@@ -48,9 +53,10 @@ runtime-backed Tier-0 like coder/apply). What blocks *third parties*:
 - **Phase 0 — foundation (partly in flight):** admin access-control (#28), metering (#44),
   usage/spend + kill switch (#39/#46), moderation UI (#41). The safety net that must exist first.
 - **Phase 1 — Tier-1 to invited creators:** #51 + #53 + #55 (config-only authoring, curated).
-  ✓ Foundation landed (tool catalog #59) and `repo-chat` is dogfooded
-  onto it (#61 — declares its tools as data). Remaining: wire create/update to a full
-  definition, the review pipeline (#53), and the authoring UI (#55).
+  ✓ Foundation landed: tool catalog (#59), `repo-chat` dogfooded onto it (#61), and
+  create/update wired to declarative capabilities (#141). Remaining: **open the vocabulary**
+  (declarative connectors → [`connector-manifest.md`](./connector-manifest.md)), the review
+  pipeline (#53), and the authoring UI (#55).
 - **Phase 2 — Tier-2 code (the hard part):** #52 + #54 + #56. Red-team the sandbox before
   any third party touches it.
 - **Phase 3 — widen + monetize:** loosen curation as guardrails mature; flip payouts (#57).

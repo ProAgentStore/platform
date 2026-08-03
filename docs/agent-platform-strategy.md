@@ -46,13 +46,21 @@ into identity/prompt/guardrails/tools[]/model/surfaces/runtime) + a shared
 multi-tenant runtime (the `AgentDO` chat loop is ~80% there). Possibly **Code Mode**
 for tool execution.
 
-> **Progress (2026-08): mostly landed.** `agents.config.capabilities` now carries a
-> declared `tools[]` allowlist against a data-driven `TOOL_CATALOG` (PR #59); the formal
-> a formal `AgentDefinition`/`sanitizeAgentDefinition` was prototyped (PR #62) but **removed
-> as premature dead code** — nothing wired it; rebuild it alongside the create/update route
-> when that's actually done. And
-> `repo-chat` is the first agent that declares its tools as data (PR #61). Remaining:
-> wire create/update to a full definition + converge onto the shared runtime.
+> **Progress (2026-08): landed.** `agents.config.capabilities` carries a declared `tools[]`
+> allowlist against a data-driven `TOOL_CATALOG` (PR #59), and `repo-chat` is the first agent
+> that declares its tools as data (PR #61). The create *and* update routes now accept + validate
+> declarative capabilities (`sanitizeDeclaredCapabilities` + a claims-vs-capabilities lint,
+> #141) — a Coder-equivalent can be stamped out from config, no monorepo PR. The earlier
+> free-standing `AgentDefinition` (PR #62) was dropped as premature; #141 is the wired form.
+>
+> **The next frontier — open the vocabulary.** The capability *fields* are now declarative, but
+> their *values* are still closed enums backed by code: `workflow` is a fixed set
+> (`JOB_APPLY`/`CODING_SESSION`/`INSURANCE_QUOTES`) and connectors are hand-written modules. The
+> two unlocks: (1) **declarative connectors** — a connector becomes a reviewed JSON manifest
+> instead of a `.ts` + deploy (see [`connector-manifest.md`](./connector-manifest.md)); (2)
+> **declarative behavior** — retire the `workflow` enum in favor of composed steps/triggers so a
+> creator can define a *new* autonomous loop, not just pick one of three. Then converge onto the
+> shared multi-tenant runtime.
 
 ### Tier 2 — Code agents via Dynamic Workers (the "write on the fly" path)
 When an agent needs custom logic, the creator (or **Coder itself**) writes code that
