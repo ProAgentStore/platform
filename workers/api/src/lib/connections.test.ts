@@ -233,3 +233,29 @@ describe("validateConnectionFilter", () => {
 		expect(validateConnectionFilter("nope")).toMatch(/clause array/);
 	});
 });
+
+describe("validateConnectionFilter — a clause that can NEVER match is a rejected clause", () => {
+	it("rejects a numeric comparison against a string value", () => {
+		// "Only Sydney leads rated 4+" written as `{"op":"gte","value":"4"}` — the natural result
+		// of a text input or a hand-written JSON body. `evalClause` requires BOTH sides to be
+		// numbers, so this is a guaranteed false: the connection is created, shows enabled and
+		// healthy, and silently drops every event. That is the exact never-matches failure this
+		// validation exists to catch, and it walked straight past it.
+		for (const op of ["gt", "gte", "lt", "lte"]) {
+			expect(validateConnectionFilter([{ field: "rating", op, value: "4" }])).toMatch(/never match/);
+			expect(validateConnectionFilter([{ field: "rating", op, value: 4 }])).toBeNull();
+		}
+	});
+
+	it("rejects a `contains` against a non-string value", () => {
+		expect(validateConnectionFilter([{ field: "name", op: "contains", value: 42 }])).toMatch(/never match/);
+		expect(validateConnectionFilter([{ field: "name", op: "contains", value: "cafe" }])).toBeNull();
+	});
+
+	it("still allows eq/ne against any type, and the value-free ops", () => {
+		expect(validateConnectionFilter([{ field: "x", op: "eq", value: "s" }])).toBeNull();
+		expect(validateConnectionFilter([{ field: "x", op: "ne", value: 3 }])).toBeNull();
+		expect(validateConnectionFilter([{ field: "x", op: "exists" }])).toBeNull();
+		expect(validateConnectionFilter([{ field: "x", op: "truthy" }])).toBeNull();
+	});
+});

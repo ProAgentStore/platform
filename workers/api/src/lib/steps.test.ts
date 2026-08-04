@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getRegistryTool, runRegistryTool } from "./tool-registry.js";
+import { differsFrom } from "./steps.js";
 import type { RegistryToolCtx } from "./tool-registry.js";
 import type { ConnectorClient } from "./connectors/client.js";
 
@@ -152,7 +153,7 @@ describe("flatten", () => {
 // Mock the instance DO: GET records?where= returns a seen map keyed by place_id; POST
 // inserts; PUT updates. Proves insert-vs-update routing + that we never double-insert a
 // key that already exists (respecting the collection's unique constraint).
-function mockAgentStub(seen: Record<string, string>) {
+function mockAgentStub(seen: Record<string, string>, stored: Record<string, Record<string, unknown>> = {}) {
 	const calls: Array<{ method: string; url: string; body?: any }> = [];
 	const fetch = vi.fn(async (req: Request) => {
 		const url = new URL(req.url);
@@ -163,7 +164,9 @@ function mockAgentStub(seen: Record<string, string>) {
 			const where = JSON.parse(url.searchParams.get("where") || "{}");
 			const kv = String(Object.values(where)[0]);
 			const id = seen[kv];
-			return new Response(JSON.stringify({ records: id ? [{ id }] : [], total: id ? 1 : 0 }), { status: 200 });
+			// The real route answers full CollectionRecords (id + data) — `emitOn:"update"` has
+			// to compare against that data to know whether anything actually changed.
+			return new Response(JSON.stringify({ records: id ? [{ id, data: stored[kv] }] : [], total: id ? 1 : 0 }), { status: 200 });
 		}
 		if (method === "POST") return new Response(JSON.stringify({ id: "new1" }), { status: 201 });
 		if (method === "PUT") return new Response(JSON.stringify({ id: "existing" }), { status: 200 });
@@ -687,5 +690,89 @@ describe("dedupe_upsert — emitOn (what makes an agent CHAIN possible)", () => 
 	it("emits nothing at all when no event is declared", async () => {
 		const { delivered } = await emitFor({ collection: "leads", key: "place_id", items: ITEMS, emitOn: "both" }, { p_old: "existing" });
 		expect(delivered).toHaveLength(0);
+	});
+});
+
+describe("dedupe_upsert emitOn:\"update\" — a re-write is not a CHANGE", () => {
+	// `changedRows` decides what emitOn:"update"/"both" emits, and it used to be pushed on every
+	// successful PUT — i.e. "every record that already existed", not "every record that changed".
+	// site-deploy uses `mode:"update", emit:"site.live", emitOn:"both"`, so re-running it for an
+	// unchanged place_id (a re-approved ticket — `failed` is runnable — or a scheduled re-run)
+	// re-emitted `site.live`. The idempotency key cannot collapse it, because a new run has a new
+	// traceId. The wired Outreach instance then drafted, and billed for, a second pitch for a site
+	// that had not changed. `differsFrom` is that decision.
+	const item = { place_id: "p1", name: "Cafe", site_status: "live" };
+
+	it("says NO CHANGE for a byte-identical record", () => {
+		expect(differsFrom({ ...item }, item)).toBe(false);
+	});
+
+	it("says CHANGED for the state transition the chain is built on", () => {
+		expect(differsFrom({ ...item, site_status: "drafted" }, item)).toBe(true);
+	});
+
+	it("says CHANGED when the record is missing a field the pipeline writes", () => {
+		expect(differsFrom({ place_id: "p1", name: "Cafe" }, item)).toBe(true);
+	});
+
+	it("says CHANGED when there is no stored record to compare against", () => {
+		expect(differsFrom(undefined, item)).toBe(true);
+	});
+
+	it("ignores stored fields the pipeline does not write — the audit trail is not a change", () => {
+		expect(differsFrom({ ...item, audit: [{ step: 1 }], other_pipeline_col: 7 }, item)).toBe(false);
+	});
+
+	it("compares nested values structurally, not by reference", () => {
+		expect(differsFrom({ a: { b: [1, 2] } }, { a: { b: [1, 2] } })).toBe(false);
+		expect(differsFrom({ a: { b: [1, 2] } }, { a: { b: [1, 3] } })).toBe(true);
+	});
+
+	it("treats undefined and null as the same absence", () => {
+		// A record round-tripped through JSON loses `undefined`; that is not a state change.
+		expect(differsFrom({ x: null }, { x: undefined } as Record<string, unknown>)).toBe(false);
+	});
+
+	it("still upserts the record either way — this only decides whether to ANNOUNCE it", async () => {
+		const { env, calls } = mockAgentStub({ p1: "existing" }, { p1: { ...item } });
+		const ctx = { env, instanceId: "inst1", userId: "u1" } as RegistryToolCtx;
+		const r = await dedupeT.handler(ctx, {
+			collection: "sites", key: "place_id", mode: "update", emit: "site.live", emitOn: "update", items: [item],
+		});
+		expect(parse(r.content)).toMatchObject({ updated: 1 });
+		expect(calls.some((c) => c.method === "PUT")).toBe(true);
+	});
+});
+
+describe("enrich — a step whose every call failed is not a successful step", () => {
+	it("FAILS when every per-item tool call failed, instead of writing the error text as data", async () => {
+		// With no vault key, `web_search` returns success:false and a prose message. enrich ignored
+		// `success` entirely: it wrote "No API key connected for the web-search connector…" onto
+		// every record under `as`, returned success, and the run closed "completed" with errors: 0
+		// — prose in the collection where structured data belonged, and nothing to find.
+		const r = await enrichT.handler(baseCtx, {
+			items: [{ id: 1 }, { id: 2 }],
+			tool: "definitely_not_a_tool",
+			as: "result",
+		});
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/all 2 .*call\(s\) failed/i);
+	});
+
+	it("reports a PARTIAL failure count while still returning the good records", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (u: any) => {
+			if (String(u).includes("live")) return new Response("hi", { status: 200 });
+			throw new Error("ECONNREFUSED");
+		});
+		const r = await enrichT.handler(baseCtx, {
+			items: [{ websiteUri: "https://live.test" }, { websiteUri: "https://dead.test" }],
+			tool: "http_reachable",
+			input: { url: { $item: "websiteUri" } },
+			as: "reachable",
+		});
+		// http_reachable reports a dead host as ok:false but the CALL succeeds — a partial
+		// business-level result is not a step failure.
+		expect(r.success).toBe(true);
+		expect(parse(r.content).count).toBe(2);
 	});
 });

@@ -463,7 +463,28 @@ export async function runDueTriggers(env: Env, now = new Date(), limit = 25): Pr
 	let dispatched = 0;
 	let failed = 0;
 	for (const trigger of results ?? []) {
-		const next = trigger.schedule ? applyJitter(nextRunAt(trigger.schedule, now), parseConfig(trigger.config).jitterMinutes) : null;
+		// Computing the next run must not be able to abort the SWEEP. `normalizeSchedule` throws
+		// on anything the CURRENT grammar rejects, and rows exist that an older grammar accepted
+		// — `* * * * *` was creatable until the minute-floor check (cf79306). Such a row is due
+		// every tick, sorts first (ORDER BY next_run_at ASC), and threw before the claim UPDATE,
+		// so its next_run_at never advanced and it was first again next minute: ONE bad row and
+		// no cron trigger on the whole platform ever fires again, for any user, with nothing but
+		// a repeating admin-log entry to say so.
+		let next: string | null;
+		try {
+			next = trigger.schedule ? applyJitter(nextRunAt(trigger.schedule, now), parseConfig(trigger.config).jitterMinutes) : null;
+		} catch (e) {
+			// Disable the row and record why. It cannot be repaired here (the schedule is invalid
+			// under the current grammar), and leaving it enabled means re-hitting it every minute.
+			await env.DB.prepare(
+				"UPDATE agent_triggers SET enabled = 0, next_run_at = NULL, last_error = ?2, updated_at = datetime('now') WHERE id = ?1",
+			)
+				.bind(trigger.id, `Disabled: schedule "${trigger.schedule}" is no longer valid — ${e instanceof Error ? e.message : String(e)}`.slice(0, 300))
+				.run()
+				.catch(() => undefined);
+			failed++;
+			continue;
+		}
 		// Atomic claim (compare-and-swap on next_run_at): the "* * * * *" cron can have
 		// overlapping scheduled() invocations, and a plain WHERE id=? UPDATE let BOTH read the
 		// same due row and dispatch it → duplicate tasks/knowledge. Advance only if next_run_at

@@ -110,6 +110,8 @@ export interface EnqueueInput {
 	payload: unknown;
 	config: Record<string, unknown>;
 	traceId?: string | null;
+	/** The caller will attempt this delivery inline — hold it off the cron sweep meanwhile. */
+	claimedInline?: boolean;
 }
 
 /**
@@ -121,11 +123,17 @@ export async function enqueueDelivery(env: Env, input: EnqueueInput): Promise<st
 	const id = crypto.randomUUID();
 	const key = idempotencyKey(input.connectionId, input.traceId, input.payload);
 	const now = new Date().toISOString();
+	// A caller that will attempt this delivery INLINE (deliverEvent) pre-claims it, so the
+	// per-minute cron can't see the freshly-inserted row as due and run the same delivery
+	// concurrently. If the inline attempt dies before writing an outcome, the hold lapses and the
+	// sweep picks it up — nothing is stranded. Callers that only enqueue (a failed trigger being
+	// handed to the outbox) leave it due now, so the normal ~1m backoff applies.
+	const dueAt = input.claimedInline ? new Date(Date.now() + CLAIM_HOLD_MS).toISOString() : now;
 	const res = await env.DB.prepare(
 		`INSERT OR IGNORE INTO agent_connection_deliveries
        (id, connection_id, source, user_id, source_instance_id, target_instance_id, event_type, action,
         payload, config, idempotency_key, trace_id, status, attempts, next_attempt_at, created_at, updated_at)
-     VALUES (?1, ?2, ?13, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 0, ?12, ?12, ?12)`,
+     VALUES (?1, ?2, ?13, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 0, ?14, ?12, ?12)`,
 	)
 		.bind(
 			id,
@@ -143,6 +151,7 @@ export async function enqueueDelivery(env: Env, input: EnqueueInput): Promise<st
 			// #17: the outbox is shared with triggers now. Defaults to 'connection' so every
 			// existing caller is unchanged.
 			input.source ?? "connection",
+			dueAt,
 		)
 		.run();
 	return (res.meta?.changes ?? 0) > 0 ? id : null;
@@ -185,6 +194,43 @@ export async function markAttemptFailed(env: Env, id: string, attempts: number, 
 		.bind(id, nextAttempts, next, error.slice(0, 2000), now.toISOString())
 		.run();
 	return "retrying";
+}
+
+/**
+ * How long a claimed delivery is held before it becomes due again.
+ *
+ * Long enough for the slowest attempt (starting a consumer pipeline / DO fetch) to finish, short
+ * enough that an attempt killed mid-flight by an isolate reset comes back rather than stranding.
+ */
+const CLAIM_HOLD_MS = 5 * 60 * 1000;
+
+/**
+ * Claim a delivery for THIS attempt. Returns false when someone else already has it.
+ *
+ * Compare-and-swap on `next_attempt_at`, exactly the trick `runDueTriggers` uses on
+ * `next_run_at` — and for the same reason. Without it the sweep SELECTed due rows and only wrote
+ * `status` AFTER the action completed, so nothing stopped two runs executing the same delivery:
+ * the cron is `* * * * *`, `enqueueDelivery` inserts with `next_attempt_at = now` and the caller
+ * then attempts it INLINE, and a sweep of 25 rows each starting a Workflow can easily exceed 60s
+ * and overlap the next tick. A `run_pipeline` delivery executed twice means the consuming
+ * pipeline runs twice — site-builder builds and bills BYOK tokens twice, site-deploy deploys
+ * twice — and both attempts then `markDelivered`, so nothing records that it happened. That
+ * directly breaks the stated "the consumer's irreversible work can't happen twice".
+ *
+ * The idempotency key protects the ENQUEUE, not the attempt; this protects the attempt.
+ *
+ * Pushing `next_attempt_at` forward (rather than moving to an `attempting` status) keeps the row
+ * recoverable: if the attempt dies without writing an outcome, it simply becomes due again.
+ */
+export async function claimDelivery(env: Env, row: DeliveryRow, now = new Date()): Promise<boolean> {
+	const hold = new Date(now.getTime() + CLAIM_HOLD_MS).toISOString();
+	const res = await env.DB.prepare(
+		`UPDATE agent_connection_deliveries SET next_attempt_at = ?2, updated_at = ?3
+       WHERE id = ?1 AND status = 'pending' AND next_attempt_at IS ?4`,
+	)
+		.bind(row.id, hold, now.toISOString(), row.next_attempt_at)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 /** Pending deliveries whose next attempt is due (the cron sweep's only read). */

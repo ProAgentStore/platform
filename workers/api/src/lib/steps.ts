@@ -26,6 +26,21 @@ function asArray(v: unknown): unknown[] {
 	return [];
 }
 
+/**
+ * Did an upsert actually change anything? Compares ONLY the fields the incoming record carries.
+ *
+ * Deliberately one-sided: the stored record also holds fields this pipeline does not write (the
+ * audit trail, another pipeline's columns), and their presence is not a change. Missing stored
+ * data counts as changed, since we cannot show it did not.
+ */
+export function differsFrom(stored: Record<string, unknown> | undefined, incoming: Record<string, unknown>): boolean {
+	if (!stored) return true;
+	for (const [k, v] of Object.entries(incoming)) {
+		if (JSON.stringify(stored[k] ?? null) !== JSON.stringify(v ?? null)) return true;
+	}
+	return false;
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
 	return typeof v === "object" && v !== null && !Array.isArray(v);
 }
@@ -492,15 +507,23 @@ export const STEP_TOOLS: ToolDef[] = [
 				if (kv === undefined || kv === null) { skipped++; continue; }
 				// Look up an existing record by the key field (indexed lookup when the field is indexed/unique).
 				const q = await stub.fetch(new Request(`${base}?where=${encodeURIComponent(JSON.stringify({ [key]: kv }))}&limit=1`));
-				const found = q.ok ? ((await q.json()) as { records?: Array<{ id: string }> }).records ?? [] : [];
+				const found = q.ok ? ((await q.json()) as { records?: Array<{ id: string; data?: Record<string, unknown> }> }).records ?? [] : [];
 				if (found.length > 0) {
 					if (mode === "skip") { skipped++; continue; }
+					// Whether the record ACTUALLY changed, decided before the write — `emitOn:
+					// "update"` is documented as "only records that changed", but pushing on every
+					// successful PUT made it "every record that already existed". A re-approved
+					// ticket or a scheduled re-run then re-emitted `site.live` for a byte-identical
+					// row, and the idempotency key cannot collapse it because a new run has a new
+					// traceId — so the wired Outreach instance drafted a second pitch, and billed
+					// for it, for a site that had not changed.
+					const changed = differsFrom(found[0].data, item);
 					const res = await stub.fetch(new Request(`${base}/${encodeURIComponent(found[0].id)}`, {
 						method: "PUT",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ data: item }),
 					}));
-					if (res.ok) { updated++; changedRows.push(item); } else skipped++;
+					if (res.ok) { updated++; if (changed) changedRows.push(item); } else skipped++;
 				} else {
 					const res = await stub.fetch(new Request(base, {
 						method: "POST",
@@ -619,9 +642,21 @@ export const STEP_TOOLS: ToolDef[] = [
 			const template = isRecord(input.input) ? input.input : {};
 			const concurrency = Number(input.concurrency) || 4;
 			const { runRegistryTool } = await import("./tool-registry.js");
+			let failedCount = 0;
+			let firstError = "";
 			const out = await mapWithConcurrency(items, concurrency, async (item) => {
 				const perItemInput = resolveItemTemplate(template, item) as Record<string, unknown>;
 				const r = await runRegistryTool(tool, ctx, perItemInput);
+				// `r.success` used to be ignored entirely, so a failure's MESSAGE was parsed as data
+				// and written onto the record. With no vault key, every lead got
+				// `"No API key connected for the web-search connector…"` under `as`, the step
+				// returned success, the run closed "completed" with `errors: 0`, and prose landed
+				// in the collection where structured data belonged — with nothing anywhere for the
+				// owner to find. A typo'd tool name did the same with "Unknown tool: x".
+				if (!r.success) {
+					failedCount++;
+					if (!firstError) firstError = r.content.slice(0, 200);
+				}
 				let result: unknown;
 				try {
 					result = JSON.parse(r.content);
@@ -630,7 +665,13 @@ export const STEP_TOOLS: ToolDef[] = [
 				}
 				return { ...item, [as]: result };
 			});
-			return ok(JSON.stringify({ items: out, count: out.length }, null, 2));
+			// Every item failing means the tool is misconfigured, not that the data was odd — fail
+			// the step so the run says so. A partial failure stays successful (the good records are
+			// real) but reports the count, so it is visible rather than silent.
+			if (failedCount && failedCount === items.length) {
+				return fail(`enrich: all ${failedCount} "${tool}" call(s) failed — ${firstError}`);
+			}
+			return ok(JSON.stringify({ items: out, count: out.length, failed: failedCount, ...(firstError ? { firstError } : {}) }, null, 2));
 		},
 	},
 

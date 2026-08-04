@@ -18,6 +18,7 @@ import { executeTriggerAction, type TriggerAction } from "./triggers.js";
 import { logEvent } from "./events.js";
 import { matchesWhere } from "./steps.js";
 import {
+	claimDelivery,
 	dueDeliveries,
 	enqueueDelivery,
 	markAttemptFailed,
@@ -118,6 +119,17 @@ export function validateConnectionFilter(raw: unknown): string | null {
 		if (typeof c.field !== "string" || !c.field.trim()) return `filter clause ${i} needs a "field"`;
 		if (typeof c.op !== "string" || !FILTER_OPS.has(c.op)) return `filter clause ${i}: op must be one of ${[...FILTER_OPS].join(", ")}`;
 		if (c.op === "in" && !Array.isArray(c.value)) return `filter clause ${i}: "in" needs an array value`;
+		// The VALUE's type matters as much as the op. `evalClause` requires both sides to be
+		// numbers for gt/gte/lt/lte and both strings for contains, so `{op:"gte", value:"4"}` — the
+		// natural result of a text input or a hand-written JSON body — is a guaranteed false. The
+		// connection is then created, shows enabled and healthy, and silently drops every event:
+		// exactly the never-matches failure this function exists to catch.
+		if ((c.op === "gt" || c.op === "gte" || c.op === "lt" || c.op === "lte") && typeof c.value !== "number") {
+			return `filter clause ${i}: "${c.op}" compares numbers, so value must be a number (got ${typeof c.value}) — it would never match`;
+		}
+		if (c.op === "contains" && typeof c.value !== "string") {
+			return `filter clause ${i}: "contains" compares strings, so value must be a string (got ${typeof c.value}) — it would never match`;
+		}
 	}
 	return null;
 }
@@ -226,6 +238,7 @@ export async function deliverEvent(
 				payload,
 				config,
 				traceId: opts.traceId ?? null,
+				claimedInline: true, // attempted immediately below — keep the cron off it meanwhile
 			});
 			if (!deliveryId) {
 				// The idempotency key collided: this exact emission is already recorded.
@@ -303,7 +316,21 @@ export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"d
 	try {
 		await executeTriggerAction(
 			env,
-			{ action: input.action as TriggerAction, name: `connection:${input.eventType}`, instance_id: input.targetInstanceId, user_id: input.userId },
+			{
+				// The producing edge's id. `connectionId` IS the trigger id when source is
+				// "trigger" (the outbox is shared, #17). Omitting it meant a retried
+				// `sync_connector` reconstructed a target with `id: undefined`, and
+				// `syncConnectorTrigger` uses `trigger.id` as the primary key of
+				// `agent_trigger_sync_state` (TEXT NOT NULL) — so the retry died on a D1 bind
+				// error unrelated to the outage that caused it, outside the per-item try, and
+				// every attempt failed identically until the row dead-lettered with a misleading
+				// last_error. Replaying it then failed the same way, forever.
+				id: input.connectionId,
+				action: input.action as TriggerAction,
+				name: `connection:${input.eventType}`,
+				instance_id: input.targetInstanceId,
+				user_id: input.userId,
+			},
 			// The emitting run's id rides along so the target's run joins the same trace.
 			{ ...input.config, traceId: input.traceId ?? undefined },
 			"webhook",
@@ -349,6 +376,10 @@ export async function runDueDeliveries(env: Env, now = new Date(), limit = 25): 
 	let retrying = 0;
 	let dead = 0;
 	for (const row of due) {
+		// Claim before attempting, or an overlapping tick (or the enqueuer's own inline attempt)
+		// executes the same delivery a second time — a `run_pipeline` consumer would build and
+		// bill twice. See claimDelivery.
+		if (!(await claimDelivery(env, row, now))) continue;
 		let payload: unknown = null;
 		try {
 			payload = JSON.parse(row.payload);

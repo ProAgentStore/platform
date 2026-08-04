@@ -40,6 +40,29 @@ export interface PipelineRunResult {
  * The step call order is deterministic (linear walk, stable `s{i}` names), so replay is
  * stable.
  */
+/**
+ * Steps that PERSIST rows themselves and return a counts summary rather than records.
+ *
+ * A pipeline ending in one of these has already done the writing, so the `sink` must stand down —
+ * and the run's counts come from what it reports, not from a fabricated `seen: 1, added: 1`.
+ */
+const PERSISTING_TOOLS = new Set(["dedupe_upsert"]);
+
+interface PersistCounts {
+	total: number;
+	inserted: number;
+	skipped: number;
+}
+
+/** The counts a persisting final step reported, or null when the last step wasn't one. */
+function persistSummary(tool: string | undefined, out: unknown): PersistCounts | null {
+	if (!tool || !PERSISTING_TOOLS.has(tool)) return null;
+	if (!out || typeof out !== "object" || Array.isArray(out)) return null;
+	const o = out as Record<string, unknown>;
+	const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+	return { total: num(o.total), inserted: num(o.inserted), skipped: num(o.skipped) };
+}
+
 export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunParams> {
 	async run(event: WorkflowEvent<PipelineRunParams>, step: WorkflowStep): Promise<PipelineRunResult> {
 		const { instanceId, userId, pipeline, params = {}, runId, trigger = "api" } = event.payload;
@@ -108,7 +131,18 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 			// reach the instance. Each record is its own durable step so a large sink resumes
 			// mid-write. Dedupe/upsert-by-key is #96's job; here we insert.
 			let sunk = 0;
-			if (pipeline.sink) {
+			const persisted = persistSummary(pipeline.steps[pipeline.steps.length - 1]?.tool, lastOutput);
+			if (persisted) {
+				// The last step ALREADY wrote the records (dedupe_upsert), and its output is a
+				// counts summary, not rows. Sinking it wrapped that summary in an array and POSTed
+				// it as a record; `validateRecord` then dropped every field as unknown to the
+				// collection's schema, so **every run of all three shipped pipelines inserted one
+				// blank row** — accumulating toward MAX_COLLECTION_RECORDS — and reported
+				// `seen: 1, added: 1` whether the sweep found 0 leads or 200.
+				seen = persisted.total;
+				added = persisted.inserted;
+				skipped += persisted.skipped;
+			} else if (pipeline.sink) {
 				const raw = Array.isArray(lastOutput) ? lastOutput : lastOutput != null ? [lastOutput] : [];
 				seen = raw.length;
 				const collection = pipeline.sink.collection;
