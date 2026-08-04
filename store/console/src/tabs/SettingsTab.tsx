@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { SettingsField } from "../lib/types";
+import TeamworkSection from "./TeamworkSection";
 
 /** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
 type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean; nodeOnline?: boolean }> };
@@ -1051,6 +1052,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{driveMsg && <div className="text-xs text-muted mt-2">{driveMsg}</div>}
 				{workdriveMsg && <div className="text-xs text-muted mt-2">{workdriveMsg}</div>}
 			</div>
+
+			{/* Teamwork — supervision + connections (#182). Placed before Triggers: both are about
+			    work arriving from elsewhere, and wiring agents together is the more common one. */}
+			<TeamworkSection instanceId={instanceId} />
 
 			{/* Triggers */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
