@@ -8,6 +8,7 @@ import { BROWSER_TOOLS } from "./browser.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { MCP_TOOLS } from "./mcp.js";
+import { SUPERVISION_TOOLS } from "./supervision.js";
 import { META_CONNECTOR } from "./meta.js";
 import { GOOGLE_SHEETS_CONNECTOR } from "./google-sheets.js";
 import { TMUX_TOOLS } from "./tmux.js";
@@ -83,6 +84,18 @@ export const CONNECTORS: Connector[] = [
 		scopes: { read: true, write: true },
 		grantModel: "user",
 		tools: BROWSER_TOOLS,
+	},
+	{
+		id: "supervision",
+		label: "Supervision (delegate to agents you oversee)",
+		// auth:"none" — internal to the platform and to ONE owner (both instances are theirs),
+		// so there is no external system and no credential. What governs it is the configured
+		// supervision graph (#183), re-checked inside delegate_goal on every call rather than
+		// trusted from the caller.
+		auth: "none",
+		scopes: { read: true, write: true },
+		grantModel: "user",
+		tools: SUPERVISION_TOOLS,
 	},
 	{
 		id: "http",
