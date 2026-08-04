@@ -154,7 +154,10 @@ export const DEFAULT_ENGINES: CodingEngine[] = [
 	// Claude is the one PERSISTENT engine (structured stream-json, multi-turn).
 	{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions" },
 	{ id: "codex", label: "Codex", command: "codex exec --sandbox danger-full-access" },
-	{ id: "gemini", label: "Gemini CLI", command: "gemini --approval-mode yolo --prompt", auth: "api-key" },
+	// `--skip-trust` is not optional alongside yolo: without it Gemini prints
+	// "Approval mode overridden to \"default\" because the current folder is not trusted" and
+	// goes back to asking — in a headless run, with nobody to ask. Verified live.
+	{ id: "gemini", label: "Gemini CLI", command: "gemini --approval-mode yolo --skip-trust --prompt", auth: "api-key" },
 	// `-p/--single`, NOT `--prompt`: grok has `--prompt-file` and `--prompt-json` but no
 	// `--prompt`, so the old preset died on an unknown/ambiguous flag before reaching the model.
 	{ id: "grok", label: "Grok", command: "grok --permission-mode bypassPermissions -p" },

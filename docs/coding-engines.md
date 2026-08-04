@@ -52,8 +52,13 @@ has to match across presets, or the choice is a trap.
 |---|---|---|
 | Claude Code | `--dangerously-skip-permissions` | `--permission-mode acceptEdits` |
 | Codex | `--sandbox danger-full-access` | `--sandbox workspace-write`, `--dangerously-bypass-approvals-and-sandbox` |
-| Gemini CLI | `--approval-mode yolo` | `--approval-mode auto_edit`, `-y` |
+| Gemini CLI | `--approval-mode yolo --skip-trust` | `--approval-mode auto_edit`, `-y` |
 | Grok | `--permission-mode bypassPermissions` | `--permission-mode acceptEdits\|auto`, `--always-approve` |
+
+**Gemini needs `--skip-trust` too.** With yolo alone it prints
+`Approval mode overridden to "default" because the current folder is not trusted` and goes back to
+asking — headless, with nobody to ask. A preset that looks correct and behaves read-only is worse
+than one that is obviously wrong, so the two flags travel together.
 
 **Why `danger-full-access` and not `workspace-write` for Codex.** `workspace-write` also blocks
 network, so `git pull`, `pnpm install` and `gh pr create` — the ordinary work of a coding agent —

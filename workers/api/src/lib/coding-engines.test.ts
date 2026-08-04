@@ -112,6 +112,14 @@ describe("default engine presets", () => {
 		}
 	});
 
+	it("pairs gemini's yolo with --skip-trust, or the yolo is inert", () => {
+		// Live: `gemini --approval-mode yolo --prompt …` prints
+		//   Approval mode overridden to "default" because the current folder is not trusted
+		// and goes back to asking — headless, with nobody to ask. The write flag alone is a
+		// preset that LOOKS correct and behaves read-only, the worst of both.
+		expect(byId("gemini").command).toContain("--skip-trust");
+	});
+
 	it("ships a local-model preset — no cloud key required", () => {
 		// "Give people options": a local model costs nothing per token, and the one-shot
 		// contract (command is a prefix, turn text appended) makes it work by configuration.
