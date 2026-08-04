@@ -132,6 +132,9 @@ describe("engine sign-in relay (#coding-auth)", () => {
 		const route = src.slice(src.indexOf('coding/sessions/:sessionId/signin'));
 		const body = route.slice(0, route.indexOf("});"));
 		expect(body).toContain('"/browser/act"');      // navigate in the runner's browser
+		// FLAT body, action as a string — the shape the runner actually parses. A nested
+		// {action:{kind,url}} is accepted silently and opens nothing.
+		expect(body).toContain('{ action: "navigate", url: prompt.url }');
 		expect(body).toContain('"/browser/handoff"');  // same relay the apply flow uses
 	});
 

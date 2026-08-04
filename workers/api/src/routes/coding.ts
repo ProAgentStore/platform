@@ -725,7 +725,10 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/signin", async (c) =>
 	}
 
 	const taskId = `signin-${sessionId}`;
-	const nav = await callRunner<{ ok?: boolean }>(conn, "/browser/act", { action: { kind: "navigate", url: prompt.url } }).catch(() => null);
+	// Flat body with `action` as a STRING — the shape lib/connectors/browser.ts uses. A nested
+	// {action:{kind,url}} silently does nothing, which is the worst possible failure here: the
+	// button reports success and no page ever opens.
+	const nav = await callRunner<{ ok?: boolean }>(conn, "/browser/act", { action: "navigate", url: prompt.url }).catch(() => null);
 	if (!nav) throw new HttpError(502, "Couldn't open the sign-in page in the runner's browser.");
 	await callRunner<{ ok: boolean }>(conn, "/browser/handoff", {
 		taskId,
