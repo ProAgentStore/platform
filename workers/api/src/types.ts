@@ -23,6 +23,8 @@ export interface Env {
 	PIPELINE_RUN: Workflow;
 	/** Generic browser brain (#69/#71): drives the runner toward an objective on any site. */
 	BROWSER_TASK: Workflow;
+	/** Durable, agent-generic autonomous loop (#158). */
+	AGENT_LOOP: Workflow;
 	/** WebSocket relay DO — one per instance, bridges cloud→runner without tunnels. */
 	RELAY: DurableObjectNamespace;
 	GITHUB_CLIENT_ID: string;

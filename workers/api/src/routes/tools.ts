@@ -9,6 +9,9 @@ import { listRuns } from "../lib/pipeline-runs.js";
 import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import { listSupervision, createSupervision, deleteSupervision } from "../lib/supervision.js";
+import { createLoopRun, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
+import { sanitizeMaxIterations } from "../lib/agent-loop.js";
+import { openBudget } from "../lib/delegation-budget-store.js";
 import type { TriggerAction } from "../lib/triggers.js";
 import type { Env } from "../types.js";
 
@@ -326,4 +329,73 @@ toolRoutes.delete("/:id/supervision/:sid", async (c) => {
 	const removed = await deleteSupervision(c.env, session.uid, c.req.param("sid"));
 	if (!removed) throw new HttpError(404, "supervision link not found");
 	return c.json({ ok: true });
+});
+
+/**
+ * Durable agent loops (#158, migration 0062).
+ *
+ * The console Loop used to run in the browser — poll `/loop-decide`, send the next instruction —
+ * so closing the tab killed an in-flight objective, and spend could not be bounded because the
+ * platform did not drive the loop. These start/watch/stop endpoints put the loop on the server;
+ * the console becomes a thin UI over them.
+ */
+toolRoutes.post("/:id/loop", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as {
+		objective?: string;
+		maxIterations?: number;
+		budget?: { costMicros?: number; delegations?: number; maxDepth?: number };
+	};
+	const objective = String(body.objective ?? "").trim();
+	if (!objective) throw new HttpError(400, "objective is required");
+	if (objective.length > 2000) throw new HttpError(400, "objective too long");
+
+	const maxIterations = sanitizeMaxIterations(body.maxIterations);
+	// Every server-driven loop gets a budget, even an unconfigured one — an autonomous run with
+	// no spend bound is the failure #184 exists to prevent, and "we'll set a limit later" is how
+	// the first runaway happens. sanitizeLimits clamps a request to the ceiling.
+	const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
+
+	const runId = crypto.randomUUID();
+	await createLoopRun(c.env, {
+		runId,
+		userId: session.uid,
+		instanceId,
+		objective,
+		maxIterations,
+		budgetId: budget.id,
+		startedAt: Date.now(),
+	});
+	await c.env.AGENT_LOOP.create({
+		id: runId,
+		params: { runId, instanceId, userId: session.uid, objective, maxIterations, budgetId: budget.id, depth: 0 },
+	});
+	return c.json({ runId, budgetId: budget.id, maxIterations, status: "running" }, 201);
+});
+
+toolRoutes.get("/:id/loop", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json({ runs: await listLoopRuns(c.env, session.uid, instanceId) });
+});
+
+toolRoutes.get("/:id/loop/:runId", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const run = await getLoopRun(c.env, session.uid, c.req.param("runId"));
+	if (!run) throw new HttpError(404, "loop run not found");
+	return c.json(run);
+});
+
+toolRoutes.post("/:id/loop/:runId/cancel", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	// Cooperative: the flag is read at the top of the next iteration so the in-flight step
+	// finishes and its spend settles. A hard kill would strand a budget reservation.
+	const ok = await requestCancel(c.env, session.uid, c.req.param("runId"));
+	if (!ok) throw new HttpError(404, "no running loop with that id");
+	return c.json({ ok: true, status: "cancelling" });
 });

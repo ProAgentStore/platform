@@ -3,6 +3,7 @@
 // break or slow an actual chat/apply/coding call.
 
 import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js";
+import type { Env } from "../types.js";
 
 export type UsageKind =
 	| "chat"
@@ -354,4 +355,29 @@ export function denseDays(fromDay: string, toDay: string): string[] {
 		out.push(new Date(t).toISOString().slice(0, 10));
 	}
 	return out;
+}
+
+/**
+ * Running total of estimated spend on one instance, in USD micros.
+ *
+ * Used by the durable agent loop (#158) to settle a budget reservation with the ACTUAL cost:
+ * read before the iteration, read after, settle the delta. `ai_usage` is append-only, so the
+ * total is monotonic and two reads are enough — no time window to get wrong.
+ *
+ * Caveat worth knowing: the delta is instance-scoped, not run-scoped, so a user chatting with the
+ * same instance while a loop runs has that chat attributed to the loop's budget. That errs toward
+ * charging the pool too much, which stops a run early — the safe direction. Under-charging would
+ * let a runaway continue.
+ */
+export async function instanceSpendMicros(env: Env, userId: string, instanceId: string): Promise<number> {
+	try {
+		const row = await env.DB.prepare(
+			"SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage WHERE user_id = ?1 AND instance_id = ?2",
+		)
+			.bind(userId, instanceId)
+			.first<{ total: number }>();
+		return Math.max(0, Number(row?.total ?? 0));
+	} catch {
+		return 0;
+	}
 }

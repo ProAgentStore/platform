@@ -6,7 +6,7 @@ import { toolRoutes } from "./tools.js";
 
 const SECRET = "test-secret";
 
-function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknown) => Promise<{ id: string }>; runs?: unknown[] } = { owned: true }) {
+function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknown) => Promise<{ id: string }>; runs?: unknown[]; loopCreate?: (arg: unknown) => Promise<{ id: string }> } = { owned: true }) {
 	const app = new Hono();
 	app.route("/v1/instances", toolRoutes);
 	app.onError((err, c) => {
@@ -25,6 +25,12 @@ function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknow
 						return {
 							first: async () => {
 								// Supervision (#183): the read-back after INSERT.
+								if (sql.includes("FROM agent_loop_runs")) {
+									return { run_id: "r1", user_id: "u1", instance_id: "i1", objective: "ship it", status: "running", stop_reason: null, detail: null, iteration: 2, max_iterations: 10, cancel_requested: 0, budget_id: "b1", started_at: 1, finished_at: null };
+								}
+								if (sql.includes("FROM delegation_budgets")) {
+									return { id: "b1", user_id: "u1", root_instance_id: "i1", cost_micros_limit: 5000000, cost_micros_reserved: 0, cost_micros_spent: 0, delegations_limit: 50, delegations_used: 0, max_depth: 4, status: "open", exhausted_reason: null, exhausted_at_depth: null, created_at: "", updated_at: "" };
+								}
 								if (sql.includes("FROM agent_supervision")) {
 									return { id: "sup1", user_id: "u1", supervisor_instance_id: "i1", subordinate_instance_id: "i2", enabled: 1, config: "{}", created_at: "", updated_at: "" };
 								}
@@ -33,7 +39,10 @@ function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknow
 									: null;
 							},
 							// logEvent (pipeline audit) does a .run() insert — must not throw.
-							run: async () => ({}),
+							// meta.changes = 1 so routes that report "did a row match?" (cancel,
+							// delete, replay) take their success path; the 404 cases in this file
+							// are all ownership/unknown-name, not zero-changes.
+							run: async () => ({ meta: { changes: 1 } }),
 							// listRuns (#98) reads via .all(); return the seeded runs for the
 							// pipeline_runs query, empty otherwise.
 							all: async () => ({ results: sql.includes("FROM pipeline_runs") ? opts.runs ?? [] : [] }),
@@ -44,6 +53,8 @@ function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknow
 		},
 		// Durable pipeline runner (issue #97) — stubbed to capture .create() calls.
 		PIPELINE_RUN: { create: opts.create ?? (async () => ({ id: "wf-test" })) },
+		// Durable agent loop (#158) — captures .create() so the start route is testable.
+		AGENT_LOOP: { create: opts.loopCreate ?? (async () => ({ id: "wf-loop" })) },
 	};
 	return { app, env };
 }
@@ -299,5 +310,74 @@ describe("supervision edges (#183)", () => {
 		}, env);
 		expect(res.status).toBe(200);
 		expect(await res.json()).toHaveProperty("supervision");
+	});
+});
+
+describe("durable agent loop (#158)", () => {
+	const tok = () => signSession({ uid: "u1", roles: ["user"] }, SECRET);
+
+	it("starts a server-driven run and returns its id", async () => {
+		let started: unknown = null;
+		const { app, env } = testApp({ loopCreate: async (arg) => { started = arg; return { id: "wf-loop" }; } });
+		const res = await app.request("/v1/instances/i1/loop", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tok()}`, "Content-Type": "application/json" },
+			body: JSON.stringify({ objective: "ship it", maxIterations: 5 }),
+		}, env);
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { runId: string; budgetId: string; maxIterations: number };
+		expect(body.runId).toBeTruthy();
+		expect(body.maxIterations).toBe(5);
+		// Every server-driven loop gets a budget — an autonomous run with no spend bound is the
+		// failure #184 exists to prevent.
+		expect(body.budgetId).toBeTruthy();
+		expect((started as { params: { depth: number } }).params.depth).toBe(0);
+	});
+
+	it("clamps a runaway iteration request", async () => {
+		const { app, env } = testApp();
+		const res = await app.request("/v1/instances/i1/loop", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tok()}`, "Content-Type": "application/json" },
+			body: JSON.stringify({ objective: "go", maxIterations: 9999 }),
+		}, env);
+		expect(((await res.json()) as { maxIterations: number }).maxIterations).toBe(50);
+	});
+
+	it("requires an objective", async () => {
+		const { app, env } = testApp();
+		const res = await app.request("/v1/instances/i1/loop", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tok()}`, "Content-Type": "application/json" },
+			body: JSON.stringify({}),
+		}, env);
+		expect(res.status).toBe(400);
+	});
+
+	it("404s for an instance the caller does not own", async () => {
+		const { app, env } = testApp({ owned: false });
+		const res = await app.request("/v1/instances/i1/loop", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tok()}`, "Content-Type": "application/json" },
+			body: JSON.stringify({ objective: "go" }),
+		}, env);
+		expect(res.status).toBe(404);
+	});
+
+	it("reads back a run so a reopened console can resume watching", async () => {
+		const { app, env } = testApp();
+		const res = await app.request("/v1/instances/i1/loop/r1", { headers: { Authorization: `Bearer ${await tok()}` } }, env);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ runId: "r1", iteration: 2, status: "running" });
+	});
+
+	it("cancels cooperatively", async () => {
+		const { app, env } = testApp();
+		const res = await app.request("/v1/instances/i1/loop/r1/cancel", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${await tok()}` },
+		}, env);
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({ status: "cancelling" });
 	});
 });

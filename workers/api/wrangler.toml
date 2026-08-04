@@ -101,6 +101,11 @@ name = "pags-browser-task"
 binding = "BROWSER_TASK"
 class_name = "BrowserTaskWorkflow"
 
+[[workflows]]
+name = "pags-agent-loop"
+binding = "AGENT_LOOP"
+class_name = "AgentLoopWorkflow"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["AgentDO"]

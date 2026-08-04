@@ -12,7 +12,7 @@ import { logEvent, listEvents } from "../lib/events.js";
 import { buildTicketAction, isRunnableStatus, readTicketAction, validateTicketAction } from "../lib/actionable-ticket.js";
 import { executeTriggerAction } from "../lib/triggers.js";
 import { validatePipeline } from "../lib/pipeline.js";
-import { parseLoopDecision } from "../lib/loop-decide.js";
+import { isCredentialsError, runLoopDecide } from "../lib/loop-orchestrator.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
 import { registerBrowseRoutes } from "./instances-browse.js";
 import { attachGlossesToMessages, registerTranslationRoutes } from "./instances-translation.js";
@@ -1299,47 +1299,21 @@ instanceRoutes.post("/:instanceId/loop-decide", async (c) => {
 		iteration: number;
 		maxIterations: number;
 	}>();
-	if (!objective) throw new HttpError(400, "objective required");
-	if (typeof objective !== "string" || objective.length > 2000) throw new HttpError(400, "objective too long");
+	if (!objective || typeof objective !== "string") throw new HttpError(400, "objective required");
+	if (objective.length > 2000) throw new HttpError(400, "objective too long");
 	if (!Array.isArray(messages)) throw new HttpError(400, "messages must be an array");
 	if (messages.length > 20) throw new HttpError(400, "too many messages");
-	const safeIteration = Math.max(0, Math.min(50, Number(iteration) || 0));
-	const safeMaxIterations = Math.max(1, Math.min(50, Number(maxIterations) || 10));
 
-	const systemPrompt = `You are a loop orchestrator. You are on iteration ${safeIteration}/${safeMaxIterations}.
-
-Read the user's objective and the conversation so far, then decide ONE of:
-- CONTINUE: the objective is not yet met. Write the next instruction to give the agent.
-- DONE: the objective is fully met. No more work needed.
-- ESCALATE: the agent is stuck, pushing back, asking questions, or needs human help.
-- FAILED: something went wrong or the agent keeps repeating itself.
-
-Reply ONLY with JSON: { "decision": "continue"|"done"|"escalate"|"failed", "nextInstruction": "...", "reason": "..." }`;
-
-	// Objective and messages go in the user turn, not interpolated into the system prompt
-	const conversationText = (messages || [])
-		.slice(-6)
-		.map((m) => `${m.role}: ${(m.content || "").slice(0, 2000)}`)
-		.join("\n\n");
-	const userContent = `OBJECTIVE: ${(objective || "").slice(0, 500)}\n\nCONVERSATION:\n${conversationText || "(no messages yet)"}`;
-
+	// #158: the prompt + model call now live in lib/loop-orchestrator.ts, shared with the durable
+	// AgentLoopWorkflow. They were about to diverge (this route inlined the prompt), and two
+	// orchestrators disagreeing about when a run is "done" is a bug nobody finds for a month.
 	try {
-		const res = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", {
-			messages: [
-				{ role: "system", content: systemPrompt },
-				{ role: "user", content: userContent },
-			],
-			maxTokens: 300,
-		}, { kind: "chat", instanceId })) as { response?: string };
-
-		// Robust parse: handles ```fences```, trailing prose, an example object first, or a
-		// pure-prose reply — instead of dead-ending the loop on anything but clean JSON.
-		return c.json(parseLoopDecision(res.response || ""));
+		const decision = await runLoopDecide(c.env, session.uid, instanceId, { objective, messages, iteration, maxIterations });
+		return c.json(decision);
 	} catch (e) {
-		const msg = e instanceof Error ? e.message : String(e);
-		if (msg.includes("API key") || msg.includes("credentials")) {
-			throw new HttpError(402, "No API key configured. Add one in Profile → API Keys.");
-		}
+		// A missing BYOK key is the user's to fix and fails identically on every retry, so it
+		// stays a clear 402 rather than a silent "escalate" decision.
+		if (isCredentialsError(e)) throw new HttpError(402, "No API key configured. Add one in Profile → API Keys.");
 		throw e;
 	}
 });
