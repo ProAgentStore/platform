@@ -12,6 +12,7 @@ import { listSupervision, createSupervision, deleteSupervision } from "../lib/su
 import { createLoopRun, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
 import { openBudget } from "../lib/delegation-budget-store.js";
+import { delegateToInstance } from "../lib/delegate-instance.js";
 import type { TriggerAction } from "../lib/triggers.js";
 import type { Env } from "../types.js";
 
@@ -398,4 +399,36 @@ toolRoutes.post("/:id/loop/:runId/cancel", async (c) => {
 	const ok = await requestCancel(c.env, session.uid, c.req.param("runId"));
 	if (!ok) throw new HttpError(404, "no running loop with that id");
 	return c.json({ ok: true, status: "cancelling" });
+});
+
+/**
+ * Agent-to-agent delegation (#159) — hand a goal to a subordinate's brain.
+ *
+ * Scoped to the SUPERVISOR. The configured graph decides who may drive whom: delegating to an
+ * instance that is not your subordinate is a 403, which is what stops the supervision graph from
+ * being merely advisory. Depth comes from the graph and the budget is inherited, so neither can
+ * be understated by the caller.
+ */
+toolRoutes.post("/:id/delegate", async (c) => {
+	const session = await requireUser(c);
+	const supervisorInstanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, supervisorInstanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as {
+		subordinateInstanceId?: string;
+		objective?: string;
+		maxIterations?: number;
+		budgetId?: string;
+		parentTraceId?: string;
+	};
+	const res = await delegateToInstance(c.env, {
+		userId: session.uid,
+		supervisorInstanceId,
+		subordinateInstanceId: String(body.subordinateInstanceId ?? ""),
+		objective: String(body.objective ?? ""),
+		maxIterations: body.maxIterations,
+		budgetId: body.budgetId ?? null,
+		parentTraceId: body.parentTraceId ?? null,
+	});
+	if (!res.ok) throw new HttpError(res.status as 400, res.error);
+	return c.json({ runId: res.runId, budgetId: res.budgetId, depth: res.depth, status: "running" }, 201);
 });

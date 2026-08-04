@@ -52,18 +52,17 @@ describe("isExecutableTarget", () => {
 		expect(isExecutableTarget({ kind: "repo", repoId: "r1" })).toBe(true);
 	});
 
-	it("refuses instance targets until #183/#184/#185 land", () => {
-		// Agent-to-agent delegation without the supervision graph, a spend budget and authority
-		// containment would be an unbounded loop and a consent bypass. Parse it, don't run it.
-		expect(isExecutableTarget({ kind: "instance", instanceId: "i1" })).toBe(false);
+	it("allows instance targets now that #183/#184/#185 have landed", () => {
+		// Held back until the supervision graph, the spend budget and authority containment
+		// existed — without those this is an unbounded loop and a consent bypass. Each is
+		// enforced on the delegation path itself (lib/delegate-instance.ts), not assumed.
+		expect(isExecutableTarget({ kind: "instance", instanceId: "i1" })).toBe(true);
 	});
 });
 
 describe("unsupportedTargetReason", () => {
-	it("explains the refusal in terms a human can act on", () => {
-		const reason = unsupportedTargetReason({ kind: "instance", instanceId: "i1" });
-		expect(reason).toContain("another agent");
-		expect(reason).not.toBe("");
+	it("names the kind so an unknown target is debuggable", () => {
+		expect(unsupportedTargetReason({ kind: "wormhole", id: "x" } as never)).toContain("wormhole");
 	});
 });
 

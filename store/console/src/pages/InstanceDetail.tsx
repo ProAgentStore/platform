@@ -93,6 +93,9 @@ export default function InstanceDetail() {
 	const [loopIteration, setLoopIteration] = useState(0);
 	const [loopMax, setLoopMax] = useState(10);
 	const [loopPaused, setLoopPaused] = useState(false);
+	// #158: the loop now runs on the SERVER (AgentLoopWorkflow). This is the run we are watching,
+	// not a loop we are driving — closing this tab no longer kills the objective.
+	const [loopRunId, setLoopRunId] = useState<string | null>(null);
 	const [showLoopForm, setShowLoopForm] = useState(false);
 	// Overflow menu for the less-frequent chat actions (Copy JSON, Clear) — keeps the
 	// controls bar focused on voice, and moves the destructive Clear behind a tap.
@@ -247,6 +250,10 @@ export default function InstanceDetail() {
 	loopMaxRef.current = loopMax;
 	const messagesRef2 = useRef(messages);
 	messagesRef2.current = messages;
+	const loopRunIdRef = useRef<string | null>(null);
+	loopRunIdRef.current = loopRunId;
+	const loadMessagesRef = useRef(loadMessages);
+	loadMessagesRef.current = loadMessages;
 
 	/** Add a system message to the chat + persist to DO. */
 	const emitSystemChat = useCallback((content: string) => {
@@ -259,43 +266,33 @@ export default function InstanceDetail() {
 		}
 	}, [id]);
 
-	const continueLoop = useCallback(async () => {
-		if (!loopOnRef.current || loopPausedRef.current || !id) return;
+	/**
+	 * Watch a server-driven run (#158).
+	 *
+	 * The console used to BE the loop: poll /loop-decide, send the next instruction. That died
+	 * with the tab and could not be budgeted, because the platform did not drive it. Now the
+	 * workflow drives and this only reports — so it also refreshes the transcript, since the
+	 * agent's turns arrive from the server rather than from calls this component made.
+	 */
+	const pollLoop = useCallback(async () => {
+		if (!id || !loopRunIdRef.current) return;
 		try {
-			const recent = messagesRef2.current.slice(-6).map((m) => ({ role: m.role, content: m.content }));
-			const decision = await api<{ decision: string; nextInstruction?: string; reason?: string }>(
-				`/v1/instances/${id}/loop-decide`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						objective: loopObjectiveRef.current,
-						messages: recent,
-						iteration: loopIterationRef.current,
-						maxIterations: loopMaxRef.current,
-					}),
-				},
+			const run = await api<{ status: string; iteration: number; stopReason?: string | null; detail?: string | null }>(
+				`/v1/instances/${id}/loop/${loopRunIdRef.current}`,
 			);
-			if (!loopOnRef.current) return; // stopped while waiting
-
-			if (decision.decision === "continue" && decision.nextInstruction) {
-				setLoopIteration((i) => i + 1);
-				emitSystemChat(`Loop ${loopIterationRef.current + 1}/${loopMaxRef.current}: ${decision.nextInstruction}`);
-				await new Promise((r) => setTimeout(r, 1500));
-				if (loopOnRef.current && !loopPausedRef.current) {
-					doSendRef.current(decision.nextInstruction);
-				}
-			} else if (decision.decision === "done") {
+			setLoopIteration(run.iteration);
+			await loadMessagesRef.current();
+			if (run.status !== "running") {
 				setLoopOn(false);
-				emitSystemChat(`Loop complete: ${decision.reason || "Objective met."}`);
-			} else {
-				setLoopOn(false);
-				emitSystemChat(`Loop paused — ${decision.decision}: ${decision.reason || "Needs your input."}`);
+				setLoopRunId(null);
+				const label = run.stopReason === "done" ? "Loop complete" : `Loop stopped (${run.stopReason ?? run.status})`;
+				emitSystemChat(`${label}: ${run.detail || ""}`.trim());
 			}
-		} catch (e) {
-			setLoopOn(false);
-			emitSystemChat(`Loop error: ${e instanceof Error ? e.message : String(e)}`);
+		} catch {
+			// A transient read failure must not kill the WATCHER — the run itself is durable and
+			// carries on regardless of whether this tab can see it.
 		}
-	}, [id]);
+	}, [id, emitSystemChat]);
 
 	const doSend = useCallback(async (msg: string, audioKey?: string) => {
 		if (!msg.trim() || !id) return;
@@ -326,11 +323,9 @@ export default function InstanceDetail() {
 			]);
 		}
 		setThinking(false);
-		// If the loop is active, continue after agent response
-		if (loopOnRef.current && !loopPausedRef.current) {
-			continueLoop();
-		}
-	}, [id, continueLoop]);
+		// #158: no client-side continuation. When a loop is running the SERVER sends the next
+		// instruction; a kick from here would race the workflow and double-send.
+	}, [id]);
 
 	// Wire the voice hook's auto-send to doSend
 	doSendRef.current = doSend;
@@ -412,30 +407,47 @@ export default function InstanceDetail() {
 		doSend(msg);
 	};
 
-	// Resume loop after human intervention — only when thinking transitions from true→false
-	const wasThinkingRef = useRef(false);
+	// Watch the server-driven run (#158). Previously this effect kicked the next iteration after
+	// a human interjected; the workflow owns sequencing now, so the client only observes.
 	useEffect(() => {
-		if (wasThinkingRef.current && !thinking && loopOn && loopPaused) {
-			setLoopPaused(false);
-			// Trigger the next loop step after the human's answer was processed
-			continueLoop();
-		}
-		wasThinkingRef.current = thinking;
-	}, [thinking]); // eslint-disable-line react-hooks/exhaustive-deps
+		if (!loopOn || !loopRunId) return;
+		const t = setInterval(() => { void pollLoop(); }, 3000);
+		void pollLoop();
+		return () => clearInterval(t);
+	}, [loopOn, loopRunId, pollLoop]);
 
-	const startLoop = () => {
-		if (!loopObjective.trim()) return;
-		setLoopOn(true);
-		setLoopIteration(0);
-		setLoopPaused(false);
+	const startLoop = async () => {
+		if (!loopObjective.trim() || !id) return;
 		setShowLoopForm(false);
-		doSend(loopObjective.trim());
+		try {
+			// The server owns the loop now (#158) — it survives this tab closing, and its spend
+			// is bounded by a budget the browser could never have enforced.
+			const run = await api<{ runId: string }>(`/v1/instances/${id}/loop`, {
+				method: "POST",
+				body: JSON.stringify({ objective: loopObjective.trim(), maxIterations: loopMax }),
+			});
+			setLoopRunId(run.runId);
+			setLoopOn(true);
+			setLoopIteration(0);
+			setLoopPaused(false);
+		} catch (e) {
+			emitSystemChat(`Could not start the loop: ${e instanceof Error ? e.message : String(e)}`);
+		}
 	};
 
-	const stopLoop = () => {
-		setLoopOn(false);
+	const stopLoop = async () => {
 		setLoopPaused(false);
-		emitSystemChat("Loop stopped by user.");
+		const runId = loopRunIdRef.current;
+		if (!id || !runId) { setLoopOn(false); return; }
+		try {
+			// Cooperative: the in-flight iteration finishes and settles its spend. The watcher
+			// below sees the terminal status and reports it, so we do not fake one here.
+			await api(`/v1/instances/${id}/loop/${runId}/cancel`, { method: "POST" });
+			emitSystemChat("Stopping the loop…");
+		} catch {
+			setLoopOn(false);
+			setLoopRunId(null);
+		}
 	};
 
 	const clearChat = async () => {

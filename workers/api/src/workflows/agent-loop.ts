@@ -34,6 +34,9 @@ export interface AgentLoopParams {
 	depth?: number;
 	/** Reserved per iteration — a bounded MAXIMUM, not a prediction. Settle refunds the rest. */
 	reserveMicros?: number;
+	/** Supervisor that asked for this run (#185). AUDIT ONLY — the subordinate executes with its
+	 *  own consent and tools; this never widens what it may do. */
+	onBehalfOf?: string | null;
 }
 
 /** Bounded worst case for one iteration (agent turn + orchestrator turn), in USD micros. */

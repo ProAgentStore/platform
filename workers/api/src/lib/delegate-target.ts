@@ -6,23 +6,27 @@
 // addressable thing is the change that lets supervision become platform data (#183) instead of
 // one agent's private structure.
 //
-// Deliberately NOT executable for every kind yet. `instance` parses and validates, but running it
-// requires the supervision graph (#183), the spend budget (#184) and authority containment (#185)
-// — without those, agent-to-agent delegation would be an unbounded loop and a consent bypass. The
-// type lands now; the capability lands behind those.
+// `instance` was deliberately parsed-but-refused until the supervision graph (#183), the spend
+// budget (#184) and authority containment (#185) existed — without those, agent-to-agent
+// delegation is an unbounded loop and a consent bypass. All three landed, so it is executable now
+// (lib/delegate-instance.ts), and that module enforces each of them on the delegation path rather
+// than trusting that they hold.
 
 /** An addressable entity a goal can be delegated to. */
 export type DelegationTarget =
 	/** A repo's Pilot (the durable CodingSessionWorkflow). Live today. */
 	| { kind: "repo"; repoId: string }
-	/** Another instance's brain. Parsed + validated; not executable until #183/#184/#185. */
+	/** Another instance's brain — a durable loop started on the subordinate (#159). */
 	| { kind: "instance"; instanceId: string };
 
 export type DelegationTargetKind = DelegationTarget["kind"];
 
 /** Kinds that can actually be delegated to right now. Anything else parses but is refused at
- *  dispatch with an explicit reason — a silent no-op would look like success on the board. */
-const EXECUTABLE: ReadonlySet<DelegationTargetKind> = new Set<DelegationTargetKind>(["repo"]);
+ *  dispatch with an explicit reason — a silent no-op would look like success on the board.
+ *  `instance` became executable once the supervision graph (#183), the spend budget (#184) and
+ *  authority containment (#185) landed; see lib/delegate-instance.ts, which enforces all three
+ *  rather than assuming them. */
+const EXECUTABLE: ReadonlySet<DelegationTargetKind> = new Set<DelegationTargetKind>(["repo", "instance"]);
 
 export function isExecutableTarget(target: DelegationTarget): boolean {
 	return EXECUTABLE.has(target.kind);
@@ -30,9 +34,6 @@ export function isExecutableTarget(target: DelegationTarget): boolean {
 
 /** Why a parsed-but-not-runnable target was refused. Phrased for the human reading the board. */
 export function unsupportedTargetReason(target: DelegationTarget): string {
-	if (target.kind === "instance") {
-		return "Delegating to another agent isn't enabled yet — it needs the supervision graph, a spend budget, and authority containment first.";
-	}
 	return `Cannot delegate to a "${target.kind}" target.`;
 }
 

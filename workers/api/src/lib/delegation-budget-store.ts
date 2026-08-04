@@ -7,9 +7,11 @@
 // D1 applies second sees the first one's reservation already subtracted and matches zero rows.
 // A read-then-write would race; this cannot.
 
+import { spendPercentileMicros } from "./usage.js";
 import type { Env } from "../types.js";
 import {
 	canAdmit,
+	DEFAULT_LIMITS,
 	sanitizeLimits,
 	type AdmissionRefusal,
 	type BudgetLimits,
@@ -62,15 +64,45 @@ function toView(row: BudgetRow): BudgetView {
 	};
 }
 
-/** Open a pool for a new delegation tree. Limits are clamped to the ceiling, so an agent asking
- *  for more than the default gets the default — raising a budget is a human action. */
+/**
+ * How many iterations of headroom a derived default should allow.
+ *
+ * A budget sized at one run's cost would stop every multi-step objective on its second step.
+ */
+const DERIVED_HEADROOM_RUNS = 25;
+
+/**
+ * Open a pool for a new delegation tree.
+ *
+ * When the caller does not name a cost limit, it is DERIVED from what this user's runs actually
+ * cost (95th percentile × headroom) rather than taken from the static placeholder. A guessed
+ * ceiling is how a safety feature becomes an obstacle: too low and it interrupts legitimate work,
+ * which is precisely the regression the UX conditions on #184 forbid. With too little history to
+ * be meaningful the static default stands, so a new account is still bounded.
+ *
+ * Limits are clamped to the ceiling either way — an agent asking for more than the maximum gets
+ * the maximum, because raising a budget is a human action.
+ */
 export async function openBudget(
 	env: Env,
 	userId: string,
 	rootInstanceId: string,
 	requested?: Partial<BudgetLimits>,
 ): Promise<BudgetView> {
-	const limits = sanitizeLimits(requested);
+	// The derived figure also RAISES the ceiling. Without that, sanitizeLimits would clamp it
+	// straight back to the static default and the derivation would be decorative — the whole
+	// point is that a user whose real runs cost more than the placeholder is not cut off at it.
+	// A caller-supplied number is still clamped; it is just clamped to a ceiling informed by
+	// measurement rather than by a guess.
+	let ceiling = DEFAULT_LIMITS;
+	let effective = requested;
+	const p95 = await spendPercentileMicros(env, userId, { percentile: 0.95 });
+	if (p95 !== null && p95 > 0) {
+		const derived = Math.max(DEFAULT_LIMITS.costMicros, p95 * DERIVED_HEADROOM_RUNS);
+		ceiling = { ...DEFAULT_LIMITS, costMicros: derived };
+		if (requested?.costMicros === undefined) effective = { ...requested, costMicros: derived };
+	}
+	const limits = sanitizeLimits(effective, ceiling);
 	const id = crypto.randomUUID();
 	await env.DB.prepare(
 		`INSERT INTO delegation_budgets

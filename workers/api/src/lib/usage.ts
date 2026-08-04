@@ -381,3 +381,46 @@ export async function instanceSpendMicros(env: Env, userId: string, instanceId: 
 		return 0;
 	}
 }
+
+/**
+ * A high percentile of recent per-run spend on this user's instances, in USD micros.
+ *
+ * Budget defaults must come from what real runs actually cost, not from a guess — a guessed
+ * ceiling is exactly how a safety feature turns into an obstacle that interrupts legitimate work.
+ * The acceptance question is "what fraction of historical runs would this default have stopped?",
+ * and answering it needs the distribution, not an average: averages are dragged down by the many
+ * cheap chat turns and would cut long coding sessions off early.
+ *
+ * `kind` scopes it to comparable work (coding sessions cost far more than chat turns). Returns
+ * null when there is too little history to be meaningful, so the caller keeps its static default
+ * rather than trusting a percentile computed from three rows.
+ */
+export async function spendPercentileMicros(
+	env: Env,
+	userId: string,
+	opts: { kind?: UsageKind; percentile?: number; minSamples?: number; days?: number } = {},
+): Promise<number | null> {
+	const percentile = Math.min(0.999, Math.max(0.5, opts.percentile ?? 0.95));
+	const minSamples = Math.max(1, opts.minSamples ?? 20);
+	const days = Math.max(1, Math.min(365, opts.days ?? 30));
+	try {
+		// One row per call; grouping by day+kind would hide the tail we care about.
+		const res = await env.DB.prepare(
+			`SELECT cost_micros FROM ai_usage
+			  WHERE user_id = ?1
+			    AND (?2 IS NULL OR kind = ?2)
+			    AND created_at >= datetime('now', ?3)
+			    AND cost_micros > 0
+			  ORDER BY cost_micros ASC`,
+		)
+			.bind(userId, opts.kind ?? null, `-${days} days`)
+			.all<{ cost_micros: number }>();
+		const values = (res.results ?? []).map((r) => Number(r.cost_micros)).filter((n) => Number.isFinite(n));
+		if (values.length < minSamples) return null;
+		// Nearest-rank: the smallest value at or above the percentile position.
+		const idx = Math.min(values.length - 1, Math.ceil(percentile * values.length) - 1);
+		return Math.max(0, values[idx]);
+	} catch {
+		return null;
+	}
+}

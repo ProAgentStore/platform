@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_LIMITS } from "./delegation-budget.js";
 import {
 	closeBudget,
+	openBudget,
 	markExhausted,
 	raiseBudget,
 	reserve,
@@ -196,5 +198,80 @@ describe("closeBudget", () => {
 		const { env, writes } = buildEnv();
 		await closeBudget(env, "u1", "b1");
 		expect(writes[0].sql).toContain("status = 'closed'");
+	});
+});
+
+/** Env with an ai_usage history, for the derived-default path. */
+function envWithHistory(costs: number[]) {
+	const inserts: Write[] = [];
+	const env = {
+		DB: {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async first() {
+								return {
+									id: "b1", user_id: "u1", root_instance_id: "i1",
+									cost_micros_limit: Number(args[3] ?? 0),
+									cost_micros_reserved: 0, cost_micros_spent: 0,
+									delegations_limit: 50, delegations_used: 0, max_depth: 4,
+									status: "open", exhausted_reason: null, exhausted_at_depth: null,
+									created_at: "", updated_at: "",
+								};
+							},
+							async all() {
+								return sql.includes("FROM ai_usage")
+									? { results: costs.map((c) => ({ cost_micros: c })) }
+									: { results: [] };
+							},
+							async run() {
+								inserts.push({ sql, args });
+								return { meta: { changes: 1 } };
+							},
+						};
+					},
+				};
+			},
+		},
+	} as unknown as Env;
+	return { env, inserts };
+}
+
+describe("openBudget — defaults derived from the ledger, not guessed", () => {
+	it("sizes the pool from this user's real spend when there is enough history", async () => {
+		// A guessed ceiling is how a safety feature becomes an obstacle. 40 runs at 1M micros
+		// ($1) each => p95 of 1M, times the headroom, well above the $5 placeholder.
+		const { env, inserts } = envWithHistory(Array(40).fill(1_000_000));
+		await openBudget(env, "u1", "i1");
+		const limit = Number(inserts[0].args[3]);
+		expect(limit).toBe(1_000_000 * 25);
+		expect(limit).toBeGreaterThan(5_000_000); // not clamped back to the static default
+	});
+
+	it("keeps the static default when history is too thin to be meaningful", async () => {
+		// A percentile from three rows is noise; a new account must still be bounded.
+		const { env, inserts } = envWithHistory([1_000_000, 2_000_000, 3_000_000]);
+		await openBudget(env, "u1", "i1");
+		expect(Number(inserts[0].args[3])).toBe(DEFAULT_LIMITS.costMicros);
+	});
+
+	it("never derives BELOW the static default", async () => {
+		// Cheap history must not shrink the floor into something that interrupts real work.
+		const { env, inserts } = envWithHistory(Array(40).fill(100));
+		await openBudget(env, "u1", "i1");
+		expect(Number(inserts[0].args[3])).toBe(DEFAULT_LIMITS.costMicros);
+	});
+
+	it("still clamps an explicit request — to the measured ceiling, not a guess", async () => {
+		const { env, inserts } = envWithHistory(Array(40).fill(1_000_000));
+		await openBudget(env, "u1", "i1", { costMicros: 999_000_000 });
+		expect(Number(inserts[0].args[3])).toBe(1_000_000 * 25);
+	});
+
+	it("honours a SMALLER explicit request", async () => {
+		const { env, inserts } = envWithHistory(Array(40).fill(1_000_000));
+		await openBudget(env, "u1", "i1", { costMicros: 250_000 });
+		expect(Number(inserts[0].args[3])).toBe(250_000);
 	});
 });
