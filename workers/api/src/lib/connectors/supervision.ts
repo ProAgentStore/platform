@@ -20,8 +20,6 @@ import { delegateToInstance } from "../delegate-instance.js";
 import { getLoopRun, listLoopRuns } from "../agent-loop-store.js";
 import { loadGraph } from "../supervision.js";
 import { subordinatesOf } from "../supervision-graph.js";
-import { getActiveSessionForRepo, listRepos } from "../coding-store.js";
-import { lastTerminal } from "../coding-timeline.js";
 import type { ToolDef } from "../tool-registry.js";
 
 /** Names of the instances a supervisor may drive, with their display names for the model. */
@@ -56,65 +54,6 @@ async function subordinateSummaries(
 	});
 }
 
-
-/** Per-subordinate live picture. Bounded hard: a supervisor's context is not a log dump. */
-const WORK_TAIL_CHARS = 400;
-const WORK_TOTAL_CHARS = 8_000;
-
-interface SubordinateWork {
-	/** Repos this subordinate owns, with whether an engine is live and what it last printed. */
-	repos: Array<{ name: string; live: boolean; recent?: string; instructions?: string }>;
-	/** The most recent run THIS supervisor can be accountable for. */
-	lastRun?: { runId: string; status: string; stopReason?: string | null; detail?: string | null };
-}
-
-/**
- * What each subordinate is actually DOING — the half that makes a supervisor an Overseer rather
- * than a dispatcher.
- *
- * The hardcoded Overseer opens by building exactly this, one level down: for every repo, is a
- * session live, and what did it last print. That global picture is what lets it answer "which repo
- * needs me?" in a single model call instead of starting work to find out. `list_subordinates`
- * returned `{instanceId, name, status}` — and `status` is `agent_instances.status`, the
- * SUBSCRIPTION status, which is "active" for every healthy subordinate forever. So the Lead could
- * name who it supervises and knew nothing else: every question about state had to be answered by
- * delegating a run, which costs a durable workflow and a full LLM loop per question.
- *
- * Same loop as the Overseer's, iterating SUBORDINATE INSTANCES instead of repos on one instance.
- * Best-effort throughout: a subordinate whose runner is offline still lists, it just has no live
- * detail. Failing to read one must never take the tool down.
- */
-async function subordinateWork(
-	env: { DB: D1Database },
-	userId: string,
-	instanceId: string,
-	budget: { left: number },
-): Promise<SubordinateWork> {
-	const out: SubordinateWork = { repos: [] };
-	const repos = await listRepos(env as never, instanceId, userId).catch(() => []);
-	for (const r of repos) {
-		const active = await getActiveSessionForRepo(env as never, instanceId, userId, r.id).catch(() => null);
-		let recent: string | undefined;
-		if (active && budget.left > 0) {
-			const term = await lastTerminal(env as never, active.id).catch(() => null);
-			if (term) {
-				recent = term.slice(-Math.min(WORK_TAIL_CHARS, budget.left));
-				budget.left -= recent.length;
-			}
-		}
-		out.repos.push({
-			name: r.name,
-			live: !!active,
-			...(recent ? { recent } : {}),
-			...(r.instructions ? { instructions: r.instructions.slice(0, 300) } : {}),
-		});
-	}
-	const runs = await listLoopRuns(env as never, userId, instanceId, 1).catch(() => []);
-	const last = runs[0];
-	if (last) out.lastRun = { runId: last.runId, status: last.status, stopReason: last.stopReason, detail: last.detail };
-	return out;
-}
-
 export const SUPERVISION_TOOLS: ToolDef[] = [
 	{
 		name: "list_subordinates",
@@ -122,17 +61,9 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		connector: "supervision",
 		scope: "read",
 		description:
-			"The agents this one supervises AND what each is currently doing — its repos, whether an engine is live, what it last printed, and how its last delegated run ended. Call this FIRST: it is your global picture, so you can answer \"what is happening / which one needs me / is anything stuck\" directly, and only delegate when work is actually required. You may only delegate to agents that appear here.",
-		jsonSchema: {
-			type: "object",
-			properties: {
-				detail: {
-					type: "boolean",
-					description: "Include each subordinate's live work state (default true). Set false for just the roster.",
-				},
-			},
-		},
-		handler: async (ctx, input) => {
+			"List the agents this one supervises — their instance id, name and status. Call this first to find out who you can delegate to; you may only delegate to agents that appear here.",
+		jsonSchema: { type: "object", properties: {} },
+		handler: async (ctx) => {
 			const subs = await subordinateSummaries(ctx as never);
 			if (!subs.length) {
 				return {
@@ -140,20 +71,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 					success: true,
 				};
 			}
-			// The global picture, not just the roster. Without it a supervisor has to START WORK to
-			// find out what is happening — the hardcoded Overseer answered from context in one
-			// model call, and a Lead that cannot is a dispatcher, not an overseer.
-			if (input?.detail === false) return { content: JSON.stringify(subs, null, 2), success: true };
-			const userId = (ctx as { userId?: string }).userId ?? "";
-			const budget = { left: WORK_TOTAL_CHARS };
-			const detailed = [];
-			for (const sub of subs) {
-				const work = await subordinateWork((ctx as { env: { DB: D1Database } }).env, userId, sub.instanceId, budget).catch(
-					() => ({ repos: [] }) as SubordinateWork,
-				);
-				detailed.push({ ...sub, ...work });
-			}
-			return { content: JSON.stringify(detailed, null, 2), success: true };
+			return { content: JSON.stringify(subs, null, 2), success: true };
 		},
 	},
 	{
