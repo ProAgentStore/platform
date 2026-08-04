@@ -228,3 +228,6 @@ export function formatDateTime(iso: string): string {
 	if (Number.isNaN(d.getTime())) return "";
 	return d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
+
+// Terminal output colorizer — shared so the console and any agent UI render it identically.
+export { renderTerminal, terminalTail } from "./terminal-render.js";

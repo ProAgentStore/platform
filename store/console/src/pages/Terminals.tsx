@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import Page from "../components/Page";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
+import { renderTerminal, terminalTail } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin } from "lucide-react";
 
@@ -112,7 +113,14 @@ export default function Terminals() {
 												<span className="text-[0.7rem] text-muted-soft ml-auto shrink-0">{ago(s.updatedAt)}</span>
 											</div>
 											{s.terminalTail && (
-												<pre className="mt-1.5 text-[0.7rem] leading-snug text-muted-soft bg-black/30 rounded-md px-2 py-1.5 overflow-hidden max-h-16 whitespace-pre-wrap break-words font-mono">{s.terminalTail.slice(-400)}</pre>
+												// Colorized with the SAME renderer the Coder uses (#187) — this pane used to be
+												// a plain uncolorized <pre> purely because the colorizer lived inside one agent's
+												// package. The renderer escapes every byte; see terminal-render.ts.
+												<pre
+													className="mt-1.5 text-[0.7rem] leading-snug bg-black/30 rounded-md px-2 py-1.5 overflow-hidden max-h-16 whitespace-pre-wrap break-words font-mono"
+													// biome-ignore lint/security/noDangerouslySetInnerHtml: renderTerminal escapes all input
+													dangerouslySetInnerHTML={{ __html: renderTerminal(terminalTail(s.terminalTail, 400)) }}
+												/>
 											)}
 										</button>
 									))}
