@@ -90,6 +90,40 @@ const NOT_BLOCKED = [
 
 const URL_RE = /https?:\/\/[^\s"'`)<>\]]+/g;
 
+/**
+ * Lines where the engine is QUOTING something, not speaking.
+ *
+ * `⚙` a tool call, `↳` its result, `❯` the echoed user turn. NOT the box-drawing characters
+ * `│└├`: Gemini renders its REAL sign-in menu inside a `│` box, so filtering those would suppress
+ * a genuine prompt — the existing GEMINI_MENU test caught exactly that. A coding agent
+ * reads source all day, so its own transcript is full of other people's text — and the phrase
+ * list is matched against every line of the tail.
+ *
+ * Seen live: the Coder was editing FWS's `packages/agent/src/mcp/transport.ts`, whose source says
+ *
+ *   ↳ if (!bearer) throw new Error('Authentication required. Empty bearer token.');
+ *
+ * so the console told the owner "This engine is waiting for you to sign in" while the engine was
+ * `runState: thinking` and working fine. It cleared itself once those lines scrolled past the
+ * 40-line window, which makes it worse, not better — an alert that appears and vanishes for no
+ * reason is exactly how a signal stops being trusted. This module's own header says a false
+ * positive is worse than a miss; the URL side was already narrowed for the same reason, and this
+ * is the phrase side of it.
+ */
+const QUOTED_LINE_RE = /^\s*(?:⚙|↳|❯)/;
+
+/**
+ * A phrase occurrence that is immediately preceded by a quote character is a STRING LITERAL being
+ * quoted, not the engine talking. Catches the raw engines too (codex/grok print stdout with no
+ * `↳` marker, so a `sed`/`grep` of the same file has nothing to filter on).
+ */
+function spokenByEngine(line: string, phrase: string): boolean {
+	const i = line.toLowerCase().indexOf(phrase);
+	if (i <= 0) return i === 0;
+	const before = line[i - 1];
+	return before !== "'" && before !== '"' && before !== "`";
+}
+
 /** Terminal prose puts URLs mid-sentence; drop trailing punctuation that isn't part of the URL. */
 function stripTrailingPunctuation(u: string): string {
 	return u.replace(/[.,;:!?'")\]]+$/, "");
@@ -108,7 +142,9 @@ export function detectAuthPrompt(pane: string): EngineAuthPrompt | null {
 	const text = (pane || "").trim();
 	if (!text) return null;
 	const tail = text.split("\n").slice(-TAIL_LINES);
-	const hay = tail.join("\n").toLowerCase();
+	// Only lines the ENGINE ITSELF wrote — a tool result quoting a repo's source is not a prompt.
+	const spoken = tail.filter((l) => !QUOTED_LINE_RE.test(l));
+	const hay = spoken.join("\n").toLowerCase();
 
 	// A "still running fine" marker anywhere in the tail wins — Claude prints its API-key
 	// precedence warning at startup on every single run, and it is not a sign-in request.
@@ -116,14 +152,16 @@ export function detectAuthPrompt(pane: string): EngineAuthPrompt | null {
 		return null;
 	}
 
-	const phrase = AUTH_PHRASES.find((p) => hay.includes(p));
+	const phrase = AUTH_PHRASES.find((p) => spoken.some((l) => l.toLowerCase().includes(p) && spokenByEngine(l, p)));
 	// Terminal output wraps URLs in prose, so the match often carries a trailing `.` or `,` —
 	// strip it BEFORE parsing, and report the cleaned URL, since this is what gets navigated to.
-	const url = (tail.join("\n").match(URL_RE) ?? []).map(stripTrailingPunctuation).find(isAuthUrl);
+	// Same filter for the URL: a sign-in link inside a file the engine printed is not a prompt,
+	// and this URL is what gets navigated to in the owner's real-profile browser.
+	const url = (spoken.join("\n").match(URL_RE) ?? []).map(stripTrailingPunctuation).find(isAuthUrl);
 
 	if (!phrase && !url) return null;
 
-	const evidence = (tail.find((l) => (phrase && l.toLowerCase().includes(phrase)) || (url && l.includes(url))) ?? "").trim().slice(0, 300);
+	const evidence = (spoken.find((l) => (phrase && l.toLowerCase().includes(phrase)) || (url && l.includes(url))) ?? "").trim().slice(0, 300);
 	return {
 		kind: url ? "oauth-url" : phrase ? "menu" : "unknown",
 		url: url ?? null,

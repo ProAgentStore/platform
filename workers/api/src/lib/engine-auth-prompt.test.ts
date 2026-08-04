@@ -123,3 +123,47 @@ describe("detectAuthPrompt — the sign-in URL drives the owner's real browser",
 		expect(p?.url).toBe("https://claude.ai/oauth/authorize");
 	});
 });
+
+describe("detectAuthPrompt — a coding agent QUOTING source is not a sign-in prompt", () => {
+	// Verbatim from a live Coder pane. The engine was editing FWS's
+	// packages/agent/src/mcp/transport.ts, and its own source contains the phrase. The console
+	// told the owner "This engine is waiting for you to sign in" while the session was
+	// `runState: thinking` and working fine — then the banner vanished when those lines scrolled
+	// past the 40-line window. An alert that appears and disappears for no reason is exactly how
+	// a signal stops being trusted, which this module's header calls out as worse than a miss.
+	const REAL_TOOL_RESULT =
+		"↳ if (!bearer) throw new Error('Authentication required. Empty bearer token.'); if (env.OAUTH_KV) { const fwsSession = await resolveOAuthToken(bearer, env.OAUTH_KV); }";
+	const REAL_TOOL_RESULT_2 =
+		"↳ } export async function requireAuth(request: Request, env: Env): Promise<string> { const auth = request.headers.get('Authorization'); throw new Error('Authentication required. Connect FreeWebStore through the app.'); }";
+
+	it("does not fire on the tool-result lines that caused the false positive", () => {
+		expect(detectAuthPrompt(`⚙ Bash {"command":"sed -n '60,80p' transport.ts"}\n${REAL_TOOL_RESULT}\n${REAL_TOOL_RESULT_2}`)).toBeNull();
+	});
+
+	it("does not fire on a tool CALL line either", () => {
+		expect(detectAuthPrompt(`⚙ Grep {"pattern":"Authentication required","path":"src"}`)).toBeNull();
+	});
+
+	it("does not fire on the user's own echoed turn", () => {
+		expect(detectAuthPrompt("❯ [12:00:00] grep for 'authentication required' in the repo")).toBeNull();
+	});
+
+	it("does not fire on a quoted string in RAW engine stdout (no ↳ marker to filter on)", () => {
+		// codex/grok print stdout unmarked, so the line filter can't help — the quote char before
+		// the phrase is what identifies it as a literal being printed rather than a prompt.
+		expect(detectAuthPrompt(`throw new Error('Authentication required. Empty bearer token.');`)).toBeNull();
+		expect(detectAuthPrompt(`  message: "Authentication required",`)).toBeNull();
+	});
+
+	it("STILL fires when the engine itself says it", () => {
+		expect(detectAuthPrompt("Authentication required")?.kind).toBe("menu");
+		expect(detectAuthPrompt("Please sign in to continue")?.kind).toBe("menu");
+		const real = detectAuthPrompt("Authentication required\nVisit the following URL: https://claude.ai/oauth/authorize?x=1");
+		expect(real?.url).toContain("claude.ai");
+	});
+
+	it("ignores an auth URL that only appears inside quoted output", () => {
+		// The console's sign-in button navigates the owner's real-profile browser to this URL.
+		expect(detectAuthPrompt("Please sign in\n↳ const LOGIN = 'https://accounts.google.com/o/oauth2/auth';")?.url).toBeNull();
+	});
+});
