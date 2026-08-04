@@ -27,7 +27,16 @@ export async function resolveEngineEnv(
 ): Promise<Record<string, string> | undefined> {
 	const { engines } = await readEngines(env, instanceId, uid);
 	const auth = engineAuthFor(engines, session.launchCommand);
-	if (auth === "machine") return undefined;
+	// An inherited provider key is NOT "the machine's login" — it is per-token billing wearing
+	// the machine's clothes. Every mode except "api-key" therefore REMOVES it (empty value =
+	// remove, see the runner's mergeEnv), so a developer with ANTHROPIC_API_KEY exported in
+	// their shell does not silently pay per token for an engine they asked to run on their
+	// subscription. This is the whole point of the modes existing; before it, all four behaved
+	// identically whenever the shell had a key.
+	const providerKeyEnv = ENGINE_API_KEYS[session.clientType]?.envVar;
+	const stripProviderKey = providerKeyEnv ? { [providerKeyEnv]: "" } : {};
+
+	if (auth === "machine") return providerKeyEnv ? stripProviderKey : undefined;
 	if (auth === "api-key") {
 		const spec = ENGINE_API_KEYS[session.clientType];
 		const key = spec ? await getUserProviderKey(env, uid, spec.provider) : null;
@@ -35,9 +44,12 @@ export async function resolveEngineEnv(
 	}
 	// "subscription" | "auto" — the stored `claude setup-token`. Only Claude has a
 	// subscription token env; for other engines these modes mean the machine login.
-	if (session.clientType !== "claude") return undefined;
+	if (session.clientType !== "claude") return providerKeyEnv ? stripProviderKey : undefined;
 	const token = await getUserProviderKey(env, uid, "claude-code");
-	if (!token) return undefined;
+	// No stored setup-token → fall through to the machine's OWN login (the claude.ai session in
+	// the keychain), which is what "auto" promises. Still strip the API key: inheriting it is
+	// what turned "auto" into per-token billing.
+	if (!token) return stripProviderKey;
 	// The runner spawns the CLI with `{...process.env, ...thisEnv}`, so a machine that exports
 	// ANTHROPIC_API_KEY hands the engine an API key — and Claude Code prefers it over the
 	// subscription token. Injecting CLAUDE_CODE_OAUTH_TOKEN alone therefore did NOTHING: picking
