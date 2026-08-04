@@ -6,6 +6,7 @@
  */
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { wrongProviderError } from "../lib/key-shape.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { logError } from "../lib/error-log.js";
 import { recordVoiceUsage } from "../lib/usage.js";
@@ -217,11 +218,12 @@ keysRoutes.put("/:provider", async (c) => {
 			);
 		}
 		keyToStore = encodeCloudflareAiCredentials(accountId.trim(), key.trim());
-	} else if (provider.keyPrefix && !key.startsWith(provider.keyPrefix)) {
-		throw new HttpError(
-			400,
-			`${provider.name} keys should start with "${provider.keyPrefix}"`,
-		);
+	} else {
+		// Reject only a key that clearly belongs to ANOTHER provider. Requiring the provider's
+		// own known prefix rots closed: Google now issues `AQ.…` keys while the old check still
+		// demanded `AIza…`, so a valid key could not be saved. See lib/key-shape.ts.
+		const mismatch = wrongProviderError(providerId, key.trim());
+		if (mismatch) throw new HttpError(400, mismatch);
 	}
 
 	const { ciphertext, dekWrapped, iv } = await encryptKey(
