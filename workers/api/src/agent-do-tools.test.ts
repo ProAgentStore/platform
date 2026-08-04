@@ -6,6 +6,7 @@ import {
 	TOOL_CATALOG,
 	toolNamesFor,
 } from "./agent-do-tools.js";
+import { registryToolNameSet } from "./lib/tool-registry.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
 
 const caps = (surfaces: AgentCapabilities["surfaces"]): AgentCapabilities => ({
@@ -271,5 +272,39 @@ describe("surface options govern the drive tools (#154)", () => {
 		const base = toolNamesFor({ surfaces: [], runtime: null, workflow: null });
 		const withOpt = toolNamesFor({ surfaces: [], runtime: null, workflow: null, surfaceOptions: { coding: { drive: false } } } as never);
 		expect([...withOpt].sort()).toEqual([...base].sort());
+	});
+});
+
+describe("tool catalog reachability — a tool nobody can call is not a tool", () => {
+	const caps = (over: Record<string, unknown> = {}) =>
+		({ surfaces: [], runtime: null, workflow: null, boardColumns: [], ...over }) as never;
+
+	it("exposes delete_record, so a collections agent can REMOVE a record", () => {
+		// It has a declared def and a working, tested handler in STORAGE_TOOLS but was in NO
+		// group. FULL is the union of the groups and CREATOR_SELECTABLE_TOOLS is built from
+		// TOOL_CATALOG, so the name was unreachable through every path: never shown to the model,
+		// refused if called from text, and silently dropped even from an explicit
+		// `capabilities.tools:["delete_record"]`. Its own test passes by calling
+		// executeStorageTool directly, past the gate. So the agent could create and update
+		// records forever and never delete one.
+		expect(CREATOR_SELECTABLE_TOOLS.has("delete_record")).toBe(true);
+		// Reachable BOTH ways: in the default full set, and via an explicit declaration.
+		expect(toolNamesFor(caps()).has("delete_record")).toBe(true);
+		expect(toolNamesFor(caps({ tools: ["delete_record"] })).has("delete_record")).toBe(true);
+	});
+
+	it("every catalog name is reachable through the declared-tools path", () => {
+		// The inverse failure: a catalog name `toolNamesFor` drops would be offered to a creator
+		// and then refused at call time.
+		const unreachable = [...CREATOR_SELECTABLE_TOOLS].filter((n) => !toolNamesFor(caps({ tools: [n] })).has(n));
+		expect(unreachable).toEqual([]);
+	});
+
+	it("every catalog name has a real implementation behind it", () => {
+		const known = new Set([...storageToolNameSet(), ...registryToolNameSet()]);
+		const orphans = [...CREATOR_SELECTABLE_TOOLS].filter((n) => !known.has(n));
+		// The coding/apply families are implemented in lib/tools.ts, not the two registries above.
+		const implementedElsewhere = new Set(["list_coding_repos", "read_terminal", "send_to_cli", "submit_job_application", "find_confirmation_link"]);
+		expect(orphans.filter((n) => !implementedElsewhere.has(n))).toEqual([]);
 	});
 });

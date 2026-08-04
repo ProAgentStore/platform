@@ -70,6 +70,32 @@ export function toolBlurbFor(capabilities: AgentCapabilities): string {
 	return "Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
 }
 
+/**
+ * Tools with NO side effect, exempt from the cross-round dedup.
+ *
+ * The dedup exists to stop duplicate side effects; a pure read repeated after a mutation is the
+ * agent OBSERVING what it just did, which is the opposite of a duplicate. Listing the safe names
+ * rather than inferring is deliberate — a tool wrongly listed here can be re-run in a loop, so
+ * this stays an explicit, reviewable set.
+ */
+const READ_ONLY_TOOLS = new Set([
+	"read_terminal",
+	"list_coding_repos",
+	"get_tasks",
+	"read_memory",
+	"get_activity",
+	"list_knowledge",
+	"read_knowledge",
+	"search_knowledge",
+	"list_files",
+	"read_file",
+	"list_collections",
+	"query_records",
+	"get_context",
+	"check_delegation",
+	"list_subordinates",
+]);
+
 export async function runAgentThink(opts: {
 	state: AgentState;
 	engine: AgentStorageEngine;
@@ -496,7 +522,10 @@ export async function runAgentThink(opts: {
 
 		let toolCalls = normalizeToolCalls((rawResult.tool_calls as unknown[]) || []);
 		if (toolCalls.length === 0 && rawResult.response) {
-			toolCalls = parseToolCallsFromText(rawResult.response as string);
+			// Scoped to the allowlist: an object in the reply that merely HAS a `name` key (a
+			// package.json, a lead record) is prose, not a tool call, and treating it as one
+			// discarded the model's real answer. See parse-tool-calls.ts.
+			toolCalls = parseToolCallsFromText(rawResult.response as string, allowedToolNames);
 		}
 
 		if (toolCalls.length === 0) {
@@ -514,7 +543,15 @@ export async function runAgentThink(opts: {
 				continue;
 			}
 			const signature = `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`;
-			if (executedCalls.has(signature)) {
+			// The dedup exists to stop DUPLICATE SIDE EFFECTS (three identical job tasks), so it
+			// applies only to calls that have one. Applied to pure reads it produced the opposite
+			// of its purpose: round 1 `read_terminal` (idle), `send_to_cli "run the tests"`; round
+			// 2 `read_terminal` again to see the result — identical signature, refused, never
+			// reaching /coding/capture — so the model described the PRE-send idle pane as the
+			// outcome. Same for `get_tasks` before and after `create_task`: the agent tells you it
+			// has no tasks immediately after creating one. A read's whole job is to observe a
+			// change something else made.
+			if (!READ_ONLY_TOOLS.has(tc.name) && executedCalls.has(signature)) {
 				toolResults.push(
 					`[${tc.name}]: Already executed this exact call this turn — not repeating. Use the earlier result.`,
 				);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agentCapabilities, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
+import { optionsFor } from "./surface-options.js";
 
 describe("agentCapabilities", () => {
 	it("uses declared config.capabilities when present", () => {
@@ -279,5 +280,37 @@ describe("custom surfaces — a bundle must not be able to impersonate a built-i
 	it("accepts a bundle on the platform's own hosts", () => {
 		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "https://proagentstore.online/s.js" })])).toHaveLength(1);
 		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "https://cdn.proagentstore.online/s.js" })])).toHaveLength(1);
+	});
+});
+
+describe("agentCapabilities — surfaceOptions must SURVIVE resolution", () => {
+	const declared = (caps: Record<string, unknown>) => ({ slug: "x", category: "code", config: JSON.stringify({ capabilities: caps }) });
+
+	it("returns the declared per-surface options", () => {
+		// They were validated and PERSISTED, but neither return path copied them onto the resolved
+		// capabilities — so every consumer read `undefined` and `optionsFor()` fell back to
+		// SURFACE_DEFAULTS. A supervised Repo Coder declaring `{drive:false, repos:"single"}` still
+		// got send_to_cli/read_terminal (the third drive-path #154 removes) and still rendered
+		// add-repo plus a multi-repo list it cannot use. The existing tests pass because they build
+		// the capabilities literal by hand and never go through this function.
+		const caps = agentCapabilities(declared({ surfaces: ["coding"], surfaceOptions: { coding: { drive: false, repos: "single" } } }));
+		expect(caps.surfaceOptions).toEqual({ coding: { drive: false, repos: "single" } });
+	});
+
+	it("gates the option on the surface, so it can never switch one on", () => {
+		const caps = agentCapabilities(declared({ surfaces: ["coding"], surfaceOptions: { coding: { drive: false } } }));
+		expect(optionsFor(caps, "coding")).toMatchObject({ drive: false });
+		expect(optionsFor(caps, "apply")).toBeNull();
+	});
+
+	it("omits the key entirely when nothing non-default is declared", () => {
+		// Keeps a stored config readable and means adding this feature rewrote nothing.
+		expect(agentCapabilities(declared({ surfaces: ["coding"] })).surfaceOptions).toBeUndefined();
+	});
+
+	it("carries options through the FALLBACK derivation too (a legacy agent can still declare them)", () => {
+		const caps = agentCapabilities({ slug: "coder", category: "code", config: JSON.stringify({ capabilities: { surfaceOptions: { coding: { repos: "single" } } } }) });
+		expect(caps.surfaces).toContain("coding"); // derived, not declared
+		expect(caps.surfaceOptions).toEqual({ coding: { repos: "single" } });
 	});
 });

@@ -72,7 +72,19 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 			const state = { objective, iteration: 1, maxIterations: maxIter, running: true };
 			activeLoops.set(id, state);
 
-			// Run the loop
+			// Run the loop.
+			//
+			// The transcript has to ADVANCE. It used to be built from `chatRes` — the iteration-0
+			// reply — on every pass, so `/loop-decide` was asked the identical question each time,
+			// with only `iteration` incremented. It therefore returned the same `continue` and the
+			// same nextInstruction deterministically: duplicate instructions re-sent to the agent,
+			// no way to ever observe that the objective was met, and all N iterations of BYOK
+			// Claude spend burned. `nextRes` — the actual reply to each new instruction — was used
+			// only for the human-readable string.
+			const turns: Array<{ role: "user" | "assistant"; content: string }> = [
+				{ role: "user", content: objective },
+				{ role: "assistant", content: chatRes.message?.content || "" },
+			];
 			const results: string[] = [`Iteration 0: sent objective\nAgent: ${chatRes.message?.content?.slice(0, 200) || "(no response)"}`];
 
 			while (state.running && state.iteration < state.maxIterations) {
@@ -83,7 +95,7 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 						method: "POST",
 						body: JSON.stringify({
 							objective: state.objective,
-							messages: [{ role: "user", content: objective }, { role: "assistant", content: chatRes.message?.content || "" }],
+							messages: turns,
 							iteration: state.iteration,
 							maxIterations: state.maxIterations,
 						}),
@@ -110,6 +122,9 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 					env,
 				)) as { message?: { content: string }; error?: string };
 
+				// Feed BOTH sides of this turn back in, or the next decision is made blind.
+				turns.push({ role: "user", content: decision.nextInstruction });
+				turns.push({ role: "assistant", content: nextRes.message?.content || nextRes.error || "" });
 				results.push(`Iteration ${state.iteration}: ${decision.nextInstruction.slice(0, 100)}\nAgent: ${nextRes.message?.content?.slice(0, 200) || nextRes.error || "(no response)"}`);
 				state.iteration++;
 			}

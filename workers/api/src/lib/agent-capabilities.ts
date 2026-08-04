@@ -360,6 +360,16 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 	// Declared tool allowlist (sibling of surfaces under config.capabilities). Honored in
 	// every path; runtime intersects it with the real catalog (agent-do-tools).
 	const tools = sanitizeToolList((declared as Record<string, unknown> | undefined)?.tools);
+	// Per-surface options. `sanitizeDeclaredCapabilities` validated and PERSISTED these, but
+	// neither return path below copied them onto the resolved capabilities — so every consumer
+	// read `undefined` and `optionsFor()` fell back to SURFACE_DEFAULTS. A supervised Repo Coder
+	// declaring `{drive:false, repos:"single"}` therefore still got send_to_cli/read_terminal
+	// (the third drive-path #154 removes) and still rendered add-repo plus a multi-repo list it
+	// cannot use. The unit tests pass because they build the capabilities literal by hand and
+	// never go through this function.
+	const surfaceOptionsRaw = (declared as Record<string, unknown> | undefined)?.surfaceOptions;
+	const surfaceOptions = serializeSurfaceOptions(parseSurfaceOptions(surfaceOptionsRaw));
+	const withOptions = Object.keys(surfaceOptions).length ? { surfaceOptions } : {};
 
 	if (declared && Array.isArray(declared.surfaces)) {
 		const surfaces = declared.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface));
@@ -369,6 +379,7 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 			workflow: declared.workflow ?? null,
 			tools,
 			customSurfaces,
+			...withOptions,
 			boardColumns: declaredColumns ?? defaultBoardColumns(surfaces),
 			settingsSchema,
 		};
@@ -385,7 +396,7 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 	} else {
 		base = { surfaces: [], runtime: null, workflow: null };
 	}
-	return { ...base, tools, customSurfaces, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema };
+	return { ...base, tools, customSurfaces, ...withOptions, boardColumns: declaredColumns ?? defaultBoardColumns(base.surfaces), settingsSchema };
 }
 
 /** True if the agent opts into a given console surface. */

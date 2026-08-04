@@ -35,8 +35,18 @@ const KB_READ = ["search_knowledge", "list_knowledge", "read_knowledge"] as cons
 const KB_WRITE = ["update_knowledge", "delete_knowledge", "add_knowledge"] as const;
 /** Binary file storage (R2). */
 const FILES = ["upload_file", "list_files", "read_file", "delete_file"] as const;
-/** Structured collections (agent-defined tables). */
-const COLLECTIONS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record"] as const;
+/**
+ * Structured collections (agent-defined tables).
+ *
+ * `delete_record` is declared in STORAGE_TOOLS with a working, tested handler but was in NO
+ * group — and since FULL is the union of the groups and CREATOR_SELECTABLE_TOOLS is built from
+ * TOOL_CATALOG, the name was unreachable through every path. `buildAgentToolDefinitions` never
+ * showed it to the model, a text-embedded call was refused as "not available to this agent", and
+ * even an explicit `capabilities.tools:["delete_record"]` was silently dropped as not-in-catalog.
+ * So a collections agent told "delete the duplicate lead" could create and update records forever
+ * but never remove one. Its test passes by calling `executeStorageTool` directly, past the gate.
+ */
+const COLLECTIONS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record", "delete_record"] as const;
 /** Legacy selector-based job submit (superseded by the apply workflow). */
 const APPLY = ["submit_job_application"] as const;
 /** Live coding-session awareness: list repos + read/drive the engine's terminal. */

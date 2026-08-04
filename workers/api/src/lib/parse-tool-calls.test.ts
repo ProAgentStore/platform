@@ -122,3 +122,37 @@ describe("normalizeToolCalls", () => {
 		expect(calls[1].arguments).toEqual({});
 	});
 });
+
+describe("parseToolCallsFromText — an object with a `name` key is not a tool call", () => {
+	const allowed = new Set(["get_tasks", "write_memory", "search_knowledge"]);
+
+	it("does not treat a package.json in the reply as a call — the answer-eating bug", () => {
+		// A repo-chat agent asked "what's in package.json" answers with the file inline. With no
+		// name check that object became a call to a tool named `@proagentstore/sdk`, so
+		// `toolCalls.length > 0` skipped the "no tools → return the reply" early return and the
+		// model's CORRECT answer was thrown away. The name then failed the allowlist, nothing ran,
+		// the round broke, and the user got an answer regenerated from a transcript reading
+		// "I called tools: [@proagentstore/sdk]: This tool isn't available to this agent".
+		const reply = 'Here is the file:\n{"name":"@proagentstore/sdk","version":"0.4.0","type":"module"}';
+		expect(parseToolCallsFromText(reply, allowed)).toEqual([]);
+	});
+
+	it("ignores any record carrying a name — a lead, a site, a person", () => {
+		expect(parseToolCallsFromText('{"name":"Joe\'s Cafe","suburb":"Newtown"}', allowed)).toEqual([]);
+	});
+
+	it("still parses a REAL text-embedded call", () => {
+		const calls = parseToolCallsFromText('I will check.\n{"name":"get_tasks"}', allowed);
+		expect(calls).toEqual([{ name: "get_tasks", arguments: {} }]);
+	});
+
+	it("rejects a non-string name rather than coercing it", () => {
+		expect(parseToolCallsFromText('{"name":42,"x":1}', allowed)).toEqual([]);
+		expect(parseToolCallsFromText('{"name":{"a":1}}', allowed)).toEqual([]);
+		expect(parseToolCallsFromText('{"name":["get_tasks"]}', allowed)).toEqual([]);
+	});
+
+	it("without an allowlist stays permissive — the old contract for callers that have none", () => {
+		expect(parseToolCallsFromText('{"name":"anything"}')).toEqual([{ name: "anything", arguments: {} }]);
+	});
+});

@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authedCall, authRequired, jsonText, text } from "../http.js";
-import { audit, dryRun, requirePermission } from "../safety.js";
+import { audit, dryRun, requireConfirmation, requirePermission } from "../safety.js";
 import type { InstanceToolsCtx } from "./shared.js";
 
 /** Repo-chat tools — gated to users who have a repo-chat agent. */
@@ -69,14 +69,26 @@ export function registerRepoTools(server: McpServer, ctx: InstanceToolsCtx): voi
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
 			repo_url: z.string().optional().describe("Repo URL or owner/repo to remove. Omit to remove ALL repos."),
+			confirm: z.string().optional().describe('Required when removing ALL repos: pass confirm="remove_all_repos".'),
 			dry_run: z.boolean().optional(),
 		},
-		async ({ token, instance_id, repo_url, dry_run }) => {
+		async ({ token, instance_id, repo_url, confirm, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
 			const input = { instance_id, repo_url };
-			const denied = await requirePermission(safetyFor(token), "write", "remove_repo", input);
+			// Removing ONE repo is an ordinary write. Omitting `repo_url` wipes the vectors and
+			// overviews for up to 20 indexed repos in a single ungated call — and `repo_url` being
+			// optional makes that an easy slip for a model. A default browser sign-in grants
+			// ["read","write","runtime"] and no "destructive", so `write` alone let it through
+			// unconfirmed, unlike every sibling bulk/irreversible tool
+			// (delete_instance_knowledge, clear_instance_messages, cancel_instance, …).
+			const removingAll = !repo_url;
+			const denied = await requirePermission(safetyFor(token), removingAll ? "destructive" : "write", "remove_repo", input);
 			if (denied) return denied;
+			if (removingAll && !dry_run) {
+				const unconfirmed = await requireConfirmation(safetyFor(token), "remove_repo", confirm, "remove_all_repos", input);
+				if (unconfirmed) return unconfirmed;
+			}
 			if (dry_run) {
 				return dryRun(safetyFor(token), "remove_repo", repo_url ? "remove one indexed repository" : "remove ALL indexed repositories", input, {
 					endpoint: `/v1/instances/${instance_id}/ingest-repo/clear`,
