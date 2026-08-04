@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } fro
 import { useParams, useNavigate } from "react-router-dom";
 import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
+import { identityFor } from "../lib/identity";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
@@ -494,7 +495,22 @@ export default function InstanceDetail() {
 	const headerContent = useMemo(() => (
 		<div className="flex items-center gap-1.5 min-w-0">
 			<button type="button" onClick={() => navigate("/instances")} className="text-muted hover:text-ink shrink-0"><ArrowLeft size={16} /></button>
-			{instance && <span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>}
+			{instance && (
+				<>
+					{/* Same mark as the instances list, so the thing you clicked is the thing you are
+					    now looking at. Shown on mobile too — it costs 20px and is the only identity
+					    cue there, since the name is hidden below sm. */}
+					<span
+						className="w-5 h-5 rounded-md flex items-center justify-center text-[0.7rem] shrink-0"
+						style={{ background: identityFor(instance).bg }}
+						title={instance.name}
+						aria-hidden="true"
+					>
+						{identityFor(instance).emoji}
+					</span>
+					<span className="text-sm font-semibold truncate max-w-32 hidden sm:inline">{instance.name}</span>
+				</>
+			)}
 			{/* Runner dot only for agents that USE a runner — chat-only agents showed a
 			    permanently grey dot that just ate navbar space (worst on mobile). */}
 			{hasRuntime && (

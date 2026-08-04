@@ -606,6 +606,13 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.getByRole("link", { name: "My Agents" }).click();
 		await expect(page).toHaveURL(/\/console\/agents$/);
 
+		// The URL changing and the route being PERSISTED are two different events —
+		// rememberRoute runs in a Layout effect. Navigating on the URL alone raced the write and
+		// made this test fail roughly two runs in three.
+		await expect
+			.poll(() => page.evaluate(() => localStorage.getItem("console:lastRoute")))
+			.toBe("agents");
+
 		// Re-opening the root now restores Agents instead of the fixed default.
 		await page.goto("/console/");
 		await expect(page).toHaveURL(/\/console\/agents$/);

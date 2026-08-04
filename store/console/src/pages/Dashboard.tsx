@@ -3,6 +3,7 @@ import Page from "../components/Page";
 import { useNavigate, useLocation } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Instance } from "../lib/types";
+import { capabilityBadges, identityFor } from "../lib/identity";
 import { platformToolGroups } from "../lib/platformTools";
 
 export default function Dashboard() {
@@ -101,16 +102,45 @@ export default function Dashboard() {
 						<p className="text-center py-8 text-muted-soft">No subscriptions yet. <button type="button" onClick={() => navigate("/browse")} className="text-accent underline">Browse agents</button> to subscribe.</p>
 					) : (
 						<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,300px),1fr))] gap-3">
-							{instances.map((inst) => (
-								<button key={inst.id} type="button" onClick={() => navigate(`/instances/${inst.id}`)}
-									className="text-left bg-panel border border-line rounded-xl p-3 sm:p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
-									<h3 className="text-[0.95rem] font-bold mb-1">{inst.name}</h3>
-									<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-2">{inst.description || "No description"}</p>
-									<div className="flex gap-2 text-xs">
-										<span className="px-1.5 py-0.5 rounded font-medium bg-green/15 text-green">subscribed</span>
-									</div>
-								</button>
-							))}
+							{instances.map((inst) => {
+								// Identity is computed, not styled inline: the tint hashes the INSTANCE id so
+								// three Repo Coders (one per repo) never share a colour. See lib/identity.ts.
+								const id = identityFor(inst);
+								const badges = capabilityBadges(inst);
+								return (
+									<button key={inst.id} type="button" onClick={() => navigate(`/instances/${inst.id}`)}
+										className="text-left bg-panel border border-line rounded-xl p-3 sm:p-4 cursor-pointer transition-all hover:border-accent hover:-translate-y-px hover:shadow-lg">
+										<div className="flex items-start gap-3 mb-2">
+											{/* The mark does the recognising — reading the title should be the fallback,
+											    not the only way to tell two agents apart. */}
+											<div
+												className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0 shadow-sm"
+												style={{ background: id.bg }}
+												aria-hidden="true"
+											>
+												<span>{id.emoji}</span>
+											</div>
+											<div className="min-w-0 flex-1">
+												<h3 className="text-[0.95rem] font-bold leading-tight truncate">{inst.name}</h3>
+												{/* "FAS platform" over "Repo Coder" — which one, then what it is. */}
+												{id.subtitle && <p className="text-xs text-muted truncate">{id.subtitle}</p>}
+											</div>
+										</div>
+										<p className="text-sm text-muted mb-2 leading-relaxed line-clamp-2">{inst.description || "No description"}</p>
+										<div className="flex gap-1.5 text-xs flex-wrap">
+											{/* Real capabilities instead of a constant "subscribed" that every card showed
+											    and which therefore distinguished nothing. */}
+											{badges.length === 0 ? (
+												<span className="px-1.5 py-0.5 rounded font-medium bg-green/15 text-green">active</span>
+											) : (
+												badges.map((b) => (
+													<span key={b} className="px-1.5 py-0.5 rounded font-medium bg-accent/12 text-accent">{b}</span>
+												))
+											)}
+										</div>
+									</button>
+								);
+							})}
 						</div>
 					)}
 				</div>

@@ -6,6 +6,9 @@ export default defineConfig({
 			"packages/*/src/**/*.test.ts",
 			"workers/*/src/**/*.test.ts",
 			"agents/job-application-assistant/src/**/*.test.ts",
+			// The console had NO unit tests and was not even in this glob, so anything added
+			// there would have passed locally and never run in CI.
+			"store/*/src/**/*.test.ts",
 		],
 		coverage: {
 			provider: "v8",
