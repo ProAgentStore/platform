@@ -40,6 +40,36 @@ async function resolveAgentCapabilities(env: Env, id: string): Promise<AgentCapa
 	return agentCapabilities({});
 }
 
+/**
+ * The one-line summary of what an agent's tools are FOR, prepended to the tool list in the
+ * system prompt. Describing tools the agent doesn't have is not cosmetic: it tells the model
+ * a story about itself that its actual tool set contradicts, and the model believes the story.
+ *
+ * A DECLARED `capabilities.tools` allowlist is checked FIRST, because the surface cases below
+ * no longer imply the tool set (#141): an agent can declare tools and NO surface, and would
+ * then fall through to the generic blurb advertising files, collections and knowledge search
+ * it does not have. That is what broke Local Repo Chat — told it could "search your
+ * knowledge", it concluded its repo tools must need an index first and refused to read a
+ * repo it could already read, suggesting the user go index it in a console tab that
+ * (correctly) does not exist for that agent.
+ */
+export function toolBlurbFor(capabilities: AgentCapabilities): string {
+	if (capabilities.tools?.length) {
+		return (
+			"The tools listed below are exactly what you have — use them directly. Do not assume a tool needs" +
+			" some other setup, indexing or ingestion step before it will work, and never tell the user to do" +
+			" something one of your own tools already does."
+		);
+	}
+	if (capabilities.surfaces.includes("repo")) {
+		return "Use them to search your indexed repositories and manage your memory.";
+	}
+	if (capabilities.surfaces.includes("coding")) {
+		return "Use them to check your repositories, read the live terminal, and manage your memory and tasks.";
+	}
+	return "Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
+}
+
 export async function runAgentThink(opts: {
 	state: AgentState;
 	engine: AgentStorageEngine;
@@ -296,13 +326,7 @@ export async function runAgentThink(opts: {
 	}
 	const useTools = TOOL_CAPABLE_MODELS.has(effectiveModel);
 	if (useTools) {
-		// Describe the tools this agent ACTUALLY has (they are capability-gated below), so
-		// a Coder isn’t told to "search your knowledge" when it has no index to search.
-		const toolBlurb = capabilities.surfaces.includes("repo")
-			? "Use them to search your indexed repositories and manage your memory."
-			: capabilities.surfaces.includes("coding")
-				? "Use them to check your repositories, read the live terminal, and manage your memory and tasks."
-				: "Use them to manage your memory, tasks, files, collections (structured data), and search your knowledge.";
+		const toolBlurb = toolBlurbFor(capabilities);
 		systemPrompt += "\n\nYou have tools available. " + toolBlurb;
 
 		// Explicitly name the CONNECTOR tools this agent actually has (GitHub, tmux, HTTP,
