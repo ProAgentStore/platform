@@ -106,6 +106,11 @@ chatRoutes.get("/:id/ws", async (c) => {
 	// binds it to the socket and ignores any client-supplied userId.
 	const doUrl = new URL(c.req.url);
 	doUrl.searchParams.set("user_id", session.uid);
+	// The RESOLVED agent id too (`:id` may be a slug). The DO pins it to the socket and uses it
+	// when a turn arrives on an un-initialised DO — first-party agents seeded by migration have no
+	// initialised template DO, and without this the auto-init fell back to the literal "unknown",
+	// which is the Vectorize partition key and the only filter vectorSearch applies.
+	doUrl.searchParams.set("agentId", agent.id);
 	return stub.fetch(new Request(doUrl.toString(), c.req.raw));
 });
 

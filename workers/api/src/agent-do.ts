@@ -323,8 +323,14 @@ export class AgentDO extends DurableObject<Env> {
 		// Auto-initialize if DO has no state (agent created via D1 but DO never init'd)
 		if (!state) {
 			const url = new URL(request.url);
-			const agentId =
-				body.agentId || url.searchParams.get("agentId") || "unknown";
+			const agentId = body.agentId || url.searchParams.get("agentId");
+			// NEVER auto-init with a placeholder. The old `|| "unknown"` fallback persisted that
+			// literal as `state.agentId`, which is the Vectorize partition key AND the only filter
+			// `vectorSearch` applies — so every DO that reached this path wrote and read vectors in
+			// one shared `"unknown"` namespace, bleeding RAG between logically separate agents (and
+			// between their owners). Its R2 file keys collapsed to `agents/unknown/files/…` too.
+			// Refusing is safe: every real caller passes an agentId.
+			if (!agentId) return json({ error: "agentId required to initialize this agent" }, 400);
 			const agentName =
 				body.agentName || url.searchParams.get("agentName") || "Agent";
 			await this.init({ agentId, name: agentName });
@@ -497,10 +503,17 @@ export class AgentDO extends DurableObject<Env> {
 		// Pin the server-verified user id (set by the authenticated /ws route) to
 		// this socket. webSocketMessage reads it back instead of trusting any
 		// client-supplied userId — which is what stops cross-user key abuse.
-		const userId = new URL(request.url).searchParams.get("user_id") || undefined;
+		const url = new URL(request.url);
+		const userId = url.searchParams.get("user_id") || undefined;
+		// The agent id is pinned too. Without it `webSocketMessage` synthesized a /chat request
+		// carrying no agentId, so on a DO with no state the auto-init fell back to the literal
+		// string "unknown" and PERSISTED it — and that value is the Vectorize partition key and
+		// the only filter `vectorSearch` applies. Two seeded agents first touched over WS would
+		// both write vectors tagged `agentId:"unknown"` and then read each other's chunks.
+		const agentId = url.searchParams.get("agentId") || url.searchParams.get("agent_id") || undefined;
 
 		this.ctx.acceptWebSocket(server);
-		if (userId) server.serializeAttachment({ userId });
+		if (userId || agentId) server.serializeAttachment({ userId, agentId });
 
 		return new Response(null, { status: 101, webSocket: client });
 	}
@@ -520,7 +533,7 @@ export class AgentDO extends DurableObject<Env> {
 				// Use the server-verified uid pinned to the socket at accept time —
 				// NEVER parsed.userId (a client could otherwise name any victim's uid
 				// and run inference on their stored API key).
-				const attach = ws.deserializeAttachment() as { userId?: string } | null;
+				const attach = ws.deserializeAttachment() as { userId?: string; agentId?: string } | null;
 				const userId = attach?.userId;
 				const request = new Request("https://internal/chat", {
 					method: "POST",
@@ -528,6 +541,7 @@ export class AgentDO extends DurableObject<Env> {
 						message: parsed.message,
 						channel: "chat",
 						userId,
+						agentId: attach?.agentId,
 					}),
 				});
 				await this.handleChat(request);
@@ -1049,8 +1063,14 @@ export class AgentDO extends DurableObject<Env> {
 			const state = await this.getState();
 			if (!state) return;
 			const engine = this.getStorageEngine(state.agentId);
-			const didWork = await repoAlarmTick(this.ctx.storage, engine, this.repoFetchers());
-			if (didWork) await this.ctx.storage.setAlarm(Date.now() + 50);
+			const tick = await repoAlarmTick(this.ctx.storage, engine, this.repoFetchers());
+			// A tick may ask for a real PAUSE. Rescheduling at +50ms after a tick that indexed
+			// nothing turned "retry once on a later tick" into "retry 50ms later", so a transient
+			// Workers-AI outage burned the single retry instantly and the repo finished "done"
+			// with an empty index about 100ms after the outage started.
+			const didWork = typeof tick === "boolean" ? tick : tick.didWork;
+			const delayMs = typeof tick === "boolean" ? 50 : tick.delayMs;
+			if (didWork) await this.ctx.storage.setAlarm(Date.now() + delayMs);
 		} catch (err) {
 			await logError(this.env, {
 				source: "alarm",

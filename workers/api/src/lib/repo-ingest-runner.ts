@@ -15,6 +15,17 @@ export const REPO_MAX_FILES = 300;
 export const REPO_MAX_FILE_BYTES = 32_000;
 export const REPO_MAX_TOTAL_BYTES = 4_000_000;
 export const REPO_CHUNK_BUDGET = 60; // ~embed calls per alarm tick
+/**
+ * What a FAILED file costs against the per-tick chunk budget.
+ *
+ * The budget only counted successful embeds, so during a Workers-AI outage every file returned
+ * -1, `chunks` stayed 0, and the loop's `chunks < REPO_CHUNK_BUDGET` guard never tripped — one
+ * tick drained the whole queue. Charging a failure keeps a bad tick the same size as a good one.
+ */
+export const REPO_FAILED_FILE_COST = 2;
+/** Pause before retrying after a tick that indexed NOTHING — the outage this retry exists for
+ *  does not resolve in the normal 50ms reschedule. */
+export const REPO_RETRY_BACKOFF_MS = 60_000;
 export const REPO_FILE_MAX_RETRY = 1; // retry a whole-file embed failure once (later tick) before dropping
 export const REPO_MAX_REPOS = 20; // indexed repos per instance
 
@@ -163,7 +174,8 @@ export async function statusList(store: RepoStore): Promise<Array<Partial<RepoIn
  * reschedule), false when nothing was pending (chain stops). Every write goes
  * through saveJob() so a concurrent remove/re-index can't be clobbered/resurrected.
  */
-export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: RepoFetchers): Promise<boolean> {
+export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: RepoFetchers): Promise<boolean | { didWork: boolean; delayMs: number }> {
+	let backoff = 0;
 	let job: RepoIngestJob | null = null;
 	for (const key of await getRepoIndex(store)) {
 		const j = await getRepoJob(store, key);
@@ -233,12 +245,24 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 						if (n > 0) chunks += n;
 						await store.delete(`rifile:${job.key}:${idx}`);
 					}
+					// A FAILED file costs the budget too. `chunks` only grew on success, so during a
+					// Workers-AI outage every file returned -1, the budget never tripped, and ONE
+					// tick drained a 300-file queue (blowing past the 1,000-subrequest cap, which
+					// embed's catch swallows). All 300 went to retry, the DO rescheduled at +50ms,
+					// the next tick repeated immediately, attempts exceeded the cap, and the repo
+					// reached "done" with ZERO vectors about 100ms after the outage began — having
+					// "retried once on a later tick" over a 50ms window.
+					if (n < 0) chunks += REPO_FAILED_FILE_COST;
 				}
 				processed++;
 			}
 			// Retried files aren't done — they go back on the queue and are re-counted next tick,
 			// so exclude them from `done` (else it over-counts and can exceed `total`).
 			const nextQueue = [...queue, ...retry];
+			// A tick that indexed NOTHING is an outage, not progress. Ask for a real pause before
+			// the retry rather than the immediate reschedule, so the one retry this design allows
+			// actually spans the outage it exists for.
+			if (chunks === 0 && retry.length > 0) backoff = REPO_RETRY_BACKOFF_MS;
 			await saveJob(store, job, {
 				done: job.done + (processed - retry.length),
 				failed: (job.failed ?? 0) + failed,
@@ -256,5 +280,5 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 	} catch (err) {
 		await saveJob(store, job, { status: "error", error: err instanceof Error ? err.message : String(err), finishedAt: f.now() });
 	}
-	return true;
+	return backoff ? { didWork: true, delayMs: backoff } : true;
 }

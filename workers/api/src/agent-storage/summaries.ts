@@ -17,6 +17,17 @@ interface SummaryDeps {
 // biome-ignore lint/suspicious/noExplicitAny: mixin constructor helper
 type GConstructorWith<T> = new (...args: any[]) => T;
 
+/** The most recently CREATED summary in a listing, or undefined. Key order is not creation
+ *  order for the legacy `sum:{uuid}` rows, and those still exist in live instances. */
+function latestByCreatedAt(entries: Map<string, ConversationSummary>): ConversationSummary | undefined {
+	let best: ConversationSummary | undefined;
+	for (const v of entries.values()) {
+		if (!v) continue;
+		if (!best || String(v.createdAt ?? "") > String(best.createdAt ?? "")) best = v;
+	}
+	return best;
+}
+
 export function withSummaries<TBase extends AgentStorageBaseCtor & GConstructorWith<SummaryDeps>>(Base: TBase) {
 	return class extends Base {
 		// ── Conversation Summarization ────────────────────────────────────────────
@@ -28,13 +39,17 @@ export function withSummaries<TBase extends AgentStorageBaseCtor & GConstructorW
 		async maybeSummarize(model: string): Promise<ConversationSummary | null> {
 			if (!this.ai) return null;
 
-			// Count messages since last summary
-			const summaries = await this.doStorage.list<ConversationSummary>({
-				prefix: "sum:",
-				reverse: true,
-				limit: 1,
-			});
-			const lastSummary = [...summaries.values()][0];
+			// Count messages since last summary.
+			//
+			// Picked by createdAt, NOT by key order. Summaries were keyed `sum:{randomUUID}`, and
+			// DO `list` orders lexicographically — so `reverse:true limit:1` returned the summary
+			// with the highest UUID, which is the newest only by luck. The resume point therefore
+			// jumped backwards at random: at message 60 it could return S1 (boundary = msg 20), so
+			// a 40-message window (≥ the 20 threshold) generated ANOTHER summary fully overlapping
+			// S2 — and the max-UUID key never advances, so every 20 further messages produced an
+			// ever-larger overlapping summary, re-extracted the same `fact:*` memories, and spent
+			// platform AI on all of it, forever.
+			const lastSummary = latestByCreatedAt(await this.doStorage.list<ConversationSummary>({ prefix: "sum:" }));
 			// Resume STRICTLY after the last summarized message. Prefer its full key; fall
 			// back to the timestamp boundary for legacy summaries without boundaryKey (that
 			// path re-includes one boundary message, but only once, at the transition).
@@ -117,7 +132,9 @@ Extract key facts about the user, their preferences, decisions made, and informa
 					createdAt: new Date().toISOString(),
 				};
 
-				await this.doStorage.put(`sum:${sessionId}`, summary);
+				// TIME-ORDERED key, like `msg:`/`evt:` — so a plain reverse list is correct too, and
+				// the reader above degrades gracefully across the legacy `sum:{uuid}` rows.
+				await this.doStorage.put(`sum:${summary.createdAt}:${sessionId}`, summary);
 
 				// Store extracted facts as memory entries. Never clobber a user-authored entry —
 				// the console Memory tab allows arbitrary keys (a user could set one literally named
@@ -163,12 +180,13 @@ Extract key facts about the user, their preferences, decisions made, and informa
 		 * Get all conversation summaries.
 		 */
 		async getSummaries(limit = 20): Promise<ConversationSummary[]> {
-			const all = await this.doStorage.list<ConversationSummary>({
-				prefix: "sum:",
-				reverse: true,
-				limit,
-			});
-			return [...all.values()];
+			// Sorted by createdAt for the same reason as above: a lexicographic reverse list over
+			// `sum:{uuid}` keys handed `buildRAGContext` an ARBITRARY 5 summaries and labelled them
+			// with dates, presenting a random subset to the model as the recent history.
+			const all = await this.doStorage.list<ConversationSummary>({ prefix: "sum:" });
+			return [...all.values()]
+				.sort((a, b) => String(b?.createdAt ?? "").localeCompare(String(a?.createdAt ?? "")))
+				.slice(0, limit);
 		}
 	};
 }

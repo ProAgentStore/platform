@@ -231,6 +231,11 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 
 			if (this.r2) await this.r2.delete(meta.r2Key);
 			await this.doStorage.delete(`file:${id}`);
+			// The extracted text too — up to 100KB of the document body is written at
+			// `filetext:{id}` on upload and was never removed, so deleting a 5MB PDF left its
+			// extracted résumé/contract text in the DO forever: unreadable (fileGetText needs
+			// `file:{id}`), unreclaimable, and growing on every upload/delete cycle.
+			await this.doStorage.delete(`filetext:${id}`);
 			await this.vectorDelete("file", id);
 			await this.logEvent("file.deleted", undefined, { fileId: id, name: meta.name });
 			return true;

@@ -499,8 +499,38 @@ instanceStorageRoutes.get("/:id/messages", async (c) => {
 	return proxyDO(c, instance.id, `/messages${query}`);
 });
 
+/**
+ * Delete every voice recording for one instance's chat.
+ *
+ * The DO clears messages, summaries, extracted facts and message vectors — but the raw audio
+ * lives in R2, outside the DO, and nothing deleted it. "Clear chat" therefore removed every
+ * transcript and left every recording in the bucket, still served by GET /voice-audio/:turnId.
+ * The Coder timeline path already does this; the Assistant path never did.
+ *
+ * Paginated: `list` truncates, and stopping at the first page would leave the rest behind.
+ */
+async function deleteVoiceAudio(storage: R2Bucket | undefined, userId: string, instanceId: string): Promise<void> {
+	if (!storage) return;
+	const prefix = `voice-audio/${userId}/${instanceId}/`;
+	let cursor: string | undefined;
+	do {
+		const page = await storage.list({ prefix, cursor });
+		if (page.objects.length) await storage.delete(page.objects.map((o) => o.key));
+		cursor = page.truncated ? page.cursor : undefined;
+	} while (cursor);
+}
+
 instanceStorageRoutes.delete("/:id/messages", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
-	return proxyDO(c, instance.id, "/messages", { method: "DELETE" });
+	const res = await proxyDO(c, instance.id, "/messages", { method: "DELETE" });
+	// The VOICE RECORDINGS too. The DO clears messages, summaries, extracted facts and message
+	// vectors — but the raw audio lives in R2, outside the DO, and nothing deleted it. So "clear
+	// chat" removed every transcript while leaving every recording in the bucket, still served by
+	// GET /voice-audio/:turnId. The Coder timeline path already deletes them; this one never did,
+	// which makes it both a broken promise (the docs say "cleared with the chat, R2 blobs
+	// deleted") and a data-retention defect. Best-effort and AFTER the clear: failing to reclaim
+	// bytes must not fail the user's delete.
+	await deleteVoiceAudio(c.env.STORAGE, session.uid, instance.id).catch(() => undefined);
+	return res;
 });

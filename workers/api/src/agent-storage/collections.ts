@@ -15,6 +15,18 @@ interface CollectionDeps {
 // biome-ignore lint/suspicious/noExplicitAny: mixin constructor helper
 type GConstructorWith<T> = new (...args: any[]) => T;
 
+/** The only shape a collection name may take. Anchored, and `:`/`%` are the dangerous ones —
+ *  the key scheme is `col:{name}:{id}`, so a colon lets one collection's prefix swallow another's. */
+const COLLECTION_NAME_RE = /^[a-z][a-z0-9_]{0,49}$/;
+
+export function assertCollectionName(name: string): void {
+	if (!COLLECTION_NAME_RE.test(name)) {
+		throw new Error(
+			`Invalid collection name "${name}". Use lowercase letters, digits and underscores, starting with a letter (max 50).`,
+		);
+	}
+}
+
 export function withCollections<TBase extends AgentStorageBaseCtor & GConstructorWith<CollectionDeps>>(Base: TBase) {
 	return class extends Base {
 		// ── Collections (Structured Storage) ──────────────────────────────────────
@@ -24,6 +36,19 @@ export function withCollections<TBase extends AgentStorageBaseCtor & GConstructo
 		 * Schemas are stored at `schema:{name}` for fast listing without scanning records.
 		 */
 		async collectionCreate(name: string, fields: CollectionField[]): Promise<CollectionSchema> {
+			// Validated HERE, the one choke point every path goes through — the regex previously
+			// lived only in the `create_collection` agent tool, so `AgentDO.handleCreateCollection`,
+			// `POST /v1/instances/:id/collections`, the MCP tool (plain `z.string()`) and
+			// `recordInsert`'s auto-create-on-first-insert all accepted any string.
+			//
+			// A name containing `:` collides with another collection's KEY PREFIX. Records live at
+			// `col:{name}:{id}` and indexes at `idx:{name}:{field}:…`, so with `leads` and
+			// `leads:2026` both present: querying `leads` full-scans `col:leads:` and returns the
+			// other collection's records, and deleting `leads` deletes `col:leads:` — destroying
+			// every record and index of `leads:2026` while its schema survives with a now-false
+			// recordCount. Silent, irreversible cross-collection data loss, reachable by an LLM
+			// simply calling insert_record with a colon in the name.
+			assertCollectionName(name);
 			const existing = await this.doStorage.get<CollectionSchema>(`schema:${name}`);
 			if (existing) throw new Error(`Collection "${name}" already exists`);
 

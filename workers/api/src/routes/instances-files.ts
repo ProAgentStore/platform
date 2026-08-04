@@ -65,7 +65,13 @@ export function registerFileUploadRoutes(router: Hono<{ Bindings: Env }>): void 
 		const key = c.req.query("key") || "";
 		const partNumber = Number(c.req.query("partNumber") || "0");
 		if (!key.startsWith(keyPrefixFor(instanceId))) throw new HttpError(403, "Key does not belong to this instance");
-		if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10_000) throw new HttpError(400, "partNumber must be 1..10000");
+		// Bounded by the CAP, not R2's 10,000-part ceiling. `size` in the create body is a
+		// client-declared number that is never used again, so `{"size":1}` followed by 10,000
+		// 10MiB parts produced a ~100GB object and the 2GB limit was decorative.
+		const maxParts = Math.ceil(MULTIPART_MAX_BYTES / MULTIPART_PART_SIZE);
+		if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > maxParts) {
+			throw new HttpError(400, `partNumber must be 1..${maxParts}`);
+		}
 		if (!c.req.raw.body) throw new HttpError(400, "part body required");
 		const upload = c.env.STORAGE.resumeMultipartUpload(key, uploadId);
 		try {
@@ -109,10 +115,23 @@ export function registerFileUploadRoutes(router: Hono<{ Bindings: Env }>): void 
 			.sort((a, b) => a.partNumber - b.partNumber);
 		if (!parts.length) throw new HttpError(400, "parts required");
 		const upload = c.env.STORAGE.resumeMultipartUpload(key, uploadId);
+		if (parts.length > Math.ceil(MULTIPART_MAX_BYTES / MULTIPART_PART_SIZE)) {
+			await upload.abort().catch(() => undefined);
+			throw new HttpError(413, "File too large (max 2GB)");
+		}
 		try {
 			await upload.complete(parts);
 		} catch (e) {
 			throw new HttpError(409, `Complete failed: ${e instanceof Error ? e.message : String(e)}`);
+		}
+		// The REAL size, now that one exists. Everything before this point trusted a number the
+		// client supplied at create time, so the cap was never actually enforced against bytes.
+		// Over the limit → delete rather than register: an unregistered object is invisible to
+		// fileList and unreclaimable through any API this worker exposes.
+		const head = await c.env.STORAGE.head(key);
+		if (head && head.size > MULTIPART_MAX_BYTES) {
+			await c.env.STORAGE.delete(key).catch(() => undefined);
+			throw new HttpError(413, "File too large (max 2GB)");
 		}
 		// Register with the DO so the file appears in the list, gets extracted + vectorized.
 		const stub = c.env.AGENT.get(c.env.AGENT.idFromName(instanceId));
