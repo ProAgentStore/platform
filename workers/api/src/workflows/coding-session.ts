@@ -17,7 +17,12 @@ import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-t
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
+import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
+import { instanceSpendMicros } from "../lib/usage.js";
 import type { Env } from "../types.js";
+
+/** Bounded worst case for one Pilot decide step, in USD micros. Settle refunds the rest. */
+const CODING_RESERVE_MICROS = 150_000; // $0.15
 
 export interface CodingSessionParams {
 	instanceId: string;
@@ -47,6 +52,14 @@ export interface CodingSessionParams {
 	 * state (done/error) so the delegation is observable on the board, not just in the thread.
 	 */
 	boardTaskId?: string;
+	/**
+	 * Delegation budget to draw against (#184). Present ONLY when a supervisor delegated this
+	 * run — a human driving their own Coder from the Coding tab passes none and is unmetered,
+	 * exactly as before. Adding a cap to that path would change behaviour nobody asked for.
+	 */
+	budgetId?: string | null;
+	/** Depth in the supervision tree; the budget refuses past its cap. */
+	depth?: number;
 }
 
 /** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
@@ -95,7 +108,37 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, capture) as Promise<CodingPaneSnapshot>,
 			act: (a: CodingActionKind) =>
 				step.do(`s${n++}-act`, retry, () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: a })) as Promise<CodingPaneSnapshot>,
-			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideCodingAction(env, userId, p, { kind: "coding", instanceId })) as Promise<CodingDecision>,
+			// The LLM call is the one place this loop spends money, so it is the one place the
+			// budget has to sit. Delegated runs (#159) previously reached the Pilot with a pool id
+			// and never drew on it — unbounded spend on exactly the path a supervisor can trigger
+			// without a human watching. Wrapping `decide` keeps runCodingLoop untouched.
+			decide: (p) =>
+				step.do(`s${n++}-decide`, retry, async () => {
+					const budgetId = event.payload.budgetId ?? null;
+					if (!budgetId) return decideCodingAction(env, userId, p, { kind: "coding", instanceId });
+
+					const draw = await reserve(env, userId, budgetId, {
+						depth: event.payload.depth ?? 0,
+						estimatedCostMicros: CODING_RESERVE_MICROS,
+					});
+					if (!draw.ok) {
+						if (draw.reason && draw.reason !== "not_found" && draw.reason !== "closed") {
+							await markExhausted(env, userId, budgetId, draw.reason, event.payload.depth ?? 0).catch(() => undefined);
+						}
+						// A clean terminal decision rather than a throw: the loop stops with a reason
+						// the human can read on the board, and the session is left intact to resume.
+						return { finish: { status: "failed" as const, detail: draw.message ?? "This run hit its spend limit." } };
+					}
+					const before = await instanceSpendMicros(env, userId, instanceId);
+					try {
+						return await decideCodingAction(env, userId, p, { kind: "coding", instanceId });
+					} finally {
+						// Settled in `finally` so a throwing decide still charges what it burned —
+						// otherwise a failing loop would run free.
+						const after = await instanceSpendMicros(env, userId, instanceId);
+						await settle(env, userId, budgetId, draw.reserved ?? CODING_RESERVE_MICROS, Math.max(0, after - before)).catch(() => undefined);
+					}
+				}) as Promise<CodingDecision>,
 			// Poll capture until the CLI goes idle (the pane stops "thinking"/"responding").
 			// Bounded so the loop can't outrun idleRetry's 10-minute step timeout.
 			waitIdle: () =>

@@ -192,6 +192,10 @@ async function delegateToPilot(
 			branch: repo.branch || undefined,
 			goal: { objective, repo: repo.name, clientType: session.clientType },
 			boardTaskId: taskId,
+			// #184: a DELEGATED coding run draws on the tree's pool. A human driving the same
+			// Pilot from the Coding tab passes no budget and stays unmetered, as before.
+			budgetId,
+			depth,
 		},
 	});
 

@@ -211,6 +211,16 @@ describe("delegateToInstance routes by the target's declared capability", () => 
 		expect(codingCreated).toHaveLength(0);
 	});
 
+	it("passes the tree's budget to the Pilot — a delegated coding run must be metered", async () => {
+		// Without this the Pilot inherits a pool id and never draws on it, leaving unbounded
+		// spend on exactly the path a supervisor can trigger with nobody watching.
+		const { env, codingCreated } = buildEnv([["sup", "sub"]], { targetConfig: CODING_CFG, repos: [REPO], session: SESSION });
+		await delegateToInstance(env, { ...base, budgetId: "parent-pool" });
+		const params = codingCreated[0].params as { budgetId: string; depth: number };
+		expect(params.budgetId).toBe("parent-pool");
+		expect(typeof params.depth).toBe("number");
+	});
+
 	it("opens an observable board task so the delegation is trackable", async () => {
 		const { env, writes } = buildEnv([["sup", "sub"]], { targetConfig: CODING_CFG, repos: [REPO], session: SESSION });
 		await delegateToInstance(env, base);
