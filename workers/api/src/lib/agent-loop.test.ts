@@ -6,6 +6,7 @@ import {
 	needsHuman,
 	nextStep,
 	NO_PROGRESS_REPEATS,
+	readAgentReply,
 	sanitizeMaxIterations,
 	statusFor,
 	type LoopState,
@@ -140,5 +141,46 @@ describe("needsHuman / statusFor", () => {
 	it("maps escalation to needs_human, not failure — they are different things to a user", () => {
 		expect(statusFor("escalated")).toBe("needs_human");
 		expect(statusFor("budget")).toBe("failed");
+	});
+});
+
+describe("readAgentReply — the AgentDO response shape", () => {
+	it("reads the AgentMessage OBJECT, not its stringification", () => {
+		// The live bug: AgentDO/chat returns { message: AgentMessage }, and treating `message`
+		// as a string produced "[object Object]" — which the orchestrator judged as a broken
+		// agent and failed the whole run.
+		const out = readAgentReply({ message: { role: "assistant", content: "I can read repos." } });
+		expect(out).toBe("I can read repos.");
+		expect(out).not.toContain("[object Object]");
+	});
+
+	it("prepends tool output so a tools-only turn is not read as empty", () => {
+		// An empty turn looks like no-progress to the loop, which then stops early.
+		const out = readAgentReply({
+			toolMessage: { content: "ran list_subordinates" },
+			message: { content: "Here is what I found." },
+		});
+		expect(out).toContain("ran list_subordinates");
+		expect(out).toContain("Here is what I found.");
+	});
+
+	it("surfaces the DO's error instead of a blank turn", () => {
+		expect(readAgentReply({ error: "No API key configured." })).toContain("No API key configured.");
+	});
+
+	it("accepts a plain-string message and a legacy `response` field", () => {
+		expect(readAgentReply({ message: "hi" })).toBe("hi");
+		expect(readAgentReply({ response: "hi" })).toBe("hi");
+	});
+
+	it("says so explicitly when there is genuinely nothing", () => {
+		// Never returns "" — an empty string is indistinguishable from a parsing failure.
+		for (const body of [{}, null, "nonsense", { message: { content: 42 } }]) {
+			expect(readAgentReply(body)).toBe("(the agent returned nothing)");
+		}
+	});
+
+	it("caps a runaway reply", () => {
+		expect(readAgentReply({ message: { content: "x".repeat(20000) } }).length).toBe(8000);
 	});
 });

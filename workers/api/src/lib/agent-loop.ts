@@ -126,3 +126,31 @@ export function statusFor(reason: LoopStopReason): "completed" | "failed" | "nee
 	if (reason === "escalated") return "needs_human";
 	return "failed";
 }
+
+/**
+ * Read an agent turn out of an AgentDO `/chat` response.
+ *
+ * Its success shape is `{ message: AgentMessage, toolMessage? }` — `message` is an OBJECT, not a
+ * string. Reading it as one yielded "[object Object]", which the orchestrator then judged as a
+ * broken agent and failed the whole run. That shipped because the parsing lived inline in a
+ * Workflow step, where nothing could test it; it lives here now so it can be.
+ *
+ * Tool output is prepended when present: a turn that only ran tools would otherwise look empty,
+ * which the loop reads as no-progress and stops on.
+ */
+export function readAgentReply(body: unknown): string {
+	const b = (body && typeof body === "object" ? body : {}) as {
+		message?: unknown;
+		toolMessage?: unknown;
+		response?: unknown;
+		error?: unknown;
+	};
+	if (typeof b.error === "string" && b.error) return `(the agent failed: ${b.error.slice(0, 500)})`;
+	const textOf = (v: unknown): string => {
+		if (typeof v === "string") return v;
+		const c = (v as { content?: unknown } | null)?.content;
+		return typeof c === "string" ? c : "";
+	};
+	const parts = [textOf(b.toolMessage), textOf(b.message) || (typeof b.response === "string" ? b.response : "")].filter(Boolean);
+	return parts.join("\n\n").slice(0, 8000) || "(the agent returned nothing)";
+}

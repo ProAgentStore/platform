@@ -13,7 +13,7 @@
 // the pure policy in lib/agent-loop.ts.
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { nextStep, instructionKey, needsHuman, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
+import { nextStep, instructionKey, needsHuman, readAgentReply, type LoopState, type LoopStopReason } from "../lib/agent-loop.js";
 import { finishLoopRun, isCancelRequested, recordIteration } from "../lib/agent-loop-store.js";
 import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-orchestrator.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
@@ -101,8 +101,9 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 							body: JSON.stringify({ message: instruction, channel: "loop", userId, agentId: instanceId }),
 						}),
 					);
-					const body = (await res.json().catch(() => ({}))) as { response?: string; message?: string };
-					return String(body.response ?? body.message ?? "").slice(0, 8000);
+					// Shape-handling lives in lib/agent-loop.ts so it is testable without a DO —
+					// getting it wrong here is what produced "[object Object]" and failed a run.
+					return readAgentReply(await res.json().catch(() => ({})));
 				} catch (e) {
 					return `(the agent could not be reached: ${e instanceof Error ? e.message : String(e)})`;
 				}
