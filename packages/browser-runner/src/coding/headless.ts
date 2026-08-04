@@ -416,13 +416,23 @@ function stamp(): string {
 	return new Date().toTimeString().slice(0, 8);
 }
 
-/** Split a launch command into bin + args, respecting single/double quotes. */
+/**
+ * Split a launch command into bin + args, respecting single/double quotes — the way a shell
+ * would, because that is what a user editing an engine preset is writing.
+ *
+ * Quotes are stripped wherever they appear in a token, not only when they wrap the whole thing.
+ * The earlier alternation (`"…" | '…' | \S+`) only recognised a fully-quoted token, so
+ * `-c model="o3"` reached the engine as the literal `model="o3"` and
+ * `--append-system-prompt="be terse"` split at the space. A preset is free text; it has to
+ * tokenize like the command line it looks like.
+ */
 export function parseCommand(command: string | undefined): { bin: string; args: string[] } {
 	const tokens: string[] = [];
-	const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-	let m: RegExpExecArray | null;
-	// biome-ignore lint/suspicious/noAssignInExpressions: tokenizer drain
-	while ((m = re.exec(command ?? "")) !== null) tokens.push(m[1] ?? m[2] ?? m[3] ?? "");
+	// One token = a run of unquoted chars and/or quoted spans, glued together (`"a b"c` → `a bc`).
+	const re = /(?:[^\s"']+|"[^"]*"|'[^']*')+/g;
+	for (const raw of (command ?? "").match(re) ?? []) {
+		tokens.push(raw.replace(/"([^"]*)"|'([^']*)'/g, (_m, d, s) => d ?? s ?? ""));
+	}
 	return { bin: tokens[0] ?? "", args: tokens.slice(1) };
 }
 

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { deriveClientType, engineAuthFor, resolveEngineEnv, type CodingEngine } from "./coding-engines.js";
+import {
+	DEFAULT_ENGINES,
+	ENGINE_WRITE_FLAGS,
+	deriveClientType,
+	engineAuthFor,
+	resolveEngineEnv,
+	type CodingEngine,
+} from "./coding-engines.js";
 import type { Env } from "../types.js";
 
 /** Env whose vault holds only the providers listed. */
@@ -76,35 +83,43 @@ describe("deriveClientType", () => {
 });
 
 describe("default engine presets", () => {
-	it("gives every non-Claude engine a NON-INTERACTIVE command", async () => {
+	const byId = (id: string) => DEFAULT_ENGINES.find((e) => e.id === id) as CodingEngine;
+	/** The CLI engines whose posture PAGS is responsible for (excludes the bring-your-own local one). */
+	const CLI_IDS = ["claude", "codex", "gemini", "grok"] as const;
+
+	it("gives every non-Claude engine a NON-INTERACTIVE command", () => {
 		// A bare `codex`/`gemini` launches a TUI and dies with "stdin is not a terminal",
 		// because headless mode has no PTY — the thing tmux used to provide. Verified live:
 		// `codex` exited 1 instantly; `codex exec` is the supported analogue of `claude -p`.
-		const mod = await import("./coding-engines.js");
-		const src = (await import("node:fs")).readFileSync(
-			(await import("node:path")).join(import.meta.dirname, "coding-engines.ts"),
-			"utf8",
-		);
-		expect(mod).toBeTruthy();
-		expect(src).toContain('command: "codex exec"');
-		expect(src).not.toMatch(/id: "codex",[^}]*command: "codex"\s*[,}]/);
+		expect(byId("codex").command.startsWith("codex exec")).toBe(true);
+		// `-p`/`--prompt` are each CLI's own single-turn flag. grok's is `-p`/`--single`;
+		// it has NO `--prompt` (only `--prompt-file`/`--prompt-json`), which the old preset used.
+		expect(byId("gemini").command).toMatch(/(^|\s)(-p|--prompt)(\s|$)/);
+		expect(byId("grok").command).toMatch(/(^|\s)(-p|--single)(\s|$)/);
+		expect(byId("grok").command).not.toMatch(/--prompt(\s|$)/);
 	});
 
-	it("ships a local-model preset — no cloud key required", async () => {
+	it("lets every CLI engine actually WRITE — a read-only engine is a silently useless agent", () => {
+		// The bug this pins: `codex exec` with no `--sandbox` inherits `sandbox: read-only`, so the
+		// engine explored the repo, explained itself well, and could not edit a file or `git pull`
+		// ("cannot open '.git/FETCH_HEAD': Operation not permitted"). Nothing failed loudly.
+		// Claude has always carried `--dangerously-skip-permissions`; if a sibling engine ships
+		// without its equivalent, switching engines silently changes what the agent can do.
+		for (const id of CLI_IDS) {
+			const { command } = byId(id);
+			const flags = ENGINE_WRITE_FLAGS[deriveClientType(command)];
+			expect(flags.some((f) => command.includes(f)), `${id}: "${command}" has no write-permission flag`).toBe(true);
+		}
+	});
+
+	it("ships a local-model preset — no cloud key required", () => {
 		// "Give people options": a local model costs nothing per token, and the one-shot
 		// contract (command is a prefix, turn text appended) makes it work by configuration.
-		const src = (await import("node:fs")).readFileSync(
-			(await import("node:path")).join(import.meta.dirname, "coding-engines.ts"),
-			"utf8",
-		);
-		expect(src).toContain("ollama run");
+		expect(byId("local").command).toContain("ollama run");
+		expect(byId("local").auth).toBe("machine");
 	});
 
-	it("defaults gemini to api-key — its individual Google sign-in is deprecated", async () => {
-		const src = (await import("node:fs")).readFileSync(
-			(await import("node:path")).join(import.meta.dirname, "coding-engines.ts"),
-			"utf8",
-		);
-		expect(src).toMatch(/id: "gemini"[\s\S]{0,120}auth: "api-key"/);
+	it("defaults gemini to api-key — its individual Google sign-in is deprecated", () => {
+		expect(byId("gemini").auth).toBe("api-key");
 	});
 });

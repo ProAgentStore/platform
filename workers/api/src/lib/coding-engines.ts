@@ -128,21 +128,55 @@ export function engineAuthFor(engines: CodingEngine[], launchCommand: string | n
  * first-class engine (structured stream-json); the others run as a real CLI the
  * user configures. Users edit these (add flags, keys, models, more engines) and
  * the per-session choice picks one.
+ *
+ * Two rules every preset here has to satisfy:
+ *
+ * 1. **Non-interactive.** Everything but Claude runs ONE-SHOT: the command is a prefix and the
+ *    turn text is appended as the final argument. A bare `codex`/`gemini`/`grok` launches a TUI,
+ *    which dies instantly with "stdin is not a terminal" — headless mode has no PTY (that is what
+ *    tmux used to provide).
+ * 2. **Allowed to write.** Every one of these CLIs defaults to a read-only/ask-first posture when
+ *    run non-interactively, and with no TTY there is nobody to ask. `codex exec` shipped without
+ *    a `--sandbox` flag, so it inherited `sandbox: read-only`: the engine could explore a repo and
+ *    answer questions but could not edit a file or even `git pull` (it failed on
+ *    `cannot open '.git/FETCH_HEAD': Operation not permitted`). It looked like a thoughtful agent
+ *    that just never got around to fixing anything. Claude's preset has carried
+ *    `--dangerously-skip-permissions` from the start, so an engine WITHOUT its equivalent flag
+ *    silently changes what the agent can do when you switch engines — the trust level has to match
+ *    across presets or the choice is a trap. {@link ENGINE_WRITE_FLAGS} names the flag per engine.
+ *
+ * These are defaults, not policy: the presets are editable per instance (console → ⚙ CLI engines,
+ * or `PUT /v1/instances/:id/coding/engines`), and every token here reaches the engine verbatim, so
+ * narrowing to `--sandbox workspace-write` — or adding `--model`, `-c`, anything else — is a
+ * config change, not a code change. See `docs/coding-engines.md`.
  */
-const DEFAULT_ENGINES: CodingEngine[] = [
+export const DEFAULT_ENGINES: CodingEngine[] = [
 	// Claude is the one PERSISTENT engine (structured stream-json, multi-turn).
 	{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions" },
-	// Everything else runs ONE-SHOT: the command is a prefix and the turn text is appended as
-	// the final argument. So these must name each CLI's non-interactive mode — a bare `codex`
-	// or `gemini` launches a TUI, which dies instantly with "stdin is not a terminal" because
-	// headless mode has no PTY (that is what tmux used to provide).
-	{ id: "codex", label: "Codex", command: "codex exec" },
-	{ id: "gemini", label: "Gemini CLI", command: "gemini --prompt", auth: "api-key" },
-	{ id: "grok", label: "Grok", command: "grok --prompt" },
+	{ id: "codex", label: "Codex", command: "codex exec --sandbox danger-full-access" },
+	{ id: "gemini", label: "Gemini CLI", command: "gemini --approval-mode yolo --prompt", auth: "api-key" },
+	// `-p/--single`, NOT `--prompt`: grok has `--prompt-file` and `--prompt-json` but no
+	// `--prompt`, so the old preset died on an unknown/ambiguous flag before reaching the model.
+	{ id: "grok", label: "Grok", command: "grok --permission-mode bypassPermissions -p" },
 	// Bring your own — a local model costs nothing per token and needs no cloud key. The prompt
 	// is appended, so anything prompt-in/text-out works by editing this command.
 	{ id: "local", label: "Local model (Ollama)", command: "ollama run llama3", auth: "machine" },
 ];
+
+/**
+ * The flag that lets each engine actually change files, per CLI. Not used to BUILD a command —
+ * a preset is free-text and the user owns it — but to assert that no shipped default forgets one,
+ * and to explain the choice in one place.
+ */
+export const ENGINE_WRITE_FLAGS: Record<CodingClientType, string[]> = {
+	// `--sandbox danger-full-access` rather than `workspace-write`: workspace-write also blocks
+	// network, so `git pull`, `pnpm install` and `gh pr create` — the ordinary work of a coding
+	// agent — would still fail, just less obviously.
+	codex: ["--sandbox danger-full-access", "--dangerously-bypass-approvals-and-sandbox", "--sandbox workspace-write"],
+	gemini: ["--approval-mode yolo", "--approval-mode auto_edit", "--yolo", "-y"],
+	grok: ["--permission-mode bypassPermissions", "--permission-mode acceptEdits", "--permission-mode auto", "--always-approve"],
+	claude: ["--dangerously-skip-permissions", "--permission-mode acceptEdits"],
+};
 
 /** Read the instance's engine presets (seeded defaults when unset). */
 export async function readEngines(env: Env, instanceId: string, userId: string): Promise<{ engines: CodingEngine[]; defaultEngineId: string }> {

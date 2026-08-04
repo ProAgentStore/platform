@@ -3,15 +3,45 @@ import { api } from "@proagentstore/sdk/client";
 import type { CodingEngine, EngineAuth } from "./types";
 import { Cpu, Trash2 } from "lucide-react";
 
-/** Mirror of the API's deriveClientType, just enough to pick the right auth options. */
-function clientOf(command: string): "claude" | "other" {
+const LAUNCHERS = ["npx", "bunx", "pnpm", "yarn", "npm", "bun", "env", "exec", "dlx", "run", "sudo", "time"];
+
+/** The engine's real binary name, skipping `FOO=bar` prefixes and wrappers like `npx`. */
+function binOf(command: string): string {
 	for (const t of command.trim().split(/\s+/)) {
 		if (!t || t.includes("=") || t.startsWith("-")) continue;
 		const base = (t.split("/").pop() || "").toLowerCase();
-		if (["npx", "bunx", "pnpm", "yarn", "npm", "bun", "env", "exec", "dlx", "run", "sudo", "time"].includes(base)) continue;
-		return base.startsWith("claude") ? "claude" : "other";
+		if (LAUNCHERS.includes(base)) continue;
+		return base;
 	}
-	return "claude";
+	return "";
+}
+
+/** Mirror of the API's deriveClientType, just enough to pick the right auth options. */
+function clientOf(command: string): "claude" | "other" {
+	const base = binOf(command);
+	return !base || base.startsWith("claude") ? "claude" : "other";
+}
+
+/**
+ * Mirror of the API's `ENGINE_WRITE_FLAGS` (workers/api/src/lib/coding-engines.ts) — kept local
+ * because the hint has to update as you TYPE, and the API is the only other place that knows.
+ *
+ * Why it exists: every CLI here defaults to read-only or ask-first when run non-interactively,
+ * and headless mode has no TTY to ask. A preset missing its flag produces an engine that reads
+ * the repo, explains itself well, and silently cannot change a single file.
+ */
+const WRITE_FLAGS: Record<string, { flags: string[]; suggest: string }> = {
+	codex: { flags: ["--sandbox", "--dangerously-bypass-approvals-and-sandbox"], suggest: "--sandbox danger-full-access" },
+	gemini: { flags: ["--approval-mode", "--yolo", "-y"], suggest: "--approval-mode yolo" },
+	grok: { flags: ["--permission-mode", "--always-approve"], suggest: "--permission-mode bypassPermissions" },
+	claude: { flags: ["--dangerously-skip-permissions", "--permission-mode"], suggest: "--dangerously-skip-permissions" },
+};
+
+/** The flag to add when a preset would launch an engine that cannot write — else null. */
+export function missingWriteFlag(command: string): string | null {
+	const spec = WRITE_FLAGS[binOf(command)];
+	if (!spec) return null; // an engine we don't know (a local model, a wrapper) — don't guess
+	return spec.flags.some((f) => command.includes(f)) ? null : spec.suggest;
 }
 
 /** The engine's vault-key name shown in the api-key option label. */
@@ -82,6 +112,7 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 					{engines.map((e, i) => {
 						const isClaude = clientOf(e.command) === "claude";
 						const signInId = `engine-${e.id}-auth`;
+						const needsWrite = missingWriteFlag(e.command);
 						return (
 							<div key={e.id} className="bg-paper border border-line rounded-lg p-2.5">
 								<div className="flex gap-1.5 items-center flex-wrap">
@@ -125,6 +156,23 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 										Default
 									</label>
 								</div>
+								{needsWrite && (
+									<div className="text-xs text-yellow mt-1.5 flex items-start gap-1.5">
+										<span aria-hidden>⚠</span>
+										<span>
+											Read-only — this engine can explore the repo but <b>cannot edit files</b> (headless has no
+											terminal to approve with). Add{" "}
+											<button
+												type="button"
+												onClick={() => update(i, { command: `${e.command.trim()} ${needsWrite}` })}
+												className="font-mono underline decoration-dotted"
+											>
+												{needsWrite}
+											</button>
+											.
+										</span>
+									</div>
+								)}
 							</div>
 						);
 					})}

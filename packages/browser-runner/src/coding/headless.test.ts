@@ -33,6 +33,11 @@ process.stdout.write("\\x1b[32mthinking about: " + line + "\\x1b[0m\\n");
 setTimeout(() => process.stdout.write("done: " + line + "\\n"), 150);
 `;
 
+/** A raw CLI that prints its own argv — to prove preset flags reach the engine verbatim. */
+const FAKE_ARGV = `#!/usr/bin/env node
+process.stdout.write("argv: " + JSON.stringify(process.argv.slice(2)) + "\\n");
+`;
+
 /** A raw CLI whose FIRST output is slow (1.8s) — to prove we don't flip idle early. */
 const FAKE_SLOW = `#!/usr/bin/env node
 const line = process.argv[2] || "";
@@ -122,18 +127,22 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	let codexBin: string;
 	let slowBin: string;
 	let pauserBin: string;
+	let argvBin: string;
 
 	beforeAll(() => {
 		dir = mkdtempSync(join(tmpdir(), "pags-raw-"));
 		codexBin = join(dir, "fake-codex.js");
 		slowBin = join(dir, "fake-slow.js");
 		pauserBin = join(dir, "fake-pauser.js");
+		argvBin = join(dir, "fake-argv.js");
 		writeFileSync(codexBin, FAKE_CODEX);
 		writeFileSync(slowBin, FAKE_SLOW);
 		writeFileSync(pauserBin, FAKE_PAUSER);
+		writeFileSync(argvBin, FAKE_ARGV);
 		chmodSync(codexBin, 0o755);
 		chmodSync(slowBin, 0o755);
 		chmodSync(pauserBin, 0o755);
+		chmodSync(argvBin, 0o755);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -185,6 +194,27 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		s.stop();
 	}, 20_000);
 
+	it("passes EVERY preset param through to the engine, with the turn text last", async () => {
+		// "It should launch with any params provided" — the preset command is a prefix and the
+		// turn text is appended as the final argument, so `--sandbox danger-full-access`,
+		// `--model`, `-c key=value`, a quoted value, anything, reaches the CLI untouched. This is
+		// what makes engine posture a CONFIG change rather than a code change; without it, the
+		// only fix for `codex exec` running read-only would have been shipping a new default.
+		const s = new HeadlessSession({
+			id: "raw-argv",
+			workDir: dir,
+			clientType: "codex",
+			bin: argvBin,
+			command: 'codex exec --sandbox danger-full-access -c model="o3"',
+		});
+		s.start();
+		s.input("fix the failing test");
+		await until(() => s.snapshot().includes("argv:"), 8000, "engine argv echo");
+		const argv = JSON.parse(/argv: (\[.*\])/.exec(s.snapshot())?.[1] ?? "[]") as string[];
+		expect(argv).toEqual(["exec", "--sandbox", "danger-full-access", "-c", "model=o3", "fix the failing test"]);
+		s.stop();
+	}, 15_000);
+
 	it("with NO command/bin, a non-Claude engine spawns ITS OWN binary (not `claude`)", async () => {
 		// Regression: the constructor fell back to a hard-coded "claude" when no command was
 		// configured, so a codex/grok session was silently driven by the wrong CLI. Whether
@@ -208,6 +238,14 @@ describe("parseCommand", () => {
 		expect(parseCommand('claude --append-system-prompt "be terse please"')).toEqual({ bin: "claude", args: ["--append-system-prompt", "be terse please"] });
 		expect(parseCommand("")).toEqual({ bin: "", args: [] });
 		expect(parseCommand(undefined)).toEqual({ bin: "", args: [] });
+	});
+
+	it("strips quotes MID-token, like a shell", () => {
+		// `-c model="o3"` used to reach the engine as the literal `model="o3"`, and
+		// `--flag="two words"` split at the space, because only a fully-quoted token counted.
+		expect(parseCommand('codex exec -c model="o3"')).toEqual({ bin: "codex", args: ["exec", "-c", "model=o3"] });
+		expect(parseCommand('claude --append-system-prompt="be terse"')).toEqual({ bin: "claude", args: ["--append-system-prompt=be terse"] });
+		expect(parseCommand("grok --agent='my agent'")).toEqual({ bin: "grok", args: ["--agent=my agent"] });
 	});
 });
 
