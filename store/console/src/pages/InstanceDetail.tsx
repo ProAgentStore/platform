@@ -165,9 +165,19 @@ export default function InstanceDetail() {
 	const checkRuntime = useCallback(async () => {
 		if (!id || !hasRuntime) return;
 		try {
-			const d = await api<{ connected?: boolean; node?: string; runtime?: Record<string, unknown> }>(`/v1/instances/${id}/runtime/status`);
-			setRunnerOnline(d.connected ?? !!(d.runtime as Record<string, unknown>));
-			setRunnerNode(d.node || (d.runtime as Record<string, unknown>)?.runner_node as string || "");
+			// The route answers `{runtime, health, capabilities, relay:{connected, runnerNode}}` —
+			// there is no top-level `connected` or `node`. Reading those fell through to
+			// `!!d.runtime`, which is true whenever a runtime row has EVER existed, so the header
+			// dot read "Runner online" forever after the first `pags up` — and the 4s poll kept
+			// re-confirming it while every runner-backed action failed. (A missing socket is a 503
+			// from the relay DO, not a throw, so the route still answers 200.) The node name came
+			// from snake_case `runner_node`, but the response is camelCase, so it was always blank.
+			// SettingsTab fixed exactly this; the header was never updated.
+			const d = await api<{ runtime?: { runnerNode?: string | null }; relay?: { connected?: boolean; runnerNode?: string | null } }>(
+				`/v1/instances/${id}/runtime/status`,
+			);
+			setRunnerOnline(d.relay?.connected === true);
+			setRunnerNode(d.relay?.runnerNode || d.runtime?.runnerNode || "");
 		} catch {
 			setRunnerOnline(false);
 		}

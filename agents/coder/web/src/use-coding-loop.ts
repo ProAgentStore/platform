@@ -174,9 +174,19 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 		api(`/v1/instances/${instanceId}/coding/sessions/${sessionId}/message`, {
 			method: "POST",
 			body: JSON.stringify({ text: obj }),
-		}).then(() => {
-			timerRef.current = setTimeout(() => runStepRef.current?.(), 5000);
-		});
+		})
+			.then(() => {
+				timerRef.current = setTimeout(() => runStepRef.current?.(), 5000);
+			})
+			// Without this, a failed first instruction (runner offline, session ended, network
+			// blip) left `loopOn` true with NOTHING scheduled: the Stop button and counter 0
+			// appeared, the thread said "Loop started", and then nothing ever happened. The
+			// rejection escaped as an unhandled promise and the user's only escape was Stop.
+			.catch((e: unknown) => {
+				setLoopOn(false);
+				loopOnRef.current = false;
+				emitSystem(`Couldn't start the loop: ${e instanceof Error ? e.message : String(e)}`);
+			});
 	};
 
 	const start = () => startWith(loopObjectiveRef.current || loopObjective);

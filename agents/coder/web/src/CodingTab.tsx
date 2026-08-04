@@ -221,10 +221,19 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const pollTerminal = useCallback(async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ pane?: string; runState?: string; authPrompt?: AuthPrompt }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
+			const d = await api<{ pane?: string; runState?: string; authPrompt?: AuthPrompt; runnerConnected?: boolean }>(
+				`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`,
+			);
 			// An engine blocked on sign-in is otherwise indistinguishable from a dead session:
 			// idle state, a pane that stops changing, no error anywhere.
 			setAuthPrompt(d.authPrompt ?? null);
+			// The header badge reads `repoStatuses[repoId]`, and the only other writer
+			// (`pollStatuses`) is DISABLED while a session is open — so the badge added to say
+			// Working/Idle sat on "Idle" for the whole session while the pane visibly scrolled.
+			// This response already carries runState; write it. Must be BEFORE the
+			// unchanged-text early return below, or a stable pane re-freezes the badge.
+			setRepoStatuses((s) => (s[openSession.repoId] === (d.runState || "idle") ? s : { ...s, [openSession.repoId]: d.runState || "idle" }));
+			if (typeof d.runnerConnected === "boolean") setRunnerOnline(d.runnerConnected);
 			const live = (d.pane || "").trim() ? (d.pane as string) : "";
 			// No live tmux (ended session / detached runner) → fall back to the last saved
 			// snapshot from the DB instead of blanking the terminal.

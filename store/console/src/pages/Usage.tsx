@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Page from "../components/Page";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -114,6 +114,13 @@ export default function Usage() {
 		setLoading(false);
 	}, [range]);
 
+	// usePolling ONLY fires on the interval — it keeps `fn` in a ref and its effect deps are
+	// [ms, enabled], so without this the page sat on "Loading…" for a full 30s on every visit,
+	// and switching the range kept rendering the old range's numbers (with no spinner) until the
+	// next tick. `load` changes identity with `range`, so one effect covers both.
+	useEffect(() => {
+		void load();
+	}, [load]);
 	usePolling(load, 30000, true);
 
 	const totals = data?.totals;

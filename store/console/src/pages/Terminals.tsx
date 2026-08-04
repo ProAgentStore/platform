@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Page from "../components/Page";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
@@ -37,6 +37,11 @@ export default function Terminals() {
 		setLoading(false);
 	}, []);
 
+	// usePolling only fires on the interval, so without a mount fetch the page showed "Loading…"
+	// for 5s on every visit even with machines already connected.
+	useEffect(() => {
+		void load();
+	}, [load]);
 	// Poll so connect/disconnect + session status stay live without a manual refresh.
 	usePolling(load, 5000, true);
 

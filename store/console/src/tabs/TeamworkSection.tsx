@@ -75,11 +75,15 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 	const load = useCallback(async () => {
 		try {
 			const [mine, sup, conns] = await Promise.all([
-				api<Instance[]>("/v1/instances/my/instances").catch(() => []),
+				// `{instances}`, not a bare array — every other caller in the console reads it that
+				// way. Reading it as an array made `Array.isArray` permanently false, so the list
+				// was always empty and BOTH pickers below could never be set: supervision and
+				// connections were unwireable from the UI, silently.
+				api<{ instances: Instance[] }>("/v1/instances/my/instances").catch(() => ({ instances: [] })),
 				api<{ supervision: SupervisionLink[] }>(`/v1/instances/${instanceId}/supervision`).catch(() => ({ supervision: [] })),
 				api<{ connections: Connection[] }>(`/v1/instances/${instanceId}/connections`).catch(() => ({ connections: [] })),
 			]);
-			setInstances(Array.isArray(mine) ? mine : []);
+			setInstances(mine.instances ?? []);
 			setLinks(sup.supervision ?? []);
 			setConnections(conns.connections ?? []);
 		} catch (e) {
