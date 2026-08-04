@@ -30,6 +30,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
+      # `pnpm test` runs the WHOLE suite, including the console + agent UIs, which import
+      # @proagentstore/sdk through its exports map — i.e. its built dist. Without this the suite
+      # green in CI (which does build it) fails here on an unresolvable bare specifier, blocking a
+      # deploy for a reason unrelated to the change. Same step, same reason, as in ci.yml.
+      - name: Build SDK
+        run: cd packages/sdk && npx tsc
+
       - name: Run tests
         run: pnpm test
 

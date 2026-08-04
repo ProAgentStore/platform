@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { missingWriteFlag } from "./EnginesModal";
+import { missingWriteFlag } from "./engine-posture.js";
 
 describe("missingWriteFlag", () => {
 	it("flags the preset that shipped read-only", () => {

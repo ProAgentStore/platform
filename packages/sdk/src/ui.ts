@@ -234,3 +234,6 @@ export { renderTerminal, terminalTail } from "./terminal-render.js";
 
 // Chat message classification — shared so a tool chip behaves identically in every chat surface.
 export { classifyMessage, isToolCallMessage, messageKey, toolCallSummary, type ChatMessageKind, type ChatMessageLike } from "./chat-message.js";
+
+// Coding-engine preset posture — "will this command let the engine actually edit files?"
+export { engineBin, isClaudeEngine, missingWriteFlag } from "./engine-posture.js";
