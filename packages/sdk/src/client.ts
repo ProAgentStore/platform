@@ -69,7 +69,11 @@ export async function api<T = Record<string, unknown>>(
 	if (!noAuth && token) headers.Authorization = `Bearer ${token}`;
 	let res: Response;
 	try {
-		res = await fetch(`${API}${path}`, { ...opts, headers });
+		// `credentials: "include"` is what lets the API set (and later receive) the OAuth
+		// state-binding cookie — a browser discards Set-Cookie on an uncredentialed cross-origin
+		// XHR. Auth itself is the Bearer header; no session cookie exists, so this changes
+		// nothing else.
+		res = await fetch(`${API}${path}`, { credentials: "include", ...opts, headers });
 	} catch (e) {
 		// A thrown fetch is almost always transient CONNECTIVITY (offline / flaky wifi /
 		// CORS), not a platform bug — and on every blip it fires one report per in-flight

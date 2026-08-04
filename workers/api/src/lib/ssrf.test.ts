@@ -110,3 +110,64 @@ describe("safeFetch (redirect re-validation)", () => {
 		await expect(safeFetch("https://public.example/loop", {}, 3)).rejects.toThrow(/too many redirects/i);
 	});
 });
+
+describe("safeFetch — credentials must not cross an origin boundary", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	/** Records the headers each hop was actually called with. */
+	function traceFetch(hops: Array<string | null>) {
+		const seen: Array<Record<string, string>> = [];
+		let i = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				seen.push(Object.fromEntries(new Headers(init.headers as HeadersInit).entries()));
+				const next = hops[i++];
+				return next
+					? new Response(null, { status: 302, headers: { location: next } })
+					: new Response("ok", { status: 200 });
+			}),
+		);
+		return seen;
+	}
+
+	it("strips the vault secret when the host changes — the leak", () => {
+		// The http/mcp connectors put the owner's DECRYPTED vault token in `Authorization`.
+		// Spreading the original init into every hop handed it to whatever host the previous
+		// host's Location named: one `302 → https://attacker.example/` from a hijacked or
+		// CDN-redirecting vendor path and the key is gone. The SSRF guard cannot help — the
+		// attacker's host is a perfectly ordinary public HTTPS host.
+		const seen = traceFetch(["https://attacker.example/steal", null]);
+		return safeFetch("https://vendor.example/api", {
+			headers: { Authorization: "Bearer SECRET", "X-Api-Key": "SECRET2", Accept: "application/json" },
+		}).then(() => {
+			expect(seen[0].authorization).toBe("Bearer SECRET");
+			expect(seen[1].authorization).toBeUndefined();
+			expect(seen[1]["x-api-key"]).toBeUndefined();
+			// A non-credential header still rides along — this strips secrets, not the request.
+			expect(seen[1].accept).toBe("application/json");
+		});
+	});
+
+	it("KEEPS credentials on a same-origin redirect — the ordinary case must still work", async () => {
+		const seen = traceFetch(["https://vendor.example/api/v2", null]);
+		await safeFetch("https://vendor.example/api", { headers: { Authorization: "Bearer SECRET" } });
+		expect(seen[1].authorization).toBe("Bearer SECRET");
+	});
+
+	it("stays stripped across a further hop back to the ORIGINAL origin", async () => {
+		// vendor → attacker → vendor must not restore the secret: the attacker chose that hop.
+		const seen = traceFetch(["https://attacker.example/a", "https://vendor.example/b", null]);
+		await safeFetch("https://vendor.example/api", { headers: { Authorization: "Bearer SECRET" } });
+		expect(seen[2].authorization).toBeUndefined();
+	});
+
+	it("strips a connector-named custom credential header too", async () => {
+		// `auth.mode:"api-key"` lets the connector config name its own header, so the rule has
+		// to be shaped like a credential rather than an exact allowlist.
+		const seen = traceFetch(["https://attacker.example/x", null]);
+		await safeFetch("https://vendor.example/api", { headers: { "X-Vendor-Token": "SECRET", "X-Trace-Id": "keep" } });
+		expect(seen[1]["x-vendor-token"]).toBeUndefined();
+		expect(seen[1]["x-trace-id"]).toBe("keep");
+	});
+});

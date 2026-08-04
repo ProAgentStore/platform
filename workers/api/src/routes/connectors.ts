@@ -9,6 +9,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { getConnector } from "../lib/connectors/registry.js";
 import { resolveOauthConfig } from "../lib/connectors/client.js";
 import { signConnectorState, verifyConnectorState, saveConnectorRefreshToken } from "../lib/connector-oauth.js";
+import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
 
 export const connectorRoutes = new Hono<{ Bindings: Env }>();
@@ -38,11 +39,17 @@ connectorRoutes.get("/:id/oauth/start", async (c) => {
 	const id = c.req.param("id");
 	const { connector, creds } = requireOauthConnector(c.env, id);
 
+	// Bind the state to THIS browser and to THIS connector — a signed state is otherwise
+	// bearer-grade, so an attacker's link completed by a victim stores the VICTIM's refresh
+	// token under the ATTACKER's account. See lib/oauth-nonce.ts.
+	const bindNonce = newOauthNonce();
 	const state = await signConnectorState(
 		session.uid,
 		Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
 		c.env.SESSION_SIGNING_KEY,
+		{ nonce: bindNonce, provider: id },
 	);
+	c.header("Set-Cookie", oauthBindCookie(bindNonce));
 	const url = new URL(connector.oauth!.authUrl);
 	url.searchParams.set("client_id", creds.clientId!);
 	url.searchParams.set("redirect_uri", callbackUri(c.req.url, id));
@@ -64,8 +71,12 @@ connectorRoutes.get("/:id/oauth/callback", async (c) => {
 	if (!c.env.KEY_ENCRYPTION_KEY) return c.text("Key encryption not configured", 500);
 
 	const { creds } = requireOauthConnector(c.env, id);
-	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY);
-	if (!uid) return c.text("invalid or expired state", 400);
+	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY, {
+		cookieNonce: readOauthBindCookie(c.req.header("cookie")),
+		provider: id,
+	});
+	c.header("Set-Cookie", clearOauthBindCookie()); // single-use, whatever the outcome
+	if (!uid) return c.text(OAUTH_BIND_ERROR, 400);
 
 	const tokenRes = await fetch(creds.tokenUrl!, {
 		method: "POST",

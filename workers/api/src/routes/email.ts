@@ -10,6 +10,8 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { decryptKey, encryptKey } from "../lib/crypto.js";
 import { GMAIL_SCOPE, mintGmailAccessToken } from "../lib/gmail.js";
+import { signConnectorState, verifyConnectorState } from "../lib/connector-oauth.js";
+import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
 
 export const emailRoutes = new Hono<{ Bindings: Env }>();
@@ -17,63 +19,17 @@ export const emailRoutes = new Hono<{ Bindings: Env }>();
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const STATE_TTL_SECONDS = 10 * 60;
+/** The vault provider this flow stores under — also pins the state to THIS connector. */
+const PROVIDER = "gmail";
 
 function redirectUri(c: { req: { url: string } }): string {
 	return new URL("/v1/email/google/callback", c.req.url).toString();
 }
 
-function b64url(bytes: Uint8Array): string {
-	return btoa(String.fromCharCode(...bytes))
-		.replace(/\+/g, "-")
-		.replace(/\//g, "_")
-		.replace(/=+$/, "");
-}
-
-function unb64url(s: string): Uint8Array {
-	const padded = s.replace(/-/g, "+").replace(/_/g, "/") + "==".slice(0, (4 - (s.length % 4)) % 4);
-	return Uint8Array.from(atob(padded), (ch) => ch.charCodeAt(0));
-}
-
-async function hmacKey(secret: string): Promise<CryptoKey> {
-	return crypto.subtle.importKey(
-		"raw",
-		new TextEncoder().encode(secret),
-		{ name: "HMAC", hash: "SHA-256" },
-		false,
-		["sign", "verify"],
-	);
-}
-
-/** Sign a short-lived state token carrying the user id. */
-async function signState(uid: string, exp: number, secret: string): Promise<string> {
-	const payload = b64url(new TextEncoder().encode(JSON.stringify({ uid, exp })));
-	const sig = b64url(
-		new Uint8Array(await crypto.subtle.sign("HMAC", await hmacKey(secret), new TextEncoder().encode(payload))),
-	);
-	return `${payload}.${sig}`;
-}
-
-async function verifyState(token: string, secret: string): Promise<string | null> {
-	try {
-		const [payload, sig] = token.split(".");
-		if (!payload || !sig) return null;
-		const valid = await crypto.subtle.verify(
-			"HMAC",
-			await hmacKey(secret),
-			unb64url(sig),
-			new TextEncoder().encode(payload),
-		);
-		if (!valid) return null;
-		const { uid, exp } = JSON.parse(new TextDecoder().decode(unb64url(payload))) as {
-			uid: string;
-			exp: number;
-		};
-		if (exp < Math.floor(Date.now() / 1000)) return null;
-		return uid;
-	} catch {
-		return null;
-	}
-}
+// The state helpers used to be a LOCAL copy of connector-oauth.ts's, byte-identical down to the
+// base64url helpers — so the fix that binds a state to its browser (and to its connector) would
+// have landed in three files and missed this one. Gmail is the highest-value of the four: the
+// refresh token it stores is what `find_confirmation_link` reads the owner's mail with.
 
 /** Start the Gmail OAuth flow. Returns the Google consent URL to open. */
 emailRoutes.get("/google/start", async (c) => {
@@ -81,11 +37,17 @@ emailRoutes.get("/google/start", async (c) => {
 	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
 		throw new HttpError(503, "Gmail connection is not configured on this deployment");
 	}
-	const state = await signState(
+	// Bind the state to THIS browser and to THIS connector: otherwise an attacker starts the
+	// flow, sends the consent URL to a victim, and the VICTIM's Gmail refresh token is stored
+	// under the ATTACKER's account. See lib/oauth-nonce.ts.
+	const bindNonce = newOauthNonce();
+	const state = await signConnectorState(
 		session.uid,
 		Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
 		c.env.SESSION_SIGNING_KEY,
+		{ nonce: bindNonce, provider: PROVIDER },
 	);
+	c.header("Set-Cookie", oauthBindCookie(bindNonce));
 	const url = new URL(AUTH_ENDPOINT);
 	url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
 	url.searchParams.set("redirect_uri", redirectUri(c));
@@ -146,8 +108,12 @@ emailRoutes.get("/google/callback", async (c) => {
 	}
 	if (!c.env.KEY_ENCRYPTION_KEY) return c.text("Key encryption not configured", 500);
 
-	const uid = await verifyState(stateRaw, c.env.SESSION_SIGNING_KEY);
-	if (!uid) return c.text("invalid or expired state", 400);
+	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY, {
+		cookieNonce: readOauthBindCookie(c.req.header("cookie")),
+		provider: PROVIDER,
+	});
+	c.header("Set-Cookie", clearOauthBindCookie()); // single-use, whatever the outcome
+	if (!uid) return c.text(OAUTH_BIND_ERROR, 400);
 
 	const tokenRes = await fetch(TOKEN_ENDPOINT, {
 		method: "POST",

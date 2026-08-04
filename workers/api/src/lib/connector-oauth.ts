@@ -1,5 +1,6 @@
 import { HttpError } from "./auth.js";
 import { decryptKey, encryptKey } from "./crypto.js";
+import { oauthBindMatches } from "./oauth-nonce.js";
 import type { Env } from "../types.js";
 
 export interface ConnectorTokenInput {
@@ -31,15 +32,45 @@ async function hmacKey(secret: string): Promise<CryptoKey> {
 	);
 }
 
-export async function signConnectorState(uid: string, exp: number, secret: string): Promise<string> {
-	const payload = b64url(new TextEncoder().encode(JSON.stringify({ uid, exp })));
+/**
+ * Sign the `state` for a connector OAuth flow.
+ *
+ * Two things beyond the uid, both required — see lib/oauth-nonce.ts for the full attack:
+ *
+ * - `nonce` binds the state to the browser that STARTED the flow. Without it, a state is
+ *   bearer-grade: an attacker starts the flow with their own bearer, sends the consent URL to a
+ *   victim, and the victim's refresh token is stored under the ATTACKER's `user_api_keys` — their
+ *   instances then read the victim's Gmail or Drive.
+ * - `provider` pins the state to the connector it was minted for. Every callback used the same
+ *   `{uid, exp}` shape, so a state minted at `/v1/drive/google/start` was accepted verbatim by the
+ *   Gmail, WorkDrive and generic-connector callbacks.
+ */
+export async function signConnectorState(
+	uid: string,
+	exp: number,
+	secret: string,
+	bind: { nonce: string; provider: string },
+): Promise<string> {
+	const payload = b64url(
+		new TextEncoder().encode(JSON.stringify({ uid, exp, n: bind.nonce, p: bind.provider })),
+	);
 	const sig = b64url(
 		new Uint8Array(await crypto.subtle.sign("HMAC", await hmacKey(secret), new TextEncoder().encode(payload))),
 	);
 	return `${payload}.${sig}`;
 }
 
-export async function verifyConnectorState(token: string, secret: string): Promise<string | null> {
+/**
+ * Verify a connector `state` and return the uid it credits — or null.
+ *
+ * Fails CLOSED on a missing nonce or provider, so states minted before this shipped stop working
+ * rather than being grandfathered: honouring them would leave the hole open for their whole TTL.
+ */
+export async function verifyConnectorState(
+	token: string,
+	secret: string,
+	bind: { cookieNonce: string | null; provider: string },
+): Promise<string | null> {
 	try {
 		const [payload, sig] = token.split(".");
 		if (!payload || !sig) return null;
@@ -50,12 +81,16 @@ export async function verifyConnectorState(token: string, secret: string): Promi
 			new TextEncoder().encode(payload),
 		);
 		if (!valid) return null;
-		const { uid, exp } = JSON.parse(new TextDecoder().decode(unb64url(payload))) as {
+		const { uid, exp, n, p } = JSON.parse(new TextDecoder().decode(unb64url(payload))) as {
 			uid: string;
 			exp: number;
+			n?: string;
+			p?: string;
 		};
 		if (typeof uid !== "string" || typeof exp !== "number") return null;
 		if (exp < Math.floor(Date.now() / 1000)) return null;
+		if (p !== bind.provider) return null;
+		if (!oauthBindMatches(n, bind.cookieNonce)) return null;
 		return uid;
 	} catch {
 		return null;

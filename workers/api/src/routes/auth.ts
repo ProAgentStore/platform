@@ -6,6 +6,7 @@ import { requireUser } from "../lib/auth.js";
 import { bindMemberOrgInstallations } from "../lib/github-app.js";
 import { logError } from "../lib/error-log.js";
 import { mintMcpAuthCode, exchangeMcpAuthCode } from "../lib/mcp-auth-codes.js";
+import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, oauthBindMatches, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
 
 export const authRoutes = new Hono<{ Bindings: Env }>();
@@ -20,6 +21,10 @@ interface OAuthState {
 	 *  session switch). Uses the same /github/callback so the OAuth App's one registered
 	 *  redirect URI still matches. */
 	linkUid?: string;
+	/** LINK flow only: binds the state to the browser that started it (see lib/oauth-nonce.ts).
+	 *  Without it a signed state is bearer-grade — anyone holding one can have a victim complete
+	 *  it and land the victim's GitHub identity (and org App installations) on THEIR account. */
+	bindNonce?: string;
 }
 
 /**
@@ -123,7 +128,22 @@ authRoutes.get("/github/callback", async (c) => {
 	// LINK flow: record the GitHub username onto the account named in the signed state —
 	// do NOT mint a session or switch accounts. Bounce back with ?github_linked=<login>.
 	if (state.linkUid) {
+		// The state alone says which account to credit, and a state is bearer-grade: whoever
+		// STARTED the flow holds one. Require the completing browser to be the one that started
+		// it, or an attacker's link, clicked by a victim, binds the VICTIM's GitHub identity —
+		// and every org App installation they belong to — onto the ATTACKER's account.
+		if (!oauthBindMatches(state.bindNonce, readOauthBindCookie(c.req.header("cookie")))) {
+			await logError(c.env, {
+				source: "auth",
+				status: 400,
+				message: "GitHub link rejected: state not bound to this browser",
+				context: { provider: "github", linkUid: state.linkUid },
+			});
+			c.header("Set-Cookie", clearOauthBindCookie());
+			return c.text(OAUTH_BIND_ERROR, 400);
+		}
 		if (!ghUser.login) return c.text("could not read GitHub login", 502);
+		c.header("Set-Cookie", clearOauthBindCookie()); // single-use
 		await c.env.DB.prepare("UPDATE users SET linked_github_login = ?1, updated_at = datetime('now') WHERE id = ?2")
 			.bind(ghUser.login, state.linkUid)
 			.run();
@@ -158,10 +178,15 @@ authRoutes.get("/github/link/start", async (c) => {
 	if (!c.env.GITHUB_CLIENT_ID) return c.json({ error: "GitHub OAuth not configured" }, 501);
 	// 30 min (not the sign-in flow's 10): the consent page can take a while when you
 	// click "Grant" on many orgs one by one, and an expired state 400s at the callback.
+	// Bind the state to THIS browser: the same nonce goes into the signed state and into a
+	// HttpOnly cookie. A victim who merely clicks the resulting link has no cookie, so the
+	// callback refuses to credit the initiator. See lib/oauth-nonce.ts.
+	const bindNonce = newOauthNonce();
 	const state = await signPayload<OAuthState>(
-		{ returnTo, exp: Math.floor(Date.now() / 1000) + 1800, linkUid: session.uid },
+		{ returnTo, exp: Math.floor(Date.now() / 1000) + 1800, linkUid: session.uid, bindNonce },
 		c.env.SESSION_SIGNING_KEY,
 	);
+	c.header("Set-Cookie", oauthBindCookie(bindNonce));
 	const url = new URL("https://github.com/login/oauth/authorize");
 	url.searchParams.set("client_id", c.env.GITHUB_CLIENT_ID);
 	// read:org so the callback can verify + auto-bind every org you're a member of, using

@@ -31,6 +31,7 @@ import {
 	signConnectorState,
 	verifyConnectorState,
 } from "../lib/connector-oauth.js";
+import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 
@@ -54,11 +55,17 @@ driveRoutes.get("/google/start", async (c) => {
 	if (!c.env.GOOGLE_CLIENT_ID || !c.env.GOOGLE_CLIENT_SECRET) {
 		throw new HttpError(503, "Google Drive connection is not configured on this deployment");
 	}
+	// Bind the state to THIS browser and to THIS connector — a signed state is otherwise
+	// bearer-grade, so an attacker's link completed by a victim stores the VICTIM's refresh
+	// token under the ATTACKER's account. See lib/oauth-nonce.ts.
+	const bindNonce = newOauthNonce();
 	const state = await signConnectorState(
 		session.uid,
 		Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
 		c.env.SESSION_SIGNING_KEY,
+		{ nonce: bindNonce, provider: PROVIDER },
 	);
+	c.header("Set-Cookie", oauthBindCookie(bindNonce));
 	const url = new URL(AUTH_ENDPOINT);
 	url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
 	url.searchParams.set("redirect_uri", redirectUri(c));
@@ -100,8 +107,12 @@ driveRoutes.get("/google/callback", async (c) => {
 	}
 	if (!c.env.KEY_ENCRYPTION_KEY) return c.text("Key encryption not configured", 500);
 
-	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY);
-	if (!uid) return c.text("invalid or expired state", 400);
+	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY, {
+		cookieNonce: readOauthBindCookie(c.req.header("cookie")),
+		provider: PROVIDER,
+	});
+	c.header("Set-Cookie", clearOauthBindCookie()); // single-use, whatever the outcome
+	if (!uid) return c.text(OAUTH_BIND_ERROR, 400);
 
 	const tokenRes = await fetch(TOKEN_ENDPOINT, {
 		method: "POST",

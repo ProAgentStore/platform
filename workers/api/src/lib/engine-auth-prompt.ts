@@ -24,18 +24,43 @@ export interface EngineAuthPrompt {
 	evidence: string;
 }
 
-/** Hosts that mean "a human is being asked to sign in", not merely a link in some output. */
+/**
+ * Hosts that mean "a human is being asked to sign in", not merely a link in some output.
+ *
+ * Matched on the parsed HOSTNAME (exact or a subdomain), never as a substring of the whole URL.
+ * A substring test accepted `https://accounts.google.com.evil.example/login` and
+ * `https://evil.example/?next=claude.ai` — and the console's sign-in button feeds this URL
+ * straight to `/browser/act {navigate}` on the runner, which drives the owner's REAL-PROFILE,
+ * already-logged-in Chrome. That turns any string an engine prints (a file it read, a CI log, a
+ * dependency banner) into a platform-endorsed "sign in here" page. Same class as the
+ * `endsWith("slack.com")` bug already fixed in routes/auth.ts.
+ */
 const AUTH_HOSTS = [
-	"accounts.google.com",
-	"claude.ai",
-	"console.anthropic.com",
-	"auth.openai.com",
-	"platform.openai.com",
-	"chatgpt.com/auth",
-	"x.ai",
-	"grok.com",
-	"github.com/login",
+	{ host: "accounts.google.com" },
+	{ host: "claude.ai" },
+	{ host: "console.anthropic.com" },
+	{ host: "auth.openai.com" },
+	{ host: "platform.openai.com" },
+	{ host: "chatgpt.com", path: "/auth" },
+	{ host: "x.ai" },
+	{ host: "grok.com" },
+	{ host: "github.com", path: "/login" },
 ];
+
+/** Is this a real https URL whose HOSTNAME is one of the sign-in hosts (or a subdomain of one)? */
+export function isAuthUrl(raw: string): boolean {
+	let u: URL;
+	try {
+		u = new URL(raw);
+	} catch {
+		return false;
+	}
+	if (u.protocol !== "https:") return false; // an http "sign-in" page is never legitimate here
+	const host = u.hostname.toLowerCase();
+	return AUTH_HOSTS.some(
+		(h) => (host === h.host || host.endsWith(`.${h.host}`)) && (!h.path || u.pathname.toLowerCase().startsWith(h.path)),
+	);
+}
 
 /**
  * Phrases an engine prints while blocked on sign-in. Deliberately narrow: a false positive tells
@@ -65,6 +90,11 @@ const NOT_BLOCKED = [
 
 const URL_RE = /https?:\/\/[^\s"'`)<>\]]+/g;
 
+/** Terminal prose puts URLs mid-sentence; drop trailing punctuation that isn't part of the URL. */
+function stripTrailingPunctuation(u: string): string {
+	return u.replace(/[.,;:!?'")\]]+$/, "");
+}
+
 /** The last N lines are what the CLI is showing NOW — an auth prompt scrolled away is history. */
 const TAIL_LINES = 40;
 
@@ -87,10 +117,9 @@ export function detectAuthPrompt(pane: string): EngineAuthPrompt | null {
 	}
 
 	const phrase = AUTH_PHRASES.find((p) => hay.includes(p));
-	const url = tail
-		.join("\n")
-		.match(URL_RE)
-		?.find((u) => AUTH_HOSTS.some((h) => u.toLowerCase().includes(h)));
+	// Terminal output wraps URLs in prose, so the match often carries a trailing `.` or `,` —
+	// strip it BEFORE parsing, and report the cleaned URL, since this is what gets navigated to.
+	const url = (tail.join("\n").match(URL_RE) ?? []).map(stripTrailingPunctuation).find(isAuthUrl);
 
 	if (!phrase && !url) return null;
 

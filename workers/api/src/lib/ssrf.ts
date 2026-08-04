@@ -96,10 +96,12 @@ export class SsrfError extends Error {
  */
 export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> {
 	let current = raw;
+	let origin = originOf(raw);
+	let hopInit = init;
 	for (let hop = 0; hop <= maxRedirects; hop++) {
 		const check = checkPublicHttpsUrl(current);
 		if (!check.ok) throw new SsrfError(check.reason);
-		const res = await fetch(current, { ...init, redirect: "manual" });
+		const res = await fetch(current, { ...hopInit, redirect: "manual" });
 		if (res.status < 300 || res.status >= 400) return res;
 		const location = res.headers.get("location");
 		if (!location) return res; // a 3xx with no Location — nothing to follow
@@ -109,6 +111,51 @@ export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirect
 		} catch {
 			throw new SsrfError("Invalid redirect target");
 		}
+		// Credentials must NOT cross an origin boundary. The caller's headers carry the owner's
+		// decrypted vault secret — `Authorization: Bearer <token>` from the http connector, the
+		// `mcp` provider token, a configured `X-Api-Key`. Spreading the original init into every
+		// hop handed that secret to whatever host the PREVIOUS host's Location named: one
+		// `302 Location: https://attacker.example/` from a hijacked or CDN-redirecting vendor
+		// path and the key is gone. The SSRF guard cannot help — the attacker's host is a
+		// perfectly public HTTPS host. Browsers and curl strip Authorization on a cross-host
+		// redirect for exactly this reason; now so do we.
+		const nextOrigin = originOf(current);
+		if (nextOrigin !== origin) {
+			hopInit = stripCredentialHeaders(hopInit);
+			origin = nextOrigin;
+		}
 	}
 	throw new SsrfError("Too many redirects");
+}
+
+function originOf(url: string): string {
+	try {
+		return new URL(url).origin;
+	} catch {
+		return "";
+	}
+}
+
+/**
+ * Headers that authenticate the caller and must be dropped when the origin changes.
+ *
+ * Deliberately a DENYLIST of the ones we actually send plus the standard ones, not an allowlist:
+ * dropping a benign header on a redirect is harmless, keeping a secret one is not. `auth.mode:
+ * "api-key"` lets the connector config name its own header, so any header whose name looks like a
+ * credential goes too.
+ */
+const CREDENTIAL_HEADERS = new Set(["authorization", "cookie", "proxy-authorization", "www-authenticate"]);
+const CREDENTIAL_HEADER_RE = /(^|[-_])(api[-_]?key|auth|token|secret|password|signature|sig)([-_]|$)/i;
+
+function isCredentialHeader(name: string): boolean {
+	const n = name.toLowerCase();
+	return CREDENTIAL_HEADERS.has(n) || CREDENTIAL_HEADER_RE.test(n);
+}
+
+function stripCredentialHeaders(init: RequestInit): RequestInit {
+	const next = new Headers(init.headers as HeadersInit | undefined);
+	for (const name of [...next.keys()]) {
+		if (isCredentialHeader(name)) next.delete(name);
+	}
+	return { ...init, headers: next };
 }

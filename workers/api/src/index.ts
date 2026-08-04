@@ -78,6 +78,12 @@ app.use(
 		allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
 		allowHeaders: ["Content-Type", "Authorization"],
 		maxAge: 86400,
+		// Required for the OAuth state-binding cookie (lib/oauth-nonce.ts): the `/start` calls
+		// are cross-origin XHR from the console, and a browser DISCARDS Set-Cookie on those
+		// unless the request is credentialed and the response allows credentials. Safe with an
+		// explicit origin allowlist (never `*`), and inert for everything else — this API
+		// authenticates with a Bearer token and has no session cookie to send.
+		credentials: true,
 	}),
 );
 

@@ -86,3 +86,40 @@ describe("authPromptGuidance", () => {
 		expect(authPromptGuidance({ kind: "menu", url: null, evidence: "" })).toMatch(/menu|choose/i);
 	});
 });
+
+describe("detectAuthPrompt — the sign-in URL drives the owner's real browser", () => {
+	// `/signin` feeds this URL to the runner's `/browser/act {navigate}`, which opens it in the
+	// owner's REAL-PROFILE, already-logged-in Chrome, presented by the console as a legitimate
+	// engine sign-in. So any string the engine prints must not be able to choose the page.
+	it("rejects a lookalike host — the substring match's failure", () => {
+		const p = detectAuthPrompt("Please sign in: https://accounts.google.com.evil.example/login");
+		expect(p?.url).toBeNull();
+	});
+
+	it("rejects an auth host appearing in the QUERY of an attacker URL", () => {
+		const p = detectAuthPrompt("Authentication required https://evil.example/?next=https://claude.ai/x");
+		expect(p?.url).toBeNull();
+	});
+
+	it("rejects a path-scoped host used off its path", () => {
+		// `github.com/login` is a sign-in page; `github.com/anything-else` is a repo link that
+		// happens to sit in the output of a coding agent constantly.
+		expect(detectAuthPrompt("Please sign in https://github.com/ProAgentStore/platform/issues/1")?.url).toBeNull();
+		expect(detectAuthPrompt("Please sign in https://github.com/login/device")?.url).toContain("github.com/login");
+	});
+
+	it("rejects http, which is never a legitimate sign-in page", () => {
+		expect(detectAuthPrompt("Please sign in http://accounts.google.com/o/oauth2")?.url).toBeNull();
+	});
+
+	it("still accepts the real thing, including a subdomain", () => {
+		expect(detectAuthPrompt("Please sign in https://accounts.google.com/o/oauth2/auth?x=1")?.url).toContain("accounts.google.com");
+		expect(detectAuthPrompt("Authentication required https://auth.openai.com/authorize")?.url).toContain("auth.openai.com");
+	});
+
+	it("drops trailing sentence punctuation rather than failing to parse", () => {
+		// Engines print URLs mid-prose; a trailing "." used to ride along into the navigate call.
+		const p = detectAuthPrompt("Please sign in at https://claude.ai/oauth/authorize.");
+		expect(p?.url).toBe("https://claude.ai/oauth/authorize");
+	});
+});

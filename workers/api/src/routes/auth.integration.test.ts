@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signPayload, signSession, verifySession } from "../lib/session.js";
+import { newOauthNonce } from "../lib/oauth-nonce.js";
 import { authRoutes } from "./auth.js";
 import type { Env } from "../types.js";
 
@@ -223,13 +224,76 @@ describe("GET /v1/auth/github/callback (integration)", () => {
 			{ json: { access_token: "gho_tok" } },
 			{ json: { id: 4242, login: "octocat", avatar_url: "", name: "" } },
 		]);
-		const linkState = await state({ linkUid: "google:99" });
-		const res = await app.request(`/v1/auth/github/callback?code=good&state=${encodeURIComponent(linkState)}`, {}, env);
+		const bindNonce = newOauthNonce();
+		const linkState = await state({ linkUid: "google:99", bindNonce });
+		const res = await app.request(
+			`/v1/auth/github/callback?code=good&state=${encodeURIComponent(linkState)}`,
+			{ headers: { cookie: `pags_oauth_bind=${bindNonce}` } },
+			env,
+		);
 		expect(res.status).toBe(302);
 		const loc = new URL(res.headers.get("location")!);
 		expect(loc.searchParams.get("github_linked")).toBe("octocat");
 		expect(loc.searchParams.get("session")).toBeNull();
 		expect(writes.some((w) => w.sql.includes("linked_github_login"))).toBe(true);
+	});
+
+	it("REFUSES a link completed by a browser that did not start it — the takeover", async () => {
+		// The attack: A calls /github/link/start with A's own bearer, gets a consent URL whose
+		// state says `linkUid: A`, and sends it to victim V. V clicks (no consent screen if V
+		// already authorized the app). Without a binding check the callback runs
+		// `UPDATE users SET linked_github_login = <V> WHERE id = <A>` and then binds every org
+		// App installation V belongs to under A's rows — A reads V's private repos.
+		const { app, env, writes } = buildApp();
+		stubFetch([
+			{ json: { access_token: "gho_tok" } },
+			{ json: { id: 4242, login: "victim", avatar_url: "", name: "" } },
+		]);
+		const attackerState = await state({ linkUid: "attacker", bindNonce: newOauthNonce() });
+		const res = await app.request(
+			`/v1/auth/github/callback?code=good&state=${encodeURIComponent(attackerState)}`,
+			{}, // the victim's browser holds no bind cookie
+			env,
+		);
+		expect(res.status).toBe(400);
+		expect(writes.some((w) => w.sql.includes("linked_github_login"))).toBe(false);
+	});
+
+	it("REFUSES a link whose state predates binding — no grandfathering", async () => {
+		// An unbound state must stop working rather than be honoured for the rest of its TTL.
+		const { app, env, writes } = buildApp();
+		stubFetch([
+			{ json: { access_token: "gho_tok" } },
+			{ json: { id: 4242, login: "octocat", avatar_url: "", name: "" } },
+		]);
+		const legacy = await state({ linkUid: "google:99" }); // no bindNonce
+		const res = await app.request(
+			`/v1/auth/github/callback?code=good&state=${encodeURIComponent(legacy)}`,
+			{ headers: { cookie: "pags_oauth_bind=whatever" } },
+			env,
+		);
+		expect(res.status).toBe(400);
+		expect(writes.some((w) => w.sql.includes("linked_github_login"))).toBe(false);
+	});
+
+	it("sets the bind cookie when the link flow STARTS, so the callback has something to match", async () => {
+		const { app, env } = buildApp();
+		const bearer = await signSession("google:99", SECRET, { roles: ["user"] });
+		const res = await app.request(
+			`https://api.proagentstore.online/v1/auth/github/link/start?return_to=${encodeURIComponent(RETURN_TO)}`,
+			{ headers: { authorization: `Bearer ${bearer}` } },
+			env,
+		);
+		expect(res.status).toBe(200);
+		const setCookie = res.headers.get("set-cookie") ?? "";
+		expect(setCookie).toMatch(/pags_oauth_bind=[0-9a-f]{32}/);
+		expect(setCookie).toContain("HttpOnly");
+		expect(setCookie).toContain("SameSite=Lax");
+		// The cookie value and the state's nonce must be the SAME value, or nothing can match.
+		const { url } = await res.json<{ url: string }>();
+		const stateParam = new URL(url).searchParams.get("state")!;
+		const payload = JSON.parse(atob(stateParam.split(".")[0].replace(/-/g, "+").replace(/_/g, "/"))) as { bindNonce?: string };
+		expect(setCookie).toContain(`pags_oauth_bind=${payload.bindNonce}`);
 	});
 });
 
