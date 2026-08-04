@@ -31,6 +31,12 @@ export interface RegistryToolCtx {
 	 */
 	onBehalfOf?: string;
 	/**
+	 * The delegation budget this work draws against (#184), when a supervisor's run is driving.
+	 * `delegate_goal` forwards it so a subordinate SHARES the tree's pool instead of opening a
+	 * fresh one — without it the bound is per-edge, which is the fanout blowup it exists to stop.
+	 */
+	budgetId?: string;
+	/**
 	 * The connector client factory (issue #86) — handlers call
 	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
 	 * grant/scope, instead of importing token-minting fns directly. Injected by

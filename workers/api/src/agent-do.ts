@@ -307,8 +307,15 @@ export class AgentDO extends DurableObject<Env> {
 			agentId?: string;
 			agentName?: string;
 			audioKey?: string;
+			/** Set when a supervisor's durable loop is driving this turn (#183/#184/#185). */
+			budgetId?: string | null;
+			onBehalfOf?: string | null;
+			traceId?: string | null;
 		}>();
 		const { message, channel, userId } = body;
+		const delegation = body.budgetId || body.onBehalfOf || body.traceId
+			? { budgetId: body.budgetId ?? null, onBehalfOf: body.onBehalfOf ?? null, traceId: body.traceId ?? null }
+			: undefined;
 		if (!message) return json({ error: "message required" }, 400);
 
 		let state = await this.getState();
@@ -351,7 +358,7 @@ export class AgentDO extends DurableObject<Env> {
 		this.broadcast({ type: "status", status: "thinking" });
 
 		try {
-			const { response, toolCalls } = await this.think(state, engine, userId);
+			const { response, toolCalls } = await this.think(state, engine, userId, delegation);
 
 			// Save tool calls as a system message (visible in chat)
 			let toolMsg: AgentMessage | undefined;
@@ -462,6 +469,7 @@ export class AgentDO extends DurableObject<Env> {
 		state: AgentState,
 		engine: AgentStorageEngine,
 		userId?: string,
+		delegation?: { budgetId?: string | null; onBehalfOf?: string | null; traceId?: string | null },
 	): Promise<{ response: string; toolCalls: string[] }> {
 		const messages = await this.getRecentMessages(MAX_CONTEXT_MESSAGES);
 		const memory = await this.getAllMemory();
@@ -476,6 +484,7 @@ export class AgentDO extends DurableObject<Env> {
 			env: this.env,
 			doStorage: this.ctx.storage,
 			broadcast: (data) => this.broadcast(data),
+			delegation,
 		});
 	}
 

@@ -136,7 +136,16 @@ export async function getBudget(env: Env, userId: string, id: string): Promise<B
 
 export interface ReservationResult {
 	ok: boolean;
-	reason?: AdmissionRefusal | "not_found" | "closed";
+	/**
+	 * Why the reservation was refused. `account_ceiling` is deliberately DISTINCT from
+	 * `cost_exhausted`: one says this TREE's pool is spent (a terminal fact about the pool), the
+	 * other says the ACCOUNT's rolling 24h backstop tripped (a transient fact about the account).
+	 * They were indistinguishable, so the workflow marked the SHARED tree budget `exhausted` when
+	 * the account backstop fired — a pool with $4.90 of $5.00 left was closed, every sibling loop
+	 * drawing on it failed with "This run's budget is already closed", and when the 24h window
+	 * rolled off the pool was STILL exhausted with no route to reopen it.
+	 */
+	reason?: AdmissionRefusal | "not_found" | "closed" | "account_ceiling";
 	message?: string;
 	/** Pass back to `settle` so the exact held amount is released. */
 	reserved?: Micros;
@@ -169,7 +178,7 @@ export async function reserve(
 	if (await userSpendSinceMicros(env, userId, DAILY_WINDOW_HOURS) >= DAILY_CEILING_MICROS) {
 		return {
 			ok: false,
-			reason: "cost_exhausted",
+			reason: "account_ceiling",
 			message: `Stopped: your agents have spent the ${formatMicros(DAILY_CEILING_MICROS)} daily limit across all runs. It resets as older usage ages out.`,
 		};
 	}

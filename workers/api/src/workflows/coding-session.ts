@@ -101,8 +101,66 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				conn = fallback;
 			}
 		}
+		/**
+		 * Close the rows a DELEGATED run opened — the loop-run row `check_delegation` reads and the
+		 * board card the supervisor watches. One writer for both, so they cannot disagree.
+		 *
+		 * `suffix` distinguishes the step names on the two call paths; a Workflow step name must be
+		 * unique within an instance.
+		 */
+		const closeDelegation = async (outcome: CodingResult, suffix = "") => {
+			if (event.payload.loopRunId) {
+				await step.do(`delegation-run-done${suffix}`, async () => {
+					const reason =
+						outcome.outcome === "cancelled"
+							? "cancelled"
+							: outcome.outcome === "max_steps"
+								? "max_iterations"
+								: outcome.outcome === "failed"
+									? "failed"
+									: "done";
+					await finishLoopRun(
+						env,
+						event.payload.loopRunId as string,
+						reason,
+						`outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}`,
+						Date.now(),
+					).catch(() => undefined);
+				});
+			}
+			if (event.payload.boardTaskId) {
+				await step.do(`delegation-task-done${suffix}`, async () => {
+					const ok = outcome.outcome !== "failed" && outcome.outcome !== "max_steps";
+					// Same shared record shape as the route that opened the card (#155) — only the
+					// status + outcome note change. Inline upsert keeps the workflow off a routes import.
+					const task = delegationTaskRecord({
+						id: event.payload.boardTaskId as string,
+						targetLabel: goal.repo,
+						objective: goal.objective,
+						status: ok ? "completed" : "failed",
+						now: new Date().toISOString(),
+						note: `outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}`,
+					});
+					await env.DB.prepare(
+						`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
+						 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
+						 ON CONFLICT(id) DO UPDATE SET type = excluded.type, status = excluded.status, payload = excluded.payload, updated_at = excluded.updated_at`,
+					).bind(event.payload.boardTaskId, instanceId, userId, task.type, task.status, JSON.stringify(task)).run().catch(() => undefined);
+					return null;
+				});
+			}
+		};
+
 		if (!conn) {
-			return { outcome: "failed", detail: "No coding runner connected. Start it with: pags up", steps: 0 };
+			// This return is BEFORE the try/finally, so the delegation rows have to be closed
+			// here explicitly. They weren't: `delegateToPilot` inserts agent_loop_runs (running)
+			// and a board card (running) before creating the workflow, so a Lead delegating to a
+			// Repo Coder whose machine had gone offline left both rows `running` PERMANENTLY —
+			// `check_delegation` told the supervisor the run was still going and the card never
+			// moved. Exactly the "looks delegated and never moves" failure the design forbids.
+			const noRunner: CodingResult = { outcome: "failed", detail: "No coding runner connected. Start it with: pags up", steps: 0 };
+			await closeDelegation(noRunner, "-no-runner");
+			return noRunner;
 		}
 
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "3 minutes" as const };
@@ -129,7 +187,10 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						estimatedCostMicros: CODING_RESERVE_MICROS,
 					});
 					if (!draw.ok) {
-						if (draw.reason && draw.reason !== "not_found" && draw.reason !== "closed") {
+						// `account_ceiling` is the ACCOUNT's rolling 24h backstop tripping, not this
+						// tree's pool being spent. Closing the shared budget for it stops every
+						// sibling drawing on the same pool and survives the window rolling off.
+						if (draw.reason && draw.reason !== "not_found" && draw.reason !== "closed" && draw.reason !== "account_ceiling") {
 							await markExhausted(env, userId, budgetId, draw.reason, event.payload.depth ?? 0).catch(() => undefined);
 						}
 						// A clean terminal decision rather than a throw: the loop stops with a reason
@@ -266,46 +327,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// Close the loop-run row a delegation opened, so ONE surface answers "how did it go"
 			// for both delegation kinds. Written here, in the same terminal step that closes the
 			// board card, so the two cannot disagree.
-			if (event.payload.loopRunId) {
-				await step.do("delegation-run-done", async () => {
-					const reason =
-						result.outcome === "cancelled"
-							? "cancelled"
-							: result.outcome === "max_steps"
-								? "max_iterations"
-								: result.outcome === "failed"
-									? "failed"
-									: "done";
-					await finishLoopRun(
-						env,
-						event.payload.loopRunId as string,
-						reason,
-						`outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`,
-						Date.now(),
-					).catch(() => undefined);
-				});
-			}
-			if (event.payload.boardTaskId) {
-				await step.do("delegation-task-done", async () => {
-					const ok = result.outcome !== "failed" && result.outcome !== "max_steps";
-					// Same shared record shape as the route that opened the card (#155) — only the
-					// status + outcome note change. Inline upsert keeps the workflow off a routes import.
-					const task = delegationTaskRecord({
-						id: event.payload.boardTaskId as string,
-						targetLabel: goal.repo,
-						objective: goal.objective,
-						status: ok ? "completed" : "failed",
-						now: new Date().toISOString(),
-						note: `outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`,
-					});
-					await env.DB.prepare(
-						`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
-						 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
-						 ON CONFLICT(id) DO UPDATE SET type = excluded.type, status = excluded.status, payload = excluded.payload, updated_at = excluded.updated_at`,
-					).bind(event.payload.boardTaskId, instanceId, userId, task.type, task.status, JSON.stringify(task)).run().catch(() => undefined);
-					return null;
-				});
-			}
+			await closeDelegation(result);
 		}
 		return result;
 	}

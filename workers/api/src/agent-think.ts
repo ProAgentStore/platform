@@ -80,8 +80,28 @@ export async function runAgentThink(opts: {
 	env: Env;
 	doStorage: DurableObjectStorage;
 	broadcast: (data: Record<string, unknown>) => void;
+	/**
+	 * Delegation context, when this turn is being driven by a supervisor's run (#183/#184/#185).
+	 *
+	 * All three were written and never read on this path, which is the ONLY path an agent's own
+	 * brain invokes a registry tool through:
+	 *
+	 *  • `budgetId` — `delegate_goal` falls back to `openBudget(...)` when it has none, so every
+	 *    agent-initiated delegation opened a FRESH pool. The tree's real ceiling became
+	 *    allowance × (number of delegation edges) rather than one shared allowance — precisely
+	 *    the fanout^depth blowup #184 exists to prevent. The per-tree bound was inert on the only
+	 *    path an agent can actually use; the "INHERITS the parent's budget" test passes because
+	 *    it hand-injects a budgetId that no production caller supplied.
+	 *  • `onBehalfOf` — AUDIT ONLY (never an authority; see lib/execution-authority.ts). Without
+	 *    it `isDelegated()` was always false, so the `delegated_tool_call` audit event was never
+	 *    written for ANY delegated run and /trace could never answer "who asked for this?".
+	 *  • `traceId` — `delegate_goal` passes `parentTraceId: ctx.traceId`, so a null here meant a
+	 *    Lead → Repo Coder → sub-delegation chain logged each hop under its own run id and never
+	 *    rendered as one tree.
+	 */
+	delegation?: { budgetId?: string | null; onBehalfOf?: string | null; traceId?: string | null };
 }): Promise<{ response: string; toolCalls: string[] }> {
-	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast } = opts;
+	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast, delegation } = opts;
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
 
 	// Authoritative capabilities → gate tools to what this agent type can actually use
@@ -512,7 +532,21 @@ export async function runAgentThink(opts: {
 					: { content: "Board can only be customized for a signed-in owner.", success: false };
 				toolResult = { name: tc.name, content: r.content, success: r.success };
 			} else if (registryToolNames.has(tc.name)) {
-					toolResult = await runRegistryTool(tc.name, { env, userId, agentId: state.agentId, instanceId: state.agentId }, (tc.arguments ?? {}) as Record<string, unknown>);
+					toolResult = await runRegistryTool(
+						tc.name,
+						{
+							env,
+							userId,
+							agentId: state.agentId,
+							instanceId: state.agentId,
+							// Carried, not invented: consent and token-minting still resolve against
+							// `instanceId` (the EXECUTOR), so this never widens what the tool may do.
+							budgetId: delegation?.budgetId ?? undefined,
+							onBehalfOf: delegation?.onBehalfOf ?? undefined,
+							traceId: delegation?.traceId ?? undefined,
+						},
+						(tc.arguments ?? {}) as Record<string, unknown>,
+					);
 				} else if (storageToolNames.has(tc.name)) {
 				toolResult = await executeStorageTool(
 					{ name: tc.name, input: tc.arguments },

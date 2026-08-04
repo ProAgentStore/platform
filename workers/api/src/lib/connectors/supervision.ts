@@ -104,6 +104,10 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 				// Correlate the child run with whatever run asked for it, so a multi-level
 				// delegation renders as one tree.
 				parentTraceId: ctx.traceId ?? null,
+				// Share the TREE's pool. Omitting this made `delegateToInstance` open a fresh
+				// budget per hop, so the real ceiling was allowance × edges — the per-tree bound
+				// was inert on the only path an agent can actually delegate through.
+				budgetId: ctx.budgetId ?? undefined,
 			});
 			if (!res.ok) return { content: res.error, success: false };
 			return {

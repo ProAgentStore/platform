@@ -150,3 +150,33 @@ describe("remainingDelegations / formatMicros", () => {
 		expect(formatMicros(-1)).toBe("$0.00");
 	});
 });
+
+describe("account ceiling vs pool exhaustion — distinguishable, because they mean opposite things", () => {
+	it("names the account backstop separately from the pool being spent", async () => {
+		// Both used to return `cost_exhausted`, so the workflow marked the SHARED tree budget
+		// `exhausted` when the ACCOUNT's rolling 24h backstop tripped. A pool with $4.90 of $5.00
+		// left was closed; every sibling loop drawing on it then failed with "This run's budget is
+		// already closed"; and when the 24h window rolled off the pool was STILL exhausted, with
+		// `raiseBudget` exported but reachable from no route. One is a terminal fact about the
+		// pool, the other a transient fact about the account.
+		const store = await import("./delegation-budget-store.js");
+		const src = (await import("node:fs")).readFileSync(
+			(await import("node:path")).join(import.meta.dirname, "delegation-budget-store.ts"),
+			"utf8",
+		);
+		expect(store).toBeTruthy();
+		// The daily-ceiling refusal must NOT reuse the pool's reason.
+		const ceilingBlock = src.slice(src.indexOf("DAILY_CEILING_MICROS)"), src.indexOf("const res = await env.DB.prepare"));
+		expect(ceilingBlock).toContain('reason: "account_ceiling"');
+		expect(ceilingBlock).not.toContain('reason: "cost_exhausted"');
+	});
+
+	it("both workflows refuse to close the shared pool for an account-level trip", async () => {
+		const fs = await import("node:fs");
+		const path = await import("node:path");
+		for (const f of ["agent-loop.ts", "coding-session.ts"]) {
+			const src = fs.readFileSync(path.join(import.meta.dirname, "..", "workflows", f), "utf8");
+			expect(src, `${f} must not markExhausted on account_ceiling`).toMatch(/draw\.reason !== "account_ceiling"/);
+		}
+	});
+});

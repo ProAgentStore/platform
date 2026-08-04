@@ -56,7 +56,17 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 		let instruction = objective;
 		let iteration = 0;
 		let stop: { reason: LoopStopReason; message: string } | null = null;
+		// The reservation currently held, if any. A step that exhausts its retries aborts the
+		// whole Workflow instance, skipping `settle` AND `finish` — CodingSessionWorkflow wraps
+		// its loop for exactly this reason; this one did not. The result was a run row stuck
+		// `running` with `finished_at` NULL FOREVER (the console and `check_delegation` report the
+		// delegation as still in flight; `cancel` returns 200 and nothing reads the flag), while
+		// the 200,000 micros stayed held against the SHARED tree pool — `remainingCost` subtracts
+		// it, so every sibling permanently has $0.20 less headroom. There is no reconciling cron:
+		// `scheduled()` runs only runDueTriggers and runDueDeliveries.
+		let outstanding: { reserved: number; spendBefore: number } | null = null;
 
+		try {
 		while (!stop) {
 			iteration++;
 
@@ -76,7 +86,12 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 				);
 				if (!draw.ok) {
 					await step.do(`budget-exhausted-${iteration}`, async () => {
-						if (draw.reason && draw.reason !== "not_found" && draw.reason !== "closed") {
+						// `account_ceiling` must NOT close the pool. It is a TRANSIENT fact about
+						// the account's rolling 24h spend, not about this tree — marking the shared
+						// budget `exhausted` closed a pool with most of its allowance left, failed
+						// every sibling loop drawing on it with "budget is already closed", and
+						// survived the window rolling off with no route to reopen it.
+						if (draw.reason && draw.reason !== "not_found" && draw.reason !== "closed" && draw.reason !== "account_ceiling") {
 							await markExhausted(this.env, userId, budgetId, draw.reason, depth);
 						}
 					});
@@ -90,6 +105,7 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 			const spendBefore = budgetId
 				? await step.do(`spend-before-${iteration}`, () => instanceSpendMicros(this.env, userId, instanceId))
 				: 0;
+			if (budgetId && reserved) outstanding = { reserved, spendBefore };
 
 			// ACT — hand the instruction to the instance's own brain, which runs with ITS tools,
 			// memory and guardrails (#185: the executor is the authority).
@@ -100,7 +116,19 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 						new Request("https://agent/chat", {
 							method: "POST",
 							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ message: instruction, channel: "loop", userId, agentId: instanceId }),
+							body: JSON.stringify({
+								message: instruction,
+								channel: "loop",
+								userId,
+								agentId: instanceId,
+								// The delegation context this turn's tools need. `onBehalfOf` was
+								// accepted as a workflow param and never read; `budgetId` never
+								// reached `delegate_goal`, so a sub-delegation opened its OWN pool
+								// instead of drawing on the tree's — the per-tree bound was inert.
+								budgetId,
+								onBehalfOf: event.payload.onBehalfOf ?? null,
+								traceId: runId,
+							}),
 						}),
 					);
 					// Shape-handling lives in lib/agent-loop.ts so it is testable without a DO —
@@ -139,6 +167,7 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 					const after = await instanceSpendMicros(this.env, userId, instanceId);
 					await settle(this.env, userId, budgetId, reserved, Math.max(0, after - spendBefore));
 				});
+				outstanding = null;
 			}
 
 			const state: LoopState = { iteration, maxIterations, recentInstructions };
@@ -148,6 +177,23 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 				break;
 			}
 			instruction = verdict.nextInstruction as string;
+		}
+		} catch (e) {
+			// A step that exhausted its retries. The run still has to END — a `running` row nobody
+			// will ever close is worse than a failed one, because the supervisor keeps waiting.
+			stop = { reason: "failed", message: `The run stopped unexpectedly: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500) };
+		} finally {
+			// Release a reservation the loop was holding when it died, or the tree pool leaks that
+			// headroom permanently. Settled with the ACTUAL spend, same as the happy path — the
+			// tokens were spent either way.
+			if (budgetId && outstanding) {
+				const held = outstanding;
+				await step.do(`settle-outstanding-${iteration}`, async () => {
+					const after = await instanceSpendMicros(this.env, userId, instanceId).catch(() => held.spendBefore);
+					await settle(this.env, userId, budgetId, held.reserved, Math.max(0, after - held.spendBefore));
+				}).catch(() => undefined);
+				outstanding = null;
+			}
 		}
 
 		await step.do("finish", async () => {
