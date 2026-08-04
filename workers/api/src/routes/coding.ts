@@ -37,6 +37,7 @@ import {
 } from "../lib/coding-store.js";
 import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask } from "./instances-runtime.js";
 import { logEvent } from "../lib/events.js";
+import { authPromptGuidance, detectAuthPrompt } from "../lib/engine-auth-prompt.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetReason, type DelegationTarget } from "../lib/delegate-target.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
@@ -680,7 +681,15 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	if (!conn) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: false });
 	const snap = await callRunner(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
 	if (!snap) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: true });
-	return c.json({ ...(snap as object), runnerConnected: true });
+	// An engine blocked on sign-in looks EXACTLY like a hung session: idle runState, a pane that
+	// stops changing, no error anywhere. Surfacing it here means the console can say "sign in"
+	// instead of the owner watching a dead terminal and concluding the platform is broken.
+	const authPrompt = detectAuthPrompt(String((snap as { pane?: unknown }).pane ?? ""));
+	return c.json({
+		...(snap as object),
+		runnerConnected: true,
+		...(authPrompt ? { authPrompt: { ...authPrompt, guidance: authPromptGuidance(authPrompt) } } : {}),
+	});
 });
 
 /**
