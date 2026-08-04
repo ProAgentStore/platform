@@ -349,3 +349,70 @@ describe("mergeEnv — the platform's engine choice must beat the machine's", ()
 		expect(out.ANTHROPIC_API_KEY).toBe("sk-ant-machine");
 	});
 });
+
+describe("HeadlessSession — a finishing turn must not clobber a newer one", () => {
+	let dir: string;
+	let slowBin: string;
+	let fastBin: string;
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-stale-"));
+		slowBin = join(dir, "slow.js");
+		fastBin = join(dir, "fast.js");
+		// Emits immediately, then LINGERS — so it is still "running" when turn 2 starts.
+		writeFileSync(slowBin, `#!/usr/bin/env node\nprocess.stdout.write("turn1 start\\n");\nsetTimeout(() => process.stdout.write("turn1 end\\n"), 3000);\n`);
+		writeFileSync(fastBin, `#!/usr/bin/env node\nprocess.stdout.write("turn2: " + (process.argv[2]||"") + "\\n");\nsetTimeout(()=>{}, 5000);\n`);
+		chmodSync(slowBin, 0o755);
+		chmodSync(fastBin, 0o755);
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("a stale process's close does not force the session idle mid-turn", async () => {
+		// The raw idle heuristic declares idle after a >1.5s output pause, so a long build gets
+		// judged idle and the brain sends turn 2 while turn 1 is still running. Without a
+		// staleness guard, turn 1's `close` then set `run = "idle"` — so the brain read a turn 2
+		// that had barely started as FINISHED and acted on a half-done turn (or double-sent) —
+		// and `proc = null`, after which stop()/interrupt()/end() could no longer kill turn 2,
+		// leaving an engine process still editing the repo, invisible to diagnostics and
+		// kill-tmux. `alive` cannot show this (a one-shot session is alive until stop), so the
+		// assertion is on `runState`, which is what the brain actually reads.
+		const s = new HeadlessSession({ id: "stale", workDir: dir, clientType: "codex", bin: slowBin });
+		s.start();
+		s.input("build");
+		await until(() => s.snapshot().includes("turn1 start"), 6000, "turn 1 to emit");
+
+		// Turn 2 starts while turn 1 is mid-flight (the exact race). Turn 1 is aborted, and its
+		// `close` lands a moment later — it must be IGNORED, because turn 2 owns the session now.
+		s.input("next");
+		expect(s.runState()).toBe("thinking");
+		await wait(600); // long enough for the stale close, far short of the 1.5s idle threshold
+		expect(s.runState()).toBe("thinking");
+		s.stop();
+	}, 20_000);
+
+	it("aborts a still-running turn before spawning its replacement", async () => {
+		// Two engine processes editing the same repo concurrently is worse than a lost turn.
+		const s = new HeadlessSession({ id: "stale2", workDir: dir, clientType: "codex", bin: fastBin });
+		s.start();
+		s.input("one");
+		await until(() => s.snapshot().includes("turn2: one"), 6000, "first turn");
+		s.input("two");
+		await until(() => s.snapshot().includes("turn2: two"), 6000, "second turn");
+		// Both turns are in the transcript, and exactly one process is current.
+		expect(s.snapshot()).toContain("turn2: one");
+		s.stop();
+		expect(s.alive).toBe(false);
+	}, 20_000);
+});
+
+describe("HeadlessSession.key — a no-op that READS as success is worse than an error", () => {
+	it("records the ignored keypress in the transcript", () => {
+		// `press_keys` was advertised to the brain, mapped to {kind:"keys"}, routed here and
+		// answered with a normal snapshot — indistinguishable from success. A menu prompt then
+		// looped: press Enter → nothing sent → unchanged pane → same decision → repeat, until the
+		// run burned all 40 decisions and ended max_steps having done nothing.
+		const s = new HeadlessSession({ id: "keys", workDir: tmpdir(), clientType: "codex", bin: "/bin/echo" });
+		s.key("Enter");
+		expect(s.snapshot()).toMatch(/ignored keypress/i);
+	});
+});

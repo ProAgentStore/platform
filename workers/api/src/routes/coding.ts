@@ -747,6 +747,24 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/signin", async (c) =>
 	// button reports success and no page ever opens.
 	const nav = await callRunner<{ ok?: boolean }>(conn, "/browser/act", { action: "navigate", url: prompt.url }).catch(() => null);
 	if (!nav) throw new HttpError(502, "Couldn't open the sign-in page in the runner's browser.");
+	// The board card MUST exist before the handoff. The runner's /browser/handoff registers the
+	// takeover in memory and then does `const task = this.store.getTask(taskId); if (task) {…}` —
+	// the whole `needs_human` status flip and the human_handoff_required event live inside that
+	// `if`. With an invented taskId no such task existed, so none of it ran: the button reported
+	// success, the console said "take over the browser to finish signing in", and the Board (which
+	// surfaces takeovers from `needs_human` tasks) showed nothing at all. The sign-in page sat open
+	// on a machine the user may not be at, with no surface to drive it — while `authPromptGuidance`
+	// told them to "open the takeover view".
+	await mirrorRuntimeTask(c.env, instanceId, uid, {
+		id: taskId,
+		type: "engine.signin",
+		status: "needs_human",
+		title: "Sign in to the coding engine",
+		subtitle: (() => { try { return new URL(prompt.url as string).host; } catch { return null; } })(),
+		reasoning: authPromptGuidance(prompt),
+		createdAt: new Date().toISOString(),
+		updatedAt: new Date().toISOString(),
+	}).catch(() => undefined);
 	await callRunner<{ ok: boolean }>(conn, "/browser/handoff", {
 		taskId,
 		label: "Engine sign-in",
@@ -774,7 +792,12 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/signin", async (c) =>
 codingRoutes.get("/:instanceId/coding/status", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const sessions = (await listSessions(c.env, instanceId, uid)).filter((s) => s.status === "active");
-	const runnerConnected = await relayConnected(c.env, instanceId, null).catch(() => false);
+	// Resolve the runner the way every other route does. `relayConnected(…, null)` names the
+	// RelayDO `instanceId` with no node suffix, but every runner since the relay handshake
+	// connects with `?node=<hostname>` — so its DO is `${instanceId}:node:${hostname}` and the
+	// bare-name DO has never had a socket. This field was therefore ALWAYS false, contradicting
+	// the per-session `runnerConnected` values computed correctly just below it.
+	const runnerConnected = !!(await getBoundRunnerConn(c.env, instanceId, uid).catch(() => null));
 	const CONCURRENCY = 6;
 	const out: Array<{ sessionId: string; repoId: string; runState: string; runnerConnected: boolean }> = [];
 	for (let i = 0; i < sessions.length; i += CONCURRENCY) {

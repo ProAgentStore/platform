@@ -313,10 +313,22 @@ export class HeadlessSession {
 			env: mergeEnv(process.env, this.config.env),
 			stdio: ["ignore", "pipe", "pipe"],
 		});
+		// A turn already running is aborted before its replacement starts. `input()` never killed
+		// the previous process, and the raw idle heuristic declares idle after a >1.5s output
+		// pause — so a long build could be judged idle, the brain sends turn 2, and TWO engine
+		// processes edit the same repo at once.
+		if (this.procAlive) {
+			try {
+				this.proc?.kill();
+			} catch {
+				/* already gone */
+			}
+		}
 		this.proc = proc;
 		// Without an 'error' listener a spawn failure (binary not on PATH) is an uncaught
 		// exception that takes the whole runner down, not just this session.
 		proc.on("error", (err: Error) => {
+			if (this.proc !== proc) return; // stale: a newer turn owns the session now
 			this.push(`[${this.config.clientType}] failed to start: ${err.message}`);
 			this.run = "idle";
 			this.proc = null;
@@ -328,14 +340,29 @@ export class HeadlessSession {
 			// operator needs to see it — silently going idle is how "stdin is not a terminal"
 			// looked like an idle session for a whole afternoon.
 			if (code) this.push(`[${this.config.clientType} exited with code ${code}]`);
+			// STALENESS GUARD, matching the persistent path's. Without it, an older turn's
+			// `close` clobbered the newer one: `run = "idle"` while process B was still working
+			// (so the brain acted on a half-done turn and could double-send), and `proc = null`
+			// so stop()/interrupt()/end() could no longer kill B — ending the session left a
+			// codex process still editing the repo, invisible to `alive`, diagnostics and
+			// kill-tmux.
+			if (this.proc !== proc) return;
 			this.run = "idle";
 			this.proc = null;
 		});
 	}
 
-	/** No TTY in headless mode; control is via messages. Kept for interface parity. */
-	key(_keys: string): void {
-		/* intentionally a no-op — there are no raw keystrokes without a terminal */
+	/**
+	 * No TTY in headless mode; control is via messages. Kept for interface parity — the human
+	 * takeover path can still route a keypress here.
+	 *
+	 * RECORDED rather than silently dropped. As a pure no-op it was indistinguishable from
+	 * success: `act` returned an ordinary snapshot with an unchanged pane, so the caller could not
+	 * tell "sent, nothing happened" from "never sent". The transcript is what the brain and the
+	 * console both read, so the truth belongs there.
+	 */
+	key(keys: string): void {
+		this.push(`[ignored keypress ${keys.slice(0, 40)} — this session has no terminal attached]`);
 	}
 
 	/** Abort the current turn (SIGINT, like Ctrl-C). The process stays usable. */

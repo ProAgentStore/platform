@@ -145,11 +145,13 @@ const CODING_TOOLS = [
 		description: "Send a natural-language instruction to the coding CLI (the next single step toward the objective).",
 		parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
 	},
-	{
-		name: "press_keys",
-		description: "Send a raw key to the CLI (e.g. 'Enter', 'Escape', 'C-c') — for menus/prompts, not normal instructions.",
-		parameters: { type: "object", properties: { keys: { type: "string" } }, required: ["keys"] },
-	},
+	// NO press_keys. `HeadlessSession.key()` is an unconditional no-op — correct, because a
+	// headless engine has no TTY to receive keystrokes — but the tool was still advertised, mapped
+	// to `{kind:"keys"}`, routed into `key()` and answered with a normal snapshot, indistinguishable
+	// from success. So a menu ("1) Sign in with…") produced: brain calls press_keys("Enter") →
+	// nothing sent → unchanged pane → `waitIdle` is skipped for non-message actions → the next
+	// decision sees the identical pane and repeats. The run burned all 40 decisions of BYOK Claude
+	// and ended `max_steps` having done nothing. A menu is now a `request_human`, which is true.
 	{
 		name: "finish",
 		description: "The objective is complete (status 'done') or cannot be completed (status 'failed').",
@@ -176,7 +178,7 @@ function systemPrompt(goal: CodingGoal): string {
 		"",
 		"You see the terminal pane. Decide the SINGLE next step and call exactly one tool.",
 		"- Drive the CLI with natural-language instructions via send_message; it does the editing/running.",
-		"- Only use press_keys for menu/confirmation prompts the CLI shows.",
+		"- You CANNOT send keystrokes: the CLI runs headless with no terminal attached. If it is waiting on a menu or a y/n prompt, either phrase the answer as an instruction via send_message, or call request_human.",
 		"- When the objective is satisfied, call finish(status:'done'). If it's impossible, finish(status:'failed').",
 		"- If a value is required that only the user has, call request_user_info — NEVER invent secrets, tokens, or personal data.",
 		"- If you hit something a human must handle live (interactive login, captcha), call request_human.",
@@ -220,7 +222,9 @@ function toDecision(call: { name: string; arguments: Record<string, unknown> }):
 		case "send_message":
 			return { action: { kind: "message", text: str(a.text) } };
 		case "press_keys":
-			return { action: { kind: "keys", keys: str(a.keys) } };
+			// No longer offered; if an older/cached tool list produces one, say so honestly rather
+			// than routing it into a no-op that reads as success.
+			return { stuck: { why: "Tried to press a key, but this session has no terminal attached — a human needs to answer the prompt." } };
 		case "finish":
 			return { finish: { status: str(a.status) === "failed" ? "failed" : "done", detail: str(a.detail) } };
 		case "request_human":

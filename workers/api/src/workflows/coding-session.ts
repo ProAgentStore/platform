@@ -167,7 +167,33 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		// waitIdle polls internally for minutes, so it needs a longer step budget than `retry`.
 		const idleRetry = { retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "10 minutes" as const };
 		let n = 0;
-		const capture = () => callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS });
+		/**
+		 * Read the pane AND whether the run should stop.
+		 *
+		 * `runCodingLoop` branches on `snap.cancelled` in two places and both workflow poll loops
+		 * test it — but nothing ever SET it: `CodingSnapshot` has no such field and neither the
+		 * runner nor the routes produce one. So the outcome "cancelled" was unreachable in
+		 * production, and a user who started a run with the wrong objective had no way to stop it
+		 * short of killing the session; the Pilot kept going for up to 12 rounds × 40 steps of
+		 * BYOK Claude decisions.
+		 *
+		 * The signal already exists and is already user-driven: Kill / End / Restart set the
+		 * `coding_sessions` row out of 'active'. Reading it here makes those buttons a clean stop
+		 * — the loop finishes its current step and returns `cancelled` — instead of the run only
+		 * ending indirectly when a later capture happens to fail.
+		 */
+		const capture = async (): Promise<CodingPaneSnapshot & { sessionId: string }> => {
+			const [snap, row] = await Promise.all([
+				callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }),
+				env.DB.prepare("SELECT status FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
+					.bind(sessionId, instanceId, userId)
+					.first<{ status: string }>()
+					.catch(() => null),
+			]);
+			// Only an explicit non-active status cancels. A read that FAILED (null) must not, or a
+			// transient D1 blip would silently abort a healthy run.
+			return row && row.status !== "active" ? { ...snap, cancelled: true } : snap;
+		};
 
 		const deps: CodingDeps = {
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, capture) as Promise<CodingPaneSnapshot>,
