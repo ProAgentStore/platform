@@ -651,9 +651,14 @@ test.describe("ProAgentStore Console smoke", () => {
 		await page.goto("/console/instances/inst-1/settings");
 		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
 
-		// The Action dropdown is the one carrying the new run_pipeline option.
-		const action = page.locator("select").filter({ has: page.locator('option[value="run_pipeline"]') });
-		const addBtn = page.getByRole("button", { name: "Add", exact: true });
+		// Scope to the Triggers card. Teamwork (#182) also offers run_pipeline and also has an
+		// add button, so both locators silently depended on this being the only such card.
+		const triggersCard = page
+			.locator("div")
+			.filter({ has: page.getByRole("heading", { name: "Triggers" }) })
+			.last();
+		const action = triggersCard.locator("select").filter({ has: page.locator('option[value="run_pipeline"]') });
+		const addBtn = triggersCard.getByRole("button", { name: "Add", exact: true });
 
 		// run_pipeline → a pipeline-name input appears; an empty submit is validated (no broken trigger).
 		await action.selectOption("run_pipeline");
