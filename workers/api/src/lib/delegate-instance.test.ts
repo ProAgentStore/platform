@@ -3,8 +3,12 @@ import { delegateToInstance } from "./delegate-instance.js";
 import type { Env } from "../types.js";
 
 /** D1 + workflow stub. `edges` seeds the owner's supervision graph. */
-function buildEnv(edges: Array<[string, string]> = [["sup", "sub"]]) {
+function buildEnv(
+	edges: Array<[string, string]> = [["sup", "sub"]],
+	opts: { targetConfig?: string | null; repos?: unknown[]; session?: unknown } = {},
+) {
 	const created: Array<Record<string, unknown>> = [];
+	const codingCreated: Array<Record<string, unknown>> = [];
 	const writes: Array<{ sql: string; args: unknown[] }> = [];
 	const env = {
 		DB: {
@@ -13,6 +17,16 @@ function buildEnv(edges: Array<[string, string]> = [["sup", "sub"]]) {
 					bind(...args: unknown[]) {
 						return {
 							async first() {
+								// The capability lookup that decides chat-loop vs Pilot.
+								if (sql.includes("JOIN agents a ON a.id = i.agent_id")) {
+									// Default to a PLAIN agent. agentCapabilities also has a slug/category
+									// fallback for legacy agents, so a coder-ish slug here would route
+									// every case to the Pilot and hide the branch under test.
+									return opts.targetConfig
+										? { slug: "coder-repo", category: "code", config: opts.targetConfig }
+										: { slug: "doc-chat", category: "productivity", config: null };
+								}
+								if (sql.includes("FROM coding_sessions")) return opts.session ?? null;
 								if (sql.includes("FROM delegation_budgets")) {
 									return {
 										id: "new-budget", user_id: "u1", root_instance_id: "sup",
@@ -25,6 +39,7 @@ function buildEnv(edges: Array<[string, string]> = [["sup", "sub"]]) {
 								return null;
 							},
 							async all() {
+								if (sql.includes("FROM coding_repos")) return { results: opts.repos ?? [] };
 								if (sql.includes("FROM agent_supervision")) {
 									return {
 										results: edges.map(([s, sub]) => ({
@@ -50,8 +65,14 @@ function buildEnv(edges: Array<[string, string]> = [["sup", "sub"]]) {
 				return { id: String(arg.id) };
 			},
 		},
+		CODING_SESSION: {
+			async create(arg: Record<string, unknown>) {
+				codingCreated.push(arg);
+				return { id: "wf-coding" };
+			},
+		},
 	} as unknown as Env;
-	return { env, created, writes };
+	return { env, created, codingCreated, writes };
 }
 
 const base = {
@@ -145,5 +166,54 @@ describe("delegateToInstance — authority and trace", () => {
 		const { env, writes } = buildEnv();
 		await delegateToInstance(env, base);
 		expect(writes.some((w) => w.sql.includes("INSERT INTO agent_loop_runs"))).toBe(true);
+	});
+});
+
+describe("delegateToInstance routes by the target's declared capability", () => {
+	const CODING_CFG = JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } });
+	const REPO = { id: "r1", name: "fas/platform", clone_url: null, branch: null, workdir: "~/dev/x", status: "ready" };
+	const SESSION = { id: "s1", repo_id: "r1", client_type: "claude", runner_node: "mac", status: "active" };
+
+	it("sends a CODING agent's goal to the Pilot, not the chat loop", async () => {
+		// The live gap: a coding agent's work happens in its Pilot driving a real CLI. Routed to
+		// the chat loop it would TALK about the repo and change nothing — success on the board,
+		// no work done.
+		const { env, created, codingCreated } = buildEnv([["sup", "sub"]], {
+			targetConfig: CODING_CFG, repos: [REPO], session: SESSION,
+		});
+		const res = await delegateToInstance(env, base);
+		expect(res.ok).toBe(true);
+		expect(codingCreated).toHaveLength(1);
+		expect(created).toHaveLength(0); // NOT the generic chat loop
+		expect((codingCreated[0].params as { goal: { objective: string } }).goal.objective).toBe("ship the thing");
+	});
+
+	it("still uses the chat loop for a non-coding agent", async () => {
+		const { env, created, codingCreated } = buildEnv();
+		expect((await delegateToInstance(env, base)).ok).toBe(true);
+		expect(created).toHaveLength(1);
+		expect(codingCreated).toHaveLength(0);
+	});
+
+	it("refuses explicitly when the coding agent has no repo", async () => {
+		// A silent no-op leaves a board card that looks delegated and never moves.
+		const { env, codingCreated } = buildEnv([["sup", "sub"]], { targetConfig: CODING_CFG, repos: [] });
+		const res = await delegateToInstance(env, base);
+		expect(res).toMatchObject({ ok: false, status: 409 });
+		expect(codingCreated).toHaveLength(0);
+	});
+
+	it("refuses with actionable wording when there is no live session", async () => {
+		const { env, codingCreated } = buildEnv([["sup", "sub"]], { targetConfig: CODING_CFG, repos: [REPO], session: null });
+		const res = await delegateToInstance(env, base);
+		expect(res.ok).toBe(false);
+		expect((res as { error: string }).error).toMatch(/pags up|Coding tab/);
+		expect(codingCreated).toHaveLength(0);
+	});
+
+	it("opens an observable board task so the delegation is trackable", async () => {
+		const { env, writes } = buildEnv([["sup", "sub"]], { targetConfig: CODING_CFG, repos: [REPO], session: SESSION });
+		await delegateToInstance(env, base);
+		expect(writes.some((w) => w.sql.includes("instance_runtime_tasks"))).toBe(true);
 	});
 });
