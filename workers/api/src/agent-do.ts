@@ -588,8 +588,17 @@ export class AgentDO extends DurableObject<Env> {
 	}
 
 	private async handleClearMessages(): Promise<Response> {
-		const all = await this.ctx.storage.list({ prefix: "msg:" });
+		const all = await this.ctx.storage.list<AgentMessage>({ prefix: "msg:" });
 		const keys = [...all.keys()];
+		// The audio ids of the messages being cleared, returned so the route deletes EXACTLY those
+		// R2 objects. A prefix delete would take the Coder Co-pilot's recordings with them —
+		// coding_timeline audio lives under the same `voice-audio/{uid}/{instanceId}/` prefix — so
+		// clearing the Assistant chat would silently destroy every Co-pilot recording for that
+		// instance while its timeline rows (and their audio_key) survived, leaving replay 404ing
+		// forever.
+		const audioKeys = [...all.values()]
+			.map((m) => (m as { audioKey?: unknown })?.audioKey)
+			.filter((k): k is string => typeof k === "string" && !!k);
 		for (let i = 0; i < keys.length; i += 128) {
 			await this.ctx.storage.delete(keys.slice(i, i + 128));
 		}
@@ -600,7 +609,7 @@ export class AgentDO extends DurableObject<Env> {
 		if (state?.agentId) {
 			await this.getStorageEngine(state.agentId).clearConversationDerived().catch(() => undefined);
 		}
-		return json({ deleted: keys.length });
+		return json({ deleted: keys.length, audioKeys });
 	}
 
 	// ── Memory ─────────────────────────────────────────────────────────────────

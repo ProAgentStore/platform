@@ -85,10 +85,28 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 			// `/apply` matched it — every future application 409'd "already in progress" for the
 			// full 4h STALE_APPLY_MS window, for an application that never took a step.
 			await step.do("no-runner-close", async () => {
-				await env.DB.prepare(
-					"UPDATE instance_runtime_tasks SET status = 'failed', updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+				// The PAYLOAD too, not just the status column. The board renders
+				// `parsePayload(row.payload)`, so updating the column alone freed the single-flight
+				// claim (which reads the column) while leaving a live-looking "running" apply card
+				// on the board forever, with a Cancel button acting on a task no workflow owns.
+				const row = await env.DB.prepare(
+					"SELECT payload FROM instance_runtime_tasks WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
 				)
 					.bind(taskId, instanceId, userId)
+					.first<{ payload: string }>()
+					.catch(() => null);
+				let payload: Record<string, unknown> = {};
+				try {
+					payload = row?.payload ? (JSON.parse(row.payload) as Record<string, unknown>) : {};
+				} catch {
+					/* a corrupt payload still gets a terminal status below */
+				}
+				const now = new Date().toISOString();
+				payload = { ...payload, id: taskId, status: "failed", error: "No browser runner connected. Start it with: pags up", updatedAt: now, completedAt: now };
+				await env.DB.prepare(
+					"UPDATE instance_runtime_tasks SET status = 'failed', payload = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+				)
+					.bind(taskId, instanceId, userId, JSON.stringify(payload))
 					.run()
 					.catch(() => undefined);
 				return null;

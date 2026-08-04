@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 import type { RunnerEvent, RunnerSession, RunnerTask } from "./types.js";
 
 interface StoreFile {
@@ -65,7 +66,7 @@ export class RunnerStore {
 			// to "failed", which re-mirrors to the board, resurrects the Retry button, and
 			// slips past the API single-flight guard → a second concurrent apply on the one
 			// browser page. Mirrors the API carve-out in expireOrphanedRuntimeTasks.
-			if (task.type === "job.apply_agent") continue;
+			if (WORKFLOW_DRIVEN_TASKS.has(task.type)) continue;
 			if (task.status === "needs_human" || task.status === "running") {
 				task.status = "failed";
 				task.error =

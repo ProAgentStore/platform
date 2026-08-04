@@ -357,11 +357,17 @@ export async function reassignSessionNode(env: Env, instanceId: string, userId: 
 		.run();
 }
 
+/**
+ * End a session. Also acts on a SUSPENDED one: `pags up --force` on another machine suspends
+ * this node's sessions, and with the Pilot no longer cancelling on `suspended` (that would kill a
+ * legitimately relocated run) an `active`-only filter left no way to stop it at all — Kill returned
+ * 0 changes while the Pilot kept spending BYOK decisions.
+ */
 export async function endSession(env: Env, instanceId: string, userId: string, sessionId: string, status: CodingSessionStatus = "ended"): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions
 		 SET status = ?4, ended_at = datetime('now'), updated_at = datetime('now')
-		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'`,
+		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status IN ('active', 'suspended')`,
 	)
 		.bind(sessionId, instanceId, userId, status)
 		.run();

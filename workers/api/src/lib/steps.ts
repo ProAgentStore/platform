@@ -27,42 +27,51 @@ function asArray(v: unknown): unknown[] {
 }
 
 /**
- * Did an upsert actually change anything? Compares ONLY the fields the incoming record carries.
+ * Did an upsert actually change anything? — the decision behind `emitOn:"update"`.
  *
- * Deliberately one-sided: the stored record also holds fields this pipeline does not write (the
- * audit trail, another pipeline's columns), and their presence is not a change. Missing stored
- * data counts as changed, since we cannot show it did not.
+ * `schemaFields`, when known, is what makes this correct. `validateRecord` persists only the
+ * collection's schema fields, so a key OUTSIDE the schema is dropped by this write too and cannot
+ * be a change. But a key can be IN the schema and absent from the stored record —
+ * `inferCollectionFields` maps every key of the first record including null-valued ones, while
+ * `validateRecord` drops the null value — and writing a real value there IS a change. An earlier
+ * version skipped every key missing from the stored record, which silently dropped exactly that
+ * chain link: any pipeline whose state change is "fill in a field that was null" stopped emitting.
+ *
+ * Without a schema we fall back to the safe direction: a non-empty incoming value for a key the
+ * stored record lacks counts as changed. A missed emit breaks a chain silently; a duplicate emit
+ * costs money and is visible.
+ *
+ * Values are compared as strings when both sides are primitives, because `validateRecord` coerces
+ * by field type (a numeric value stored into a `string` field becomes `String(value)`) and that
+ * coercion is not a state change. NEVER for objects — `String({})` is `"[object Object]"` for
+ * every object, which would report all nested changes as no-change.
  */
-export function differsFrom(stored: Record<string, unknown> | undefined, incoming: Record<string, unknown>): boolean {
+export function differsFrom(
+	stored: Record<string, unknown> | undefined,
+	incoming: Record<string, unknown>,
+	schemaFields?: ReadonlySet<string>,
+): boolean {
 	if (!stored) return true;
-	// Compare only fields the stored record ACTUALLY HAS.
-	//
-	// `validateRecord` keeps only the collection's schema fields, and the schema is inferred from
-	// the FIRST inserted record — skipping keys whose value was null/undefined. So if the first
-	// `sites` row had no `email` (a lead with no public address: the common case), `email` is
-	// absent from the schema permanently. Comparing all incoming keys then found
-	// `stored.email === undefined` vs a string on every later run and reported "changed" for a
-	// byte-identical record — re-emitting `site.live`, which a new run's traceId stops the
-	// idempotency key from collapsing, so Outreach drafted and billed a second pitch. A key the
-	// schema drops is not persisted by this write either, so it cannot BE a change.
-	//
-	// Compared as strings because `validateRecord` coerces by field type (a numeric item value is
-	// stored as `String(value)` for a `string` field), and that coercion is not a change either.
+	const isEmpty = (x: unknown) => x === null || x === undefined || x === "";
+	const primitive = (x: unknown) => x === null || x === undefined || typeof x !== "object";
 	let comparable = 0;
 	for (const [k, v] of Object.entries(incoming)) {
-		if (!Object.hasOwn(stored, k)) continue;
+		// Not in the schema → not persisted → not a change.
+		if (schemaFields && !schemaFields.has(k)) continue;
+		if (!Object.hasOwn(stored, k)) {
+			// Absent from the stored record. An empty incoming value would be dropped by
+			// validateRecord too, so it changes nothing; a real value is a genuine new field.
+			if (isEmpty(v)) continue;
+			return true;
+		}
 		comparable++;
 		const a = stored[k];
 		if (a === v) continue;
 		if (JSON.stringify(a ?? null) === JSON.stringify(v ?? null)) continue;
-		// String coercion only between PRIMITIVES. Applied to objects it compares
-		// "[object Object]" to "[object Object]", which reports every nested change as no-change —
-		// the opposite failure, and a silent one.
-		const primitive = (x: unknown) => x === null || x === undefined || typeof x !== "object";
 		if (primitive(a) && primitive(v) && String(a ?? "") === String(v ?? "")) continue;
 		return true;
 	}
-	// Nothing in common — we cannot show it is unchanged, so treat it as changed.
+	// Nothing was comparable and nothing new — we cannot show it is unchanged.
 	return comparable === 0;
 }
 
@@ -524,6 +533,13 @@ export const STEP_TOOLS: ToolDef[] = [
 
 			const stub = ctx.env.AGENT.get(ctx.env.AGENT.idFromName(ctx.instanceId));
 			const base = `https://agent/collections/${encodeURIComponent(collection)}/records`;
+			// The schema, once — it is what tells `differsFrom` which incoming keys this write will
+			// actually persist. Absent (a brand-new collection) it falls back to the safe rule.
+			const schemaFields = await stub
+				.fetch(new Request(`https://agent/collections/${encodeURIComponent(collection)}`))
+				.then(async (r) => (r.ok ? ((await r.json()) as { fields?: Array<{ name: string }> }) : null))
+				.then((sc) => (sc?.fields?.length ? new Set(sc.fields.map((f) => f.name)) : undefined))
+				.catch(() => undefined);
 			let inserted = 0, updated = 0, skipped = 0;
 			const newRows: Record<string, unknown>[] = []; // net-new inserts
 			const changedRows: Record<string, unknown>[] = []; // updated-in-place records
@@ -542,7 +558,7 @@ export const STEP_TOOLS: ToolDef[] = [
 					// row, and the idempotency key cannot collapse it because a new run has a new
 					// traceId — so the wired Outreach instance drafted a second pitch, and billed
 					// for it, for a site that had not changed.
-					const changed = differsFrom(found[0].data, item);
+					const changed = differsFrom(found[0].data, item, schemaFields);
 					const res = await stub.fetch(new Request(`${base}/${encodeURIComponent(found[0].id)}`, {
 						method: "PUT",
 						headers: { "Content-Type": "application/json" },

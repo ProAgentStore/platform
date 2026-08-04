@@ -10,6 +10,7 @@ import { McpRuntime } from "./mcp-runtime.js";
 import { HumanHandoffError, RunnerInputError } from "./errors.js";
 import { RunnerStore } from "./store.js";
 import { CodingRuntime } from "./coding/runtime.js";
+import { WORKFLOW_DRIVEN_TASKS } from "./task-types.js";
 
 /** True for a plain object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -55,7 +56,7 @@ const APPROVAL_REQUIRED_TASKS = new Set(["browser.open"]);
  * workflow then polled a dead session for 15 minutes before failing a run it had already
  * completed.
  */
-const WORKFLOW_DRIVEN_TASKS = new Set(["job.apply_agent", "browser.task"]);
+
 const require = createRequire(import.meta.url);
 
 

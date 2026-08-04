@@ -147,27 +147,25 @@ export async function sendPushToUser(env: Env, userId: string, msg: PushMessage)
 		.bind(userId)
 		.all<{ id: string; endpoint: string; p256dh: string; auth: string; user_agent: string | null }>();
 
-	// ONE subscription per device. The browser rotates its push endpoint and
-	// re-enabling notifications inserts a new row, so a user accumulates stale
-	// dupes and gets N pushes for one event. Keep the newest per device (user
-	// agent); delete + skip the older ones so it self-heals.
+	// Deduped by ENDPOINT, which is the thing that actually identifies a subscription — and only
+	// skipped, never deleted.
+	//
+	// Keying on `user_agent` was wrong twice over. It is the raw UA header truncated to 200 chars,
+	// so a laptop and a desktop on the same Chrome + OS version produce byte-identical values —
+	// and the older row was DELETED, silently and permanently unsubscribing one of the user's two
+	// machines on the first push. The existing test never sets user_agent, so it fell through to
+	// the per-row-unique endpoint and never exercised the collision.
+	//
+	// The duplicate this guards against is the same endpoint re-inserted after the browser
+	// re-subscribes, and skipping is enough for that: a false positive here costs one duplicate
+	// notification, whereas a false positive on DELETE is unrecoverable without the user manually
+	// re-enabling.
 	const seen = new Set<string>();
 	const fresh: typeof results = [];
-	const staleIds: string[] = [];
 	for (const row of results) {
-		const device = row.user_agent || row.endpoint;
-		if (seen.has(device)) {
-			staleIds.push(row.id);
-			continue;
-		}
-		seen.add(device);
+		if (seen.has(row.endpoint)) continue;
+		seen.add(row.endpoint);
 		fresh.push(row);
-	}
-	if (staleIds.length) {
-		await env.DB.prepare(`DELETE FROM push_subscriptions WHERE id IN (${staleIds.map(() => "?").join(",")})`)
-			.bind(...staleIds)
-			.run()
-			.catch(() => {});
 	}
 
 	let sent = 0;

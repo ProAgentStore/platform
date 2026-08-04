@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -120,13 +120,24 @@ export const loginCommand = new Command("login")
 export const logoutCommand = new Command("logout")
 	.description("Sign out and remove stored session")
 	.action(() => {
+		// STATIC import. This package is ESM ("type":"module", tsup --format esm), so esbuild
+		// rewrites a bare `require("node:fs")` into its `__require` shim, which throws
+		// `Dynamic require of "fs" is not supported` at runtime. The catch below then printed
+		// "Already signed out." while the 30-day account JWT stayed on disk — `pags whoami` still
+		// named the user and `pags up` still connected. A sign-out that reports success and
+		// removes nothing is the worst possible shape for this command.
+		if (!existsSync(TOKEN_FILE)) {
+			writeLine("Already signed out.");
+			return;
+		}
 		try {
-			if (existsSync(TOKEN_FILE)) {
-				const { unlinkSync } = require("node:fs") as typeof import("node:fs");
-				unlinkSync(TOKEN_FILE);
-			}
+			unlinkSync(TOKEN_FILE);
 			writeLine("Signed out.");
-		} catch { writeLine("Already signed out."); }
+		} catch (err) {
+			// Report the REAL reason (permissions, a read-only home) instead of claiming success.
+			writeError(`Could not remove ${TOKEN_FILE}: ${err instanceof Error ? err.message : String(err)}`);
+			process.exit(1);
+		}
 	});
 
 export const whoamiCommand = new Command("whoami")

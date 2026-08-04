@@ -109,7 +109,16 @@ export function printStep(label: string, status: "ok" | "fail" | "wait"): void {
 	console.log(pad + icon + " " + label);
 }
 
-export async function waitForKey(keys: string[]): Promise<string> {
+/**
+ * Wait for one of `keys`.
+ *
+ * `onInterrupt` — what to do on Ctrl+C. Raw mode disables ISIG, so Ctrl+C arrives here as a
+ * KEYPRESS and the process's `SIGINT` handler never fires. `pags up` registers its shutdown on
+ * SIGINT, so the default `process.exit(0)` returned the shell prompt while leaving the spawned
+ * `runner connect` child alive — still holding its relay socket, still heartbeating
+ * `status = 'online'`, still driving the user's real Chrome. Pressing `q` worked; Ctrl+C did not.
+ */
+export async function waitForKey(keys: string[], onInterrupt?: () => void): Promise<string> {
 	return new Promise((resolve) => {
 		readline.emitKeypressEvents(process.stdin);
 		if (process.stdin.isTTY) process.stdin.setRawMode(true);
@@ -118,6 +127,10 @@ export async function waitForKey(keys: string[]): Promise<string> {
 		const onKeypress = (str: string, key: readline.Key) => {
 			if (key?.ctrl && key.name === "c") {
 				cleanup();
+				if (onInterrupt) {
+					onInterrupt();
+					return;
+				}
 				process.exit(0);
 			}
 			const val = (str || "").trim().toLowerCase();

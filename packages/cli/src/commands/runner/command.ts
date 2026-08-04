@@ -37,7 +37,12 @@ export function createRunnerCommand(): Command {
 		.command("start")
 		.description("Start the local ProAgentStore browser runtime in the foreground")
 	.option("--host <host>", "Host to bind", "127.0.0.1")
-	.option("--port <port>", "Port to bind", "49171")
+	// NO default: commander would then always populate `opts.port`, so the `|| findFreePort(…)`
+	// fallback below never ran and the EADDRINUSE guard it exists for was dead code. Anything
+	// already bound to 49171 (a second OS user's runner, an unrelated dev server) made the runner
+	// fail to bind, and `pags up` reported a runner exit after a 15s health-poll instead of just
+	// picking 49172.
+	.option("--port <port>", "Port to bind (default: first free port from 49171)")
 	.option("--data-dir <path>", "Runner data directory")
 	.option("--token <token>", "Require this bearer token")
 	.option("--instance-id <id>", "Bind runner requests to a PAGS instance id")

@@ -223,6 +223,8 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 			let processed = 0;
 			let failed = 0;
 			let chunks = 0;
+			/** Budget consumed by FAILURES alone — so "did anything succeed?" stays answerable. */
+			let failedCost = 0;
 			while (queue.length > 0 && (processed === 0 || chunks < REPO_CHUNK_BUDGET)) {
 				const idx = queue.shift() as number;
 				const file = await store.get<{ path: string; content: string; attempts?: number }>(`rifile:${job.key}:${idx}`);
@@ -252,7 +254,10 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 					// the next tick repeated immediately, attempts exceeded the cap, and the repo
 					// reached "done" with ZERO vectors about 100ms after the outage began — having
 					// "retried once on a later tick" over a 50ms window.
-					if (n < 0) chunks += REPO_FAILED_FILE_COST;
+					if (n < 0) {
+						chunks += REPO_FAILED_FILE_COST;
+						failedCost += REPO_FAILED_FILE_COST;
+					}
 				}
 				processed++;
 			}
@@ -262,7 +267,12 @@ export async function repoAlarmTick(store: RepoStore, engine: RepoEngine, f: Rep
 			// A tick that indexed NOTHING is an outage, not progress. Ask for a real pause before
 			// the retry rather than the immediate reschedule, so the one retry this design allows
 			// actually spans the outage it exists for.
-			if (chunks === 0 && retry.length > 0) backoff = REPO_RETRY_BACKOFF_MS;
+			// Compared against failedCost, not 0. Charging failures to the budget (right above) made
+			// `chunks === 0` UNSATISFIABLE whenever anything was retried — the two halves of this
+			// fix cancelled each other, so the backoff and the whole {didWork,delayMs} union were
+			// dead code and the single retry still spanned 50ms. The question is "did anything
+			// SUCCEED this tick", which is `chunks > failedCost`.
+			if (chunks === failedCost && retry.length > 0) backoff = REPO_RETRY_BACKOFF_MS;
 			await saveJob(store, job, {
 				done: job.done + (processed - retry.length),
 				failed: (job.failed ?? 0) + failed,

@@ -60,7 +60,12 @@ export async function checkAuth(): Promise<User | null> {
 		const data = await api<User>("/v1/auth/me");
 		if (data.id) return data;
 	} catch {
-		setToken(null);
+		// Do NOT clear the token here. `api()` throws for a network failure and for ANY non-2xx —
+		// including the deliberate 503 "The service is updating" the API returns for transient
+		// infra errors — so a reload while offline, or during a deploy, erased a perfectly valid
+		// session and forced a re-OAuth. The genuine 401 case is already handled inside `api()`
+		// (clears the token and dispatches `pags:unauthorized`), which is the one place that
+		// should own credential invalidation.
 	}
 	return null;
 }

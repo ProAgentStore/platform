@@ -503,19 +503,28 @@ export function parseCommand(command: string | undefined): { bin: string; args: 
 	while (i < src.length) {
 		while (i < src.length && isSpace(src[i])) i++;
 		if (i >= src.length) break;
-		const start = i;
+		const tokenStart = i;
 		let out = "";
-		let quote: string | null = null;
 		while (i < src.length) {
 			const ch = src[i];
-			if (quote) {
-				if (ch === quote) quote = null;
-				else out += ch;
-				i++;
-				continue;
-			}
-			if (ch === '"' || ch === "'") {
-				quote = ch;
+			// A DOUBLE quote always opens a span — that is what `--flag "two words"` means and
+			// what anyone typing this expects.
+			//
+			// A SINGLE quote opens one only at a token boundary (token start, or right after `=`),
+			// because in ordinary English it is an apostrophe. This field is a preset text box, not
+			// a shell: a real shell would pair the two apostrophes in `don't guess and don't stop`
+			// and hand the engine `dont guess and dont` plus a stray `stop`, which is exactly the
+			// mangling seen here. `--agent='my agent'` and `'my agent'` still work.
+			const opens = ch === '"' || (ch === "'" && (i === tokenStart || src[i - 1] === "="));
+			if (opens) {
+				const close = src.indexOf(ch, i + 1);
+				if (close !== -1) {
+					out += src.slice(i + 1, close);
+					i = close + 1;
+					continue;
+				}
+				// Unterminated — the character is literal, not the start of a span.
+				out += ch;
 				i++;
 				continue;
 			}
@@ -523,20 +532,7 @@ export function parseCommand(command: string | undefined): { bin: string; args: 
 			out += ch;
 			i++;
 		}
-		if (quote) {
-			// UNTERMINATED quote → it was a literal character, not a quote. `don't` is ordinary
-			// English in a user-edited preset; treating the apostrophe as an opening quote made
-			// `--append-system-prompt don't guess` reach the engine as three broken arguments.
-			i = start;
-			let raw = "";
-			while (i < src.length && !isSpace(src[i])) {
-				raw += src[i];
-				i++;
-			}
-			tokens.push(raw);
-		} else {
-			tokens.push(out);
-		}
+		tokens.push(out);
 	}
 	return { bin: tokens[0] ?? "", args: tokens.slice(1) };
 }

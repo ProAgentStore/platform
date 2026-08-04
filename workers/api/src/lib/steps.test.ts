@@ -711,13 +711,30 @@ describe("dedupe_upsert emitOn:\"update\" — a re-write is not a CHANGE", () =>
 		expect(differsFrom({ ...item, site_status: "drafted" }, item)).toBe(true);
 	});
 
-	it("says NO CHANGE for a field the collection schema does not store", () => {
-		// The schema is inferred from the FIRST inserted record and skips null/undefined values,
-		// so a field absent from the stored record is one `validateRecord` DROPS on write too —
-		// writing it changes nothing. Comparing it anyway reported "changed" on every run for a
-		// byte-identical record, re-emitting `site.live` (a new run has a new traceId, so the
-		// idempotency key cannot collapse it) and billing Outreach for a second pitch.
-		expect(differsFrom({ place_id: "p1", name: "Cafe" }, item)).toBe(false);
+	it("says NO CHANGE for a field OUTSIDE the collection schema — it is not persisted", () => {
+		// `validateRecord` keeps only schema fields, so writing a non-schema key changes nothing.
+		// Reporting it as a change re-emitted `site.live` for a byte-identical record on every
+		// run — and a new run has a new traceId, so the idempotency key cannot collapse it —
+		// billing Outreach for a second pitch each time.
+		const schema = new Set(["place_id", "name"]);
+		expect(differsFrom({ place_id: "p1", name: "Cafe" }, item, schema)).toBe(false);
+	});
+
+	it("but says CHANGED for a schema field the stored record has not filled in yet", () => {
+		// The inverse, and the one an earlier fix got wrong: `inferCollectionFields` maps EVERY key
+		// of the first record including null-valued ones, while `validateRecord` drops the null
+		// VALUE — so a key can be in the schema and absent from the record, and writing a real
+		// value there IS persisted. Skipping it silently dropped the chain link for any pipeline
+		// whose state change is "fill in a field that was null".
+		const schema = new Set(["place_id", "name", "site_status"]);
+		expect(differsFrom({ place_id: "p1", name: "Cafe" }, item, schema)).toBe(true);
+	});
+
+	it("with NO schema, errs toward CHANGED — a missed emit is silent, a duplicate is visible", () => {
+		expect(differsFrom({ place_id: "p1", name: "Cafe" }, item)).toBe(true);
+		// ...but an empty incoming value would be dropped on write too, so it is still no change.
+		expect(differsFrom({ place_id: "p1" }, { place_id: "p1", email: null })).toBe(false);
+		expect(differsFrom({ place_id: "p1" }, { place_id: "p1", email: "" })).toBe(false);
 	});
 
 	it("but says CHANGED when NOTHING is comparable — we cannot show it is unchanged", () => {

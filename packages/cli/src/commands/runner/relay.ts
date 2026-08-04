@@ -152,8 +152,13 @@ export function openRelaySocket(
 		ws.onclose = (ev) => {
 			if (reconnecting) return;
 			reconnecting = true;
-			// 401 on reconnect = token expired → tell the user clearly
-			const reason = ev.code === 4401 || ev.code === 1008 ? ' (token expired — run `pags login` then `pags up`)' : '';
+			// Report what the server actually SAID. The old branch tested for 4401/1008 — codes
+			// nothing in the codebase ever sends — so every real rejection (409 "another runner",
+			// 401 after a key rotation) arrived as a bare 1006 and the message was dropped,
+			// leaving the user watching an identical reconnect line forever.
+			const said = (ev.reason || "").trim();
+			const hint = ev.code === 4401 ? " — run `pags login`, then `pags up`" : ev.code === 4409 ? " — run `pags up --force` to take over" : "";
+			const reason = said ? ` (${said}${hint})` : ev.code === 1008 ? " (token expired — run `pags login` then `pags up`)" : "";
 			writeLine(`Relay disconnected: ${instanceId.slice(0, 8)}…${reason} — reconnecting in ${Math.round(backoffMs / 1000)}s`);
 			setTimeout(() => {
 				reconnecting = false;

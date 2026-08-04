@@ -31,6 +31,20 @@ interface CommandResponse {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+/** Accept the upgrade only to close it immediately with a code the client can read. A rejected
+ *  upgrade surfaces as 1006 with no reason; an accepted-then-closed socket carries both. */
+function closeWithReason(code: number, reason: string): Response {
+	const pair = new WebSocketPair();
+	const [client, server] = [pair[0], pair[1]];
+	server.accept();
+	try {
+		server.close(code, reason.slice(0, 120));
+	} catch {
+		/* already closing */
+	}
+	return new Response(null, { status: 101, webSocket: client });
+}
+
 export class RelayDO extends DurableObject<Env> {
 	private pending = new Map<string, PendingRequest>();
 
@@ -66,10 +80,13 @@ export class RelayDO extends DurableObject<Env> {
 				try { ws.send("ping"); alive = true; break; } catch { /* dead */ }
 			}
 			if (alive) {
-				return Response.json(
-					{ error: "Another runner is already connected. Use --force to take over." },
-					{ status: 409 },
-				);
+				// Accept, then close with an application code + reason. A rejected UPGRADE reaches
+				// the client as close code 1006 with no body, so the CLI's only diagnostic branch
+				// (4401/1008 — codes nothing ever sent) never fired and the actionable
+				// "Use --force to take over" was discarded: the user saw
+				// "Relay disconnected … reconnecting in 30s" forever while the TUI sat on
+				// "Setting things up…".
+				return closeWithReason(4409, "Another runner is already connected. Use --force to take over.");
 			}
 		}
 

@@ -500,7 +500,12 @@ instanceStorageRoutes.get("/:id/messages", async (c) => {
 });
 
 /**
- * Delete every voice recording for one instance's chat.
+ * Delete the voice recordings of the messages that were just cleared.
+ *
+ * Keyed off the DO's returned audioKeys, NOT a prefix sweep: the Coder Co-pilot's recordings live
+ * under the SAME `voice-audio/{uid}/{instanceId}/` prefix (coding-timeline.ts), so a prefix delete
+ * would destroy every Co-pilot recording for the instance while its timeline rows survived —
+ * replay 404ing forever, from a delete the user never asked for.
  *
  * The DO clears messages, summaries, extracted facts and message vectors — but the raw audio
  * lives in R2, outside the DO, and nothing deleted it. "Clear chat" therefore removed every
@@ -509,21 +514,24 @@ instanceStorageRoutes.get("/:id/messages", async (c) => {
  *
  * Paginated: `list` truncates, and stopping at the first page would leave the rest behind.
  */
-async function deleteVoiceAudio(storage: R2Bucket | undefined, userId: string, instanceId: string): Promise<void> {
-	if (!storage) return;
-	const prefix = `voice-audio/${userId}/${instanceId}/`;
-	let cursor: string | undefined;
-	do {
-		const page = await storage.list({ prefix, cursor });
-		if (page.objects.length) await storage.delete(page.objects.map((o) => o.key));
-		cursor = page.truncated ? page.cursor : undefined;
-	} while (cursor);
+async function deleteVoiceAudio(
+	storage: R2Bucket | undefined,
+	userId: string,
+	instanceId: string,
+	audioKeys: string[],
+): Promise<void> {
+	if (!storage || !audioKeys.length) return;
+	const keys = audioKeys.map((k) => `voice-audio/${userId}/${instanceId}/${k}`);
+	// Batched — R2 delete takes at most 1000 keys per call.
+	for (let i = 0; i < keys.length; i += 500) await storage.delete(keys.slice(i, i + 500));
 }
 
 instanceStorageRoutes.delete("/:id/messages", async (c) => {
 	const session = await requireUser(c);
 	const instance = await resolveOwnedInstance(c, session);
 	const res = await proxyDO(c, instance.id, "/messages", { method: "DELETE" });
+	const body = (await res.clone().json().catch(() => ({}))) as { audioKeys?: unknown };
+	const audioKeys = Array.isArray(body.audioKeys) ? body.audioKeys.filter((k): k is string => typeof k === "string") : [];
 	// The VOICE RECORDINGS too. The DO clears messages, summaries, extracted facts and message
 	// vectors — but the raw audio lives in R2, outside the DO, and nothing deleted it. So "clear
 	// chat" removed every transcript while leaving every recording in the bucket, still served by
@@ -531,6 +539,6 @@ instanceStorageRoutes.delete("/:id/messages", async (c) => {
 	// which makes it both a broken promise (the docs say "cleared with the chat, R2 blobs
 	// deleted") and a data-retention defect. Best-effort and AFTER the clear: failing to reclaim
 	// bytes must not fail the user's delete.
-	await deleteVoiceAudio(c.env.STORAGE, session.uid, instance.id).catch(() => undefined);
+	await deleteVoiceAudio(c.env.STORAGE, session.uid, instance.id, audioKeys).catch(() => undefined);
 	return res;
 });

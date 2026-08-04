@@ -49,7 +49,13 @@ export function withSummaries<TBase extends AgentStorageBaseCtor & GConstructorW
 			// S2 — and the max-UUID key never advances, so every 20 further messages produced an
 			// ever-larger overlapping summary, re-extracted the same `fact:*` memories, and spent
 			// platform AI on all of it, forever.
-			const lastSummary = latestByCreatedAt(await this.doStorage.list<ConversationSummary>({ prefix: "sum:" }));
+			// BOUNDED. This runs after every assistant reply, so an unbounded list deserialized
+			// every summary the instance has ever made, on the hot chat path inside the DO. The
+			// new time-ordered key makes a reverse window correct for new rows, and the legacy
+			// `sum:{uuid}` keys sort below `sum:2…` so they lose to any new row anyway.
+			const lastSummary = latestByCreatedAt(
+				await this.doStorage.list<ConversationSummary>({ prefix: "sum:", reverse: true, limit: 32 }),
+			);
 			// Resume STRICTLY after the last summarized message. Prefer its full key; fall
 			// back to the timestamp boundary for legacy summaries without boundaryKey (that
 			// path re-includes one boundary message, but only once, at the transition).
@@ -183,7 +189,7 @@ Extract key facts about the user, their preferences, decisions made, and informa
 			// Sorted by createdAt for the same reason as above: a lexicographic reverse list over
 			// `sum:{uuid}` keys handed `buildRAGContext` an ARBITRARY 5 summaries and labelled them
 			// with dates, presenting a random subset to the model as the recent history.
-			const all = await this.doStorage.list<ConversationSummary>({ prefix: "sum:" });
+			const all = await this.doStorage.list<ConversationSummary>({ prefix: "sum:", reverse: true, limit: Math.max(limit, 32) });
 			return [...all.values()]
 				.sort((a, b) => String(b?.createdAt ?? "").localeCompare(String(a?.createdAt ?? "")))
 				.slice(0, limit);

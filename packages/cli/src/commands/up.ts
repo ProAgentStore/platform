@@ -210,7 +210,9 @@ export const upCommand = new Command("up")
 
 		// Interactive loop — stay alive even if child dies
 		while (true) {
-			const key = await waitForKey(["r", "l", "q"]);
+			// Ctrl+C must take the SAME path as `q` — otherwise it exits the TUI and orphans the
+			// runner child, which keeps the relay open and the browser alive.
+			const key = await waitForKey(["r", "l", "q"], shutdown);
 			if (key === "q") {
 				shutdown();
 				break;

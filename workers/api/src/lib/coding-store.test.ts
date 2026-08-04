@@ -103,7 +103,12 @@ describe("reconcileOrphanedSessions (#139)", () => {
 		expect(updates).toHaveLength(2); // one endSession UPDATE each for a + c
 		for (const u of updates) {
 			expect(u.sql).toContain("status = ?4"); // endSession sets status via bind
-			expect(u.sql).toContain("status = 'active'"); // guarded WHERE clause
+			// Guarded WHERE clause — active OR suspended. `pags up --force` on another machine
+			// suspends this node's sessions, and since the Pilot no longer cancels on `suspended`
+			// (that would kill a legitimately relocated run), an active-only filter left a
+			// suspended session with NO way to be stopped: Kill returned 0 changes while its Pilot
+			// kept spending BYOK decisions.
+			expect(u.sql).toContain("status IN ('active', 'suspended')");
 		}
 		expect(updates.flatMap((u) => u.args)).toEqual(expect.arrayContaining(["a", "c"]));
 	});

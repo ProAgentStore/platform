@@ -457,3 +457,30 @@ describe("HeadlessSession — a one-shot engine that cannot SPAWN is not alive",
 		s.stop();
 	}, 15_000);
 });
+
+describe("parseCommand — apostrophes must not pair ACROSS tokens", () => {
+	it("keeps an EVEN number of apostrophes as literals in their own tokens", () => {
+		// The first fix looked ahead for a closing quote anywhere in the command, so two ordinary
+		// apostrophes paired across whitespace: `don't guess and don't stop` collapsed into one
+		// argument `dont guess and dont` plus a stray `stop`, handing the engine a mangled prompt.
+		expect(parseCommand("claude --append-system-prompt don't guess and don't stop")).toEqual({
+			bin: "claude",
+			args: ["--append-system-prompt", "don't", "guess", "and", "don't", "stop"],
+		});
+	});
+
+	it("still honours a REAL quoted span containing whitespace", () => {
+		expect(parseCommand(`claude --append-system-prompt "be terse please" --model x`)).toEqual({
+			bin: "claude",
+			args: ["--append-system-prompt", "be terse please", "--model", "x"],
+		});
+		expect(parseCommand("grok --agent='my agent' -p")).toEqual({ bin: "grok", args: ["--agent=my agent", "-p"] });
+	});
+
+	it("handles the awkward shapes without throwing or losing text", () => {
+		expect(parseCommand("   ")).toEqual({ bin: "", args: [] });
+		expect(parseCommand('a"b"c')).toEqual({ bin: "abc", args: [] });
+		expect(parseCommand(`it's "a b" it's`)).toEqual({ bin: "it's", args: ["a b", "it's"] });
+		expect(parseCommand('claude "unclosed')).toEqual({ bin: "claude", args: ['"unclosed'] });
+	});
+});

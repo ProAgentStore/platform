@@ -72,6 +72,7 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 		let seen = 0;
 		let added = 0;
 		let skipped = 0;
+		let updated = 0;
 		let errors = 0;
 		try {
 			await step.do("trace-start", async () => {
@@ -147,11 +148,13 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				// blank row** — accumulating toward MAX_COLLECTION_RECORDS — and reported
 				// `seen: 1, added: 1` whether the sweep found 0 leads or 200.
 				seen = persisted.total;
-				// Inserts AND in-place updates are both records this run put into the collection.
-				// Counting only inserts made a `mode:"update"` pipeline (site-deploy) report
-				// `added: 0` on a perfectly good run — indistinguishable, on the run row, from a
-				// record that got filtered out.
-				added = persisted.inserted + persisted.updated;
+				// `added` means NET-NEW. Folding `updated` in to stop site-deploy reporting
+				// `added: 0` broke the primary shipped pipeline instead: lead-finder upserts with
+				// `mode:"update"`, so a re-sweep counted every pre-existing lead as added and the
+				// run row claimed 200 added when 0 were new — destroying the one signal that says
+				// whether the sweep found anything. The update count goes in the detail line.
+				added = persisted.inserted;
+				updated = persisted.updated;
 				skipped += persisted.skipped;
 			} else if (pipeline.sink) {
 				const raw = Array.isArray(lastOutput) ? lastOutput : lastOutput != null ? [lastOutput] : [];
@@ -187,7 +190,11 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				return null;
 			});
 			await step.do("run-close-ok", async () => {
-				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${pipeline.sink ? `, ${added} → ${pipeline.sink.collection}` : ""}`).catch(() => undefined);
+				// `updated` rides in the DETAIL, so an update-only pipeline reads as work done without
+				// inflating `added` (which means net-new) for the sweeps that re-see everything.
+				const persisted = updated ? `, ${updated} updated` : "";
+				const sinkNote = pipeline.sink ? `, ${added} → ${pipeline.sink.collection}${persisted}` : persisted;
+				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${sinkNote}`).catch(() => undefined);
 				return null;
 			});
 			return { outcome: "completed", steps: pipeline.steps.length, sunk };
