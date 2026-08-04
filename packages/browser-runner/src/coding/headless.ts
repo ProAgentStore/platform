@@ -1,4 +1,26 @@
 import { type ChildProcess, spawn } from "node:child_process";
+
+/**
+ * Merge the platform's resolved engine env over the machine's, where an EMPTY value means
+ * REMOVE rather than "set to empty".
+ *
+ * Needed because the machine env is inherited wholesale: a developer with ANTHROPIC_API_KEY in
+ * their shell handed it to every engine, and Claude Code prefers an API key over the
+ * subscription token — so choosing "subscription" injected CLAUDE_CODE_OAUTH_TOKEN and then
+ * silently lost, billing per token anyway. Without a way to express removal the setting could
+ * not mean what it said.
+ */
+export function mergeEnv(
+	base: NodeJS.ProcessEnv,
+	overlay: Record<string, string> | undefined,
+): NodeJS.ProcessEnv {
+	const out: NodeJS.ProcessEnv = { ...base };
+	for (const [k, v] of Object.entries(overlay ?? {})) {
+		if (v === "") delete out[k];
+		else out[k] = v;
+	}
+	return out;
+}
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ClientType, handlerFor } from "./handlers.js";
@@ -155,7 +177,7 @@ export class HeadlessSession {
 
 		const proc = spawn(this.cmdBin, args, {
 			cwd: this.config.workDir,
-			env: { ...process.env, ...this.config.env },
+			env: mergeEnv(process.env, this.config.env),
 			stdio: ["pipe", "pipe", "pipe"],
 		});
 		this.proc = proc;

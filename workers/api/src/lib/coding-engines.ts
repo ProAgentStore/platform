@@ -37,7 +37,14 @@ export async function resolveEngineEnv(
 	// subscription token env; for other engines these modes mean the machine login.
 	if (session.clientType !== "claude") return undefined;
 	const token = await getUserProviderKey(env, uid, "claude-code");
-	return token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : undefined;
+	if (!token) return undefined;
+	// The runner spawns the CLI with `{...process.env, ...thisEnv}`, so a machine that exports
+	// ANTHROPIC_API_KEY hands the engine an API key — and Claude Code prefers it over the
+	// subscription token. Injecting CLAUDE_CODE_OAUTH_TOKEN alone therefore did NOTHING: picking
+	// "subscription" still billed per token, silently, which is the exact outcome the comment
+	// above says must not happen. An empty value means REMOVE (see the runner), so the choice
+	// the user made actually decides how their engine bills.
+	return { CLAUDE_CODE_OAUTH_TOKEN: token, ANTHROPIC_API_KEY: "" };
 }
 
 const CLIENTS: CodingClientType[] = ["claude", "gemini", "codex", "grok"];
