@@ -264,7 +264,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"create_agent",
-			"Create a new agent on ProAgentStore",
+			"Create a new agent on ProAgentStore. `capabilities` and `settings_schema` declare what the agent IS — surfaces, runtime, workflow, its tools[] allowlist and its subscriber settings — so a fully-formed agent is one call. Without them you get a plain chat agent that then needs update_agent.",
 			{
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 				slug: AGENT_ID,
@@ -274,6 +274,16 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				model: z.string().optional(),
 				personality: z.string().optional(),
 				goal: z.string().optional(),
+				capabilities: z
+					.union([z.record(z.unknown()), z.string()])
+					.optional()
+					.describe(
+						"Declarative capabilities, validated server-side: surfaces[], runtime (browser|coding|null), workflow, tools[] allowlist (e.g. delegate_goal/list_subordinates for a supervisor, or the coding runtime for a repo agent). Object, or a JSON string of the same.",
+					),
+				settings_schema: z
+					.union([z.array(z.unknown()), z.string()])
+					.optional()
+					.describe("Typed per-subscriber settings (select/text/number/toggle, max 12). Array, or a JSON string of the same."),
 				dry_run: z.boolean().optional(),
 			},
 			async ({
@@ -285,11 +295,21 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				model,
 				personality,
 				goal,
+				capabilities,
+				settings_schema,
 				dry_run,
 			}) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
-				const input = { slug, name, description, category, model, personality, goal };
+				// Accept a JSON string as well as an object: models routinely send one when a
+				// schema says "object", and rejecting that turns a working call into a retry loop.
+				const parseMaybeJson = (v: unknown): unknown => {
+					if (typeof v !== "string") return v;
+					try { return JSON.parse(v); } catch { return undefined; }
+				};
+				const caps = parseMaybeJson(capabilities);
+				const schema = parseMaybeJson(settings_schema);
+				const input = { slug, name, description, category, model, personality, goal, capabilities: caps, settingsSchema: schema };
 				const denied = await requirePermission(this.safety(token), "write", "create_agent", input);
 				if (denied) return denied;
 				if (dry_run) {
@@ -309,6 +329,10 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 						model,
 						personality,
 						goal,
+						// Undefined keys are dropped by JSON.stringify, so an omitted field stays
+						// omitted rather than blanking a server-side default.
+						capabilities: caps,
+						settingsSchema: schema,
 					}),
 				}, this.env)) as { id?: string; error?: string };
 				if (data.id) await audit(this.safety(token), { tool: "create_agent", action: "completed", input, result: { id: data.id } });

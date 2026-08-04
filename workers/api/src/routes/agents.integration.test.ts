@@ -412,3 +412,53 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		expect(body.tools).toEqual(["search_knowledge"]);
 	});
 });
+
+describe("a fully-declared agent is creatable in ONE call (self-serve, no migration)", () => {
+	// The point of declarative agents is that a Coder-equivalent needs no monorepo PR. If
+	// creating one still requires a SQL seed — or create-then-remember-to-also-set-settings —
+	// then "agents are data" is only true on paper.
+	const CAPS = {
+		surfaces: [] as string[],
+		runtime: null,
+		workflow: null,
+		tools: ["list_subordinates", "delegate_goal", "check_delegation"],
+	};
+	const SCHEMA = [
+		{ id: "max_parallel", label: "Max agents at once", type: "number", default: 3 },
+	];
+
+	it("persists capabilities AND settingsSchema from the create body", async () => {
+		const { app, env, writes } = buildApp();
+		const res = await json(app, env, "POST", "/v1/agents", {
+			slug: "coder-lead-clone", name: "Coder Lead", description: "Delegates to repo agents.",
+			capabilities: CAPS, settingsSchema: SCHEMA,
+		}, await tokenFor("u1", ["user", "creator"]));
+		expect(res.status).toBe(201);
+		const cfgWrite = writes.find((w) => w.sql.includes("UPDATE agents SET config"));
+		expect(cfgWrite, "config was never written").toBeTruthy();
+		const cfg = JSON.parse(String((cfgWrite as any).args[0]));
+		expect(cfg.capabilities.tools).toEqual(CAPS.tools);
+		// TOP level — nested under capabilities it parses fine and renders nothing.
+		expect(Array.isArray(cfg.settingsSchema)).toBe(true);
+		expect(cfg.capabilities.settingsSchema).toBeUndefined();
+	});
+
+	it("still creates a plain agent when neither is supplied", async () => {
+		const { app, env, writes } = buildApp();
+		const res = await json(app, env, "POST", "/v1/agents", { slug: "plain", name: "Plain" }, await tokenFor("u1", ["user", "creator"]));
+		expect(res.status).toBe(201);
+		// No config write at all, rather than one that blanks server-side defaults.
+		expect(writes.find((w) => w.sql.includes("UPDATE agents SET config"))).toBeUndefined();
+	});
+
+	it("sanitizes a bogus capability instead of storing it", async () => {
+		const { app, env, writes } = buildApp();
+		await json(app, env, "POST", "/v1/agents", {
+			slug: "bogus", name: "Bogus", capabilities: { runtime: "telepathy", surfaces: ["coding"] },
+		}, await tokenFor("u1", ["user", "creator"]));
+		const cfgWrite = writes.find((w) => w.sql.includes("UPDATE agents SET config"));
+		const cfg = JSON.parse(String((cfgWrite as any).args[0]));
+		expect(cfg.capabilities.runtime).toBeNull();
+		expect(cfg.capabilities.surfaces).toEqual(["coding"]);
+	});
+});

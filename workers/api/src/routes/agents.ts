@@ -297,6 +297,7 @@ agentRoutes.post("/", async (c) => {
 		personality?: string;
 		goal?: string;
 		capabilities?: unknown;
+		settingsSchema?: unknown;
 	}>();
 
 	if (!body.slug || !body.name) {
@@ -337,11 +338,22 @@ agentRoutes.post("/", async (c) => {
 
 	// Declarative capabilities at creation (#141): a Coder-equivalent can be stamped out
 	// as pure data — {surfaces,runtime,workflow,tools} — with no platform code change.
-	// Validated against the closed enums; customSurfaces/settingsSchema keep their own routes.
+	// Validated against the closed enums; customSurfaces keeps its own route.
+	//
+	// settingsSchema is accepted HERE too, not only via its dedicated PUT. An agent whose
+	// behaviour is entirely declared is not usable until its subscriber settings exist, so
+	// splitting them across two calls meant "create an agent from a client" was really
+	// "create, then remember to also…" — and a half-declared agent looks fine and does
+	// nothing. Stored at the TOP level, which is where agent-capabilities.ts reads it;
+	// nested under capabilities it parses and renders nothing.
 	const declaredCaps = sanitizeDeclaredCapabilities(body.capabilities);
-	if (Object.keys(declaredCaps).length > 0) {
+	const declaredSettings = body.settingsSchema === undefined ? null : sanitizeSettingsSchema(body.settingsSchema);
+	const initialConfig: Record<string, unknown> = {};
+	if (Object.keys(declaredCaps).length > 0) initialConfig.capabilities = declaredCaps;
+	if (declaredSettings && declaredSettings.length > 0) initialConfig.settingsSchema = declaredSettings;
+	if (Object.keys(initialConfig).length > 0) {
 		await c.env.DB.prepare("UPDATE agents SET config = ?1 WHERE id = ?2")
-			.bind(JSON.stringify({ capabilities: declaredCaps }), id)
+			.bind(JSON.stringify(initialConfig), id)
 			.run();
 	}
 
