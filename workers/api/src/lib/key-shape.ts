@@ -22,14 +22,14 @@ const SIGNATURES: ReadonlyArray<{ prefix: string; provider: string }> = [
 	{ prefix: "sk-", provider: "openai" },
 ];
 
-/** Human labels for the refusal message. */
-const LABELS: Record<string, string> = {
-	anthropic: "Anthropic",
-	openrouter: "OpenRouter",
-	groq: "Groq",
-	xai: "xAI",
-	google: "Google AI",
-	openai: "OpenAI",
+/** Human labels for the refusal message, article included so the sentence reads correctly. */
+const LABELS: Record<string, { a: string; name: string }> = {
+	anthropic: { a: "an Anthropic", name: "Anthropic" },
+	openrouter: { a: "an OpenRouter", name: "OpenRouter" },
+	groq: { a: "a Groq", name: "Groq" },
+	xai: { a: "an xAI", name: "xAI" },
+	google: { a: "a Google AI", name: "Google AI" },
+	openai: { a: "an OpenAI", name: "OpenAI" },
 };
 
 /** The provider a key's shape identifies, or null when the shape is unfamiliar. */
@@ -49,5 +49,7 @@ export function identifyKeyProvider(key: string): string | null {
 export function wrongProviderError(providerId: string, key: string): string | null {
 	const identified = identifyKeyProvider(key);
 	if (!identified || identified === providerId) return null;
-	return `That looks like ${LABELS[identified] ?? identified} key, not ${LABELS[providerId] ?? providerId}. Check you pasted it into the right provider.`;
+	const from = LABELS[identified]?.a ?? `a ${identified}`;
+	const to = LABELS[providerId]?.name ?? providerId;
+	return `That looks like ${from} key, not ${to}. Check you pasted it into the right provider.`;
 }

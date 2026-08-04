@@ -110,11 +110,20 @@ describe("PUT /v1/keys/:provider (integration)", () => {
 		expect((await res.json() as any).error).toContain("Unknown provider");
 	});
 
-	it("400s a key whose prefix doesn't match the provider (real validation)", async () => {
+	it("400s a key that clearly belongs to ANOTHER provider (real validation)", async () => {
+		// `sk-…` without `sk-ant-` is an OpenAI-shaped key in the Anthropic slot.
 		const { app, env } = buildApp();
 		const res = await json(app, env, "PUT", "/v1/keys/anthropic", { key: "sk-not-anthropic" }, await tokenFor("u1"));
 		expect(res.status).toBe(400);
-		expect((await res.json() as any).error).toContain("sk-ant-");
+		expect((await res.json() as any).error).toContain("OpenAI");
+	});
+
+	it("ACCEPTS a shape we don't recognise — a provider changing format must not lock users out", async () => {
+		// The regression this replaced: AI Studio started issuing `AQ.…` keys while the check
+		// still demanded `AIza…`, so a working key could not be saved at all.
+		const { app, env } = buildApp();
+		const res = await json(app, env, "PUT", "/v1/keys/google", { key: "AQ.Ab8RN6-new-format" }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
 	});
 
 	it("stores an encrypted key (ciphertext is NOT the plaintext)", async () => {
