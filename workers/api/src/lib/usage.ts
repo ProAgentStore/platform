@@ -424,3 +424,29 @@ export async function spendPercentileMicros(
 		return null;
 	}
 }
+
+/**
+ * Total estimated spend for a user over a rolling window, in USD micros.
+ *
+ * The per-tree pool (#184) bounds ONE runaway delegation. It cannot see a thousand small runaway
+ * trees: each opens its own budget, each stays inside it, and the account still bleeds. This is
+ * the other control — an account-wide ceiling over time, which is a rolling window rather than a
+ * pool because there is nothing to reserve against.
+ */
+export async function userSpendSinceMicros(env: Env, userId: string, hours = 24): Promise<number> {
+	const h = Math.max(1, Math.min(24 * 30, Math.floor(hours)));
+	try {
+		const row = await env.DB.prepare(
+			`SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage
+			  WHERE user_id = ?1 AND created_at >= datetime('now', ?2)`,
+		)
+			.bind(userId, `-${h} hours`)
+			.first<{ total: number }>();
+		return Math.max(0, Number(row?.total ?? 0));
+	} catch {
+		// A ledger read failure must not become an outage. Failing OPEN is deliberate: the
+		// per-tree pool still bounds the work, so the safe-ish default here is to let it run
+		// rather than freeze every agent on a transient D1 blip.
+		return 0;
+	}
+}

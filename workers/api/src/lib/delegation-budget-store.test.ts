@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_LIMITS } from "./delegation-budget.js";
 import {
 	closeBudget,
+	DAILY_CEILING_MICROS,
 	openBudget,
 	markExhausted,
 	raiseBudget,
@@ -273,5 +274,69 @@ describe("openBudget — defaults derived from the ledger, not guessed", () => {
 		const { env, inserts } = envWithHistory(Array(40).fill(1_000_000));
 		await openBudget(env, "u1", "i1", { costMicros: 250_000 });
 		expect(Number(inserts[0].args[3])).toBe(250_000);
+	});
+});
+
+describe("the account backstop — what a per-tree pool cannot see", () => {
+	/** Env whose ai_usage rolling-window SUM returns `spent`. */
+	function envSpent(spent: number) {
+		const writes: Write[] = [];
+		const env = {
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind() {
+							return {
+								async first() {
+									if (sql.includes("SUM(cost_micros)")) return { total: spent };
+									return openRow({ cost_micros_spent: 0 });
+								},
+								async all() { return { results: [] }; },
+								async run() { writes.push({ sql, args: [] }); return { meta: { changes: 1 } }; },
+							};
+						},
+					};
+				},
+			},
+		} as unknown as Env;
+		return { env, writes };
+	}
+
+	it("refuses a NEW draw once the account has spent its daily limit", async () => {
+		// A thousand small trees each stay inside their own pool while the bill grows; the
+		// per-tree budget is blind to the account, so this is the only thing that catches it.
+		const { env, writes } = envSpent(DAILY_CEILING_MICROS);
+		const r = await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 });
+		expect(r.ok).toBe(false);
+		expect(r.message).toMatch(/daily limit/i);
+		// Refused at ADMISSION — the pool is never touched.
+		expect(writes.filter((w) => w.sql.includes("UPDATE delegation_budgets"))).toHaveLength(0);
+	});
+
+	it("admits normally while the account is under the ceiling", async () => {
+		const { env } = envSpent(1_000_000);
+		expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).ok).toBe(true);
+	});
+
+	it("fails OPEN when the ledger read breaks", async () => {
+		// A transient D1 blip must not freeze every agent — the per-tree pool still bounds work.
+		const env = {
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind() {
+							return {
+								async first() {
+									if (sql.includes("SUM(cost_micros)")) throw new Error("D1 down");
+									return openRow({ cost_micros_spent: 0 });
+								},
+								async run() { return { meta: { changes: 1 } }; },
+							};
+						},
+					};
+				},
+			},
+		} as unknown as Env;
+		expect((await reserve(env, "u1", "b1", { depth: 1, estimatedCostMicros: 1 })).ok).toBe(true);
 	});
 });

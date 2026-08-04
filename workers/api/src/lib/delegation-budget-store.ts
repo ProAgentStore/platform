@@ -7,11 +7,12 @@
 // D1 applies second sees the first one's reservation already subtracted and matches zero rows.
 // A read-then-write would race; this cannot.
 
-import { spendPercentileMicros } from "./usage.js";
+import { spendPercentileMicros, userSpendSinceMicros } from "./usage.js";
 import type { Env } from "../types.js";
 import {
 	canAdmit,
 	DEFAULT_LIMITS,
+	formatMicros,
 	sanitizeLimits,
 	type AdmissionRefusal,
 	type BudgetLimits,
@@ -70,6 +71,17 @@ function toView(row: BudgetRow): BudgetView {
  * A budget sized at one run's cost would stop every multi-step objective on its second step.
  */
 const DERIVED_HEADROOM_RUNS = 25;
+
+/**
+ * Account-wide ceiling over a rolling 24h, in USD micros.
+ *
+ * The per-tree pool bounds ONE runaway. It cannot see a thousand small ones — each opens its own
+ * budget, each stays inside it, and the account still bleeds. This is the backstop for that,
+ * checked at admission so an exhausted account cannot open new work rather than being discovered
+ * on a bill. Generous on purpose: it is a circuit breaker, not a quota.
+ */
+export const DAILY_CEILING_MICROS = 50_000_000; // $50 / 24h across everything
+const DAILY_WINDOW_HOURS = 24;
 
 /**
  * Open a pool for a new delegation tree.
@@ -149,6 +161,19 @@ export async function reserve(
 	opts: { depth: number; estimatedCostMicros: Micros },
 ): Promise<ReservationResult> {
 	const need = Math.max(0, Math.floor(opts.estimatedCostMicros));
+
+	// Account backstop, checked BEFORE the pool: a per-tree budget is blind to the account, so
+	// without this a thousand small trees each stay inside their own limit while the bill grows.
+	// Deliberately not part of the atomic UPDATE — it is a coarse circuit breaker over a rolling
+	// window, and racing two admissions past it by one step is not the failure mode it guards.
+	if (await userSpendSinceMicros(env, userId, DAILY_WINDOW_HOURS) >= DAILY_CEILING_MICROS) {
+		return {
+			ok: false,
+			reason: "cost_exhausted",
+			message: `Stopped: your agents have spent the ${formatMicros(DAILY_CEILING_MICROS)} daily limit across all runs. It resets as older usage ages out.`,
+		};
+	}
+
 	const res = await env.DB.prepare(
 		`UPDATE delegation_budgets
 		    SET cost_micros_reserved = cost_micros_reserved + ?3,

@@ -4,7 +4,8 @@
 // instead of the current triple-definition. Additive: the legacy AGENT_TOOLS /
 // STORAGE_TOOLS catalog is untouched; registry tools are dispatched alongside them.
 import type { Env } from "../types.js";
-import { consentInstanceOf } from "./execution-authority.js";
+import { consentInstanceOf, describeAuthority, isDelegated } from "./execution-authority.js";
+import { logEvent } from "./events.js";
 import { connectorTools, getConnector } from "./connectors/registry.js";
 import { connectorClient, type ConnectorClient } from "./connectors/client.js";
 import { hasConsent } from "./connector-consent.js";
@@ -244,6 +245,22 @@ export async function runRegistryTool(
 			connectorClient: ctx.connectorClient ?? ((provider: string) => connectorClient(ctx.env, provider, { userId: ctx.userId, instanceId: consentInstanceOf({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf }) || undefined })),
 		};
 		const r = await tool.handler(handlerCtx, input || {});
+		// #185 audit: record WHOSE authority ran a delegated tool call. Only when delegated —
+		// for ordinary work the authority is trivially the instance already on the event, so
+		// logging every call would be pure noise at real cost. When a supervisor asked, "who
+		// asked" and "whose permissions applied" are different questions and both matter.
+		if (isDelegated({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf })) {
+			await logEvent(ctx.env, {
+				source: "tool",
+				event: "delegated_tool_call",
+				message: `${name} ${describeAuthority({ instanceId: ctx.instanceId ?? "", userId: ctx.userId ?? "", onBehalfOf: ctx.onBehalfOf })}`,
+				userId: ctx.userId ?? null,
+				instanceId: ctx.instanceId ?? null,
+				traceId: ctx.traceId ?? null,
+				level: r.success ? "info" : "warn",
+				context: { tool: name, scope: tool.scope, onBehalfOf: ctx.onBehalfOf, success: r.success },
+			}).catch(() => undefined);
+		}
 		return { name, content: r.content, success: r.success };
 	} catch (err) {
 		return { name, content: `Error: ${err instanceof Error ? err.message : String(err)}`, success: false };
