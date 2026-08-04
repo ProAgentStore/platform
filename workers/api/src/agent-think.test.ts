@@ -64,3 +64,82 @@ describe("toolBlurbFor (declared tools must not be described as tools the agent 
 		expect(toolBlurbFor(caps({ tools: [] }))).toContain("search your knowledge");
 	});
 });
+
+describe("cross-round dedup — a read repeats only when something CHANGED", () => {
+	// The rule is stated in agent-think.ts and worth pinning as data, because getting it wrong is
+	// invisible in both directions:
+	//   too strict → `read_terminal` after `send_to_cli` is refused, so the model describes the
+	//                PRE-send pane as the outcome (and `get_tasks` says "no tasks" right after
+	//                create_task);
+	//   too loose  → the model re-runs the same pure read every round until the cap, which also
+	//                removes the loop's stopping condition. Seen live on the Coder Lead:
+	//                `list_subordinates` ran 1×, then 2×, then 3× in one turn for the same rows.
+	function replay(calls: Array<{ name: string; read: boolean }>): string[] {
+		const READ = new Set(calls.filter((c) => c.read).map((c) => c.name));
+		const executed = new Map<string, number>();
+		let mutations = 0;
+		const outcome: string[] = [];
+		for (const c of calls) {
+			const sig = `${c.name}:{}`;
+			const isRead = READ.has(c.name);
+			const ranAt = executed.get(sig);
+			if (ranAt !== undefined && !(isRead && mutations > ranAt)) {
+				outcome.push("refused");
+				continue;
+			}
+			executed.set(sig, mutations);
+			if (!isRead) mutations++;
+			outcome.push("ran");
+		}
+		return outcome;
+	}
+
+	it("refuses a pure read repeated with NOTHING in between", () => {
+		expect(replay([
+			{ name: "list_subordinates", read: true },
+			{ name: "list_subordinates", read: true },
+			{ name: "list_subordinates", read: true },
+		])).toEqual(["ran", "refused", "refused"]);
+	});
+
+	it("ALLOWS the same read once a mutating tool has run", () => {
+		expect(replay([
+			{ name: "read_terminal", read: true },
+			{ name: "send_to_cli", read: false },
+			{ name: "read_terminal", read: true },
+		])).toEqual(["ran", "ran", "ran"]);
+	});
+
+	it("refuses a second read after the mutation, until the next REAL mutation", () => {
+		// The 5th call is a duplicate create_task, correctly refused — and because it never ran,
+		// nothing changed, so the read after it is refused too. A refused mutation must not count
+		// as a change, or the pair would ping-pong: read, blocked-write, read, blocked-write…
+		expect(replay([
+			{ name: "get_tasks", read: true },
+			{ name: "create_task", read: false },
+			{ name: "get_tasks", read: true },
+			{ name: "get_tasks", read: true },
+			{ name: "create_task", read: false },
+			{ name: "get_tasks", read: true },
+		])).toEqual(["ran", "ran", "ran", "refused", "refused", "refused"]);
+	});
+
+	it("a DIFFERENT mutation re-opens the read", () => {
+		expect(replay([
+			{ name: "get_tasks", read: true },
+			{ name: "create_task", read: false },
+			{ name: "get_tasks", read: true },
+			{ name: "update_task", read: false },
+			{ name: "get_tasks", read: true },
+		])).toEqual(["ran", "ran", "ran", "ran", "ran"]);
+	});
+
+	it("never lets a MUTATION repeat, whatever happened in between", () => {
+		// The original guard's whole purpose: three identical job tasks from one turn.
+		expect(replay([
+			{ name: "create_task", read: false },
+			{ name: "read_terminal", read: true },
+			{ name: "create_task", read: false },
+		])).toEqual(["ran", "ran", "refused"]);
+	});
+});

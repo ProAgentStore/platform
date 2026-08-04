@@ -504,7 +504,16 @@ export async function runAgentThink(opts: {
 	const maxToolRounds = 8;
 	// Guard against the model re-issuing the same tool call across rounds, which
 	// otherwise creates duplicate side effects (e.g. three identical job tasks).
-	const executedCalls = new Set<string>();
+	//
+	// Keyed to the MUTATION COUNT at the time of execution, not a bare set. Exempting reads
+	// unconditionally was too coarse: with nothing to stop it, the model re-ran the same pure read
+	// every round until the round cap, which also removed the loop's natural stopping condition
+	// (a round that executes nothing breaks). Seen live on the Coder Lead — `list_subordinates`
+	// with identical args ran once, then twice, then three times in a single turn, each time
+	// returning the same three rows. A read is only worth repeating when something CHANGED since
+	// the last identical call, which is exactly what this counter answers.
+	const executedCalls = new Map<string, number>();
+	let mutations = 0;
 
 	for (let round = 0; round < maxToolRounds; round++) {
 		let rawResult: Record<string, unknown>;
@@ -551,13 +560,17 @@ export async function runAgentThink(opts: {
 			// outcome. Same for `get_tasks` before and after `create_task`: the agent tells you it
 			// has no tasks immediately after creating one. A read's whole job is to observe a
 			// change something else made.
-			if (!READ_ONLY_TOOLS.has(tc.name) && executedCalls.has(signature)) {
+			const isRead = READ_ONLY_TOOLS.has(tc.name);
+			const ranAt = executedCalls.get(signature);
+			// Repeat allowed only for a READ, and only when a mutating tool has run since.
+			if (ranAt !== undefined && !(isRead && mutations > ranAt)) {
 				toolResults.push(
 					`[${tc.name}]: Already executed this exact call this turn — not repeating. Use the earlier result.`,
 				);
 				continue;
 			}
-			executedCalls.add(signature);
+			executedCalls.set(signature, mutations);
+			if (!isRead) mutations++;
 			executedThisRound++;
 			let toolResult: ToolCallResult;
 			if (tc.name === "configure_board") {
