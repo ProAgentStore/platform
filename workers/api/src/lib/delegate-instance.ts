@@ -168,6 +168,20 @@ async function delegateToPilot(
 	// Observable board task, so a delegated goal is trackable rather than buried in one repo's
 	// thread. The Pilot flips it to completed/failed at its terminal state.
 	const taskId = `deleg-${crypto.randomUUID()}`;
+
+	// AND a loop-run row, so `check_delegation` answers for BOTH delegation kinds. Without it
+	// the supervisor is handed a run id, told to track it, and gets "no run with that id" —
+	// the tool's own instructions would be a lie.
+	const runId = crypto.randomUUID();
+	await createLoopRun(env, {
+		runId,
+		userId: input.userId,
+		instanceId: input.subordinateInstanceId,
+		objective,
+		maxIterations: sanitizeMaxIterations(input.maxIterations),
+		budgetId,
+		startedAt: Date.now(),
+	}).catch(() => undefined);
 	await env.DB.prepare(
 		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
 		 VALUES (?1, ?2, ?3, 'delegation', 'running', ?4, datetime('now'), datetime('now'))`,
@@ -196,6 +210,7 @@ async function delegateToPilot(
 			// Pilot from the Coding tab passes no budget and stays unmetered, as before.
 			budgetId,
 			depth,
+			loopRunId: runId,
 		},
 	});
 
@@ -209,5 +224,5 @@ async function delegateToPilot(
 		context: { taskId, depth, budgetId, subordinate: input.subordinateInstanceId },
 	}).catch(() => undefined);
 
-	return { ok: true, runId: taskId, budgetId, depth };
+	return { ok: true, runId, budgetId, depth };
 }

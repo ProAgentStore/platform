@@ -19,6 +19,7 @@ import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
+import { finishLoopRun } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
 
 /** Bounded worst case for one Pilot decide step, in USD micros. Settle refunds the rest. */
@@ -60,6 +61,12 @@ export interface CodingSessionParams {
 	budgetId?: string | null;
 	/** Depth in the supervision tree; the budget refuses past its cap. */
 	depth?: number;
+	/**
+	 * agent_loop_runs row to close when this finishes (#159). A delegated coding run must be
+	 * answerable through `check_delegation` like every other delegation — otherwise the
+	 * supervisor is handed a run id it cannot look up.
+	 */
+	loopRunId?: string | null;
 }
 
 /** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
@@ -256,6 +263,28 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// delegated goal) so its status reflects the real outcome, not a stuck "running".
 			// Inline upsert into instance_runtime_tasks (the board's source) — same shape as
 			// mirrorRuntimeTask, kept here so the workflow doesn't import a routes module.
+			// Close the loop-run row a delegation opened, so ONE surface answers "how did it go"
+			// for both delegation kinds. Written here, in the same terminal step that closes the
+			// board card, so the two cannot disagree.
+			if (event.payload.loopRunId) {
+				await step.do("delegation-run-done", async () => {
+					const reason =
+						result.outcome === "cancelled"
+							? "cancelled"
+							: result.outcome === "max_steps"
+								? "max_iterations"
+								: result.outcome === "failed"
+									? "failed"
+									: "done";
+					await finishLoopRun(
+						env,
+						event.payload.loopRunId as string,
+						reason,
+						`outcome: ${result.outcome}${result.detail ? ` — ${result.detail}` : ""}`,
+						Date.now(),
+					).catch(() => undefined);
+				});
+			}
 			if (event.payload.boardTaskId) {
 				await step.do("delegation-task-done", async () => {
 					const ok = result.outcome !== "failed" && result.outcome !== "max_steps";

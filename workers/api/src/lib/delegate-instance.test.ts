@@ -221,6 +221,16 @@ describe("delegateToInstance routes by the target's declared capability", () => 
 		expect(typeof params.depth).toBe("number");
 	});
 
+	it("opens a loop-run row so check_delegation can actually answer", async () => {
+		// The tool tells the supervisor to track the returned id with check_delegation, which
+		// reads agent_loop_runs. Returning a board-task id instead made those instructions a lie.
+		const { env, writes, codingCreated } = buildEnv([["sup", "sub"]], { targetConfig: CODING_CFG, repos: [REPO], session: SESSION });
+		const res = await delegateToInstance(env, base);
+		expect(writes.some((w) => w.sql.includes("INSERT INTO agent_loop_runs"))).toBe(true);
+		// The id handed back is the one that row uses, and the workflow gets it to close.
+		expect((codingCreated[0].params as { loopRunId: string }).loopRunId).toBe((res as { runId: string }).runId);
+	});
+
 	it("opens an observable board task so the delegation is trackable", async () => {
 		const { env, writes } = buildEnv([["sup", "sub"]], { targetConfig: CODING_CFG, repos: [REPO], session: SESSION });
 		await delegateToInstance(env, base);
