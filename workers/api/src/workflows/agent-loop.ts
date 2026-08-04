@@ -19,6 +19,8 @@ import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-or
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
 import { logEvent } from "../lib/events.js";
+import { escalationNote, escalationTarget } from "../lib/escalation.js";
+import { loadGraph } from "../lib/supervision.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
@@ -160,8 +162,54 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 				traceId: runId,
 				level: needsHuman(stop.reason) ? "warn" : "info",
 			}).catch(() => undefined);
-			// Only interrupt a human when the ending actually needs one — a clean finish or a
-			// cancel they asked for should not buzz a phone.
+			// #157: climb the ladder before waking anyone. Three subordinates under one Lead means
+			// three pings to the same person otherwise, each missing the context the Lead has —
+			// a hierarchy that amplifies interrupts instead of absorbing them.
+			if (needsHuman(stop.reason)) {
+				const graph = await loadGraph(this.env, userId).catch(() => []);
+				const target = escalationTarget(graph, instanceId, 0);
+				if (target.kind === "supervisor") {
+					const note = escalationNote({
+						subordinateName: instanceId,
+						objective,
+						reason: stop.reason,
+						detail: stop.message,
+					});
+					// Told, not triggered: a board card the supervisor can see plus a note in its
+					// thread. Auto-resolution would start spending unprompted and is a bigger
+					// decision than routing an interrupt.
+					await this.env.DB.prepare(
+						`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
+						 VALUES (?1, ?2, ?3, 'escalation', 'needs_human', ?4, datetime('now'), datetime('now'))`,
+					)
+						.bind(
+							`esc-${runId}`,
+							target.instanceId,
+							userId,
+							JSON.stringify({
+								id: `esc-${runId}`,
+								type: "escalation",
+								status: "needs_human",
+								title: `A supervised agent needs a decision`,
+								reasoning: note,
+								createdAt: new Date().toISOString(),
+								updatedAt: new Date().toISOString(),
+							}),
+						)
+						.run()
+						.catch(() => undefined);
+					await logEvent(this.env, {
+						source: "loop",
+						event: "escalated_to_supervisor",
+						message: `${instanceId} → ${target.instanceId} (hop ${target.hops})`,
+						userId,
+						instanceId: target.instanceId,
+						traceId: runId,
+						level: "warn",
+					}).catch(() => undefined);
+					return; // the human is NOT interrupted at this level
+				}
+			}
 			if (needsHuman(stop.reason)) {
 				await notifyUser(
 					this.env,

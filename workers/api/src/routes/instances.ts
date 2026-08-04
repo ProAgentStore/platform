@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HttpError, requireUser } from "../lib/auth.js";
+import { createRepo, listRepos } from "../lib/coding-store.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
@@ -662,8 +663,53 @@ instanceRoutes.put("/:instanceId/settings", async (c) => {
 	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
 		.bind(JSON.stringify(cfg), instanceId, session.uid)
 		.run();
+
+	// A `repo` setting on a coding agent should MEAN something. Before this it was prompt
+	// context only: you told the agent which repo it owned, and it still had no repo attached,
+	// so a delegated goal was refused with "no repository yet" and the owner had to add the
+	// same path a second time on the Coding tab. Attach it here, once, when it is first named.
+	// Idempotent by workdir, and never touches an instance that already has repos — the Coding
+	// tab stays the place to manage several.
+	await attachSettingRepo(c.env, instanceId, session.uid, cfg.settings).catch(() => undefined);
+
 	return c.json({ settings: resolveSettingsValues(schema, cfg.settings) });
 });
+
+/**
+ * Attach the repo named in an agent's typed settings, if it has none yet.
+ *
+ * Deliberately conservative: only for an agent whose declared runtime is coding, only when the
+ * instance has NO repos, and only for a value that looks like a path or owner/name. Anything
+ * more eager would fight the Coding tab rather than complement it.
+ */
+async function attachSettingRepo(env: Env, instanceId: string, userId: string, settings: unknown): Promise<void> {
+	const value = (settings && typeof settings === "object" ? (settings as Record<string, unknown>).repo : null);
+	const spec = typeof value === "string" ? value.trim() : "";
+	if (!spec || spec.length > 400) return;
+
+	const row = await env.DB.prepare(
+		"SELECT a.slug AS slug, a.category AS category, a.config AS config FROM agent_instances i JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
+	)
+		.bind(instanceId, userId)
+		.first<{ slug: string; category: string; config: string | null }>();
+	if (!row || agentCapabilities(row as never).runtime !== "coding") return;
+
+	const existing = await listRepos(env, instanceId, userId);
+	if (existing.length) return;
+
+	const isLocalPath = spec.startsWith("~") || spec.startsWith("/") || spec.startsWith(".");
+	const isOwnerRepo = /^[\w.-]+\/[\w.-]+$/.test(spec);
+	const isUrl = /^(https?:\/\/|git@)/.test(spec);
+	if (!isLocalPath && !isOwnerRepo && !isUrl) return;
+
+	const name = isLocalPath ? spec.split("/").filter(Boolean).slice(-2).join("/") : spec.replace(/^https?:\/\/[^/]+\//, "").replace(/\.git$/, "");
+	await createRepo(env, instanceId, userId, {
+		name: name || spec,
+		workdir: isLocalPath ? spec : undefined,
+		githubRepo: isOwnerRepo ? spec : undefined,
+		cloneUrl: isUrl ? spec : undefined,
+	});
+}
 
 /** Probe a registered runtime's health and capabilities through PAGS. */
 instanceRoutes.get("/:instanceId/runtime/status", async (c) => {

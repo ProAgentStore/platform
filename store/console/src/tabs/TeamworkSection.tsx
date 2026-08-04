@@ -18,7 +18,19 @@ import { api } from "@proagentstore/sdk/client";
 
 type Instance = { id: string; name?: string; slug?: string; agentName?: string };
 type SupervisionLink = { id: string; supervisorInstanceId: string; subordinateInstanceId: string; enabled: boolean };
-type Connection = { id: string; eventType: string; targetInstanceId: string; action: string };
+type FilterClause = { field: string; op: string; value?: unknown };
+type Connection = { id: string; eventType: string; targetInstanceId: string; action: string; config?: Record<string, unknown> };
+
+/** One-line summary of a connection's routing filter, so a wired predicate is visible rather
+ *  than hidden in config — an invisible filter is indistinguishable from a broken chain. */
+function describeFilter(config: Record<string, unknown> | undefined): string {
+	const raw = config?.filter;
+	const clauses = (Array.isArray(raw) ? raw : (raw as { where?: unknown } | undefined)?.where) as FilterClause[] | undefined;
+	if (!Array.isArray(clauses) || !clauses.length) return "";
+	return clauses
+		.map((c) => `${c.field} ${c.op}${c.value === undefined ? "" : ` ${Array.isArray(c.value) ? c.value.join("/") : String(c.value)}`}`)
+		.join(" and ");
+}
 type Delivery = {
 	id: string;
 	status: string;
@@ -29,6 +41,11 @@ type Delivery = {
 };
 
 const ACTIONS = ["run_pipeline", "insert_record", "create_task", "add_knowledge"] as const;
+
+/** The routing-predicate vocabulary, mirroring FILTER_OPS server-side. Ops that take no value
+ *  are listed so the value box can disappear rather than being ignored. */
+const FILTER_OPS = ["eq", "ne", "contains", "in", "gt", "gte", "lt", "lte", "exists", "missing", "truthy", "falsy"] as const;
+const VALUELESS_OPS = new Set(["exists", "missing", "truthy", "falsy"]);
 
 export default function TeamworkSection({ instanceId }: { instanceId: string }) {
 	const [instances, setInstances] = useState<Instance[]>([]);
@@ -43,6 +60,11 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 	const [target, setTarget] = useState("");
 	const [action, setAction] = useState<(typeof ACTIONS)[number]>("run_pipeline");
 	const [pipeline, setPipeline] = useState("");
+	// Routing filter (#182). One clause is enough to express the case that motivated it —
+	// "only Sydney leads" — without turning this card into a query builder.
+	const [filterField, setFilterField] = useState("");
+	const [filterOp, setFilterOp] = useState<(typeof FILTER_OPS)[number]>("eq");
+	const [filterValue, setFilterValue] = useState("");
 	const [showDead, setShowDead] = useState(false);
 
 	const nameOf = useCallback(
@@ -109,6 +131,22 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 		setBusy(false);
 	};
 
+	/** Assemble the action config + optional routing filter. A `in` clause takes a list, so a
+	 *  comma-separated value is split; everything else is passed through as typed. */
+	const buildConfig = (): Record<string, unknown> => {
+		const cfg: Record<string, unknown> = {};
+		if (action === "run_pipeline" && pipeline.trim()) cfg.pipeline = pipeline.trim();
+		const field = filterField.trim();
+		if (field) {
+			const clause: Record<string, unknown> = { field, op: filterOp };
+			if (!VALUELESS_OPS.has(filterOp)) {
+				clause.value = filterOp === "in" ? filterValue.split(",").map((v) => v.trim()).filter(Boolean) : filterValue;
+			}
+			cfg.filter = [clause];
+		}
+		return cfg;
+	};
+
 	const addConnection = async () => {
 		if (!eventType.trim() || !target) return;
 		setBusy(true);
@@ -120,11 +158,13 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					eventType: eventType.trim(),
 					targetInstanceId: target,
 					action,
-					config: action === "run_pipeline" && pipeline.trim() ? { pipeline: pipeline.trim() } : {},
+					config: buildConfig(),
 				}),
 			});
 			setEventType("");
 			setPipeline("");
+			setFilterField("");
+			setFilterValue("");
 			await load();
 		} catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
 		setBusy(false);
@@ -186,6 +226,7 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 					<div key={cn.id} className="flex items-center justify-between gap-2 text-sm border border-line rounded-lg px-3 py-2 mb-1">
 						<span className="truncate">
 							<code className="text-xs">{cn.eventType}</code> → {nameOf(cn.targetInstanceId)} <span className="text-muted text-xs">({cn.action})</span>
+							{describeFilter(cn.config) && <span className="text-muted text-xs"> · only when {describeFilter(cn.config)}</span>}
 						</span>
 						<button type="button" disabled={busy} onClick={() => removeConnection(cn.id)} className={chip}>Remove</button>
 					</div>
@@ -204,6 +245,29 @@ export default function TeamworkSection({ instanceId }: { instanceId: string }) 
 				{action === "run_pipeline" && (
 					<input value={pipeline} onChange={(e) => setPipeline(e.target.value)} placeholder="Pipeline name to run on the target" className={`${field} mt-2`} />
 				)}
+				{/* Routing filter — the server validates it at create time, so a predicate that
+				    could never match is rejected here rather than quietly stopping the chain. */}
+				<div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-2 mt-2">
+					<input
+						aria-label="Filter field"
+						value={filterField}
+						onChange={(e) => setFilterField(e.target.value)}
+						placeholder="Only when… field (optional, e.g. suburb)"
+						className={field}
+					/>
+					<select aria-label="Filter operator" value={filterOp} onChange={(e) => setFilterOp(e.target.value as (typeof FILTER_OPS)[number])} className={field}>
+						{FILTER_OPS.map((o) => <option key={o} value={o}>{o}</option>)}
+					</select>
+					{!VALUELESS_OPS.has(filterOp) && (
+						<input
+							aria-label="Filter value"
+							value={filterValue}
+							onChange={(e) => setFilterValue(e.target.value)}
+							placeholder={filterOp === "in" ? "comma,separated,values" : "value"}
+							className={field}
+						/>
+					)}
+				</div>
 			</div>
 
 			{/* ── Dead letters ────────────────────────────────────────── */}
