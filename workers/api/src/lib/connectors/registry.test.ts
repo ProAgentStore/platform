@@ -2,9 +2,20 @@ import { describe, expect, it } from "vitest";
 import { CONNECTORS, connectorTools, getConnector } from "./registry.js";
 
 describe("connector registry", () => {
-	it("declares browser, github, google_sheets, http, mcp, meta, supervision, tmux, and web-search", () => {
+	it("declares browser, github, google_sheets, http, mcp, meta, repo-local, supervision, tmux, and web-search", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
-		expect(ids).toEqual(["browser", "github", "google_sheets", "http", "mcp", "meta", "supervision", "tmux", "web-search"]);
+		expect(ids).toEqual(["browser", "github", "google_sheets", "http", "mcp", "meta", "repo-local", "supervision", "tmux", "web-search"]);
+	});
+
+	// repo-local is the only read-ONLY connector: scopes.write:false is what makes it
+	// impossible to write-consent, which is the whole reason it isn't part of tmux.
+	it("repo-local is a no-auth local connector with no write scope", () => {
+		const repo = getConnector("repo-local");
+		expect(repo?.auth).toBe("none");
+		expect(repo?.scopes).toEqual({ read: true, write: false });
+		const tools = connectorTools().filter((t) => t.connector === "repo-local");
+		expect(tools.length).toBe(4);
+		expect(tools.every((t) => t.scope === "read")).toBe(true);
 	});
 
 	it("browser is a no-auth local connector (relay-reached, like tmux), read+write", () => {

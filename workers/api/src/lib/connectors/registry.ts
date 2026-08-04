@@ -8,6 +8,7 @@ import { BROWSER_TOOLS } from "./browser.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
 import { MCP_TOOLS } from "./mcp.js";
+import { REPO_LOCAL_TOOLS } from "./repo-local.js";
 import { SUPERVISION_TOOLS } from "./supervision.js";
 import { META_CONNECTOR } from "./meta.js";
 import { GOOGLE_SHEETS_CONNECTOR } from "./google-sheets.js";
@@ -84,6 +85,22 @@ export const CONNECTORS: Connector[] = [
 		scopes: { read: true, write: true },
 		grantModel: "user",
 		tools: BROWSER_TOOLS,
+	},
+	{
+		id: "repo-local",
+		label: "Local repository (read-only, via the runner)",
+		// auth:"none" — like tmux/browser, reached over the runner relay, so the credential is
+		// simply that the user's own machine is connected. The repo is never copied into
+		// platform storage: only the excerpts a tool call returns cross the wire, and access is
+		// whatever the local checkout already has (so a private repo needs no GitHub App).
+		//
+		// scopes.write is FALSE, which is the point of a separate connector rather than folding
+		// these into tmux: a read-only connector can never be write-consented, so this agent
+		// cannot be talked into running a command. Driving the machine stays tmux's job.
+		auth: "none",
+		scopes: { read: true, write: false },
+		grantModel: "user",
+		tools: REPO_LOCAL_TOOLS,
 	},
 	{
 		id: "supervision",

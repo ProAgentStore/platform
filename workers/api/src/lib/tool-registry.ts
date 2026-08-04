@@ -44,10 +44,13 @@ export interface RegistryToolResult {
 	success: boolean;
 }
 
-/** A draft-07 JSON Schema for a tool's input — an object schema with typed properties. */
+/** A draft-07 JSON Schema for a tool's input — an object schema with typed properties.
+ *  A property carries `type`/`description` plus whatever else draft-07 allows (`enum`,
+ *  `items`, `default`, …); the schema is passed to the model verbatim, so constraining
+ *  properties to two keys only meant a tool couldn't express a closed value set. */
 export interface JsonSchema {
 	type: "object";
-	properties: Record<string, { type: string; description?: string }>;
+	properties: Record<string, { type: string; description?: string; [k: string]: unknown }>;
 	required?: string[];
 	[k: string]: unknown;
 }
