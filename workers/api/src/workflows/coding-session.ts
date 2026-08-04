@@ -12,7 +12,7 @@ import {
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { getSession, getRepo, reassignSessionNode } from "../lib/coding-store.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
-import { resolveEngineEnv } from "../routes/coding.js";
+import { resolveEngineEnv } from "../lib/coding-engines.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { copilotSummary } from "../lib/coding-copilot.js";

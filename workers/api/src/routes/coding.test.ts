@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { type CodingEngine, deriveClientType, engineAuthFor, pickNextIssue } from "./coding.js";
+import { pickNextIssue } from "./coding.js";
+// Engine presets + sign-in moved to lib/ so the workflow stops importing a routes module.
+import { type CodingEngine, deriveClientType, engineAuthFor } from "../lib/coding-engines.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
 
 describe("delegationTaskRecord (#155 — observable delegation task)", () => {
