@@ -41,6 +41,9 @@ interface TimelineEntry {
 	audioKey?: string;
 }
 
+/** Returned by /capture when the engine is waiting for a human to sign in. */
+type AuthPrompt = { kind: "oauth-url" | "menu" | "unknown"; url: string | null; evidence: string; guidance: string };
+
 export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride }: Props) {
 	const navigate = useNavigate();
 	const [repos, setRepos] = useState<CodingRepo[]>([]);
@@ -186,6 +189,25 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	usePolling(pollStatuses, 3000, hasActiveSessions && !openSession);
 
 	// Terminal polling (1.5s when a session is open)
+	// Engine sign-in relay (#coding-auth): the CLI's OAuth uses a LOOPBACK redirect, so the
+	// browser must be on the runner machine — opening the link here would redirect to this
+	// laptop's localhost, where nothing is listening.
+	const [authPrompt, setAuthPrompt] = useState<AuthPrompt | null>(null);
+	const [signinMsg, setSigninMsg] = useState("");
+	const startSignin = useCallback(async () => {
+		if (!openSession) return;
+		setSigninMsg("Opening the sign-in page on your runner machine…");
+		try {
+			const r = await api<{ ok: boolean; guidance?: string }>(
+				`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/signin`,
+				{ method: "POST" },
+			);
+			setSigninMsg(r.ok ? "Opened — take over the browser to finish signing in." : (r.guidance ?? "Use the terminal below to choose an option."));
+		} catch (e) {
+			setSigninMsg(e instanceof Error ? e.message : String(e));
+		}
+	}, [instanceId, openSession]);
+
 	const termTextRef = useRef(terminalText);
 	termTextRef.current = terminalText;
 	const savedTerminalRef = useRef(savedTerminal);
@@ -193,7 +215,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const pollTerminal = useCallback(async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ pane?: string; runState?: string }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
+			const d = await api<{ pane?: string; runState?: string; authPrompt?: AuthPrompt }>(`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`);
+			// An engine blocked on sign-in is otherwise indistinguishable from a dead session:
+			// idle state, a pane that stops changing, no error anywhere.
+			setAuthPrompt(d.authPrompt ?? null);
 			const live = (d.pane || "").trim() ? (d.pane as string) : "";
 			// No live tmux (ended session / detached runner) → fall back to the last saved
 			// snapshot from the DB instead of blanking the terminal.
@@ -697,6 +722,28 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						loopPresets={loopPresets}
 						onClearChat={clearChat}
 					/>
+				)}
+				{/* Sign-in relay (#coding-auth). Shown in BOTH views: a blocked engine looks like a
+				    dead session, and the owner is as likely to be on the co-pilot view as the
+				    terminal when they notice nothing is happening. */}
+				{authPrompt && (
+					<div className="mb-2 rounded-lg border border-orange/40 bg-orange/10 px-3 py-2">
+						<div className="text-sm font-semibold">This engine is waiting for you to sign in</div>
+						<p className="text-xs text-muted mt-0.5">{authPrompt.guidance}</p>
+						{authPrompt.evidence && (
+							<pre className="text-[0.65rem] text-muted mt-1 whitespace-pre-wrap break-all">{authPrompt.evidence}</pre>
+						)}
+						{authPrompt.kind === "oauth-url" && (
+							<button
+								type="button"
+								onClick={startSignin}
+								className="mt-2 text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold"
+							>
+								Open sign-in on my runner
+							</button>
+						)}
+						{signinMsg && <div className="text-xs text-muted mt-1.5">{signinMsg}</div>}
+					</div>
 				)}
 				{view === "terminal" && (
 					<TerminalView

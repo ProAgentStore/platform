@@ -693,6 +693,60 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 });
 
 /**
+ * Relay an engine's sign-in into the RUNNER's browser (#coding-auth).
+ *
+ * Engine CLIs authenticate with a loopback redirect: a server on 127.0.0.1:PORT expecting a
+ * browser on that machine. Mailing the URL to the owner's laptop cannot work — the redirect would
+ * hit THEIR localhost, where nothing listens, and the same IP does not help because it is
+ * literally 127.0.0.1 on the runner.
+ *
+ * So the page is opened in the browser that already runs on the runner, and handed to the human
+ * through the takeover relay that solves reCAPTCHAs in the apply flow. The redirect then lands
+ * exactly where the CLI is listening. No new runner capability: navigate + handoff + input all
+ * exist already.
+ */
+codingRoutes.post("/:instanceId/coding/sessions/:sessionId/signin", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const sessionId = c.req.param("sessionId");
+	const session = await getSession(c.env, instanceId, uid, sessionId);
+	if (!session) throw new HttpError(404, "Session not found");
+	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
+	if (!conn) throw new HttpError(409, "No runner connected — start it with: pags up");
+
+	// Re-read the pane rather than trusting a client-supplied URL: this navigates a real browser
+	// on the owner's machine, so the destination must come from what the ENGINE actually printed.
+	const snap = await callRunner<{ pane?: string }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
+	const prompt = detectAuthPrompt(String(snap?.pane ?? ""));
+	if (!prompt) throw new HttpError(409, "This engine isn't waiting for a sign-in right now.");
+	if (!prompt.url) {
+		// A menu with no URL cannot be relayed by opening a link — the human has to drive the CLI
+		// itself. Saying so beats a button that appears to do nothing.
+		return c.json({ ok: false, kind: prompt.kind, guidance: authPromptGuidance(prompt), evidence: prompt.evidence }, 200);
+	}
+
+	const taskId = `signin-${sessionId}`;
+	const nav = await callRunner<{ ok?: boolean }>(conn, "/browser/act", { action: { kind: "navigate", url: prompt.url } }).catch(() => null);
+	if (!nav) throw new HttpError(502, "Couldn't open the sign-in page in the runner's browser.");
+	await callRunner<{ ok: boolean }>(conn, "/browser/handoff", {
+		taskId,
+		label: "Engine sign-in",
+		reason: "challenge",
+	}).catch(() => undefined);
+
+	await logEvent(c.env, {
+		source: "coding",
+		event: "signin_relay",
+		message: `Opened engine sign-in for ${session.id} in the runner's browser`,
+		userId: uid,
+		instanceId,
+		traceId: sessionId,
+		context: { taskId, host: (() => { try { return new URL(prompt.url as string).host; } catch { return null; } })() },
+	}).catch(() => undefined);
+
+	return c.json({ ok: true, kind: prompt.kind, taskId, url: prompt.url, guidance: authPromptGuidance(prompt) }, 200);
+});
+
+/**
  * Aggregate live status for ALL of this instance's active coding sessions in ONE call —
  * status only (runState), no terminal panes — so the console can poll once instead of N
  * per-session /capture calls. Owner-scoped; bounded fan-out to the runner. (CODER-006, #82)

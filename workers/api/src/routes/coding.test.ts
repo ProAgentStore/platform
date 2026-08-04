@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { pickNextIssue } from "./coding.js";
 // Engine presets + sign-in moved to lib/ so the workflow stops importing a routes module.
@@ -107,5 +109,38 @@ describe("deriveClientType", () => {
 	it("defaults to claude for an empty command", () => {
 		expect(deriveClientType("")).toBe("claude");
 		expect(deriveClientType("   ")).toBe("claude");
+	});
+});
+
+describe("engine sign-in relay (#coding-auth)", () => {
+	// The route is thin by design; what matters is the CONTRACT it enforces, so these pin the
+	// decisions rather than re-testing the detector (covered in engine-auth-prompt.test.ts).
+
+	it("only relays a URL the ENGINE printed, never one from the caller", async () => {
+		// This navigates a real browser on the owner's machine. Accepting a client-supplied URL
+		// would turn an authenticated route into an open redirect onto their desktop.
+		const src = readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+		const route = src.slice(src.indexOf('coding/sessions/:sessionId/signin'));
+		const body = route.slice(0, route.indexOf("});"));
+		expect(body).toContain('callRunner<{ pane?: string }>');   // re-reads the pane
+		expect(body).toContain("detectAuthPrompt");
+		expect(body).not.toMatch(/req\.json\(\)[\s\S]{0,200}url/);  // never reads a URL from the request
+	});
+
+	it("hands off through the EXISTING takeover path rather than a new mechanism", async () => {
+		const src = readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+		const route = src.slice(src.indexOf('coding/sessions/:sessionId/signin'));
+		const body = route.slice(0, route.indexOf("});"));
+		expect(body).toContain('"/browser/act"');      // navigate in the runner's browser
+		expect(body).toContain('"/browser/handoff"');  // same relay the apply flow uses
+	});
+
+	it("logs only the HOST of the sign-in URL, not the whole thing", () => {
+		// OAuth URLs carry state/PKCE/redirect params; putting them verbatim in a durable trace
+		// is a needless secret-adjacent leak.
+		const src = readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+		const route = src.slice(src.indexOf('coding/sessions/:sessionId/signin'));
+		const body = route.slice(0, route.indexOf("logEvent") + 400);
+		expect(body).toContain("new URL(prompt.url as string).host");
 	});
 });
