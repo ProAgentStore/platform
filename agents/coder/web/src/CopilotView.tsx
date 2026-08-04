@@ -1,5 +1,5 @@
 import { type KeyboardEvent, type RefObject, useState, useEffect, useRef } from "react";
-import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
+import { renderMd, formatDateTime, classifyMessage, toolCallSummary, messageKey as sdkMessageKey } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
@@ -310,14 +310,13 @@ export default function CopilotView({
 				onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}
 				className={`flex-1 overflow-y-auto flex flex-col gap-2 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
 			>
-				{summaryHistory.map((m) => {
-					// Tool calls: collapsed chip
-					const isToolCall = m.role === "system" && /^[✅❌]/.test(m.content);
-					if (isToolCall) {
-						const toolNames = m.content.match(/\*\*(\w+)\*\*/g)?.map((t) => t.replace(/\*\*/g, "")) || ["tools"];
-						const summary = toolNames.length <= 2 ? toolNames.join(", ") : `${toolNames.length} tools`;
+				{summaryHistory.map((m, i) => {
+					// Shared classification (SDK) — this heuristic was duplicated here and in the
+					// console's instance chat, character for character.
+					if (classifyMessage(m) === "tool") {
+						const summary = toolCallSummary(m.content);
 						return (
-							<details key={messageKey(m)} className="self-start max-w-[90%]">
+							<details key={messageKey(m) || sdkMessageKey(m, i)} className="self-start max-w-[90%]">
 								<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
 									<Wrench size={11} className="shrink-0" />
 									<span>Used {summary}</span>
@@ -327,7 +326,7 @@ export default function CopilotView({
 							</details>
 						);
 					}
-					if (m.role === "system") {
+					if (classifyMessage(m) === "system") {
 						return (
 							<div key={messageKey(m)} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]">
 								<span className="whitespace-pre-wrap break-words">{m.content}</span>

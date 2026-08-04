@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
 import { identityFor } from "../lib/identity";
+import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk/ui";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
@@ -659,13 +660,13 @@ export default function InstanceDetail() {
 								</button>
 							)}
 							{messages.map((m, i) => {
-								// Tool calls: collapsed chip, tap to expand
-								const isToolCall = m.role === "system" && /^[✅❌]/.test(m.content);
-								if (isToolCall) {
-									const toolNames = m.content.match(/\*\*(\w+)\*\*/g)?.map((t) => t.replace(/\*\*/g, "")) || ["tools"];
-									const summary = toolNames.length <= 2 ? toolNames.join(", ") : `${toolNames.length} tools`;
+								// Classification lives in the SDK — the same heuristic was written out three
+								// times (here, the Coder Co-pilot, the agent page) and three copies of a
+								// heuristic is three chances to drift, invisibly.
+								if (classifyMessage(m) === "tool") {
+									const summary = toolCallSummary(m.content);
 									return (
-										<details key={m.id || m.createdAt || i} className="self-start max-w-[90%]">
+										<details key={messageKey(m, i)} className="self-start max-w-[90%]">
 											<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
 												<Wrench size={11} className="shrink-0" />
 												<span>Used {summary}</span>
@@ -674,10 +675,10 @@ export default function InstanceDetail() {
 										</details>
 									);
 								}
-								// Regular system messages (loop status, etc.)
-								if (m.role === "system") {
+								// Regular system messages (loop status, etc.) — deliberately NOT collapsed.
+								if (classifyMessage(m) === "system") {
 									return (
-										<div key={m.id || m.createdAt || i} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]">
+										<div key={messageKey(m, i)} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]">
 											<span className="whitespace-pre-wrap break-words">{m.content}</span>
 										</div>
 									);
@@ -685,7 +686,7 @@ export default function InstanceDetail() {
 								// User + assistant messages
 								return (
 									<div
-										key={m.id || m.createdAt || i}
+										key={messageKey(m, i)}
 										// Keep a bubble tap from bubbling to the chat-container tap handler — in
 										// Tap-to-talk that would churn the mic (and fire a phantom empty turn); in
 										// Hands-free it would reopen the mic into the replay audio. NOTE: no

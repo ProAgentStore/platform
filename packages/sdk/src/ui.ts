@@ -231,3 +231,6 @@ export function formatDateTime(iso: string): string {
 
 // Terminal output colorizer — shared so the console and any agent UI render it identically.
 export { renderTerminal, terminalTail } from "./terminal-render.js";
+
+// Chat message classification — shared so a tool chip behaves identically in every chat surface.
+export { classifyMessage, isToolCallMessage, messageKey, toolCallSummary, type ChatMessageKind, type ChatMessageLike } from "./chat-message.js";
