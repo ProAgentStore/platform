@@ -222,3 +222,54 @@ describe("agent tool definition helpers", () => {
 		expect(names.has("read_memory")).toBe(false);
 	});
 });
+
+describe("surface options govern the drive tools (#154)", () => {
+	const CODING = ["send_to_cli", "read_terminal", "list_coding_repos"];
+
+	it("a plain coding agent KEEPS them — the #119 invariant is the default", () => {
+		// Dropping these silently once left an orchestrator unable to send tasks, after which
+		// it deflected or hallucinated success. Nothing about this changes for existing agents.
+		const names = toolNamesFor({ surfaces: ["coding"], runtime: "coding", workflow: null });
+		for (const t of CODING) expect(names.has(t)).toBe(true);
+	});
+
+	it("keeps them even when a declared allowlist omits them", () => {
+		const names = toolNamesFor({ surfaces: ["coding"], runtime: "coding", workflow: null, tools: ["github_list_issues"] });
+		for (const t of CODING) expect(names.has(t)).toBe(true);
+	});
+
+	it("DROPS them for a supervised repo agent that declares drive:false", () => {
+		// A Repo Coder is driven by its Lead. Carrying these makes its chat a third way to drive
+		// an engine, alongside the Co-pilot and the Overseer — the overlapping drive-paths #154
+		// exists to remove.
+		const names = toolNamesFor({
+			surfaces: ["coding"],
+			runtime: "coding",
+			workflow: null,
+			surfaceOptions: { coding: { drive: false } },
+		} as never);
+		for (const t of CODING) expect(names.has(t)).toBe(false);
+	});
+
+	it("still gives that agent its declared tools and the universal base", () => {
+		// Opting out of driving must not strip it of everything else.
+		const names = toolNamesFor({
+			surfaces: ["coding"],
+			runtime: "coding",
+			workflow: null,
+			tools: ["github_list_issues"],
+			surfaceOptions: { coding: { drive: false } },
+		} as never);
+		expect(names.has("github_list_issues")).toBe(true);
+		expect(names.size).toBeGreaterThan(1);
+	});
+
+	it("is INERT on an agent that does not declare the coding surface", () => {
+		// An option must never change a surface the agent does not have. Note the baseline: a
+		// surface-less agent gets the FULL catalog by design, so the assertion is that the
+		// option changes nothing — not that the tools are absent.
+		const base = toolNamesFor({ surfaces: [], runtime: null, workflow: null });
+		const withOpt = toolNamesFor({ surfaces: [], runtime: null, workflow: null, surfaceOptions: { coding: { drive: false } } } as never);
+		expect([...withOpt].sort()).toEqual([...base].sort());
+	});
+});

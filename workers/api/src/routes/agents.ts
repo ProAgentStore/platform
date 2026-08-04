@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
+import { sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { lintAgentClaims } from "../lib/agent-claims-lint.js";
 import { HttpError, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
@@ -490,16 +490,12 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 
 	// customSurfaces load as CODE into the console origin — only overwrite when the key is
 	// present (so a capabilities-only PATCH doesn't wipe them), and require an https bundle URL.
+	// Shares the READ path's sanitizer rather than re-implementing it. The two had already
+	// drifted (this one trimmed, the other did not), and only one of them knew about reserved
+	// ids — so whichever validator you happened not to look at was the one that let a
+	// tab-shadowing surface through.
 	if (Array.isArray(body.customSurfaces)) {
-		caps.customSurfaces = body.customSurfaces.flatMap((v) => {
-			if (!v || typeof v !== "object") return [];
-			const o = v as Record<string, unknown>;
-			const sid = typeof o.id === "string" ? o.id.trim() : "";
-			const label = typeof o.label === "string" ? o.label.trim() : "";
-			const bundleUrl = typeof o.bundleUrl === "string" ? o.bundleUrl.trim() : "";
-			if (!sid || !label || !/^https:\/\//.test(bundleUrl)) return [];
-			return [{ id: sid, label, bundleUrl, ...(typeof o.icon === "string" && o.icon ? { icon: o.icon } : {}) }];
-		});
+		caps.customSurfaces = sanitizeCustomSurfaces(body.customSurfaces) ?? [];
 	}
 
 	// The declarative power fields (#141) — closed-enum validated, merged per-key so an

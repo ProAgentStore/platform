@@ -1,4 +1,5 @@
 import { AGENT_TOOLS } from "./lib/tools.js";
+import { optionsFor } from "./lib/surface-options.js";
 import { STORAGE_TOOLS } from "./lib/storage-tools.js";
 import { registryConnectorGroups, registryToolDefs, type JsonSchema } from "./lib/tool-registry.js";
 import type { AgentCapabilities } from "./lib/agent-capabilities.js";
@@ -125,17 +126,25 @@ export function toolNamesFor(capabilities?: AgentCapabilities): Set<string> {
 	} else if (surfaces.includes("repo")) {
 		set = new Set<string>([...BASE, ...KB_READ]);
 	} else if (surfaces.includes("coding")) {
-		set = new Set<string>([...BASE, ...CODING]);
+		// The DEFAULT tool set for a coding agent. Also honours drive:false — otherwise an agent
+		// that declares no allowlist would still receive the drive tools here, before the
+		// invariant below ever runs, and the opt-out would silently do nothing.
+		set = optionsFor(capabilities, "coding")?.drive === false ? new Set<string>(BASE) : new Set<string>([...BASE, ...CODING]);
 	} else {
 		set = new Set<string>(FULL);
 	}
-	// Invariant (issue #119 / CODER-008): a `coding`-surface agent IS the orchestrator that
-	// drives + observes its per-repo Engines. The delegation tools (send_to_cli, read_terminal,
-	// list_coding_repos) are non-negotiable and must ALWAYS be present — even when a declared
-	// `capabilities.tools` allowlist would otherwise omit them. Dropping them silently is exactly
-	// what left the orchestrator unable to send tasks (it then deflected or hallucinated success).
-	// A declared allowlist still governs every OTHER tool (a Coder can opt into KB, etc.).
-	if (surfaces.includes("coding")) for (const t of CODING) set.add(t);
+	// Invariant (issue #119 / CODER-008): a `coding`-surface agent that DRIVES its own engines
+	// always keeps the delegation tools (send_to_cli, read_terminal, list_coding_repos), even
+	// when a declared allowlist would omit them — silently dropping them is what once left an
+	// orchestrator unable to send tasks, after which it deflected or hallucinated success.
+	//
+	// The premise is now conditional, because Coder 2 split "coding agent" in two: a Repo Coder
+	// is DRIVEN BY its Lead, so carrying these would make its chat a third way to drive an
+	// engine, alongside the Co-pilot and the Overseer — the overlapping drive-paths #154 exists
+	// to remove. It opts out with `{id:"coding", drive:false}`; its Coding tab and its Pilot are
+	// unaffected, since neither goes through chat tools. Default stays true, so every existing
+	// agent is untouched.
+	if (optionsFor(capabilities, "coding")?.drive) for (const t of CODING) set.add(t);
 	return set;
 }
 

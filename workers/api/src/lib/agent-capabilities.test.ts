@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCapabilities, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList } from "./agent-capabilities.js";
+import { agentCapabilities, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
 
 describe("agentCapabilities", () => {
 	it("uses declared config.capabilities when present", () => {
@@ -214,5 +214,59 @@ describe("agentCapabilities", () => {
 			expect(caps.runtime).toBe("coding");
 			expect(caps.workflow).toBe("CODING_SESSION");
 		});
+	});
+});
+
+describe("custom surfaces — a bundle must not be able to impersonate a built-in tab", () => {
+	const surf = (over: Record<string, unknown> = {}) => ({
+		id: "notes", label: "Notes", bundleUrl: "https://example.com/s.js", ...over,
+	});
+
+	it("REJECTS a surface claiming a built-in id", () => {
+		// The console resolves custom surfaces BEFORE the built-in registry, so `{id:"settings"}`
+		// would render a third-party bundle where the real Settings tab belongs — a
+		// credential-phishing surface under a legitimate label.
+		for (const id of ["settings", "chat", "board", "coding", "knowledge", "apply"]) {
+			expect(sanitizeCustomSurfaces([surf({ id })])).toBeUndefined();
+		}
+	});
+
+	it("rejects a reserved id regardless of case or padding", () => {
+		expect(sanitizeCustomSurfaces([surf({ id: " SETTINGS " })])).toBeUndefined();
+	});
+
+	it("drops duplicate ids — they also produced duplicate React keys", () => {
+		const out = sanitizeCustomSurfaces([surf({ id: "notes" }), surf({ id: "notes", label: "Other" })]);
+		expect(out).toHaveLength(1);
+		expect(out?.[0].label).toBe("Notes");
+	});
+
+	it("enforces an id charset instead of accepting any non-empty string", () => {
+		for (const id of ["../evil", "a b", "Notes!", "", "-leading", "9start"]) {
+			expect(sanitizeCustomSurfaces([surf({ id })])).toBeUndefined();
+		}
+		expect(sanitizeCustomSurfaces([surf({ id: "my-notes2" })])).toHaveLength(1);
+	});
+
+	it("caps the count and the field lengths", () => {
+		// Sibling validators cap (settings 12, tools 40); this one capped nothing, so an owner
+		// could persist thousands of megabyte-labelled surfaces into every instance response.
+		const many = Array.from({ length: 50 }, (_, i) => surf({ id: `s${i}` }));
+		expect(sanitizeCustomSurfaces(many)?.length).toBeLessThanOrEqual(8);
+		const long = sanitizeCustomSurfaces([surf({ label: "x".repeat(5000), icon: "y".repeat(500) })]);
+		expect(long?.[0].label.length).toBe(80);
+		expect((long?.[0].icon ?? "").length).toBeLessThanOrEqual(8);
+	});
+
+	it("still requires an https bundle URL", () => {
+		for (const u of ["http://x/s.js", "javascript:alert(1)", "//x/s.js", ""]) {
+			expect(sanitizeCustomSurfaces([surf({ bundleUrl: u })])).toBeUndefined();
+		}
+	});
+
+	it("accepts a well-formed surface", () => {
+		expect(sanitizeCustomSurfaces([surf()])).toEqual([
+			{ id: "notes", label: "Notes", bundleUrl: "https://example.com/s.js", icon: undefined },
+		]);
 	});
 });

@@ -14,6 +14,8 @@
  * category, so nothing needs a migration to keep working.
  */
 
+import { parseSurfaceOptions, serializeSurfaceOptions } from "./surface-options.js";
+
 /** A console surface an agent opts into (drives tabs + which UI blocks render). */
 export type AgentSurface = "apply" | "coding" | "insurance" | "repo";
 
@@ -85,6 +87,8 @@ export interface AgentCapabilities {
 	tools?: string[];
 	/** Phase 3: agent-published UIs the console loads dynamically from bundles. */
 	customSurfaces?: CustomSurface[];
+	/** Per-surface options keyed by surface id (see lib/surface-options.ts). */
+	surfaceOptions?: Record<string, unknown>;
 	/** The agent's single work board columns — declared, else a per-surface default. */
 	boardColumns: BoardColumn[];
 	/** Typed per-instance settings the agent declares (subscriber sets values). */
@@ -151,17 +155,42 @@ export function sanitizeBoardColumns(value: unknown): BoardColumn[] | undefined 
 
 /** Validate declared custom surfaces — these load as CODE into the console origin,
  *  so require an https bundle URL and reject anything malformed. */
-function sanitizeCustomSurfaces(value: unknown): CustomSurface[] | undefined {
+/** Built-in tab ids a custom surface may NOT claim (store/console/src/lib/surfaces.tsx). */
+export const RESERVED_SURFACE_IDS = new Set([
+	"chat", "apply", "board", "repo", "coding", "activity", "knowledge", "indexing", "data", "settings",
+]);
+const MAX_CUSTOM_SURFACES = 8;
+const CUSTOM_SURFACE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
+
+/**
+ * Validate declared custom surfaces.
+ *
+ * The reserved-id check is a SECURITY control, not tidiness: the console resolves a custom
+ * surface BEFORE the built-in registry, so an agent declaring `{id:"settings"}` would render its
+ * own bundle where the real Settings tab belongs — a credential-phishing surface wearing a
+ * legitimate label. Duplicate ids are dropped for the same reason (and they produced duplicate
+ * React keys).
+ *
+ * Caps mirror the sibling validators (settingsSchema: 12 fields; tools: 40) which this one was
+ * missing entirely, so an owner could persist thousands of surfaces with megabyte labels into
+ * `agents.config` — a payload then serialized into every instance response.
+ */
+export function sanitizeCustomSurfaces(value: unknown): CustomSurface[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const out: CustomSurface[] = [];
+	const seen = new Set<string>();
 	for (const v of value) {
+		if (out.length >= MAX_CUSTOM_SURFACES) break;
 		if (!v || typeof v !== "object") continue;
 		const o = v as Record<string, unknown>;
-		const id = typeof o.id === "string" ? o.id : "";
-		const label = typeof o.label === "string" ? o.label : "";
-		const bundleUrl = typeof o.bundleUrl === "string" ? o.bundleUrl : "";
-		if (!id || !label || !/^https:\/\//.test(bundleUrl)) continue;
-		out.push({ id, label, bundleUrl, icon: typeof o.icon === "string" ? o.icon : undefined });
+		const id = (typeof o.id === "string" ? o.id : "").trim().toLowerCase();
+		const label = (typeof o.label === "string" ? o.label : "").trim().slice(0, 80);
+		const bundleUrl = (typeof o.bundleUrl === "string" ? o.bundleUrl : "").trim().slice(0, 500);
+		if (!CUSTOM_SURFACE_ID_RE.test(id) || RESERVED_SURFACE_IDS.has(id) || seen.has(id)) continue;
+		if (!label || !/^https:\/\//.test(bundleUrl)) continue;
+		seen.add(id);
+		const icon = typeof o.icon === "string" ? o.icon.trim().slice(0, 8) : undefined;
+		out.push({ id, label, bundleUrl, icon: icon || undefined });
 	}
 	return out.length ? out : undefined;
 }
@@ -253,6 +282,8 @@ const KNOWN_WORKFLOWS = new Set(["JOB_APPLY", "CODING_SESSION", "INSURANCE_QUOTE
  *  boardColumns are owned by their own routes/validators and are NOT part of this. */
 export interface DeclaredCapabilities {
 	surfaces?: AgentSurface[];
+	/** Per-surface options, keyed by surface id. Inert for a surface not in `surfaces`. */
+	surfaceOptions?: Record<string, unknown>;
 	runtime?: AgentRuntimeKind;
 	workflow?: AgentCapabilities["workflow"];
 	tools?: string[];
@@ -270,6 +301,14 @@ export function sanitizeDeclaredCapabilities(input: unknown): DeclaredCapabiliti
 	const out: DeclaredCapabilities = {};
 	if (Array.isArray(o.surfaces)) {
 		out.surfaces = [...new Set(o.surfaces.filter((s): s is AgentSurface => KNOWN_SURFACES.has(s as AgentSurface)))];
+	}
+	// Per-surface options — the shape a bare surface id cannot express. Sanitized through the
+	// same parser the consumers use, and stored compactly so declaring nothing non-default
+	// writes nothing. An option for an UNDECLARED surface is inert, never a way to switch one
+	// on; `optionsFor` gates on `surfaces` for exactly that reason.
+	if ("surfaceOptions" in o) {
+		const opts = serializeSurfaceOptions(parseSurfaceOptions(o.surfaceOptions));
+		if (Object.keys(opts).length) out.surfaceOptions = opts;
 	}
 	if ("runtime" in o) {
 		out.runtime = KNOWN_RUNTIMES.has(o.runtime as Exclude<AgentRuntimeKind, null>) ? (o.runtime as AgentRuntimeKind) : null;
