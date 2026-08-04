@@ -19,7 +19,7 @@ import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
-import { finishLoopRun } from "../lib/agent-loop-store.js";
+import { finishLoopRun, recordIteration } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
 
 /** Bounded worst case for one Pilot decide step, in USD micros. Settle refunds the rest. */
@@ -119,6 +119,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 								: outcome.outcome === "failed"
 									? "failed"
 									: "done";
+					// The Pilot drives its own loop and never called `recordIteration`, so
+					// `check_delegation` reported "iteration: 0 of 10" for a run that took a dozen
+					// steps — the supervisor's only progress signal, permanently reading zero.
+					// Recorded at the terminal state, which is when the real count is known.
+					await recordIteration(env, event.payload.loopRunId as string, outcome.steps ?? 0).catch(() => undefined);
 					await finishLoopRun(
 						env,
 						event.payload.loopRunId as string,

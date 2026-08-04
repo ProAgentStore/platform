@@ -67,6 +67,41 @@ export interface StepResult {
 }
 
 /**
+ * Cloudflare journals every `step.do` return value and rejects one over 1MiB with a
+ * `WorkflowInternalError` that kills the RUN — not the step. Seen in production:
+ *
+ *   lead_finder … failed … "Step s3-flatten-1 output is too large. Maximum allowed size is 1MiB."
+ *
+ * A sweep that happened to match a lot of places lost everything, several steps in, to an
+ * infrastructure error naming an internal step id — with no indication of what to do about it.
+ * Checked here, BEFORE returning, so it becomes an ordinary failed step: the run closes cleanly,
+ * the error store gets the real reason, and the message names the fix (`slice`, which exists for
+ * exactly this).
+ */
+const MAX_STEP_OUTPUT_BYTES = 900_000; // under 1MiB, with headroom for the journal's own framing
+
+export function capStepOutput(result: StepResult, tool: string, index: number): StepResult {
+	let bytes: number;
+	try {
+		bytes = new TextEncoder().encode(JSON.stringify(result)).length;
+	} catch {
+		return result; // unserializable is the Workflow engine's problem to report, not ours
+	}
+	if (bytes <= MAX_STEP_OUTPUT_BYTES) return result;
+	const kb = Math.round(bytes / 1024);
+	return {
+		tool,
+		bind: result.bind,
+		success: false,
+		content:
+			`step ${index} (${tool}) produced ${kb}KB, over the 1MiB per-step limit. ` +
+			"Cap the list before this step with a `slice` step (e.g. {\"tool\":\"slice\",\"inputs\":{\"limit\":50}}), " +
+			"or narrow the search that produced it.",
+		output: null,
+	};
+}
+
+/**
  * One entry in a record's audit trail (issue #98). Deliberately the SAME shape the /data
  * tab detail already renders for the lead-finder (`{step, detail, at}`), so generalizing
  * the console detail view means rendering this array unchanged. `step` is a short label

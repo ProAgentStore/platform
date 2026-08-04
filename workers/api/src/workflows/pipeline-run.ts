@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { attachAudit, auditStepEntry, executePipelineStep, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
+import { attachAudit, auditStepEntry, capStepOutput, executePipelineStep, stepBind, type AuditEntry, type PipelineDef, type StepResult } from "../lib/pipeline.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
 import { closeRun } from "../lib/pipeline-runs.js";
@@ -96,7 +96,13 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				// (typed `unknown`), which doesn't satisfy that constraint at compile time even
 				// though it's plain JSON at runtime. Route the callback through `unknown` and cast
 				// the journaled result back to StepResult — same escape hatch job-apply uses.
-				const result = (await step.do(`s${i}-${s.tool}`, async () => (await executePipelineStep({ env, userId, instanceId, traceId: runId }, s, i, outputs, params)) as unknown as Record<string, string>)) as unknown as StepResult;
+				const result = (await step.do(`s${i}-${s.tool}`, async () =>
+					capStepOutput(
+						(await executePipelineStep({ env, userId, instanceId, traceId: runId }, s, i, outputs, params)) as unknown as StepResult,
+						s.tool,
+						i,
+					) as unknown as Record<string, string>,
+				)) as unknown as StepResult;
 				outputs[bind] = result.output;
 				lastOutput = result.output;
 				// Capture this step's DECISION onto the trail (first-class, not reconstructed).
