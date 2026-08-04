@@ -290,6 +290,9 @@ interface AttemptInput {
 	config: Record<string, unknown>;
 	payload: unknown;
 	traceId: string | null;
+	/** Which kind of edge produced this (#17). Only affects how the failure is LABELLED — the
+	 *  retry mechanics are identical, which is the point of sharing one outbox. */
+	source?: "connection" | "trigger";
 }
 
 /**
@@ -311,9 +314,12 @@ export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"d
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		const outcome = await markAttemptFailed(env, input.deliveryId, input.attempts, message);
+		const kind = input.source === "trigger" ? "trigger" : "connection";
 		await logEvent(env, {
-			source: "connection",
-			event: outcome === "dead" ? "connection.delivery_dead" : "connection.delivery_retry",
+			// Label by the producing edge so a human reading the trace can tell a stuck trigger
+			// from a stuck connection; they are the same mechanism but not the same problem.
+			source: kind,
+			event: outcome === "dead" ? `${kind}.delivery_dead` : `${kind}.delivery_retry`,
 			level: "error",
 			message: outcome === "dead" ? `gave up after ${MAX_ATTEMPTS} attempts: ${message}` : message,
 			userId: input.userId,
@@ -361,6 +367,7 @@ export async function runDueDeliveries(env: Env, now = new Date(), limit = 25): 
 			config: parseJsonColumn(row.config),
 			payload,
 			traceId: row.trace_id,
+			source: row.source === "trigger" ? "trigger" : "connection",
 		});
 		if (outcome === "delivered") delivered++;
 		else if (outcome === "dead") dead++;

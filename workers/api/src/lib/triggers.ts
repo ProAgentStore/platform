@@ -10,6 +10,7 @@ import {
 	type DriveFile,
 } from "./drive.js";
 import { logEvent } from "./events.js";
+import { enqueueDelivery } from "./connection-deliveries.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
 import {
 	exportWorkDriveFile,
@@ -414,6 +415,29 @@ export async function dispatchTrigger(
        WHERE id = ?1`,
 		).bind(trigger.id, message.slice(0, 1000)).run();
 		await recordTriggerEvent(env, trigger, sourceType, "failed", { payload, error: message });
+
+		// #17: hand the failure to the SAME outbox connections use, rather than losing it.
+		// Before this a failed cron or webhook was simply gone, so whether your automation
+		// survived a transient outage depended on which kind of edge fired — and nothing said
+		// which. Enqueueing here (not before the attempt) keeps the happy path free of a write:
+		// the vast majority of dispatches succeed, and only a failure needs to become durable.
+		//
+		// The idempotency key is (source id, trace, payload) and the trace carries a timestamp,
+		// so each dispatch enqueues at most one retry chain and a later dispatch is not
+		// suppressed as a duplicate of an earlier failure.
+		await enqueueDelivery(env, {
+			connectionId: trigger.id,
+			source: "trigger",
+			userId: trigger.user_id,
+			sourceInstanceId: trigger.instance_id,
+			targetInstanceId: trigger.instance_id,
+			eventType: `trigger.${sourceType}`,
+			action: trigger.action,
+			payload,
+			config: parseConfig(trigger.config) as unknown as Record<string, unknown>,
+			traceId,
+		}).catch(() => null);
+
 		await logEvent(env, {
 			source: "trigger",
 			event: "trigger.failed",

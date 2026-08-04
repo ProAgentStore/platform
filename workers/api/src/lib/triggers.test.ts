@@ -365,3 +365,76 @@ describe("applyJitter (#172 schedule jitter)", () => {
 		}
 	});
 });
+
+describe("a failed trigger becomes durable (#17)", () => {
+	/** Captures writes so we can assert the outbox row, and fails the action to force the path. */
+	function envFailing() {
+		const writes: Array<{ sql: string; args: unknown[] }> = [];
+		const env = {
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind(...args: unknown[]) {
+							return {
+								async first() { return null; },
+								async all() { return { results: [] }; },
+								async run() { writes.push({ sql, args }); return { meta: { changes: 1 } }; },
+							};
+						},
+					};
+				},
+			},
+			// No AGENT binding → executeTriggerAction throws, which is the failure we want.
+		} as unknown as Env;
+		return { env, writes };
+	}
+
+	const row = {
+		id: "trg-1", user_id: "u1", instance_id: "i1", name: "Nightly sweep",
+		type: "cron", action: "run_pipeline", config: JSON.stringify({ pipeline: "sweep" }),
+		enabled: 1, schedule: "0 2 * * *", next_run_at: null, last_run_at: null,
+		failure_count: 0, last_error: null, token: null, created_at: "", updated_at: "",
+	} as never;
+
+	it("enqueues the failure into the SAME outbox connections use", async () => {
+		// Before this a failed cron was simply lost, so durability depended on which kind of
+		// edge fired — with nothing in the UI saying which.
+		const { env, writes } = envFailing();
+		await expect(dispatchTrigger(env, row, "cron", { a: 1 })).rejects.toThrow();
+		const enqueued = writes.find((w) => w.sql.includes("INSERT OR IGNORE INTO agent_connection_deliveries"));
+		expect(enqueued, "no outbox row was written").toBeTruthy();
+	});
+
+	it("marks the row as trigger-sourced so a stuck trigger is distinguishable", async () => {
+		const { env, writes } = envFailing();
+		await expect(dispatchTrigger(env, row, "cron", { a: 1 })).rejects.toThrow();
+		const enqueued = writes.find((w) => w.sql.includes("agent_connection_deliveries"));
+		expect((enqueued as { args: unknown[] }).args).toContain("trigger");
+		// The producing edge id is the TRIGGER, so replay targets the right thing.
+		expect((enqueued as { args: unknown[] }).args).toContain("trg-1");
+	});
+
+	it("still records the failure on the trigger itself and rethrows", async () => {
+		// The outbox is additional durability, not a replacement for the existing accounting —
+		// runDueTriggers counts the failure and the console still shows last_error.
+		const { env, writes } = envFailing();
+		await expect(dispatchTrigger(env, row, "cron", {})).rejects.toThrow();
+		expect(writes.some((w) => w.sql.includes("failure_count = failure_count + 1"))).toBe(true);
+	});
+
+	it("writes NOTHING to the outbox on a successful dispatch", async () => {
+		// The happy path must stay free of an extra write — the vast majority of dispatches
+		// succeed, and only a failure needs to become durable.
+		const writes: Array<{ sql: string }> = [];
+		const env = {
+			DB: {
+				prepare(sql: string) {
+					return { bind() { return { async first() { return null; }, async all() { return { results: [] }; }, async run() { writes.push({ sql }); return { meta: { changes: 1 } }; } }; } };
+				},
+			},
+			AGENT: { idFromName: () => "id", get: () => ({ fetch: async () => new Response("{}", { status: 200 }) }) },
+		} as unknown as Env;
+		await dispatchTrigger(env, { ...(row as object), action: "create_task" } as never, "cron", { title: "x" }).catch(() => undefined);
+		expect(writes.some((w) => w.sql.includes("agent_connection_deliveries"))).toBe(false);
+	});
+});

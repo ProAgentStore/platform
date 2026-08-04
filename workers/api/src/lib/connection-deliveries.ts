@@ -75,6 +75,8 @@ export function idempotencyKey(connectionId: string, traceId: string | null | un
 export interface DeliveryRow {
 	id: string;
 	connection_id: string;
+	/** 'connection' | 'trigger' (#17). Older rows predate the column and read as 'connection'. */
+	source?: string | null;
 	user_id: string;
 	source_instance_id: string;
 	target_instance_id: string;
@@ -92,8 +94,14 @@ export interface DeliveryRow {
 	updated_at: string;
 }
 
+/** What kind of edge produced a durable attempt. Triggers share this outbox (#17) rather than
+ *  growing a second one with its own backoff table and dead-letter concept. */
+export type DeliverySource = "connection" | "trigger";
+
 export interface EnqueueInput {
+	/** The producing edge: a connection id, or a trigger id when `source` is "trigger". */
 	connectionId: string;
+	source?: DeliverySource;
 	userId: string;
 	sourceInstanceId: string;
 	targetInstanceId: string;
@@ -115,9 +123,9 @@ export async function enqueueDelivery(env: Env, input: EnqueueInput): Promise<st
 	const now = new Date().toISOString();
 	const res = await env.DB.prepare(
 		`INSERT OR IGNORE INTO agent_connection_deliveries
-       (id, connection_id, user_id, source_instance_id, target_instance_id, event_type, action,
+       (id, connection_id, source, user_id, source_instance_id, target_instance_id, event_type, action,
         payload, config, idempotency_key, trace_id, status, attempts, next_attempt_at, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 0, ?12, ?12, ?12)`,
+     VALUES (?1, ?2, ?13, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', 0, ?12, ?12, ?12)`,
 	)
 		.bind(
 			id,
@@ -132,6 +140,9 @@ export async function enqueueDelivery(env: Env, input: EnqueueInput): Promise<st
 			key,
 			input.traceId ?? null,
 			now,
+			// #17: the outbox is shared with triggers now. Defaults to 'connection' so every
+			// existing caller is unchanged.
+			input.source ?? "connection",
 		)
 		.run();
 	return (res.meta?.changes ?? 0) > 0 ? id : null;
