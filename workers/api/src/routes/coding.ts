@@ -685,6 +685,23 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// stops changing, no error anywhere. Surfacing it here means the console can say "sign in"
 	// instead of the owner watching a dead terminal and concluding the platform is broken.
 	const authPrompt = detectAuthPrompt(String((snap as { pane?: unknown }).pane ?? ""));
+
+	// Persist the transcript at the END of a turn. Until now the ONLY writer was /explain (the
+	// Co-pilot), so anyone working in the Terminal view had nothing saved at all: the pane lived
+	// in the runner's memory and died with `pags up`. Worse, the stale snapshot from a previous
+	// session kept rendering, which is how a fixed error message went on being displayed.
+	//
+	// Gated on idle + changed rather than written on every poll: /capture runs every 3s per open
+	// session, and a read+write on each would be a lot of D1 for a pane that is not moving.
+	const pane = String((snap as { pane?: unknown }).pane ?? "");
+	const runState = String((snap as { runState?: unknown }).runState ?? "");
+	if (pane.trim() && runState === "idle") {
+		const last = await lastTerminal(c.env, sessionId);
+		if (pane.trim() !== (last ?? "").trim()) {
+			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "terminal", content: pane.slice(-8000) }).catch(() => undefined);
+		}
+	}
+
 	return c.json({
 		...(snap as object),
 		runnerConnected: true,

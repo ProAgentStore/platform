@@ -147,3 +147,36 @@ describe("engine sign-in relay (#coding-auth)", () => {
 		expect(body).toContain("new URL(prompt.url as string).host");
 	});
 });
+
+describe("terminal persistence (#coding-transcript)", () => {
+	/** The capture route's body — up to the NEXT route, not the first `return c.json(`, which is
+	 *  the runner-offline early return well before the code under test. */
+	const routeSrc = () => {
+		const src = readFileSync(join(import.meta.dirname, "coding.ts"), "utf8");
+		const i = src.indexOf("coding/sessions/:sessionId/capture");
+		const next = src.indexOf("codingRoutes.", i + 10);
+		return src.slice(i, next === -1 ? undefined : next);
+	};
+
+	it("persists the transcript from /capture, not only from /explain", () => {
+		// Before this, the ONLY writer was the Co-pilot route — so anyone working in the
+		// Terminal view had nothing saved, and the pane died with the runner.
+		expect(routeSrc()).toContain("appendTimeline");
+		expect(routeSrc()).toContain('type: "terminal"');
+	});
+
+	it("writes only at the END of a turn, not on every poll", () => {
+		// /capture runs every 3s per open session; a read+write per poll would be a lot of D1
+		// for a pane that is not moving.
+		expect(routeSrc()).toContain('runState === "idle"');
+	});
+
+	it("dedupes against the last saved snapshot", () => {
+		// An idle session polls forever; without this it would append an identical row each time.
+		expect(routeSrc()).toContain("lastTerminal");
+	});
+
+	it("caps what it stores", () => {
+		expect(routeSrc()).toContain("slice(-8000)");
+	});
+});
