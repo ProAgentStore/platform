@@ -353,18 +353,21 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		expect(merged.settingsSchema[0].id).toBe("target_language");
 	});
 
-	it("PUT capabilities rejects a non-https bundle URL (filters it out)", async () => {
+	it("PUT capabilities keeps only a bundle on a PLATFORM host", async () => {
+		// Tightened from "any https": a surface bundle executes as code in the console origin
+		// with the viewer's session, and the console's same-origin check used to be the ONLY
+		// enforcement. A cross-origin bundle is now refused server-side too.
 		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: null }] });
 		const res = await json(app, env, "PUT", "/v1/agents/a1/capabilities", {
 			customSurfaces: [
-				{ id: "s1", label: "Ok", bundleUrl: "https://cdn.example.com/s1.js" },
+				{ id: "s1", label: "Ok", bundleUrl: "https://proagentstore.online/s1.js" },
+				{ id: "xorigin", label: "Cross origin", bundleUrl: "https://cdn.example.com/s1.js" },
 				{ id: "bad", label: "Bad", bundleUrl: "http://insecure/s2.js" },
 				{ id: "js", label: "XSS", bundleUrl: "javascript:alert(1)" },
 			],
 		}, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as any;
-		// Only the https surface survives.
 		expect(body.customSurfaces).toHaveLength(1);
 		expect(body.customSurfaces[0].id).toBe("s1");
 	});

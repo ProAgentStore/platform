@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api, API, getToken } from "@proagentstore/sdk/client";
 import type { Instance, Message } from "../lib/types";
 import { identityFor } from "../lib/identity";
+import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
@@ -765,7 +766,16 @@ export default function InstanceDetail() {
 					// Agent-published (Phase 3) surface — load its bundle dynamically.
 					const custom = customSurfaces.find((c) => c.id === tab);
 					if (custom) {
-						return <DynamicSurface bundleUrl={custom.bundleUrl} instanceId={id} sessionId={urlSessionId} />;
+						// A custom surface is THIRD-PARTY CODE running in this origin. DynamicSurface
+						// catches a synchronous mount() throw, but an async one — the pattern the
+						// docs themselves promote — escaped to the global unhandledrejection handler
+						// and left a blank tab with no error UI. resetKey on the surface id so
+						// switching tabs clears a stale error.
+						return (
+							<ErrorBoundary resetKey={custom.id}>
+								<DynamicSurface bundleUrl={custom.bundleUrl} instanceId={id} sessionId={urlSessionId} />
+							</ErrorBoundary>
+						);
 					}
 					// Built-in surface from the static registry.
 					const active = SURFACES.find((s) => s.id === tab);

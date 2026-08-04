@@ -15,6 +15,7 @@
  */
 
 import { parseSurfaceOptions, serializeSurfaceOptions } from "./surface-options.js";
+import { isAllowedBundleUrl } from "./origins.js";
 
 /** A console surface an agent opts into (drives tabs + which UI blocks render). */
 export type AgentSurface = "apply" | "coding" | "insurance" | "repo";
@@ -187,7 +188,9 @@ export function sanitizeCustomSurfaces(value: unknown): CustomSurface[] | undefi
 		const label = (typeof o.label === "string" ? o.label : "").trim().slice(0, 80);
 		const bundleUrl = (typeof o.bundleUrl === "string" ? o.bundleUrl : "").trim().slice(0, 500);
 		if (!CUSTOM_SURFACE_ID_RE.test(id) || RESERVED_SURFACE_IDS.has(id) || seen.has(id)) continue;
-		if (!label || !/^https:\/\//.test(bundleUrl)) continue;
+		// Same-origin enforced SERVER-side (see isAllowedBundleUrl) — a bundle runs as code in
+		// the console origin, so the UI check must not be the only one.
+		if (!label || !isAllowedBundleUrl(bundleUrl)) continue;
 		seen.add(id);
 		const icon = typeof o.icon === "string" ? o.icon.trim().slice(0, 8) : undefined;
 		out.push({ id, label, bundleUrl, icon: icon || undefined });

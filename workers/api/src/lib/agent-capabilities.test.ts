@@ -218,8 +218,10 @@ describe("agentCapabilities", () => {
 });
 
 describe("custom surfaces — a bundle must not be able to impersonate a built-in tab", () => {
+	// Bundles must live on a platform host (see isAllowedBundleUrl) — a surface runs as code
+	// in the console origin, so the fixture uses a real allowed host.
 	const surf = (over: Record<string, unknown> = {}) => ({
-		id: "notes", label: "Notes", bundleUrl: "https://example.com/s.js", ...over,
+		id: "notes", label: "Notes", bundleUrl: "https://proagentstore.online/s.js", ...over,
 	});
 
 	it("REJECTS a surface claiming a built-in id", () => {
@@ -259,14 +261,23 @@ describe("custom surfaces — a bundle must not be able to impersonate a built-i
 	});
 
 	it("still requires an https bundle URL", () => {
-		for (const u of ["http://x/s.js", "javascript:alert(1)", "//x/s.js", ""]) {
+		for (const u of ["http://proagentstore.online/s.js", "javascript:alert(1)", "//x/s.js", ""]) {
 			expect(sanitizeCustomSurfaces([surf({ bundleUrl: u })])).toBeUndefined();
 		}
 	});
 
-	it("accepts a well-formed surface", () => {
-		expect(sanitizeCustomSurfaces([surf()])).toEqual([
-			{ id: "notes", label: "Notes", bundleUrl: "https://example.com/s.js", icon: undefined },
-		]);
+	it("REJECTS a cross-origin bundle server-side, not just in the console", () => {
+		// A bundle executes as code in the console origin with the viewer's session. The console
+		// refused cross-origin, but the server persisted and served it — so any second consumer
+		// (mobile shell, SSR/preview, admin preview) that mounted a bundle without re-doing that
+		// check inherited account takeover.
+		for (const u of ["https://evil.example/x.js", "https://proagentstore.online.evil.com/x.js"]) {
+			expect(sanitizeCustomSurfaces([surf({ bundleUrl: u })])).toBeUndefined();
+		}
+	});
+
+	it("accepts a bundle on the platform's own hosts", () => {
+		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "https://proagentstore.online/s.js" })])).toHaveLength(1);
+		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "https://cdn.proagentstore.online/s.js" })])).toHaveLength(1);
 	});
 });
