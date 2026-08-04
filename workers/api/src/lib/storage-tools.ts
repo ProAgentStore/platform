@@ -642,7 +642,20 @@ export async function executeStorageTool(
 							{ timeoutMs: READ_TIMEOUT_MS },
 						).catch(() => null)
 					: null;
-				if (snap) return ok(call.name, `[live · ${snap.runState || "unknown"}]\n${(snap.pane || "(empty)").slice(-3000)}`);
+				if (snap) {
+					// WHY the mode matters here: a one-shot engine (codex/grok/local — anything but
+					// Claude) spawns per turn and EXITS when the turn ends, so "idle" is the normal
+					// completed state. Without saying so, the brain reads idle + no new output as a
+					// hang and reports the work as stuck — which is exactly what happened: a finished
+					// `git pull` was blamed on unrelated OAuth noise in the startup banner.
+					const oneShot = session.clientType !== "claude";
+					const state = snap.runState || "unknown";
+					const note =
+						oneShot && state === "idle"
+							? " — one-shot engine: the turn has FINISHED (it exits after each turn); this is not a hang"
+							: "";
+					return ok(call.name, `[live · ${state}${note}]\n${(snap.pane || "(empty)").slice(-3000)}`);
+				}
 				// Runner offline / capture miss: fall back to the last saved snapshot, clearly labelled
 				// so the orchestrator never presents stale scrollback as live activity.
 				const tail = await lastTerminal(ctx.env as Env, session.id).catch(() => null);
@@ -673,7 +686,14 @@ export async function executeStorageTool(
 						{ sessionId: rSession.id, action: { kind: "message", text: msg } },
 						{ timeoutMs: READ_TIMEOUT_MS },
 					);
-					return ok(call.name, `Sent to ${rName}: "${msg.slice(0, 100)}"`);
+					// Set the expectation BEFORE the brain reads back. A one-shot engine runs the turn
+					// and exits, so the very next read_terminal shows "idle" — which reads as a hang
+					// unless you know that is what success looks like.
+					const rOneShot = rSession.clientType !== "claude";
+					const expect = rOneShot
+						? " The engine runs this turn then exits, so it will show as idle when finished — read the terminal for its output, and treat idle as DONE."
+						: " Read the terminal in a moment to see the result.";
+					return ok(call.name, `Sent to ${rName}: "${msg.slice(0, 100)}".${expect}`);
 				} catch {
 					return fail(call.name, "Runner offline — cannot send");
 				}

@@ -122,12 +122,26 @@ describe("github connector — resolveRepo error messages", () => {
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
 
-	it("treats a thrown token mint as no-access (does not propagate)", async () => {
+	it("reports a THROWN token mint as transient, not as a missing installation", async () => {
+		// These are different problems with different fixes. Reporting a network blip as
+		// "install the GitHub App" sent an owner to fix something that was already correct —
+		// the same call failed and then succeeded two minutes later with no config change.
 		const throwing = (_p: string) => ({ token: () => Promise.reject(new Error("boom")) }) as never;
 		const r = await tool("github_workflow_runs").handler(ctx({ connectorClient: throwing }), { repo: "acme/widgets" });
 		expect(r.success).toBe(false);
-		expect(r.content).toMatch(/No GitHub access/);
+		expect(r.content).toMatch(/transient|try again/i);
+		expect(r.content).not.toMatch(/^No GitHub access/);
+		// Still swallowed — a throw must never escape the tool.
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("still says NO ACCESS when the mint returns nothing (genuinely not installed)", async () => {
+		// The un-thrown, empty case is the real "not authorized" signal and must keep its
+		// actionable message.
+		const empty = (_p: string) => ({ token: () => Promise.resolve(null) }) as never;
+		const r = await tool("github_workflow_runs").handler(ctx({ connectorClient: empty }), { repo: "acme/widgets" });
+		expect(r.success).toBe(false);
+		expect(r.content).toMatch(/No GitHub access/);
 	});
 });
 

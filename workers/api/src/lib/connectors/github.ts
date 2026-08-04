@@ -38,8 +38,27 @@ async function resolveRepo(ctx: RegistryToolCtx, repo: string): Promise<{ token:
 	if (!githubAppConfigured(ctx.env)) return { error: "GitHub is not connected on this platform (GitHub App not configured)." };
 	const owner = ownerOf(repo);
 	if (!owner) return { error: `Invalid repo "${repo}" — use the form "owner/name".` };
-	const token = await ctx.connectorClient?.("github").token({ resourceId: repo }).catch(() => null);
-	if (!token) return { error: `No GitHub access for "${owner}". Install/authorize the ProAgentStore GitHub App for that account, then try again.` };
+	// Swallowing every error into one message made a TRANSIENT failure look like a missing
+	// installation: the same call failed at 11:17 and succeeded at 11:19 with no config change,
+	// and the agent told its owner to go install an App that was already installed. A wrong
+	// diagnosis costs more than a vague one, so distinguish the two.
+	let token: string | null = null;
+	let cause: unknown = null;
+	try {
+		token = (await ctx.connectorClient?.("github").token({ resourceId: repo })) ?? null;
+	} catch (e) {
+		cause = e;
+	}
+	if (!token) {
+		if (cause) {
+			const msg = cause instanceof Error ? cause.message : String(cause);
+			// A retryable fault names itself; "not installed" does not fail, it returns nothing.
+			return {
+				error: `Couldn't reach GitHub for "${owner}" just now (${msg.slice(0, 120)}). This is usually transient — try again. If it keeps failing, re-authorize the ProAgentStore GitHub App.`,
+			};
+		}
+		return { error: `No GitHub access for "${owner}". Install/authorize the ProAgentStore GitHub App for that account, then try again.` };
+	}
 	return { token };
 }
 
