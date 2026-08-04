@@ -33,6 +33,9 @@ export interface SurfaceContext {
 	boardColumns?: BoardColumn[];
 	/** The agent's declared subscriber settings (rendered on the Settings tab). */
 	settingsSchema?: SettingsField[];
+	/** Per-surface options (capabilities.surfaceOptions). `repos:"single"` hides the
+	 *  multi-repo affordances for an agent that owns exactly one repo. */
+	surfaceOptions?: Record<string, { repos?: string; drive?: boolean }>;
 	setChildHeader: (node: ReactNode | null) => void;
 	onUnsubscribe: () => void;
 }
@@ -87,8 +90,16 @@ export const SURFACES: SurfaceDef[] = [
 		label: "Coding",
 		icon: "💻",
 		show: (s) => s.includes("coding"),
-		render: ({ instanceId, sessionId, setChildHeader }) => (
-			<CodingTab key={instanceId} instanceId={instanceId} initialSessionId={sessionId} onHeaderOverride={setChildHeader} />
+		render: ({ instanceId, sessionId, setChildHeader, surfaceOptions }) => (
+			<CodingTab
+				key={instanceId}
+				instanceId={instanceId}
+				initialSessionId={sessionId}
+				onHeaderOverride={setChildHeader}
+				// A Repo Coder owns ONE repo by design; showing add-repo and a repo list it can
+				// never use is what made a configured agent look like the hardcoded Coder.
+				singleRepo={surfaceOptions?.coding?.repos === "single"}
+			/>
 		),
 	},
 	{

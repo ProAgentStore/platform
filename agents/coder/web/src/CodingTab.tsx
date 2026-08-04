@@ -17,6 +17,12 @@ interface Props {
 	instanceId: string;
 	initialSessionId?: string;
 	onHeaderOverride?: (content: ReactNode | null) => void;
+	/**
+	 * This agent owns exactly ONE repo (capabilities.surfaceOptions.coding.repos === "single").
+	 * Hides add-repo and the repo list: a Repo Coder is one agent per repository, and rendering
+	 * affordances it can never use is what made a configured agent look like the hardcoded Coder.
+	 */
+	singleRepo?: boolean;
 }
 
 // Remember the repo the user was last working on, per instance, so returning to the Coding
@@ -44,7 +50,7 @@ interface TimelineEntry {
 /** Returned by /capture when the engine is waiting for a human to sign in. */
 type AuthPrompt = { kind: "oauth-url" | "menu" | "unknown"; url: string | null; evidence: string; guidance: string };
 
-export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride }: Props) {
+export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride, singleRepo = false }: Props) {
 	const navigate = useNavigate();
 	const [repos, setRepos] = useState<CodingRepo[]>([]);
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
@@ -780,6 +786,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			</div>
 			{landingView === "repos" ? (
 				<ReposList
+					singleRepo={singleRepo}
 					instanceId={instanceId}
 					repos={repos}
 					sessions={sessions}

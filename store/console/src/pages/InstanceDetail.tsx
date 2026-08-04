@@ -776,6 +776,7 @@ export default function InstanceDetail() {
 						sessionId: urlSessionId,
 						boardColumns: instance?.capabilities?.boardColumns,
 						settingsSchema: instance?.capabilities?.settingsSchema,
+						surfaceOptions: instance?.capabilities?.surfaceOptions,
 						setChildHeader,
 						onUnsubscribe: () => navigate("/instances"),
 					});

@@ -11,7 +11,7 @@ type TimelineEntry = { type?: string; content?: string; text?: string };
 export default function ReposList({
 	instanceId,
 	repos, sessions, repoStatuses, runnerOnline,
-	showAddRepo, setShowAddRepo, addRepoInput, setAddRepoInput, addRepo,
+	singleRepo = false, showAddRepo, setShowAddRepo, addRepoInput, setAddRepoInput, addRepo,
 	openTerminal, startSession, setSettingsRepoId,
 	repoLabel, getActiveSession, onWorkOnIssue, onOpenEngines,
 }: {
@@ -20,6 +20,8 @@ export default function ReposList({
 	sessions: CodingSession[];
 	repoStatuses: Record<string, string>;
 	runnerOnline: boolean | null;
+	/** One-repo agent: hide add-repo and the "Repositories" header row. */
+	singleRepo?: boolean;
 	showAddRepo: boolean;
 	setShowAddRepo: (v: boolean) => void;
 	addRepoInput: string;
@@ -79,7 +81,10 @@ export default function ReposList({
 					<span className="text-ink font-bold text-[0.95rem]">Repositories</span>
 					<div className="flex gap-1.5">
 						<button type="button" onClick={onOpenEngines} title="CLI engines & sign-in" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold flex items-center gap-1"><Cpu size={13} /><span className="hidden sm:inline">Engines</span></button>
-						<button type="button" onClick={() => setShowAddRepo(!showAddRepo)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add</button>
+						{/* A one-repo agent cannot use this — its repo comes from its settings. */}
+						{!singleRepo && (
+							<button type="button" onClick={() => setShowAddRepo(!showAddRepo)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add</button>
+						)}
 					</div>
 				</div>
 
@@ -91,7 +96,7 @@ export default function ReposList({
 				)}
 
 				{/* Add repo form */}
-				{showAddRepo && (
+				{showAddRepo && !singleRepo && (
 					<div className="mt-3">
 						<div className="flex gap-1.5 flex-wrap">
 							<input

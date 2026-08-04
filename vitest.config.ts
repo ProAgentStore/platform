@@ -9,6 +9,10 @@ export default defineConfig({
 			// The console had NO unit tests and was not even in this glob, so anything added
 			// there would have passed locally and never run in CI.
 			"store/*/src/**/*.test.ts",
+			// Same gap for the Coder web UI. Named explicitly rather than `agents/*` — most
+			// dirs under agents/ are inert vendored seed copies (see pags/CLAUDE.md) and must
+			// not be swept into the suite.
+			"agents/coder/web/src/**/*.test.ts",
 		],
 		coverage: {
 			provider: "v8",

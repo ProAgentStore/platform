@@ -45,6 +45,8 @@ export interface Instance {
 		boardColumns?: BoardColumn[];
 		/** Typed per-instance settings the agent declares (rendered on Settings). */
 		settingsSchema?: SettingsField[];
+	/** Per-surface options; see workers/api/src/lib/surface-options.ts. */
+	surfaceOptions?: Record<string, { repos?: string; drive?: boolean }>;
 	};
 }
 
