@@ -74,3 +74,37 @@ describe("deriveClientType", () => {
 		expect(deriveClientType("some-other-cli")).toBe("codex");
 	});
 });
+
+describe("default engine presets", () => {
+	it("gives every non-Claude engine a NON-INTERACTIVE command", async () => {
+		// A bare `codex`/`gemini` launches a TUI and dies with "stdin is not a terminal",
+		// because headless mode has no PTY — the thing tmux used to provide. Verified live:
+		// `codex` exited 1 instantly; `codex exec` is the supported analogue of `claude -p`.
+		const mod = await import("./coding-engines.js");
+		const src = (await import("node:fs")).readFileSync(
+			(await import("node:path")).join(import.meta.dirname, "coding-engines.ts"),
+			"utf8",
+		);
+		expect(mod).toBeTruthy();
+		expect(src).toContain('command: "codex exec"');
+		expect(src).not.toMatch(/id: "codex",[^}]*command: "codex"\s*[,}]/);
+	});
+
+	it("ships a local-model preset — no cloud key required", async () => {
+		// "Give people options": a local model costs nothing per token, and the one-shot
+		// contract (command is a prefix, turn text appended) makes it work by configuration.
+		const src = (await import("node:fs")).readFileSync(
+			(await import("node:path")).join(import.meta.dirname, "coding-engines.ts"),
+			"utf8",
+		);
+		expect(src).toContain("ollama run");
+	});
+
+	it("defaults gemini to api-key — its individual Google sign-in is deprecated", async () => {
+		const src = (await import("node:fs")).readFileSync(
+			(await import("node:path")).join(import.meta.dirname, "coding-engines.ts"),
+			"utf8",
+		);
+		expect(src).toMatch(/id: "gemini"[\s\S]{0,120}auth: "api-key"/);
+	});
+});

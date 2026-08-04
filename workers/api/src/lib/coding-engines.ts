@@ -130,10 +130,18 @@ export function engineAuthFor(engines: CodingEngine[], launchCommand: string | n
  * the per-session choice picks one.
  */
 const DEFAULT_ENGINES: CodingEngine[] = [
+	// Claude is the one PERSISTENT engine (structured stream-json, multi-turn).
 	{ id: "claude", label: "Claude Code", command: "claude --dangerously-skip-permissions" },
-	{ id: "gemini", label: "Gemini CLI", command: "gemini" },
-	{ id: "codex", label: "Codex", command: "codex" },
-	{ id: "grok", label: "Grok", command: "grok" },
+	// Everything else runs ONE-SHOT: the command is a prefix and the turn text is appended as
+	// the final argument. So these must name each CLI's non-interactive mode — a bare `codex`
+	// or `gemini` launches a TUI, which dies instantly with "stdin is not a terminal" because
+	// headless mode has no PTY (that is what tmux used to provide).
+	{ id: "codex", label: "Codex", command: "codex exec" },
+	{ id: "gemini", label: "Gemini CLI", command: "gemini --prompt", auth: "api-key" },
+	{ id: "grok", label: "Grok", command: "grok --prompt" },
+	// Bring your own — a local model costs nothing per token and needs no cloud key. The prompt
+	// is appended, so anything prompt-in/text-out works by editing this command.
+	{ id: "local", label: "Local model (Ollama)", command: "ollama run llama3", auth: "machine" },
 ];
 
 /** Read the instance's engine presets (seeded defaults when unset). */

@@ -168,7 +168,32 @@ export class HeadlessSession {
 	}
 
 	/** Launch (or resume) the agent process. Idempotent if already alive. */
+	/**
+	 * Raw engines run ONE-SHOT PER TURN, not as a persistent interactive process.
+	 *
+	 * The persistent design assumed an interactive CLI reading stdin — which is what tmux used to
+	 * provide, via a PTY. Without one, `codex` (and grok, and any TUI) dies immediately with
+	 * "stdin is not a terminal", so three of the four engines were simply broken.
+	 *
+	 * AgentCoder solved this before PAGS existed and ran fine on it: `claude -p '<instruction>'`
+	 * per turn, plain exec, no PTY and no tmux. Codex's exact analogue is `codex exec`. So the
+	 * process is spawned when a turn ARRIVES and exits when the turn ends, rather than being
+	 * kept alive for stdin writes that a non-interactive binary will never read.
+	 *
+	 * Claude keeps its persistent stream-json process — it is explicitly non-interactive and
+	 * multi-turn, which is why it survived the migration untouched.
+	 */
+	private get oneShot(): boolean {
+		return this.mode === "raw";
+	}
+
 	start(): void {
+		// A one-shot engine has nothing to start until there is a turn to run; starting it here
+		// is what produced the instant "exited with code 1".
+		if (this.oneShot) {
+			this.run = "idle";
+			return;
+		}
 		if (this.alive) return;
 		// stream-json: we own the structural flags + --resume; merge the user's extras
 		// (e.g. --model) without letting them clobber or orphan-value our flags. raw:
@@ -230,12 +255,54 @@ export class HeadlessSession {
 				const msg = JSON.stringify({ type: "user", message: { role: "user", content: [{ type: "text", text }] } });
 				this.proc?.stdin?.write(`${msg}\n`);
 			} else {
-				// Raw CLI: write the line to stdin as if typed.
-				this.proc?.stdin?.write(`${text}\n`);
+				// Raw CLI: spawn THIS turn. See `oneShot` — there is no persistent process to
+				// write to, because a non-interactive binary would never have read it.
+				this.runOneShot(text);
 			}
 		} catch {
 			/* process may have died; the next snapshot reports not-alive */
 		}
+	}
+
+	/**
+	 * Run ONE turn as its own process, the way AgentCoder did (`claude -p '<instruction>'`).
+	 *
+	 * Contract, deliberately general so it is not a Codex special case: **the preset command is a
+	 * prefix and the turn text is appended as the final argument.** That makes every prompt-in /
+	 * text-out CLI usable by configuration alone —
+	 *
+	 *   codex exec              → codex exec "<turn>"
+	 *   claude -p               → claude -p "<turn>"
+	 *   ollama run llama3       → ollama run llama3 "<turn>"
+	 *   my-model --flag         → my-model --flag "<turn>"
+	 *
+	 * — including a local model, with no platform change and no cloud key. Whoever configures the
+	 * preset decides what runs and what it costs; the platform does not need to know the engine.
+	 */
+	private runOneShot(text: string): void {
+		const proc = spawn(this.cmdBin, [...this.cmdArgs, text], {
+			cwd: this.config.workDir,
+			env: mergeEnv(process.env, this.config.env),
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		this.proc = proc;
+		// Without an 'error' listener a spawn failure (binary not on PATH) is an uncaught
+		// exception that takes the whole runner down, not just this session.
+		proc.on("error", (err: Error) => {
+			this.push(`[${this.config.clientType}] failed to start: ${err.message}`);
+			this.run = "idle";
+			this.proc = null;
+		});
+		proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString()));
+		proc.stderr?.on("data", (d: Buffer) => this.onStdout(d.toString()));
+		proc.on("close", (code: number | null) => {
+			// A non-zero exit is the engine's own failure (bad flags, not signed in) and the
+			// operator needs to see it — silently going idle is how "stdin is not a terminal"
+			// looked like an idle session for a whole afternoon.
+			if (code) this.push(`[${this.config.clientType} exited with code ${code}]`);
+			this.run = "idle";
+			this.proc = null;
+		});
 	}
 
 	/** No TTY in headless mode; control is via messages. Kept for interface parity. */

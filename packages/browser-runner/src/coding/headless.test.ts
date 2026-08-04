@@ -27,27 +27,26 @@ rl.on("line", (line) => {
 /** A raw (non-Claude) CLI: echoes coloured (ANSI) lines for each stdin line, with a
  *  short delay before the second line, then goes quiet. */
 const FAKE_CODEX = `#!/usr/bin/env node
-const rl = require("node:readline").createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  process.stdout.write("\\x1b[32mthinking about: " + line + "\\x1b[0m\\n");
-  setTimeout(() => process.stdout.write("done: " + line + "\\n"), 150);
-});
+// One-shot, like \`codex exec "<turn>"\`: the prompt is the final argument, not a stdin line.
+const line = process.argv[2] || "";
+process.stdout.write("\\x1b[32mthinking about: " + line + "\\x1b[0m\\n");
+setTimeout(() => process.stdout.write("done: " + line + "\\n"), 150);
 `;
 
 /** A raw CLI whose FIRST output is slow (1.8s) — to prove we don't flip idle early. */
 const FAKE_SLOW = `#!/usr/bin/env node
-const rl = require("node:readline").createInterface({ input: process.stdin });
-rl.on("line", (line) => { setTimeout(() => process.stdout.write("late: " + line + "\\n"), 1800); });
+const line = process.argv[2] || "";
+setTimeout(() => process.stdout.write("late: " + line + "\\n"), 1800);
 `;
 
 /** A raw CLI that emits, PAUSES > 1.5s (e.g. a compile/test run), then resumes — to prove
  *  the settle heuristic doesn't LATCH idle: resumed output must restore "thinking". */
 const FAKE_PAUSER = `#!/usr/bin/env node
-const rl = require("node:readline").createInterface({ input: process.stdin });
-rl.on("line", (line) => {
-  process.stdout.write("part 1: " + line + "\\n");
-  setTimeout(() => process.stdout.write("part 2: " + line + "\\n"), 2000);
-});
+const line = process.argv[2] || "";
+process.stdout.write("part 1: " + line + "\\n");
+setTimeout(() => process.stdout.write("part 2: " + line + "\\n"), 2000);
+// Linger so the resumed-"thinking" state is observable before close ends the turn.
+setTimeout(() => {}, 4000);
 `;
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -141,7 +140,9 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	it("captures raw stdout (ANSI-stripped) into the transcript and settles to idle", async () => {
 		const s = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", bin: codexBin });
 		s.start();
-		expect(s.alive).toBe(true);
+		// A one-shot engine has nothing running until a turn arrives — starting it eagerly is
+		// what made `codex` die instantly with "stdin is not a terminal".
+		expect(s.alive).toBe(false);
 		s.input("hi");
 		expect(s.runState()).toBe("thinking"); // set synchronously on send
 
@@ -191,6 +192,8 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		// the transcript must reference codex and NEVER claude.
 		const s = new HeadlessSession({ id: "raw-default", workDir: dir, clientType: "codex" });
 		expect(() => s.start()).not.toThrow();
+		// One-shot: the process is spawned by the TURN, so nothing runs until input arrives.
+		s.input("hi");
 		await until(() => s.snapshot().toLowerCase().includes("codex"), 8000, "default raw engine process output");
 		const snap = s.snapshot().toLowerCase();
 		expect(snap).toContain("codex");
