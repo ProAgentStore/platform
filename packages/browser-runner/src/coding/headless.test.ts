@@ -149,9 +149,13 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 	it("captures raw stdout (ANSI-stripped) into the transcript and settles to idle", async () => {
 		const s = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", bin: codexBin });
 		s.start();
-		// A one-shot engine has nothing running until a turn arrives — starting it eagerly is
-		// what made `codex` die instantly with "stdin is not a terminal".
-		expect(s.alive).toBe(false);
+		// A one-shot engine spawns nothing until a turn arrives — starting it eagerly is what
+		// made `codex` die instantly with "stdin is not a terminal". Asserted as "no process ran"
+		// (empty transcript, idle) rather than `alive === false`: alive means "can take a turn",
+		// and reading it as "a process is executing" is what killed every delegated goal at
+		// iteration 0.
+		expect(s.snapshot()).toBe("");
+		expect(s.runState()).toBe("idle");
 		s.input("hi");
 		expect(s.runState()).toBe("thinking"); // set synchronously on send
 
@@ -193,6 +197,30 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		expect(s.runState()).toBe("idle");
 		s.stop();
 	}, 20_000);
+
+	it("is ALIVE between turns — a resting one-shot engine is not a dead session", async () => {
+		// The Pilot opens every iteration with
+		//   if (!snap.alive) return failed("coding session is not running")
+		// and a one-shot engine has no process between turns — that IS its resting state. So
+		// every delegated goal on codex/grok/gemini/ollama died at iteration 0 having done
+		// nothing, reporting a dead session that was healthy and answering interactive turns.
+		// `alive` means "can take a turn"; "is a turn executing" is runState.
+		const s = new HeadlessSession({ id: "raw-alive", workDir: dir, clientType: "codex", bin: codexBin });
+		s.start();
+		expect(s.alive).toBe(true); // before the first turn
+		expect(s.runState()).toBe("idle"); // ...and nothing is executing
+
+		s.input("hi");
+		await until(() => s.snapshot().includes("done: hi"), 12_000, "the turn to finish");
+		await until(() => s.runState() === "idle", 6000, "settle after the turn");
+		expect(s.alive).toBe(true); // still alive AFTER the turn's process exited
+
+		s.stop();
+		expect(s.alive).toBe(false); // stop() is the only thing that ends it
+		s.start();
+		expect(s.alive).toBe(true); // ...and a restart brings it back
+		s.stop();
+	}, 25_000);
 
 	it("passes EVERY preset param through to the engine, with the turn text last", async () => {
 		// "It should launch with any params provided" — the preset command is a prefix and the

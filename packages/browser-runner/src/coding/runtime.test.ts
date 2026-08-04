@@ -129,6 +129,19 @@ describe("CodingRuntime over the stream-json engine", () => {
 		expect(snap.runState).toBe("idle");
 	});
 
+	it("reports a resting ONE-SHOT session as alive — this is the shape the Pilot reads", () => {
+		// `runCodingLoop` fails the whole goal on `!snap.alive`, and this snapshot is what it
+		// gets. A one-shot engine has no process until a turn arrives, so before the fix every
+		// delegated goal on codex/grok/gemini reported "coding session is not running" at
+		// iteration 0 — against a session that was fine.
+		rt = new CodingRuntime(join(dir, "base"));
+		const snap = rt.start({ sessionId: "one-shot", repoId: "r1", workDir: dir, clientType: "codex", bin });
+		expect(snap.alive).toBe(true);
+		expect(snap.runState).toBe("idle");
+		expect(snap.ready).toBe(true);
+		rt.end("one-shot");
+	});
+
 	it("lists sessions and ends them", () => {
 		rt = new CodingRuntime(join(dir, "base"));
 		rt.start({ sessionId: "s2", repoId: "r1", workDir: dir, clientType: "claude", bin });

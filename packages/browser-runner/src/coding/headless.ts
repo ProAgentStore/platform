@@ -99,6 +99,8 @@ export class HeadlessSession {
 	private sawOutputSinceInput = false;
 	/** Raw-mode: when the current turn started (absolute idle backstop). */
 	private turnStartedAt = 0;
+	/** Set by stop() — the only thing that ends a one-shot session (see `alive`). */
+	private stopped = false;
 
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.sessionName = `pags-${config.clientType}-${config.id}`;
@@ -118,13 +120,36 @@ export class HeadlessSession {
 		this.binName = (this.cmdBin.split("/").pop() || this.cmdBin) || "cli";
 	}
 
-	/** True while the agent process is running. NOTE: do NOT use `proc.killed` — Node sets
-	 *  it true the instant a signal is DELIVERED, not when the process exits. interrupt()
-	 *  SIGINTs to abort a turn while the process keeps running, so `killed` gave a false
-	 *  "dead" → input() then spawned a SECOND process (orphaning the first). exitCode is
-	 *  null while running and set on normal exit; signalCode is set when a signal actually
-	 *  terminated it — together they're the real liveness signal. */
+	/**
+	 * Can this session take a turn? — NOT "is a process executing right now".
+	 *
+	 * The distinction only appeared with one-shot engines. A persistent Claude session has a
+	 * process alive between turns, so the two questions had the same answer and one getter served
+	 * both. A one-shot engine has NO process between turns — that is its resting state — so the
+	 * process-liveness answer is `false` for every question asked while the session sits idle,
+	 * which is exactly when the Pilot asks.
+	 *
+	 * The cost of conflating them was total: `runCodingLoop` opens with
+	 * `if (!snap.alive) return failed("coding session is not running")`, so every delegated goal
+	 * on codex/grok/gemini/ollama died at iteration 0 having done nothing, reporting a dead
+	 * session that was in fact healthy and answering interactive turns fine.
+	 *
+	 * So: a one-shot session is alive until `stop()`. Whether a turn is currently executing is
+	 * `runState`, which is the question the loop actually has a use for.
+	 *
+	 * NOTE for the persistent path: do NOT use `proc.killed` — Node sets it true the instant a
+	 * signal is DELIVERED, not when the process exits. interrupt() SIGINTs to abort a turn while
+	 * the process keeps running, so `killed` gave a false "dead" → input() then spawned a SECOND
+	 * process (orphaning the first). exitCode is null while running and set on normal exit;
+	 * signalCode is set when a signal actually terminated it — together they're the real signal.
+	 */
 	get alive(): boolean {
+		if (this.oneShot) return !this.stopped;
+		return this.procAlive;
+	}
+
+	/** Is a process running THIS instant? The persistent engine's liveness, and the spawn guard. */
+	private get procAlive(): boolean {
 		return this.proc !== null && this.proc.exitCode === null && this.proc.signalCode === null;
 	}
 
@@ -188,13 +213,16 @@ export class HeadlessSession {
 	}
 
 	start(): void {
+		// Starting always un-stops: `stop()` is what ends a one-shot session, so a (re)start
+		// after one has to bring it back or the session is permanently unusable.
+		this.stopped = false;
 		// A one-shot engine has nothing to start until there is a turn to run; starting it here
 		// is what produced the instant "exited with code 1".
 		if (this.oneShot) {
 			this.run = "idle";
 			return;
 		}
-		if (this.alive) return;
+		if (this.procAlive) return;
 		// stream-json: we own the structural flags + --resume; merge the user's extras
 		// (e.g. --model) without letting them clobber or orphan-value our flags. raw:
 		// run exactly what the user configured and capture stdout.
@@ -321,7 +349,7 @@ export class HeadlessSession {
 		this.lastOutputAt = Date.now();
 	}
 
-	/** Tear the process down. */
+	/** Tear the process down. For a one-shot engine this is the ONLY thing that ends the session. */
 	stop(): void {
 		try {
 			this.proc?.kill();
@@ -330,6 +358,7 @@ export class HeadlessSession {
 		}
 		this.proc = null;
 		this.run = "idle";
+		this.stopped = true;
 	}
 
 	// ── internals ────────────────────────────────────────────────────────────
