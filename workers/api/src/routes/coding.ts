@@ -36,6 +36,8 @@ import {
 	updateRepoClone,
 } from "../lib/coding-store.js";
 import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask } from "./instances-runtime.js";
+import { agentCapabilities } from "../lib/agent-capabilities.js";
+import { optionsFor } from "../lib/surface-options.js";
 import { logEvent } from "../lib/events.js";
 import { authPromptGuidance, detectAuthPrompt } from "../lib/engine-auth-prompt.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
@@ -1075,6 +1077,26 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	return c.json({ delegated: false, reply });
 });
 
+
+/**
+ * Is the in-agent Overseer switched off for this instance?
+ *
+ * True when the coding surface declares `drive:false` — the agent does not drive engines itself,
+ * so a cross-repo driver on top of it is the duplicated hierarchy #154 removes.
+ */
+async function overseerDisabled(env: Env, instanceId: string): Promise<boolean> {
+	const row = await env.DB.prepare(
+		`SELECT a.slug AS slug, a.category AS category, a.config AS config
+		   FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+		  WHERE i.id = ?1`,
+	)
+		.bind(instanceId)
+		.first<{ slug: string | null; category: string | null; config: string | null }>()
+		.catch(() => null);
+	if (!row) return false; // unknown shape → behave as before, never lock an agent out by accident
+	return optionsFor(agentCapabilities(row), "coding")?.drive === false;
+}
+
 /**
  * The cross-repo Overseer (#9, Step 2): ONE agent across ALL the user's repos. It
  * reads each repo's recent activity (global context) and either answers about
@@ -1084,6 +1106,14 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
  */
 codingRoutes.post("/:instanceId/coding/overseer", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
+	// The Overseer is the IN-AGENT cross-repo coordinator — it reads every repo on the instance
+	// and delegates into their engines via `drive_claude`. That is exactly the layer the platform
+	// supervision graph replaces, so an agent that declares `drive:false` (a Repo Coder: one repo,
+	// driven BY its Lead) must not carry it. Its UI is already gone; the route stayed reachable,
+	// which is the whole second layer still hanging off a leaf agent.
+	if (await overseerDisabled(c.env, instanceId)) {
+		throw new HttpError(403, "This agent doesn't coordinate across repos — its supervisor does. Give the goal to the Lead instead.");
+	}
 	const body = (await c.req.json().catch(() => ({}))) as { message?: string };
 	const raw = String(body.message ?? "").trim();
 	if (!raw) return c.json({ error: "message is required" }, 400);
