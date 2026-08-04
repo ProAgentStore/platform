@@ -32,14 +32,26 @@ async function subordinateSummaries(
 	const ids = subordinatesOf(await loadGraph(ctx.env as never, userId), supervisorId);
 	if (!ids.length) return [];
 	const placeholders = ids.map((_, i) => `?${i + 2}`).join(",");
+	// `agent_instances` has NO name column — a per-instance display name lives in
+	// config.displayName (set by PUT /:id/name), and everything else falls back to the template's
+	// name. Selecting i.name is a D1 error, not an empty result, so it takes the whole tool down.
 	const res = await ctx.env.DB.prepare(
-		`SELECT i.id AS id, i.status AS status, COALESCE(i.name, a.name) AS name
+		`SELECT i.id AS id, i.status AS status, i.config AS config, a.name AS agent_name
 		   FROM agent_instances i LEFT JOIN agents a ON a.id = i.agent_id
 		  WHERE i.user_id = ?1 AND i.id IN (${placeholders})`,
 	)
 		.bind(userId, ...ids)
-		.all<{ id: string; status: string; name: string | null }>();
-	return (res.results ?? []).map((r) => ({ instanceId: r.id, name: r.name ?? r.id, status: r.status }));
+		.all<{ id: string; status: string; config: string | null; agent_name: string | null }>();
+	return (res.results ?? []).map((r) => {
+		let displayName: string | null = null;
+		try {
+			const cfg = JSON.parse(r.config ?? "{}") as { displayName?: unknown };
+			if (typeof cfg.displayName === "string" && cfg.displayName.trim()) displayName = cfg.displayName.trim();
+		} catch {
+			// A malformed config must not hide the subordinate — fall back to the template name.
+		}
+		return { instanceId: r.id, name: displayName ?? r.agent_name ?? r.id, status: r.status };
+	});
 }
 
 export const SUPERVISION_TOOLS: ToolDef[] = [
