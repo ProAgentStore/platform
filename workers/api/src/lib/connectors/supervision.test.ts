@@ -62,7 +62,9 @@ describe("list_subordinates", () => {
 	});
 
 	it("falls back to the template's name", async () => {
-		const r = await tool("list_subordinates").handler(ctx(buildEnv()) as never, {});
+		// `detail:false` is the roster shape — the default now also carries each subordinate's live
+		// work state, which is what makes a supervisor an overseer rather than a dispatcher.
+		const r = await tool("list_subordinates").handler(ctx(buildEnv()) as never, { detail: false });
 		expect(JSON.parse(r.content)).toEqual([{ instanceId: "sub", name: "Repo Coder", status: "active" }]);
 	});
 
@@ -101,5 +103,89 @@ describe("check_delegation", () => {
 		const r = await tool("check_delegation").handler(ctx(buildEnv()) as never, {});
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/runId|instanceId/);
+	});
+});
+
+describe("list_subordinates — a supervisor needs the GLOBAL PICTURE, not a roster", () => {
+	// The hardcoded Overseer opens by reading every repo's live state, which is what lets it answer
+	// "which repo needs me?" in ONE model call. `list_subordinates` returned {instanceId, name,
+	// status} — and `status` is agent_instances.status, the SUBSCRIPTION status, permanently
+	// "active". So the Lead knew who it supervised and nothing else: every question about state had
+	// to be answered by DELEGATING a run, costing a durable workflow and a full LLM loop per
+	// question. That is a dispatcher, not an overseer.
+	const tool = SUPERVISION_TOOLS.find((t) => t.name === "list_subordinates")!;
+
+	function env(rows: { repos?: Array<{ id: string; name: string; instructions?: string }>; session?: boolean; term?: string }) {
+		return {
+			DB: {
+				prepare(sql: string) {
+					return {
+						bind() {
+							return {
+								async all() {
+									if (sql.includes("FROM agent_supervision")) {
+										return { results: [{ supervisor_instance_id: "lead", subordinate_instance_id: "sub1", enabled: 1 }] };
+									}
+									if (sql.includes("FROM agent_instances i LEFT JOIN agents")) {
+										return { results: [{ id: "sub1", status: "active", config: "{}", agent_name: "FAS platform" }] };
+									}
+									if (sql.includes("FROM coding_repos")) return { results: rows.repos ?? [] };
+									if (sql.includes("agent_loop_runs")) return { results: [] };
+									return { results: [] };
+								},
+								async first() {
+									if (sql.includes("FROM coding_sessions")) return rows.session ? { id: "s1", status: "active" } : null;
+									if (sql.includes("coding_timeline")) return rows.term ? { content: rows.term } : null;
+									return null;
+								},
+								async run() { return { meta: { changes: 0 } }; },
+							};
+						},
+					};
+				},
+			},
+		} as never;
+	}
+
+	it("reports each subordinate's repos and whether an engine is LIVE", async () => {
+		const r = await tool.handler(
+			{ env: env({ repos: [{ id: "r1", name: "fas/platform" }], session: true }), userId: "u1", instanceId: "lead" } as never,
+			{},
+		);
+		const out = JSON.parse(r.content) as Array<{ name: string; repos: Array<{ name: string; live: boolean }> }>;
+		expect(out[0].name).toBe("FAS platform");
+		expect(out[0].repos).toEqual([expect.objectContaining({ name: "fas/platform", live: true })]);
+	});
+
+	it("says NOT live when no engine is running, instead of implying work is happening", async () => {
+		const r = await tool.handler(
+			{ env: env({ repos: [{ id: "r1", name: "fas/platform" }], session: false }), userId: "u1", instanceId: "lead" } as never,
+			{},
+		);
+		expect((JSON.parse(r.content) as Array<{ repos: Array<{ live: boolean }> }>)[0].repos[0].live).toBe(false);
+	});
+
+	it("still returns the plain roster on detail:false — the cheap path stays cheap", async () => {
+		const r = await tool.handler({ env: env({}), userId: "u1", instanceId: "lead" } as never, { detail: false });
+		const out = JSON.parse(r.content) as Array<Record<string, unknown>>;
+		expect(out[0]).toEqual({ instanceId: "sub1", name: "FAS platform", status: "active" });
+		expect(out[0].repos).toBeUndefined();
+	});
+
+	it("degrades to the roster rather than failing when a subordinate can't be read", async () => {
+		// A subordinate whose runner is offline (or whose read throws) must still be listed —
+		// losing the whole tool because one agent is unreachable would be worse than no detail.
+		const broken = { DB: { prepare(sql: string) { return { bind() { return {
+			async all() {
+				if (sql.includes("FROM agent_supervision")) return { results: [{ supervisor_instance_id: "lead", subordinate_instance_id: "sub1", enabled: 1 }] };
+				if (sql.includes("FROM agent_instances i LEFT JOIN agents")) return { results: [{ id: "sub1", status: "active", config: "{}", agent_name: "FAS platform" }] };
+				throw new Error("runner unreachable");
+			},
+			async first() { throw new Error("runner unreachable"); },
+			async run() { return { meta: { changes: 0 } }; },
+		}; } }; } } } as never;
+		const r = await tool.handler({ env: broken, userId: "u1", instanceId: "lead" } as never, {});
+		expect(r.success).toBe(true);
+		expect((JSON.parse(r.content) as Array<{ name: string }>)[0].name).toBe("FAS platform");
 	});
 });
