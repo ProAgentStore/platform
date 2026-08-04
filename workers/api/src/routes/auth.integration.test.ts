@@ -228,7 +228,7 @@ describe("GET /v1/auth/github/callback (integration)", () => {
 		const linkState = await state({ linkUid: "google:99", bindNonce });
 		const res = await app.request(
 			`/v1/auth/github/callback?code=good&state=${encodeURIComponent(linkState)}`,
-			{ headers: { cookie: `pags_oauth_bind=${bindNonce}` } },
+			{ headers: { cookie: `pags_oauth_bind_github_link=${bindNonce}` } },
 			env,
 		);
 		expect(res.status).toBe(302);
@@ -269,7 +269,7 @@ describe("GET /v1/auth/github/callback (integration)", () => {
 		const legacy = await state({ linkUid: "google:99" }); // no bindNonce
 		const res = await app.request(
 			`/v1/auth/github/callback?code=good&state=${encodeURIComponent(legacy)}`,
-			{ headers: { cookie: "pags_oauth_bind=whatever" } },
+			{ headers: { cookie: "pags_oauth_bind_github_link=whatever" } },
 			env,
 		);
 		expect(res.status).toBe(400);
@@ -286,14 +286,14 @@ describe("GET /v1/auth/github/callback (integration)", () => {
 		);
 		expect(res.status).toBe(200);
 		const setCookie = res.headers.get("set-cookie") ?? "";
-		expect(setCookie).toMatch(/pags_oauth_bind=[0-9a-f]{32}/);
+		expect(setCookie).toMatch(/pags_oauth_bind_github_link=[0-9a-f]{32}/);
 		expect(setCookie).toContain("HttpOnly");
 		expect(setCookie).toContain("SameSite=Lax");
 		// The cookie value and the state's nonce must be the SAME value, or nothing can match.
 		const { url } = await res.json<{ url: string }>();
 		const stateParam = new URL(url).searchParams.get("state")!;
 		const payload = JSON.parse(atob(stateParam.split(".")[0].replace(/-/g, "+").replace(/_/g, "/"))) as { bindNonce?: string };
-		expect(setCookie).toContain(`pags_oauth_bind=${payload.bindNonce}`);
+		expect(setCookie).toContain(`pags_oauth_bind_github_link=${payload.bindNonce}`);
 	});
 });
 

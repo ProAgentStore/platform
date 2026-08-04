@@ -34,7 +34,15 @@
 // NOT applied to plain SIGN-IN (`/github/start`, `/google/start`): there the callback mints a
 // session for whoever consented, so completing someone else's flow signs you in as yourself.
 
-const COOKIE = "pags_oauth_bind";
+/**
+ * Cookie name, SCOPED PER FLOW.
+ *
+ * One shared name meant starting a Drive connect while a Gmail connect was still open overwrote
+ * the nonce, so the Gmail callback failed closed — and because every callback clears the cookie
+ * "whatever the outcome", finishing ANY flow invalidated every other one in flight. The provider
+ * is already pinned in the state, so scoping the cookie to it costs nothing.
+ */
+const cookieName = (scope: string): string => `pags_oauth_bind_${scope.replace(/[^a-z0-9_]+/gi, "_").slice(0, 40)}`;
 /** Matches the longest state TTL in use (the GitHub link flow's 30 min). */
 const MAX_AGE = 1800;
 
@@ -43,22 +51,23 @@ export function newOauthNonce(): string {
 }
 
 /** `Set-Cookie` value for the start response. Path=/ so every callback path receives it. */
-export function oauthBindCookie(nonce: string): string {
-	return `${COOKIE}=${nonce}; Path=/; Max-Age=${MAX_AGE}; HttpOnly; Secure; SameSite=Lax`;
+export function oauthBindCookie(nonce: string, scope: string): string {
+	return `${cookieName(scope)}=${nonce}; Path=/; Max-Age=${MAX_AGE}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 /** Expire the cookie once a flow finishes — a nonce is single-use. */
-export function clearOauthBindCookie(): string {
-	return `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+export function clearOauthBindCookie(scope: string): string {
+	return `${cookieName(scope)}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 }
 
 /** Read the bind nonce from a request's Cookie header, or null. */
-export function readOauthBindCookie(cookieHeader: string | null | undefined): string | null {
+export function readOauthBindCookie(cookieHeader: string | null | undefined, scope: string): string | null {
 	if (!cookieHeader) return null;
+	const want = cookieName(scope);
 	for (const part of cookieHeader.split(";")) {
 		const eq = part.indexOf("=");
 		if (eq < 0) continue;
-		if (part.slice(0, eq).trim() !== COOKIE) continue;
+		if (part.slice(0, eq).trim() !== want) continue;
 		const v = part.slice(eq + 1).trim();
 		return v || null;
 	}

@@ -35,10 +35,35 @@ function asArray(v: unknown): unknown[] {
  */
 export function differsFrom(stored: Record<string, unknown> | undefined, incoming: Record<string, unknown>): boolean {
 	if (!stored) return true;
+	// Compare only fields the stored record ACTUALLY HAS.
+	//
+	// `validateRecord` keeps only the collection's schema fields, and the schema is inferred from
+	// the FIRST inserted record — skipping keys whose value was null/undefined. So if the first
+	// `sites` row had no `email` (a lead with no public address: the common case), `email` is
+	// absent from the schema permanently. Comparing all incoming keys then found
+	// `stored.email === undefined` vs a string on every later run and reported "changed" for a
+	// byte-identical record — re-emitting `site.live`, which a new run's traceId stops the
+	// idempotency key from collapsing, so Outreach drafted and billed a second pitch. A key the
+	// schema drops is not persisted by this write either, so it cannot BE a change.
+	//
+	// Compared as strings because `validateRecord` coerces by field type (a numeric item value is
+	// stored as `String(value)` for a `string` field), and that coercion is not a change either.
+	let comparable = 0;
 	for (const [k, v] of Object.entries(incoming)) {
-		if (JSON.stringify(stored[k] ?? null) !== JSON.stringify(v ?? null)) return true;
+		if (!Object.hasOwn(stored, k)) continue;
+		comparable++;
+		const a = stored[k];
+		if (a === v) continue;
+		if (JSON.stringify(a ?? null) === JSON.stringify(v ?? null)) continue;
+		// String coercion only between PRIMITIVES. Applied to objects it compares
+		// "[object Object]" to "[object Object]", which reports every nested change as no-change —
+		// the opposite failure, and a silent one.
+		const primitive = (x: unknown) => x === null || x === undefined || typeof x !== "object";
+		if (primitive(a) && primitive(v) && String(a ?? "") === String(v ?? "")) continue;
+		return true;
 	}
-	return false;
+	// Nothing in common — we cannot show it is unchanged, so treat it as changed.
+	return comparable === 0;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

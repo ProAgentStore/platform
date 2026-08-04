@@ -163,11 +163,18 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 			// Settled even when a step failed: the tokens were spent either way, and a pool that
 			// only charges for successes lets a failing loop run free.
 			if (budgetId && reserved) {
+				// Cleared BEFORE the settle step, not after. `settle` is not idempotent — it both
+				// releases the reservation and ADDS the spend — so if the settle step threw after
+				// its body had run, the `finally` below would charge the same iteration to the
+				// shared tree pool a second time. Real money double-counted is worse than a
+				// reservation that leaks headroom in a pool the owner can reopen, and the settle
+				// step has its own retries. The finally therefore only ever settles a reservation
+				// whose settle was never ATTEMPTED.
+				outstanding = null;
 				await step.do(`settle-${iteration}`, async () => {
 					const after = await instanceSpendMicros(this.env, userId, instanceId);
 					await settle(this.env, userId, budgetId, reserved, Math.max(0, after - spendBefore));
 				});
-				outstanding = null;
 			}
 
 			const state: LoopState = { iteration, maxIterations, recentInstructions };

@@ -171,18 +171,30 @@ export function isJobSpecificQuestion(key: string): boolean {
  */
 export function guessProfileKey(field: string): string {
 	const f = field.toLowerCase();
-	if (/phone|mobile|tel/.test(f)) return "phone";
-	if (/salary|compensation|pay|rate/.test(f)) return "salaryExpectation";
-	if (/linkedin/.test(f)) return "linkedin";
-	if (/portfolio|website|url|site/.test(f)) return "website";
-	if (/work auth|authoriz|right to work|visa|sponsor/.test(f)) return "workAuthorization";
-	if (/postal|zip/.test(f)) return "postalCode";
-	if (/city/.test(f)) return "city";
-	if (/state|province|region/.test(f)) return "state";
-	if (/country/.test(f)) return "country";
-	if (/email/.test(f)) return "email";
-	if (/first name/.test(f)) return "firstName";
-	if (/last name|surname/.test(f)) return "lastName";
+	// WORD-BOUNDED. These were bare substrings, and `saveAskAndHoldAnswer` writes the answer
+	// straight into the matched standard column whenever that column is EMPTY — which is exactly
+	// when the agent is asking. So a free-text question containing an unrelated word silently
+	// overwrote canonical PII, and the next real application typed it into a live form:
+	//
+	//   "Have you worked in hotel management?"        → /tel/  → phone            = "No"
+	//   "Is this statement accurate?"                 → /rate/ → salaryExpectation
+	//   "Are you an onsite or remote candidate?"      → /site/ → website
+	//   "How many years at a corporate law firm?"     → /rate/ → salaryExpectation
+	//
+	// `profileToCandidate` then emits `- Phone: No` into the apply prompt. The old tests only
+	// used exact labels ("phone", "salary expectation"), so none of this showed.
+	if (/\b(phone|mobile|cell|telephone|tel)\b/.test(f)) return "phone";
+	if (/\b(salary|compensation|pay|rate)\b/.test(f)) return "salaryExpectation";
+	if (/\blinkedin\b/.test(f)) return "linkedin";
+	if (/\b(portfolio|website|url|site)\b/.test(f)) return "website";
+	if (/\b(work auth\w*|authoriz\w*|right to work|visa|sponsor\w*)\b/.test(f)) return "workAuthorization";
+	if (/\b(postal|postcode|zip)\b/.test(f)) return "postalCode";
+	if (/\bcity\b/.test(f)) return "city";
+	if (/\b(state|province|region)\b/.test(f)) return "state";
+	if (/\bcountry\b/.test(f)) return "country";
+	if (/\be-?mail\b/.test(f)) return "email";
+	if (/\bfirst name\b|\bgiven name\b/.test(f)) return "firstName";
+	if (/\b(last name|surname|family name)\b/.test(f)) return "lastName";
 	return f.replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "note";
 }
 

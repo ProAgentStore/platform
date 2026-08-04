@@ -288,9 +288,11 @@ describe("tool catalog reachability — a tool nobody can call is not a tool", (
 		// executeStorageTool directly, past the gate. So the agent could create and update
 		// records forever and never delete one.
 		expect(CREATOR_SELECTABLE_TOOLS.has("delete_record")).toBe(true);
-		// Reachable BOTH ways: in the default full set, and via an explicit declaration.
-		expect(toolNamesFor(caps()).has("delete_record")).toBe(true);
 		expect(toolNamesFor(caps({ tools: ["delete_record"] })).has("delete_record")).toBe(true);
+		// But NOT by default. Folding it into COLLECTIONS would put it in FULL, which is what
+		// every agent declaring no allowlist gets — silently handing an irreversible delete to
+		// every existing production agent, with no owner opt-in and no undo.
+		expect(toolNamesFor(caps()).has("delete_record")).toBe(false);
 	});
 
 	it("every catalog name is reachable through the declared-tools path", () => {

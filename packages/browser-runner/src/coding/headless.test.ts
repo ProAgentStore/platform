@@ -416,3 +416,44 @@ describe("HeadlessSession.key — a no-op that READS as success is worse than an
 		expect(s.snapshot()).toMatch(/ignored keypress/i);
 	});
 });
+
+describe("parseCommand — an apostrophe in ordinary English must survive", () => {
+	it("keeps an unbalanced quote inside its token", () => {
+		// Presets are user-edited free text. The quote-stripping regex matched `don` and left `t`
+		// as a separate argument, so `--append-system-prompt don't guess` reached the engine as
+		// three broken args. The old `(\S+)` fallback kept it intact.
+		expect(parseCommand("claude --append-system-prompt don't")).toEqual({ bin: "claude", args: ["--append-system-prompt", "don't"] });
+		expect(parseCommand("claude it's fine")).toEqual({ bin: "claude", args: ["it's", "fine"] });
+	});
+
+	it("still strips BALANCED quotes, including mid-token", () => {
+		expect(parseCommand('codex exec -c model="o3"')).toEqual({ bin: "codex", args: ["exec", "-c", "model=o3"] });
+		expect(parseCommand('claude --p="two words"')).toEqual({ bin: "claude", args: ["--p=two words"] });
+	});
+});
+
+describe("HeadlessSession — a one-shot engine that cannot SPAWN is not alive", () => {
+	it("reports dead when the binary is missing, so the Pilot stops instead of retrying forever", async () => {
+		// `alive = !stopped` made a misconfigured engine indistinguishable from a healthy idle one,
+		// so `runCodingLoop`'s `if (!snap.alive)` guard — the thing that catches a bad command —
+		// became structurally unreachable for every one-shot engine, and the Pilot burned all 40
+		// BYOK decisions re-spawning a binary that isn't there.
+		const s = new HeadlessSession({ id: "missing", workDir: tmpdir(), clientType: "codex", bin: join(tmpdir(), "no-such-engine-xyz") });
+		s.start();
+		expect(s.alive).toBe(true); // nothing has been tried yet
+		s.input("hi");
+		await until(() => !s.alive, 8000, "the spawn failure to be reported");
+		expect(s.alive).toBe(false);
+		expect(s.snapshot()).toMatch(/failed to start/i);
+	}, 15_000);
+
+	it("a restart clears the failure — it is also a retry of the command", async () => {
+		const s = new HeadlessSession({ id: "missing2", workDir: tmpdir(), clientType: "codex", bin: join(tmpdir(), "no-such-engine-xyz") });
+		s.start();
+		s.input("hi");
+		await until(() => !s.alive, 8000, "the spawn failure");
+		s.start();
+		expect(s.alive).toBe(true);
+		s.stop();
+	}, 15_000);
+});

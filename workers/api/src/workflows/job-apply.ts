@@ -1,5 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { decideAction, describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
+import { decideAction, describeAction, dryRunBlockReason, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyJob, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
 import { callRunner, getBoundRunnerConn, type RunnerConn } from "../lib/runner-client.js";
 import { atsHost, getAtsCacheHint, saveAtsCache } from "../lib/apply-cache.js";
 import { saveAskAndHoldAnswer } from "../lib/profile.js";
@@ -77,6 +77,22 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 		// Resolved fresh (not journaled) so the runner token never lands in state.
 		const conn = await getBoundRunnerConn(env, instanceId, userId);
 		if (!conn) {
+			// The runner task was ALREADY created and mirrored as `running` before this workflow
+			// booted, and this return skips `/browser/complete` — the only thing that closes it.
+			// Nothing else ever would: `expireOrphanedRuntimeTasks` deliberately exempts
+			// `job.apply_agent`. So a WiFi blip in the ~200ms between the pre-flight check and the
+			// workflow starting left the row `running` forever, and the single-flight claim in
+			// `/apply` matched it — every future application 409'd "already in progress" for the
+			// full 4h STALE_APPLY_MS window, for an application that never took a step.
+			await step.do("no-runner-close", async () => {
+				await env.DB.prepare(
+					"UPDATE instance_runtime_tasks SET status = 'failed', updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
+				)
+					.bind(taskId, instanceId, userId)
+					.run()
+					.catch(() => undefined);
+				return null;
+			});
 			return { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
 		}
 
@@ -133,8 +149,12 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				// slip through and really submit in test mode). "Finish"/"Done" are never entry
 				// buttons; "Easy/Quick Apply" + "1-click" submit from a saved profile. Plain
 				// "Apply"/"Apply now"/"Next"/"Continue" stay walkable so dry-run can still fill.
-				if (job.dryRun && a.action === "click" && /\bsubmit\b|\bfinish\b|\bdone\b|\bcomplete\b|\bconfirm\b|send application|submit application|easy apply|quick apply|one[- ]?click|1[- ]?click/i.test(String(a.name ?? ""))) {
-					return { url: "", challenge: null as string | null, error: "DRY-RUN (test mode): the final submit is BLOCKED — do not submit. Call finish(status:\"ready\") now." };
+				// One stateless guard, shared with the pure loop's module so it is testable without a
+				// Workflow — including the nameless-click case, which slipped past BOTH guards and
+				// really submitted an application during a test run.
+				const blocked = job.dryRun ? dryRunBlockReason(a as { action?: string; name?: string }) : null;
+				if (blocked) {
+					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
 					// Pass resumePath so the runner arms file-chooser auto-attach (résumé

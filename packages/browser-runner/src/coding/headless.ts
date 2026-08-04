@@ -101,6 +101,15 @@ export class HeadlessSession {
 	private turnStartedAt = 0;
 	/** Set by stop() — the only thing that ends a one-shot session (see `alive`). */
 	private stopped = false;
+	/**
+	 * The engine binary could not be spawned (ENOENT, not executable).
+	 *
+	 * Without this, `alive = !stopped` made a MISCONFIGURED engine indistinguishable from a
+	 * healthy idle one — so `runCodingLoop`'s `if (!snap.alive)` guard, the thing that catches a
+	 * bad command, became structurally unreachable for every one-shot engine and the Pilot burned
+	 * all 40 BYOK decisions re-spawning a binary that isn't there.
+	 */
+	private spawnFailed = false;
 
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.sessionName = `pags-${config.clientType}-${config.id}`;
@@ -144,7 +153,7 @@ export class HeadlessSession {
 	 * signalCode is set when a signal actually terminated it — together they're the real signal.
 	 */
 	get alive(): boolean {
-		if (this.oneShot) return !this.stopped;
+		if (this.oneShot) return !this.stopped && !this.spawnFailed;
 		return this.procAlive;
 	}
 
@@ -216,6 +225,7 @@ export class HeadlessSession {
 		// Starting always un-stops: `stop()` is what ends a one-shot session, so a (re)start
 		// after one has to bring it back or the session is permanently unusable.
 		this.stopped = false;
+		this.spawnFailed = false; // a restart is also a retry of a command that could not run
 		// A one-shot engine has nothing to start until there is a turn to run; starting it here
 		// is what produced the instant "exited with code 1".
 		if (this.oneShot) {
@@ -332,6 +342,9 @@ export class HeadlessSession {
 			this.push(`[${this.config.clientType}] failed to start: ${err.message}`);
 			this.run = "idle";
 			this.proc = null;
+			// The command itself is unrunnable — report the session dead so the loop stops with a
+			// real reason instead of retrying a binary that does not exist.
+			this.spawnFailed = true;
 		});
 		proc.stdout?.on("data", (d: Buffer) => this.onStdout(d.toString()));
 		proc.stderr?.on("data", (d: Buffer) => this.onStdout(d.toString()));
@@ -483,11 +496,47 @@ function stamp(): string {
  * tokenize like the command line it looks like.
  */
 export function parseCommand(command: string | undefined): { bin: string; args: string[] } {
+	const src = command ?? "";
 	const tokens: string[] = [];
-	// One token = a run of unquoted chars and/or quoted spans, glued together (`"a b"c` → `a bc`).
-	const re = /(?:[^\s"']+|"[^"]*"|'[^']*')+/g;
-	for (const raw of (command ?? "").match(re) ?? []) {
-		tokens.push(raw.replace(/"([^"]*)"|'([^']*)'/g, (_m, d, s) => d ?? s ?? ""));
+	const isSpace = (c: string) => c === " " || c === "\t" || c === "\n" || c === "\r";
+	let i = 0;
+	while (i < src.length) {
+		while (i < src.length && isSpace(src[i])) i++;
+		if (i >= src.length) break;
+		const start = i;
+		let out = "";
+		let quote: string | null = null;
+		while (i < src.length) {
+			const ch = src[i];
+			if (quote) {
+				if (ch === quote) quote = null;
+				else out += ch;
+				i++;
+				continue;
+			}
+			if (ch === '"' || ch === "'") {
+				quote = ch;
+				i++;
+				continue;
+			}
+			if (isSpace(ch)) break;
+			out += ch;
+			i++;
+		}
+		if (quote) {
+			// UNTERMINATED quote → it was a literal character, not a quote. `don't` is ordinary
+			// English in a user-edited preset; treating the apostrophe as an opening quote made
+			// `--append-system-prompt don't guess` reach the engine as three broken arguments.
+			i = start;
+			let raw = "";
+			while (i < src.length && !isSpace(src[i])) {
+				raw += src[i];
+				i++;
+			}
+			tokens.push(raw);
+		} else {
+			tokens.push(out);
+		}
 	}
 	return { bin: tokens[0] ?? "", args: tokens.slice(1) };
 }

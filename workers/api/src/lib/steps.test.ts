@@ -711,8 +711,23 @@ describe("dedupe_upsert emitOn:\"update\" — a re-write is not a CHANGE", () =>
 		expect(differsFrom({ ...item, site_status: "drafted" }, item)).toBe(true);
 	});
 
-	it("says CHANGED when the record is missing a field the pipeline writes", () => {
-		expect(differsFrom({ place_id: "p1", name: "Cafe" }, item)).toBe(true);
+	it("says NO CHANGE for a field the collection schema does not store", () => {
+		// The schema is inferred from the FIRST inserted record and skips null/undefined values,
+		// so a field absent from the stored record is one `validateRecord` DROPS on write too —
+		// writing it changes nothing. Comparing it anyway reported "changed" on every run for a
+		// byte-identical record, re-emitting `site.live` (a new run has a new traceId, so the
+		// idempotency key cannot collapse it) and billing Outreach for a second pitch.
+		expect(differsFrom({ place_id: "p1", name: "Cafe" }, item)).toBe(false);
+	});
+
+	it("but says CHANGED when NOTHING is comparable — we cannot show it is unchanged", () => {
+		expect(differsFrom({ unrelated: 1 }, item)).toBe(true);
+	});
+
+	it("ignores the type coercion validateRecord applies on write", () => {
+		// A `string` field stores String(value); that is not a state change.
+		expect(differsFrom({ rating: "4" }, { rating: 4 })).toBe(false);
+		expect(differsFrom({ rating: "4" }, { rating: 5 })).toBe(true);
 	});
 
 	it("says CHANGED when there is no stored record to compare against", () => {

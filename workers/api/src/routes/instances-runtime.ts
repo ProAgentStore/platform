@@ -372,6 +372,15 @@ export async function clearFinishedRuntimeTasks(
 }
 
 /**
+ * Task types driven by a durable remote Workflow, not by the runner process.
+ *
+ * They own their own lifecycle and their own handoff timeout, so a runner reconnect does NOT
+ * orphan them. Kept as one set because the predicate is needed in two places (the SQL filter and
+ * the per-row guard) and they drifted: `browser.task` was in neither.
+ */
+const WORKFLOW_DRIVEN_TASK_TYPES = new Set(["job.apply_agent", "browser.task"]);
+
+/**
  * When a runner (re)registers, any task that was mid-flight on the PREVIOUS
  * session is orphaned — its browser page / takeover session died with the old
  * process and can never be resumed. Mark those (needs_human / running) as failed
@@ -391,7 +400,7 @@ export async function expireOrphanedRuntimeTasks(
 		// would kill a live "needs_human" apply task mid-takeover.
 		`SELECT id, payload FROM instance_runtime_tasks
      WHERE instance_id = ?1 AND user_id = ?2 AND status IN ('needs_human', 'running')
-       AND type != 'job.apply_agent'`,
+       AND type NOT IN ('job.apply_agent', 'browser.task')`,
 	)
 		.bind(instanceId, userId)
 		.all<RuntimeTaskMirrorRow>();
@@ -403,8 +412,13 @@ export async function expireOrphanedRuntimeTasks(
 	for (const row of results) {
 		const task = parsePayload(row.payload);
 		if (!isRecord(task)) continue;
-		// Workflow-driven apply tasks survive a runner reconnect — never expire them.
-		if (task.type === "job.apply_agent") continue;
+		// Workflow-driven tasks survive a runner reconnect — never expire them. `browser.task`
+		// was missing: BrowserTaskWorkflow is just as durable, so restarting `pags up` marked a
+		// live browse run "failed" on the board AND released the single-flight claim (which keys
+		// on queued/running/needs_human) — so a re-run started a SECOND workflow issuing actions
+		// against the same shared page the first was still driving. Interleaved clicks and types
+		// on a live page is exactly what that claim exists to prevent.
+		if (WORKFLOW_DRIVEN_TASK_TYPES.has(String(task.type))) continue;
 		task.status = "failed";
 		task.error = reason;
 		task.updatedAt = now;

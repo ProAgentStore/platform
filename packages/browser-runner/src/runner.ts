@@ -45,6 +45,17 @@ const CAPABILITIES: RunnerCapability[] = [
 export const MAX_AUTONOMOUS_ATTEMPTS = 3;
 
 const APPROVAL_REQUIRED_TASKS = new Set(["browser.open"]);
+
+/**
+ * Tasks steered by a remote durable Workflow rather than executed by the runner.
+ *
+ * ONE list, because the two places that need it drifted: task creation already treated
+ * `browser.task` like `job.apply_agent`, but `resumeTakeover` did not — so a human resolving a
+ * stuck browse handoff destroyed the takeover session instead of handing control back, and the
+ * workflow then polled a dead session for 15 minutes before failing a run it had already
+ * completed.
+ */
+const WORKFLOW_DRIVEN_TASKS = new Set(["job.apply_agent", "browser.task"]);
 const require = createRequire(import.meta.url);
 
 
@@ -118,7 +129,7 @@ export class LocalRunner {
 		// steered by the remote Workflow brain via the /browser/* endpoints — the runner
 		// never auto-executes them. The task exists for the console board, the activity
 		// trace, and takeover keying.
-		if (normalized.type === "job.apply_agent" || normalized.type === "browser.task") {
+		if (WORKFLOW_DRIVEN_TASKS.has(normalized.type)) {
 			const task: RunnerTask = {
 				id: `task_${crypto.randomUUID()}`,
 				type: normalized.type,
@@ -403,10 +414,18 @@ export class LocalRunner {
 		if (!task) throw new RunnerInputError("Task not found");
 		const page = session.page;
 
-		// Agent-driven applications are steered by the remote workflow. "Resume"
-		// here just signals the human finished the stuck step (or solved a captcha);
-		// the workflow polls humanDone and continues driving. Do NOT complete/submit.
-		if (task.type === "job.apply_agent") {
+		// Agent-driven runs are steered by the remote workflow. "Resume" here just signals the
+		// human finished the stuck step (or solved a captcha); the workflow polls humanDone and
+		// continues driving. Do NOT complete/submit.
+		//
+		// `browser.task` belongs here too, and its omission made a stuck handoff UNRESOLVABLE:
+		// `humanDone` is set ONLY in this branch, so a browse task fell through to the path below,
+		// which sets `status = "completed"` and calls `endTakeover()` — destroying the session.
+		// `browserHandoffStatus` then returns `{solved:false}` forever (no session), so the
+		// workflow polled for the full 15 minutes and closed the run "failed — stuck not resolved
+		// in time", on a task it had already marked completed. The console's Resume button is
+		// agent-agnostic, so the user pressing it was what broke the run.
+		if (WORKFLOW_DRIVEN_TASKS.has(task.type)) {
 			session.humanDone = true;
 			this.addTaskEvent(task, "job.resumed", "Human finished the step — handing back to the agent");
 			return { submitted: false, resumed: true, reason: "handed back to the agent — the agent is continuing" };
@@ -418,7 +437,7 @@ export class LocalRunner {
 			return { submitted: false, reason: `The ${challenge} challenge isn't solved yet — complete it in the live view, then submit again.` };
 		}
 
-		// Only browser.open reaches here now (job.apply_agent returns above) — it just
+		// Only browser.open reaches here now (workflow-driven tasks return above) — it just
 		// needs the challenge cleared, no form submit.
 		this.addTaskEvent(task, "job.resumed", "Human cleared the challenge; resuming");
 		const output = {
@@ -1005,8 +1024,21 @@ export class LocalRunner {
 		const page = await this.getActivePage();
 		this.takeovers.set(taskId, { page, reason, humanDone: false });
 		const screenshotBase64 = await captureScreenshotDataUrl(page);
-		const task = this.store.getTask(taskId);
-		if (task) {
+		// The takeover is registered ABOVE, unconditionally — that is what makes the live view work.
+		// Everything below is the task's own bookkeeping, and it used to be skipped whenever no
+		// LOCAL task existed. The engine sign-in relay mints its own id (`signin-<sessionId>`) for
+		// a coding session that has no runner task at all, so the handoff registered silently and
+		// none of the status flip, the message or the screenshot ever happened: the console
+		// reported success and offered "take over the browser", while the takeover it pointed at
+		// carried no context. A task row is created for it here rather than requiring the caller
+		// to have made one, so the handoff is complete for every caller.
+		let task = this.store.getTask(taskId);
+		if (!task) {
+			const now = new Date().toISOString();
+			task = { id: taskId, type: "browser.handoff", status: "needs_human", input: {}, requiresApproval: false, createdAt: now, updatedAt: now };
+			this.store.putTask(task);
+		}
+		{
 			task.status = "needs_human";
 			task.updatedAt = new Date().toISOString();
 			this.store.putTask(task);

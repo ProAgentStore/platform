@@ -195,9 +195,14 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					.first<{ status: string }>()
 					.catch(() => null),
 			]);
-			// Only an explicit non-active status cancels. A read that FAILED (null) must not, or a
-			// transient D1 blip would silently abort a healthy run.
-			return row && row.status !== "active" ? { ...snap, cancelled: true } : snap;
+			// ONLY a terminal status cancels. `suspended` is not one: `pags up --force` on another
+			// machine suspends sessions owned by other nodes, and `resumeSessionsForNode` only
+			// revives them for a MATCHING runner_node — while `reassignSessionNode` deliberately
+			// leaves the status alone. So a session relocated to a live machine can legitimately
+			// sit `suspended`, and treating that as cancellation would end a healthy run at step 0
+			// with no explanation, replacing the relocation this workflow does a few lines above.
+			// A read that FAILED (null) must not cancel either, or a D1 blip aborts a good run.
+			return row && (row.status === "ended" || row.status === "error") ? { ...snap, cancelled: true } : snap;
 		};
 
 		const deps: CodingDeps = {

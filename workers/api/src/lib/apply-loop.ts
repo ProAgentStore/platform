@@ -492,6 +492,35 @@ export function applySystemPrompt(job: ApplyJob): string {
 	return lines.filter((l) => l !== "").join("\n");
 }
 
+/**
+ * The STATELESS dry-run block: may this action be forwarded to the browser in test mode?
+ *
+ * Returns the message to hand back to the brain, or null to allow. Separate from the pure loop's
+ * post-fill guard because this one arms immediately — a 1-click "Easy Apply" from a saved profile
+ * submits as the FIRST action, before anything has been filled.
+ *
+ * A NAMELESS click is refused. `name` is documented on the click tool but only `ref` is required,
+ * and the runner targets purely by ref — so `click({ref:"e88"})` on the final Submit matched
+ * nothing in either guard (both test `name ?? ""`, which is empty) and really submitted a job
+ * application during a run the user asked to be a test. Dry run's whole promise is "this will not
+ * submit", so an unverifiable click is refused rather than trusted; the brain re-issues it with
+ * the label and continues.
+ */
+const DRY_RUN_SUBMIT_RE =
+	/\bsubmit\b|\bfinish\b|\bdone\b|\bcomplete\b|\bconfirm\b|send application|submit application|easy apply|quick apply|one[- ]?click|1[- ]?click/i;
+
+export function dryRunBlockReason(action: { action?: string; name?: string } | null | undefined): string | null {
+	if (!action || action.action !== "click") return null;
+	const name = String(action.name ?? "").trim();
+	if (!name) {
+		return 'DRY-RUN (test mode): a click must include the control\'s visible `name` so the final submit can be recognised and blocked. Re-issue this click with `name`.';
+	}
+	if (DRY_RUN_SUBMIT_RE.test(name)) {
+		return 'DRY-RUN (test mode): the final submit is BLOCKED — do not submit. Call finish(status:"ready") now.';
+	}
+	return null;
+}
+
 /** Map a Claude tool call to a loop decision (a BrowserAction or a finish). */
 export function toolCallToDecision(call: { name: string; arguments: Record<string, unknown> }, job: ApplyJob, thought?: string): ApplyDecision {
 	const a = call.arguments || {};

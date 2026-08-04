@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getProfile, profileCustomAnswers, profileToCandidate, saveAskAndHoldAnswer, setProfileField, upsertProfile } from "./profile.js";
+import { getProfile, guessProfileKey, profileCustomAnswers, profileToCandidate, saveAskAndHoldAnswer, setProfileField, upsertProfile } from "./profile.js";
 import type { Env } from "../types.js";
 
 /** In-memory D1 mock for the single-row-per-user user_profile upsert. */
@@ -94,5 +94,50 @@ describe("user profile", () => {
 		expect(c.location).toBe("Melbourne, VIC, Australia");
 		expect(c.email).toBe("x@y.com");
 		expect(c.phone).toBe("123");
+	});
+});
+
+describe("guessProfileKey — a substring match writes the WRONG canonical PII", () => {
+	// `saveAskAndHoldAnswer` writes the answer straight into the matched standard column whenever
+	// that column is EMPTY — which is exactly when the agent is asking. So an unrelated word in a
+	// free-text question silently overwrote canonical PII, and `profileToCandidate` then emitted it
+	// into the apply prompt, where the brain typed it into a live job application.
+	it("does not read a phone number out of 'hotel'", () => {
+		expect(guessProfileKey("Have you worked in hotel management?")).not.toBe("phone");
+	});
+
+	it("does not read a salary out of 'accurate' or 'corporate'", () => {
+		expect(guessProfileKey("Is this statement accurate?")).not.toBe("salaryExpectation");
+		expect(guessProfileKey("How many years at a corporate law firm?")).not.toBe("salaryExpectation");
+	});
+
+	it("does not read a website out of 'onsite'", () => {
+		expect(guessProfileKey("Are you an onsite or remote candidate?")).not.toBe("website");
+	});
+
+	it("does not read a city out of 'capacity', or a state out of 'statement'", () => {
+		expect(guessProfileKey("What is your capacity to travel?")).not.toBe("city");
+		expect(guessProfileKey("Do you agree with the statement?")).not.toBe("state");
+	});
+
+	it("still maps the real labels it exists for", () => {
+		expect(guessProfileKey("Phone number")).toBe("phone");
+		expect(guessProfileKey("Mobile")).toBe("phone");
+		expect(guessProfileKey("Salary expectation")).toBe("salaryExpectation");
+		expect(guessProfileKey("Hourly rate")).toBe("salaryExpectation");
+		expect(guessProfileKey("LinkedIn URL")).toBe("linkedin");
+		expect(guessProfileKey("Portfolio website")).toBe("website");
+		expect(guessProfileKey("Are you authorized to work in the US?")).toBe("workAuthorization");
+		expect(guessProfileKey("City")).toBe("city");
+		expect(guessProfileKey("State/Province")).toBe("state");
+		expect(guessProfileKey("Country")).toBe("country");
+		expect(guessProfileKey("Email address")).toBe("email");
+		expect(guessProfileKey("First name")).toBe("firstName");
+		expect(guessProfileKey("Last name")).toBe("lastName");
+		expect(guessProfileKey("Postal code")).toBe("postalCode");
+	});
+
+	it("falls back to a sanitized custom key for a genuinely non-standard question", () => {
+		expect(guessProfileKey("How did you hear about us?")).toBe("how_did_you_hear_about_us");
 	});
 });

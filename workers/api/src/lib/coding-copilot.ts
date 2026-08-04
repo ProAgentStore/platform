@@ -85,7 +85,7 @@ export async function copilotSummary(env: Env, userId: string | undefined, args:
 	for (let round = 0; round < 3; round++) {
 		const raw = (await runUserWorkersAi(env, userId, "claude-sonnet-4-6", { messages, tools, maxTokens: 600 }, { kind: "copilot", instanceId: args.instanceId })) as Record<string, unknown>;
 		let calls = normalizeToolCalls((raw.tool_calls as unknown[]) || []);
-		if (calls.length === 0 && raw.response) calls = parseToolCallsFromText(raw.response as string);
+		if (calls.length === 0 && raw.response) calls = parseToolCallsFromText(raw.response as string, ALL_INSPECT_TOOL_NAMES);
 		if (calls.length === 0) return (raw.response as string) || "";
 
 		const results: string[] = [];

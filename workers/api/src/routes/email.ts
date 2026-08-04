@@ -47,7 +47,7 @@ emailRoutes.get("/google/start", async (c) => {
 		c.env.SESSION_SIGNING_KEY,
 		{ nonce: bindNonce, provider: PROVIDER },
 	);
-	c.header("Set-Cookie", oauthBindCookie(bindNonce));
+	c.header("Set-Cookie", oauthBindCookie(bindNonce, PROVIDER));
 	const url = new URL(AUTH_ENDPOINT);
 	url.searchParams.set("client_id", c.env.GOOGLE_CLIENT_ID);
 	url.searchParams.set("redirect_uri", redirectUri(c));
@@ -109,10 +109,10 @@ emailRoutes.get("/google/callback", async (c) => {
 	if (!c.env.KEY_ENCRYPTION_KEY) return c.text("Key encryption not configured", 500);
 
 	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY, {
-		cookieNonce: readOauthBindCookie(c.req.header("cookie")),
+		cookieNonce: readOauthBindCookie(c.req.header("cookie"), PROVIDER),
 		provider: PROVIDER,
 	});
-	c.header("Set-Cookie", clearOauthBindCookie()); // single-use, whatever the outcome
+	c.header("Set-Cookie", clearOauthBindCookie(PROVIDER)); // single-use, whatever the outcome
 	if (!uid) return c.text(OAUTH_BIND_ERROR, 400);
 
 	const tokenRes = await fetch(TOKEN_ENDPOINT, {

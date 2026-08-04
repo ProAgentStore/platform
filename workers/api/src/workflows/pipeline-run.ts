@@ -51,6 +51,7 @@ const PERSISTING_TOOLS = new Set(["dedupe_upsert"]);
 interface PersistCounts {
 	total: number;
 	inserted: number;
+	updated: number;
 	skipped: number;
 }
 
@@ -60,7 +61,7 @@ function persistSummary(tool: string | undefined, out: unknown): PersistCounts |
 	if (!out || typeof out !== "object" || Array.isArray(out)) return null;
 	const o = out as Record<string, unknown>;
 	const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
-	return { total: num(o.total), inserted: num(o.inserted), skipped: num(o.skipped) };
+	return { total: num(o.total), inserted: num(o.inserted), updated: num(o.updated), skipped: num(o.skipped) };
 }
 
 export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunParams> {
@@ -146,7 +147,11 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				// blank row** — accumulating toward MAX_COLLECTION_RECORDS — and reported
 				// `seen: 1, added: 1` whether the sweep found 0 leads or 200.
 				seen = persisted.total;
-				added = persisted.inserted;
+				// Inserts AND in-place updates are both records this run put into the collection.
+				// Counting only inserts made a `mode:"update"` pipeline (site-deploy) report
+				// `added: 0` on a perfectly good run — indistinguishable, on the run row, from a
+				// record that got filtered out.
+				added = persisted.inserted + persisted.updated;
 				skipped += persisted.skipped;
 			} else if (pipeline.sink) {
 				const raw = Array.isArray(lastOutput) ? lastOutput : lastOutput != null ? [lastOutput] : [];

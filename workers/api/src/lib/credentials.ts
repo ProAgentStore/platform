@@ -159,12 +159,22 @@ export async function updateCredential(env: Env, instanceId: string, userId: str
 	const existing = await env.DB.prepare("SELECT * FROM agent_credentials WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3").bind(id, instanceId, userId).first<CredRow>();
 	if (!existing) return false;
 	// Merge: keep existing secrets unless new ones are supplied.
+	//
+	// An EMPTY STRING means "unchanged", not "the new value". `readInput` passes `""` through
+	// (only non-strings become undefined), so a form rendering a blank password box — the normal
+	// way to edit a credential without retyping the secret — sent `password: ""`. That was treated
+	// as the new value; `encryptSecretsFor` skips falsy secrets, so with pin/recoveryCodes also
+	// empty it returned null and the UPDATE wrote `secrets_ciphertext = NULL`, irreversibly
+	// destroying the stored ATS password. The next apply still saw `hasStoredLogin: true`, fell
+	// back to the derived password, and told the brain to use a login that no longer works —
+	// burning the run to a stuck handoff. Clearing a secret needs an explicit act, not a blank box.
+	const kept = (next: string | undefined, prev: string | undefined) => (next?.trim() ? next : prev);
 	const current = await decryptSecrets(env, existing);
 	const merged: CredentialInput = {
 		domain: input.domain || existing.domain,
-		password: input.password !== undefined ? input.password : current.password,
-		pin: input.pin !== undefined ? input.pin : current.pin,
-		recoveryCodes: input.recoveryCodes !== undefined ? input.recoveryCodes : current.recoveryCodes,
+		password: kept(input.password, current.password),
+		pin: kept(input.pin, current.pin),
+		recoveryCodes: kept(input.recoveryCodes, current.recoveryCodes),
 	};
 	const enc = await encryptSecretsFor(env, merged);
 	await env.DB.prepare(

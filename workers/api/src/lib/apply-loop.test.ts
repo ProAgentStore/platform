@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runApplyLoop, toolCallToDecision, type ApplyDeps, type ApplyDecision, type ApplyJob, type BrowserAction, type PageSnapshot } from "./apply-loop.js";
+import { dryRunBlockReason, runApplyLoop, toolCallToDecision, type ApplyDeps, type ApplyDecision, type ApplyJob, type BrowserAction, type PageSnapshot } from "./apply-loop.js";
 
 const JOB: ApplyJob = {
 	url: "https://jobs.example.com/123",
@@ -439,5 +439,37 @@ describe("runApplyLoop resilience", () => {
 		const result = await runApplyLoop(deps, JOB, { maxSteps: 5 });
 		expect(result.outcome).toBe("stuck");
 		expect(result.detail).toContain("timed out");
+	});
+});
+
+
+describe("dryRunBlockReason — dry run must not be able to submit", () => {
+	it("REFUSES a nameless click — the hole that really submitted an application", () => {
+		// `name` is documented on the click tool but only `ref` is required, and the runner targets
+		// purely by ref. Both dry-run guards tested `name ?? ""`, so `click({ref:"e88"})` on the
+		// final Submit matched nothing and went straight through, submitting a real job
+		// application during a run the user asked to be a test.
+		expect(dryRunBlockReason({ action: "click", name: "" })).toMatch(/must include the control's visible `name`/);
+		expect(dryRunBlockReason({ action: "click" })).toMatch(/must include/);
+		expect(dryRunBlockReason({ action: "click", name: "   " })).toMatch(/must include/);
+	});
+
+	it("blocks the named terminal buttons, including 1-click apply", () => {
+		for (const name of ["Submit", "Submit application", "Finish", "Done", "Complete", "Confirm", "Easy Apply", "1-click apply", "Send application"]) {
+			expect(dryRunBlockReason({ action: "click", name }), name).toMatch(/BLOCKED/);
+		}
+	});
+
+	it("still lets dry run WALK the form — it has to fill things to be a useful test", () => {
+		// "Apply"/"Apply now"/"Next"/"Continue" are entry/pagination buttons on most ATS.
+		for (const name of ["Apply", "Apply now", "Next", "Continue", "Add another", "Upload resume"]) {
+			expect(dryRunBlockReason({ action: "click", name }), name).toBeNull();
+		}
+	});
+
+	it("only governs clicks — typing and uploading are never the submit", () => {
+		expect(dryRunBlockReason({ action: "type" })).toBeNull();
+		expect(dryRunBlockReason({ action: "upload", name: "" })).toBeNull();
+		expect(dryRunBlockReason(null)).toBeNull();
 	});
 });

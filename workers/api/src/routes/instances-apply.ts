@@ -371,7 +371,20 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 			method: "POST",
 			body: JSON.stringify({ taskId: body.taskId, value: String(body.value ?? "") }),
 		});
-		return c.json((await runtimeJson(res)) as object, runtimeStatus(res, 200));
+		const payload = (await runtimeJson(res)) as { ok?: boolean } | null;
+		// The runner reports a LOST handoff as `{ok:false}` with HTTP 200 (its own comment says
+		// "so the console can say session expired"), and this route passed the 200 straight
+		// through — so the console, which only alerts on a thrown error, showed success and
+		// cleared the box. The value was never delivered, the workflow polled a dead session for
+		// the remaining 15 minutes, and the run closed "needs_input not resolved in time" with
+		// the answer the user typed recorded nowhere.
+		if (payload && payload.ok === false) {
+			return c.json(
+				{ ...payload, error: "That takeover session is gone (the runner restarted). Re-run the application and answer again." },
+				409,
+			);
+		}
+		return c.json((payload ?? {}) as object, runtimeStatus(res, 200));
 	});
 
 	/** End a human-takeover session. */

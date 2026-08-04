@@ -46,7 +46,20 @@ const FILES = ["upload_file", "list_files", "read_file", "delete_file"] as const
  * So a collections agent told "delete the duplicate lead" could create and update records forever
  * but never remove one. Its test passes by calling `executeStorageTool` directly, past the gate.
  */
-const COLLECTIONS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record", "delete_record"] as const;
+const COLLECTIONS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record"] as const;
+
+/**
+ * Irreversible collection writes — DECLARABLE but never granted by default.
+ *
+ * `delete_record` was unreachable through every path, which is a bug (a collections agent could
+ * create and update forever but never remove). Folding it into COLLECTIONS fixed reachability but
+ * overcorrected: COLLECTIONS flows into FULL, and FULL is the default for every agent that
+ * declares no `capabilities.tools` — so every existing production agent would silently gain an
+ * irreversible delete, with no owner opt-in (the write-consent gate covers registry connectors,
+ * not STORAGE_TOOLS) and no undo. Its own group instead: a creator opts in by declaring it,
+ * nobody inherits it.
+ */
+const COLLECTIONS_DESTRUCTIVE = ["delete_record"] as const;
 /** Legacy selector-based job submit (superseded by the apply workflow). */
 const APPLY = ["submit_job_application"] as const;
 /** Live coding-session awareness: list repos + read/drive the engine's terminal. */
@@ -89,6 +102,7 @@ export const TOOL_CATALOG: readonly ToolCatalogGroup[] = [
 	{ id: "kb_write", label: "Knowledge base — write", tools: KB_WRITE, tier: "standard" },
 	{ id: "files", label: "File storage", tools: FILES, tier: "standard" },
 	{ id: "collections", label: "Structured collections", tools: COLLECTIONS, tier: "standard" },
+	{ id: "collections_destructive", label: "Structured collections — delete", tools: COLLECTIONS_DESTRUCTIVE, tier: "standard" },
 	{ id: "coding", label: "Live coding session", tools: CODING, tier: "runtime" },
 	// Connector tools (issue #85/#86): one catalog group per external system, from the
 	// registry — a creator declares them in capabilities.tools like any other tool.

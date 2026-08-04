@@ -49,7 +49,7 @@ connectorRoutes.get("/:id/oauth/start", async (c) => {
 		c.env.SESSION_SIGNING_KEY,
 		{ nonce: bindNonce, provider: id },
 	);
-	c.header("Set-Cookie", oauthBindCookie(bindNonce));
+	c.header("Set-Cookie", oauthBindCookie(bindNonce, id));
 	const url = new URL(connector.oauth!.authUrl);
 	url.searchParams.set("client_id", creds.clientId!);
 	url.searchParams.set("redirect_uri", callbackUri(c.req.url, id));
@@ -72,10 +72,10 @@ connectorRoutes.get("/:id/oauth/callback", async (c) => {
 
 	const { creds } = requireOauthConnector(c.env, id);
 	const uid = await verifyConnectorState(stateRaw, c.env.SESSION_SIGNING_KEY, {
-		cookieNonce: readOauthBindCookie(c.req.header("cookie")),
+		cookieNonce: readOauthBindCookie(c.req.header("cookie"), id),
 		provider: id,
 	});
-	c.header("Set-Cookie", clearOauthBindCookie()); // single-use, whatever the outcome
+	c.header("Set-Cookie", clearOauthBindCookie(id)); // single-use, whatever the outcome
 	if (!uid) return c.text(OAUTH_BIND_ERROR, 400);
 
 	const tokenRes = await fetch(creds.tokenUrl!, {

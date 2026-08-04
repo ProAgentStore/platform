@@ -132,18 +132,18 @@ authRoutes.get("/github/callback", async (c) => {
 		// STARTED the flow holds one. Require the completing browser to be the one that started
 		// it, or an attacker's link, clicked by a victim, binds the VICTIM's GitHub identity —
 		// and every org App installation they belong to — onto the ATTACKER's account.
-		if (!oauthBindMatches(state.bindNonce, readOauthBindCookie(c.req.header("cookie")))) {
+		if (!oauthBindMatches(state.bindNonce, readOauthBindCookie(c.req.header("cookie"), "github_link"))) {
 			await logError(c.env, {
 				source: "auth",
 				status: 400,
 				message: "GitHub link rejected: state not bound to this browser",
 				context: { provider: "github", linkUid: state.linkUid },
 			});
-			c.header("Set-Cookie", clearOauthBindCookie());
+			c.header("Set-Cookie", clearOauthBindCookie("github_link"));
 			return c.text(OAUTH_BIND_ERROR, 400);
 		}
 		if (!ghUser.login) return c.text("could not read GitHub login", 502);
-		c.header("Set-Cookie", clearOauthBindCookie()); // single-use
+		c.header("Set-Cookie", clearOauthBindCookie("github_link")); // single-use
 		await c.env.DB.prepare("UPDATE users SET linked_github_login = ?1, updated_at = datetime('now') WHERE id = ?2")
 			.bind(ghUser.login, state.linkUid)
 			.run();
@@ -186,7 +186,7 @@ authRoutes.get("/github/link/start", async (c) => {
 		{ returnTo, exp: Math.floor(Date.now() / 1000) + 1800, linkUid: session.uid, bindNonce },
 		c.env.SESSION_SIGNING_KEY,
 	);
-	c.header("Set-Cookie", oauthBindCookie(bindNonce));
+	c.header("Set-Cookie", oauthBindCookie(bindNonce, "github_link"));
 	const url = new URL("https://github.com/login/oauth/authorize");
 	url.searchParams.set("client_id", c.env.GITHUB_CLIENT_ID);
 	// read:org so the callback can verify + auto-bind every org you're a member of, using
