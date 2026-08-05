@@ -60,7 +60,7 @@ export function captureTerminalTarget(target: string, opts: { backend?: Terminal
 		case "kitty":
 			return kittyExec(["@", "get-text", "--match", `id:${t.id}`, "--extent", "all"], 5000);
 		case "iterm2":
-			return itermSessionScript(t.id, "contents of theSession");
+			return itermSessionScript(t.id, "return contents of theSession");
 	}
 }
 
@@ -124,7 +124,7 @@ export function createTerminalTarget(opts: { backend: TerminalBackend; name?: st
 				"create window with default profile",
 				"set theSession to current session of current window",
 				`write text ${appleString(`cd ${shellQuote(workDir)}${opts.command ? ` && ${opts.command}` : ""}`)} in theSession`,
-				"return \"1:1:1\"",
+				"return ((index of current window) as text) & \":1:1\"",
 				"end tell",
 			].join("\n");
 			const id = osascript(script).trim() || "1:1:1";
@@ -181,7 +181,8 @@ function listItermTargets(): TerminalTarget[] {
 			"repeat with ti from 1 to count of tabs of window wi",
 			"repeat with si from 1 to count of sessions of tab ti of window wi",
 			"set sid to (wi as text) & \":\" & (ti as text) & \":\" & (si as text)",
-			"set out to out & sid & tab & name of session si of tab ti of window wi & linefeed",
+			"set sname to name of session si of tab ti of window wi",
+			"set out to out & sid & (ASCII character 9) & sname & linefeed",
 			"end repeat",
 			"end repeat",
 			"end repeat",
@@ -218,11 +219,11 @@ function osascript(script: string): string {
 }
 
 function itermSessionScript(target: string, command: string): string {
-	const [w, t, s] = target.split(":").map((v) => Math.max(1, Number(v) || 1));
+	const [w, t, s] = target.split(":").map((v) => Math.max(1, Number.parseInt(v, 10) || 1));
 	const script = [
 		'tell application "iTerm2"',
 		`set theSession to session ${s} of tab ${t} of window ${w}`,
-		`return ${command}`,
+		command,
 		"end tell",
 	].join("\n");
 	return osascript(script);
