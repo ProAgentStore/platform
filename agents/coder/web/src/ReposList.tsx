@@ -78,7 +78,7 @@ export default function ReposList({
 			{/* Repos section */}
 			<div className="bg-panel border border-line rounded-xl p-3">
 				<div className="flex justify-between items-center gap-2">
-					<span className="text-ink font-bold text-[0.95rem]">Repositories</span>
+					<span className="text-ink font-bold text-[0.95rem]">{singleRepo ? "Repository" : "Repositories"}</span>
 					<div className="flex gap-1.5">
 						<button type="button" onClick={onOpenEngines} title="CLI engines & sign-in" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold flex items-center gap-1"><Cpu size={13} /><span className="hidden sm:inline">Engines</span></button>
 						{/* A one-repo agent cannot use this — its repo comes from its settings. */}

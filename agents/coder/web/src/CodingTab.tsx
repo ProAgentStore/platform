@@ -329,7 +329,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		} catch (e) {
 			console.error("[coding] timeline load failed:", e);
 		}
-	}, [instanceId, navigate]);
+	}, [instanceId, navigate, copilot]);
 
 	// Auto-open a session on mount ONLY for a deep link (URL session id) or the repo the user
 	// was last working on (persisted). With neither, land on the repo LIST view (openSession
@@ -632,12 +632,21 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		if (!openSession || !onHeaderOverride) return;
 		onHeaderOverride(
 			<div className="flex items-center gap-1 sm:gap-2 min-w-0 w-full">
-				<button type="button" onClick={closeTerminal} title="All repos" aria-label="All repos" className="flex items-center justify-center text-muted hover:text-ink shrink-0 -ml-1 w-7 h-8 sm:w-auto sm:h-auto sm:px-1 sm:py-1"><ArrowLeft size={16} /></button>
+				<button type="button" onClick={closeTerminal} title={singleRepo ? "Back" : "All repos"} aria-label={singleRepo ? "Back" : "All repos"} className="flex items-center justify-center text-muted hover:text-ink shrink-0 -ml-1 w-7 h-8 sm:w-auto sm:h-auto sm:px-1 sm:py-1"><ArrowLeft size={16} /></button>
 				<div className="relative min-w-0 shrink">
+					{/* A one-repo agent has nothing to switch TO. The dropdown listed a single repo
+					    and offered "Add a repo" that ReposList then refuses to render — a button
+					    that closed your terminal and showed nothing. It is also the multi-repo
+					    mental model the Lead/Repo-Coder split exists to remove: you switch repos by
+					    switching AGENTS now. Plain label instead. */}
+					{singleRepo ? (
+						<span className="block truncate text-sm font-semibold max-w-[5.75rem] sm:max-w-[11rem]">{openRepo?.name || openSession.repoId}</span>
+					) : (
 					<button type="button" onClick={() => setRepoMenuOpen((v) => !v)} title="Switch repo" className="flex items-center gap-1 text-sm font-semibold hover:text-accent w-full max-w-[5.75rem] sm:max-w-[11rem] min-w-0">
 						<span className="truncate">{openRepo?.name || openSession.repoId}</span>
 						<ChevronDown size={14} className="shrink-0 text-muted" />
 					</button>
+					)}
 					{repoMenuOpen && (
 						<>
 							<button type="button" aria-label="Close menu" onClick={() => setRepoMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
