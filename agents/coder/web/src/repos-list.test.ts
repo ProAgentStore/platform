@@ -12,6 +12,18 @@ import { describe, expect, it } from "vitest";
  */
 const src = (f: string) => readFileSync(join(import.meta.dirname, f), "utf8");
 
+/**
+ * Source with comments removed. Several assertions below forbid a pattern, and the comment
+ * explaining WHY necessarily contains it — without this, the note documenting a fix fails the
+ * test protecting it.
+ */
+const code = (f: string) =>
+	src(f)
+		.replace(/\/\*[\s\S]*?\*\//g, "")
+		.split("\n")
+		.map((l) => l.replace(/(^|[^:])\/\/.*$/, "$1"))
+		.join("\n");
+
 describe("single-repo agents hide the multi-repo affordances", () => {
 	it("ReposList gates the + Add button on singleRepo", () => {
 		expect(src("ReposList.tsx")).toContain("!singleRepo && (");
@@ -123,22 +135,34 @@ describe("Work on this issue actually starts work", () => {
 	});
 });
 
-describe("clicking Coding lands on the Coding view, not inside a session", () => {
+describe("the Terminal tab shows the terminal", () => {
 	const tab = src("CodingTab.tsx");
+	const autoOpen = tab.slice(tab.indexOf("// Auto-open a session on mount"), tab.indexOf("const closeTerminal"));
 
-	it("does not restore the last session for a ONE-repo agent", () => {
-		// "Restore the repo I was in" answers a multi-repo question. With one repo it fired on
-		// every visit, so clicking the Coding tab dropped you straight into a terminal and Builds,
-		// Issues and the repo's own status sat behind a back arrow you had to know to press.
-		const fn = tab.slice(tab.indexOf("// Auto-open a session on mount"), tab.indexOf("const closeTerminal"));
-		expect(fn).toContain("} else if (!singleRepo) {");
-		expect(fn).toContain("loadLastRepo(instanceId)");
+	it("attaches a one-repo agent to its live session automatically", () => {
+		// It briefly did not, and that was right while opening a session took over the whole page
+		// and buried Builds and Issues. The solo layout renders the terminal INSIDE its tab, so
+		// there is nothing left to hide — and leaving it off put a live session behind an
+		// "Open session" button on the tab whose only job is to show it.
+		expect(autoOpen).toContain("} else if (singleRepo) {");
+		expect(autoOpen).toContain('sessions.find((s) => s.status === "active")');
+	});
+
+	it("still restores the LAST repo only when there are several", () => {
+		// "Which repo was I in" is a real question with many and a meaningless one with one.
+		expect(autoOpen).toContain("loadLastRepo(instanceId)");
 	});
 
 	it("still honours a deep link to a specific session, for everyone", () => {
-		// /coding/csess_x was explicitly asked for; only the implicit restore is scoped.
-		const fn = tab.slice(tab.indexOf("// Auto-open a session on mount"), tab.indexOf("const closeTerminal"));
-		expect(fn).toContain("if (initialSessionId) {");
+		expect(autoOpen).toContain("if (initialSessionId) {");
+	});
+
+	it("offers Start — never Open — when nothing is running", () => {
+		// With auto-attach, being on this branch means there IS no session; an "Open" button here
+		// would point at nothing.
+		const src_ = code("CodingTab.tsx");
+		const solo = src_.slice(src_.indexOf("if (singleRepo && repos.length <= 1)"));
+		expect(solo).toContain("Start a session");
+		expect(solo).not.toContain("Open session");
 	});
 });
-

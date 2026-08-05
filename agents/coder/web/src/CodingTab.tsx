@@ -351,15 +351,17 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		let target: CodingSession | undefined;
 		if (initialSessionId) {
 			target = sessions.find((s) => s.id === initialSessionId);
-		} else if (!singleRepo) {
-			// Restore the last-used repo IF it still has an active session; otherwise show the list.
-			//
-			// Multi-repo only. Restoring answers "which of my repos was I in", and a one-repo agent
-			// has no such question — its "last repo" is always its only repo, so this fired on every
-			// visit and made the Coding LANDING unreachable: clicking the tab dropped you into a
-			// terminal, and Builds, Issues and the repo's own status were behind a back arrow you
-			// had to know to press. A deep link (/coding/csess_x) still opens the session for
-			// everyone; that one was asked for.
+		} else if (singleRepo) {
+			// One repo: attach to its live session, always. There is nothing to disambiguate and
+			// nothing to hide — the terminal renders INSIDE the Terminal tab, with Issues and
+			// Builds still one click away. (This was briefly disabled, back when opening a session
+			// took over the whole page and buried the other views; the solo layout removed that
+			// reason, and leaving it off just meant a live session sat behind an "Open session"
+			// button on the tab whose entire purpose is to show it.)
+			target = sessions.find((s) => s.status === "active");
+		} else {
+			// Multi-repo: restore the last repo you were in — a real question when there are
+			// several — but only if it still has a live session.
 			const lastRepo = loadLastRepo(instanceId);
 			target = lastRepo ? sessions.find((s) => s.repoId === lastRepo && s.status === "active") : undefined;
 		}
@@ -781,7 +783,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// to the list, which still hides add-repo.
 	if (singleRepo && repos.length <= 1) {
 		const solo = repos[0];
-		const active = solo ? getActiveSession(solo.id) : undefined;
 		const tab = (id: typeof soloView, label: string, Icon: typeof SquareTerminal) => (
 			<button
 				type="button"
@@ -843,9 +844,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 								</>
 							) : (
 								<>
+									{/* No "Open session": a live one is attached automatically above, so the
+									    only reason to be here is that there ISN'T one. */}
 									<p className="text-sm text-muted">No session running.</p>
-									<button type="button" onClick={() => active ? openTerminal(active) : startSession(solo.id)} className="text-sm px-4 py-2 rounded-lg bg-accent text-white font-bold">
-										{active ? "Open session" : "Start a session"}
+									<button type="button" onClick={() => startSession(solo.id)} className="text-sm px-4 py-2 rounded-lg bg-accent text-white font-bold">
+										Start a session
 									</button>
 								</>
 							)}
