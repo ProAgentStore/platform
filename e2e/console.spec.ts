@@ -284,9 +284,13 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		if (path === "/v1/instances/inst-1/loop/run-1") {
 			// First poll: still running. After that: done, so the completion message renders.
 			loopPolls += 1;
-			return loopPolls < 2
-				? json({ status: "running", iteration: 1 })
-				: json({ status: "completed", iteration: 2, stopReason: "done", detail: "outcome: done — Fixed it on `fix/80` (commit `e599f2b`). **All 758 tests pass.**" });
+			if (loopPolls < 2) return json({ status: "running", iteration: 1 });
+			// The workflow already appended the outcome to the thread, exactly as the real one does.
+			const done = "**Loop complete**\n\nFixed it on `fix/80` (commit `e599f2b`). **All 758 tests pass.**";
+			if (!persistedMessages.some((m) => String(m.content).includes("Loop complete"))) {
+				persistedMessages.push({ role: "system", content: done, createdAt: new Date().toISOString() });
+			}
+			return json({ status: "completed", iteration: 2, stopReason: "done", detail: "outcome: done — Fixed it." });
 		}
 		if (path === "/v1/instances/inst-1/system-message" && method === "POST") {
 			// The real DO PERSISTS it, so the next /messages read returns it. Without that here the
@@ -731,10 +735,13 @@ test.describe("ProAgentStore Console smoke", () => {
 		// …and that this thread is NOT where the work will show up.
 		await expect(page.getByText(/Coding.*tab, not here/)).toBeVisible();
 
-		// The completion renders as MARKDOWN, not literal backticks and asterisks.
+		// The completion renders as MARKDOWN, not literal backticks and asterisks. For a CODING
+		// loop the workflow writes it (so it survives a closed tab); the client must not add a
+		// second copy — the mock returns it from /messages, as the server would.
 		await expect(page.getByText(/Loop complete/)).toBeVisible({ timeout: 15000 });
+		await expect(page.getByText(/Loop complete/)).toHaveCount(1);
 		const md = page.locator(".msg-md").filter({ hasText: "Loop complete" });
-		await expect(md.locator("strong")).toContainText("All 758 tests pass");
+		await expect(md.locator("strong").filter({ hasText: "758" })).toHaveCount(1);
 		await expect(md.locator("code").first()).toContainText("fix/80");
 		await expect(page.getByText("**All 758 tests pass.**")).toHaveCount(0);
 	});

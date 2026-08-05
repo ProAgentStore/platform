@@ -110,6 +110,8 @@ export default function InstanceDetail() {
 	// controls bar focused on voice, and moves the destructive Clear behind a tap.
 	const [showChatMenu, setShowChatMenu] = useState(false);
 	const loopOnRef = useRef(false);
+	/** Which driver the running loop dispatched to — decides who writes the completion notice. */
+	const loopDriverRef = useRef<string | null>(null);
 	const loopPausedRef = useRef(false);
 	loopOnRef.current = loopOn;
 	loopPausedRef.current = loopPaused;
@@ -304,8 +306,13 @@ export default function InstanceDetail() {
 			if (run.status !== "running") {
 				setLoopOn(false);
 				setLoopRunId(null);
-				const label = run.stopReason === "done" ? "Loop complete" : `Loop stopped (${run.stopReason ?? run.status})`;
-				emitSystemChat(`${label}: ${run.detail || ""}`.trim());
+				// The coding driver posts its own outcome from the workflow, so the transcript
+				// refresh above already brought it in — emitting here would show it twice.
+				if (loopDriverRef.current !== "coding") {
+					const label = run.stopReason === "done" ? "Loop complete" : `Loop stopped (${run.stopReason ?? run.status})`;
+					emitSystemChat(`${label}: ${run.detail || ""}`.trim());
+				}
+				loopDriverRef.current = null;
 			}
 		} catch {
 			// A transient read failure must not kill the WATCHER — the run itself is durable and
@@ -456,6 +463,9 @@ export default function InstanceDetail() {
 					: `**Loop started** — working on: ${loopObjective.trim()}\n\nUp to ${loopMax} steps.`,
 			);
 			setLoopRunId(run.runId);
+			// Remember WHICH driver ran: a coding loop's completion notice is written server-side
+			// (it must survive this tab closing), so emitting one here too would duplicate it.
+			loopDriverRef.current = run.driver ?? null;
 			setLoopOn(true);
 			setLoopIteration(0);
 			setLoopPaused(false);

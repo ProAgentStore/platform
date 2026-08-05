@@ -132,6 +132,33 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		let pilotThoughts = 0;
 
 		/**
+		 * Put a line in the OWNER'S CHAT THREAD.
+		 *
+		 * A loop on a coding agent drives the engine, so the Assistant tab saw nothing at all while
+		 * work happened — you pressed Loop and the next thing you learned was that a commit existed.
+		 * The instructions the loop sends on your behalf, and the outcome, belong in the
+		 * conversation you started it from.
+		 *
+		 * Written by the WORKFLOW, not the browser. The completion notice used to come from the
+		 * console's poll, so closing the tab meant it was never recorded anywhere — the run finished
+		 * and the thread simply never mentioned it.
+		 */
+		const postToChat = async (content: string) => {
+			try {
+				const stub = env.AGENT.get(env.AGENT.idFromName(instanceId));
+				await stub.fetch(
+					new Request("https://agent/system-message", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ content }),
+					}),
+				);
+			} catch {
+				// The thread is a record, never the work. A failed append must not fail the run.
+			}
+		};
+
+		/**
 		 * Close the rows a DELEGATED run opened — the loop-run row `check_delegation` reads and the
 		 * board card the supervisor watches. One writer for both, so they cannot disagree.
 		 *
@@ -162,6 +189,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						`outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}`,
 						Date.now(),
 					).catch(() => undefined);
+					// The result, in the thread the loop was started from. Written HERE rather than by
+					// the console's poll: the browser version only existed if the tab happened to be
+					// open, so a run finished while you were elsewhere was never recorded at all.
+					const ok = reason === "done";
+					await postToChat(
+						`${ok ? "**Loop complete**" : `**Loop stopped** (${reason})`}${outcome.detail ? `\n\n${outcome.detail}` : ""}`,
+					);
 				});
 			}
 			if (event.payload.boardTaskId) {
@@ -309,6 +343,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// Rides the same hook — no extra durable step for either write.
 					if (postProgress && event.payload.boardTaskId) {
 						await setWorkCardProgress(env, instanceId, userId, event.payload.boardTaskId, message);
+					}
+					// Only for a loop the OWNER started (or a supervisor delegated) — a session the
+					// human is driving by hand already shows every keystroke in the terminal, and
+					// echoing it into chat would be noise about work they are watching happen.
+					if (type === "action" && event.payload.loopRunId) {
+						await postToChat(`**Loop → engine** (step ${at}): ${message}`);
 					}
 					return null;
 				}).then(() => undefined);
