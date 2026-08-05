@@ -45,6 +45,7 @@ import { connectorRoutes } from "./routes/connectors.js";
 import { cloudflareAccessGate } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
+import { runStaleRunSweep } from "./lib/run-sweeper.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
@@ -205,5 +206,9 @@ export default {
 		ctx.waitUntil(
 			runDueDeliveries(env).catch((err) => logUnhandled(env, err, { path: "scheduled:deliveries", method: "CRON" })),
 		);
+		// Close runs whose Workflow died mid-step (#207C). A third independent failure domain: a
+		// row stuck at `running` forever tells every supervisor its subordinate is still working.
+		// `runStaleRunSweep` swallows + logs its own errors.
+		ctx.waitUntil(runStaleRunSweep(env));
 	},
 };

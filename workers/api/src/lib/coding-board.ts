@@ -11,10 +11,9 @@
 // hardcoded Overseer assembles per repo. Rather than let supervision read `coding_sessions` (the
 // coupling reverted in 3f14bd3), the domain writes a record supervision already reads.
 //
-// The upsert is inline rather than calling `mirrorRuntimeTask`: that lives in
-// `routes/instances-runtime.ts`, and importing a routes module from lib drags the Hono router into
-// every caller. `workflows/coding-session.ts` already made the same choice for the same reason
-// ("Inline upsert keeps the workflow off a routes import").
+// The SQL lives in `work-card.ts`, shared with the other domains that put work on the board; this
+// module owns only the card's SHAPE.
+import { closeWorkCards, upsertWorkCard } from "./work-card.js";
 import type { Env } from "../types.js";
 
 /** Board status for a session. Maps onto `defaultBoardColumns(["coding"])` with no declaration:
@@ -56,15 +55,7 @@ export async function upsertCodingSessionCard(
 ): Promise<void> {
 	const now = new Date().toISOString();
 	const task = codingSessionTaskRecord({ ...opts, now });
-	await env.DB.prepare(
-		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
-		 ON CONFLICT(id) DO UPDATE SET type = excluded.type, status = excluded.status,
-		   payload = excluded.payload, updated_at = excluded.updated_at`,
-	)
-		.bind(codingCardId(opts.sessionId), opts.instanceId, opts.userId, task.type, task.status, JSON.stringify(task))
-		.run()
-		.catch(() => undefined);
+	await upsertWorkCard(env, { instanceId: opts.instanceId, userId: opts.userId, id: codingCardId(opts.sessionId), task });
 }
 
 /**
@@ -86,17 +77,5 @@ export async function closeCodingSessionCards(
 	sessionIds: readonly string[],
 	status: Exclude<CodingCardStatus, "running">,
 ): Promise<void> {
-	if (!sessionIds.length) return;
-	const ids = sessionIds.map((s) => codingCardId(s));
-	const placeholders = ids.map((_, i) => `?${i + 4}`).join(",");
-	await env.DB.prepare(
-		`UPDATE instance_runtime_tasks
-		    SET status = ?1,
-		        payload = json_set(json_set(payload, '$.status', ?1), '$.updatedAt', datetime('now')),
-		        updated_at = datetime('now')
-		  WHERE instance_id = ?2 AND user_id = ?3 AND id IN (${placeholders})`,
-	)
-		.bind(status, instanceId, userId, ...ids)
-		.run()
-		.catch(() => undefined);
+	await closeWorkCards(env, instanceId, userId, sessionIds.map(codingCardId), status);
 }

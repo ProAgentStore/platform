@@ -11,6 +11,7 @@ import {
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { endSession, getSession, getRepo, reassignSessionNode } from "../lib/coding-store.js";
+import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
@@ -114,6 +115,17 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		let pilotSteps = 0;
 
 		/**
+		 * Thoughts seen, for throttling the progress line below.
+		 *
+		 * The Lead sees card titles, outcomes and step counts — not the terminal text the hardcoded
+		 * Overseer reads. There is no clean way for supervision to reach that text and it must not
+		 * try (the coupling reverted in 3f14bd3). So the Pilot pushes a plain-language line into its
+		 * OWN card instead, and the Lead reads live progress through a generic record while still
+		 * knowing nothing about tmux. #207B — the deliberate finish line for Overseer parity.
+		 */
+		let pilotThoughts = 0;
+
+		/**
 		 * Close the rows a DELEGATED run opened — the loop-run row `check_delegation` reads and the
 		 * board card the supervisor watches. One writer for both, so they cannot disagree.
 		 *
@@ -159,11 +171,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						now: new Date().toISOString(),
 						note: `outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}`,
 					});
-					await env.DB.prepare(
-						`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
-						 VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now'), datetime('now'))
-						 ON CONFLICT(id) DO UPDATE SET type = excluded.type, status = excluded.status, payload = excluded.payload, updated_at = excluded.updated_at`,
-					).bind(event.payload.boardTaskId, instanceId, userId, task.type, task.status, JSON.stringify(task)).run().catch(() => undefined);
+					await upsertWorkCard(env, { instanceId, userId, id: event.payload.boardTaskId as string, task });
 					return null;
 				});
 			}
@@ -275,12 +283,20 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// and `++` inside would double-count every retry into the progress figure.
 				// `runCodingLoop` emits exactly one "action" per step, so this counts steps.
 				const at = type === "action" ? ++pilotSteps : pilotSteps;
+				// Throttled: the first thought lands immediately (so a watcher sees SOMETHING right
+				// away) and then every 4th. Counted outside step.do for the same retry reason as
+				// pilotSteps — a re-run body would otherwise skew the cadence.
+				const postProgress = type === "thought" && (++pilotThoughts === 1 || pilotThoughts % 4 === 0);
 				return step.do(`s${n++}-event`, async () => {
 					await callRunner(conn, "/coding/event", { sessionId, type, message, data }).catch(() => undefined);
 					// The supervisor's progress signal. No extra durable step — it rides the event
 					// hook the loop already calls.
 					if (type === "action" && event.payload.loopRunId) {
 						await recordIteration(env, event.payload.loopRunId, at).catch(() => undefined);
+					}
+					// Rides the same hook — no extra durable step for either write.
+					if (postProgress && event.payload.boardTaskId) {
+						await setWorkCardProgress(env, instanceId, userId, event.payload.boardTaskId, message);
 					}
 					return null;
 				}).then(() => undefined);

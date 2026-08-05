@@ -24,6 +24,12 @@ export function delegationTaskRecord(opts: {
 		status: opts.status,
 		title: `Delegated: ${label}`.slice(0, 200),
 		reasoning,
+		// ALSO as `description`, because that is the field every generic reader takes a card's
+		// one-line detail from (`board.ts`, and `instance-work.ts` for a supervisor) — `reasoning`
+		// is in neither chain, so the outcome text reached the console and nothing else. While the
+		// run is live this field carries the Pilot's progress line instead (#207B); the terminal
+		// write replaces it with what actually happened.
+		...(opts.note ? { description: opts.note.slice(0, 300) } : {}),
 		createdAt: opts.now,
 		updatedAt: opts.now,
 	};

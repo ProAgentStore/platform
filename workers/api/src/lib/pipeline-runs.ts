@@ -13,6 +13,7 @@
  * break the path it observes. Read back via GET /v1/instances/:id/pipeline-runs + the MCP
  * `list_pipeline_runs` tool (owner-scoped).
  */
+import { closePipelineRunCard, upsertPipelineRunCard } from "./pipeline-board.js";
 import type { Env } from "../types.js";
 
 export type RunStatus = "running" | "completed" | "failed" | "interrupted";
@@ -60,6 +61,16 @@ export async function openRun(
 				Date.now(),
 			)
 			.run();
+		// The run also goes on the work board, so a pipeline agent is visible to the unified board
+		// and to a supervisor while it runs (#207A) — not only in its own runs table.
+		await upsertPipelineRunCard(env, {
+			instanceId: r.instanceId,
+			userId: r.userId,
+			runId: r.runId,
+			pipeline: String(r.pipeline).slice(0, 200),
+			trigger: String(r.trigger).slice(0, 32),
+			status: "running",
+		});
 		// Opportunistic retention: no cron, so ~1% of writes prune rows older than 30 days.
 		if (Math.random() < 0.01) {
 			await env.DB.prepare("DELETE FROM pipeline_runs WHERE created_at < datetime('now', '-30 days')").run().catch(() => undefined);
@@ -92,6 +103,11 @@ export async function closeRun(
 				detail != null ? String(detail).slice(0, 2000) : null,
 			)
 			.run();
+		// AFTER the row is updated, so the card reads back the terminal state, and here rather than
+		// at the four `closeRun` call sites in `workflows/pipeline-run.ts` — one choke point is how
+		// #206 avoided stranding cards on the paths nobody remembered to wire.
+		const counted = `${counts.seen | 0} seen · ${counts.added | 0} added${counts.errors ? ` · ${counts.errors | 0} error(s)` : ""}`;
+		await closePipelineRunCard(env, runId, status, detail ? `${detail} — ${counted}` : counted);
 	} catch (err) {
 		console.error("[pipeline-runs] closeRun failed:", err instanceof Error ? err.message : String(err));
 	}
