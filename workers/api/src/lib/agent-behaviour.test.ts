@@ -10,6 +10,7 @@ import {
 	prefersTechnical,
 	resolveBehaviour,
 	sanitizeBehaviour,
+	strayBehaviourKey,
 } from "./agent-behaviour.js";
 
 describe("unset is a first-class state", () => {
@@ -265,5 +266,35 @@ describe("applyBehaviourPatch — patch semantics shared by the route and the to
 		// A field removed from the schema, or an option renamed, must not survive a later patch.
 		const { behaviour } = applyBehaviourPatch({ tone: "retired-option" }, { emoji: true });
 		expect(behaviour).toEqual({ emoji: true });
+	});
+});
+
+describe("strayBehaviourKey — memory entries that belong in behaviour now (#226)", () => {
+	it("matches the key a real agent actually wrote", () => {
+		expect(strayBehaviourKey("preference:response_style")).toBe(true);
+	});
+
+	it("matches the other ways an agent might name the same idea", () => {
+		for (const k of ["preference:tone", "pref:verbosity", "preference:communication_style", "preference:Persona"]) {
+			expect(strayBehaviourKey(k), k).toBe(true);
+		}
+	});
+
+	it("leaves genuine subject-matter preferences alone", () => {
+		// The dangerous direction. A loose match here has agents deleting real knowledge, so a
+		// preference key that is a FACT about the work must never be swept up.
+		for (const k of [
+			"preference:coffee_supplier",
+			"preference:deploy_target",
+			"preference:preferred_branch",
+			"identity:name",
+			"knowledge:tone_mapping_algorithm",
+		]) {
+			expect(strayBehaviourKey(k), k).toBe(false);
+		}
+	});
+
+	it("requires the preference prefix, so a knowledge entry about tone is untouched", () => {
+		expect(strayBehaviourKey("context:tone")).toBe(false);
 	});
 });

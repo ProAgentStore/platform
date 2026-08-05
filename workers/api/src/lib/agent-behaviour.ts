@@ -654,3 +654,32 @@ export function behaviourStyleReminder(behaviour: Behaviour): string {
 	}
 	return parts.join(" ");
 }
+
+/**
+ * Does this memory key hold a communication preference that now belongs in behaviour (#226)?
+ *
+ * Live agents wrote these before there was anywhere else to put them, and memory lives in the DO —
+ * out of reach of a D1 migration. The prompt uses this to ask the agent to move its own, once.
+ *
+ * Deliberately narrow. A key like `preference:coffee_supplier` is a genuine fact about the subject
+ * and must stay in memory; only keys naming an aspect of MANNER match. A loose match here would
+ * have agents deleting real knowledge.
+ */
+const BEHAVIOURAL_KEY_HINTS = [
+	"response_style",
+	"responsestyle",
+	"communication",
+	"tone",
+	"verbosity",
+	"technicality",
+	"formality",
+	"persona",
+	"reply_length",
+	"response_length",
+];
+
+export function strayBehaviourKey(key: string): boolean {
+	const k = key.toLowerCase();
+	if (!k.startsWith("preference:") && !k.startsWith("pref:")) return false;
+	return BEHAVIOURAL_KEY_HINTS.some((h) => k.includes(h));
+}

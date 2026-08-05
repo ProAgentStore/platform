@@ -23,6 +23,7 @@ import {
 	fieldPrompt,
 	prefersTechnical,
 	resolveBehaviour,
+	strayBehaviourKey,
 } from "./lib/agent-behaviour.js";
 import type { Env } from "./types.js";
 
@@ -230,7 +231,28 @@ export async function runAgentThink(opts: {
 			const userSet = m.source === "user" ? " (user-set)" : "";
 			systemPrompt += `- [${m.type}] ${m.key}${userSet}: ${m.content}\n`;
 		}
+		// Self-heal the entries written before there was anywhere else to put them (#226). These
+		// exist on live agents and can't be reached by a D1 migration — memory lives in the DO — so
+		// the agent moves its own, once, the next time it is asked about them.
+		const strays = memory.filter((m) => strayBehaviourKey(m.key));
+		if (strays.length) {
+			systemPrompt +=
+				`\nThese entries hold COMMUNICATION preferences, which no longer belong in memory: ${strays
+					.map((m) => m.key)
+					.join(", ")}. When the user next asks about how you communicate, move each one with set_behaviour` +
+				" and then delete_memory the old key. Do not act on them as if they were facts about the subject.\n";
+		}
 	}
+
+	// Emitted unconditionally, NOT inside the memory block above — an agent with no memory yet is
+	// precisely the one about to write the first preference into the wrong place. write_memory is
+	// the tool the model already knows; without being told otherwise it keeps reaching for it, and
+	// a stored `preference:response_style` reads back correctly enough to look like it worked.
+	systemPrompt +=
+		"\n\nMEMORY vs BEHAVIOUR: memory is for facts about the SUBJECT you work on. How you" +
+		" COMMUNICATE — technicality, length, tone, formatting, persona, what to call the user — is" +
+		" not memory. If the user asks you to change how you answer, call set_behaviour; to tell them" +
+		" your current manner, call get_behaviour. Never store a communication preference with write_memory.";
 
 	const activeTasks = tasks.filter((t) => t.status !== "complete");
 	if (activeTasks.length > 0) {
