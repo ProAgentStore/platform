@@ -17,12 +17,24 @@ export interface PrefOverrideProps {
 	hasOverride: boolean;
 	/** One-line description of the effective values, shown next to "Using your defaults". */
 	summary?: string;
+	/**
+	 * False until the current value has loaded.
+	 *
+	 * Load-bearing, not cosmetic: the initial GET resolves asynchronously and then sets the
+	 * override state. Clicking before it lands means the fetch's answer overwrites the choice you
+	 * just made, and the radio silently springs back. A control whose current value is unknown
+	 * must not be operable.
+	 */
+	loaded?: boolean;
 	onUseDefaults: () => void;
 	onCustomise: () => void;
 }
 
-export default function PrefOverride({ label, hasOverride, summary, onUseDefaults, onCustomise }: PrefOverrideProps) {
+export default function PrefOverride({ label, hasOverride, summary, loaded = true, onUseDefaults, onCustomise }: PrefOverrideProps) {
 	const name = `pref-${label.replace(/\s+/g, "-")}`;
+	if (!loaded) {
+		return <div className="mb-3 text-sm text-muted-soft">Loading your {label}…</div>;
+	}
 	return (
 		<div className="mb-3">
 			<label className="flex items-start gap-2 text-sm cursor-pointer py-1">

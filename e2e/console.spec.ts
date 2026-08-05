@@ -629,6 +629,8 @@ test.describe("ProAgentStore Console smoke", () => {
 		// toggle would rebuild the per-agent sprawl this change exists to remove.
 		await mockSignedInConsole(page);
 		await page.goto("/console/instances/inst-1/settings");
+		// Wait for the control to EXIST — it renders "Loading your voice settings…" until the GET
+		// lands, because clicking before then let the response overwrite the choice.
 		const usingDefaults = page.getByRole("radio", { name: /Using your defaults/ }).first();
 		await expect(usingDefaults).toBeChecked();
 		// The fields stay hidden while the agent follows the account.
@@ -638,10 +640,43 @@ test.describe("ProAgentStore Console smoke", () => {
 		const crashes: string[] = [];
 		page.on("pageerror", (e) => crashes.push(String(e)));
 		const customise = page.getByRole("radio", { name: /Customise for this agent/ }).first();
-		await customise.check();
+		// click(), not check(): check() asserts the input reflects the new state SYNCHRONOUSLY, which
+		// a controlled React radio never does — it flips only after the state round-trip. The
+		// toBeChecked below is the assertion, and it auto-retries.
+		await customise.click();
 		await expect(customise).toBeChecked();
 		await expect(page.locator("#voice-stt-mode")).toBeVisible();
 		expect(crashes).toEqual([]);
+	});
+
+	test("a slow settings load cannot silently revert your choice", async ({ page }) => {
+		// The real bug behind a "flaky" test: the initial GET /voice-settings resolves AFTER the
+		// user clicks, then calls setVoiceOverride(hasOverride) and springs the radio back. On CI
+		// the delay was enough to hit it every other run; for a user on a slow connection it is a
+		// setting that refuses to change and never says why. The control is now inert until the
+		// current value is known.
+		await mockSignedInConsole(page);
+		// Delay ONLY the voice-settings read, so the page renders while it is still in flight.
+		await page.route("**/v1/instances/inst-1/voice-settings", async (route) => {
+			await new Promise((r) => setTimeout(r, 1200));
+			await route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false }),
+			});
+		});
+		await page.goto("/console/instances/inst-1/settings");
+		// While in flight the radios do not exist, so there is nothing to click too early.
+		await expect(page.getByRole("radio", { name: /Customise for this agent/ }).first()).toHaveCount(0);
+		await expect(page.getByText(/Loading your voice settings/)).toBeVisible();
+		// Once loaded, the choice sticks — the late response has already landed.
+		const customise = page.getByRole("radio", { name: /Customise for this agent/ }).first();
+		await expect(customise).toBeVisible({ timeout: 5000 });
+		await customise.click();
+		await expect(customise).toBeChecked();
+		// Give any straggling response the chance to clobber it; it must not.
+		await page.waitForTimeout(500);
+		await expect(customise).toBeChecked();
 	});
 
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {

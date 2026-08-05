@@ -172,6 +172,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	// happens to match your defaults is still a choice the user made.
 	const [voiceOverride, setVoiceOverride] = useState(false);
 	const [trOverride, setTrOverride] = useState(false);
+	const [trLoaded, setTrLoaded] = useState(false);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
 	// Per-instance display name (distinguishes multiple instances of one agent).
 	const [instName, setInstName] = useState("");
@@ -270,6 +271,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setTrFontSize(d.translation?.fontSize || "medium");
 				setTrLanguages(d.languages || []);
 				setTrOverride(d.hasOverride === true);
+				setTrLoaded(true);
 			} catch {}
 			try {
 				const d = await api<{ voiceSettings?: Record<string, unknown>; hasOverride?: boolean }>(`/v1/instances/${instanceId}/voice-settings`);
@@ -1281,6 +1283,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				<h3 className="text-base font-bold mb-2">Voice</h3>
 				<PrefOverride
 					label="voice settings"
+					// `voiceSettings` is null until the GET lands. Without this the radios are live
+					// while the real value is still in flight, and the response overwrites the click.
+					loaded={voiceSettings !== null}
 					hasOverride={voiceOverride}
 					summary={voiceSummary}
 					onUseDefaults={clearVoiceOverride}
@@ -1299,6 +1304,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				<h3 className="text-base font-bold mb-1">Translation</h3>
 				<PrefOverride
 					label="translation settings"
+					loaded={trLoaded}
 					hasOverride={trOverride}
 					summary={trEnabled ? `On — ${trTarget}` : "Off"}
 					onUseDefaults={clearTrOverride}
