@@ -182,7 +182,8 @@ export default function TmuxTab({ instanceId }: Props) {
 		setStatus("");
 		setError("");
 		try {
-			const content = await callTool("terminal_send_keys", { target: selected, text: sendText || undefined, keys: sendKeys });
+			const keys = sendKeys.split(",").map((key) => key.trim()).filter(Boolean);
+			const content = await callTool("terminal_send_keys", { target: selected, text: sendText || undefined, keys });
 			setPane(content);
 			setSendText("");
 			setSendKeys("");

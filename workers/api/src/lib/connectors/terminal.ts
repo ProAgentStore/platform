@@ -111,14 +111,16 @@ export const TERMINAL_TOOLS: ToolDef[] = [
 				target: { type: "string", description: "Terminal target, e.g. `tmux:main`, `kitty:3`, or `iterm2:1:1:1`." },
 				backend: BACKEND_PROP,
 				text: { type: "string", description: "Literal text to type." },
-				keys: { type: "string", description: "Comma-separated named keys, e.g. Enter, Escape, C-c." },
+				keys: { type: "array", description: "Named keys to send, e.g. [\"Enter\"], [\"Escape\"], or [\"C-c\"]." },
 			},
 			required: ["target"],
 		},
 		handler: async (ctx, input) => {
 			const r = await resolveRunner(ctx);
 			if ("error" in r) return { content: r.error, success: false };
-			const keys = String(input.keys ?? "").split(",").map((k) => k.trim()).filter(Boolean);
+			const keys = Array.isArray(input.keys)
+				? input.keys.map((k) => String(k).trim()).filter(Boolean)
+				: String(input.keys ?? "").split(",").map((k) => k.trim()).filter(Boolean);
 			if (input.text == null && keys.length === 0) return { content: "Provide `text` and/or `keys` to send.", success: false };
 			const res = await callRunner<{ pane?: string }>(r.conn, "/terminal/send", { target: requireTarget(input), backend: backend(input), text: input.text == null ? undefined : String(input.text), keys });
 			return { content: res.pane ?? "Sent.", success: true };

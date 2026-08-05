@@ -72,6 +72,14 @@ describe("terminal connector — runner dispatch", () => {
 		expect(r.success).toBe(true);
 	});
 
+	it("sends text and key arrays through /terminal/send", async () => {
+		callRunner.mockResolvedValue({ pane: "sent" });
+		const r = await tool("terminal_send_keys").handler(ctx(), { target: "tmux:main", text: "echo hi", keys: ["Enter"] });
+		expect(callRunner).toHaveBeenCalledWith(FAKE_CONN, "/terminal/send", { target: "tmux:main", backend: undefined, text: "echo hi", keys: ["Enter"] });
+		expect(r.success).toBe(true);
+		expect(r.content).toBe("sent");
+	});
+
 	it("rejects empty writes before touching the runner", async () => {
 		const r = await tool("terminal_run_command").handler(ctx(), { target: "tmux:main", command: "  " });
 		expect(r.success).toBe(false);
