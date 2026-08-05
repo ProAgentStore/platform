@@ -560,6 +560,57 @@ export function behaviourPrompt(behaviour: Behaviour): string {
 }
 
 /**
+ * JSON Schema for `set_behaviour` (#224), derived from the field table.
+ *
+ * Generated rather than hand-written so adding a field never means editing the tool — the same
+ * reason the console fetches the table instead of restating it. Every property also accepts `null`,
+ * because "go back to how you were" has to be expressible or a setting can only ever be changed,
+ * never undone.
+ */
+export function behaviourToolSchema(allowedIds: readonly string[]): Record<string, unknown> {
+	const allowed = new Set(allowedIds);
+	const properties: Record<string, unknown> = {};
+	for (const f of BEHAVIOUR_FIELDS) {
+		if (!allowed.has(f.id)) continue;
+		const desc = [f.label, f.help].filter(Boolean).join(" — ");
+		switch (f.type) {
+			case "scale":
+				properties[f.id] = {
+					type: ["number", "null"],
+					minimum: 0,
+					maximum: 100,
+					// The bands are spelled out so the model picks a value that lands where it means
+					// to, instead of guessing what "70" does.
+					description: `${desc}. 0-100: ${(f.bands ?? []).map((b) => `up to ${b.max} = ${b.label}`).join("; ")}`,
+				};
+				break;
+			case "number":
+				properties[f.id] = { type: ["number", "null"], minimum: f.min, maximum: f.max, description: desc };
+				break;
+			case "toggle":
+				properties[f.id] = { type: ["boolean", "null"], description: desc };
+				break;
+			case "choice":
+				properties[f.id] = {
+					type: ["string", "null"],
+					enum: [...(f.options ?? []).map((o) => o.value), null],
+					description: `${desc}. ${(f.options ?? []).map((o) => `${o.value} = ${o.label}`).join("; ")}`,
+				};
+				break;
+			case "text":
+				properties[f.id] = { type: ["string", "null"], maxLength: f.maxLength, description: desc };
+				break;
+			case "list":
+				properties[f.id] = { type: ["array", "null"], items: { type: "string" }, description: desc };
+				break;
+		}
+	}
+	// `required: []` rather than omitted: every tool definition on the platform declares it, and
+	// a patch tool genuinely has no required field — say that explicitly.
+	return { type: "object", properties, required: [] };
+}
+
+/**
  * Human-readable current settings, for `get_behaviour` (#224) and the UI summary.
  *
  * Returns the BAND PROSE alongside the raw value so the agent explains itself in the same words the

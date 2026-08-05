@@ -12,7 +12,7 @@ import type { AgentCapabilities } from "./lib/agent-capabilities.js";
 // tools lets each capability expose exactly what it can actually use.
 
 /** Universal agent facilities every agent gets: memory, tasks, web fetch, context. */
-const BASE = [
+export const BASE = [
 	"read_memory",
 	"write_memory",
 	"delete_memory",
@@ -35,6 +35,17 @@ const BASE = [
 	// had, invented a pipeline named "coding", failed, and then told the user the engine was
 	// running. It refuses cleanly on an agent with no separate executor.
 	"start_work",
+	// Read and change how the agent communicates (#224).
+	//
+	// Base rather than creator-selectable because the alternative is what actually happened: asked
+	// to be less technical, an agent with no behaviour tool wrote `preference:response_style` into
+	// MEMORY and read it back, which looks like it worked and stores character in the place meant
+	// for subject-matter knowledge. Every agent can be asked to change its manner, so every agent
+	// needs somewhere real to put the answer.
+	//
+	// set_behaviour is confined to SELF_WRITABLE_FIELDS — guardrails are not self-writable.
+	"get_behaviour",
+	"set_behaviour",
 ] as const;
 
 /** Read the vector knowledge base (RAG). Only agents that HAVE an index get these. */

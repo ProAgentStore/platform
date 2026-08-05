@@ -13,6 +13,8 @@ import { STEP_TOOLS } from "./steps.js";
 import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { openBudget } from "./delegation-budget-store.js";
+import { SELF_WRITABLE_FIELDS, behaviourToolSchema, describeBehaviour } from "./agent-behaviour.js";
+import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
 
 export interface RegistryToolCtx {
 	env: Env;
@@ -135,6 +137,57 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			return started.ok
 				? { content: `Started work on: ${objective} (run ${started.runId}). It reports progress into this conversation.`, success: true }
 				: { content: started.error, success: false };
+		},
+	},
+	{
+		name: "get_behaviour",
+		description:
+			"Read how your subscriber has asked you to communicate — technicality, length, tone, formatting, and so on. Use this when they ask what your settings are, or before changing one, so you report what is actually stored rather than what you remember.",
+		tier: "base",
+		jsonSchema: { type: "object", properties: {}, required: [] },
+		handler: async (ctx) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "get_behaviour needs an owned instance context.", success: false };
+			const behaviour = await readBehaviour(ctx.env, ctx.instanceId, ctx.userId);
+			const rows = describeBehaviour(behaviour);
+			if (!rows.length) {
+				return {
+					content:
+						"Nothing is configured — you are using the platform defaults. The subscriber can set your behaviour in the Behaviour tab, or ask you to change it here.",
+					success: true,
+				};
+			}
+			// The band PROSE, not the raw value. Reading back "technicality is 70" would put the
+			// number into the conversation, which is exactly what the band mapping exists to avoid.
+			return { content: rows.map((r) => `${r.label}: ${r.description}`).join("\n"), success: true };
+		},
+	},
+	{
+		name: "set_behaviour",
+		description:
+			"Change how you communicate, when the subscriber asks you to (\"be less technical\", \"stop using emoji\", \"keep answers short\"). Pass only the fields that change; pass null to reset one to the platform default. This is the ONLY correct place for preferences about your manner — do not store them in memory, which is for knowledge about the subject you work on.",
+		tier: "base",
+		jsonSchema: behaviourToolSchema(SELF_WRITABLE_FIELDS) as ToolDef["jsonSchema"],
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "set_behaviour needs an owned instance context.", success: false };
+			// SELF_WRITABLE_FIELDS excludes every guardrail. A Repo Coder reads untrusted repo files
+			// and issue bodies; if injected text could widen the agent's own restrictions then the
+			// restrictions are decorative. The schema above already omits them, but the schema is a
+			// hint to the model — this is the enforcement.
+			const { behaviour, rejected } = await patchBehaviour(
+				ctx.env,
+				ctx.instanceId,
+				ctx.userId,
+				input,
+				SELF_WRITABLE_FIELDS,
+			);
+			const rows = describeBehaviour(behaviour);
+			const summary = rows.length ? rows.map((r) => `${r.label}: ${r.description}`).join("\n") : "(nothing configured)";
+			// Refusals are reported, not swallowed: a tool that half-applies a patch and returns
+			// success teaches the model it changed something it did not.
+			const refused = rejected.length
+				? `\n\nNOT changed (either not a real setting, or only the subscriber can set it in the Behaviour tab): ${rejected.join(", ")}`
+				: "";
+			return { content: `Updated. Your behaviour is now:\n${summary}${refused}`, success: true };
 		},
 	},
 	{
