@@ -582,7 +582,10 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("Job application").first()).toBeVisible();
 		// The waiting-for-approval job's card has an Approve button.
 		await page.getByRole("button", { name: "Approve" }).click();
-		expect(mock.approvedTaskId).toBe("task-approval");
+		// Polled, not a bare expect: the click fires a fetch the route handler answers
+		// asynchronously, so reading the mock on the very next tick is a race that only loses on a
+		// slow machine — which is how it flaked in CI while passing every time locally.
+		await expect.poll(() => mock.approvedTaskId).toBe("task-approval");
 	});
 
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {
