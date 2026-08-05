@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { CONNECTORS, connectorTools, getConnector } from "./registry.js";
 
 describe("connector registry", () => {
-	it("declares browser, github, google_sheets, http, mcp, meta, repo-local, supervision, tmux, and web-search", () => {
+	it("declares browser, github, google_sheets, http, mcp, meta, repo-local, supervision, terminal, tmux, and web-search", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
-		expect(ids).toEqual(["browser", "github", "google_sheets", "http", "mcp", "meta", "repo-local", "supervision", "tmux", "web-search"]);
+		expect(ids).toEqual(["browser", "github", "google_sheets", "http", "mcp", "meta", "repo-local", "supervision", "terminal", "tmux", "web-search"]);
 	});
 
 	// repo-local is the only read-ONLY connector: scopes.write:false is what makes it
@@ -84,6 +84,21 @@ describe("connector registry", () => {
 
 	it("tmux is a no-auth local connector", () => {
 		expect(getConnector("tmux")?.auth).toBe("none");
+	});
+
+	it("terminal is a no-auth local connector with read+write runner tools", () => {
+		const terminal = getConnector("terminal");
+		expect(terminal?.auth).toBe("none");
+		expect(terminal?.scopes).toEqual({ read: true, write: true });
+		expect(terminal?.grantModel).toBe("user");
+		expect(terminal?.tools.map((t) => t.name).sort()).toEqual([
+			"terminal_capture",
+			"terminal_kill_target",
+			"terminal_list_targets",
+			"terminal_new_target",
+			"terminal_run_command",
+			"terminal_send_keys",
+		]);
 	});
 
 	it("unknown connector → undefined", () => {
