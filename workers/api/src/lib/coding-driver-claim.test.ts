@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { claimSessionDriver, releaseSessionDriver, endSession } from "./coding-store.js";
+import { claimSessionDriver, releaseSessionDriver, endSession, touchSessionDriver, STALE_DRIVER_MS } from "./coding-store.js";
 import type { Env } from "../types.js";
 
 /** D1 stub whose UPDATE "changes" is decided by a predicate over the SQL, so we can model
@@ -81,3 +81,46 @@ describe("releasing the claim", () => {
 		expect(upd?.sql).toContain("driver_at = NULL");
 	});
 });
+
+describe("a claim expires — a dead workflow must not lock the session forever", () => {
+	it("is takeable once it has gone quiet", () => {
+		// The production failure: release happens in endSession, and the reasoning was that a dead
+		// workflow gets cleaned up by reconcileOrphanedSessions. That only fires when the RUNNER
+		// reports no tmux. A workflow that dies while its tmux is healthy left the session `active`
+		// forever, so every later run got "already being worked on" — with nothing to stop and no
+		// way back. It happened within hours of shipping.
+		const { env, writes } = stubEnv(1);
+		return claimSessionDriver(env, "i1", "u1", "s1", "d1").then(() => {
+			expect(writes[0].sql).toContain("driver_at < ?6");
+			// The cutoff is a timestamp, not a flag — an old claim is stale by arithmetic.
+			expect(Number(writes[0].args[5])).toBeLessThan(Date.now());
+			expect(Number(writes[0].args[5])).toBeGreaterThan(Date.now() - STALE_DRIVER_MS - 5_000);
+		});
+	});
+
+	it("treats a pre-heartbeat claim (driver_at NULL) as takeable", () => {
+		// Rows claimed before the heartbeat column was written must not be permanent locks.
+		const { env, writes } = stubEnv(1);
+		return claimSessionDriver(env, "i1", "u1", "s1", "d1").then(() => {
+			expect(writes[0].sql).toContain("driver_at IS NULL");
+		});
+	});
+
+	it("waits longer than the longest LEGITIMATE silence", () => {
+		// A live Pilot heartbeats per action, so the only quiet stretch is a human handoff —
+		// itself bounded at 15 minutes. Shorter than that and a run loses its own claim while a
+		// human is answering it.
+		expect(STALE_DRIVER_MS).toBeGreaterThanOrEqual(15 * 60_000);
+	});
+
+	it("heartbeats only the claim it actually holds", () => {
+		// Scoped to driver_id: a stale workflow must not keep someone else's claim alive.
+		const { env, writes } = stubEnv(1);
+		return touchSessionDriver(env, "i1", "u1", "s1", "d1").then(() => {
+			expect(writes[0].sql).toContain("driver_id = ?4");
+			expect(writes[0].sql).toContain("SET driver_at = ?5");
+			expect(writes[0].args).toContain("d1");
+		});
+	});
+});
+

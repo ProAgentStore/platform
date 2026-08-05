@@ -10,7 +10,7 @@ import {
 	type CodingResult,
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
-import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver } from "../lib/coding-store.js";
+import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionDriver } from "../lib/coding-store.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
@@ -349,6 +349,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// echoing it into chat would be noise about work they are watching happen.
 					if (type === "action" && event.payload.loopRunId) {
 						await postToChat(`**Loop → engine** (step ${at}): ${message}`);
+					}
+					// Heartbeat the single-flight claim. Without it a run longer than
+					// STALE_DRIVER_MS would expire its OWN claim and a second Pilot could take the
+					// session out from under it — the exact collision the claim exists to prevent.
+					if (type === "action" && event.payload.driverId) {
+						await touchSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId);
 					}
 					return null;
 				}).then(() => undefined);

@@ -437,11 +437,48 @@ export async function reconcileOrphanedSessions(
 }
 
 /**
+ * How long a claim survives without a heartbeat before another driver may take it.
+ *
+ * A claim with no expiry was a permanent lockout. Release happens in `endSession`, and the
+ * reasoning was that a dead workflow would be cleaned up by `reconcileOrphanedSessions` — but that
+ * only fires when the RUNNER reports no tmux. A workflow that dies while its tmux is perfectly
+ * healthy leaves the session `active` forever, and every later run gets "already being worked on"
+ * with nothing to stop and no way back. That happened in production within hours.
+ *
+ * Fifteen minutes because a live Pilot heartbeats on every action (`touchSessionDriver`), so the
+ * only way to go quiet this long is to be dead — except across a human handoff, which is itself
+ * bounded at 15 minutes, so the window is deliberately not shorter.
+ */
+export const STALE_DRIVER_MS = 15 * 60_000;
+
+/**
+ * Keep a live claim fresh. Cheap enough to call per action: it rides the same hook that already
+ * records progress, and without it a long run would expire its own claim mid-flight.
+ */
+export async function touchSessionDriver(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	sessionId: string,
+	driverId: string,
+): Promise<void> {
+	await env.DB.prepare(
+		"UPDATE coding_sessions SET driver_at = ?5 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND driver_id = ?4",
+	)
+		.bind(sessionId, instanceId, userId, driverId, Date.now())
+		.run()
+		.catch(() => undefined);
+}
+
+/**
  * Claim the right to DRIVE a session, atomically. Returns false when someone already holds it.
  *
  * The condition is in the UPDATE, not in a preceding SELECT: a check-then-act would let two
  * concurrent `/run` calls both read "free" and both proceed, which is precisely the race being
  * closed. `status = 'active'` is part of the predicate so an ended session cannot be claimed.
+ *
+ * A claim that has gone quiet for {@link STALE_DRIVER_MS} is takeable. `driver_at IS NULL` is
+ * takeable too — a row claimed before the heartbeat existed must not lock the session forever.
  */
 export async function claimSessionDriver(
 	env: Env,
@@ -455,9 +492,9 @@ export async function claimSessionDriver(
 		    SET driver_id = ?5, driver_at = ?4, updated_at = datetime('now')
 		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3
 		    AND status = 'active'
-		    AND (driver_id IS NULL OR driver_id = ?5)`,
+		    AND (driver_id IS NULL OR driver_id = ?5 OR driver_at IS NULL OR driver_at < ?6)`,
 	)
-		.bind(sessionId, instanceId, userId, Date.now(), driverId)
+		.bind(sessionId, instanceId, userId, Date.now(), driverId, Date.now() - STALE_DRIVER_MS)
 		.run();
 	return (res.meta?.changes ?? 0) > 0;
 }
