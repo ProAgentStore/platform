@@ -6,7 +6,7 @@ Creators publish agent templates. Users subscribe to private agent instances. Ea
 
 ## Start Here
 
-- [Connectors](connectors.md): two layers — *ingest* connectors (Google Drive, Google Docs, Zoho WorkDrive) imported into knowledge via per-folder grants, and *registry* connectors an agent drives as tools (GitHub, HTTP/REST, Web Search, Meta, tmux, and the experimental browser), with per-instance write-consent gating.
+- [Connectors](connectors.md): two layers — *ingest* connectors (Google Drive, Google Docs, Zoho WorkDrive) imported into knowledge via per-folder grants, and *registry* connectors an agent drives as tools (GitHub, HTTP/REST, Web Search, Meta, Terminal, legacy tmux, and the experimental browser), with per-instance write-consent gating.
 - [Triggers](triggers.md): configure webhooks and cron schedules for private agent instances.
 - [MCP](mcp.md): connect Codex, Claude Code, Cursor, and other MCP clients to the official ProAgentStore MCP server.
 - [Browser Runtime](browser-runtime.md): run local browser and CLI capabilities with `pags up`.

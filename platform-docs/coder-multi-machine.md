@@ -9,7 +9,7 @@ Each machine runs `pags up`. ProAgentStore records the machine as a runner node,
 - Keep a desktop and laptop connected to the same Coder instance.
 - Run different repo sessions on different machines at the same time.
 - Preserve account-level authorization, audit, and workflow state in ProAgentStore.
-- Keep local files, browser profiles, CLI auth, and tmux sessions on the machine where they run.
+- Keep local files, browser profiles, CLI auth, and terminal sessions on the machine where they run.
 
 One repo still has at most one active session. That prevents two coding CLIs from fighting over the same working tree and git index.
 
@@ -21,7 +21,7 @@ Coder session
   -> node-scoped RelayDO
   -> outbound WebSocket
   -> local pags up runner
-  -> tmux CLI session
+  -> terminal CLI session
 ```
 
 The legacy instance runtime row remains the default runtime for browser/apply behavior and older clients. Coder adds node-level runtime rows for machine-specific routing.

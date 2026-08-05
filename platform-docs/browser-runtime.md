@@ -5,7 +5,7 @@ Runtime-backed agents use `pags up`, which runs local browser and CLI capabiliti
 The current PAGS runtime pattern is:
 
 ```text
-Workflow brain -> callRunner() -> RelayDO -> WebSocket -> local runner -> browser/tmux
+Workflow brain -> callRunner() -> RelayDO -> WebSocket -> local runner -> browser/terminal
 ```
 
 The cloud-hosted workflow is the brain. The local runner is the hands. This keeps account state, audit, and orchestration in ProAgentStore while browser sessions, local files, and CLI sessions stay on the user's machine.
@@ -19,7 +19,7 @@ ProAgentStore Workflow
   -> RelayDO
   -> outbound WebSocket
   -> local browser runner
-  -> Playwright browser or tmux CLI
+  -> Playwright browser or terminal CLI
 ```
 
 The outbound WebSocket relay is the only transport. The earlier Cloudflare Tunnel / cloudflared modes were removed — there is no tunnel fallback, no `--tunnel` flag, and no public inbound server. The runner mints a short-lived, instance-scoped relay token and opens `wss://…/v1/relay/:instanceId/connect`; the relay DO is keyed per (instance, node) and hibernates when idle.
@@ -32,7 +32,7 @@ The workflow brain runs in ProAgentStore. The hands run locally.
 | --- | --- | --- |
 | Brain | Cloudflare Workflow | Plans steps, manages durable task state, checks policy, requests approval |
 | Relay | RelayDO WebSocket relay | Carries scoped calls between the cloud workflow and local runner |
-| Hands | Local `pags up` runner | Drives Playwright browser actions or tmux CLI sessions |
+| Hands | Local `pags up` runner | Drives Playwright browser actions or terminal CLI sessions |
 | Browser/session | User machine | Keeps cookies, local files, active logins, and interactive handoff state |
 
 ## Browser-Capable Agents
@@ -50,10 +50,10 @@ The Job Application Assistant is the reference browser-capable agent. Its Cloudf
 
 ## Coder Agents
 
-Coder agents use the same runtime idea, but the local capability is a tmux-backed CLI session rather than a browser.
+Coder agents use the same runtime idea, but the local capability is a terminal-backed CLI session rather than a browser. The default backend remains tmux; the generic terminal connector can also address kitty and iTerm2 targets when those apps expose local control APIs.
 
 ```text
-Workflow brain -> RelayDO -> local runner -> tmux CLI session
+Workflow brain -> RelayDO -> local runner -> terminal CLI session
 ```
 
 This allows long-running coding sessions while preserving the account-level control plane and audit model.

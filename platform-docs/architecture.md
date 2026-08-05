@@ -17,7 +17,7 @@ platform/
   packages/
     sdk/                 Browser/client SDK and shared helpers
     cli/                 pags CLI: init, publish, login, mcp, runner
-    browser-runner/      Local Playwright/tmux runtime served by `pags up`
+    browser-runner/      Local Playwright/terminal runtime served by `pags up`
     compliance/          Policy/check tooling
   agents/                First-party catalog agents
   templates/             Agent scaffolds
@@ -50,7 +50,7 @@ workers/mcp --------------- OAuth + tool surface, calls workers/api
 Local machine
         |
         v
-packages/browser-runner ---- Playwright browser, tmux CLIs, local files
+packages/browser-runner ---- Playwright browser, terminal CLIs, local files
         ^
         |
 RelayDO WebSocket relay ---- outbound runner connection, no inbound tunnel
@@ -82,7 +82,7 @@ Runtime-backed agents use `pags up`, which runs a local browser/CLI runtime from
 Current runtime-backed surfaces:
 
 - Job Application Assistant: Cloudflare Workflow brain drives Playwright browser actions.
-- Coder: Cloudflare Workflow brain drives local CLI sessions in tmux. Coder sessions can route to node-scoped runners when multiple machines are connected to the same instance.
+- Coder: Cloudflare Workflow brain drives local CLI sessions through the generic Terminal connector. Coder sessions can route to node-scoped runners when multiple machines are connected to the same instance.
 
 ## Docs Plane
 

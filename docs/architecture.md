@@ -47,7 +47,7 @@ platform/
 +-- packages/
 |   +-- sdk/                 Browser/client SDK and shared UI/voice helpers
 |   +-- cli/                 pags CLI: init, publish, login, mcp, runner
-|   +-- browser-runner/      Local Playwright/tmux runtime served by `pags up`
+|   +-- browser-runner/      Local Playwright/terminal runtime served by `pags up`
 |   +-- compliance/          Policy/check tooling
 +-- agents/                  First-party catalog agents
 +-- templates/               Agent scaffolds for worker, cron, api templates
@@ -81,7 +81,7 @@ workers/mcp --------------- OAuth + tool surface, calls workers/api
 Local machine
         |
         v
-packages/browser-runner ---- Playwright browser, tmux CLIs, local files
+packages/browser-runner ---- Playwright browser, terminal CLIs, local files
         ^
         |
 RelayDO WebSocket relay ---- outbound runner connection, no inbound tunnel
@@ -129,14 +129,14 @@ Current runtime-backed surfaces:
 
 - Job Application Assistant: Cloudflare Workflow brain drives Playwright browser
   actions.
-- Coder: Cloudflare Workflow brain drives local CLI sessions in tmux. Multiple
+- Coder: Cloudflare Workflow brain drives local CLI sessions through the generic Terminal connector. Multiple
   machines can connect to the same Coder instance through node-scoped relay
   connections; see [Coder Multi-Machine Runtime](../platform-docs/coder-multi-machine.md).
 
 The key architectural pattern is "brain in cloud, hands local":
 
 ```text
-Workflow brain -> callRunner() -> RelayDO -> WebSocket -> local runner -> browser/tmux
+Workflow brain -> callRunner() -> RelayDO -> WebSocket -> local runner -> browser/terminal
 ```
 
 ## API Worker
@@ -159,7 +159,7 @@ The API worker is a Hono app. It mounts route modules for:
 - Instance storage: documents, files, collections, search, activity, summaries
 - Runtime: `/v1/relay`, runtime registration/status/task mirrors
 - Coding: `/v1/instances/:id/coding/...`
-- Connectors: `/v1/github` (GitHub App), `/v1/drive` (Google Drive), `/v1/workdrive` (Zoho WorkDrive), `/v1/email` (Gmail, apply-flow reads); registry connectors (github, http, meta, web-search, tmux, browser) are dispatched through the tool loop, not per-connector routes
+- Connectors: `/v1/github` (GitHub App), `/v1/drive` (Google Drive), `/v1/workdrive` (Zoho WorkDrive), `/v1/email` (Gmail, apply-flow reads); registry connectors (github, http, meta, web-search, terminal, tmux, browser) are dispatched through the tool loop, not per-connector routes
 - Keys: BYOK key vault and key proxy
 - Billing, notifications, push, dashboard, errors
 
@@ -331,7 +331,7 @@ The browser runner provides:
 - Runtime task endpoints.
 - CAPTCHA/handoff support.
 - File upload support.
-- tmux-backed coding sessions.
+- terminal-backed coding sessions.
 - Terminal capture and action execution.
 
 ### Assessment
@@ -393,7 +393,7 @@ source-of-truth rule.
 Recommended source-of-truth rule:
 
 - Durable Workflow owns long-running brain progress.
-- Local runner owns immediate browser/tmux execution state.
+- Local runner owns immediate browser/terminal execution state.
 - D1 `instance_runtime_tasks` is the user-visible mirror and query index.
 - `agent_events` is the timeline/audit stream.
 - Board rows are presentation and operational workflow state.
@@ -438,7 +438,8 @@ Registered connectors (`CONNECTORS`):
 | `http` | token (vault key) | read+write | generic HTTP/REST — call any API as config |
 | `web-search` | token (vault key) | read | Google Custom Search |
 | `meta` | token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |
-| `tmux` | none (runner relay) | read+write | drive shells/CLIs on the user's machine |
+| `terminal` | none (runner relay) | read+write | drive tmux, kitty, or iTerm2 targets on the user's machine |
+| `tmux` | none (runner relay) | read+write | legacy compatibility wrapper for tmux sessions |
 | `browser` | none (runner relay) | read+write | experimental (`BROWSER_TOOLS_ENABLED`); `browser_navigate`/`browser_snapshot`/`browser_act` |
 
 Auth is minted through the single `connectorClient(env, provider, {userId, instanceId})`
@@ -650,7 +651,7 @@ Use these rules when adding new platform features:
 - R2 owns blobs.
 - Vectorize owns semantic retrieval indexes.
 - Workflows own long-running brain progress.
-- The local runner owns local browser/tmux execution.
+- The local runner owns local browser/terminal execution.
 - MCP should call platform APIs, not reimplement platform behavior.
 - User-facing LLM spend must be BYOK unless the billing model explicitly
   changes.

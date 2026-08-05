@@ -8,8 +8,9 @@ ProAgentStore has two connector layers, for two different jobs.
    integration used by the apply flow to read verification emails; it is not a knowledge-ingest
    connector.)
 2. **Registry connectors** (the tool framework, issues #84–#90): a declared registry of
-   integrations an agent drives as **tools** — GitHub, HTTP/REST, Web Search, Meta, tmux, and
-   the experimental browser. See [Registry connectors](#registry-connectors) below.
+   integrations an agent drives as **tools** — GitHub, HTTP/REST, Web Search, Meta, Terminal,
+   legacy tmux, and the experimental browser. See [Registry connectors](#registry-connectors)
+   below.
 
 ## Registry connectors
 
@@ -24,14 +25,16 @@ An agent gets a connector's tools only when it declares them in `capabilities.to
 | `http` | vault API key | read + write | `http_request` (call any REST API as configuration) |
 | `web-search` | vault API key | read | `web_search` (Google Custom Search) |
 | `meta` | platform token (`META_ACCESS_TOKEN`) | write | `whatsapp_send_message`, `instagram_send_dm` |
-| `tmux` | none (runner relay) | read + write | `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write) |
+| `terminal` | none (runner relay) | read + write | `terminal_list_targets`, `terminal_capture`, `terminal_run_command` (write), `terminal_send_keys` (write) |
+| `tmux` | none (runner relay) | read + write | Legacy compatibility: `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write) |
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
 
 **Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:
 a GitHub-App installation token, an OAuth refresh→access exchange, a key from the user's BYOK
-vault (`user_api_keys`), or none for local relay connectors (tmux/browser reach the user's
-machine over the WebSocket relay — machine ownership is already enforced by the relay-token
-handshake).
+vault (`user_api_keys`), or none for local relay connectors (terminal/tmux/browser reach the
+user's machine over the WebSocket relay — machine ownership is already enforced by the relay-token
+handshake). The generic Terminal connector targets `tmux:<session>`, `kitty:<window-id>`, or
+`iterm2:<window>:<tab>:<session>`.
 
 **Write-consent gating (#90).** Every `scope:"write"` connector tool is refused unless the
 instance has explicit write-consent for that connector (`instance_connector_consent`, migration

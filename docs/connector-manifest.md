@@ -86,7 +86,7 @@ A connector manifest is JSON (built-in ones committed as data; later, creator-su
 | `api-key` | user's BYOK vault (`user_api_keys`), injected into header/query per the tool | http, web-search |
 | `oauth2` | refresh→access exchange; refresh token envelope-encrypted; `secretRef` server-side | Slack, Google Sheets, Notion, Linear |
 | `app` | installation token (GitHub-App style) | github |
-| `none` | reached over the runner relay (machine-owned) | tmux, browser |
+| `none` | reached over the runner relay (machine-owned) | terminal, tmux, browser |
 
 The one new capability is a **generic OAuth2 handler** driven by `auth` config — today Drive/Gmail/
 GitHub each hand-roll their flow. Consolidating them into one manifest-driven `authorize` +
