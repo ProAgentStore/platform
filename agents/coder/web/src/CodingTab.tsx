@@ -9,10 +9,11 @@ import { repoTitle } from "./repo-title";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
+import RepoIssues from "./RepoIssues";
 import RepoSettingsModal from "./RepoSettingsModal";
 import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
-import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer } from "lucide-react";
+import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, Cpu, RotateCw } from "lucide-react";
 
 interface Props {
 	instanceId: string;
@@ -114,6 +115,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [showEngines, setShowEngines] = useState(false);
 	// Landing view toggle: the repos list vs. the Builds status panel (CODER-004).
 	const [landingView, setLandingView] = useState<"repos" | "builds">("repos");
+	/**
+	 * The single-repo agent's surface: three views, one nav row, always visible.
+	 *
+	 * A one-repo Coder had `Repos | Builds` where "Repos" was one repo, Issues were nested inside
+	 * that repo's card, and the terminal took over the whole header — so opening it hid every
+	 * other view behind a back arrow. Terminal / Issues / Builds are the three things this agent
+	 * actually has, so they are the navigation.
+	 */
+	const [soloView, setSoloView] = useState<"terminal" | "issues" | "builds">("terminal");
 	const [loopPresets] = useState([
 		{ id: "bugs", label: "Fix bugs", objective: "Find and fix all bugs. Run tests after each fix. Commit when all pass." },
 		{ id: "quality", label: "Quality check", objective: "Run a full code quality audit: type check, lint, find code smells, dead code, and fix issues found. Commit improvements." },
@@ -760,7 +770,108 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		openSession?.clientType === "claude" &&
 		/not logged in|please run \/login|invalid api key|oauth token (is |has )?(expired|revoked)/i.test(terminalText);
 
-	// ── Session open: full-screen terminal/co-pilot ──
+	// ── Single-repo agent: one surface, three views, navigation never hidden ──
+	//
+	// Guarded on the DATA as well as the declaration. `repos: "single"` is what the agent says;
+	// an instance could still hold two rows (added before the declaration, or by the API), and a
+	// solo view showing `repos[0]` would make the other one unreachable. In that case fall through
+	// to the list, which still hides add-repo.
+	if (singleRepo && repos.length <= 1) {
+		const solo = repos[0];
+		const active = solo ? getActiveSession(solo.id) : undefined;
+		const tab = (id: typeof soloView, label: string, Icon: typeof SquareTerminal) => (
+			<button
+				type="button"
+				onClick={() => setSoloView(id)}
+				aria-pressed={soloView === id}
+				className={`flex items-center gap-1 px-2.5 py-1 text-xs font-bold ${soloView === id ? "bg-accent-soft text-accent" : "text-muted hover:text-accent"}`}
+			>
+				<Icon size={13} /> {label}
+			</button>
+		);
+		return (
+			<div className="flex flex-col h-full min-h-0">
+				<div className="px-2 pt-2 sm:px-4 sm:pt-3 flex items-center gap-2 flex-wrap">
+					<div className="inline-flex border border-line rounded-lg overflow-hidden shrink-0">
+						{tab("terminal", "Terminal", SquareTerminal)}
+						{tab("issues", "Issues", CircleDot)}
+						{tab("builds", "Builds", Hammer)}
+					</div>
+					{solo && <span className="text-xs text-muted truncate min-w-0">{repoTitle(solo)} · {repoLabel(solo)}</span>}
+					<div className="ml-auto flex gap-1 shrink-0">
+						<button type="button" onClick={() => setShowEngines(true)} title="CLI engines & sign-in" aria-label="CLI engines" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Cpu size={13} /></button>
+						{solo && <button type="button" onClick={() => setSettingsRepoId(solo.id)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><FolderCog size={13} /></button>}
+						{openSession && <button type="button" onClick={restartSession} title="Restart the CLI" aria-label="Restart the CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><RotateCw size={13} /></button>}
+					</div>
+				</div>
+
+				{claudeSignedOut && soloView === "terminal" && (
+					<div className="bg-orange-50 border border-amber-500 rounded-lg p-2.5 m-2 text-sm text-orange-900">
+						<b>Claude Code is signed out on your runner.</b> Run <code>claude setup-token</code> on any machine (it opens a browser),
+						save the token under <button type="button" onClick={() => navigate("/profile")} className="underline font-semibold">Profile → API keys → Claude Code</button>,
+						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
+					</div>
+				)}
+
+				{soloView === "terminal" && (
+					openSession ? (
+						<TerminalView
+							termInput={termInput}
+							setTermInput={setTermInput}
+							sendTerminalMessage={sendTerminalMessage}
+							terminalText={terminalText}
+							termRef={termRef}
+							termAutoScroll={termAutoScroll}
+							setTermAutoScroll={setTermAutoScroll}
+							stale={!terminalLive && !!savedTerminal}
+						/>
+					) : (
+						<div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+							{!solo ? (
+								<p className="text-sm text-muted-soft">No repository set yet — add its path in <b>Settings → Agent settings</b>.</p>
+							) : runnerOnline === false ? (
+								<>
+									<p className="text-sm text-muted">Your machine isn't connected.</p>
+									<code className="bg-panel border border-line rounded-md px-2 py-1 text-sm">pags up</code>
+								</>
+							) : (
+								<>
+									<p className="text-sm text-muted">No session running.</p>
+									<button type="button" onClick={() => active ? openTerminal(active) : startSession(solo.id)} className="text-sm px-4 py-2 rounded-lg bg-accent text-white font-bold">
+										{active ? "Open session" : "Start a session"}
+									</button>
+								</>
+							)}
+						</div>
+					)
+				)}
+				{soloView === "issues" && (
+					<div className="flex-1 min-h-0 overflow-auto px-2 py-2 sm:px-4 sm:py-3">
+						{solo?.githubRepo ? (
+							<div className="bg-panel border border-line rounded-xl p-3">
+								<RepoIssues instanceId={instanceId} repo={solo} onWorkOnIssue={workOnIssue} startOpen />
+							</div>
+						) : (
+							<p className="text-center py-6 text-muted-soft text-sm">This repo isn't connected to GitHub, so it has no issues to show.</p>
+						)}
+					</div>
+				)}
+				{soloView === "builds" && <BuildsPanel instanceId={instanceId} />}
+				{settingsModal}
+				{showEngines && (
+					<EnginesModal
+						instanceId={instanceId}
+						engines={engines}
+						defaultEngineId={defaultEngine}
+						onClose={() => setShowEngines(false)}
+						onSaved={loadCoding}
+					/>
+				)}
+			</div>
+		);
+	}
+
+	// ── Session open: full-screen terminal/co-pilot (multi-repo) ──
 	if (openSession) {
 		return (
 			<div className="flex flex-col h-full">

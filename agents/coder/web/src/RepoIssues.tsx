@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo } from "./types";
 import { CircleDot, ExternalLink, RefreshCw, ChevronRight, Play } from "lucide-react";
@@ -21,12 +21,21 @@ export default function RepoIssues({
 	instanceId,
 	repo,
 	onWorkOnIssue,
+	startOpen = false,
 }: {
 	instanceId: string;
 	repo: CodingRepo;
 	onWorkOnIssue: (repo: CodingRepo, issue: { number: number; title: string }) => void;
+	/**
+	 * Render expanded, with no disclosure row.
+	 *
+	 * Nested under a repo card, Issues is one of several things and collapsing is right. As its
+	 * OWN tab on a single-repo agent it is the entire point of the view — arriving at a collapsed
+	 * "Issues ▸" you must click again is a wasted step and reads as an empty page.
+	 */
+	startOpen?: boolean;
 }) {
-	const [open, setOpen] = useState(false);
+	const [open, setOpen] = useState(startOpen);
 	const [issues, setIssues] = useState<Issue[] | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -50,14 +59,28 @@ export default function RepoIssues({
 		if (next && issues === null) load();
 	};
 
+	// As its own tab there is nothing to expand INTO — fetch on mount instead of on a click that
+	// no longer exists.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: load is stable per (instance, repo).
+	useEffect(() => {
+		if (startOpen && issues === null && !loading) load();
+	}, [startOpen]);
+
 	return (
-		<div className="mt-2 border-t border-line pt-2">
+		<div className={startOpen ? "" : "mt-2 border-t border-line pt-2"}>
 			<div className="flex items-center justify-between gap-2">
-				<button type="button" onClick={toggle} className="flex items-center gap-1 text-xs font-semibold text-muted hover:text-accent">
-					<ChevronRight size={13} className={`transition-transform ${open ? "rotate-90" : ""}`} />
-					<CircleDot size={12} />
-					Issues{issues !== null ? ` (${issues.length})` : ""}
-				</button>
+				{startOpen ? (
+					<span className="flex items-center gap-1 text-xs font-semibold text-muted">
+						<CircleDot size={12} />
+						Issues{issues !== null ? ` (${issues.length})` : ""}
+					</span>
+				) : (
+					<button type="button" onClick={toggle} className="flex items-center gap-1 text-xs font-semibold text-muted hover:text-accent">
+						<ChevronRight size={13} className={`transition-transform ${open ? "rotate-90" : ""}`} />
+						<CircleDot size={12} />
+						Issues{issues !== null ? ` (${issues.length})` : ""}
+					</button>
+				)}
 				{open && (
 					<button type="button" onClick={load} title="Refresh issues" disabled={loading} className="text-muted hover:text-accent disabled:opacity-40">
 						<RefreshCw size={12} className={loading ? "animate-spin" : ""} />

@@ -36,37 +36,50 @@ describe("single-repo agents hide the multi-repo affordances", () => {
 	});
 });
 
-describe("a one-repo agent gets the repo, not a list containing it", () => {
-	// A list exists so you can CHOOSE. With one repo there is nothing to choose between, so the
-	// card wrapper, the "Repositories" heading and the "1 active session" strip were all counting
-	// and framing a single thing — the same complaint that produced the Builds change.
-	const src_ = src("ReposList.tsx");
+describe("a one-repo agent gets Terminal / Issues / Builds, not a repo list", () => {
+	// A one-repo Coder had `Repos | Builds` where "Repos" was one repo, Issues were nested inside
+	// that repo's card, and opening the terminal took over the whole header — so every other view
+	// went behind a back arrow. Those three ARE the agent's surface, so they are the navigation.
+	const tab = src("CodingTab.tsx");
 
-	it("renders the repo directly when singleRepo and exactly one repo", () => {
-		expect(src_).toContain("if (singleRepo && repos.length === 1)");
-		// `bare` drops the row chrome so it reads as the page, not as a list item.
-		expect(src_).toContain("<RepoCard r={repos[0]} bare />");
+	it("routes a single-repo agent to its own three-view surface", () => {
+		expect(tab).toContain('const [soloView, setSoloView] = useState<"terminal" | "issues" | "builds">');
+		expect(tab).toContain("if (singleRepo && repos.length <= 1) {");
 	});
 
-	it("does not count sessions in the single-repo view", () => {
-		// activeCount is computed only on the list path now.
-		const single = src_.slice(src_.indexOf("if (singleRepo && repos.length === 1)"), src_.indexOf("const activeCount"));
-		expect(single).not.toContain("activeCount");
+	it("falls back to the list if the data disagrees with the declaration", () => {
+		// `repos: "single"` is what the agent SAYS. Two rows in data and a solo view showing
+		// repos[0] would make the other unreachable, so the guard is on the data too.
+		expect(tab).toContain("repos.length <= 1");
 	});
 
-	it("uses ONE naming rule for the repo, whatever it was added as", () => {
-		// repoTitle: the GitHub coordinate when there is one, else the folder name — so the header
-		// stops showing `fws/platform` (last two PATH segments) as if it were an owner/repo slug.
-		expect(src_).toContain("repoTitle(r)");
-		expect(src_).not.toMatch(/>\{r\.name\}</);
+	it("keeps navigation visible instead of taking over the header", () => {
+		// The header takeover is what hid Builds and Issues behind a back arrow.
+		const solo = tab.slice(tab.indexOf("if (singleRepo && repos.length <= 1)"), tab.indexOf("// ── Session open"));
+		expect(solo).toContain('tab("terminal", "Terminal"');
+		expect(solo).toContain('tab("issues", "Issues"');
+		expect(solo).toContain('tab("builds", "Builds"');
+		expect(solo).not.toContain("onHeaderOverride");
 	});
 
-	it("marks a local-only repo as local, so a folder name is not misread as a slug", () => {
-		expect(src_).toContain("!repoIsGitHub(r)");
+	it("opens Issues expanded — as its own tab there is nothing to expand into", () => {
+		const solo = tab.slice(tab.indexOf("if (singleRepo && repos.length <= 1)"), tab.indexOf("// ── Session open"));
+		expect(solo).toContain("startOpen");
 	});
 
-	it("still offers add-repo on a MULTI-repo agent", () => {
-		expect(src_).toContain("!singleRepo && (");
+	it("offers a way to START when nothing is running, rather than an empty pane", () => {
+		const solo = tab.slice(tab.indexOf("if (singleRepo && repos.length <= 1)"), tab.indexOf("// ── Session open"));
+		expect(solo).toContain("Start a session");
+		expect(solo).toContain("pags up");
+	});
+
+	it("ReposList no longer carries a dead single-repo branch", () => {
+		// CodingTab returns before it, so the branch was unreachable — the "old page" to remove.
+		const list = src("ReposList.tsx");
+		expect(list).not.toContain("the repo IS the page");
+		expect(list).not.toContain("repos.length === 1");
+		// …but still hides add-repo in the misconfiguration fallback.
+		expect(list).toContain("!singleRepo && (");
 	});
 });
 

@@ -9,14 +9,12 @@ import { repoIsGitHub, repoTitle } from "./repo-title";
 type TimelineEntry = { type?: string; content?: string; text?: string };
 
 /**
- * The Coding landing view.
+ * The MULTI-repo landing: add-repo, runner CTA, one row per repo.
  *
- * ONE repo → the repo IS the page: identity, status and actions directly, with no
- * "Repositories" card wrapping a list of one and no "1 active session" strip counting a single
- * thing. A list exists so you can CHOOSE; a one-repo agent has nothing to choose between. Same
- * argument the Builds panel follows.
- *
- * SEVERAL → the list, unchanged.
+ * A single-repo agent no longer arrives here at all — CodingTab gives it Terminal / Issues /
+ * Builds directly, because a list exists so you can CHOOSE and it has nothing to choose between.
+ * `singleRepo` survives only for the misconfiguration case (declared single, two rows in data),
+ * where the list is the honest fallback but add-repo still must not appear.
  */
 export default function ReposList({
 	instanceId,
@@ -144,21 +142,6 @@ export default function ReposList({
 			<Cpu size={13} /><span className="hidden sm:inline">Engines</span>
 		</button>
 	);
-
-	// ── One repo: the repo IS the page ──
-	if (singleRepo && repos.length === 1) {
-		return (
-			<div className="px-2 py-2 sm:px-4 sm:py-3 overflow-auto flex-1">
-				<div className="bg-panel border border-line rounded-xl p-3">
-					<div className="flex justify-between items-start gap-2">
-						<div className="min-w-0 flex-1"><RepoCard r={repos[0]} bare /></div>
-						<div className="shrink-0">{enginesButton}</div>
-					</div>
-					{offlineCta}
-				</div>
-			</div>
-		);
-	}
 
 	const activeCount = sessions.filter((s) => s.status === "active").length;
 	return (
