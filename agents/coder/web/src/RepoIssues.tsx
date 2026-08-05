@@ -13,9 +13,10 @@ interface Issue {
 }
 
 /**
- * Read-only GitHub Issues for one repo (Phase A). Fetched on expand from the cloud
- * (works on any runner). "Work on this" pre-fills an objective for the user to review
- * and send — it never auto-runs. Only rendered for GitHub-connected repos.
+ * Read-only GitHub Issues for one repo. Fetched on expand from the cloud (works on any
+ * runner). "Work on this" hands the issue straight to the Loop, which dispatches to the
+ * agent's Pilot and drives the engine (#210) — it does start work. Only rendered for
+ * GitHub-connected repos.
  */
 export default function RepoIssues({
 	instanceId,
@@ -98,19 +99,28 @@ export default function RepoIssues({
 						<p className="text-xs text-muted-soft py-1">No open issues.</p>
 					) : (
 						issues?.map((i) => (
-							<div key={i.number} className="flex items-center gap-2 text-xs">
-								<span className="text-muted shrink-0 tabular-nums">#{i.number}</span>
-								<span className="truncate flex-1" title={i.title}>{i.title}</span>
+							// items-start, not items-center: on a narrow screen the title wraps to two
+							// lines and centre-alignment floats the number and buttons into the middle
+							// of it.
+							<div key={i.number} className="flex items-start gap-2 text-xs">
+								<span className="text-muted shrink-0 tabular-nums leading-5">#{i.number}</span>
+								{/* The title is the content of the row and was the thing being squeezed out.
+								    Wrap to two lines on mobile where there is no horizontal room; keep the
+								    single-line truncation on desktop where the list reads as a table. */}
+								<span className="flex-1 min-w-0 line-clamp-2 sm:truncate leading-5" title={i.title}>{i.title}</span>
 								{i.labels.slice(0, 2).map((l) => (
 									<span key={l} className="hidden sm:inline text-[0.6rem] px-1 py-0.5 bg-accent-soft text-accent rounded font-semibold shrink-0">{l}</span>
 								))}
 								<button
 									type="button"
 									onClick={() => onWorkOnIssue(repo, { number: i.number, title: i.title })}
-									title="Pre-fill this issue as the objective"
-									className="shrink-0 flex items-center gap-0.5 px-1.5 py-0.5 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent"
+									title="Work on this issue"
+									aria-label={`Work on issue #${i.number}`}
+									className="shrink-0 flex items-center gap-0.5 p-1.5 sm:px-1.5 sm:py-0.5 rounded-md border border-line text-muted font-semibold hover:border-accent hover:text-accent"
 								>
-									<Play size={10} /> Work on this
+									{/* Icon-only on mobile — the label costs ~70px of the title's width, and the
+									    icon plus aria-label carries the same meaning. */}
+									<Play size={10} /> <span className="hidden sm:inline">Work on this</span>
 								</button>
 								{i.url && (
 									<a href={i.url} target="_blank" rel="noreferrer" title="Open on GitHub" className="shrink-0 text-muted hover:text-accent">
