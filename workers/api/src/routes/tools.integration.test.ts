@@ -36,6 +36,16 @@ function buildApp(opts: { owns?: Array<[string, string]>; consents?: unknown[] }
 								if (sql.includes("FROM agent_instances")) {
 									const [id, uid] = args as [string, string];
 									if (!owns.has(`${id}::${uid}`)) return null;
+									// The tool-policy gate joins agents to read capabilities.tools; the fixture
+									// agent must declare the tool under test or it is (correctly) refused.
+									if (sql.includes("JOIN agents")) {
+										return {
+											slug: "fixture",
+											category: "general",
+											config: JSON.stringify({ capabilities: { tools: ["github_workflow_runs", "github_list_issues", "github_read_issue", "github_create_issue", "http_request"] } }),
+											instance_config: "{}",
+										};
+									}
 									return { id, agent_id: "a1", user_id: uid, status: "active", config: "{}", created_at: "", updated_at: "" };
 								}
 								return null;

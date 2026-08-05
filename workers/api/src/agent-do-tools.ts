@@ -172,10 +172,18 @@ export function toolNamesFor(capabilities?: AgentCapabilities): Set<string> {
 	return set;
 }
 
-export function buildAgentToolDefinitions(opts?: { emailEnabled?: boolean; capabilities?: AgentCapabilities }) {
+export function buildAgentToolDefinitions(opts?: {
+	emailEnabled?: boolean;
+	capabilities?: AgentCapabilities;
+	/** The owner's per-instance off-switches (`config.disabledTools`). Applied LAST so it
+	 *  overrides every grant above it, including the coding invariant: the subscriber's veto
+	 *  over their own copy is the one control a creator's declaration must not outrank. */
+	disabledTools?: readonly string[];
+}) {
 	const enabled = toolNamesFor(opts?.capabilities);
 	// Permission-gated tools are only offered to the model when the user granted them.
 	if (opts?.emailEnabled) enabled.add("find_confirmation_link");
+	for (const name of opts?.disabledTools ?? []) enabled.delete(name);
 
 	// Two def shapes are merged: the legacy AGENT_TOOLS/STORAGE_TOOLS carry an ad-hoc
 	// `parameters` map (rebuilt into a JSON Schema below); registry tools already carry a

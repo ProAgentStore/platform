@@ -6,7 +6,14 @@ import { toolRoutes } from "./tools.js";
 
 const SECRET = "test-secret";
 
-function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknown) => Promise<{ id: string }>; runs?: unknown[]; loopCreate?: (arg: unknown) => Promise<{ id: string }> } = { owned: true }) {
+/** The tool-policy gate (#tools) resolves the AGENT's declared capabilities, so a fixture
+ *  must declare the tools its test invokes — a legacy agent that declares none is now
+ *  correctly refused. Default: declare exactly the tools exercised in this file. */
+const FIXTURE_AGENT_CONFIG = JSON.stringify({
+	capabilities: { tools: ["github_workflow_runs", "github_list_issues", "github_read_issue", "github_create_issue", "http_request"] },
+});
+
+function testApp(opts: { owned?: boolean; config?: string; agentConfig?: string; create?: (arg: unknown) => Promise<{ id: string }>; runs?: unknown[]; loopCreate?: (arg: unknown) => Promise<{ id: string }> } = { owned: true }) {
 	const app = new Hono();
 	app.route("/v1/instances", toolRoutes);
 	app.onError((err, c) => {
@@ -34,9 +41,14 @@ function testApp(opts: { owned?: boolean; config?: string; create?: (arg: unknow
 								if (sql.includes("FROM agent_supervision")) {
 									return { id: "sup1", user_id: "u1", supervisor_instance_id: "i1", subordinate_instance_id: "i2", enabled: 1, config: "{}", created_at: "", updated_at: "" };
 								}
-								return sql.includes("FROM agent_instances") && (opts.owned ?? true)
-									? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config, created_at: "", updated_at: "" }
-									: null;
+								if (!sql.includes("FROM agent_instances") || !(opts.owned ?? true)) return null;
+								// The tool-policy join (agent_instances ⨝ agents) needs the AGENT's config,
+								// which is where capabilities.tools lives; the plain ownership read needs
+								// the INSTANCE row. Same table, different shape.
+								if (sql.includes("JOIN agents")) {
+									return { slug: "fixture", category: "general", config: opts.agentConfig ?? FIXTURE_AGENT_CONFIG, instance_config: config };
+								}
+								return { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config, created_at: "", updated_at: "" };
 							},
 							// logEvent (pipeline audit) does a .run() insert — must not throw.
 							// meta.changes = 1 so routes that report "did a row match?" (cancel,
@@ -379,5 +391,92 @@ describe("durable agent loop (#158)", () => {
 		}, env);
 		expect(res.status).toBe(200);
 		expect(await res.json()).toMatchObject({ status: "cancelling" });
+	});
+});
+
+// ── The capability gate on the generic invoker ───────────────────────────────
+//
+// Before this gate, owning an instance WAS authority to run any tool in the registry from
+// this route (and from MCP's call_instance_tool, which proxies it). So `capabilities.tools`
+// bounded the agent's chat while its instance could still be driven to read the owner's
+// terminals or spreadsheets. These tests are the proof that "this agent is read-only" is now
+// a property of the instance rather than of one surface.
+describe("tool policy gate (undeclared tools are refused on every surface)", () => {
+	const READ_ONLY_AGENT = JSON.stringify({ capabilities: { tools: ["github_workflow_runs"] } });
+
+	it("403s a tool the agent does not declare, even a harmless read", async () => {
+		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
+		const res = await req(app, env, "/v1/instances/i1/tools/http_request", { method: "POST", body: JSON.stringify({ url: "https://x.test" }) }, await tok("u1"));
+		expect(res.status).toBe(403);
+		expect(((await res.json()) as any).error).toContain("not one of this agent's tools");
+	});
+
+	it("still runs a tool the agent does declare", async () => {
+		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
+		const res = await req(app, env, "/v1/instances/i1/tools/github_workflow_runs", { method: "POST", body: JSON.stringify({ repo: "o/n" }) }, await tok("u1"));
+		expect(res.status).toBe(200);
+	});
+
+	it("reports a verdict for EVERY tool, so the UI can show what is blocked and why", async () => {
+		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
+		const body = (await (await req(app, env, "/v1/instances/i1/tools", {}, await tok("u1"))).json()) as any;
+		const allowed = body.tools.filter((t: any) => t.allowed).map((t: any) => t.name);
+		expect(allowed).toContain("github_workflow_runs");
+		expect(allowed).not.toContain("http_request");
+		expect(body.tools.find((t: any) => t.name === "http_request").reason).toBe("not_declared");
+		// No write tool survives for a read-only agent — the assertion an auditor actually wants.
+		expect(body.tools.filter((t: any) => t.allowed && t.scope === "write")).toEqual([]);
+	});
+
+	it("?allowed=true narrows to just the runnable set", async () => {
+		const { app, env } = testApp({ agentConfig: READ_ONLY_AGENT });
+		const body = (await (await req(app, env, "/v1/instances/i1/tools?allowed=true", {}, await tok("u1"))).json()) as any;
+		expect(body.tools.every((t: any) => t.allowed)).toBe(true);
+	});
+});
+
+describe("PUT /v1/instances/:id/tools/:name — the owner's off-switch", () => {
+	const AGENT = JSON.stringify({ capabilities: { tools: ["github_workflow_runs", "http_request"] } });
+
+	it("persists the off-switch onto the instance config", async () => {
+		let written = "";
+		const { app, env } = testApp({ agentConfig: AGENT });
+		(env.DB as any).prepare = (sql: string) => ({
+			bind: (...args: unknown[]) => ({
+				first: async () =>
+					sql.includes("JOIN agents")
+						? { slug: "fixture", category: "general", config: AGENT, instance_config: "{}" }
+						: sql.includes("FROM agent_instances")
+							? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}" }
+							: null,
+				run: async () => {
+					if (sql.includes("UPDATE agent_instances")) written = String(args[0]);
+					return { meta: { changes: 1 } };
+				},
+				all: async () => ({ results: [] }),
+			}),
+		});
+		const res = await req(app, env, "/v1/instances/i1/tools/http_request", { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
+		expect(res.status).toBe(200);
+		expect(JSON.parse(written).disabledTools).toEqual(["http_request"]);
+	});
+
+	it("refuses to record an off-switch for a tool the agent never had", async () => {
+		const { app, env } = testApp({ agentConfig: JSON.stringify({ capabilities: { tools: ["github_workflow_runs"] } }) });
+		const res = await req(app, env, "/v1/instances/i1/tools/http_request", { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
+		expect(res.status).toBe(403);
+	});
+
+	it("rejects a non-boolean `enabled` rather than guessing", async () => {
+		const { app, env } = testApp({ agentConfig: AGENT });
+		const res = await req(app, env, "/v1/instances/i1/tools/http_request", { method: "PUT", body: JSON.stringify({ enabled: "yes" }) }, await tok("u1"));
+		expect(res.status).toBe(400);
+	});
+
+	it("a switched-off tool is then refused by the invoker", async () => {
+		const { app, env } = testApp({ agentConfig: AGENT, config: JSON.stringify({ disabledTools: ["http_request"] }) });
+		const res = await req(app, env, "/v1/instances/i1/tools/http_request", { method: "POST", body: JSON.stringify({ url: "https://x.test" }) }, await tok("u1"));
+		expect(res.status).toBe(403);
+		expect(((await res.json()) as any).error).toContain("switched off");
 	});
 });

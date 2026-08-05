@@ -13,15 +13,45 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 	// definition in the API registry → surfaced here via a thin proxy.
 	server.tool(
 		"list_instance_tools",
-		"List the connector tools (e.g. GitHub) callable on one of your instances, with their input schemas.",
+		"Audit exactly what one of your instances may do. Returns EVERY registry tool with this instance's verdict: `allowed` (may it run), `scope` (read/write), `disabled` (you switched it off) and `reason` (ok | not_declared | disabled_by_owner), plus input schemas. Pass allowed_only:true for just the runnable set. Use this to verify an agent is read-only before trusting it with sensitive data — a tool absent from the allowed set cannot be invoked, by chat or by call_instance_tool.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),
+			allowed_only: z.boolean().optional().describe("Return only the tools this instance may actually run."),
 		},
-		async ({ token, instance_id }) => {
+		async ({ token, instance_id, allowed_only }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const data = await authedCall(`/v1/instances/${instance_id}/tools`, sessionToken, {}, env);
+			const qs = allowed_only ? "?allowed=true" : "";
+			const data = await authedCall(`/v1/instances/${instance_id}/tools${qs}`, sessionToken, {}, env);
+			return jsonText(data);
+		},
+	);
+	server.tool(
+		"set_instance_tool",
+		"Switch one tool on or off for one of your instances — the owner's veto over what their own copy may do. A tool switched off is removed from the agent's chat AND refused by call_instance_tool, so this is a real capability change, not a UI preference. You can only toggle tools the agent declares; everything else is already refused.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string().describe("Instance ID from my_instances"),
+			tool: z.string().describe("Tool name, e.g. repo_read_file (see list_instance_tools)."),
+			enabled: z.boolean().describe("true to allow the tool, false to switch it off."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, tool, enabled, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			// Gated as a write: this changes what an agent is permitted to do, so a read-only
+			// MCP session must not be able to widen an agent's reach.
+			const denied = await requirePermission(safetyFor(token), "write", "set_instance_tool", { tool, enabled });
+			if (denied) return denied;
+			if (dry_run) return text(`Dry run: would set ${tool} to ${enabled ? "enabled" : "disabled"} on ${instance_id}.`);
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/tools/${encodeURIComponent(tool)}`,
+				sessionToken,
+				{ method: "PUT", body: JSON.stringify({ enabled }) },
+				env,
+			);
+			await audit(safetyFor(token), { tool: "set_instance_tool", action: "completed", input: { instance_id, tool, enabled } });
 			return jsonText(data);
 		},
 	);

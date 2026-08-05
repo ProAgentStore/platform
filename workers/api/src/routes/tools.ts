@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { getRegistryTool, registryTools, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
+import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { validatePipeline, type PipelineDef } from "../lib/pipeline.js";
@@ -63,28 +64,78 @@ function matchesType(val: unknown, type: string): boolean {
  */
 export const toolRoutes = new Hono<{ Bindings: Env }>();
 
-/** GET /v1/instances/:id/tools — connector tools callable on this instance + schemas. */
+/**
+ * GET /v1/instances/:id/tools — EVERY registry tool with this instance's verdict on it.
+ *
+ * Returns the full list rather than only the runnable ones: "what can this agent do" is
+ * only answerable if the answer also says what it can't and why. Each entry carries
+ * `allowed` (the gate's decision), `disabled` (owner switched it off) and `reason`.
+ * `?allowed=true` narrows to the runnable set for callers that want just that.
+ */
 toolRoutes.get("/:id/tools", async (c) => {
 	const session = await requireUser(c);
-	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
-	const tools = registryTools().map((t) => ({
-		name: t.name,
-		connector: t.connector,
-		scope: t.scope,
-		description: t.description,
-		jsonSchema: t.jsonSchema,
-	}));
-	return c.json({ tools });
+	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const policy = await instanceToolPolicy(c.env, instance.id, session.uid, instance.config);
+	const onlyAllowed = c.req.query("allowed") === "true";
+	return c.json({ tools: onlyAllowed ? policy.filter((t) => t.allowed) : policy });
+});
+
+/**
+ * PUT /v1/instances/:id/tools/:name — the owner's per-tool off-switch (`{enabled:boolean}`).
+ *
+ * The subscriber's veto over their own copy, independent of what the creator declared: a
+ * creator can only ever GRANT capability, so without this the owner has no way to take one
+ * away short of unsubscribing. Switching a tool off removes it from the chat runtime AND
+ * refuses it on this route, because a control that only covers one surface isn't control.
+ * Undeclared tools are rejected rather than stored, so the list can't fill with names this
+ * agent could never run anyway.
+ */
+toolRoutes.put("/:id/tools/:name", async (c) => {
+	const session = await requireUser(c);
+	const instance = await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const name = c.req.param("name");
+	if (!getRegistryTool(name)) throw new HttpError(404, `Unknown tool: ${name}`);
+	const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown };
+	if (typeof body.enabled !== "boolean") throw new HttpError(400, "`enabled` must be true or false.");
+
+	const policy = await instanceToolPolicy(c.env, instance.id, session.uid, instance.config);
+	const entry = policy.find((t) => t.name === name);
+	if (!entry || entry.reason === "not_declared") {
+		throw new HttpError(403, explainRefusal(name, "not_declared"));
+	}
+
+	let cfg: Record<string, unknown> = {};
+	try {
+		cfg = JSON.parse(instance.config || "{}") as Record<string, unknown>;
+	} catch {
+		/* malformed config → rebuild from empty rather than fail the toggle */
+	}
+	const disabled = new Set(readDisabledTools(instance.config));
+	if (body.enabled) disabled.delete(name);
+	else disabled.add(name);
+	cfg[DISABLED_TOOLS_KEY] = [...disabled];
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instance.id, session.uid)
+		.run();
+	return c.json({ name, enabled: body.enabled, disabledTools: [...disabled] });
 });
 
 /** POST /v1/instances/:id/tools/:name — invoke a connector tool (body = its input args). */
 toolRoutes.post("/:id/tools/:name", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("id");
-	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
 	const name = c.req.param("name");
 	const tool = getRegistryTool(name);
 	if (!tool) throw new HttpError(404, `Unknown tool: ${name}`);
+	// The capability gate. Owning the instance is NOT authority to run anything on it —
+	// without this, `capabilities.tools` bounded only the chat, and a read-only agent's
+	// instance could still be driven to any tool in the registry from here or via MCP.
+	const policy = await instanceToolPolicy(c.env, instanceId, session.uid, instance.config);
+	const entry = policy.find((t) => t.name === name);
+	if (!entry?.allowed) {
+		throw new HttpError(403, explainRefusal(name, entry?.reason ?? "not_declared"));
+	}
 	const input = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
 	const invalid = validateAgainstSchema(tool.jsonSchema, input);
 	if (invalid) throw new HttpError(400, invalid);

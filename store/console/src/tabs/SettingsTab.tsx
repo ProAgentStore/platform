@@ -37,6 +37,17 @@ interface Props {
 	onUnsubscribe: () => void;
 }
 
+/** One registry tool + this instance's verdict on it (GET /v1/instances/:id/tools). */
+interface ToolPolicyEntry {
+	name: string;
+	connector?: string;
+	scope: "read" | "write";
+	description: string;
+	allowed: boolean;
+	disabled: boolean;
+	reason: "ok" | "not_declared" | "disabled_by_owner";
+}
+
 interface ConnectorGrant {
 	id: string;
 	provider: "google_drive" | "zoho_workdrive";
@@ -88,6 +99,24 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [writeConnectors, setWriteConnectors] = useState<string[]>([]);
 	const [grantedConnectors, setGrantedConnectors] = useState<string[]>([]);
 	const [consentMsg, setConsentMsg] = useState("");
+	// Tool policy: every registry tool with THIS instance's verdict on it. The answer to
+	// "what can this agent actually do", including what it can't and why — an allow-list you
+	// can't read is not something you can trust.
+	const [toolPolicy, setToolPolicy] = useState<ToolPolicyEntry[]>([]);
+	const [toolMsg, setToolMsg] = useState("");
+
+	// Switch one tool off/on for this instance (optimistic; reverts on failure).
+	const toggleTool = async (name: string, enabled: boolean) => {
+		setToolPolicy((p) => p.map((t) => (t.name === name ? { ...t, allowed: enabled, disabled: !enabled, reason: enabled ? "ok" : "disabled_by_owner" } : t)));
+		try {
+			await api(`/v1/instances/${instanceId}/tools/${encodeURIComponent(name)}`, { method: "PUT", body: JSON.stringify({ enabled }) });
+			setToolMsg(`${name} ${enabled ? "enabled" : "switched off"}`);
+			setTimeout(() => setToolMsg(""), 2500);
+		} catch (e) {
+			setToolPolicy((p) => p.map((t) => (t.name === name ? { ...t, allowed: !enabled, disabled: enabled, reason: enabled ? "disabled_by_owner" : "ok" } : t)));
+			setToolMsg(e instanceof Error ? e.message : "Could not change that tool");
+		}
+	};
 
 	// Toggle a connector's write consent (optimistic; reverts on failure).
 	const toggleConnectorConsent = async (connector: string, enabled: boolean) => {
@@ -228,14 +257,17 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				// writeConnectors = the agent's declared tools ∩ the registry's write tools.
 				const [inst, toolsRes, consentRes] = await Promise.all([
 					api<{ instances?: Array<{ id: string; capabilities?: { tools?: string[]; runtime?: string | null } }> }>("/v1/instances/my/instances"),
-					api<{ tools?: Array<{ name: string; connector: string; scope: string }> }>(`/v1/instances/${instanceId}/tools`),
+					api<{ tools?: ToolPolicyEntry[] }>(`/v1/instances/${instanceId}/tools`),
 					api<{ consents?: Array<{ connector: string; scope: string }> }>(`/v1/instances/${instanceId}/connectors/consent`),
 				]);
 				const mine = (inst.instances || []).find((i) => i.id === instanceId);
 				setAgentNeedsRunner(mine?.capabilities?.runtime != null);
-				const myTools = new Set(mine?.capabilities?.tools || []);
+				const policy = toolsRes.tools || [];
+				setToolPolicy(policy);
+				// Which connectors can this agent WRITE with? Read off the server's verdict rather
+				// than re-deriving it client-side — the gate and the UI must not be able to disagree.
 				const writeConns = new Set<string>();
-				for (const t of toolsRes.tools || []) if (t.scope === "write" && myTools.has(t.name)) writeConns.add(t.connector);
+				for (const t of policy) if (t.scope === "write" && t.connector && (t.allowed || t.disabled)) writeConns.add(t.connector);
 				setWriteConnectors([...writeConns]);
 				setGrantedConnectors((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
 			} catch {}
@@ -874,6 +906,49 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				<p className="text-sm text-muted mb-3">
 					Connect accounts once, then grant this agent access to only the folders it should use.
 				</p>
+
+				{/* Tools — the full, honest answer to "what can this agent do?". Shows what it
+				    MAY run and what it may not, with the reason, so "read-only" is verifiable
+				    rather than asserted. Toggling here changes the agent's real capability:
+				    a tool switched off is withheld from its chat AND refused by the API/MCP. */}
+				{toolPolicy.length > 0 && (
+					<div className="mb-3 pb-3 border-b border-line">
+						<div className="text-sm font-semibold mb-0.5">Tools</div>
+						<p className="text-[0.7rem] text-muted-soft mb-2">
+							Everything this agent is allowed to do. Switch any of them off — it applies to the agent's chat, the API and MCP alike.
+							{toolPolicy.some((t) => t.allowed && t.scope === "write")
+								? " This agent has write tools; each one also needs its connector granted below."
+								: " This agent has no write tools — it can only read."}
+						</p>
+						{toolPolicy
+							.filter((t) => t.allowed || t.disabled)
+							.map((t) => (
+								<label key={t.name} className="flex items-start gap-2 text-sm cursor-pointer mb-1.5">
+									<input
+										type="checkbox"
+										checked={t.allowed}
+										onChange={(e) => toggleTool(t.name, e.target.checked)}
+										className="w-4 h-4 accent-accent mt-0.5"
+									/>
+									<span className="min-w-0">
+										<span className="font-mono text-[0.78rem] font-semibold">{t.name}</span>
+										<span
+											className={`ml-1.5 text-[0.62rem] uppercase tracking-wide ${t.scope === "write" ? "text-red" : "text-muted"}`}
+										>
+											{t.scope}
+										</span>
+										{t.connector && <span className="ml-1.5 text-[0.68rem] text-muted-soft">{t.connector}</span>}
+										{t.disabled && <span className="ml-1.5 text-[0.68rem] text-muted">— off</span>}
+										<span className="block text-[0.68rem] text-muted-soft leading-snug">{t.description}</span>
+									</span>
+								</label>
+							))}
+						{toolPolicy.every((t) => !t.allowed && !t.disabled) && (
+							<p className="text-xs text-muted">This agent declares no tools — it can only talk.</p>
+						)}
+						{toolMsg && <p className="text-xs text-green mt-1">{toolMsg}</p>}
+					</div>
+				)}
 
 				{/* Connector write-consent (#90): the human gate for tools that act AS you
 				    (e.g. the browser agent's navigate/click/type). Off until you check it. */}

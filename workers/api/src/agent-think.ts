@@ -6,6 +6,7 @@ import { buildAgentToolDefinitions, storageToolNameSet, toolNamesFor } from "./a
 import { registryToolNameSet, registryTools, runRegistryTool } from "./lib/tool-registry.js";
 import { configureBoardForAgent } from "./lib/board.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
+import { readDisabledTools } from "./lib/instance-tool-policy.js";
 import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
@@ -488,15 +489,21 @@ export async function runAgentThink(opts: {
 		return { response: result.response || "", toolCalls: [] };
 	}
 
+	// The owner's per-tool off-switches (config.disabledTools). Applied to BOTH the
+	// definitions handed to the model and the execution allow-list below — a control that
+	// covers only one of those isn't control, it's a suggestion.
+	const disabledTools = readDisabledTools(JSON.stringify(instanceCfg));
 	const tools = buildAgentToolDefinitions({
 		emailEnabled: state.permissions?.email === true,
 		capabilities,
+		disabledTools,
 	});
 	// The same allow-list, enforced at EXECUTION too: a non-tool model can emit a
 	// withheld tool as text (parseToolCallsFromText), which would otherwise bypass the
 	// definition-level gate. Belt and suspenders.
 	const allowedToolNames = toolNamesFor(capabilities);
 	if (state.permissions?.email === true) allowedToolNames.add("find_confirmation_link");
+	for (const name of disabledTools) allowedToolNames.delete(name);
 	const allToolLog: string[] = [];
 	const storageToolNames = storageToolNameSet();
 	const registryToolNames = registryToolNameSet();
