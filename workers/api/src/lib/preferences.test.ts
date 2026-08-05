@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
 	defaultTranslationSettings,
 	defaultVoiceSettings,
@@ -8,6 +10,8 @@ import {
 	resolveVoice,
 	sanitizeTranslationSettings,
 	sanitizeVoiceSettings,
+	STT_MODELS,
+	VOICE_PROVIDERS,
 } from "./preferences.js";
 
 describe("resolveVoice — the precedence chain (#211)", () => {
@@ -161,5 +165,39 @@ describe("parseAccountPreferences — a corrupt blob must not break sign-in", ()
 		const p = parseAccountPreferences(JSON.stringify({ voice: { speed: 120 } }));
 		expect(p.voice?.speed).toBe(120);
 		expect(p.translation).toBeUndefined();
+	});
+});
+
+describe("cross-package drift — the allowlist has to agree with the code that uses it", () => {
+	// The API and the SDK are separate packages with no dependency between them, so these
+	// constants can only be kept in sync by a test. The failure is not theoretical: if the SDK's
+	// DEFAULT_STT_MODEL is not in the API's allowlist, `unknownVoiceField` 400s a save of the
+	// value the SDK itself chose — voice silently stops being configurable.
+	const read = (rel: string) => readFileSync(join(__dirname, rel), "utf8");
+
+	it("the SDK's DEFAULT_STT_MODEL is a model the API will accept", () => {
+		const src = read("../../../../packages/sdk/src/voice/stt.ts");
+		const m = src.match(/export const DEFAULT_STT_MODEL = "([^"]+)"/);
+		expect(m, "DEFAULT_STT_MODEL no longer declared as a string literal").toBeTruthy();
+		expect(STT_MODELS).toContain(m?.[1]);
+		// …and it is what an unconfigured user gets, so the two defaults cannot diverge either.
+		expect(defaultVoiceSettings().sttModel).toBe(m?.[1]);
+	});
+
+	it("every model the console offers is one the API will accept", () => {
+		// A <option> outside the allowlist is a control that 400s when you use it.
+		const src = read("../../../../store/console/src/components/VoiceFields.tsx");
+		const block = src.slice(src.indexOf('id="voice-stt-model"'));
+		const offered = [...block.slice(0, block.indexOf("</select>")).matchAll(/<option value="([^"]+)"/g)].map((x) => x[1]);
+		expect(offered.length).toBeGreaterThan(0);
+		expect(offered.filter((v) => !STT_MODELS.includes(v as never))).toEqual([]);
+	});
+
+	it("every TTS provider the console offers is one the API will accept", () => {
+		const src = read("../../../../store/console/src/components/VoiceFields.tsx");
+		const block = src.slice(src.indexOf('id="voice-tts-provider"'));
+		const offered = [...block.slice(0, block.indexOf("</select>")).matchAll(/<option value="([^"]+)"/g)].map((x) => x[1]);
+		expect(offered.length).toBeGreaterThan(0);
+		expect(offered.filter((v) => !VOICE_PROVIDERS.includes(v as never))).toEqual([]);
 	});
 });

@@ -26,6 +26,7 @@ export interface VoiceFieldsProps {
 export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = "Saved — applies on your next turn" }: VoiceFieldsProps) {
 	const voiceSettings = value;
 	const [sttMode, setSttMode] = useState("browser");
+	const [sttModel, setSttModel] = useState("gpt-4o-transcribe");
 	const [ttsProvider, setTtsProvider] = useState("browser");
 	const [ttsVoice, setTtsVoice] = useState("alloy");
 	const [speed, setSpeed] = useState(100);
@@ -48,6 +49,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 		const vs = value || {};
 		const list = (v: unknown) => (Array.isArray(v) ? (v as string[]).join(", ") : typeof v === "string" ? v : "");
 		setSttMode(typeof vs.sttMode === "string" ? vs.sttMode : "browser");
+		setSttModel(typeof vs.sttModel === "string" ? vs.sttModel : "gpt-4o-transcribe");
 		setTtsProvider(typeof vs.provider === "string" ? vs.provider : "browser");
 		setTtsVoice(((vs.openai as Record<string, unknown>)?.voice as string) || "alloy");
 		setSpeed(typeof vs.speed === "number" ? vs.speed : 100);
@@ -91,10 +93,29 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 			</select>
 			{sttMode === "openai" && hasOpenAiKey !== null && (
 				hasOpenAiKey ? (
-					<p className="text-xs text-green mb-4">✓ OpenAI key found — voice is transcribed with Whisper (AI).</p>
+					<p className="text-xs text-green mb-2">✓ OpenAI key found — voice is transcribed with Whisper (AI).</p>
 				) : (
-					<p className="text-xs text-red mb-4">⚠ No OpenAI key found — Smart (AI) can't run, so it's still using plain dictation. Add your key in <b>Knowledge → Credentials</b> to enable Whisper.</p>
+					<p className="text-xs text-red mb-2">⚠ No OpenAI key found — Smart (AI) can't run, so it's still using plain dictation. Add your key in <b>Knowledge → Credentials</b> to enable Whisper.</p>
 				)
+			)}
+			{/* The model was already read by resolveVoiceConfig but had no way in: the save route
+			    never persisted it and nothing sent it, so it was pinned to the default forever.
+			    Exposed here now that the shared sanitizer stores it (#211/T3). */}
+			{sttMode === "openai" && (
+				<>
+					<label htmlFor="voice-stt-model" className="block text-sm font-semibold mb-1 mt-3">Transcription model</label>
+					<select
+						id="voice-stt-model"
+						value={sttModel}
+						onChange={(e) => { setSttModel(e.target.value); saveVoice({ sttModel: e.target.value }); }}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-1 block w-full sm:w-auto"
+					>
+						<option value="gpt-4o-transcribe">Realtime — words appear as you speak (default)</option>
+						<option value="gpt-4o-mini-transcribe">Realtime mini — cheaper and faster, slightly less accurate</option>
+						<option value="whisper-1">Whisper (legacy) — batch only, no live words</option>
+					</select>
+					<p className="text-[0.7rem] text-muted-soft mb-4">Only the realtime models stream partial words; whisper-1 returns the whole turn at the end.</p>
+				</>
 			)}
 
 			<label htmlFor="voice-tts-provider" className="block text-sm font-semibold mb-1 mt-4">Voice output (how it speaks back)</label>
