@@ -669,7 +669,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		: "idle";
 	// biome-ignore lint/correctness/useExhaustiveDependencies: event handlers intentionally read current component state; the header only needs to refresh when visible header state changes.
 	useEffect(() => {
-		if (!openSession || !onHeaderOverride) return;
+		// NOT for the single-repo surface. That view keeps the normal instance header and carries
+		// its own Terminal/Issues/Builds row, so taking the header over would replace the tab bar,
+		// stack two sets of chrome, and hide the very navigation the solo view exists to keep.
+		if (singleRepo || !openSession || !onHeaderOverride) return;
 		onHeaderOverride(
 			<div className="flex items-center gap-1 sm:gap-2 min-w-0 w-full">
 				<button type="button" onClick={closeTerminal} title={singleRepo ? "Back" : "All repos"} aria-label={singleRepo ? "Back" : "All repos"} className="flex items-center justify-center text-muted hover:text-ink shrink-0 -ml-1 w-7 h-8 sm:w-auto sm:h-auto sm:px-1 sm:py-1"><ArrowLeft size={16} /></button>
@@ -753,7 +756,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		// Deps so this only re-runs when the header's VISIBLE content changes. With no
 		// deps it was a render storm: each run handed setChildHeader a fresh element →
 		// re-rendered the parent → this child → effect again, continuously.
-	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen, openStatus]);
+	}, [openSession, onHeaderOverride, openRepo?.name, view, repoMenuOpen, sessionMenuOpen, openStatus, singleRepo]);
 
 	const settingsModal = settingsRepoId
 		? (() => {
@@ -801,7 +804,11 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					<div className="ml-auto flex gap-1 shrink-0">
 						<button type="button" onClick={() => setShowEngines(true)} title="CLI engines & sign-in" aria-label="CLI engines" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Cpu size={13} /></button>
 						{solo && <button type="button" onClick={() => setSettingsRepoId(solo.id)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><FolderCog size={13} /></button>}
+						{/* The session actions the header takeover used to hold. Without these the solo
+						    view could start a session and never stop it. */}
+						{openSession && <button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" aria-label="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Copy size={13} /></button>}
 						{openSession && <button type="button" onClick={restartSession} title="Restart the CLI" aria-label="Restart the CLI" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><RotateCw size={13} /></button>}
+						{openSession && <button type="button" onClick={endSession} title="End session" aria-label="End session" className="text-xs px-1.5 py-1 rounded-md border border-red text-red font-semibold"><Square size={13} /></button>}
 					</div>
 				</div>
 

@@ -62,6 +62,20 @@ describe("a one-repo agent gets Terminal / Issues / Builds, not a repo list", ()
 		expect(solo).not.toContain("onHeaderOverride");
 	});
 
+	it("the header-override EFFECT is also skipped — not just the render path", () => {
+		// The effect fires on `openSession` alone, so the solo view started a session and then had
+		// its page header replaced anyway: the instance tab bar vanished and two sets of chrome
+		// stacked. Rendering a different tree is not enough when an effect pushes the old one.
+		expect(tab).toContain("if (singleRepo || !openSession || !onHeaderOverride) return;");
+	});
+
+	it("carries the session actions the takeover used to provide", () => {
+		// Without these the solo view could START a session and never stop it.
+		const solo = tab.slice(tab.indexOf("if (singleRepo && repos.length <= 1)"), tab.indexOf("// ── Session open"));
+		expect(solo).toContain("endSession");
+		expect(solo).toContain("restartSession");
+	});
+
 	it("opens Issues expanded — as its own tab there is nothing to expand into", () => {
 		const solo = tab.slice(tab.indexOf("if (singleRepo && repos.length <= 1)"), tab.indexOf("// ── Session open"));
 		expect(solo).toContain("startOpen");
