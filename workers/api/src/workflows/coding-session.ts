@@ -10,7 +10,7 @@ import {
 	type CodingResult,
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
-import { endSession, getSession, getRepo, reassignSessionNode } from "../lib/coding-store.js";
+import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver } from "../lib/coding-store.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
@@ -68,6 +68,12 @@ export interface CodingSessionParams {
 	 * supervisor is handed a run id it cannot look up.
 	 */
 	loopRunId?: string | null;
+	/**
+	 * The single-flight claim this run holds on the session (#208). Released when the run ends —
+	 * including the early no-runner return, which is exactly where a claim would otherwise be
+	 * stranded and lock the session out of every future run.
+	 */
+	driverId?: string | null;
 }
 
 /** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
@@ -186,6 +192,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// moved. Exactly the "looks delegated and never moves" failure the design forbids.
 			const noRunner: CodingResult = { outcome: "failed", detail: "No coding runner connected. Start it with: pags up", steps: 0 };
 			await closeDelegation(noRunner, "-no-runner");
+			// The only exit that leaves the session ACTIVE, so it is the only one that has to free
+			// the claim itself — everywhere else `endSession` does it. Miss this and one offline
+			// moment locks the session out of every future run.
+			if (event.payload.driverId) {
+				await releaseSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId);
+			}
 			return noRunner;
 		}
 

@@ -21,6 +21,7 @@ import {
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import {
+	claimSessionDriver,
 	createRepo,
 	createSession,
 	deleteRepo,
@@ -1283,6 +1284,15 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 	const objective = String(body.objective ?? "").trim();
 	if (!objective) return c.json({ error: "objective is required" }, 400);
 
+	// One driver per engine (#208). Claimed BEFORE the workflow is created, because the damage
+	// isn't a duplicate row — it's two Pilots typing into the same tmux pane, each reasoning over
+	// a terminal the other is also writing to. A 409 is the honest answer: the work IS already
+	// running, and starting a second one would corrupt the first.
+	const driverId = crypto.randomUUID();
+	if (!(await claimSessionDriver(c.env, instanceId, uid, sessionId, driverId))) {
+		throw new HttpError(409, "This session is already being driven — stop the current run before starting another.");
+	}
+
 	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
 	const repoInstructions = repo.instructions;
 	const combined = [instanceInstructions, repoInstructions].filter(Boolean).join("\n\n");
@@ -1306,6 +1316,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 			branch: repo.branch || undefined,
 			token: token ?? undefined,
 			goal,
+			driverId,
 		},
 	});
 	return c.json({ workflowId: wf.id, sessionId });

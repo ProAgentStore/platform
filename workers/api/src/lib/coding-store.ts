@@ -388,8 +388,13 @@ export async function reassignSessionNode(env: Env, instanceId: string, userId: 
  */
 export async function endSession(env: Env, instanceId: string, userId: string, sessionId: string, status: CodingSessionStatus = "ended"): Promise<boolean> {
 	const res = await env.DB.prepare(
+		// driver_id cleared here too: an ended session cannot be "being driven", and this is the
+		// ONE place a session leaves `active` (#206), so every terminal path — the end route, the
+		// orphan reaper, a takeover, the Pilot's own close — frees the claim without knowing it
+		// exists. A claim outliving its session would lock the repo out of all future runs.
 		`UPDATE coding_sessions
-		 SET status = ?4, ended_at = datetime('now'), updated_at = datetime('now')
+		 SET status = ?4, ended_at = datetime('now'), updated_at = datetime('now'),
+		     driver_id = NULL, driver_at = NULL
 		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status IN ('active', 'suspended')`,
 	)
 		.bind(sessionId, instanceId, userId, status)
@@ -429,4 +434,48 @@ export async function reconcileOrphanedSessions(
 		await endSession(env, instanceId, userId, id, "ended");
 	}
 	return orphaned;
+}
+
+/**
+ * Claim the right to DRIVE a session, atomically. Returns false when someone already holds it.
+ *
+ * The condition is in the UPDATE, not in a preceding SELECT: a check-then-act would let two
+ * concurrent `/run` calls both read "free" and both proceed, which is precisely the race being
+ * closed. `status = 'active'` is part of the predicate so an ended session cannot be claimed.
+ */
+export async function claimSessionDriver(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	sessionId: string,
+	driverId: string,
+): Promise<boolean> {
+	const res = await env.DB.prepare(
+		`UPDATE coding_sessions
+		    SET driver_id = ?5, driver_at = ?4, updated_at = datetime('now')
+		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3
+		    AND status = 'active'
+		    AND (driver_id IS NULL OR driver_id = ?5)`,
+	)
+		.bind(sessionId, instanceId, userId, Date.now(), driverId)
+		.run();
+	return (res.meta?.changes ?? 0) > 0;
+}
+
+/** Give the session back. Scoped to the holder, so a late release can't free someone else's claim. */
+export async function releaseSessionDriver(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	sessionId: string,
+	driverId: string,
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE coding_sessions
+		    SET driver_id = NULL, driver_at = NULL, updated_at = datetime('now')
+		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND driver_id = ?4`,
+	)
+		.bind(sessionId, instanceId, userId, driverId)
+		.run()
+		.catch(() => undefined);
 }
