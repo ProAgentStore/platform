@@ -16,6 +16,14 @@ import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
 import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "./lib/runner-client.js";
+import {
+	behaviourField,
+	behaviourPrompt,
+	behaviourStyleReminder,
+	fieldPrompt,
+	prefersTechnical,
+	resolveBehaviour,
+} from "./lib/agent-behaviour.js";
 import type { Env } from "./types.js";
 
 /**
@@ -140,14 +148,32 @@ export async function runAgentThink(opts: {
 	// is the INSTANCE id for instance DOs; a template/preview DO has no row → stays
 	// empty. Best-effort: a failed read must never block the turn.
 	let instanceCfg: Record<string, unknown> = {};
+	let agentCfg: Record<string, unknown> = {};
 	try {
-		const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1")
+		// Joined rather than a second query: the agent row is only wanted for the creator's
+		// behaviour default, which is not worth another round trip on every turn.
+		const row = await env.DB.prepare(
+			"SELECT i.config AS config, a.config AS agent_config FROM agent_instances i" +
+				" LEFT JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1",
+		)
 			.bind(state.agentId)
-			.first<{ config: string | null }>();
+			.first<{ config: string | null; agent_config: string | null }>();
 		if (row?.config) instanceCfg = JSON.parse(row.config) as Record<string, unknown>;
+		if (row?.agent_config) agentCfg = JSON.parse(row.agent_config) as Record<string, unknown>;
 	} catch { /* skip silently */ }
 
+	// Behaviour (#223) — the subscriber's declared character, replacing three hardcoded
+	// heuristics further down (the technical/plain guess, the no-step-by-step rule, and the
+	// 2-sentence cap). Sparse: an agent that has configured nothing resolves to `{}` and every
+	// one of those heuristics stays exactly as it was.
+	const behaviour = resolveBehaviour(agentCfg.behaviour, instanceCfg.behaviour);
+
 	let systemPrompt = state.systemPrompt;
+
+	// Placed BEFORE the honesty/safety text below, not after. `persona` is free subscriber text;
+	// it configures manner, and must not be positioned to outrank "never claim an action
+	// succeeded when it failed".
+	systemPrompt += behaviourPrompt(behaviour);
 
 	// Rules & Tips (specialInstructions) — the subscriber's standing free-text rules.
 	// Injected right after the base prompt so they take precedence; previously these
@@ -401,12 +427,21 @@ export async function runAgentThink(opts: {
 	// and any coding-capable instance (it has attached repos). Everything else
 	// keeps the concise, read-aloud voice tuned for non-technical users.
 	const repoChatStyle = state.guardrails?.responseStyle === "technical";
-	const technical = repoChatStyle || hasCodingContext;
-	const styleReminder = technical
-		? "Answer accurately and concretely, grounded in the code above. Lead with a plain-English explanation; cite real file paths/functions and add short snippets only when they help."
-		: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.";
+	// A DECLARED technicality wins over the guess. The guess ("has repos ⇒ wants jargon") is only
+	// ever a stand-in for asking, so once the subscriber has answered, it stops applying.
+	const technical = prefersTechnical(behaviour) ?? (repoChatStyle || hasCodingContext);
+	const styleReminder =
+		behaviourStyleReminder(behaviour) ||
+		(technical
+			? "Answer accurately and concretely, grounded in the code above. Lead with a plain-English explanation; cite real file paths/functions and add short snippets only when they help."
+			: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.");
 
-	systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'.";
+	// Unconditional until #223: there was no way to ask for the steps. Now the OFF state of
+	// `showWorking` carries this same rule (see the field's `offPrompt`), so leaving it here too
+	// would contradict a subscriber who turned it on.
+	if (behaviour.showWorking === undefined) {
+		systemPrompt += "\n\nIMPORTANT: Never output step-by-step thinking. Never say 'Step 1' or 'Step 2'.";
+	}
 
 	// HONESTY / grounding. Real chats showed an agent tell the user a post was
 	// "successfully queued" when the tool had returned a 500, and another address the
@@ -440,10 +475,16 @@ export async function runAgentThink(opts: {
 				"\n- If asked to find or fix something in the code from this chat, say that work runs in the Coding tab and offer to summarize what the current session is doing." +
 				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
 		} else {
+		// The 2-sentence cap is a LENGTH rule that happened to live inside the plain-speech block.
+		// A subscriber who asked for thorough answers has already overruled it, so honour that
+		// rather than telling the model both things in the same prompt.
+		const lengthRule = behaviour.verbosity
+			? fieldPrompt(behaviourField("verbosity")!, behaviour.verbosity)
+			: "MAXIMUM 2 sentences. Shorter is better.";
 		systemPrompt +=
 			"\n\nSTYLE: You are speaking to a NON-TECHNICAL person. Your response will be READ ALOUD to them." +
 			"\nRULES:" +
-			"\n- MAXIMUM 2 sentences. Shorter is better." +
+			`\n- ${lengthRule}` +
 			"\n- Never mention filenames, paths, line numbers, git status, CSS classes, function names, or code." +
 			"\n- Never repeat raw tool output. Summarize in plain English." +
 			"\n- Say WHAT happened and WHETHER it needs anything from the user." +

@@ -16,6 +16,7 @@ import { executeTriggerAction } from "../lib/triggers.js";
 import { validatePipeline } from "../lib/pipeline.js";
 import { isCredentialsError, runLoopDecide } from "../lib/loop-orchestrator.js";
 import { readInstanceConfig, registerApplyRoutes } from "./instances-apply.js";
+import { registerBehaviourRoutes } from "./instances-behaviour.js";
 import { registerBrowseRoutes } from "./instances-browse.js";
 import { attachGlossesToMessages, registerTranslationRoutes } from "./instances-translation.js";
 import { registerFileUploadRoutes } from "./instances-files.js";
@@ -775,6 +776,7 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 // Human-takeover proxies, Special Instructions, learned tips, and the ask-and-hold
 // input channel live in instances-apply.ts to keep this file focused.
 registerApplyRoutes(instanceRoutes);
+registerBehaviourRoutes(instanceRoutes);
 registerBrowseRoutes(instanceRoutes);
 registerTranslationRoutes(instanceRoutes);
 registerFileUploadRoutes(instanceRoutes);
