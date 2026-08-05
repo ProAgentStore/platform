@@ -991,6 +991,16 @@ async function delegateToTarget(
 		return { ok: false, reply: `${targetLabel} has no live session — open it (or tap Start) first, then I can drive it.` };
 	}
 
+	// Single-flight BEFORE anything observable is written (#208). This is the third path that
+	// starts a Pilot on a real session, and it was the one still left open: the claim went on
+	// `/sessions/:id/run` only, so `drive_claude` could put a SECOND Pilot on a pane a first was
+	// already typing into. Claimed first so a refusal doesn't leave a board card + trace event
+	// announcing work that never started.
+	const driverId = crypto.randomUUID();
+	if (!(await claimSessionDriver(c.env, instanceId, uid, session.id, driverId))) {
+		return { ok: false, reply: `${targetLabel} is already being worked on — let the current run finish, or stop it first.` };
+	}
+
 	const taskId = `deleg-${crypto.randomUUID()}`;
 	const now = new Date().toISOString();
 	const label = objective.length > 120 ? `${objective.slice(0, 117)}…` : objective;
@@ -1010,6 +1020,7 @@ async function delegateToTarget(
 			instanceId, userId: uid, sessionId: session.id, repoId: repo.id,
 			runnerNode: session.runnerNode ?? null, cloneUrl: repo.cloneUrl ?? undefined,
 			branch: repo.branch || undefined, token: token ?? undefined, goal, boardTaskId: taskId,
+			driverId,
 		},
 	});
 	return { ok: true, taskId, label: targetLabel, reply: `On it — delegated to ${repo.name}; track it on the board.` };

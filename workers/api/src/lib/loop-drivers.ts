@@ -21,7 +21,7 @@
 import { createLoopRun } from "./agent-loop-store.js";
 import { sanitizeMaxIterations } from "./agent-loop.js";
 import { delegationTaskRecord } from "./delegation.js";
-import { getActiveSessionForRepo, listRepos } from "./coding-store.js";
+import { claimSessionDriver, getActiveSessionForRepo, listRepos } from "./coding-store.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
 
@@ -115,6 +115,20 @@ const codingDriver: LoopDriver = {
 			};
 		}
 
+		// Single-flight, same as `/sessions/:id/run` (#208). Without it a Lead delegating a goal —
+		// or the owner pressing Loop — starts a SECOND Pilot on a session that is already being
+		// driven, and the two interleave `tmux send-keys` into the same pane, each reasoning over
+		// a terminal the other is writing to. #208 added the claim to the route only; these paths
+		// reach the same engine and were left open, so the guarantee was a sixth of a guarantee.
+		const driverId = crypto.randomUUID();
+		if (!(await claimSessionDriver(env, instanceId, userId, session.id, driverId))) {
+			return {
+				ok: false,
+				status: 409,
+				error: `${repo.name} is already being worked on — wait for the current run to finish, or stop it first.`,
+			};
+		}
+
 		const runId = crypto.randomUUID();
 		const maxIterations = sanitizeMaxIterations(input.maxIterations);
 		await createLoopRun(env, {
@@ -158,6 +172,7 @@ const codingDriver: LoopDriver = {
 				budgetId: input.budgetId,
 				depth: input.depth,
 				loopRunId: runId,
+				driverId,
 			},
 		});
 		return { ok: true, runId, driver: codingDriver.id };

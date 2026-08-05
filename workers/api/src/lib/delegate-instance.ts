@@ -23,9 +23,6 @@ import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { sanitizeMaxIterations } from "./agent-loop.js";
 import { logEvent } from "./events.js";
-import { agentCapabilities } from "./agent-capabilities.js";
-import { getActiveSessionForRepo, listRepos } from "./coding-store.js";
-import { delegationTaskRecord } from "./delegation.js";
 import type { Env } from "../types.js";
 
 export interface DelegateInstanceInput {
@@ -140,101 +137,6 @@ export async function delegateToInstance(env: Env, input: DelegateInstanceInput)
 		instanceId: input.supervisorInstanceId,
 		traceId: input.parentTraceId ?? runId,
 		context: { runId, depth, budgetId },
-	}).catch(() => undefined);
-
-	return { ok: true, runId, budgetId, depth };
-}
-
-/**
- * Delegate to a coding agent's Pilot — the durable loop that drives a real CLI.
- *
- * Mirrors what the hardcoded Overseer does, with the repo resolved from the subordinate rather
- * than named by the caller: a Repo Coder owns exactly one repo, so the supervisor should not have
- * to know which. Refusals are explicit, because the alternative — a board card that looks
- * delegated and never moves — is the failure #154 was written to kill.
- */
-async function delegateToPilot(
-	env: Env,
-	input: DelegateInstanceInput,
-	depth: number,
-	budgetId: string,
-	objective: string,
-): Promise<DelegateInstanceResult> {
-	const repos = await listRepos(env, input.subordinateInstanceId, input.userId).catch(() => []);
-	const repo = repos[0];
-	if (!repo) {
-		return {
-			ok: false,
-			status: 409,
-			error: "That coding agent has no repository yet — add one on its Coding tab first.",
-		};
-	}
-	const session = await getActiveSessionForRepo(env, input.subordinateInstanceId, input.userId, repo.id);
-	if (!session) {
-		return {
-			ok: false,
-			status: 409,
-			error: `${repo.name} has no live coding session — start one on its Coding tab (and run \`pags up\`), then delegate again.`,
-		};
-	}
-
-	// Observable board task, so a delegated goal is trackable rather than buried in one repo's
-	// thread. The Pilot flips it to completed/failed at its terminal state.
-	const taskId = `deleg-${crypto.randomUUID()}`;
-
-	// AND a loop-run row, so `check_delegation` answers for BOTH delegation kinds. Without it
-	// the supervisor is handed a run id, told to track it, and gets "no run with that id" —
-	// the tool's own instructions would be a lie.
-	const runId = crypto.randomUUID();
-	await createLoopRun(env, {
-		runId,
-		userId: input.userId,
-		instanceId: input.subordinateInstanceId,
-		objective,
-		maxIterations: sanitizeMaxIterations(input.maxIterations),
-		budgetId,
-		startedAt: Date.now(),
-	}).catch(() => undefined);
-	await env.DB.prepare(
-		`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, 'delegation', 'running', ?4, datetime('now'), datetime('now'))`,
-	)
-		.bind(
-			taskId,
-			input.subordinateInstanceId,
-			input.userId,
-			JSON.stringify(delegationTaskRecord({ id: taskId, targetLabel: repo.name, objective, status: "running", now: new Date().toISOString() })),
-		)
-		.run()
-		.catch(() => undefined);
-
-	await env.CODING_SESSION.create({
-		params: {
-			instanceId: input.subordinateInstanceId,
-			userId: input.userId,
-			sessionId: session.id,
-			repoId: repo.id,
-			runnerNode: session.runnerNode ?? null,
-			cloneUrl: repo.cloneUrl ?? undefined,
-			branch: repo.branch || undefined,
-			goal: { objective, repo: repo.name, clientType: session.clientType },
-			boardTaskId: taskId,
-			// #184: a DELEGATED coding run draws on the tree's pool. A human driving the same
-			// Pilot from the Coding tab passes no budget and stays unmetered, as before.
-			budgetId,
-			depth,
-			loopRunId: runId,
-		},
-	});
-
-	await logEvent(env, {
-		source: "coding",
-		event: "delegate",
-		message: `${input.supervisorInstanceId} → ${repo.name}: ${objective.slice(0, 160)}`,
-		userId: input.userId,
-		instanceId: input.supervisorInstanceId,
-		traceId: input.parentTraceId ?? taskId,
-		context: { taskId, depth, budgetId, subordinate: input.subordinateInstanceId },
 	}).catch(() => undefined);
 
 	return { ok: true, runId, budgetId, depth };

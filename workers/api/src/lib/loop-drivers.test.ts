@@ -36,7 +36,7 @@ describe("loopDriverFor — the ONE Loop dispatches on what the agent DECLARES (
 });
 
 /** Env stub recording the writes + which Workflow binding was created. */
-function stubEnv(opts: { repos?: unknown[]; session?: unknown } = {}) {
+function stubEnv(opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean } = {}) {
 	const sql: string[] = [];
 	const created: Array<{ binding: string; params: Record<string, unknown> }> = [];
 	const wf = (binding: string) => ({ create: vi.fn(async (a: { params: Record<string, unknown> }) => { created.push({ binding, params: a.params }); return { id: "wf" }; }) });
@@ -47,7 +47,8 @@ function stubEnv(opts: { repos?: unknown[]; session?: unknown } = {}) {
 				return {
 					bind() {
 						return {
-							async run() { return { meta: { changes: 1 } }; },
+							// A claim whose predicate matched nothing = somebody else holds it.
+							async run() { return { meta: { changes: opts.claimTaken && q.includes("driver_id") ? 0 : 1 } }; },
 							async all() { return { results: opts.repos ?? [] }; },
 							async first() { return opts.session ?? null; },
 						};
@@ -127,3 +128,47 @@ describe('the "Delegated:" board card belongs to a supervisor, not to the owner'
 		expect(String(created[0].params.boardTaskId)).toMatch(/^deleg-/);
 	});
 });
+
+describe("one driver per engine — every path that starts a Pilot claims it (#208 hole)", () => {
+	const codingEnv = (claimTaken = false) => stubEnv({
+		repos: [{ id: "r1", name: "fws/platform" }],
+		session: { id: "s1", client_type: "claude" },
+		claimTaken,
+	});
+
+	it("claims the session before creating the workflow", async () => {
+		// #208 put the claim on `/sessions/:id/run` ONLY. This path — the owner's Loop button and
+		// every `delegate_goal` to a coding agent — reaches the same tmux pane and was left open,
+		// so two Pilots could interleave `send-keys` into one terminal, each reasoning over output
+		// the other was writing.
+		const { env, sql, created } = codingEnv();
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(sql.some((q) => q.includes("driver_id") && q.includes("UPDATE coding_sessions"))).toBe(true);
+		// The Pilot must carry the claim, or nothing releases it when the run ends.
+		expect(created[0].params.driverId).toBeTruthy();
+	});
+
+	it("refuses — and starts NOTHING — when another driver already holds the session", async () => {
+		const { env, sql, created } = codingEnv(true);
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base, delegated: true });
+		expect(out).toMatchObject({ ok: false, status: 409 });
+		if (!out.ok) expect(out.error).toMatch(/already being worked on/i);
+		// No workflow, no loop-run row, and no "Delegated:" card announcing work that never began.
+		expect(created).toHaveLength(0);
+		expect(sql.some((q) => q.includes("INSERT INTO agent_loop_runs"))).toBe(false);
+		expect(sql.some((q) => q.includes("'delegation'"))).toBe(false);
+	});
+
+	it("claims BEFORE opening the run row, so a refusal leaves no orphan", async () => {
+		// Order matters: a claim checked after the row is written leaves an `agent_loop_runs` row
+		// that no workflow will ever close — the stranded-row failure #207C exists to sweep up.
+		const { env, sql } = codingEnv();
+		await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		const claimAt = sql.findIndex((q) => q.includes("driver_id") && q.includes("UPDATE coding_sessions"));
+		const runAt = sql.findIndex((q) => q.includes("INSERT INTO agent_loop_runs"));
+		expect(claimAt).toBeGreaterThanOrEqual(0);
+		expect(claimAt).toBeLessThan(runAt);
+	});
+});
+

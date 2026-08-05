@@ -76,16 +76,19 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		expect(sub.resume?.filename).toContain("resume");
 		expect(sub.resume?.size).toBeGreaterThan(0);
 		expect(result.url).toContain("/success/");
-		// 120s, not the file's usual 60s: this is the heaviest test here (8 sequential
-		// real-browser actions, ~22s on a dev machine) and it repeatedly flaked at 60s
-		// on CI's slower runners while passing on every rerun.
+		// 120s across this whole file, not 60s. `beforeEach` builds a new LocalRunner and launches
+		// a FRESH real Chrome for every test — eight launches per file — so under a loaded machine
+		// (a parallel vitest pool, or an e2e run alongside) a launch alone can eat most of a 60s
+		// budget. Two different tests here timed out at 60s in one full-suite run and the whole
+		// file passed 8/8 in 27s immediately after, in isolation. The heaviest test was already
+		// bumped for exactly this; the rest were left to flake.
 	}, 120_000);
 
 	it("snapshot reports a CAPTCHA challenge so the brain can hand off", async () => {
 		await runner.browserAct({ action: "navigate", url: `${server.jobUrl}?challenge=1` });
 		const snap = await runner.browserSnapshot();
 		expect(snap.challenge).toBe("cloudflare-turnstile");
-	}, 60_000);
+	}, 120_000);
 
 	it("does NOT hand off for an invisible reCAPTCHA badge, but DOES for a visible checkbox", async () => {
 		// The Dayforce false-positive: an invisible v3 badge must be ignored.
@@ -94,7 +97,7 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		// A visible "I'm not a robot" checkbox IS a real challenge.
 		await runner.browserAct({ action: "navigate", url: `${server.jobUrl}?recaptcha=1` });
 		expect((await runner.browserSnapshot()).challenge).toBe("recaptcha");
-	}, 60_000);
+	}, 120_000);
 
 	it("agent handoff lifecycle: same-session pause → solved → resume → complete", async () => {
 		// Agent-driven task: created running, never auto-executed by the runner.
@@ -123,7 +126,7 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 
 		await runner.browserComplete(task.id, "submitted", "Application received");
 		expect(runner.store.getTask(task.id)?.status).toBe("completed");
-	}, 60_000);
+	}, 120_000);
 
 	it("auto-handles a native dialog so the brain isn't wedged (real ATS: alert after résumé upload)", async () => {
 		// A page that pops a native alert — exactly what Coles does after résumé upload.
@@ -138,7 +141,7 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		const after = await runner.browserAct({ action: "key", key: "Enter" });
 		expect(after.ok).toBe(true);
 		expect(after.feedback ?? "").toMatch(/dialog was accepted/i);
-	}, 60_000);
+	}, 120_000);
 
 	it("reads back a masked field's real value so the brain doesn't oscillate", async () => {
 		// A phone field that transforms input like a real intl mask: "0404…" → "+61404…".
@@ -149,7 +152,7 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		// The runner reports what the field ACTUALLY holds now (the transformed value).
 		expect(res.feedback ?? "").toMatch(/now reads/i);
 		expect(res.feedback ?? "").toContain("+61404453580");
-	}, 60_000);
+	}, 120_000);
 
 	it("upload falls back to setInputFiles when the target isn't the chooser trigger (Ashby drop-zone)", async () => {
 		// Ashby: the labeled 'Resume' control is a drop-zone/button that does NOT open a
@@ -161,7 +164,7 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		await runner.browserAct({ action: "upload", ref: ref(snap.snapshot, "button", "Resume"), name: "Resume" }, resume());
 		// The input's onchange set the title to FILE:<name> → the file really attached.
 		expect((await runner.browserSnapshot()).title).toContain("FILE:");
-	}, 60_000);
+	}, 120_000);
 
 	it("a failed action (bad ref) throws so the workflow surfaces it to the brain", async () => {
 		await runner.browserAct({ action: "navigate", url: server.jobUrl });
@@ -169,5 +172,5 @@ describe("LocalRunner brain-driven browser endpoints", () => {
 		// A ref that doesn't exist must not silently succeed — it throws (→ the
 		// workflow maps it to `error`, driving the brain's self-correction).
 		await expect(runner.browserAct({ action: "click", ref: "e99999", name: "ghost" })).rejects.toThrow();
-	}, 60_000);
+	}, 120_000);
 });
