@@ -44,6 +44,12 @@ export interface Instance {
 		surfaces: string[];
 		runtime?: string;
 		workflow?: string;
+		/**
+		 * The agent's DECLARED tool allowlist (absent when it declares none, meaning the server
+		 * grants a per-surface default). Tabs that are only meaningful for certain tools gate on
+		 * this — see SurfaceCaps in lib/surfaces.
+		 */
+		tools?: string[];
 		/** Phase 3: agent-published UIs, loaded dynamically from a bundle URL. */
 		customSurfaces?: CustomSurface[];
 		/** The agent's single work-board columns (server always resolves a default). */

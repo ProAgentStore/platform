@@ -72,3 +72,53 @@ describe("visibleSurfaces still derives tabs from declared capabilities", () => 
 		expect(visibleSurfaces([]).map((s) => s.id)).toContain("board");
 	});
 });
+
+describe("tabs are gated on what the agent DECLARES, not shown to everyone", () => {
+	const ids = (caps: { surfaces: string[]; tools?: string[] }) => visibleSurfaces(caps).map((s) => s.id);
+
+	it("a Repo Coder loses Indexing and Data — it has neither knowledge nor collections", () => {
+		// The complaint: seven tabs on an agent that can use four. Indexing renders the vector
+		// store (nothing indexed, nothing that searches it) and Data renders collections (an agent
+		// with no collection tools can never create a row), so both were permanently empty.
+		const coder = {
+			surfaces: ["coding"],
+			tools: ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_list_issues", "github_read_issue", "github_create_issue"],
+		};
+		expect(ids(coder)).not.toContain("indexing");
+		expect(ids(coder)).not.toContain("data");
+		// …but keeps everything it does use.
+		expect(ids(coder)).toEqual(expect.arrayContaining(["chat", "coding", "activity", "knowledge", "settings"]));
+	});
+
+	it("repo-chat KEEPS Indexing — indexing a codebase is the whole product", () => {
+		const repoChat = { surfaces: ["repo"], tools: ["search_knowledge", "list_knowledge", "read_knowledge"] };
+		expect(ids(repoChat)).toContain("indexing");
+		// It still writes no collections.
+		expect(ids(repoChat)).not.toContain("data");
+	});
+
+	it("an agent that declares NO tools keeps every tab — undeclared must stay permissive", () => {
+		// The safety property. An agent with no allowlist gets a per-surface DEFAULT set resolved
+		// server-side, so the console cannot know what it can do. Guessing would silently remove a
+		// tab a live agent depends on — doc-chat and the pipeline agents declare nothing and need
+		// both Indexing and Data.
+		const undeclared = { surfaces: [] };
+		expect(ids(undeclared)).toEqual(expect.arrayContaining(["indexing", "data", "knowledge", "board"]));
+		// Same for the legacy call shape (a bare surface array).
+		expect(visibleSurfaces([]).map((s) => s.id)).toContain("data");
+	});
+
+	it("Knowledge stays for everyone — it is a composite, and Memory is universal", () => {
+		// Gating it on KB tools would take Memory and Rules & Tips away to hide two sub-tabs.
+		const noTools = { surfaces: ["coding"], tools: ["repo_git"] };
+		expect(ids(noTools)).toContain("knowledge");
+	});
+
+	it("an empty declared allowlist is still a declaration, not 'undeclared'", () => {
+		// `tools: []` means the agent said it needs nothing. Treating it as undefined would make
+		// the most restrictive declaration the most permissive UI.
+		expect(ids({ surfaces: ["coding"], tools: [] })).not.toContain("indexing");
+		expect(ids({ surfaces: ["coding"], tools: [] })).not.toContain("data");
+	});
+});
+

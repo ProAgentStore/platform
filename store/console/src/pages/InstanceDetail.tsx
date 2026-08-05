@@ -50,6 +50,11 @@ export default function InstanceDetail() {
 	const navigate = useNavigate();
 	const [instance, setInstance] = useState<Instance | null>(null);
 	const surfaces = instance?.capabilities?.surfaces || [];
+	// Tabs are gated on the whole DECLARED set, not just surfaces: some are about what the agent
+	// can DO (knowledge tools → Indexing, collection tools → Data). An agent that declares no tool
+	// allowlist stays permissive. See SurfaceCaps in lib/surfaces.
+	const declaredTools = instance?.capabilities?.tools;
+	const surfaceCaps = { surfaces, tools: declaredTools };
 	// Phase 3: agent-published UIs, loaded dynamically (see DynamicSurface).
 	const customSurfaces = instance?.capabilities?.customSurfaces || [];
 
@@ -59,7 +64,7 @@ export default function InstanceDetail() {
 	const splatParts = splat?.split("/") || [];
 	const urlTab = splatParts[0] || "";
 	const allowedSurfaces = new Set<string>([
-		...visibleSurfaces(surfaces).map((s) => s.id),
+		...visibleSurfaces(surfaceCaps).map((s) => s.id),
 		...customSurfaces.map((c) => c.id),
 	]);
 	const tab: Tab = allowedSurfaces.has(urlTab) ? urlTab : "chat";
@@ -496,11 +501,13 @@ export default function InstanceDetail() {
 	// Tabs are derived from the surface registry filtered by this instance's capabilities.
 	const tabDefs = useMemo(
 		() => [
-			...visibleSurfaces(surfaces).map((s) => ({ id: s.id as string, label: s.label, icon: s.icon })),
+			...visibleSurfaces(surfaceCaps).map((s) => ({ id: s.id as string, label: s.label, icon: s.icon })),
 			...customSurfaces.map((c) => ({ id: c.id, label: c.label, icon: c.icon || "🧩" })),
 		],
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[surfaces.join(","), customSurfaces.map((c) => c.id).join(",")],
+		// Joined strings, not the arrays: each poll returns fresh array identities, and depending on
+		// those would re-derive the tab list every few seconds.
+		[surfaces.join(","), declaredTools?.join(","), customSurfaces.map((c) => c.id).join(",")],
 	);
 
 	// Inject instance controls into the Layout header (single bar)

@@ -45,8 +45,14 @@ export interface SurfaceDef {
 	id: SurfaceId;
 	label: string;
 	icon: string;
-	/** Show this surface for an instance whose capability surfaces are `surfaces`. */
-	show: (surfaces: string[]) => boolean;
+	/**
+	 * Should this tab appear for an instance with these declared capabilities?
+	 *
+	 * Takes the whole capability set, not just `surfaces`, because some tabs are about what the
+	 * agent can DO rather than which surface it mounts: the vector-store view is meaningless to an
+	 * agent with no knowledge tools, and the collections view to one that never writes a record.
+	 */
+	show: (caps: SurfaceCaps) => boolean;
 	/**
 	 * Renders the surface body. Omitted for `chat`, which the shell renders inline
 	 * because it owns the page-level chat/voice/loop state.
@@ -69,6 +75,32 @@ export interface SurfaceDef {
 	ownsHeader?: boolean;
 }
 
+/** What a `show` predicate gets to decide on — everything the agent DECLARED. */
+export interface SurfaceCaps {
+	surfaces: string[];
+	/**
+	 * The agent's declared tool allowlist, or undefined when it declares none.
+	 *
+	 * undefined is the important case: an agent that declares nothing gets the per-surface DEFAULT
+	 * tool set server-side (`toolNamesFor`), so the console cannot know what it can do and must not
+	 * guess. Every predicate below therefore treats "not declared" as permissive — only an agent
+	 * that has said exactly what it needs gets the narrower UI. That keeps every legacy and
+	 * undeclared agent's tabs exactly as they were.
+	 */
+	tools?: string[];
+}
+
+/** Does a DECLARED allowlist contain any of these? Undefined (not declared) ⇒ permissive. */
+function canUse(caps: SurfaceCaps, names: readonly string[]): boolean {
+	if (!caps.tools) return true;
+	return names.some((n) => caps.tools?.includes(n));
+}
+
+/** Reading or writing the knowledge base — what the vector store is built from. */
+const KB_TOOLS = ["search_knowledge", "list_knowledge", "read_knowledge", "add_knowledge", "update_knowledge", "delete_knowledge"] as const;
+/** Structured collections — what the Data tab renders. */
+const COLLECTION_TOOLS = ["create_collection", "list_collections", "insert_record", "query_records", "update_record", "delete_record"] as const;
+
 export const SURFACES: SurfaceDef[] = [
 	{ id: "chat", label: "Assistant", icon: "💬", show: () => true },
 	{
@@ -77,7 +109,7 @@ export const SURFACES: SurfaceDef[] = [
 		icon: "📮",
 		// The job-application agent's single work board (one card per job, Retry, move,
 		// attempts drill-down). The old applications-records detail page was retired.
-		show: (s) => s.includes("apply"),
+		show: ({ surfaces }) => surfaces.includes("apply"),
 		scroll: true,
 		render: ({ instanceId, boardColumns }) => <BoardTab instanceId={instanceId} columns={boardColumns} apply />,
 	},
@@ -86,7 +118,7 @@ export const SURFACES: SurfaceDef[] = [
 		label: "Board",
 		icon: "📋",
 		// Generic work board for agents without their own dedicated surface.
-		show: (s) => !s.includes("coding") && !s.includes("apply") && !s.includes("repo") && !s.includes("tmux"),
+		show: ({ surfaces: s }) => !s.includes("coding") && !s.includes("apply") && !s.includes("repo") && !s.includes("tmux"),
 		scroll: true,
 		render: ({ instanceId, boardColumns }) => <BoardTab instanceId={instanceId} columns={boardColumns} />,
 	},
@@ -95,7 +127,7 @@ export const SURFACES: SurfaceDef[] = [
 		label: "Repo",
 		icon: "🔍",
 		// The read-only repo-chat agent's surface: index a GitHub repo, then chat with it.
-		show: (s) => s.includes("repo"),
+		show: ({ surfaces }) => surfaces.includes("repo"),
 		scroll: true,
 		render: ({ instanceId }) => <RepoTab instanceId={instanceId} />,
 	},
@@ -103,7 +135,7 @@ export const SURFACES: SurfaceDef[] = [
 		id: "coding",
 		label: "Coding",
 		icon: "💻",
-		show: (s) => s.includes("coding"),
+		show: ({ surfaces }) => surfaces.includes("coding"),
 		// A full-screen terminal owns the header: repo + engine status + session actions.
 		ownsHeader: true,
 		render: ({ instanceId, sessionId, setChildHeader, surfaceOptions }) => (
@@ -127,7 +159,7 @@ export const SURFACES: SurfaceDef[] = [
 		id: "tmux",
 		label: "Terminal",
 		icon: "▣",
-		show: (s) => s.includes("tmux"),
+		show: ({ surfaces }) => surfaces.includes("tmux"),
 		render: ({ instanceId }) => <TmuxTab instanceId={instanceId} />,
 	},
 	{
@@ -145,6 +177,10 @@ export const SURFACES: SurfaceDef[] = [
 		id: "knowledge",
 		label: "Knowledge",
 		icon: "📚",
+		// Deliberately NOT gated on KB tools. It is a composite: Documents/Files need them, but
+		// Memory and Rules & Tips are per-instance and universal — every agent has memory, and
+		// every subscriber can write rules. Gating the tab would take those away to hide two
+		// sub-tabs. Splitting the composite is the real fix and is a separate change.
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId, isApply }) => <KnowledgeTab instanceId={instanceId} isApply={isApply} />,
@@ -153,7 +189,11 @@ export const SURFACES: SurfaceDef[] = [
 		id: "indexing",
 		label: "Indexing",
 		icon: "🔎",
-		show: () => true,
+		// The vector store behind RAG. An agent with no knowledge tools has nothing indexed and
+		// nothing that searches it, so this rendered an empty panel on every coding agent — the
+		// same "shown because nobody asked whether the agent declares it" failure as the second
+		// chat. The `repo` surface counts: repo-chat ingests a codebase INTO this store.
+		show: (caps) => caps.surfaces.includes("repo") || canUse(caps, KB_TOOLS),
 		scroll: true,
 		render: ({ instanceId }) => <IndexingTab instanceId={instanceId} />,
 	},
@@ -161,8 +201,10 @@ export const SURFACES: SurfaceDef[] = [
 		id: "data",
 		label: "Data",
 		icon: "📊",
-		// Spreadsheet view over the agent's structured collections (filter + sort).
-		show: () => true,
+		// Spreadsheet view over the agent's structured collections (filter + sort). Collections are
+		// only ever created by an agent's own tools or its pipelines, so one that declares neither
+		// can never have a row here — the tab was permanently empty with no way to fill it.
+		show: (caps) => canUse(caps, COLLECTION_TOOLS),
 		scroll: true,
 		render: ({ instanceId }) => <DataTab instanceId={instanceId} />,
 	},
@@ -186,6 +228,9 @@ export function surfaceOwnsHeader(id: string | undefined): boolean {
 }
 
 /** Tabs visible for an instance with the given capability surfaces, in registry order. */
-export function visibleSurfaces(surfaces: string[]): SurfaceDef[] {
-	return SURFACES.filter((s) => s.show(surfaces));
+export function visibleSurfaces(caps: SurfaceCaps | string[]): SurfaceDef[] {
+	// Accepts a bare surface array so a caller with no capability object (and every existing test)
+	// keeps working — it simply means "nothing declared", which is the permissive case.
+	const c: SurfaceCaps = Array.isArray(caps) ? { surfaces: caps } : caps;
+	return SURFACES.filter((s) => s.show(c));
 }
