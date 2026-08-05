@@ -38,6 +38,8 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 	const [keepAwake, setKeepAwake] = useState(true);
 	const [repeatWords, setRepeatWords] = useState("");
 	const [muteWords, setMuteWords] = useState("");
+	const [unmuteWords, setUnmuteWords] = useState("");
+	const [exitWords, setExitWords] = useState("");
 	const [stopWords, setStopWords] = useState("");
 	const [stopSpeechKeyword, setStopSpeechKeyword] = useState("");
 	const [confirmLanguage, setConfirmLanguage] = useState(true);
@@ -61,6 +63,8 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 		setKeepAwake(vs.keepAwake !== false);
 		setRepeatWords(list(vs.repeatWords));
 		setMuteWords(list(vs.muteWords));
+		setUnmuteWords(list(vs.unmuteWords));
+		setExitWords(list(vs.exitWords));
 		setStopWords(list(vs.stopWords));
 		setStopSpeechKeyword(typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword : "");
 		setConfirmLanguage(vs.confirmLanguage !== false);
@@ -270,7 +274,17 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Mute keywords</span>
 					<input value={muteWords} onChange={(e) => setMuteWords(e.target.value)} onBlur={() => saveVoice({ muteWords })} placeholder="mute, mute mic  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say one to mute the mic until you unmute it in the app.</span>
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say one to mute the mic and stop the agent mid-sentence. Say an unmute word below to come back.</span>
+				</label>
+				<label className="block">
+					<span className="block text-xs font-semibold mb-0.5">Unmute keywords</span>
+					<input value={unmuteWords} onChange={(e) => setUnmuteWords(e.target.value)} onBlur={() => saveVoice({ unmuteWords })} placeholder="unmute, start listening  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Only listened for while you're muted, so these words can't interrupt a normal sentence. A short beep confirms the mic is live. Not available on iOS Safari, which has no background recogniser.</span>
+				</label>
+				<label className="block">
+					<span className="block text-xs font-semibold mb-0.5">Exit-voice keywords</span>
+					<input value={exitWords} onChange={(e) => setExitWords(e.target.value)} onBlur={() => saveVoice({ exitWords })} placeholder="exit voice, text mode  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Leaves voice entirely and returns to typing — unlike mute, which keeps the session live.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Stop-word — finish my turn</span>

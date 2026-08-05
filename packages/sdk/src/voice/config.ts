@@ -29,6 +29,10 @@ interface VoiceConfig {
 	 *  for repeat/mute; stopWords is off unless set. */
 	repeatWords: string[];
 	muteWords: string[];
+	/** Phrases that re-open the mic while muted (#152) — matched ONLY while muted. */
+	unmuteWords: string[];
+	/** Phrases that leave voice mode entirely and return to typing (#165). */
+	exitWords: string[];
 	stopWords: string[];
 	/** Say this word/phrase while the agent is speaking to immediately halt playback
 	 *  (e.g. "stop stop"). Empty ⇒ off. Per-instance. Case-insensitive substring match. */
@@ -92,6 +96,8 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		keepAwake: vs.keepAwake !== false,
 		repeatWords: parseWords(vs.repeatWords),
 		muteWords: parseWords(vs.muteWords),
+		unmuteWords: parseWords(vs.unmuteWords),
+		exitWords: parseWords(vs.exitWords),
 		stopWords: parseWords(vs.stopWords),
 		stopSpeechKeyword: typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword.trim().slice(0, 40) : "",
 		confirmLanguage: vs.confirmLanguage !== false, // default ON
@@ -121,6 +127,8 @@ export async function getVoiceConfig(
 		const fromProfile: Array<[string, string]> = [
 			["repeatWords", "voiceRepeatWords"],
 			["muteWords", "voiceMuteWords"],
+			["unmuteWords", "voiceUnmuteWords"],
+			["exitWords", "voiceExitWords"],
 			["stopWords", "voiceStopWords"],
 			["stopSpeechKeyword", "voiceStopSpeechKeyword"],
 		];

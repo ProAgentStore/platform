@@ -6,7 +6,7 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, shouldRunControlListener, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
 import { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -23,6 +23,34 @@ const RESTART_DELAY_MS = 350;
 // so starting hands-free anywhere stops any other hands-free already running. Holds the current
 // session's teardown callback, keyed by a stable per-hook token so a hook never stops itself.
 let activeHandsFree: { token: object; stop: () => void } | null = null;
+
+/**
+ * The "mic is live again" cue (#152). Unmuting by VOICE has no visual gesture behind it —
+ * the user is not looking at the screen, which is the whole point of hands-free — so a
+ * confirmation they can HEAR is the only signal that the command landed. Synthesised with
+ * WebAudio rather than an asset so it ships with the SDK and needs no network fetch.
+ *
+ * Deliberately short and quiet: it fires immediately before the mic opens, and anything
+ * longer would be captured as the start of the user's own turn.
+ */
+function playStartCue(): void {
+	try {
+		const Ctx = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
+			?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+		if (!Ctx) return;
+		const ctx = new Ctx();
+		const osc = ctx.createOscillator();
+		const gain = ctx.createGain();
+		osc.frequency.value = 880;
+		gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+		gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.01);
+		gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+		osc.connect(gain).connect(ctx.destination);
+		osc.start();
+		osc.stop(ctx.currentTime + 0.13);
+		osc.onended = () => { try { void ctx.close(); } catch { /* already closed */ } };
+	} catch { /* no audio context (locked tab / unsupported) — the visual pill still updates */ }
+}
 
 /**
  * Unlock browser Text-to-Speech synchronously inside a user gesture. iOS/Safari
@@ -231,8 +259,43 @@ export function useVoice(instanceId: string | undefined, opts: {
 				gateRef.current = createSpeechGate({
 					lang: voiceLangRef.current,
 					onInterim: (text) => {
+						// Control words during CAPTURE (#228). In Whisper/OpenAI mode the main path
+						// records with MediaRecorder and produces nothing until the clip uploads, and
+						// the background control listener has yielded because the mic is open — so for
+						// the whole recording window nobody was checking, and "mute" said mid-turn did
+						// nothing. This gate is already running a recognizer over the same audio for
+						// noise filtering and already has the words; scanning them here is what closes
+						// that window. Guarded so browser-dictation mode (which checks its own interim)
+						// can't fire the same command twice.
+						const now = Date.now();
+						if (
+							shouldScanGateTranscript({
+								commandsEnabled: commandsEnabledRef.current,
+								mainUsesBrowserSpeech: !sttIsWhisperRef.current,
+								paused: pausedForThinkingRef.current,
+								echoing: isEchoing(readGuard(), now),
+							})
+						) {
+							const cmd = matchVoiceCommand(
+								text,
+								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current },
+								voiceLangRef.current,
+								{ muted: mutedRef.current },
+							);
+							if (cmd) {
+								// The command IS the turn — drop the audio so it is never transcribed
+								// and sent as a chat message on top of being acted on.
+								handledUtteranceRef.current = true;
+								flushSync(() => setInterim(""));
+								if (cmd === "mute") muteFromCommandRef.current();
+								else if (cmd === "unmute") unmuteFromCommandRef.current();
+								else if (cmd === "exit") exitFromCommandRef.current();
+								else if (cmd === "repeat") repeatLastRef.current();
+								return;
+							}
+						}
 						// Ignore the agent's own voice (echo tail), and paused/muted windows.
-						if (mutedRef.current || shouldIgnoreResult(readGuard(), Date.now())) return;
+						if (mutedRef.current || shouldIgnoreResult(readGuard(), now)) return;
 						setInterim(text);
 					},
 				});
@@ -393,6 +456,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// stopWords off unless set). Read live so a settings change applies mid-session.
 	const repeatWordsRef = useRef<string[]>([]);
 	const muteWordsRef = useRef<string[]>([]);
+	const unmuteWordsRef = useRef<string[]>([]);
+	const exitWordsRef = useRef<string[]>([]);
 	const stopWordsRef = useRef<string[]>([]);
 	// Say this (normalized) word/phrase while the agent is speaking to halt playback. Empty ⇒
 	// off; when set, the recognizer is kept alive through TTS so it can hear it.
@@ -419,6 +484,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 			keepAwakeRef.current = c.keepAwake;
 			repeatWordsRef.current = c.repeatWords;
 			muteWordsRef.current = c.muteWords;
+			unmuteWordsRef.current = c.unmuteWords;
+			exitWordsRef.current = c.exitWords;
 			stopWordsRef.current = c.stopWords;
 			stopSpeechKeywordRef.current = c.stopSpeechKeyword;
 			confirmLanguageRef.current = c.confirmLanguage;
@@ -591,6 +658,32 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const muteFromCommandRef = useRef(muteFromCommand);
 	muteFromCommandRef.current = muteFromCommand;
 
+	// "unmute" voice command → re-open the mic (#152). The SINGLE unmute implementation:
+	// toggleMute delegates here rather than repeating it, because this is where the
+	// stale-ref trap lives — startListening bails on `mutedRef.current`, which React only
+	// refreshes on the next render, so a version that set state alone left the mic shut and
+	// looked exactly like the bug this command exists to fix.
+	const unmuteFromCommand = useCallback(() => {
+		mutedRef.current = false;
+		setMuted(false);
+		playStartCue();
+		if (convoOnRef.current && !pausedForThinkingRef.current) startListening();
+	}, [startListening]);
+	const unmuteFromCommandRef = useRef(unmuteFromCommand);
+	unmuteFromCommandRef.current = unmuteFromCommand;
+
+	// "exit voice" voice command (#165) → leave voice entirely and go back to typing.
+	// setVoiceMode is defined far below (it depends on toggleConvo), so it is reached through
+	// a ref rather than hoisted — the control listener has to be able to call it from here.
+	const setVoiceModeRef = useRef<((m: VoiceMode) => Promise<void>) | null>(null);
+	const exitFromCommand = useCallback(() => {
+		mutedRef.current = false; // don't leave a muted flag behind for the next voice session
+		setMuted(false);
+		void setVoiceModeRef.current?.("text");
+	}, []);
+	const exitFromCommandRef = useRef(exitFromCommand);
+	exitFromCommandRef.current = exitFromCommand;
+
 	// ── Always-on background control-word listener (#153) ──────────────────────────────────
 	// The mute (and stop-speech) commands used to be reachable ONLY inside the main
 	// transcription paths — i.e. only while the mic was actively recording a user turn. So
@@ -612,10 +705,17 @@ export function useVoice(instanceId: string | undefined, opts: {
 			speakEndedAtRef.current = Date.now();
 			return;
 		}
-		// Mute command — honored at ANY time (mutes the mic AND cancels TTS via muteFromCommand).
-		if (matchVoiceCommand(text, { mute: muteWordsRef.current }, voiceLangRef.current) === "mute") {
-			muteFromCommandRef.current();
-		}
+		// Control words — honored at ANY time. `muted` is passed so unmute is matched ONLY while
+		// muted (and mute/repeat are inert there); see matchVoiceCommand.
+		const cmd = matchVoiceCommand(
+			text,
+			{ mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current },
+			voiceLangRef.current,
+			{ muted: mutedRef.current },
+		);
+		if (cmd === "mute") muteFromCommandRef.current();
+		else if (cmd === "unmute") unmuteFromCommandRef.current();
+		else if (cmd === "exit") exitFromCommandRef.current();
 	}, []);
 	const handleControlResultRef = useRef(handleControlResult);
 	handleControlResultRef.current = handleControlResult;
@@ -681,7 +781,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const pending = convoOnRef.current && !sttIsWhisperRef.current ? pendingTextRef.current : "";
 			const combined = `${pending} ${text}`.trim();
 			const cmd = combined
-				? matchVoiceCommand(combined, { repeat: repeatWordsRef.current, mute: muteWordsRef.current }, voiceLangRef.current)
+				? matchVoiceCommand(
+						combined,
+						{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current },
+						voiceLangRef.current,
+						{ muted: mutedRef.current },
+					)
 				: null;
 			if (cmd) {
 				handledUtteranceRef.current = true;
@@ -692,7 +797,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 					repeatLastRef.current();
 				} else {
 					flushSync(() => setInterim(""));
-					muteFromCommandRef.current();
+					if (cmd === "mute") muteFromCommandRef.current();
+					else if (cmd === "unmute") unmuteFromCommandRef.current();
+					else exitFromCommandRef.current();
 				}
 				return;
 			}
@@ -700,7 +807,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 		// Conversation mode.
 		if (convoOnRef.current) {
-			const cmdWords = { repeat: repeatWordsRef.current, mute: muteWordsRef.current };
+			const cmdWords = { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current };
 			// Finalize a hands-free turn: honor a repeat/mute command, else strip a trailing
 			// stop-word and send. Shared by the Whisper path, the silence timer, and the
 			// stop-word early-flush so all three behave identically.
@@ -785,7 +892,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 				setMicOn(false);
 			});
 			if (commandsEnabledRef.current) {
-				const cmd = matchVoiceCommand(text.trim(), { repeat: repeatWordsRef.current, mute: muteWordsRef.current }, voiceLangRef.current);
+				const cmd = matchVoiceCommand(
+					text.trim(),
+					{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current },
+					voiceLangRef.current,
+					{ muted: mutedRef.current },
+				);
 				if (cmd === "repeat") { repeatLastRef.current(); return; }
 				if (cmd === "mute") { muteFromCommandRef.current(); return; }
 			}
@@ -811,6 +923,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 			keepAwakeRef.current = c.keepAwake;
 			repeatWordsRef.current = c.repeatWords;
 			muteWordsRef.current = c.muteWords;
+			unmuteWordsRef.current = c.unmuteWords;
+			exitWordsRef.current = c.exitWords;
 			stopWordsRef.current = c.stopWords;
 			stopSpeechKeywordRef.current = c.stopSpeechKeyword;
 			confirmLanguageRef.current = c.confirmLanguage;
@@ -1120,24 +1234,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	const toggleMute = useCallback(() => {
 		if (muted) {
-			// Unmute: resume listening. Flip the REF now, not just the state — startListening
-			// bails on `mutedRef.current`, which React only refreshes on the next render. So
-			// calling it synchronously here read the stale `true` and the mic never reopened
-			// (unmute did nothing). beginTalk sets the ref directly for the same reason.
-			mutedRef.current = false;
-			setMuted(false);
-			if (convoOnRef.current && !pausedForThinkingRef.current) {
-				startListening();
-			}
+			// ONE unmute implementation, shared with the voice command — see unmuteFromCommand
+			// for the stale-ref trap it exists to contain.
+			unmuteFromCommandRef.current();
 		} else {
-			// Mute: stop mic but keep convo mode on
+			// Mute: stop mic but keep convo mode on. Flip the ref too, not just state: several
+			// guards (canOpenMic, the gate's onInterim) read the REF, and React only refreshes
+			// it on the next render.
+			mutedRef.current = true;
 			setMuted(true);
 			sttRef.current?.stop();
 			stopAudioMonitor();
 			setMicOn(false);
 			setInterim("");
 		}
-	}, [muted, startListening, stopAudioMonitor]);
+	}, [muted, stopAudioMonitor]);
 
 	// The three modes are derived from the primitives so there's ONE source of truth:
 	// hands-free ⇒ continuous convo; ptt ⇒ replies aloud but no continuous listen; text
@@ -1186,6 +1297,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 			void ensureTts().then((t) => t.unlock()).catch(() => {});
 		}
 	}, [toggleConvo, ensureTts, stopAudioMonitor]);
+	// Reachable from the control listener, which is declared far above this (see exitFromCommand).
+	setVoiceModeRef.current = setVoiceMode;
 
 	return {
 		/** The active interaction mode + the ONLY setter the UI needs. */

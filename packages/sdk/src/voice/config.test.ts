@@ -141,3 +141,17 @@ describe("resolveVoiceConfig — clamping", () => {
 		expect(resolveVoiceConfig({ sttModel: 42 }, true).sttModel).toBe("gpt-4o-transcribe");
 	});
 });
+
+describe("unmute/exit words (#152/#165) follow the same precedence as mute", () => {
+	it("parses both from the instance voice settings", () => {
+		const c = resolveVoiceConfig({ unmuteWords: "wake up, listen", exitWords: "bye voice" }, false);
+		expect(c.unmuteWords).toEqual(["wake up", "listen"]);
+		expect(c.exitWords).toEqual(["bye voice"]);
+	});
+
+	it("defaults to empty (⇒ built-in per-language phrasings) when unset", () => {
+		const c = resolveVoiceConfig({}, false);
+		expect(c.unmuteWords).toEqual([]);
+		expect(c.exitWords).toEqual([]);
+	});
+})

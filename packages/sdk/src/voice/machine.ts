@@ -86,6 +86,11 @@ export function derivePhase(s: {
 	if (s.speaking) return "speaking";
 	if (s.mode === "text") return "idle";
 	if (s.transcribing) return "transcribing";
-	if (s.mode === "handsfree" && s.muted) return "muted";
+	// Muted is reported in ANY voice mode, not just hands-free (#228). The mute VOICE command
+	// is reachable in tap-to-talk too (the control listener runs whenever `speakOn`), but the
+	// Mute button is rendered only in hands-free — so a ptt user who said "mute" saw the pill
+	// read "idle" with no muted state anywhere. The next tap clears it (beginTalk), so nothing
+	// is stuck; the only feedback the user got was simply wrong.
+	if (s.muted) return "muted";
 	return s.micOn ? "listening" : "idle";
 }

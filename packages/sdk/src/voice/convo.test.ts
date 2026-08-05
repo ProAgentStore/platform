@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
+import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -268,5 +268,80 @@ describe("transcriptLanguageMismatch (#126 — never assume a different language
 		expect(transcriptLanguageMismatch("네", "en-US")).toBe(false); // 1 letter — not enough signal
 		expect(transcriptLanguageMismatch("", "en-US")).toBe(false);
 		expect(transcriptLanguageMismatch("안녕하세요", "xx-YY")).toBe(false); // unmapped language → never flag
+	});
+});
+
+// ── unmute (#152) / exit (#165) / mute reachability (#228) ───────────────────
+describe("matchVoiceCommand — unmute, gated on actually being muted", () => {
+	it("matches the built-in unmute phrasings while muted", () => {
+		for (const p of ["unmute", "unmute mic", "start listening", "wake up"]) {
+			expect(matchVoiceCommand(p, undefined, "en-US", { muted: true })).toBe("unmute");
+		}
+	});
+
+	// Without the state gate, "unmute" would fire on someone merely SAYING the word — e.g.
+	// reading instructions aloud, or a reply that explains the feature.
+	it("does not match unmute when not muted", () => {
+		expect(matchVoiceCommand("unmute", undefined, "en-US", { muted: false })).toBeNull();
+		expect(matchVoiceCommand("unmute", undefined, "en-US")).toBeNull();
+	});
+
+	// The bug this ordering exists to prevent: several languages build the unmute phrase out
+	// of the mute phrase, so a mute-first check would swallow it.
+	it("prefers unmute over mute in languages where one contains the other", () => {
+		expect(matchVoiceCommand("stummschaltung aufheben", undefined, "de-DE", { muted: true })).toBe("unmute");
+		expect(matchVoiceCommand("取消静音", undefined, "zh-CN", { muted: true })).toBe("unmute");
+	});
+
+	it("while muted, mute and repeat are inert — silence was the point", () => {
+		expect(matchVoiceCommand("mute", undefined, "en-US", { muted: true })).toBeNull();
+		expect(matchVoiceCommand("repeat", undefined, "en-US", { muted: true })).toBeNull();
+	});
+
+	it("keeps whole-utterance precision for unmute", () => {
+		expect(matchVoiceCommand("unmute the alarm please", undefined, "en-US", { muted: true })).toBeNull();
+	});
+});
+
+describe("matchVoiceCommand — exit voice mode (#165)", () => {
+	it("matches exit phrasings whether muted or not — it is the way out of both", () => {
+		expect(matchVoiceCommand("exit voice", undefined, "en-US", { muted: false })).toBe("exit");
+		expect(matchVoiceCommand("exit voice", undefined, "en-US", { muted: true })).toBe("exit");
+		expect(matchVoiceCommand("text mode", undefined, "en-US")).toBe("exit");
+	});
+
+	it("is multi-word, so it may appear inside a longer utterance", () => {
+		expect(matchVoiceCommand("okay exit voice mode now", undefined, "en-US")).toBe("exit");
+	});
+
+	it("custom words replace the built-ins, as for repeat/mute", () => {
+		expect(matchVoiceCommand("bye voice", { exit: ["bye voice"] }, "en-US")).toBe("exit");
+		expect(matchVoiceCommand("exit voice", { exit: ["bye voice"] }, "en-US")).toBeNull();
+	});
+});
+
+describe("shouldScanGateTranscript (#228)", () => {
+	const base = { commandsEnabled: true, mainUsesBrowserSpeech: false, paused: false, echoing: false };
+
+	// The actual bug: in Whisper mode the main path has no interim during capture and the
+	// control listener has yielded, so the gate's words are the only ones available.
+	it("scans the gate when the main path is Whisper", () => {
+		expect(shouldScanGateTranscript(base)).toBe(true);
+	});
+
+	// Browser dictation already checks its own interim — scanning both would fire one spoken
+	// command twice from two recognizers reading the same audio.
+	it("does not scan when the main path is browser dictation", () => {
+		expect(shouldScanGateTranscript({ ...base, mainUsesBrowserSpeech: true })).toBe(false);
+	});
+
+	it("respects the commands toggle", () => {
+		expect(shouldScanGateTranscript({ ...base, commandsEnabled: false })).toBe(false);
+	});
+
+	// The agent's own TTS bleeding into the mic must not be able to command it.
+	it("does not scan while paused or echoing", () => {
+		expect(shouldScanGateTranscript({ ...base, paused: true })).toBe(false);
+		expect(shouldScanGateTranscript({ ...base, echoing: true })).toBe(false);
 	});
 });

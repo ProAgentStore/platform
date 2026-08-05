@@ -61,6 +61,10 @@ export interface VoiceSettings {
 	keepAwake: boolean;
 	repeatWords: string[];
 	muteWords: string[];
+	/** Phrases that re-open the mic while muted (#152). */
+	unmuteWords: string[];
+	/** Phrases that leave voice mode entirely (#165). */
+	exitWords: string[];
 	stopWords: string[];
 	stopSpeechKeyword: string;
 	confirmLanguage: boolean;
@@ -110,6 +114,8 @@ export function defaultVoiceSettings(): VoiceSettings {
 		keepAwake: true,
 		repeatWords: [],
 		muteWords: [],
+		unmuteWords: [],
+		exitWords: [],
 		stopWords: [],
 		stopSpeechKeyword: "",
 		confirmLanguage: true,
@@ -150,6 +156,8 @@ export function sanitizeVoiceSettings(raw: unknown, base: VoiceSettings = defaul
 		keepAwake: has("keepAwake") ? o.keepAwake !== false : base.keepAwake,
 		repeatWords: has("repeatWords") ? parseVoiceWords(o.repeatWords) : base.repeatWords,
 		muteWords: has("muteWords") ? parseVoiceWords(o.muteWords) : base.muteWords,
+		unmuteWords: has("unmuteWords") ? parseVoiceWords(o.unmuteWords) : base.unmuteWords,
+		exitWords: has("exitWords") ? parseVoiceWords(o.exitWords) : base.exitWords,
 		stopWords: has("stopWords") ? parseVoiceWords(o.stopWords) : base.stopWords,
 		stopSpeechKeyword: typeof o.stopSpeechKeyword === "string" ? o.stopSpeechKeyword.trim().slice(0, 40) : base.stopSpeechKeyword,
 		confirmLanguage: has("confirmLanguage") ? o.confirmLanguage !== false : base.confirmLanguage,

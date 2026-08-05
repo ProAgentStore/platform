@@ -103,16 +103,52 @@ export function resolveVoiceStatus(input: {
 }
 
 /** A spoken command the hook acts on locally instead of sending as a chat message. */
-export type VoiceCommand = "repeat" | "mute";
+export type VoiceCommand = "repeat" | "mute" | "unmute" | "exit";
 
 /** Per-instance overrides for the command keywords (Settings → Voice). Empty/absent =
- *  use the built-in defaults for repeat + mute; stop-words are OFF unless configured. */
+ *  use the built-in defaults for repeat/mute/unmute/exit; stop-words are OFF unless configured. */
 export interface VoiceCommandWords {
 	/** Phrases that re-speak the last reply. Overrides the built-in multilingual set. */
 	repeat?: string[];
-	/** Phrases that mute the mic until the user unmutes in the app. */
+	/** Phrases that mute the mic. */
 	mute?: string[];
+	/** Phrases that re-open the mic while muted (#152). */
+	unmute?: string[];
+	/** Phrases that leave voice entirely and return to text mode (#165). */
+	exit?: string[];
 }
+
+/** "Unmute" phrasings per language. The mirror of MUTE_BY_LANG — matched ONLY while muted
+ *  (see matchVoiceCommand), so these words are inert during a normal turn and can't hijack
+ *  ordinary speech. */
+const UNMUTE_BY_LANG: Record<string, string[]> = {
+	en: ["unmute", "unmute mic", "unmute the mic", "unmute microphone", "start listening", "resume listening", "listen up", "wake up"],
+	es: ["reactivar", "activar micrófono", "escucha", "vuelve a escuchar"],
+	fr: ["réactive le micro", "reprends l'écoute", "écoute moi"],
+	de: ["stummschaltung aufheben", "hör wieder zu", "wach auf"],
+	it: ["riattiva", "riattiva il microfono", "ascolta"],
+	pt: ["reativar", "reativar microfone", "volte a ouvir"],
+	zh: ["取消静音", "开麦", "开始听"],
+	ja: ["ミュート解除", "聞いて"],
+	ko: ["음소거 해제", "들어봐"],
+	hi: ["अनम्यूट", "फिर से सुनो"],
+};
+
+/** "Exit voice" phrasings per language (#165) — leave voice mode entirely and go back to
+ *  typing. Distinct from mute: mute keeps the session live and listening for control words,
+ *  exit tears the whole thing down. */
+const EXIT_BY_LANG: Record<string, string[]> = {
+	en: ["exit voice", "exit voice mode", "stop voice", "stop voice mode", "leave voice", "text mode", "switch to text", "back to text"],
+	es: ["salir de voz", "modo texto", "cambiar a texto"],
+	fr: ["quitter la voix", "mode texte", "passer au texte"],
+	de: ["sprachmodus beenden", "textmodus", "zurück zum text"],
+	it: ["esci dalla voce", "modalità testo"],
+	pt: ["sair da voz", "modo texto"],
+	zh: ["退出语音", "文字模式", "切换到文字"],
+	ja: ["音声モード終了", "テキストモード"],
+	ko: ["음성 모드 종료", "텍스트 모드"],
+	hi: ["वॉइस बंद करो", "टेक्स्ट मोड"],
+};
 
 /** "Mute" phrasings per language (2-letter code). Whole-utterance only. English is the
  *  built-in baseline; other-language users add their own words in Settings → Voice. */
@@ -228,13 +264,34 @@ export function phraseMatchesTranscript(normalizedTranscript: string, phrase: st
  * won't trigger on a Chinese phrase. Custom `words` from Settings/Profile REPLACE the built-ins
  * and apply in any language (the user chose them explicitly).
  */
-export function matchVoiceCommand(text: string, words?: VoiceCommandWords, lang?: string): VoiceCommand | null {
+export function matchVoiceCommand(
+	text: string,
+	words?: VoiceCommandWords,
+	lang?: string,
+	state?: { muted?: boolean },
+): VoiceCommand | null {
 	const t = normalizeTranscript(text);
 	const l = langKey(lang);
-	const repeat = words?.repeat?.length ? words.repeat : (REPEAT_BY_LANG[l] ?? REPEAT_BY_LANG.en);
-	const mute = words?.mute?.length ? words.mute : (MUTE_BY_LANG[l] ?? MUTE_BY_LANG.en);
-	if (repeat.some((p) => phraseMatchesTranscript(t, p))) return "repeat";
-	if (mute.some((p) => phraseMatchesTranscript(t, p))) return "mute";
+	const pick = (custom: string[] | undefined, table: Record<string, string[]>) =>
+		custom?.length ? custom : (table[l] ?? table.en);
+	const hit = (phrases: string[]) => phrases.some((p) => phraseMatchesTranscript(t, p));
+
+	// Order matters. "unmute" is checked FIRST and only while muted: several languages build
+	// the unmute phrase out of the mute phrase (de "stummschaltung aufheben" contains "stumm"),
+	// so a mute-first order would swallow it. English is safe by whole-utterance matching —
+	// other languages are not.
+	if (state?.muted) {
+		// While muted the ONLY meaningful commands are unmute and exit. Checking mute here
+		// would be a no-op at best; checking repeat would speak while the user asked for silence.
+		if (hit(pick(words?.unmute, UNMUTE_BY_LANG))) return "unmute";
+		if (hit(pick(words?.exit, EXIT_BY_LANG))) return "exit";
+		return null;
+	}
+	// Not muted: unmute is meaningless, and matching it here would fire on someone SAYING the
+	// word ("say unmute to turn the mic back on") rather than commanding it.
+	if (hit(pick(words?.exit, EXIT_BY_LANG))) return "exit";
+	if (hit(pick(words?.repeat, REPEAT_BY_LANG))) return "repeat";
+	if (hit(pick(words?.mute, MUTE_BY_LANG))) return "mute";
 	return null;
 }
 
@@ -249,6 +306,36 @@ export function matchVoiceCommand(text: string, words?: VoiceCommandWords, lang?
  */
 export function shouldRunControlListener(s: { engaged: boolean; mainRecording: boolean }): boolean {
 	return s.engaged && !s.mainRecording;
+}
+
+/**
+ * Should a live transcript chunk be scanned for control words (#228)?
+ *
+ * The control listener above yields whenever the main mic is capturing, which left a hole: it
+ * assumed the main path checks control words during capture, and that is only true for browser
+ * DICTATION (which emits interim results live). The Whisper/OpenAI path records with
+ * MediaRecorder and produces nothing until the clip is uploaded — so for the whole recording
+ * window nobody was checking, and "mute" said mid-turn did nothing until end-of-turn (or never,
+ * if it wasn't the entire utterance).
+ *
+ * In that mode the speech GATE is already running a browser recognizer over the same audio for
+ * noise filtering, and already has the words. This is the predicate for using them: scan the
+ * gate's transcript exactly when the main path can't do it itself.
+ *
+ * `paused` covers the reply-in-flight window (the gate keeps running across it) and `echoing`
+ * the TTS tail, so the agent's own voice can't issue commands to it.
+ */
+export function shouldScanGateTranscript(s: {
+	commandsEnabled: boolean;
+	mainUsesBrowserSpeech: boolean;
+	paused: boolean;
+	echoing: boolean;
+}): boolean {
+	if (!s.commandsEnabled) return false;
+	// Browser dictation already checks control words on its own interim results; scanning the
+	// gate too would double-fire the same command from two recognizers on the same audio.
+	if (s.mainUsesBrowserSpeech) return false;
+	return !s.paused && !s.echoing;
 }
 
 /**
