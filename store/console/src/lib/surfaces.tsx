@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { CodingTab } from "@proagentstore/coder-web";
 import ActivityTab from "../tabs/ActivityTab";
+import BehaviourTab from "../tabs/BehaviourTab";
 import BoardTab from "../tabs/BoardTab";
 import DataTab from "../tabs/DataTab";
 import IndexingTab from "../tabs/IndexingTab";
@@ -23,7 +24,7 @@ import type { BoardColumn, SettingsField } from "./types";
 // See ../../../PLAN-agent-os.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "tmux" | "activity" | "indexing" | "knowledge" | "data" | "settings";
+export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "tmux" | "activity" | "indexing" | "knowledge" | "behaviour" | "data" | "settings";
 
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
@@ -191,6 +192,19 @@ export const SURFACES: SurfaceDef[] = [
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId, isApply }) => <KnowledgeTab instanceId={instanceId} isApply={isApply} />,
+	},
+	{
+		id: "behaviour",
+		label: "Behaviour",
+		icon: "🎭",
+		// How the agent COMMUNICATES — distinct from Settings (what it IS: repo, engine, runner)
+		// and Knowledge (what it KNOWS). Universal: every agent has a manner, and before this it
+		// was configurable nowhere, which is why an agent asked to be less technical stored the
+		// preference in Memory. Registered here rather than hardcoded into the page so it obeys the
+		// same rules as every other tab.
+		show: () => true,
+		scroll: true,
+		render: ({ instanceId }) => <BehaviourTab instanceId={instanceId} />,
 	},
 	{
 		id: "indexing",
