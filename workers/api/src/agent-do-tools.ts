@@ -27,6 +27,14 @@ const BASE = [
 	"configure_board",
 	// Start a declarative data pipeline the owner configured on this instance (#97).
 	"run_pipeline",
+	// Hand a goal to the agent's OWN executor (its Pilot), when it has one.
+	//
+	// Without this a Repo Coder's chat could not act at all: `drive:false` correctly removes the
+	// engine tools — a chat driving the CLI would be a second, uncoordinated driver — but nothing
+	// replaced them. Asked to "just do it", the agent reached for the only action-shaped tool it
+	// had, invented a pipeline named "coding", failed, and then told the user the engine was
+	// running. It refuses cleanly on an agent with no separate executor.
+	"start_work",
 ] as const;
 
 /** Read the vector knowledge base (RAG). Only agents that HAVE an index get these. */

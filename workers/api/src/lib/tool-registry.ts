@@ -10,6 +10,9 @@ import { connectorTools, getConnector } from "./connectors/registry.js";
 import { connectorClient, type ConnectorClient } from "./connectors/client.js";
 import { hasConsent } from "./connector-consent.js";
 import { STEP_TOOLS } from "./steps.js";
+import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
+import { capabilitiesForInstance } from "./agent-capabilities.js";
+import { openBudget } from "./delegation-budget-store.js";
 
 export interface RegistryToolCtx {
 	env: Env;
@@ -94,6 +97,46 @@ export type RegistryTool = ToolDef;
  * has declared on the instance ("sweep Sydney" → run the `leads` pipeline with city=Sydney).
  */
 const FIRST_PARTY_TOOLS: ToolDef[] = [
+	{
+		name: "start_work",
+		description:
+			"Hand a GOAL to this agent's own executor and let it work autonomously — the same thing the Loop button does. Use this whenever the user asks you to DO something rather than explain it. Give an outcome in plain language ('fix issue #83 and merge it'), not a single command. It runs durably in the background and reports each step back into this conversation; say it has started, do not claim it has finished.",
+		tier: "base",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				objective: { type: "string", description: "The outcome you want, in plain language." },
+				maxIterations: { type: "number", description: "Optional cap on how many steps it may take (default 10)." },
+			},
+			required: ["objective"],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "start_work needs an owned instance context.", success: false };
+			const objective = String(input.objective ?? "").trim();
+			if (!objective) return { content: "start_work needs an objective.", success: false };
+			const caps = await capabilitiesForInstance(ctx.env, ctx.instanceId, ctx.userId);
+			const driver = loopDriverFor(caps);
+			// Only where handing work to a DIFFERENT executor means something. On a plain chat agent
+			// the driver IS this chat, so starting one from inside it would be the chat looping
+			// itself — recursion dressed as delegation.
+			if (driver.id === DEFAULT_LOOP_DRIVER.id) {
+				return { content: "This agent has no separate executor to hand work to — do it with your own tools instead.", success: false };
+			}
+			const budget = await openBudget(ctx.env, ctx.userId, ctx.instanceId);
+			const started = await driver.start({
+				env: ctx.env,
+				instanceId: ctx.instanceId,
+				userId: ctx.userId,
+				objective,
+				maxIterations: typeof input.maxIterations === "number" ? input.maxIterations : undefined,
+				budgetId: budget.id,
+				depth: 0,
+			});
+			return started.ok
+				? { content: `Started work on: ${objective} (run ${started.runId}). It reports progress into this conversation.`, success: true }
+				: { content: started.error, success: false };
+		},
+	},
 	{
 		name: "run_pipeline",
 		description:
