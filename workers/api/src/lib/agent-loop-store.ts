@@ -20,6 +20,8 @@ export interface LoopRunRow {
 	budget_id: string | null;
 	started_at: number;
 	finished_at: number | null;
+	/** ms epoch of the last recorded iteration (0067). Null for a run that never reported. */
+	last_progress_at: number | null;
 }
 
 export interface LoopRunView {
@@ -35,6 +37,10 @@ export interface LoopRunView {
 	budgetId: string | null;
 	startedAt: number;
 	finishedAt: number | null;
+	/** ms epoch of the last recorded iteration. A `running` run whose value is far in the past is
+	 *  stalled — the only queryable staleness signal there is, since a Workflow that dies mid-step
+	 *  leaves `status` at `running` forever. */
+	lastProgressAt: number | null;
 }
 
 export function toLoopRunView(row: LoopRunRow): LoopRunView {
@@ -51,6 +57,7 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		budgetId: row.budget_id,
 		startedAt: row.started_at,
 		finishedAt: row.finished_at,
+		lastProgressAt: row.last_progress_at ?? null,
 	};
 }
 
@@ -91,8 +98,14 @@ export async function listLoopRuns(env: Env, userId: string, instanceId: string,
 }
 
 /** Record progress mid-run so a watching console sees movement without the workflow finishing. */
-export async function recordIteration(env: Env, runId: string, iteration: number): Promise<void> {
-	await env.DB.prepare("UPDATE agent_loop_runs SET iteration = ?2 WHERE run_id = ?1").bind(runId, iteration).run();
+/**
+ * Record progress. `at` defaults to now, so every existing caller starts writing the staleness
+ * signal with no change — `AgentLoopWorkflow` already calls this once per iteration.
+ */
+export async function recordIteration(env: Env, runId: string, iteration: number, at: number = Date.now()): Promise<void> {
+	await env.DB.prepare("UPDATE agent_loop_runs SET iteration = ?2, last_progress_at = ?3 WHERE run_id = ?1")
+		.bind(runId, iteration, at)
+		.run();
 }
 
 /**

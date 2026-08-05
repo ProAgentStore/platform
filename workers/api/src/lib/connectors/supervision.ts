@@ -20,28 +20,46 @@ import { delegateToInstance } from "../delegate-instance.js";
 import { getLoopRun, listLoopRuns } from "../agent-loop-store.js";
 import { loadGraph } from "../supervision.js";
 import { subordinatesOf } from "../supervision-graph.js";
+import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "../agent-capabilities.js";
+import { recentRunsForInstances, recentWorkForInstances } from "../instance-work.js";
+import { summarizeSubordinates } from "../subordinate-observation.js";
 import type { ToolDef } from "../tool-registry.js";
 
 /** Names of the instances a supervisor may drive, with their display names for the model. */
+interface SubordinateRow {
+	instanceId: string;
+	name: string;
+	/** `active | paused | canceled` — the SUBSCRIPTION lifecycle, not work state. */
+	subscription: string;
+	/** Resolved per-instance override → agent declaration → per-surface default. */
+	columns: BoardColumn[];
+}
+
 async function subordinateSummaries(
 	ctx: { env: { DB: D1Database }; userId?: string; instanceId?: string },
-): Promise<Array<{ instanceId: string; name: string; status: string }>> {
+	only?: string,
+): Promise<SubordinateRow[]> {
 	const userId = ctx.userId ?? "";
 	const supervisorId = ctx.instanceId ?? "";
 	if (!userId || !supervisorId) return [];
-	const ids = subordinatesOf(await loadGraph(ctx.env as never, userId), supervisorId);
+	let ids = subordinatesOf(await loadGraph(ctx.env as never, userId), supervisorId);
+	// A named instance is INTERSECTED with the graph, never trusted — same posture as
+	// delegate_goal, which re-checks membership inside delegateToInstance rather than relying on
+	// the tool description to discourage a model from naming someone else's agent.
+	if (only) ids = ids.filter((id) => id === only);
 	if (!ids.length) return [];
 	const placeholders = ids.map((_, i) => `?${i + 2}`).join(",");
 	// `agent_instances` has NO name column — a per-instance display name lives in
 	// config.displayName (set by PUT /:id/name), and everything else falls back to the template's
 	// name. Selecting i.name is a D1 error, not an empty result, so it takes the whole tool down.
 	const res = await ctx.env.DB.prepare(
-		`SELECT i.id AS id, i.status AS status, i.config AS config, a.name AS agent_name
+		`SELECT i.id AS id, i.status AS status, i.config AS config, a.name AS agent_name,
+		        a.slug AS slug, a.category AS category, a.config AS agent_config
 		   FROM agent_instances i LEFT JOIN agents a ON a.id = i.agent_id
 		  WHERE i.user_id = ?1 AND i.id IN (${placeholders})`,
 	)
 		.bind(userId, ...ids)
-		.all<{ id: string; status: string; config: string | null; agent_name: string | null }>();
+		.all<{ id: string; status: string; config: string | null; agent_name: string | null; slug: string | null; category: string | null; agent_config: string | null }>();
 	return (res.results ?? []).map((r) => {
 		let displayName: string | null = null;
 		try {
@@ -50,9 +68,26 @@ async function subordinateSummaries(
 		} catch {
 			// A malformed config must not hide the subordinate — fall back to the template name.
 		}
-		return { instanceId: r.id, name: displayName ?? r.agent_name ?? r.id, status: r.status };
+		// The subordinate's OWN status vocabulary, resolved the same way boardConfigForInstance
+		// does: per-instance override → agent declaration → per-surface default. This is what lets
+		// a supervisor interpret a free-text status without holding any vocabulary of its own.
+		let override: BoardColumn[] | undefined;
+		try {
+			override = sanitizeBoardColumns((JSON.parse(r.config ?? "{}") as { boardColumns?: unknown }).boardColumns);
+		} catch {
+			/* malformed config — fall through to the agent's declared columns */
+		}
+		const declared = agentCapabilities({ slug: r.slug ?? undefined, category: r.category ?? undefined, config: r.agent_config ?? undefined }).boardColumns;
+		return {
+			instanceId: r.id,
+			name: displayName ?? r.agent_name ?? r.id,
+			subscription: r.status,
+			columns: override ?? declared,
+		};
 	});
 }
+
+const NO_SUBORDINATES = "You do not supervise any agents yet. Add a supervision link in Settings first.";
 
 export const SUPERVISION_TOOLS: ToolDef[] = [
 	{
@@ -61,17 +96,56 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		connector: "supervision",
 		scope: "read",
 		description:
-			"List the agents this one supervises — their instance id, name and status. Call this first to find out who you can delegate to; you may only delegate to agents that appear here.",
+			"The roster of agents this one supervises — instance id, name, and SUBSCRIPTION state (active/paused), which is NOT what they are doing. Use subordinate_status to see what each is working on. You may only delegate to agents that appear here.",
 		jsonSchema: { type: "object", properties: {} },
 		handler: async (ctx) => {
 			const subs = await subordinateSummaries(ctx as never);
+			if (!subs.length) return { content: NO_SUBORDINATES, success: true };
+			// Roster only — the columns are an implementation detail of subordinate_status.
+			const roster = subs.map((s) => ({ instanceId: s.instanceId, name: s.name, subscription: s.subscription }));
+			return { content: JSON.stringify(roster, null, 2), success: true };
+		},
+	},
+	{
+		name: "subordinate_status",
+		tier: "connector",
+		connector: "supervision",
+		scope: "read",
+		description:
+			"What every agent you supervise is doing RIGHT NOW, in one call: what each is working on, " +
+			"what finished, what is waiting on a human, and how long anything has been quiet. Call this " +
+			"FIRST whenever you are asked about status, progress, or what is happening, and answer from " +
+			"it — never start a run just to find out. Each item's `status` is that agent's own word for " +
+			"it; `columnTitle` is what THAT agent says the word means.",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				instanceId: { type: "string", description: "Only this subordinate. Omit for all of them." },
+				limit: { type: "number", description: "Recent items per agent (1-25, default 8)." },
+			},
+		},
+		handler: async (ctx, input) => {
+			const only = typeof input.instanceId === "string" && input.instanceId.trim() ? input.instanceId.trim() : undefined;
+			const subs = await subordinateSummaries(ctx as never, only);
 			if (!subs.length) {
 				return {
-					content: "You do not supervise any agents yet. Add a supervision link in Settings first.",
+					content: only
+						? "You do not supervise that agent. Call list_subordinates to see who you may address."
+						: NO_SUBORDINATES,
 					success: true,
 				};
 			}
-			return { content: JSON.stringify(subs, null, 2), success: true };
+			const env = (ctx as { env: never }).env;
+			const userId = (ctx as { userId?: string }).userId ?? "";
+			const ids = subs.map((s) => s.instanceId);
+			const perInstance = typeof input.limit === "number" ? input.limit : undefined;
+			// Two statements total, regardless of fan-out — see instance-work.ts.
+			const [work, runs] = await Promise.all([
+				recentWorkForInstances(env, userId, ids, perInstance).catch(() => []),
+				recentRunsForInstances(env, userId, ids).catch(() => []),
+			]);
+			const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
+			return { content: JSON.stringify({ asOf: new Date().toISOString(), ...view }, null, 2), success: true };
 		},
 	},
 	{

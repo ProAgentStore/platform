@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentCapabilities, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
+import { agentCapabilities, columnForStatus, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
 import { optionsFor } from "./surface-options.js";
 
 describe("agentCapabilities", () => {
@@ -312,5 +312,43 @@ describe("agentCapabilities — surfaceOptions must SURVIVE resolution", () => {
 		const caps = agentCapabilities({ slug: "coder", category: "code", config: JSON.stringify({ capabilities: { surfaceOptions: { coding: { repos: "single" } } } }) });
 		expect(caps.surfaces).toContain("coding"); // derived, not declared
 		expect(caps.surfaceOptions).toEqual({ coding: { repos: "single" } });
+	});
+});
+
+describe("columnForStatus — the canonical bucketing rule", () => {
+	const cols = [
+		{ id: "running", title: "Running", color: "#000", statuses: ["running", "in_progress"] },
+		{ id: "needs_human", title: "Needs you", color: "#000", statuses: ["needs_human"] },
+		{ id: "other", title: "Other", color: "#000", catchAll: true },
+	];
+
+	it("matches a declared status", () => {
+		expect(columnForStatus(cols, "in_progress")?.id).toBe("running");
+	});
+
+	it("also matches a column's own id — the two existing copies do, so this must too", () => {
+		// store/console BoardTab and workers/mcp shared.ts both accept `c.id === status`; a
+		// canonical rule that dropped it would silently re-bucket live cards.
+		expect(columnForStatus(cols, "needs_human")?.id).toBe("needs_human");
+		expect(columnForStatus([{ id: "blocked", title: "Blocked", color: "#000" }], "blocked")?.id).toBe("blocked");
+	});
+
+	it("first match wins, so column order is the tiebreak", () => {
+		const dup = [
+			{ id: "a", title: "A", color: "#000", statuses: ["x"] },
+			{ id: "b", title: "B", color: "#000", statuses: ["x"] },
+		];
+		expect(columnForStatus(dup, "x")?.id).toBe("a");
+	});
+
+	it("falls back to catchAll for an unclaimed status", () => {
+		expect(columnForStatus(cols, "wat")?.id).toBe("other");
+	});
+
+	it("returns null when nothing claims it and there is no catchAll — a null is information", () => {
+		// It says the agent is writing a status its own declaration never claimed, which a
+		// supervisor should surface rather than guess about.
+		expect(columnForStatus(cols.slice(0, 2), "wat")).toBeNull();
+		expect(columnForStatus([], "running")).toBeNull();
 	});
 });

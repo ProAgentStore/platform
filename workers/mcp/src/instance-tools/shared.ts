@@ -84,6 +84,14 @@ export function normalizeTriggerConfig(
 export interface BoardColumn { id: string; title: string; statuses?: string[]; catchAll?: boolean }
 export interface BoardItem { jobKey: string; title: string; subtitle?: string; description?: string; status: string; runStatus?: string; userStatus?: string | null; url?: string; attempts?: unknown[]; latestTaskId?: string }
 
+/**
+ * CANONICAL SOURCE: `workers/api/src/lib/agent-capabilities.ts` `columnForStatus`.
+ *
+ * Kept as a copy because the MCP worker is a separate deployable with its own build — it cannot
+ * import from the API worker. Same rule, deliberately: a column claims a status via `statuses[]`
+ * or by its own `id`, else the `catchAll`, else nothing. If you change one, change both (a third
+ * copy lives in `store/console/src/tabs/BoardTab.tsx` for the same reason).
+ */
 export function columnFor(cols: BoardColumn[], status: string): string | null {
 	for (const c of cols) if (c.statuses?.includes(status) || c.id === status) return c.id;
 	const catchAll = cols.find((c) => c.catchAll);

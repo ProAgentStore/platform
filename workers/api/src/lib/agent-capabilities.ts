@@ -134,6 +134,29 @@ export function defaultBoardColumns(surfaces: AgentSurface[]): BoardColumn[] {
 /** Validate a declared board-columns array (each needs id + title). Exported so the
  *  per-instance board-config override (lib/board.ts + the console/MCP/agent editors)
  *  validates columns through the exact same rules as an agent's declared columns. */
+/**
+ * Which declared column claims a raw status — the platform's canonical bucketing rule.
+ *
+ * `boardColumns` is an agent's OWN status vocabulary: it declares that its word `"needs_human"`
+ * means the column titled "Needs you". That makes it the one mechanism by which something generic
+ * (a supervisor, the board reader, MCP) can interpret a free-text `instance_runtime_tasks.status`
+ * written by a domain it knows nothing about — including a third-party agent whose columns are
+ * "Triage / Cooking / Shipped".
+ *
+ * The rule already existed twice, both OUTSIDE this worker and both matching `id === status` as
+ * well as `statuses.includes(status)`: `store/console/src/tabs/BoardTab.tsx` and
+ * `workers/mcp/src/instance-tools/shared.ts`. `board.ts` says of its own resolver, "This single
+ * resolver is shared by the board reader, the config route, MCP, and the agent tool so they can't
+ * drift" — that intent applies here too, so this is the copy to point the others at.
+ *
+ * Returns the column, or null when nothing claims the status and no catchAll exists. A null is
+ * meaningful: it says the agent's declared vocabulary does not cover a status it is writing.
+ */
+export function columnForStatus(columns: readonly BoardColumn[], status: string): BoardColumn | null {
+	for (const c of columns) if (c.statuses?.includes(status) || c.id === status) return c;
+	return columns.find((c) => c.catchAll) ?? null;
+}
+
 export function sanitizeBoardColumns(value: unknown): BoardColumn[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const out: BoardColumn[] = [];

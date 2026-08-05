@@ -94,6 +94,7 @@ const READ_ONLY_TOOLS = new Set([
 	"get_context",
 	"check_delegation",
 	"list_subordinates",
+	"subordinate_status",
 ]);
 
 export async function runAgentThink(opts: {

@@ -96,3 +96,66 @@ describe("both templates survive the platform's own validator", () => {
 		});
 	}
 });
+
+describe("0067 — the Lead's declared tools stay real and never shrink", () => {
+	// The existing parity tests read 0063 ONLY, so a tool added by a later migration is untested:
+	// `capabilities.tools` is an authoritative allowlist, so a name the template does not declare
+	// is invisible to the agent however well the registry provides it — and a name it declares
+	// that the registry does NOT provide is a silently inert agent.
+	const declared0067 = (): string[] => {
+		const sql = readFileSync(join(MIGRATIONS, "0067_supervisor_observe.sql"), "utf8");
+		const m = sql.match(/json\('(\[[^']*\])'\)/);
+		if (!m) throw new Error("0067 no longer sets capabilities.tools via json('[…]')");
+		return JSON.parse(m[1]) as string[];
+	};
+
+	it("grants the Lead subordinate_status — without it the tool exists and the agent cannot call it", () => {
+		expect(declared0067()).toContain("subordinate_status");
+	});
+
+	it("declares no tool the registry does not actually provide", async () => {
+		const { registryToolNameSet } = await import("./tool-registry.js");
+		const known = registryToolNameSet();
+		expect(declared0067().filter((n) => !known.has(n))).toEqual([]);
+	});
+
+	it("is a SUPERSET of 0063 — a later migration must not silently drop delegate_goal", () => {
+		const sql = readFileSync(join(MIGRATIONS, "0063_seed_coder2_agents.sql"), "utf8");
+		const lead = sql.slice(sql.indexOf("agent_coder_lead"));
+		const before = [...lead.matchAll(/"(list_subordinates|delegate_goal|check_delegation)"/g)].map((m) => m[1]);
+		const after = declared0067();
+        for (const name of new Set(before)) expect(after).toContain(name);
+	});
+});
+
+describe("declared board vocabularies are fully claimed by the canonical bucketer", () => {
+	it("every status a seeded agent declares resolves to one of its own columns", async () => {
+		// The drift guard. `columnForStatus` falls back to catchAll and then null, so a future
+		// agent inventing a status lands in a plausible-but-wrong bucket with no test failing —
+		// quiet wrongness in a supervisor's status read is the failure docs/supervision.md warns
+		// about. This turns that drift back into a loud failure.
+		const { columnForStatus } = await import("./agent-capabilities.js");
+		const files = ["0063_seed_coder2_agents.sql", "0057_seed_site_builder_agent.sql", "0032_seed_repo_chat_agent.sql"];
+		for (const f of files) {
+			let sql: string;
+			try {
+				sql = readFileSync(join(MIGRATIONS, f), "utf8");
+			} catch {
+				continue; // a seed that has been renamed is not this test's business
+			}
+			for (const m of sql.matchAll(/"boardColumns":(\[.*?\}\])/g)) {
+				let cols: Array<{ id: string; title: string; color: string; statuses?: string[] }>;
+				try {
+					cols = JSON.parse(m[1].replace(/\\u0027/g, "'"));
+				} catch {
+					continue;
+				}
+				for (const c of cols) {
+					for (const st of c.statuses ?? []) {
+						expect(columnForStatus(cols, st)?.id, `${f}: "${st}" is claimed by no column`).toBe(c.id);
+					}
+				}
+			}
+		}
+	});
+});

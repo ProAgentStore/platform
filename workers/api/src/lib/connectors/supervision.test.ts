@@ -13,7 +13,7 @@ const tool = (name: string) => {
  * one is an error rather than a null. Live use hit exactly this — `SELECT i.name` took the whole
  * tool down with a D1_ERROR, which the model surfaced to the user as a platform failure.
  */
-function buildEnv(opts: { edges?: Array<[string, string]>; instances?: Array<Record<string, unknown>> } = {}) {
+function buildEnv(opts: { edges?: Array<[string, string]>; instances?: Array<Record<string, unknown>>; work?: unknown[]; runs?: unknown[] } = {}) {
 	const INSTANCE_COLUMNS = new Set(["id", "user_id", "agent_id", "status", "config", "created_at", "updated_at"]);
 	const env = {
 		DB: {
@@ -37,6 +37,8 @@ function buildEnv(opts: { edges?: Array<[string, string]>; instances?: Array<Rec
 								if (sql.includes("FROM agent_instances")) {
 									return { results: opts.instances ?? [{ id: "sub", status: "active", config: null, agent_name: "Repo Coder" }] };
 								}
+								if (sql.includes("FROM instance_runtime_tasks")) return { results: opts.work ?? [] };
+								if (sql.includes("FROM agent_loop_runs")) return { results: opts.runs ?? [] };
 								return { results: [] };
 							},
 							async first() { return null; },
@@ -63,7 +65,10 @@ describe("list_subordinates", () => {
 
 	it("falls back to the template's name", async () => {
 		const r = await tool("list_subordinates").handler(ctx(buildEnv()) as never, {});
-		expect(JSON.parse(r.content)).toEqual([{ instanceId: "sub", name: "Repo Coder", status: "active" }]);
+		// `subscription`, not `status` — the field is agent_instances.status, the SUBSCRIPTION
+		// lifecycle, which reads "active" for an idle agent and an on-fire one alike. Naming it
+		// `status` invited the model to read it as work state; subordinate_status answers that.
+		expect(JSON.parse(r.content)).toEqual([{ instanceId: "sub", name: "Repo Coder", subscription: "active" }]);
 	});
 
 	it("prefers a per-instance display name when the owner set one", async () => {
@@ -101,5 +106,64 @@ describe("check_delegation", () => {
 		const r = await tool("check_delegation").handler(ctx(buildEnv()) as never, {});
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/runId|instanceId/);
+	});
+});
+
+describe("subordinate_status — the observe verb", () => {
+	const t = tool("subordinate_status");
+
+	it("is a READ on the supervision connector, so registry gating and consent apply correctly", () => {
+		expect(t.scope).toBe("read");
+		expect(t.connector).toBe("supervision");
+	});
+
+	it("reports what a subordinate is doing, bucketed through THAT agent's declared columns", async () => {
+		const env = buildEnv({
+			instances: [{
+				id: "sub", status: "active", config: null, agent_name: "Repo Coder",
+				slug: "coder-repo", category: "code",
+				agent_config: JSON.stringify({ capabilities: { surfaces: ["coding"], boardColumns: [
+					{ id: "running", title: "Running", color: "#000", statuses: ["running"] },
+				] } }),
+			}],
+			work: [{ instance_id: "sub", id: "t1", type: "delegation", status: "running",
+			         payload: JSON.stringify({ title: "Delegated: green the suite" }), updated_at: "2026-08-05T10:00:00.000Z" }],
+			runs: [{ instance_id: "sub", run_id: "r1", objective: "green the suite", status: "running", stop_reason: null,
+			         detail: null, iteration: 4, max_iterations: 10, started_at: 1, finished_at: null, last_progress_at: 2 }],
+		});
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].work[0]).toMatchObject({ status: "running", columnTitle: "Running", title: "Delegated: green the suite" });
+		expect(out.subordinates[0].runs[0]).toMatchObject({ objective: "green the suite", iteration: 4, maxIterations: 10 });
+	});
+
+	it("REFUSES an instanceId outside the supervision graph rather than reading it", async () => {
+		// Same posture as delegate_goal, which re-checks membership inside delegateToInstance
+		// instead of trusting the tool description to discourage a model from naming another
+		// owner's agent. A read is not exempt: it would leak what that agent is working on.
+		const out = await t.handler(ctx(buildEnv()) as never, { instanceId: "someone-elses" });
+		expect(out.content).toMatch(/do not supervise that agent/i);
+		expect(out.success).toBe(true);
+	});
+
+	it("says so plainly when there is nobody to observe", async () => {
+		const out = await t.handler(ctx(buildEnv({ edges: [] })) as never, {});
+		expect(out.content).toMatch(/do not supervise any agents yet/i);
+	});
+
+	it("still reports the roster when the work reads fail — a broken read must not blind the supervisor", async () => {
+		const env = {
+			DB: {
+				prepare(sql: string) {
+					return { bind() { return { async all() {
+						if (sql.includes("FROM agent_supervision")) return { results: [{ supervisor_instance_id: "sup", subordinate_instance_id: "sub" }] };
+						if (sql.includes("FROM agent_instances")) return { results: [{ id: "sub", status: "active", config: null, agent_name: "Repo Coder" }] };
+						throw new Error("D1 unavailable");
+					} }; } };
+				},
+			},
+		} as unknown as Env;
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].name).toBe("Repo Coder");
+		expect(out.subordinates[0].work).toEqual([]);
 	});
 });
