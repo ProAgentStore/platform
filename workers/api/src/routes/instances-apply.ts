@@ -1,6 +1,7 @@
 import type { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
+import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
 import { findCredentialForHost } from "../lib/credentials.js";
 import { getProfile, profileToCandidate, profileToPreferences, profileCustomAnswers } from "../lib/profile.js";
@@ -350,12 +351,16 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		const inst = await requireOwnedInstance(c.env, instanceId, session.uid);
-		// The ATS cache is per-USER (shared across the user's apply runs). Only the
-		// job-application agent may read it — otherwise it would surface a user's
-		// application history inside unrelated agents (e.g. Coder). Defense-in-depth
-		// behind the console gate.
-		const agent = await c.env.DB.prepare("SELECT slug FROM agents WHERE id = ?1").bind(inst.agent_id).first<{ slug: string }>();
-		if (agent?.slug !== "job-application-assistant") return c.json({ tips: [] });
+		// The ATS cache is per-USER (shared across the user's apply runs), so only an agent that
+		// actually DOES applying may read it — otherwise it surfaces a user's application history
+		// inside unrelated agents (e.g. Coder). Defense-in-depth behind the console gate.
+		//
+		// Gated on the declared `apply` surface rather than `slug === "job-application-assistant"`:
+		// the slug check silently returned an empty list for any OTHER apply agent — a second
+		// instance built from config would have had a permanently blank Rules & Tips tab with no
+		// error to explain it. Capability, not identity.
+		const caps = await capabilitiesForInstance(c.env, instanceId, session.uid);
+		if (!caps?.surfaces.includes("apply")) return c.json({ tips: [] });
 		return c.json({ tips: await listAtsCache(c.env, session.uid) });
 	});
 

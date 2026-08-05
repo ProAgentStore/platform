@@ -93,6 +93,12 @@ function buildApp(opts: Opts = {}) {
 						},
 						async all() {
 							if (sql.includes("FROM agent_instances i")) return { results: opts.myInstances ?? [] };
+							// The per-USER ATS tips cache. Non-empty so an ALLOWED read is
+							// distinguishable from a refusal — both return `{tips: […]}`, so a test
+							// asserting only the shape passes even when the gate refuses everything.
+							if (sql.includes("FROM ats_apply_cache")) {
+								return { results: [{ host: "jobs.dayforcehcm.com", outcome: "submitted", steps: 12, notes: "n", updated_at: "2026-08-01" }] };
+							}
 							return { results: [] };
 						},
 						async run() { writes.push({ sql, args }); return { meta: { changes: 1 } }; },
@@ -827,3 +833,38 @@ describe("voice-settings resolve against the owner's account defaults (#211)", (
 		expect(saved.voiceSettings).toBeUndefined();
 	});
 });
+
+describe("apply-tips is gated on the DECLARED surface, not on an agent slug", () => {
+	// It read `slug === "job-application-assistant"`. Any OTHER agent that declares `apply` — the
+	// whole point of declarative capabilities — got an empty list with no error, so its Rules &
+	// Tips tab was permanently blank and nothing said why. Capability, not identity.
+	const applyAgent = (slug: string) => ({
+		id: "a1", slug, category: "productivity",
+		config: JSON.stringify({ capabilities: { surfaces: ["apply"], runtime: "browser", workflow: "JOB_APPLY" } }),
+	});
+
+	it("serves tips to a DIFFERENT agent that declares the apply surface", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], instanceAgent: applyAgent("my-own-apply-agent") });
+		const res = await get(app, env, "/v1/instances/inst-1/apply-tips", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		// A REAL tip, not just the right shape: a refusal also returns `{tips: []}`, so asserting
+		// the key alone would pass with the gate permanently closed.
+		expect((await res.json() as { tips: unknown[] }).tips).toHaveLength(1);
+	});
+
+	it("still refuses an agent that does NOT declare apply", async () => {
+		// The protection this gate exists for: a user's application history must not surface inside an
+		// unrelated agent such as the Coder.
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			instanceAgent: {
+				id: "a1", slug: "coder-repo", category: "code",
+				config: JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } }),
+			},
+		});
+		const res = await get(app, env, "/v1/instances/inst-1/apply-tips", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ tips: [] });
+	});
+});
+
