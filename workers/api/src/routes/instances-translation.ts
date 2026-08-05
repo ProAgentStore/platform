@@ -13,6 +13,7 @@ import { approxTokens } from "../lib/ai-pricing.js";
 import type { Env } from "../types.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
+import { parseAccountPreferences, resolveTranslation, sanitizeTranslationSettings, type TranslationSettings } from "../lib/preferences.js";
 
 /** Languages the under-message translation can target. SINGLE source of truth —
  *  `tag` (BCP-47) is what the console's spoken-translation voice uses, so the
@@ -38,6 +39,15 @@ export const TRANSLATION_LANGUAGES: ReadonlyArray<{ name: string; tag: string }>
 
 const languageByName = (name: unknown) => TRANSLATION_LANGUAGES.find((l) => l.name === name);
 
+/** The owner's account-level translation defaults. One read, shared by every caller below. */
+export async function accountTranslationOf(env: Env, userId: string): Promise<TranslationSettings | undefined> {
+	const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
+		.bind(userId)
+		.first<{ preferences: string | null }>()
+		.catch(() => null);
+	return parseAccountPreferences(row?.preferences).translation;
+}
+
 export interface TranslationConfig {
 	enabled: boolean;
 	target: string;
@@ -47,9 +57,15 @@ export interface TranslationConfig {
 	fontSize: "small" | "medium" | "large";
 }
 
-/** Normalize whatever is stored at instance config.translation. */
-export function translationConfigOf(cfg: Record<string, unknown>): TranslationConfig {
-	const t = (cfg.translation && typeof cfg.translation === "object" ? cfg.translation : {}) as Record<string, unknown>;
+/**
+ * Normalize the translation config for one instance, `account` being the owner's defaults (#211).
+ *
+ * `cfg.translation` is now an OVERRIDE, present only when the owner chose "customise for this
+ * agent"; absent means "use my defaults". Passing no account is still valid (platform defaults) —
+ * that is what a caller with no user context gets.
+ */
+export function translationConfigOf(cfg: Record<string, unknown>, account?: TranslationSettings): TranslationConfig {
+	const t = resolveTranslation(account, cfg.translation) as unknown as Record<string, unknown>;
 	const lang = languageByName(t.target) ?? TRANSLATION_LANGUAGES[0];
 	return {
 		enabled: t.enabled === true,
@@ -88,7 +104,7 @@ export async function attachGlossesToMessages(
 ): Promise<void> {
 	try {
 		const cfg = await readInstanceConfig(env, instanceId, userId);
-		const t = translationConfigOf(cfg);
+		const t = translationConfigOf(cfg, await accountTranslationOf(env, userId));
 		if (!t.enabled || !messages.length) return;
 		const transliterate = t.transliterate ? 1 : 0;
 		const assistant = messages.filter((m) => m.role === "assistant" && typeof m.content === "string" && (m.content as string).trim());
@@ -126,7 +142,12 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-		return c.json({ translation: translationConfigOf(cfg), languages: TRANSLATION_LANGUAGES });
+		const account = await accountTranslationOf(c.env, session.uid);
+		return c.json({
+			translation: translationConfigOf(cfg, account),
+			hasOverride: cfg.translation !== undefined && cfg.translation !== null,
+			languages: TRANSLATION_LANGUAGES,
+		});
 	});
 
 	/** Save the under-message translation config. */
@@ -134,21 +155,32 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const body = (await c.req.json().catch(() => ({}))) as { enabled?: unknown; target?: unknown; transliterate?: unknown; wordTap?: unknown; fontSize?: unknown };
-		const lang = languageByName(body.target) ?? TRANSLATION_LANGUAGES[0];
-		const translation = {
-			enabled: body.enabled === true,
-			target: lang.name,
-			transliterate: body.transliterate === true,
-			wordTap: body.wordTap !== false,
-			fontSize: body.fontSize === "small" || body.fontSize === "large" ? body.fontSize : "medium",
-		};
+		const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+		const account = await accountTranslationOf(c.env, session.uid);
+		// Sanitized against the ACCOUNT default so a partial body keeps the rest of the owner's
+		// preferences; the language name is still validated against the table that owns it.
+		const merged = sanitizeTranslationSettings(body, account);
+		const lang = languageByName(merged.target) ?? TRANSLATION_LANGUAGES[0];
+		const translation = { ...merged, target: lang.name };
 		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 		cfg.translation = translation;
 		await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
 			.bind(JSON.stringify(cfg), instanceId, session.uid)
 			.run();
-		return c.json({ translation: { ...translation, targetTag: lang.tag } });
+		return c.json({ translation: { ...translation, targetTag: lang.tag }, hasOverride: true });
+	});
+
+	/** "Use my defaults" — drop the per-agent override. */
+	router.delete("/:instanceId/translation", async (c) => {
+		const session = await requireUser(c);
+		const instanceId = c.req.param("instanceId");
+		await requireOwnedInstance(c.env, instanceId, session.uid);
+		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+		delete cfg.translation;
+		await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+			.bind(JSON.stringify(cfg), instanceId, session.uid)
+			.run();
+		return c.json({ translation: translationConfigOf(cfg, await accountTranslationOf(c.env, session.uid)), hasOverride: false });
 	});
 
 	/** Translate a chat message into the instance's configured target language — the
@@ -159,7 +191,7 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-		const t = translationConfigOf(cfg);
+		const t = translationConfigOf(cfg, await accountTranslationOf(c.env, session.uid));
 		if (!t.enabled) throw new HttpError(400, "Translation is not enabled for this instance");
 		const { target, transliterate } = t;
 		const body = (await c.req.json().catch(() => ({}))) as { text?: unknown };

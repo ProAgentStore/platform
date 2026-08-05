@@ -40,6 +40,8 @@ interface Opts {
 	doResponse?: (path: string, method: string) => Response;
 	/** STORAGE.get result (voice-audio fetch). */
 	storageGet?: unknown;
+	/** users.preferences blob — the owner's account-level voice/translation defaults (#211). */
+	accountPreferences?: string;
 }
 
 function buildApp(opts: Opts = {}) {
@@ -83,6 +85,8 @@ function buildApp(opts: Opts = {}) {
 								if (sql.includes("SELECT config")) return { config: instanceConfig };
 								return { id, agent_id: "a1", user_id: uid, status: "active", config: instanceConfig, created_at: "", updated_at: "" };
 							}
+							// account preferences (#211) — the base every instance resolves against.
+							if (sql.includes("SELECT preferences FROM users")) return { preferences: opts.accountPreferences ?? "" };
 							// chat: agent name lookup
 							if (sql.includes("SELECT name FROM agents")) return { name: agentMeta.name };
 							return null;
@@ -151,6 +155,9 @@ function post(app: Hono, env: unknown, path: string, body: unknown, tok?: string
 }
 function put(app: Hono, env: unknown, path: string, body: unknown, tok?: string) {
 	return app.request(path, { method: "PUT", headers: { ...(tok ? { Authorization: `Bearer ${tok}` } : {}), "Content-Type": "application/json" }, body: JSON.stringify(body) }, env);
+}
+function del(app: Hono, env: unknown, path: string, tok?: string) {
+	return app.request(path, { method: "DELETE", headers: tok ? { Authorization: `Bearer ${tok}` } : {} }, env);
 }
 
 // ————————————————————————————————————————————————————————————————
@@ -704,5 +711,119 @@ describe("voice-audio routes (integration)", () => {
 		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], storageGet: null });
 		const res = await get(app, env, "/v1/instances/inst-1/voice-audio/turn-x", await tokenFor("u1"));
 		expect(res.status).toBe(404);
+	});
+});
+
+// ————————————————————————————————————————————————————————————————
+// Account preferences vs per-agent override (#211)
+// ————————————————————————————————————————————————————————————————
+
+describe("voice-settings resolve against the owner's account defaults (#211)", () => {
+	const ACCOUNT = JSON.stringify({ voice: { speed: 130, sttMode: "openai", provider: "openai-realtime" } });
+
+	it("an agent with NO override reports the ACCOUNT default, and says so", async () => {
+		// The point of the whole change: configure once, and every agent follows. Before this a new
+		// subscription seeded nothing and silently ran on platform defaults.
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], accountPreferences: ACCOUNT });
+		const res = await get(app, env, "/v1/instances/inst-1/voice-settings", await tokenFor("u1"));
+		const body = await res.json() as { voiceSettings: { speed: number; sttMode: string }; hasOverride: boolean };
+		expect(body.voiceSettings.speed).toBe(130);
+		expect(body.voiceSettings.sttMode).toBe("openai");
+		expect(body.hasOverride).toBe(false);
+	});
+
+	it("an override wins, and inherits the fields it does not mention from the ACCOUNT", async () => {
+		// Not from platform defaults — otherwise "customise the speed on this one agent" would
+		// silently drop the user back to browser dictation.
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			accountPreferences: ACCOUNT,
+			instanceConfig: JSON.stringify({ voiceSettings: { speed: 90 } }),
+		});
+		const res = await get(app, env, "/v1/instances/inst-1/voice-settings", await tokenFor("u1"));
+		const body = await res.json() as { voiceSettings: { speed: number; sttMode: string }; hasOverride: boolean };
+		expect(body.voiceSettings.speed).toBe(90);
+		expect(body.voiceSettings.sttMode).toBe("openai");
+		expect(body.hasOverride).toBe(true);
+	});
+
+	it("keeps returning the effective object under `voiceSettings` — the SDK reads that exact key", async () => {
+		// packages/sdk/src/voice/config.ts getVoiceConfig() does `d.voiceSettings`. Renaming it, or
+		// returning the raw override instead of the resolved object, breaks voice in the console AND
+		// coder-web with nothing in this repo failing.
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]], accountPreferences: ACCOUNT });
+		const body = await (await get(app, env, "/v1/instances/inst-1/voice-settings", await tokenFor("u1"))).json() as Record<string, unknown>;
+		expect(body).toHaveProperty("voiceSettings");
+		expect((body.voiceSettings as Record<string, unknown>).language).toBeDefined();
+	});
+
+	it("PUT stores an override sanitized against the account, not the platform", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], accountPreferences: ACCOUNT });
+		const res = await put(app, env, "/v1/instances/inst-1/voice-settings", { speed: 80 }, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const saved = JSON.parse(String((writes.find((w) => w.sql.includes("UPDATE agent_instances"))?.args ?? [])[0]));
+		expect(saved.voiceSettings.speed).toBe(80);
+		expect(saved.voiceSettings.sttMode).toBe("openai"); // inherited, not reset to "browser"
+		expect((await res.json() as { hasOverride: boolean }).hasOverride).toBe(true);
+	});
+
+	it("DELETE removes the override entirely — absence is what 'use my defaults' means", async () => {
+		const { app, env, writes } = buildApp({
+			owns: [["inst-1", "u1"]],
+			accountPreferences: ACCOUNT,
+			instanceConfig: JSON.stringify({ displayName: "keep me", voiceSettings: { speed: 90 } }),
+		});
+		const res = await del(app, env, "/v1/instances/inst-1/voice-settings", await tokenFor("u1"));
+		const saved = JSON.parse(String((writes.find((w) => w.sql.includes("UPDATE agent_instances"))?.args ?? [])[0]));
+		expect(saved.voiceSettings).toBeUndefined();
+		expect(saved.displayName).toBe("keep me"); // only the override goes
+		const body = await res.json() as { voiceSettings: { speed: number }; hasOverride: boolean };
+		expect(body.hasOverride).toBe(false);
+		expect(body.voiceSettings.speed).toBe(130); // back to the account default
+	});
+
+	it("a declared voiceLanguage still wins — and is NOT written into storage", async () => {
+		// Language Buddy's target_language. Previously the settings route COPIED it into
+		// voiceSettings, which both went stale and — now that presence means "customised" — would
+		// have flipped the agent off the owner's defaults just by picking a language.
+		const { app, env, writes } = buildApp({
+			owns: [["inst-1", "u1"]],
+			accountPreferences: ACCOUNT,
+			instanceAgent: {
+				id: "a1", slug: "language-buddy", category: "education",
+				// TOP-LEVEL settingsSchema, a sibling of `capabilities` — that is where
+				// agentCapabilities reads it from (agent-capabilities.ts:379).
+				config: JSON.stringify({ settingsSchema: [
+					{ id: "target_language", label: "Target language", type: "select", voiceLanguage: true,
+					  options: [{ value: "zh-CN", label: "Chinese" }], default: "zh-CN" },
+				] }),
+			},
+			instanceConfig: JSON.stringify({ settings: { target_language: "zh-CN" } }),
+		});
+		const body = await (await get(app, env, "/v1/instances/inst-1/voice-settings", await tokenFor("u1"))).json() as {
+			voiceSettings: { language: string; speed: number }; hasOverride: boolean;
+		};
+		expect(body.voiceSettings.language).toBe("zh-CN");
+		expect(body.voiceSettings.speed).toBe(130); // the rest still comes from the account
+		expect(body.hasOverride).toBe(false); // a declared language is not a customisation
+		expect(writes).toHaveLength(0); // reading resolves; it never writes
+	});
+
+	it("saving a declared voiceLanguage does not create an override", async () => {
+		const { app, env, writes } = buildApp({
+			owns: [["inst-1", "u1"]],
+			accountPreferences: ACCOUNT,
+			instanceAgent: {
+				id: "a1", slug: "language-buddy", category: "education",
+				config: JSON.stringify({ settingsSchema: [
+					{ id: "target_language", label: "Target language", type: "select", voiceLanguage: true,
+					  options: [{ value: "ja-JP", label: "Japanese" }], default: "ja-JP" },
+				] }),
+			},
+		});
+		await put(app, env, "/v1/instances/inst-1/settings", { settings: { target_language: "ja-JP" } }, await tokenFor("u1"));
+		const saved = JSON.parse(String((writes.find((w) => w.sql.includes("UPDATE agent_instances"))?.args ?? [])[0]));
+		expect(saved.settings.target_language).toBe("ja-JP");
+		expect(saved.voiceSettings).toBeUndefined();
 	});
 });

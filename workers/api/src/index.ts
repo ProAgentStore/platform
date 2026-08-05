@@ -14,6 +14,7 @@ import { chatRoutes } from "./routes/chat.js";
 import { instanceRoutes } from "./routes/instances.js";
 import { credentialRoutes } from "./routes/credentials.js";
 import { profileRoutes } from "./routes/profile.js";
+import { preferenceRoutes } from "./routes/preferences.js";
 import { keysRoutes } from "./routes/keys.js";
 import { emailRoutes } from "./routes/email.js";
 import { driveRoutes } from "./routes/drive.js";
@@ -127,6 +128,7 @@ app.route("/v1/agents", runRoutes); // /v1/agents/:id/run, /executions
 app.route("/v1/instances", instanceRoutes); // /v1/instances/:agentId/subscribe, /my/instances, /:id/chat, etc.
 app.route("/v1/instances", credentialRoutes); // /v1/instances/:id/credentials (vault)
 app.route("/v1/profile", profileRoutes); // structured candidate profile
+app.route("/v1/preferences", preferenceRoutes); // account-wide voice + translation defaults (#211)
 app.route("/v1/agents", analyticsRoutes); // /v1/agents/:id/analytics
 app.route("/v1/dashboard", dashboardRoutes);
 app.route("/v1/notifications", notificationRoutes);

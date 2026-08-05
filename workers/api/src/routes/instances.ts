@@ -5,6 +5,7 @@ import { createRepo, listRepos } from "../lib/coding-store.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { applySettingsPatch, resolveSettingsValues } from "../lib/instance-settings.js";
+import { parseAccountPreferences, resolveVoice, sanitizeVoiceSettings, unknownVoiceField, type VoiceSettings } from "../lib/preferences.js";
 import { buildInstanceBoard, setBoardItemStatus, clearFinishedBoardItems, columnsForInstance, boardConfigForInstance, setInstanceBoardConfig } from "../lib/board.js";
 import type { BoardColumn } from "../lib/agent-capabilities.js";
 import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/coding-store.js";
@@ -517,7 +518,11 @@ instanceRoutes.get("/:instanceId/voice-settings", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-	return c.json({ voiceSettings: cfg.voiceSettings || { provider: "browser" } });
+	const { effective, hasOverride } = await effectiveVoice(c.env, instanceId, session.uid, cfg);
+	// Still `voiceSettings`, still the fully-resolved object: `getVoiceConfig` in
+	// packages/sdk/src/voice/config.ts reads exactly that key, so the SDK, the console chat and
+	// coder-web all keep working unchanged while resolution moves server-side.
+	return c.json({ voiceSettings: effective, hasOverride });
 });
 
 /**
@@ -542,66 +547,74 @@ instanceRoutes.get("/:instanceId/trace", async (c) => {
 	return c.json({ instanceId, count: events.length, events });
 });
 
-/** Normalize a keywords field (array OR comma-separated string) → a clean short list. */
-function parseVoiceWords(v: unknown): string[] {
-	// Split on comma / newline / semicolon — NOT space (a phrase can be multi-word, e.g.
-	// "mute mic"). Mirrors parseWords in packages/sdk/src/voice/config.ts.
-	const list = Array.isArray(v) ? v : typeof v === "string" ? v.split(/[,\n;]/) : [];
-	return list.filter((x): x is string => typeof x === "string").map((s) => s.trim().slice(0, 40)).filter(Boolean).slice(0, 20);
+/**
+ * Resolve what this agent ACTUALLY uses: account defaults, then this instance's override if it has
+ * one, then a declared `voiceLanguage` setting on top of the language.
+ *
+ * `hasOverride` is presence, not value equality — an override whose fields happen to match your
+ * defaults is still an override, and the console's "Using your defaults / Customise" control has to
+ * show what the user chose, not what the numbers came out as.
+ */
+async function effectiveVoice(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	cfg: Record<string, unknown>,
+): Promise<{ effective: VoiceSettings; hasOverride: boolean }> {
+	const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
+		.bind(userId)
+		.first<{ preferences: string | null }>();
+	const account = parseAccountPreferences(row?.preferences);
+	const override = cfg.voiceSettings;
+	const hasOverride = override !== undefined && override !== null;
+	// The declared language (Language Buddy's `target_language`) read LIVE from the agent's schema
+	// + this instance's settings — never from a stored copy, which is what used to go stale.
+	const schema = await settingsSchemaForInstance(env, instanceId, userId).catch(() => []);
+	const values = resolveSettingsValues(schema, cfg.settings as Record<string, unknown> | undefined);
+	const declared = schema.find((f) => f.voiceLanguage);
+	const declaredLanguage = declared && typeof values[declared.id] === "string" ? String(values[declared.id]) : undefined;
+	return { effective: resolveVoice(account.voice, hasOverride ? override : undefined, declaredLanguage), hasOverride };
 }
 
-/** Update voice settings for hands-off mode. */
+/**
+ * Write a per-agent voice override. Sanitized against the ACCOUNT default, so a partial body keeps
+ * the rest of your preferences instead of snapping unspecified fields back to platform defaults.
+ */
 instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const body = await c.req.json<Record<string, unknown>>();
-	const provider = String(body.provider || "browser");
-	if (!["browser", "openai-realtime", "gemini-live"].includes(provider)) {
-		throw new HttpError(400, "provider must be browser, openai-realtime, or gemini-live");
-	}
-	const speed = typeof body.speed === "number" ? Math.max(50, Math.min(200, Math.round(body.speed))) : 100;
-	// Conversation mode: ms of silence after you stop talking before the message is
-	// sent. Higher = more tolerant of mid-sentence pauses.
-	const silenceMs = typeof body.silenceMs === "number" ? Math.max(500, Math.min(6000, Math.round(body.silenceMs))) : 1500;
-	// Hands-free max recording duration (ms): stop + submit after this long regardless. 10s–5min.
-	const maxDictationMs = typeof body.maxDictationMs === "number" ? Math.max(10000, Math.min(300000, Math.round(body.maxDictationMs))) : 60000;
-	// Speech recognition: "browser" dictation (default) or "openai" Whisper (AI).
-	const sttMode = body.sttMode === "openai" ? "openai" : "browser";
-	// Mic sensitivity for Whisper silence detection (0.4–2): higher = more sensitive
-	// (quiet mics); lower = needs louder speech (noisy environments).
-	// Conservative default (0.8): lower = less likely to treat background noise as speech.
-	const sensitivity = typeof body.sensitivity === "number" ? Math.max(0.4, Math.min(2, body.sensitivity)) : 0.8;
-	const settings = {
-		provider,
-		speed,
-		silenceMs,
-		maxDictationMs,
-		sttMode,
-		sensitivity,
-		openai: body.openai && typeof body.openai === "object" ? body.openai : undefined,
-		gemini: body.gemini && typeof body.gemini === "object" ? body.gemini : undefined,
-		language: typeof body.language === "string" ? body.language.slice(0, 10) : "en-US",
-		// Hands-free voice commands (e.g. "repeat") — on unless explicitly disabled.
-		commandsEnabled: body.commandsEnabled !== false,
-		// Keep the screen awake during hands-free (screen wake lock) — on unless disabled.
-		keepAwake: body.keepAwake !== false,
-		// Custom hands-free command keywords (empty ⇒ built-in defaults; stopWords off unless set).
-		repeatWords: parseVoiceWords(body.repeatWords),
-		muteWords: parseVoiceWords(body.muteWords),
-		stopWords: parseVoiceWords(body.stopWords),
-		// Say this word/phrase while the agent is speaking to halt playback (empty ⇒ off).
-		stopSpeechKeyword: typeof body.stopSpeechKeyword === "string" ? body.stopSpeechKeyword.trim().slice(0, 40) : "",
-		// Lock STT to the configured language; a mis-detected other-language transcript is not
-		// sent — the user is asked to repeat instead. Default ON (#126).
-		confirmLanguage: body.confirmLanguage !== false,
-	};
+	const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+	// Strict on write: a caller asking for a provider we don't know must be told, not quietly
+	// given "browser". The sanitizer stays lenient because it also parses stored rows.
+	const bad = unknownVoiceField(body);
+	if (bad) throw new HttpError(400, bad);
+	const row = await c.env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
+		.bind(session.uid)
+		.first<{ preferences: string | null }>();
+	const account = parseAccountPreferences(row?.preferences);
+	const settings = sanitizeVoiceSettings(body, account.voice);
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	cfg.voiceSettings = settings;
 	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
 		.bind(JSON.stringify(cfg), instanceId, session.uid)
 		.run();
-	return c.json({ voiceSettings: settings });
+	const { effective } = await effectiveVoice(c.env, instanceId, session.uid, cfg);
+	return c.json({ voiceSettings: effective, hasOverride: true });
+});
+
+/** "Use my defaults" — drop the override entirely. Absence is what the resolver reads. */
+instanceRoutes.delete("/:instanceId/voice-settings", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	delete cfg.voiceSettings;
+	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
+		.bind(JSON.stringify(cfg), instanceId, session.uid)
+		.run();
+	const { effective } = await effectiveVoice(c.env, instanceId, session.uid, cfg);
+	return c.json({ voiceSettings: effective, hasOverride: false });
 });
 
 /** Rename this instance (per-instance display name — distinguishes multiple
@@ -655,11 +668,11 @@ instanceRoutes.put("/:instanceId/settings", async (c) => {
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	const result = applySettingsPatch(schema, cfg.settings, body.settings);
 	cfg.settings = result.settings;
-	if (result.voiceLanguageValue) {
-		const voice = (cfg.voiceSettings && typeof cfg.voiceSettings === "object" ? cfg.voiceSettings : { provider: "browser" }) as Record<string, unknown>;
-		voice.language = result.voiceLanguageValue.slice(0, 10);
-		cfg.voiceSettings = voice;
-	}
+	// A field declared `voiceLanguage: true` is NOT copied into voiceSettings any more (#211).
+	// Writing it here made a stored duplicate of a declared value: change the setting and the old
+	// language lingered until something re-saved, and — now that presence of `voiceSettings` marks
+	// an agent as "customised" — merely picking a language would have silently flipped the agent
+	// off your account defaults. `resolveVoice` applies it live from the declared setting instead.
 	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
 		.bind(JSON.stringify(cfg), instanceId, session.uid)
 		.run();
