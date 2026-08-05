@@ -128,7 +128,7 @@ export default function TmuxTab({ instanceId }: Props) {
 	const capture = useCallback(async (session = selectedRef.current) => {
 		if (!session) return;
 		setLoadingPane(true);
-			setError("");
+		setError("");
 		try {
 			const content = await callTool("terminal_capture", { target: session, lines: 500 });
 			setPane(content);
@@ -157,7 +157,11 @@ export default function TmuxTab({ instanceId }: Props) {
 	}, [refreshTargets, capture]);
 
 	const selectedInfo = useMemo(() => targets.find((s) => targetKey(s) === selected), [targets, selected]);
-	const canWrite = allowedTools.has("terminal_run_command") || allowedTools.has("terminal_send_keys") || allowedTools.has("terminal_new_target") || allowedTools.has("terminal_kill_target");
+	const canRunCommand = allowedTools.has("terminal_run_command");
+	const canSendKeys = allowedTools.has("terminal_send_keys");
+	const canCreateTarget = allowedTools.has("terminal_new_target");
+	const canKillTarget = allowedTools.has("terminal_kill_target");
+	const canWrite = canRunCommand || canSendKeys || canCreateTarget || canKillTarget;
 
 	const runCommand = async () => {
 		if (!selected || !command.trim()) return;
@@ -210,7 +214,7 @@ export default function TmuxTab({ instanceId }: Props) {
 	};
 
 	const killSession = async () => {
-		if (!selected || !confirm(`Kill tmux session "${selected}"?`)) return;
+		if (!selected || !confirm(`Kill terminal target "${selected}"?`)) return;
 		setStatus("");
 		setError("");
 		try {
@@ -283,7 +287,7 @@ export default function TmuxTab({ instanceId }: Props) {
 						<button type="button" onClick={copyPane} disabled={!pane} title="Copy pane output" aria-label="Copy pane output" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 							<Clipboard size={14} />
 						</button>
-						<button type="button" onClick={killSession} disabled={!selected || !allowedTools.has("terminal_kill_target")} title={canWrite ? "Kill target" : "Grant terminal write access in Settings"} aria-label="Kill target" className="p-1.5 rounded-lg border border-line text-muted hover:text-red hover:border-red disabled:opacity-40">
+							<button type="button" onClick={killSession} disabled={!selected || !canKillTarget} title={canKillTarget ? "Kill target" : "Grant terminal kill access in Settings"} aria-label="Kill target" className="p-1.5 rounded-lg border border-line text-muted hover:text-red hover:border-red disabled:opacity-40">
 							<Trash2 size={14} />
 						</button>
 					</div>
@@ -309,30 +313,30 @@ export default function TmuxTab({ instanceId }: Props) {
 							onChange={(e) => setCommand(e.target.value)}
 							onKeyDown={(e) => { if (e.key === "Enter") runCommand(); }}
 							placeholder="Command"
-							disabled={!selected || !allowedTools.has("terminal_run_command")}
+								disabled={!selected || !canRunCommand}
 							className="font-mono"
 						/>
-						<button type="button" onClick={runCommand} disabled={!selected || !command.trim() || !allowedTools.has("terminal_run_command")} title="Run command" aria-label="Run command" className="px-3 rounded-lg bg-accent text-white disabled:opacity-40">
+							<button type="button" onClick={runCommand} disabled={!selected || !command.trim() || !canRunCommand} title="Run command" aria-label="Run command" className="px-3 rounded-lg bg-accent text-white disabled:opacity-40">
 							<Play size={15} />
 						</button>
 					</div>
 					<div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_11rem_auto] gap-2">
-						<input value={sendText} onChange={(e) => setSendText(e.target.value)} placeholder="Text to send" disabled={!selected || !allowedTools.has("terminal_send_keys")} className="font-mono" />
-						<input value={sendKeys} onChange={(e) => setSendKeys(e.target.value)} placeholder="Keys, e.g. Enter" disabled={!selected || !allowedTools.has("terminal_send_keys")} className="font-mono" />
-						<button type="button" onClick={sendKeysToPane} disabled={!selected || (!sendText && !sendKeys.trim()) || !allowedTools.has("terminal_send_keys")} title="Send keys" aria-label="Send keys" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							<input value={sendText} onChange={(e) => setSendText(e.target.value)} placeholder="Text to send" disabled={!selected || !canSendKeys} className="font-mono" />
+							<input value={sendKeys} onChange={(e) => setSendKeys(e.target.value)} placeholder="Keys, e.g. Enter" disabled={!selected || !canSendKeys} className="font-mono" />
+							<button type="button" onClick={sendKeysToPane} disabled={!selected || (!sendText && !sendKeys.trim()) || !canSendKeys} title="Send keys" aria-label="Send keys" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 							<Keyboard size={15} />
 						</button>
 					</div>
 					<div className="grid grid-cols-1 sm:grid-cols-[8rem_11rem_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
-						<select value={newBackend} onChange={(e) => setNewBackend(e.target.value as "tmux" | "kitty" | "iterm2")} disabled={!allowedTools.has("terminal_new_target")}>
+							<select value={newBackend} onChange={(e) => setNewBackend(e.target.value as "tmux" | "kitty" | "iterm2")} disabled={!canCreateTarget}>
 							<option value="tmux">tmux</option>
 							<option value="kitty">kitty</option>
 							<option value="iterm2">iTerm2</option>
 						</select>
-						<input value={newSession} onChange={(e) => setNewSession(e.target.value)} placeholder="Name" disabled={!allowedTools.has("terminal_new_target")} className="font-mono" />
-						<input value={newWorkDir} onChange={(e) => setNewWorkDir(e.target.value)} placeholder="Working directory" disabled={!allowedTools.has("terminal_new_target")} className="font-mono" />
-						<input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} placeholder="Startup command" disabled={!allowedTools.has("terminal_new_target")} className="font-mono" />
-						<button type="button" onClick={createSession} disabled={!newSession.trim() || !allowedTools.has("terminal_new_target")} title="Create target" aria-label="Create target" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							<input value={newSession} onChange={(e) => setNewSession(e.target.value)} placeholder="Name" disabled={!canCreateTarget} className="font-mono" />
+							<input value={newWorkDir} onChange={(e) => setNewWorkDir(e.target.value)} placeholder="Working directory" disabled={!canCreateTarget} className="font-mono" />
+							<input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} placeholder="Startup command" disabled={!canCreateTarget} className="font-mono" />
+							<button type="button" onClick={createSession} disabled={!newSession.trim() || !canCreateTarget} title="Create target" aria-label="Create target" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 							<Plus size={15} />
 						</button>
 					</div>
