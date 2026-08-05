@@ -96,3 +96,22 @@ describe("Work on this issue actually starts work", () => {
 	});
 });
 
+describe("clicking Coding lands on the Coding view, not inside a session", () => {
+	const tab = src("CodingTab.tsx");
+
+	it("does not restore the last session for a ONE-repo agent", () => {
+		// "Restore the repo I was in" answers a multi-repo question. With one repo it fired on
+		// every visit, so clicking the Coding tab dropped you straight into a terminal and Builds,
+		// Issues and the repo's own status sat behind a back arrow you had to know to press.
+		const fn = tab.slice(tab.indexOf("// Auto-open a session on mount"), tab.indexOf("const closeTerminal"));
+		expect(fn).toContain("} else if (!singleRepo) {");
+		expect(fn).toContain("loadLastRepo(instanceId)");
+	});
+
+	it("still honours a deep link to a specific session, for everyone", () => {
+		// /coding/csess_x was explicitly asked for; only the implicit restore is scoped.
+		const fn = tab.slice(tab.indexOf("// Auto-open a session on mount"), tab.indexOf("const closeTerminal"));
+		expect(fn).toContain("if (initialSessionId) {");
+	});
+});
+

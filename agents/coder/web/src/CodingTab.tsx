@@ -341,8 +341,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		let target: CodingSession | undefined;
 		if (initialSessionId) {
 			target = sessions.find((s) => s.id === initialSessionId);
-		} else {
+		} else if (!singleRepo) {
 			// Restore the last-used repo IF it still has an active session; otherwise show the list.
+			//
+			// Multi-repo only. Restoring answers "which of my repos was I in", and a one-repo agent
+			// has no such question — its "last repo" is always its only repo, so this fired on every
+			// visit and made the Coding LANDING unreachable: clicking the tab dropped you into a
+			// terminal, and Builds, Issues and the repo's own status were behind a back arrow you
+			// had to know to press. A deep link (/coding/csess_x) still opens the session for
+			// everyone; that one was asked for.
 			const lastRepo = loadLastRepo(instanceId);
 			target = lastRepo ? sessions.find((s) => s.repoId === lastRepo && s.status === "active") : undefined;
 		}
@@ -350,7 +357,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			autoOpenedRef.current = true;
 			openTerminal(target);
 		}
-	}, [sessions, initialSessionId, instanceId, openTerminal]);
+	}, [sessions, initialSessionId, instanceId, openTerminal, singleRepo]);
 
 	const closeTerminal = useCallback(() => {
 		autoOpenedRef.current = true; // stay on the list — don't let a sessions refresh re-open
