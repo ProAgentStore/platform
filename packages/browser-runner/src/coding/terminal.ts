@@ -77,7 +77,7 @@ export function runTerminalCommand(target: string, command: string, backend?: Te
 			kittyExec(["@", "send-key", "--match", `id:${t.id}`, "enter"]);
 			return captureTerminalTarget(t.id, { backend: "kitty" });
 		case "iterm2":
-			itermSessionScript(t.id, `write text ${appleString(command)} in theSession`);
+			itermSessionScript(t.id, `tell theSession to write text ${appleString(command)}`);
 			return captureTerminalTarget(t.id, { backend: "iterm2" });
 	}
 }
@@ -97,7 +97,7 @@ export function sendTerminalKeys(target: string, opts: { backend?: TerminalBacke
 			return captureTerminalTarget(t.id, { backend: "kitty" });
 		case "iterm2":
 			if ((opts.keys ?? []).length > 0) throw new Error("iTerm2 generic key events are not supported yet; send text or run a command.");
-			itermSessionScript(t.id, `write text ${appleString(opts.text ?? "")} in theSession`);
+			itermSessionScript(t.id, `tell theSession to write text ${appleString(opts.text ?? "")}`);
 			return captureTerminalTarget(t.id, { backend: "iterm2" });
 	}
 }
@@ -123,7 +123,7 @@ export function createTerminalTarget(opts: { backend: TerminalBackend; name?: st
 				'tell application "iTerm2"',
 				"create window with default profile",
 				"set theSession to current session of current window",
-				`write text ${appleString(`cd ${shellQuote(workDir)}${opts.command ? ` && ${opts.command}` : ""}`)} in theSession`,
+				`tell theSession to write text ${appleString(`cd ${shellQuote(workDir)}${opts.command ? ` && ${opts.command}` : ""}`)}`,
 				"return ((index of current window) as text) & \":1:1\"",
 				"end tell",
 			].join("\n");
@@ -142,7 +142,7 @@ export function killTerminalTarget(target: string, backend?: TerminalBackend): b
 			kittyExec(["@", "close-window", "--match", `id:${t.id}`]);
 			return true;
 		case "iterm2":
-			itermSessionScript(t.id, "close theSession");
+			itermCloseTarget(t.id);
 			return true;
 	}
 }
@@ -224,6 +224,16 @@ function itermSessionScript(target: string, command: string): string {
 		'tell application "iTerm2"',
 		`set theSession to session ${s} of tab ${t} of window ${w}`,
 		command,
+		"end tell",
+	].join("\n");
+	return osascript(script);
+}
+
+function itermCloseTarget(target: string): string {
+	const [w, t] = target.split(":").map((v) => Math.max(1, Number.parseInt(v, 10) || 1));
+	const script = [
+		'tell application "iTerm2"',
+		`close tab ${t} of window ${w}`,
 		"end tell",
 	].join("\n");
 	return osascript(script);
