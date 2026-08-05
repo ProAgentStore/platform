@@ -6,6 +6,7 @@ import { identityFor } from "../lib/identity";
 import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk/ui";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
+import PlaybackIcon from "../components/PlaybackIcon";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
@@ -381,7 +382,20 @@ export default function InstanceDetail() {
 	// Only ONE replay at a time: a new double-tap (or word tap) cuts off the previous
 	// recording instead of layering Audio elements on top of each other.
 	const replayAudioRef = useRef<HTMLAudioElement | null>(null);
+	/**
+	 * Which message is loading or speaking, so the UI can say so.
+	 *
+	 * Keyed by `messageKey`, not by object identity: the transcript is refetched on a poll, which
+	 * replaces every message object, and an identity-keyed indicator would silently detach from
+	 * the message it belongs to mid-playback.
+	 */
+	const [replay, setReplay] = useState<{ key: string; phase: "loading" | "playing" } | null>(null);
+	// A generation counter so a slow fetch that finishes AFTER you started another message cannot
+	// resurrect its own indicator — the late response must not overwrite the current one.
+	const replayGenRef = useRef(0);
 	const stopReplay = useCallback(() => {
+		replayGenRef.current += 1;
+		setReplay(null);
 		const a = replayAudioRef.current;
 		if (a) {
 			try { a.pause(); } catch { /* already stopped */ }
@@ -397,32 +411,54 @@ export default function InstanceDetail() {
 
 	// Double-tap a message: play its SAVED voice recording if we have one (voice turns),
 	// else fall back to speaking the text via TTS. Owner-scoped fetch of the R2 blob.
-	const playMessage = useCallback(async (m: Message) => {
+	const playMessage = useCallback(async (m: Message, key: string) => {
+		// Tapping the message that is already playing STOPS it — otherwise the only way to silence
+		// a long recording was to play a different one.
+		const wasPlaying = replay?.key === key;
 		stopReplay();
+		if (wasPlaying) return;
+		const gen = ++replayGenRef.current;
+		const mine = () => replayGenRef.current === gen;
+		setReplay({ key, phase: "loading" });
 		if (id && m.audioKey) {
 			try {
 				const res = await fetch(`${API}/v1/instances/${id}/voice-audio/${m.audioKey}`, {
 					headers: { Authorization: `Bearer ${getToken() ?? ""}` },
 				});
+				if (!mine()) return; // superseded while the blob was downloading
 				if (res.ok) {
 					const url = URL.createObjectURL(await res.blob());
 					const audio = new Audio(url);
 					const cleanup = () => {
 						URL.revokeObjectURL(url);
 						if (replayAudioRef.current === audio) replayAudioRef.current = null;
+						if (mine()) setReplay(null);
 					};
 					audio.onended = cleanup;
 					audio.onerror = cleanup;
 					// play() rejection (autoplay blocked) fires NEITHER onended nor onerror,
 					// so revoke here too or the blob URL leaks. Then fall through to TTS.
-					try { replayAudioRef.current = audio; await audio.play(); return; } catch { cleanup(); }
+					try {
+						replayAudioRef.current = audio;
+						await audio.play();
+						if (mine()) setReplay({ key, phase: "playing" });
+						return;
+					} catch { cleanup(); }
 				}
 			} catch { /* fall through to TTS */ }
 		}
+		if (!mine()) return;
 		// No saved recording (or it failed to load) — re-speak the text. Direct, not the
 		// auto-speak-gated path, so replay works even when no voice mode is active.
-		directSpeakRef.current(m.content);
-	}, [id, stopReplay]);
+		setReplay({ key, phase: "playing" });
+		try {
+			await directSpeakRef.current(m.content);
+		} finally {
+			// `speak` resolves when the utterance ends, so the indicator tracks TTS as well as a
+			// saved recording — the two paths must not look different to the reader.
+			if (mine()) setReplay(null);
+		}
+	}, [id, stopReplay, replay?.key]);
 
 	const sendMessage = () => {
 		if (!input.trim()) return;
@@ -754,8 +790,8 @@ export default function InstanceDetail() {
 										}`}
 									>
 										<CopyButton text={m.content} />
-										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play your recording" className="opacity-80 hover:opacity-100"><Volume2 size={11} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
-										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m); }} onDoubleClick={(e) => e.stopPropagation()} title="Play this message" className="opacity-70 hover:opacity-100"><Volume2 size={11} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
+										{m.role === "user" && <div className="text-[0.65rem] opacity-70 mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">You{m.audioKey && <button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play your recording"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play your recording"} className="opacity-80 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button>}</span>{m.createdAt && <span className="font-normal opacity-80">{formatDateTime(m.createdAt)}</span>}</div>}
+										{m.role === "assistant" && <div className="text-[0.65rem] text-accent mb-0.5 font-bold flex items-center justify-between gap-3"><span className="flex items-center gap-1">Assistant<button type="button" onClick={(e) => { e.stopPropagation(); playMessage(m, messageKey(m, i)); }} onDoubleClick={(e) => e.stopPropagation()} title={replay?.key === messageKey(m, i) ? "Stop" : "Play this message"} aria-label={replay?.key === messageKey(m, i) ? "Stop playback" : "Play this message"} className="opacity-70 hover:opacity-100"><PlaybackIcon phase={replay?.key === messageKey(m, i) ? replay.phase : "idle"} /></button></span>{m.createdAt && <span className="font-normal text-muted">{formatDateTime(m.createdAt)}</span>}</div>}
 										{m.role === "assistant" ? (
 											<GlossedMessage
 												message={m}

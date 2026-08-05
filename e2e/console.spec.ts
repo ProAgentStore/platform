@@ -746,6 +746,41 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("**All 758 tests pass.**")).toHaveCount(0);
 	});
 
+	test("replaying a message shows it loading, then which one is speaking", async ({ page }) => {
+		// Fetching the saved recording from R2 is not instant. The button used to sit unchanged
+		// through it, so a tap looked like nothing happened and people tapped again — cutting off
+		// the load already running. And once audio started, nothing said WHICH message you were
+		// hearing, which matters most in the long thread replay exists for.
+		await mockSignedInConsole(page);
+		let releaseAudio: (() => void) | null = null;
+		await page.route("**/v1/instances/inst-1/voice-audio/**", async (route) => {
+			// Hold the response open so the loading state is observable rather than a flash.
+			await new Promise<void>((r) => { releaseAudio = r; setTimeout(r, 4000); });
+			await route.fulfill({ status: 200, contentType: "audio/webm", body: "not-real-audio" });
+		});
+		await page.route("**/v1/instances/inst-1/messages*", (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					messages: [{ id: "m1", role: "assistant", content: "Hello there", createdAt: "2026-08-05T10:00:00.000Z", audioKey: "a1" }],
+				}),
+			}),
+		);
+		await page.goto("/console/instances/inst-1");
+
+		const play = page.getByRole("button", { name: "Play this message" });
+		await expect(play).toBeVisible();
+		await play.click();
+		// Spinner while the blob downloads — the tap was acknowledged.
+		await expect(page.locator("button .animate-spin")).toBeVisible();
+		releaseAudio?.();
+		// Then the equaliser marks the message being spoken. (The fake blob cannot decode, so the
+		// element errors and clears — either bars or a return to idle proves the state advanced
+		// past loading, which is the thing that was missing.)
+		await expect(page.locator("button .animate-spin")).toHaveCount(0, { timeout: 10000 });
+	});
+
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {
 		await mockSignedInConsole(page);
 

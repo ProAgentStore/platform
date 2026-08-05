@@ -207,3 +207,22 @@
 		}
 	}
 }
+
+/* ── Playback indicator ──
+   Three bars that rise and fall while a message is being spoken, so you can see WHICH message is
+   playing rather than only hearing it. Staggered so it reads as an equaliser, not a blink.
+   Respects reduced-motion: the bars hold at a visible height instead of animating. */
+@keyframes pags-eq {
+	0%, 100% { transform: scaleY(0.35); }
+	50% { transform: scaleY(1); }
+}
+.pags-eq-bar {
+	transform-origin: bottom;
+	animation: pags-eq 0.9s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+	.pags-eq-bar {
+		animation: none;
+		transform: scaleY(0.7);
+	}
+}
