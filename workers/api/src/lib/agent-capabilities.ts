@@ -426,3 +426,31 @@ export function agentCapabilities(agent: AgentLike): AgentCapabilities {
 export function hasSurface(agent: AgentLike, surface: AgentSurface): boolean {
 	return agentCapabilities(agent).surfaces.includes(surface);
 }
+
+/**
+ * Resolve an INSTANCE's capabilities — the join every caller was writing by hand.
+ *
+ * Three copies of this exact SELECT existed (`overseerDisabled`, `copilotDisabled`, and the
+ * delegation dispatch), which is how a rule ends up enforced in two places out of three. One
+ * helper, so "what does this agent declare" has a single answer.
+ *
+ * `userId` scopes to the owner when supplied. Returns null when the instance isn't there.
+ */
+export async function capabilitiesForInstance(
+	env: { DB: D1Database },
+	instanceId: string,
+	userId?: string,
+): Promise<AgentCapabilities | null> {
+	const sql = userId
+		? `SELECT a.slug AS slug, a.category AS category, a.config AS config
+		     FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+		    WHERE i.id = ?1 AND i.user_id = ?2`
+		: `SELECT a.slug AS slug, a.category AS category, a.config AS config
+		     FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+		    WHERE i.id = ?1`;
+	const stmt = env.DB.prepare(sql);
+	const row = await (userId ? stmt.bind(instanceId, userId) : stmt.bind(instanceId))
+		.first<{ slug: string | null; category: string | null; config: string | null }>()
+		.catch(() => null);
+	return row ? agentCapabilities(row as never) : null;
+}

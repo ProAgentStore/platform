@@ -10,6 +10,8 @@ import { listConnections, createConnection, deleteConnection } from "../lib/conn
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
 import { listSupervision, createSupervision, deleteSupervision } from "../lib/supervision.js";
 import { createLoopRun, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
+import { loopDriverFor } from "../lib/loop-drivers.js";
+import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
 import { openBudget } from "../lib/delegation-budget-store.js";
 import { delegateToInstance } from "../lib/delegate-instance.js";
@@ -359,21 +361,23 @@ toolRoutes.post("/:id/loop", async (c) => {
 	// the first runaway happens. sanitizeLimits clamps a request to the ceiling.
 	const budget = await openBudget(c.env, session.uid, instanceId, body.budget);
 
-	const runId = crypto.randomUUID();
-	await createLoopRun(c.env, {
-		runId,
-		userId: session.uid,
+	// ONE Loop, in the ONE chat — but what it DRIVES is whatever the agent declares (#210).
+	// Hardcoding AGENT_LOOP here meant a Repo Coder's Loop looped a chat with no write tools:
+	// it could read its repo in a circle and never touch the engine. The supervisor path already
+	// dispatched correctly; the owner's own button did not.
+	const caps = await capabilitiesForInstance(c.env, instanceId, session.uid).catch(() => null);
+	const driver = loopDriverFor(caps);
+	const started = await driver.start({
+		env: c.env,
 		instanceId,
+		userId: session.uid,
 		objective,
 		maxIterations,
 		budgetId: budget.id,
-		startedAt: Date.now(),
+		depth: 0,
 	});
-	await c.env.AGENT_LOOP.create({
-		id: runId,
-		params: { runId, instanceId, userId: session.uid, objective, maxIterations, budgetId: budget.id, depth: 0 },
-	});
-	return c.json({ runId, budgetId: budget.id, maxIterations, status: "running" }, 201);
+	if (!started.ok) throw new HttpError(started.status, started.error);
+	return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running" }, 201);
 });
 
 toolRoutes.get("/:id/loop", async (c) => {

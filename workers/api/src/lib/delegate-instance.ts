@@ -19,6 +19,8 @@ import { depthAbove, subordinatesOf } from "./supervision-graph.js";
 import { loadGraph } from "./supervision.js";
 import { openBudget } from "./delegation-budget-store.js";
 import { createLoopRun } from "./agent-loop-store.js";
+import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
+import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { sanitizeMaxIterations } from "./agent-loop.js";
 import { logEvent } from "./events.js";
 import { agentCapabilities } from "./agent-capabilities.js";
@@ -80,15 +82,26 @@ export async function delegateToInstance(env: Env, input: DelegateInstanceInput)
 	// changing it — which looks like success on the board and produces nothing. The hardcoded
 	// Overseer always reached the Pilot; a declared supervisor must too, or "as capable as the
 	// hardcoded Coder" is false in the only way that matters.
-	const target = await env.DB.prepare(
-		`SELECT a.slug AS slug, a.category AS category, a.config AS config
-		   FROM agent_instances i JOIN agents a ON a.id = i.agent_id
-		  WHERE i.id = ?1 AND i.user_id = ?2`,
-	)
-		.bind(input.subordinateInstanceId, input.userId)
-		.first<{ slug: string; category: string; config: string | null }>();
-	if (target && agentCapabilities(target as never).workflow === "CODING_SESSION") {
-		return delegateToPilot(env, input, depth, budgetId, objective);
+	// The SAME dispatcher the owner's own Loop button uses (#210). It was this `if` — one
+	// hardcoded workflow name — and the owner's path didn't have it, so pressing Loop on a Repo
+	// Coder looped a chat that cannot write. One table now serves both, and a new agent type is
+	// an entry in it rather than a branch in each caller.
+	const caps = await capabilitiesForInstance(env, input.subordinateInstanceId, input.userId);
+	const driver = loopDriverFor(caps);
+	if (driver.id !== DEFAULT_LOOP_DRIVER.id) {
+		const started = await driver.start({
+			env,
+			instanceId: input.subordinateInstanceId,
+			userId: input.userId,
+			objective,
+			maxIterations: input.maxIterations,
+			budgetId,
+			depth,
+			delegated: true,
+		});
+		return started.ok
+			? { ok: true, runId: started.runId, budgetId, depth }
+			: { ok: false, status: started.status, error: started.error };
 	}
 
 	const runId = crypto.randomUUID();
