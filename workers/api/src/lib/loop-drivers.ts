@@ -40,6 +40,13 @@ export interface LoopStartInput {
 	 * would be a lie. Their coding run is already on the board as its session card (#206).
 	 */
 	delegated?: boolean;
+	/**
+	 * Which supervisor asked for this — AUDIT ONLY, never an authority (#185, and see
+	 * `lib/execution-authority.ts`). Threaded into the chat loop so a delegated turn records who
+	 * it was acting for. It lived only in `delegate-instance.ts`'s own AGENT_LOOP call, which is
+	 * how it would have gone missing the moment that duplicate was folded into this table.
+	 */
+	onBehalfOf?: string;
 }
 
 export type LoopStartResult =
@@ -84,6 +91,7 @@ const chatDriver: LoopDriver = {
 				maxIterations,
 				budgetId: input.budgetId,
 				depth: input.depth,
+				onBehalfOf: input.onBehalfOf,
 			},
 		});
 		return { ok: true, runId, driver: chatDriver.id };

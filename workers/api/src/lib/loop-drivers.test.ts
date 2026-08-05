@@ -76,6 +76,15 @@ describe("every driver opens an agent_loop_runs row — the fact that makes ONE 
 		expect(created[0].binding).toBe("AGENT_LOOP");
 	});
 
+	it("the chat driver preserves delegated audit context", async () => {
+		// `onBehalfOf` is audit-only, but losing it makes delegated chat-loop tools look like
+		// ordinary subordinate actions in /trace. delegateToInstance now goes through this driver
+		// too, so the driver must own that forwarding instead of one caller special-casing it.
+		const { env, created } = stubEnv();
+		await loopDriverFor(caps(null)).start({ env, ...base, onBehalfOf: "supervisor" });
+		expect(created[0].params.onBehalfOf).toBe("supervisor");
+	});
+
 	it("the coding driver does, and threads the SAME run id into the Pilot", async () => {
 		const { env, sql, created } = stubEnv({
 			repos: [{ id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready" }],
@@ -171,4 +180,3 @@ describe("one driver per engine — every path that starts a Pilot claims it (#2
 		expect(claimAt).toBeLessThan(runAt);
 	});
 });
-

@@ -18,10 +18,8 @@
 import { depthAbove, subordinatesOf } from "./supervision-graph.js";
 import { loadGraph } from "./supervision.js";
 import { openBudget } from "./delegation-budget-store.js";
-import { createLoopRun } from "./agent-loop-store.js";
-import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
+import { loopDriverFor } from "./loop-drivers.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
-import { sanitizeMaxIterations } from "./agent-loop.js";
 import { logEvent } from "./events.js";
 import type { Env } from "../types.js";
 
@@ -74,58 +72,34 @@ export async function delegateToInstance(env: Env, input: DelegateInstanceInput)
 	const budgetId = input.budgetId ?? (await openBudget(env, input.userId, input.supervisorInstanceId)).id;
 
 	// Route by the target's DECLARED capability (#156: one delegate verb that picks the level).
-	// A coding agent's work happens in its Pilot driving a real CLI; its chat only explains.
-	// Sending a coding goal to the chat loop makes the agent TALK about the repo instead of
-	// changing it — which looks like success on the board and produces nothing. The hardcoded
-	// Overseer always reached the Pilot; a declared supervisor must too, or "as capable as the
-	// hardcoded Coder" is false in the only way that matters.
-	// The SAME dispatcher the owner's own Loop button uses (#210). It was this `if` — one
-	// hardcoded workflow name — and the owner's path didn't have it, so pressing Loop on a Repo
-	// Coder looped a chat that cannot write. One table now serves both, and a new agent type is
-	// an entry in it rather than a branch in each caller.
+	// A coding agent's work happens in its Pilot driving a real CLI; its chat only explains, so
+	// sending a coding goal to the chat loop makes the agent TALK about the repo instead of
+	// changing it — success on the board, nothing in the repo.
+	//
+	// EVERY driver goes through the table now, including the default. #210 routed only the
+	// non-chat drivers and kept a second AGENT_LOOP call here for the rest — two implementations
+	// of one verb, already drifted: this copy passed `onBehalfOf` (#185, audit) and the table's
+	// did not, so folding them later without noticing would have dropped the audit field. It moved
+	// into LoopStartInput and the duplicate is gone.
+	//
+	// Collapsing the branch also fixes a real gap: the coding path `return`ed early, so a
+	// delegation to a Repo Coder never emitted the `delegate` event below. A multi-level tree with
+	// a coding agent in it rendered as unrelated runs — precisely the join the event exists for.
 	const caps = await capabilitiesForInstance(env, input.subordinateInstanceId, input.userId);
-	const driver = loopDriverFor(caps);
-	if (driver.id !== DEFAULT_LOOP_DRIVER.id) {
-		const started = await driver.start({
-			env,
-			instanceId: input.subordinateInstanceId,
-			userId: input.userId,
-			objective,
-			maxIterations: input.maxIterations,
-			budgetId,
-			depth,
-			delegated: true,
-		});
-		return started.ok
-			? { ok: true, runId: started.runId, budgetId, depth }
-			: { ok: false, status: started.status, error: started.error };
-	}
-
-	const runId = crypto.randomUUID();
-	await createLoopRun(env, {
-		runId,
-		userId: input.userId,
+	const started = await loopDriverFor(caps).start({
+		env,
 		instanceId: input.subordinateInstanceId,
+		userId: input.userId,
 		objective,
-		maxIterations: sanitizeMaxIterations(input.maxIterations),
+		maxIterations: input.maxIterations,
 		budgetId,
-		startedAt: Date.now(),
+		depth,
+		delegated: true,
+		// AUDIT ONLY — never an authority (lib/execution-authority.ts).
+		onBehalfOf: input.supervisorInstanceId,
 	});
-
-	await env.AGENT_LOOP.create({
-		id: runId,
-		params: {
-			runId,
-			instanceId: input.subordinateInstanceId,
-			userId: input.userId,
-			objective,
-			maxIterations: sanitizeMaxIterations(input.maxIterations),
-			budgetId,
-			depth,
-			// #185: audit only. The subordinate's own consent and tools govern what it may do.
-			onBehalfOf: input.supervisorInstanceId,
-		},
-	});
+	if (!started.ok) return { ok: false, status: started.status, error: started.error };
+	const runId = started.runId;
 
 	// Logged under the PARENT's trace as well as its own, so a three-level delegation reads as one
 	// tree rather than as unrelated runs — the join choreography normally lacks.
