@@ -18,7 +18,7 @@ import { parseSurfaceOptions, serializeSurfaceOptions } from "./surface-options.
 import { isAllowedBundleUrl } from "./origins.js";
 
 /** A console surface an agent opts into (drives tabs + which UI blocks render). */
-export type AgentSurface = "apply" | "coding" | "insurance" | "repo";
+export type AgentSurface = "apply" | "coding" | "insurance" | "repo" | "tmux";
 
 /** Which local runner runtime the agent's hands use (null = no local runner). */
 export type AgentRuntimeKind = "browser" | "coding" | null;
@@ -181,7 +181,7 @@ export function sanitizeBoardColumns(value: unknown): BoardColumn[] | undefined 
  *  so require an https bundle URL and reject anything malformed. */
 /** Built-in tab ids a custom surface may NOT claim (store/console/src/lib/surfaces.tsx). */
 export const RESERVED_SURFACE_IDS = new Set([
-	"chat", "apply", "board", "repo", "coding", "activity", "knowledge", "indexing", "data", "settings",
+	"chat", "apply", "board", "repo", "coding", "tmux", "activity", "knowledge", "indexing", "data", "settings",
 ]);
 const MAX_CUSTOM_SURFACES = 8;
 const CUSTOM_SURFACE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -296,7 +296,7 @@ export function sanitizeToolList(value: unknown): string[] | undefined {
 	return out.length ? out : undefined;
 }
 
-const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "repo"]);
+const KNOWN_SURFACES = new Set<AgentSurface>(["apply", "coding", "insurance", "repo", "tmux"]);
 /** Closed enums for the WRITABLE power fields. A creator can only declare capabilities
  *  the platform already implements — no arbitrary code, so the blast radius is bounded
  *  (unlike customSurfaces, which loads a code bundle and stays on its own guarded path). */

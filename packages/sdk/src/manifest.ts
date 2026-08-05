@@ -11,7 +11,7 @@
  * runner runtimes. Mirrors `AgentSurface` in agent-capabilities.ts; open-ended
  * (`string & {}`) so new agents can declare new surfaces without a host edit.
  */
-export type AgentCapabilitySurface = "apply" | "coding" | (string & {});
+export type AgentCapabilitySurface = "apply" | "coding" | "repo" | "tmux" | (string & {});
 
 /** Which local runner runtime the agent's hands use (null = no local runner). */
 export type AgentRuntimeKind = "browser" | "coding" | null;

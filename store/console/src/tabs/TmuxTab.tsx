@@ -1,0 +1,325 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { renderTerminal } from "@proagentstore/sdk/ui";
+import { api } from "@proagentstore/sdk/client";
+import { Clipboard, Keyboard, Loader2, Play, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
+
+interface Props {
+	instanceId: string;
+}
+
+interface TmuxSession {
+	name: string;
+	windows?: number;
+	attached?: boolean;
+	activeCommand?: string;
+	activeWindow?: string;
+	created?: string;
+}
+
+interface ToolResult {
+	content?: string;
+	success?: boolean;
+	error?: string;
+}
+
+interface ToolPolicyEntry {
+	name: string;
+	allowed: boolean;
+	scope: "read" | "write";
+	reason?: string;
+}
+
+function parseSessions(content?: string): TmuxSession[] {
+	if (!content) return [];
+	try {
+		const parsed = JSON.parse(content) as unknown;
+		if (!Array.isArray(parsed)) return [];
+		return parsed.flatMap((item): TmuxSession[] => {
+			if (!item || typeof item !== "object") return [];
+			const row = item as Record<string, unknown>;
+			const name = typeof row.name === "string" ? row.name : "";
+			if (!name) return [];
+			return [{
+				name,
+				windows: typeof row.windows === "number" ? row.windows : undefined,
+				attached: typeof row.attached === "boolean" ? row.attached : undefined,
+				activeCommand: typeof row.activeCommand === "string" ? row.activeCommand : undefined,
+				activeWindow: typeof row.activeWindow === "string" ? row.activeWindow : undefined,
+				created: typeof row.created === "string" ? row.created : undefined,
+			}];
+		});
+	} catch {
+		return [];
+	}
+}
+
+function createdLabel(created?: string): string {
+	if (!created) return "";
+	const n = Number(created);
+	if (!Number.isFinite(n)) return "";
+	return new Date(n * 1000).toLocaleString();
+}
+
+export default function TmuxTab({ instanceId }: Props) {
+	const [sessions, setSessions] = useState<TmuxSession[]>([]);
+	const [selected, setSelected] = useState("");
+	const [pane, setPane] = useState("");
+	const [status, setStatus] = useState("");
+	const [error, setError] = useState("");
+	const [loadingList, setLoadingList] = useState(false);
+	const [loadingPane, setLoadingPane] = useState(false);
+	const [command, setCommand] = useState("");
+	const [sendText, setSendText] = useState("");
+	const [sendKeys, setSendKeys] = useState("");
+	const [newSession, setNewSession] = useState("");
+	const [newWorkDir, setNewWorkDir] = useState("");
+	const [newCommand, setNewCommand] = useState("");
+	const [allowedTools, setAllowedTools] = useState<Set<string>>(new Set());
+	const selectedRef = useRef("");
+	selectedRef.current = selected;
+
+	const callTool = useCallback(async (name: string, body: Record<string, unknown> = {}) => {
+		const result = await api<ToolResult>(`/v1/instances/${instanceId}/tools/${encodeURIComponent(name)}`, {
+			method: "POST",
+			body: JSON.stringify(body),
+		});
+		if (result.success === false) throw new Error(result.content || result.error || `${name} failed`);
+		return result.content ?? "";
+	}, [instanceId]);
+
+	const loadToolPolicy = useCallback(async () => {
+		try {
+			const data = await api<{ tools?: ToolPolicyEntry[] }>(`/v1/instances/${instanceId}/tools?allowed=true`);
+			setAllowedTools(new Set((data.tools || []).map((t) => t.name)));
+		} catch {
+			setAllowedTools(new Set());
+		}
+	}, [instanceId]);
+
+	const refreshSessions = useCallback(async () => {
+		setLoadingList(true);
+		setError("");
+		try {
+			const content = await callTool("tmux_list_sessions");
+			const list = parseSessions(content);
+			setSessions(list);
+			setSelected((current) => {
+				if (current && list.some((s) => s.name === current)) return current;
+				return list[0]?.name ?? "";
+			});
+			if (list.length === 0) setPane("");
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setLoadingList(false);
+		}
+	}, [callTool]);
+
+	const capture = useCallback(async (session = selectedRef.current) => {
+		if (!session) return;
+		setLoadingPane(true);
+		setError("");
+		try {
+			const content = await callTool("tmux_capture_pane", { session, lines: 500 });
+			setPane(content);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		} finally {
+			setLoadingPane(false);
+		}
+	}, [callTool]);
+
+	useEffect(() => {
+		void loadToolPolicy();
+		void refreshSessions();
+	}, [loadToolPolicy, refreshSessions]);
+
+	useEffect(() => {
+		if (selected) void capture(selected);
+	}, [selected, capture]);
+
+	useEffect(() => {
+		const timer = window.setInterval(() => {
+			void refreshSessions();
+			if (selectedRef.current) void capture(selectedRef.current);
+		}, 4000);
+		return () => window.clearInterval(timer);
+	}, [refreshSessions, capture]);
+
+	const selectedInfo = useMemo(() => sessions.find((s) => s.name === selected), [sessions, selected]);
+	const canWrite = allowedTools.has("tmux_run_command") || allowedTools.has("tmux_send_keys") || allowedTools.has("tmux_new_session") || allowedTools.has("tmux_kill_session");
+
+	const runCommand = async () => {
+		if (!selected || !command.trim()) return;
+		setStatus("");
+		setError("");
+		try {
+			const content = await callTool("tmux_run_command", { session: selected, command });
+			setPane(content);
+			setCommand("");
+			setStatus(`Ran in ${selected}`);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const sendKeysToPane = async () => {
+		if (!selected || (!sendText && !sendKeys.trim())) return;
+		setStatus("");
+		setError("");
+		try {
+			const content = await callTool("tmux_send_keys", { session: selected, text: sendText || undefined, keys: sendKeys });
+			setPane(content);
+			setSendText("");
+			setSendKeys("");
+			setStatus(`Sent to ${selected}`);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const createSession = async () => {
+		if (!newSession.trim()) return;
+		const sessionName = newSession.trim();
+		setStatus("");
+		setError("");
+		try {
+			await callTool("tmux_new_session", { session: sessionName, workDir: newWorkDir.trim() || undefined, command: newCommand.trim() || undefined });
+			setStatus(`Created ${sessionName}`);
+			setNewSession("");
+			setNewWorkDir("");
+			setNewCommand("");
+			await refreshSessions();
+			setSelected(sessionName);
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const killSession = async () => {
+		if (!selected || !confirm(`Kill tmux session "${selected}"?`)) return;
+		setStatus("");
+		setError("");
+		try {
+			await callTool("tmux_kill_session", { session: selected });
+			setPane("");
+			setSelected("");
+			setStatus(`Killed ${selected}`);
+			await refreshSessions();
+		} catch (e) {
+			setError(e instanceof Error ? e.message : String(e));
+		}
+	};
+
+	const copyPane = async () => {
+		if (!pane) return;
+		await navigator.clipboard.writeText(pane).catch(() => {});
+		setStatus("Copied pane output");
+	};
+
+	return (
+		<div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[17rem_minmax(0,1fr)] bg-paper">
+			<aside className="border-b lg:border-b-0 lg:border-r border-line min-h-0 flex flex-col">
+				<div className="px-3 py-2 border-b border-line flex items-center justify-between gap-2">
+					<div className="flex items-center gap-2 min-w-0">
+						<Terminal size={16} className="text-accent shrink-0" />
+						<h2 className="text-sm font-bold truncate">tmux</h2>
+					</div>
+					<button type="button" onClick={refreshSessions} title="Refresh sessions" aria-label="Refresh sessions" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-50" disabled={loadingList}>
+						<RefreshCw size={14} className={loadingList ? "animate-spin" : ""} />
+					</button>
+				</div>
+				<div className="overflow-y-auto min-h-0 chat-scroll p-2 space-y-1">
+					{sessions.length === 0 && (
+						<div className="text-xs text-muted-soft px-2 py-4">No tmux sessions found on the connected runner.</div>
+					)}
+					{sessions.map((s) => (
+						<button
+							key={s.name}
+							type="button"
+							onClick={() => setSelected(s.name)}
+							className={`w-full text-left px-2 py-2 rounded-lg border transition-colors ${selected === s.name ? "border-accent bg-accent-soft" : "border-transparent hover:border-line hover:bg-panel"}`}
+						>
+							<div className="flex items-center justify-between gap-2 min-w-0">
+								<span className="font-mono text-sm truncate">{s.name}</span>
+								<span className={`w-2 h-2 rounded-full shrink-0 ${s.attached ? "bg-green" : "bg-muted-soft"}`} title={s.attached ? "Attached" : "Detached"} />
+							</div>
+							<div className="mt-1 text-[0.7rem] text-muted-soft truncate">
+								{s.activeCommand || "unknown"} {s.activeWindow ? `- ${s.activeWindow}` : ""} {s.windows ? `- ${s.windows}w` : ""}
+							</div>
+						</button>
+					))}
+				</div>
+			</aside>
+
+			<section className="min-h-0 flex flex-col">
+				<div className="border-b border-line px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+					<div className="min-w-0">
+						<div className="flex items-center gap-2 min-w-0">
+							<span className="font-mono text-sm font-bold truncate">{selected || "No session selected"}</span>
+							{selectedInfo?.attached != null && <span className={`text-[0.65rem] px-1.5 py-0.5 rounded-full ${selectedInfo.attached ? "bg-green/15 text-green" : "bg-panel text-muted"}`}>{selectedInfo.attached ? "attached" : "detached"}</span>}
+						</div>
+						<div className="text-[0.7rem] text-muted-soft truncate">
+							{selectedInfo ? `${selectedInfo.activeCommand || "unknown"}${selectedInfo.activeWindow ? ` - ${selectedInfo.activeWindow}` : ""}${createdLabel(selectedInfo.created) ? ` - ${createdLabel(selectedInfo.created)}` : ""}` : "Start a session below or run tmux on the connected machine."}
+						</div>
+					</div>
+					<div className="flex items-center gap-1.5">
+						<button type="button" onClick={() => capture()} disabled={!selected || loadingPane} title="Capture pane" aria-label="Capture pane" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							{loadingPane ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+						</button>
+						<button type="button" onClick={copyPane} disabled={!pane} title="Copy pane output" aria-label="Copy pane output" className="p-1.5 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							<Clipboard size={14} />
+						</button>
+						<button type="button" onClick={killSession} disabled={!selected || !allowedTools.has("tmux_kill_session")} title={canWrite ? "Kill session" : "Grant tmux write access in Settings"} aria-label="Kill session" className="p-1.5 rounded-lg border border-line text-muted hover:text-red hover:border-red disabled:opacity-40">
+							<Trash2 size={14} />
+						</button>
+					</div>
+				</div>
+
+				{(error || status || !canWrite) && (
+					<div className="px-3 py-2 border-b border-line text-xs">
+						{error ? <span className="text-red">{error}</span> : status ? <span className="text-green">{status}</span> : <span className="text-muted">Grant tmux write access in Settings to run commands, send keys, create sessions, or kill sessions.</span>}
+					</div>
+				)}
+
+				<div className="flex-1 min-h-0 bg-[#080808]">
+					<pre className="h-full overflow-auto chat-scroll p-3 text-[0.74rem] leading-relaxed font-mono whitespace-pre-wrap break-words">
+						{/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderTerminal escapes terminal bytes before colorizing them. */}
+						<code dangerouslySetInnerHTML={{ __html: renderTerminal(pane || (selected ? "" : "Select a tmux session to capture its pane.")) }} />
+					</pre>
+				</div>
+
+				<div className="border-t border-line p-2 space-y-2 bg-panel/40">
+					<div className="flex gap-2">
+						<input
+							value={command}
+							onChange={(e) => setCommand(e.target.value)}
+							onKeyDown={(e) => { if (e.key === "Enter") runCommand(); }}
+							placeholder="Command"
+							disabled={!selected || !allowedTools.has("tmux_run_command")}
+							className="font-mono"
+						/>
+						<button type="button" onClick={runCommand} disabled={!selected || !command.trim() || !allowedTools.has("tmux_run_command")} title="Run command" aria-label="Run command" className="px-3 rounded-lg bg-accent text-white disabled:opacity-40">
+							<Play size={15} />
+						</button>
+					</div>
+					<div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_11rem_auto] gap-2">
+						<input value={sendText} onChange={(e) => setSendText(e.target.value)} placeholder="Text to send" disabled={!selected || !allowedTools.has("tmux_send_keys")} className="font-mono" />
+						<input value={sendKeys} onChange={(e) => setSendKeys(e.target.value)} placeholder="Keys, e.g. Enter" disabled={!selected || !allowedTools.has("tmux_send_keys")} className="font-mono" />
+						<button type="button" onClick={sendKeysToPane} disabled={!selected || (!sendText && !sendKeys.trim()) || !allowedTools.has("tmux_send_keys")} title="Send keys" aria-label="Send keys" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							<Keyboard size={15} />
+						</button>
+					</div>
+					<div className="grid grid-cols-1 sm:grid-cols-[11rem_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+						<input value={newSession} onChange={(e) => setNewSession(e.target.value)} placeholder="New session" disabled={!allowedTools.has("tmux_new_session")} className="font-mono" />
+						<input value={newWorkDir} onChange={(e) => setNewWorkDir(e.target.value)} placeholder="Working directory" disabled={!allowedTools.has("tmux_new_session")} className="font-mono" />
+						<input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} placeholder="Startup command" disabled={!allowedTools.has("tmux_new_session")} className="font-mono" />
+						<button type="button" onClick={createSession} disabled={!newSession.trim() || !allowedTools.has("tmux_new_session")} title="Create session" aria-label="Create session" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
+							<Plus size={15} />
+						</button>
+					</div>
+				</div>
+			</section>
+		</div>
+	);
+}

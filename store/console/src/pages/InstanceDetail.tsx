@@ -120,7 +120,7 @@ export default function InstanceDetail() {
 		transcribePrompt: buildTranscribePrompt(surfaces, instance?.name ? [instance.name] : []),
 		// A code explainer (repo/coding) speaks ABOUT code — keep identifiers + file
 		// basenames in the spoken reply instead of gutting them to "a file … a file".
-		technical: surfaces.includes("repo") || surfaces.includes("coding"),
+		technical: surfaces.includes("repo") || surfaces.includes("coding") || surfaces.includes("tmux"),
 	});
 
 	// Auto-grow the chat input so the FULL live transcript (or a long typed message) is readable
@@ -572,7 +572,7 @@ export default function InstanceDetail() {
 									onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
 									// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
 									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voice.interim) { e.preventDefault(); sendMessage(); } }}
-									placeholder={voice.talking ? "Listening — tap to send" : voice.mode === "ptt" ? "Tap the chat to talk — or type" : voice.mode === "handsfree" ? (voice.micOn ? "Listening…" : "Hands-free — just talk") : isCoding ? "Ask about your repos..." : "Send a message..."}
+									placeholder={voice.talking ? "Listening — tap to send" : voice.mode === "ptt" ? "Tap the chat to talk — or type" : voice.mode === "handsfree" ? (voice.micOn ? "Listening…" : "Hands-free — just talk") : isCoding ? "Ask about your repos..." : surfaces.includes("tmux") ? "Ask about tmux sessions..." : "Send a message..."}
 									readOnly={!!voice.interim}
 									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
 								/>

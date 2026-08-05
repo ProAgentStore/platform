@@ -7,6 +7,7 @@ import IndexingTab from "../tabs/IndexingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
+import TmuxTab from "../tabs/TmuxTab";
 import type { BoardColumn, SettingsField } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -22,7 +23,7 @@ import type { BoardColumn, SettingsField } from "./types";
 // See ../../../PLAN-agent-os.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "activity" | "indexing" | "knowledge" | "data" | "settings";
+export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "tmux" | "activity" | "indexing" | "knowledge" | "data" | "settings";
 
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
@@ -72,7 +73,7 @@ export const SURFACES: SurfaceDef[] = [
 		label: "Board",
 		icon: "📋",
 		// Generic work board for agents without their own dedicated surface.
-		show: (s) => !s.includes("coding") && !s.includes("apply") && !s.includes("repo"),
+		show: (s) => !s.includes("coding") && !s.includes("apply") && !s.includes("repo") && !s.includes("tmux"),
 		scroll: true,
 		render: ({ instanceId, boardColumns }) => <BoardTab instanceId={instanceId} columns={boardColumns} />,
 	},
@@ -106,6 +107,13 @@ export const SURFACES: SurfaceDef[] = [
 				copilot={surfaceOptions?.coding?.copilot !== false}
 			/>
 		),
+	},
+	{
+		id: "tmux",
+		label: "tmux",
+		icon: "▣",
+		show: (s) => s.includes("tmux"),
+		render: ({ instanceId }) => <TmuxTab instanceId={instanceId} />,
 	},
 	{
 		id: "activity",

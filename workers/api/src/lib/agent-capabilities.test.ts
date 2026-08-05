@@ -18,8 +18,8 @@ describe("agentCapabilities", () => {
 	});
 
 	it("filters unknown surfaces out of declared config", () => {
-		const cfg = JSON.stringify({ capabilities: { surfaces: ["coding", "bogus"] } });
-		expect(agentCapabilities({ config: cfg }).surfaces).toEqual(["coding"]);
+		const cfg = JSON.stringify({ capabilities: { surfaces: ["coding", "tmux", "bogus"] } });
+		expect(agentCapabilities({ config: cfg }).surfaces).toEqual(["coding", "tmux"]);
 	});
 
 	it("falls back to apply for the job-application agent", () => {
@@ -175,9 +175,10 @@ describe("agentCapabilities", () => {
 		});
 
 		it("drops unknown surfaces and dedupes", () => {
-			expect(sanitizeDeclaredCapabilities({ surfaces: ["coding", "bogus", "coding", "repo"] }).surfaces).toEqual([
+			expect(sanitizeDeclaredCapabilities({ surfaces: ["coding", "bogus", "coding", "repo", "tmux"] }).surfaces).toEqual([
 				"coding",
 				"repo",
+				"tmux",
 			]);
 		});
 
@@ -229,7 +230,7 @@ describe("custom surfaces — a bundle must not be able to impersonate a built-i
 		// The console resolves custom surfaces BEFORE the built-in registry, so `{id:"settings"}`
 		// would render a third-party bundle where the real Settings tab belongs — a
 		// credential-phishing surface under a legitimate label.
-		for (const id of ["settings", "chat", "board", "coding", "knowledge", "apply"]) {
+		for (const id of ["settings", "chat", "board", "coding", "tmux", "knowledge", "apply"]) {
 			expect(sanitizeCustomSurfaces([surf({ id })])).toBeUndefined();
 		}
 	});
