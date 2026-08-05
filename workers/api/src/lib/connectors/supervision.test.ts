@@ -102,10 +102,13 @@ describe("tool shape", () => {
 });
 
 describe("check_delegation", () => {
-	it("asks for one of the two identifiers rather than guessing", async () => {
+	it("answers WITHOUT an identifier now — it used to refuse and demand one", async () => {
+		// It required a runId or an instanceId, which meant the model had to already know who to
+		// ask about before it could find out anything. That is backwards for the "what is going
+		// on?" question, and it is why the Lead could never answer without delegating first.
 		const r = await tool("check_delegation").handler(ctx(buildEnv()) as never, {});
-		expect(r.success).toBe(false);
-		expect(r.content).toMatch(/runId|instanceId/);
+		expect(r.success).toBe(true);
+		expect(JSON.parse(r.content).subordinates).toHaveLength(1);
 	});
 });
 
@@ -165,5 +168,36 @@ describe("subordinate_status — the observe verb", () => {
 		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
 		expect(out.subordinates[0].name).toBe("Repo Coder");
 		expect(out.subordinates[0].work).toEqual([]);
+	});
+});
+
+describe("check_delegation without a runId — the model reaches for the tool it already knows", () => {
+	// Measured, not assumed: given both tools, the Lead called check_delegation three times in a
+	// row and never called subordinate_status. A new tool name has to be DISCOVERED; the one
+	// already in the model's habit does not. Both paths therefore return the same good answer.
+	it("returns the same global picture subordinate_status does", async () => {
+		const env = buildEnv({
+			work: [{ instance_id: "sub", id: "t1", type: "delegation", status: "completed",
+			         payload: JSON.stringify({ title: "Delegated: x" }), updated_at: "2026-08-05T10:00:00.000Z" }],
+		});
+		const viaNew = JSON.parse((await tool("subordinate_status").handler(ctx(env) as never, {})).content);
+		const viaOld = JSON.parse((await tool("check_delegation").handler(ctx(env) as never, {})).content);
+		expect(viaOld.subordinates).toEqual(viaNew.subordinates);
+	});
+
+	it("still answers a SPECIFIC run id from the run record, not the summary", async () => {
+		// The drill-down branch is correct as-is and must not be swallowed by the summary.
+		const t = tool("check_delegation");
+		const out = await t.handler(ctx(buildEnv()) as never, { runId: "nope" });
+		expect(out.success).toBe(false);
+		expect(out.content).toMatch(/No delegated run with id nope/);
+	});
+
+	it("no longer demands an instanceId just to say what is going on", async () => {
+		// It used to refuse with "Give either a runId, or an instanceId" — which forced the model
+		// to already know who to ask about before it could find out anything.
+		const out = await tool("check_delegation").handler(ctx(buildEnv()) as never, {});
+		expect(out.success).toBe(true);
+		expect(out.content).not.toMatch(/Give either a runId/);
 	});
 });

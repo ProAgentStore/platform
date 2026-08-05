@@ -17,7 +17,7 @@
 // `delegate_goal` re-checks that on every call rather than trusting the caller.
 
 import { delegateToInstance } from "../delegate-instance.js";
-import { getLoopRun, listLoopRuns } from "../agent-loop-store.js";
+import { getLoopRun } from "../agent-loop-store.js";
 import { loadGraph } from "../supervision.js";
 import { subordinatesOf } from "../supervision-graph.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "../agent-capabilities.js";
@@ -87,6 +87,33 @@ async function subordinateSummaries(
 	});
 }
 
+/**
+ * The supervisor's global picture. Shared by `subordinate_status` and by `check_delegation`'s
+ * no-run-id branch, so the answer does not depend on which tool the model happens to reach for.
+ */
+async function observeSubordinates(
+	ctx: { env: never; userId?: string; instanceId?: string },
+	only?: string,
+	limit?: number,
+): Promise<{ content: string; success: boolean }> {
+	const subs = await subordinateSummaries(ctx as never, only);
+	if (!subs.length) {
+		return {
+			content: only ? "You do not supervise that agent. Call list_subordinates to see who you may address." : NO_SUBORDINATES,
+			success: true,
+		};
+	}
+	const userId = ctx.userId ?? "";
+	const ids = subs.map((s) => s.instanceId);
+	// Two statements total, regardless of fan-out — see instance-work.ts.
+	const [work, runs] = await Promise.all([
+		recentWorkForInstances(ctx.env, userId, ids, limit).catch(() => []),
+		recentRunsForInstances(ctx.env, userId, ids).catch(() => []),
+	]);
+	const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
+	return { content: JSON.stringify({ asOf: new Date().toISOString(), ...view }, null, 2), success: true };
+}
+
 const NO_SUBORDINATES = "You do not supervise any agents yet. Add a supervision link in Settings first.";
 
 export const SUPERVISION_TOOLS: ToolDef[] = [
@@ -126,26 +153,8 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		},
 		handler: async (ctx, input) => {
 			const only = typeof input.instanceId === "string" && input.instanceId.trim() ? input.instanceId.trim() : undefined;
-			const subs = await subordinateSummaries(ctx as never, only);
-			if (!subs.length) {
-				return {
-					content: only
-						? "You do not supervise that agent. Call list_subordinates to see who you may address."
-						: NO_SUBORDINATES,
-					success: true,
-				};
-			}
-			const env = (ctx as { env: never }).env;
-			const userId = (ctx as { userId?: string }).userId ?? "";
-			const ids = subs.map((s) => s.instanceId);
-			const perInstance = typeof input.limit === "number" ? input.limit : undefined;
-			// Two statements total, regardless of fan-out — see instance-work.ts.
-			const [work, runs] = await Promise.all([
-				recentWorkForInstances(env, userId, ids, perInstance).catch(() => []),
-				recentRunsForInstances(env, userId, ids).catch(() => []),
-			]);
-			const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
-			return { content: JSON.stringify({ asOf: new Date().toISOString(), ...view }, null, 2), success: true };
+			const limit = typeof input.limit === "number" ? input.limit : undefined;
+			return observeSubordinates(ctx as never, only, limit);
 		},
 	},
 	{
@@ -196,7 +205,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		connector: "supervision",
 		scope: "read",
 		description:
-			"Check what a delegated run is doing: its status, how many steps it has taken, and why it stopped. With no run id, lists the most recent runs you started. Use this instead of asking the agent — delegation reports back through here.",
+			"Check ONE delegated run by id: its status, how many steps it has taken, and why it stopped. With no run id this falls through to the same picture subordinate_status gives — so for \"what is happening across my agents\", prefer subordinate_status directly.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -212,12 +221,16 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 				if (!run) return { content: `No delegated run with id ${runId}.`, success: false };
 				return { content: JSON.stringify(run, null, 2), success: true };
 			}
-			const instanceId = String(input.instanceId ?? "").trim();
-			if (!instanceId) {
-				return { content: "Give either a runId, or an instanceId to list that agent's runs.", success: false };
-			}
-			const runs = await listLoopRuns(ctx.env as never, userId, instanceId, 10);
-			return { content: JSON.stringify(runs, null, 2), success: true };
+			// No run id → the caller is asking "what is going on", not "how is run X". Answer with
+			// the SAME view subordinate_status returns rather than a bare list of loop rows.
+			//
+			// Not politeness — measured. Given both tools, the Lead reached for this one three
+			// times in a row and never called subordinate_status, because it is the tool it has
+			// always used and its own description advertises the listing branch. A new tool name
+			// has to be DISCOVERED; the one already in the model's habit does not. Making both
+			// paths return the good answer is robust to which one it picks.
+			const only = String(input.instanceId ?? "").trim() || undefined;
+			return observeSubordinates(ctx as never, only);
 		},
 	},
 ];
