@@ -34,7 +34,8 @@ usageRoutes.get("/", async (c) => {
 	const where = days ? "AND u.created_at >= ?2" : "";
 	const stmt = c.env.DB.prepare(
 		`SELECT COALESCE(u.agent_id, i.agent_id) AS agent_id, u.instance_id, u.provider, u.model, u.kind,
-		        u.input_tokens, u.output_tokens, u.cost_micros, u.created_at, a.name AS agent_name
+		        u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
+		        u.cost_micros, u.created_at, a.name AS agent_name
 		 FROM ai_usage u
 		 LEFT JOIN agent_instances i ON i.id = u.instance_id
 		 LEFT JOIN agents a ON a.id = COALESCE(u.agent_id, i.agent_id)

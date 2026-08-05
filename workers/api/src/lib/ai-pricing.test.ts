@@ -82,3 +82,39 @@ describe("formatUsd", () => {
 		expect(formatUsd(500)).toBe("<$0.01");
 	});
 });
+
+describe("prompt-cache pricing (#212)", () => {
+	it("prices a cache READ at a tenth of input — the whole point of caching", () => {
+		// 1M input tokens on sonnet = $3.00. The same tokens served from cache = $0.30.
+		expect(estimateCostMicros("claude-sonnet-4-6", 1_000_000, 0)).toBe(3_000_000);
+		expect(estimateCostMicros("claude-sonnet-4-6", 0, 0, { read: 1_000_000 })).toBe(300_000);
+	});
+
+	it("prices a cache WRITE at 1.25x — you pay a premium once to save 90% later", () => {
+		expect(estimateCostMicros("claude-sonnet-4-6", 0, 0, { write: 1_000_000 })).toBe(3_750_000);
+	});
+
+	it("is unchanged for callers that pass no cache info", () => {
+		// Every non-Anthropic path (Workers AI) has no prompt cache and must keep its old number.
+		expect(estimateCostMicros("claude-sonnet-4-6", 1000, 100)).toBe(estimateCostMicros("claude-sonnet-4-6", 1000, 100, {}));
+		expect(estimateCostMicros("@cf/meta/llama-3.2-3b-instruct", 1000, 100, { read: 5000 }))
+			.toBeGreaterThanOrEqual(0);
+	});
+
+	it("stops overstating a mostly-cached call", () => {
+		// The bug: input+read+write were summed and ALL priced at the input rate. A 10k-token
+		// prompt that is 90% cache-read cost $0.030 on the old maths and really costs $0.0057 —
+		// so the Usage page was reporting >5x the true figure for a well-cached agent.
+		const wrong = estimateCostMicros("claude-sonnet-4-6", 10_000, 0);
+		const right = estimateCostMicros("claude-sonnet-4-6", 1_000, 0, { read: 9_000 });
+		expect(wrong).toBe(30_000);
+		expect(right).toBe(5_700);
+		expect(right).toBeLessThan(wrong / 5);
+	});
+
+	it("never returns a negative or fractional micro", () => {
+		expect(estimateCostMicros("claude-sonnet-4-6", -5, -5, { read: -100, write: -100 })).toBe(0);
+		expect(Number.isInteger(estimateCostMicros("claude-sonnet-4-6", 7, 3, { read: 11, write: 13 }))).toBe(true);
+	});
+});
+

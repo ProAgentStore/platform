@@ -4,11 +4,11 @@ import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { BarChart3, RefreshCw } from "lucide-react";
 
-interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }
+interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
 interface Day { date: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }
 interface UsageData {
 	range: string;
-	totals: { inputTokens: number; outputTokens: number; costMicros: number; calls: number };
+	totals: { inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number };
 	daily: Day[];
 	byModel: Bucket[];
 	byKind: Bucket[];
@@ -124,6 +124,13 @@ export default function Usage() {
 	usePolling(load, 30000, true);
 
 	const totals = data?.totals;
+	// null when there is nothing to report on — no calls, or only pre-0074 rows where the split was
+	// never recorded. Showing "0%" then would claim the cache is failing when we simply don't know.
+	const cacheHitRate = (() => {
+		const read = totals?.cacheReadTokens ?? 0;
+		const fresh = totals?.inputTokens ?? 0;
+		return read + fresh > 0 && read > 0 ? read / (read + fresh) : null;
+	})();
 	const empty = !!data && totals && totals.calls === 0;
 
 	return (
@@ -166,8 +173,21 @@ export default function Usage() {
 						<Stat label="Est. cost" value={usd(totals.costMicros)} accent />
 						<Stat label="Total tokens" value={tok(totals.inputTokens + totals.outputTokens)} />
 						<Stat label="Input · Output" value={`${tok(totals.inputTokens)} · ${tok(totals.outputTokens)}`} />
-						<Stat label="AI calls" value={totals.calls.toLocaleString()} />
+						{/* Cache hit rate — read ÷ (input + read). The number that says whether prompt
+						    caching is actually working; a read costs a tenth of a fresh input token,
+						    so this is where the money is. Hidden until there is cache data, since
+						    rows written before migration 0074 genuinely do not know. */}
+						{cacheHitRate === null ? (
+							<Stat label="AI calls" value={totals.calls.toLocaleString()} />
+						) : (
+							<Stat label="Prompt cache hit" value={`${Math.round(cacheHitRate * 100)}%`} />
+						)}
 					</div>
+					{cacheHitRate !== null && (
+						<div className="text-xs text-muted-soft -mt-2 mb-4">
+							{totals.calls.toLocaleString()} AI calls · {tok(totals.cacheReadTokens || 0)} tokens served from cache at a tenth of the input price.
+						</div>
+					)}
 
 					{/* Daily chart */}
 					<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-4">

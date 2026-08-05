@@ -1,0 +1,21 @@
+-- Split cached input tokens out of plain input (#212).
+--
+-- `user-ai.ts` summed all three Anthropic counters into one number:
+--   input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+-- so a cache READ — billed at 0.1x — was recorded and priced identically to a fresh input token.
+--
+-- Two consequences, both bad:
+--   • the Usage page OVERSTATES cost whenever the cache works, because every read is priced at
+--     the full input rate;
+--   • nobody can tell whether prompt caching is working AT ALL. The system prompt is cached
+--     (user-ai.ts), but `agent-think.ts` injects a fresh live terminal capture into that same
+--     block every turn, which would bust the cache on every call — and the ledger cannot show it.
+--
+-- You cannot optimise a cache you cannot see. These columns make the hit rate observable before
+-- anyone changes the prompt.
+--
+-- Nullable with no default backfill: rows written before this migration genuinely do not know the
+-- split, and defaulting them to 0 would assert "no cache activity" about calls we never measured.
+-- NULL reads as unknown; the Usage page treats it as such.
+ALTER TABLE ai_usage ADD COLUMN cache_read_tokens INTEGER;
+ALTER TABLE ai_usage ADD COLUMN cache_write_tokens INTEGER;

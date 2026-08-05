@@ -33,6 +33,16 @@ export interface UsageContext {
 export interface UsageTokens {
 	input: number;
 	output: number;
+	/**
+	 * Prompt-cache tokens, kept SEPARATE from `input` (#212).
+	 *
+	 * They used to be summed into it, so a cache read — billed at 0.1x — was recorded and priced
+	 * exactly like a fresh input token. That both overstated cost and made the cache invisible:
+	 * there was no way to tell whether prompt caching was working at all, which is the number you
+	 * need before touching a prompt to make it cache better.
+	 */
+	cacheRead?: number;
+	cacheWrite?: number;
 }
 
 interface RecordArgs extends UsageContext {
@@ -53,13 +63,18 @@ export async function recordUsage(
 ): Promise<void> {
 	try {
 		if (!args.userId || !usage) return;
-		const input = Math.max(0, Math.floor(Number(usage.input) || 0));
-		const output = Math.max(0, Math.floor(Number(usage.output) || 0));
-		if (input === 0 && output === 0) return;
-		const cost = estimateCostMicros(args.model, input, output);
+		const n = (v: unknown) => Math.max(0, Math.floor(Number(v) || 0));
+		const input = n(usage.input);
+		const output = n(usage.output);
+		const cacheRead = n(usage.cacheRead);
+		const cacheWrite = n(usage.cacheWrite);
+		// A fully-cached call can legitimately have input 0 — dropping it would hide exactly the
+		// calls we most want to see, and undercount spend (a cache read is not free).
+		if (input === 0 && output === 0 && cacheRead === 0 && cacheWrite === 0) return;
+		const cost = estimateCostMicros(args.model, input, output, { read: cacheRead, write: cacheWrite });
 		await env.DB.prepare(
-			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cost_micros, created_at)
-			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))`,
+			`INSERT INTO ai_usage (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_micros, created_at)
+			 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'))`,
 		)
 			.bind(
 				crypto.randomUUID(),
@@ -71,6 +86,8 @@ export async function recordUsage(
 				args.kind,
 				input,
 				output,
+				cacheRead,
+				cacheWrite,
 				cost,
 			)
 			.run();
@@ -152,6 +169,9 @@ export interface UsageRow {
 	kind: string;
 	input_tokens: number;
 	output_tokens: number;
+	/** Prompt-cache tokens. NULL on rows written before 0074 — genuinely unknown, not zero. */
+	cache_read_tokens?: number | null;
+	cache_write_tokens?: number | null;
 	cost_micros: number;
 	created_at: string; // "YYYY-MM-DD HH:MM:SS" (UTC, D1 datetime('now'))
 }
@@ -161,6 +181,15 @@ export interface UsageBucket {
 	label?: string;
 	inputTokens: number;
 	outputTokens: number;
+	/**
+	 * Prompt-cache tokens, reported separately so the hit rate is visible.
+	 *
+	 * cacheReadTokens ÷ (inputTokens + cacheReadTokens) IS the cache hit rate. Before this they
+	 * were summed into inputTokens, so the ratio could not be computed and nobody could tell
+	 * whether caching worked — while the cost line silently assumed it never did.
+	 */
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
 	costMicros: number;
 	calls: number;
 }
@@ -173,11 +202,16 @@ export interface UsageSummary {
 	byAgent: UsageBucket[];
 }
 
-const emptyBucket = (key: string): UsageBucket => ({ key, inputTokens: 0, outputTokens: 0, costMicros: 0, calls: 0 });
+const emptyBucket = (key: string): UsageBucket => ({ key, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, calls: 0 });
 
 function bump(b: UsageBucket, r: UsageRow) {
 	b.inputTokens += r.input_tokens || 0;
 	b.outputTokens += r.output_tokens || 0;
+	// `|| 0` folds pre-0074 NULLs into zero for the SUM, which is the only sane arithmetic — the
+	// distinction that matters (unknown vs. genuinely no cache activity) is preserved per-row in
+	// D1, not in an aggregate that has to add them up.
+	b.cacheReadTokens += r.cache_read_tokens || 0;
+	b.cacheWriteTokens += r.cache_write_tokens || 0;
 	b.costMicros += r.cost_micros || 0;
 	b.calls += 1;
 }
@@ -196,7 +230,7 @@ export function aggregateUsage(
 	rows: UsageRow[],
 	opts: { fromDay?: string; toDay?: string; agentNames?: Record<string, string> } = {},
 ): UsageSummary {
-	const totals = { inputTokens: 0, outputTokens: 0, costMicros: 0, calls: 0 };
+	const totals = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0, calls: 0 };
 	const dayMap = new Map<string, UsageBucket>();
 	const modelMap = new Map<string, UsageBucket>();
 	const kindMap = new Map<string, UsageBucket>();
@@ -211,6 +245,8 @@ export function aggregateUsage(
 	for (const r of rows) {
 		totals.inputTokens += r.input_tokens || 0;
 		totals.outputTokens += r.output_tokens || 0;
+		totals.cacheReadTokens += r.cache_read_tokens || 0;
+		totals.cacheWriteTokens += r.cache_write_tokens || 0;
 		totals.costMicros += r.cost_micros || 0;
 		totals.calls += 1;
 		into(dayMap, usageDay(r.created_at), r);

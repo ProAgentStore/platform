@@ -185,9 +185,15 @@ async function runAnthropic(
 	const textParts = content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
 	const toolUse = content.filter((c) => c.type === "tool_use");
 	const u = (data.usage as Record<string, number>) || {};
+	// Kept SEPARATE, not summed (#212). Anthropic bills a cache read at 0.1x input and a cache
+	// write at 1.25x; folding all three into `input` priced every read at the full rate and made
+	// the cache invisible — you could not tell a hit from a miss, so you could not tell whether
+	// caching was working before changing a prompt to make it work better.
 	const usage = {
-		input: (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0),
+		input: u.input_tokens || 0,
 		output: u.output_tokens || 0,
+		cacheRead: u.cache_read_input_tokens || 0,
+		cacheWrite: u.cache_creation_input_tokens || 0,
 	};
 
 	// Ledger the call for the Usage page. Best-effort: recordUsage swallows all errors,

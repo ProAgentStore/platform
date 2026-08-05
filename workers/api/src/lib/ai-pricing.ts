@@ -59,16 +59,36 @@ export function priceFor(model: string | null | undefined): ModelPrice {
  * Estimated cost of one call, in integer micros of USD. Never negative; tolerates
  * missing/garbage token counts (treated as 0).
  */
+/**
+ * Anthropic prompt-cache multipliers, relative to the model's input price.
+ *
+ * A cache READ is billed at 0.1x input, and WRITING the cache costs 1.25x (you pay a premium once
+ * to save 90% on every later read). Folding both into plain input — which this did — overstates
+ * cost whenever the cache works and understates the benefit of making it work.
+ *
+ * Ratios, not a per-model table: Anthropic defines them as multiples of the model's own input
+ * price, so a new model needs no entry here.
+ */
+export const CACHE_READ_MULTIPLIER = 0.1;
+export const CACHE_WRITE_MULTIPLIER = 1.25;
+
 export function estimateCostMicros(
 	model: string | null | undefined,
 	inputTokens: number | null | undefined,
 	outputTokens: number | null | undefined,
+	/** Cached tokens, priced at their own rates. Omit for providers without a prompt cache. */
+	cache?: { read?: number | null; write?: number | null },
 ): number {
 	const p = priceFor(model);
-	const inTok = Math.max(0, Math.floor(Number(inputTokens) || 0));
-	const outTok = Math.max(0, Math.floor(Number(outputTokens) || 0));
+	const n = (v: number | null | undefined) => Math.max(0, Math.floor(Number(v) || 0));
+	const inTok = n(inputTokens);
+	const outTok = n(outputTokens);
 	// tokens × (USD / 1e6 tokens) × 1e6 micros/USD  ⇒  tokens × USD-per-M, rounded.
-	const micros = inTok * p.inputPerM + outTok * p.outputPerM;
+	const micros =
+		inTok * p.inputPerM +
+		outTok * p.outputPerM +
+		n(cache?.read) * p.inputPerM * CACHE_READ_MULTIPLIER +
+		n(cache?.write) * p.inputPerM * CACHE_WRITE_MULTIPLIER;
 	return Math.round(micros);
 }
 

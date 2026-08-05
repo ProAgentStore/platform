@@ -25,7 +25,7 @@ describe("denseDays", () => {
 describe("aggregateUsage", () => {
 	it("sums totals across rows", () => {
 		const s = aggregateUsage([row(), row({ input_tokens: 500, output_tokens: 100, cost_micros: 3000 })]);
-		expect(s.totals).toEqual({ inputTokens: 1500, outputTokens: 300, costMicros: 9000, calls: 2 });
+		expect(s.totals).toEqual({ inputTokens: 1500, outputTokens: 300, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 9000, calls: 2 });
 	});
 
 	it("breaks down by model, kind and agent sorted by cost", () => {
@@ -62,3 +62,38 @@ describe("aggregateUsage", () => {
 		expect(s.daily.map((d) => d.date)).toEqual(["2026-07-10", "2026-07-14"]);
 	});
 });
+
+describe("prompt-cache tokens are reported separately (#212)", () => {
+	it("keeps cache reads OUT of inputTokens, so the hit rate is computable", () => {
+		// They used to be summed into input. That made the hit rate — cacheRead ÷ (input +
+		// cacheRead) — impossible to compute, so nobody could tell whether prompt caching was
+		// working, while the cost line silently priced every read at the full input rate.
+		const s = aggregateUsage([row({ input_tokens: 200, cache_read_tokens: 1800, cache_write_tokens: 0 })]);
+		expect(s.totals.inputTokens).toBe(200);
+		expect(s.totals.cacheReadTokens).toBe(1800);
+		const hitRate = s.totals.cacheReadTokens / (s.totals.inputTokens + s.totals.cacheReadTokens);
+		expect(hitRate).toBeCloseTo(0.9);
+	});
+
+	it("carries the split into every breakdown, not just totals", () => {
+		// The per-kind view is where you would actually look: "is the Coder's chat cache-hitting?"
+		const s = aggregateUsage([
+			row({ kind: "chat", input_tokens: 100, cache_read_tokens: 900 }),
+			row({ kind: "coding", input_tokens: 1000, cache_read_tokens: 0 }),
+		]);
+		const chat = s.byKind.find((b) => b.key === "chat");
+		const coding = s.byKind.find((b) => b.key === "coding");
+		expect(chat?.cacheReadTokens).toBe(900);
+		expect(coding?.cacheReadTokens).toBe(0);
+	});
+
+	it("treats a pre-migration NULL as zero for the sum without crashing", () => {
+		// Rows written before 0074 have NULL — genuinely unknown. Aggregation has to add them up
+		// somehow, and zero is the only sane arithmetic; the unknown-vs-zero distinction lives in
+		// D1, not in a total.
+		const s = aggregateUsage([row({ cache_read_tokens: null, cache_write_tokens: null })]);
+		expect(s.totals.cacheReadTokens).toBe(0);
+		expect(s.totals.cacheWriteTokens).toBe(0);
+	});
+});
+
