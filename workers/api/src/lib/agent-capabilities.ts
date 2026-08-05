@@ -29,6 +29,16 @@ export interface CustomSurface {
 	label: string;
 	icon?: string;
 	bundleUrl: string;
+	/**
+	 * May this surface replace the page header while it is active?
+	 *
+	 * The same capability the built-in surface registry declares (`store/console/src/lib/surfaces.tsx`
+	 * `ownsHeader`). A full-screen surface — a live terminal — needs the header for its own context
+	 * and controls. It used to be `if (tab !== "coding")` in the console, so exactly one first-party
+	 * component could have it; declaring it here means a published surface is not a second-class
+	 * citizen, and the shell derives the behaviour instead of naming a tab.
+	 */
+	ownsHeader?: boolean;
 }
 
 export type SettingsFieldType = "select" | "text" | "number" | "toggle";
@@ -216,7 +226,12 @@ export function sanitizeCustomSurfaces(value: unknown): CustomSurface[] | undefi
 		if (!label || !isAllowedBundleUrl(bundleUrl)) continue;
 		seen.add(id);
 		const icon = typeof o.icon === "string" ? o.icon.trim().slice(0, 8) : undefined;
-		out.push({ id, label, bundleUrl, icon: icon || undefined });
+		// A surface that takes the full viewport may replace the page header — the same capability
+		// the built-in registry declares with `ownsHeader`. Sanitized here or a creator could
+		// declare it and watch it silently vanish: a whitelist that drops an unknown field is the
+		// failure mode `parseConfig` is already documented for.
+		const ownsHeader = o.ownsHeader === true ? true : undefined;
+		out.push({ id, label, bundleUrl, icon: icon || undefined, ownsHeader });
 	}
 	return out.length ? out : undefined;
 }

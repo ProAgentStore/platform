@@ -10,9 +10,10 @@ import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
-import { SURFACES, visibleSurfaces } from "../lib/surfaces";
+import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import DynamicSurface from "../components/DynamicSurface";
+import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
 
 /**
@@ -550,10 +551,15 @@ export default function InstanceDetail() {
 		</div>
 	), [instance, hasRuntime, runnerOnline, runnerNode, tab, tabDefs, navigate]);
 
-	// Child tabs (CodingTab) can override the header when they have their own controls
+	// A surface that DECLARES `ownsHeader` may replace the page header while it is active — a
+	// full-screen terminal needs it for repo + engine status + session actions.
 	const [childHeader, setChildHeader] = useState<ReactNode | null>(null);
-	// Clear override when switching away from the tab that set it
-	useEffect(() => { if (tab !== "coding") setChildHeader(null); }, [tab]);
+	// Clear it whenever the active surface is not one that declares the capability. Derived from
+	// the declaration — the built-in registry OR the agent's own published surface — not from
+	// `tab !== "coding"`: the string comparison meant only one surface could ever own the header,
+	// and the next one to need it would have added a second hardcoded branch.
+	const activeOwnsHeader = surfaceOwnsHeader(tab) || customSurfaces.some((c) => c.id === tab && c.ownsHeader);
+	useEffect(() => { if (!activeOwnsHeader) setChildHeader(null); }, [activeOwnsHeader]);
 	useHeaderSlot(childHeader || headerContent);
 
 	return (
@@ -784,7 +790,14 @@ export default function InstanceDetail() {
 						// switching tabs clears a stale error.
 						return (
 							<ErrorBoundary resetKey={custom.id}>
-								<DynamicSurface bundleUrl={custom.bundleUrl} instanceId={id} sessionId={urlSessionId} />
+								<DynamicSurface
+									bundleUrl={custom.bundleUrl}
+									instanceId={id}
+									sessionId={urlSessionId}
+									// Only a surface that DECLARED the capability is handed a working
+									// setHeader; for the rest the bundle's call is inert.
+									onHeader={custom.ownsHeader ? (el) => setChildHeader(el ? <HostedNode el={el} /> : null) : undefined}
+								/>
 							</ErrorBoundary>
 						);
 					}

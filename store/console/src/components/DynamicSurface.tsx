@@ -51,6 +51,18 @@ export interface SurfaceMountContext {
 	instanceId: string;
 	sessionId?: string;
 	sdk: SurfaceSdk;
+	/**
+	 * Replace the page header while this surface is active, or clear it with null.
+	 *
+	 * Only honoured for a surface that DECLARES `ownsHeader` — the platform passes a no-op
+	 * otherwise, so a bundle cannot seize the header by calling an API it never declared. The
+	 * shell also clears the header on unmount, so a crashing bundle cannot strand its own chrome
+	 * over the next tab.
+	 *
+	 * Takes an HTMLElement rather than a React node: a bundle owns a plain DOM subtree and may
+	 * ship its own framework, so handing it React would be the one thing this boundary avoids.
+	 */
+	setHeader: (el: HTMLElement | null) => void;
 }
 
 type SurfaceModule = {
@@ -59,12 +71,19 @@ type SurfaceModule = {
 
 const sdk: SurfaceSdk = { api, getToken, apiBase: API, renderMd, mdLite, esc, escAttr, formatTime };
 
-export default function DynamicSurface({ bundleUrl, instanceId, sessionId }: {
+export default function DynamicSurface({ bundleUrl, instanceId, sessionId, onHeader }: {
 	bundleUrl: string;
 	instanceId: string;
 	sessionId?: string;
+	/** Provided ONLY when the surface declares `ownsHeader`; absent ⇒ setHeader is a no-op. */
+	onHeader?: (el: HTMLElement | null) => void;
 }) {
 	const ref = useRef<HTMLDivElement>(null);
+	// Read through a ref, and deliberately NOT a dependency below: the caller passes an inline
+	// closure, so depending on it would tear down and re-import the bundle on every parent render.
+	// The ref keeps the effect from closing over a stale one without paying that cost.
+	const onHeaderRef = useRef(onHeader);
+	onHeaderRef.current = onHeader;
 	const [error, setError] = useState("");
 	const [loading, setLoading] = useState(true);
 
@@ -88,7 +107,11 @@ export default function DynamicSurface({ bundleUrl, instanceId, sessionId }: {
 					setError("This surface bundle has no mount() export.");
 					return;
 				}
-				unmount = mod.mount({ el: ref.current, instanceId, sessionId, sdk });
+				// A bundle that did not declare `ownsHeader` still gets the function — calling it is
+				// simply inert. Handing it a missing key instead would make every bundle guard for
+				// it, and the failure mode of forgetting is a crash rather than a no-op.
+				const setHeader = (el: HTMLElement | null) => onHeaderRef.current?.(el);
+				unmount = mod.mount({ el: ref.current, instanceId, sessionId, sdk, setHeader });
 			} catch (e) {
 				if (!cancelled) setError(e instanceof Error ? e.message : String(e));
 			} finally {
@@ -96,6 +119,9 @@ export default function DynamicSurface({ bundleUrl, instanceId, sessionId }: {
 			}
 		})();
 		return () => {
+			// The shell owns the header: clear whatever the bundle put there, so a surface that
+			// crashes or unmounts cannot strand its chrome over the next tab.
+			onHeaderRef.current?.(null);
 			cancelled = true;
 			try { (unmount as (() => void) | undefined)?.(); } catch { /* surface cleanup threw */ }
 			// Surfaces own their subtree; clear it so a remount starts clean.

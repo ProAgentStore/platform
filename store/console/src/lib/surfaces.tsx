@@ -54,6 +54,19 @@ export interface SurfaceDef {
 	render?: (ctx: SurfaceContext) => ReactNode;
 	/** Wrap the body in the standard scroll padding (board/knowledge/settings) vs. render raw (coding). */
 	scroll?: boolean;
+	/**
+	 * May this surface REPLACE the page header while it is the active tab?
+	 *
+	 * A surface that takes the full viewport (a live terminal) needs the header for its own
+	 * context and controls — which repo, is the engine idle, restart it. That is a real need, but
+	 * it used to be spelled `if (tab !== "coding")` in InstanceDetail: a string comparison against
+	 * one tab name, so no other surface could ever have it and the next one would have added a
+	 * second branch. Declared here instead, and the shell derives the behaviour from the registry.
+	 *
+	 * The surface pushes its node through `ctx.setChildHeader`; the shell clears it automatically
+	 * when a surface that does NOT declare this becomes active.
+	 */
+	ownsHeader?: boolean;
 }
 
 export const SURFACES: SurfaceDef[] = [
@@ -91,6 +104,8 @@ export const SURFACES: SurfaceDef[] = [
 		label: "Coding",
 		icon: "💻",
 		show: (s) => s.includes("coding"),
+		// A full-screen terminal owns the header: repo + engine status + session actions.
+		ownsHeader: true,
 		render: ({ instanceId, sessionId, setChildHeader, surfaceOptions }) => (
 			<CodingTab
 				key={instanceId}
@@ -164,6 +179,11 @@ export const SURFACES: SurfaceDef[] = [
 ];
 
 export const SURFACE_IDS = SURFACES.map((s) => s.id);
+
+/** Does the surface with this id declare that it may replace the page header? */
+export function surfaceOwnsHeader(id: string | undefined): boolean {
+	return !!SURFACES.find((s) => s.id === id)?.ownsHeader;
+}
 
 /** Tabs visible for an instance with the given capability surfaces, in registry order. */
 export function visibleSurfaces(surfaces: string[]): SurfaceDef[] {

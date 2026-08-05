@@ -22,6 +22,11 @@ export interface CustomSurface {
 	icon?: string;
 	/** ESM bundle exporting mount(ctx). Loaded by DynamicSurface. */
 	bundleUrl: string;
+	/**
+	 * May this surface replace the page header while it is active? Same capability the built-in
+	 * registry declares with `ownsHeader` — a published surface is not a second-class citizen.
+	 */
+	ownsHeader?: boolean;
 }
 
 export interface Instance {

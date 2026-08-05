@@ -353,3 +353,34 @@ describe("columnForStatus — the canonical bucketing rule", () => {
 		expect(columnForStatus([], "running")).toBeNull();
 	});
 });
+
+describe("customSurfaces.ownsHeader — a published surface is not a second-class citizen", () => {
+	// Absolute https on a platform host — `isAllowedBundleUrl` rejects a relative path, and a
+	// fixture that fails THAT check would pass these assertions for the wrong reason.
+	const surf = (extra: Record<string, unknown> = {}) => [{
+		id: "notes", label: "Notes", bundleUrl: "https://proagentstore.online/console/surfaces/notes.js", ...extra,
+	}];
+
+	it("survives sanitizing when declared", () => {
+		// The whole point: a whitelist sanitizer that drops an unknown field lets a creator declare
+		// a capability and watch it silently do nothing — the failure `parseConfig` is already
+		// documented for. If this field is not carried through, the console never sees it.
+		expect(sanitizeCustomSurfaces(surf({ ownsHeader: true }))?.[0].ownsHeader).toBe(true);
+	});
+
+	it("is absent unless EXPLICITLY true — a truthy string must not grant it", () => {
+		// Replacing the page header is a takeover of shell chrome; it should need a real boolean,
+		// not any value that happens to be truthy in JSON.
+		for (const v of [undefined, null, 0, 1, "", "true", "yes", {}, []]) {
+			expect(sanitizeCustomSurfaces(surf({ ownsHeader: v }))?.[0].ownsHeader, String(v)).toBeUndefined();
+		}
+		expect(sanitizeCustomSurfaces(surf())?.[0].ownsHeader).toBeUndefined();
+	});
+
+	it("does not weaken the checks that keep a bundle safe", () => {
+		// Declaring a capability must not become a way past the same-origin + reserved-id gates.
+		expect(sanitizeCustomSurfaces([{ id: "chat", label: "X", bundleUrl: "https://proagentstore.online/x.js", ownsHeader: true }])).toBeUndefined();
+		expect(sanitizeCustomSurfaces([{ id: "notes", label: "X", bundleUrl: "https://evil.example/x.js", ownsHeader: true }])).toBeUndefined();
+	});
+});
+
