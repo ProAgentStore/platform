@@ -8,7 +8,7 @@
 --   runtime  "coding"  — non-null so `pags up` registers this instance and the connector can
 --                        resolve the local runner relay. It does not start a coding engine.
 --   workflow null      — no autonomous loop.
---   tools    tmux_*    — list/capture read tools plus write-consented run/send/create/kill.
+--   tools    terminal_* — generic local terminals (tmux, kitty, iTerm2 where available).
 --
 -- Writes stay fail-closed through instance_connector_consent: the agent can only run commands,
 -- send keys, create sessions, or kill sessions after the owner grants tmux write access in the
@@ -36,12 +36,12 @@ INSERT OR IGNORE INTO agents (
       "runtime": "coding",
       "workflow": null,
       "tools": [
-        "tmux_list_sessions",
-        "tmux_capture_pane",
-        "tmux_run_command",
-        "tmux_send_keys",
-        "tmux_new_session",
-        "tmux_kill_session"
+        "terminal_list_targets",
+        "terminal_capture",
+        "terminal_run_command",
+        "terminal_send_keys",
+        "terminal_new_target",
+        "terminal_kill_target"
       ]
     },
     "identity": {
@@ -64,6 +64,17 @@ INSERT OR IGNORE INTO agents (
 -- without rewriting the owner or other unrelated fields.
 UPDATE agents
    SET category = 'coding',
-       config = json_set(COALESCE(NULLIF(config, ''), '{}'), '$.capabilities.surfaces', json('["tmux"]')),
+       config = json_set(
+         json_set(COALESCE(NULLIF(config, ''), '{}'), '$.capabilities.surfaces', json('["tmux"]')),
+         '$.capabilities.tools',
+         json('[
+           "terminal_list_targets",
+           "terminal_capture",
+           "terminal_run_command",
+           "terminal_send_keys",
+           "terminal_new_target",
+           "terminal_kill_target"
+         ]')
+       ),
        updated_at = datetime('now')
  WHERE slug = 'tmux-operator';

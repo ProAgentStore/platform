@@ -12,6 +12,7 @@ import { REPO_LOCAL_TOOLS } from "./repo-local.js";
 import { SUPERVISION_TOOLS } from "./supervision.js";
 import { META_CONNECTOR } from "./meta.js";
 import { GOOGLE_SHEETS_CONNECTOR } from "./google-sheets.js";
+import { TERMINAL_TOOLS } from "./terminal.js";
 import { TMUX_TOOLS } from "./tmux.js";
 import { WEB_SEARCH_CONNECTOR } from "./web-search.js";
 
@@ -67,6 +68,16 @@ export const CONNECTORS: Connector[] = [
 	// meta is a declarative manifest (#146): shape as data, tools keep their Graph-API logic
 	// via the handler escape hatch. auth "platform-token" → Connector.auth "token" + tokenEnv.
 	META_CONNECTOR,
+	{
+		id: "terminal",
+		label: "Terminal (local runner)",
+		// Generic terminal connector over the runner relay. Backend-specific local adapters
+		// currently include tmux, kitty remote control, and iTerm2 AppleScript.
+		auth: "none",
+		scopes: { read: true, write: true },
+		grantModel: "user",
+		tools: TERMINAL_TOOLS,
+	},
 	{
 		id: "tmux",
 		label: "tmux (local runner)",

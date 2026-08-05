@@ -124,6 +124,23 @@ describe("tmux connector", () => {
 	});
 });
 
+describe("terminal connector", () => {
+	it("registers the generic local terminal tools", () => {
+		const names = registryToolNameSet();
+		expect(names.has("terminal_list_targets")).toBe(true);
+		expect(names.has("terminal_capture")).toBe(true);
+		expect(names.has("terminal_run_command")).toBe(true);
+		expect(getRegistryTool("terminal_run_command")?.connector).toBe("terminal");
+		expect(getRegistryTool("terminal_run_command")?.scope).toBe("write");
+	});
+
+	it("groups terminal tools under the terminal connector for the catalog", () => {
+		const grp = registryConnectorGroups().find((g) => g.connector === "terminal");
+		expect(grp?.tools).toContain("terminal_list_targets");
+		expect(grp?.tools).toContain("terminal_run_command");
+	});
+});
+
 describe("meta connector (WhatsApp + Instagram)", () => {
 	it("registers the meta write tools", () => {
 		const names = registryToolNameSet();

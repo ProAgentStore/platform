@@ -125,7 +125,7 @@ export const SURFACES: SurfaceDef[] = [
 	},
 	{
 		id: "tmux",
-		label: "tmux",
+		label: "Terminal",
 		icon: "▣",
 		show: (s) => s.includes("tmux"),
 		render: ({ instanceId }) => <TmuxTab instanceId={instanceId} />,

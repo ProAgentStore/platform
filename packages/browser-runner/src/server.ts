@@ -364,6 +364,55 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, { session, created: true, workDir });
 	}
 
+	// ── generic terminal connector ──────────────────────────────────────────
+	// One local-terminal vocabulary over backend-specific adapters. tmux is fully
+	// controllable; kitty needs remote control enabled; iTerm2 needs macOS Automation access.
+	if ((req.method === "GET" || req.method === "POST") && path === "/terminal/list") {
+		const { listTerminalTargets } = await import("./coding/terminal.js");
+		const b = req.method === "POST" ? await readJson<{ backend?: string }>(req) : { backend: "all" };
+		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : "all";
+		return json(res, 200, { targets: listTerminalTargets(backend) });
+	}
+	if (req.method === "POST" && path === "/terminal/capture") {
+		const { captureTerminalTarget } = await import("./coding/terminal.js");
+		const b = await readJson<{ target?: string; backend?: string; lines?: number }>(req);
+		const target = String(b.target || "").trim();
+		if (!target) return json(res, 400, { error: "A `target` is required." });
+		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
+		return json(res, 200, { target, pane: captureTerminalTarget(target, { backend, lines: b.lines }) });
+	}
+	if (req.method === "POST" && path === "/terminal/run") {
+		const { runTerminalCommand } = await import("./coding/terminal.js");
+		const b = await readJson<{ target?: string; backend?: string; command?: string }>(req);
+		const target = String(b.target || "").trim();
+		const command = String(b.command ?? "");
+		if (!target) return json(res, 400, { error: "A `target` is required." });
+		if (!command.trim()) return json(res, 400, { error: "A `command` is required." });
+		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
+		return json(res, 200, { target, command, pane: runTerminalCommand(target, command, backend) });
+	}
+	if (req.method === "POST" && path === "/terminal/send") {
+		const { sendTerminalKeys } = await import("./coding/terminal.js");
+		const b = await readJson<{ target?: string; backend?: string; text?: string; keys?: string[] }>(req);
+		const target = String(b.target || "").trim();
+		if (!target) return json(res, 400, { error: "A `target` is required." });
+		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
+		return json(res, 200, { target, pane: sendTerminalKeys(target, { backend, text: b.text == null ? undefined : String(b.text), keys: b.keys ?? [] }) });
+	}
+	if (req.method === "POST" && path === "/terminal/session") {
+		const { createTerminalTarget, killTerminalTarget } = await import("./coding/terminal.js");
+		const b = await readJson<{ action?: string; target?: string; backend?: string; name?: string; workDir?: string; command?: string }>(req);
+		const backend = b.backend === "tmux" || b.backend === "kitty" || b.backend === "iterm2" ? b.backend : undefined;
+		if (b.action === "kill") {
+			const target = String(b.target || "").trim();
+			if (!target) return json(res, 400, { error: "A `target` is required." });
+			return json(res, 200, { target, killed: killTerminalTarget(target, backend) });
+		}
+		if (!backend) return json(res, 400, { error: "`backend` must be tmux, kitty, or iterm2." });
+		const target = createTerminalTarget({ backend, name: b.name, workDir: b.workDir, command: b.command });
+		return json(res, 200, { target });
+	}
+
 	return json(res, 404, { error: "Not found" });
 }
 
