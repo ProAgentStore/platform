@@ -17,6 +17,7 @@ import {
 	unknownVoiceField,
 	type AccountPreferences,
 } from "../lib/preferences.js";
+import { TRANSLATION_LANGUAGES } from "./instances-translation.js";
 import type { Env } from "../types.js";
 
 export const preferenceRoutes = new Hono<{ Bindings: Env }>();
@@ -30,7 +31,9 @@ async function readPreferences(env: Env, userId: string): Promise<AccountPrefere
 
 preferenceRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
-	return c.json({ preferences: await readPreferences(c.env, session.uid) });
+	// The language list rides along: the Preferences page needs it to render the translation
+	// target, and it has no instance to ask. Owned by instances-translation.ts, not duplicated.
+	return c.json({ preferences: await readPreferences(c.env, session.uid), languages: TRANSLATION_LANGUAGES });
 });
 
 /**

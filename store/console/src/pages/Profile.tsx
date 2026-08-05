@@ -41,11 +41,6 @@ export default function Profile() {
 	// Token
 	const [tokenVisible, setTokenVisible] = useState(false);
 
-	// Text scale
-	const [textScale, setTextScaleState] = useState(() => {
-		try { return parseFloat(localStorage.getItem("pags:textScale") || "1") || 1; } catch { return 1; }
-	});
-
 	useEffect(() => {
 		if (!user) return;
 		setDisplayName(user.display_name || user.login || "");
@@ -92,12 +87,6 @@ export default function Profile() {
 			setCpStatus("Saved");
 			setTimeout(() => setCpStatus(""), 2500);
 		} catch { setCpStatus("Save failed"); }
-	};
-
-	const setTextScale = (s: number) => {
-		setTextScaleState(s);
-		localStorage.setItem("pags:textScale", String(s));
-		document.documentElement.style.fontSize = s === 1 ? "" : `${s * 100}%`;
 	};
 
 	const addKey = async (providerId: string, providerName: string) => {
@@ -164,21 +153,6 @@ export default function Profile() {
 					<div className="flex justify-between items-center gap-3 py-2.5 border-b border-line text-sm min-w-0">
 						<span className="text-muted font-medium">GitHub</span>
 						<a href={`https://github.com/${user.login}`} target="_blank" rel="noopener" className="text-accent min-w-0 text-right [overflow-wrap:anywhere]">{user.login}</a>
-					</div>
-				</div>
-
-				{/* Appearance */}
-				<div className="mb-6">
-					<h3 className="text-[0.95rem] font-semibold mb-3">Appearance</h3>
-					<div className="flex justify-between items-center py-2.5 border-b border-line text-sm">
-						<span className="text-muted font-medium">Text size</span>
-						<div className="inline-flex border border-line rounded-lg overflow-hidden">
-							{[{ s: 0.9, l: "A-" }, { s: 1, l: "A" }, { s: 1.15, l: "A+" }, { s: 1.3, l: "A++" }].map(({ s, l }) => (
-								<button key={s} type="button" onClick={() => setTextScale(s)}
-									className={`px-2.5 py-1 text-xs font-bold ${textScale === s ? "bg-panel-hover text-ink" : "text-muted"}`}
-								>{l}</button>
-							))}
-						</div>
 					</div>
 				</div>
 

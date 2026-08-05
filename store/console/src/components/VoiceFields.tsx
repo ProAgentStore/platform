@@ -1,0 +1,298 @@
+import { useEffect, useState } from "react";
+
+/**
+ * The voice controls, rendered IDENTICALLY by the account Preferences page and by a per-agent
+ * override on the instance Settings tab (#211).
+ *
+ * One component, two hosts. The controls used to exist only inside SettingsTab, which is why voice
+ * could not be an account setting without duplicating ~220 lines of JSX — and a duplicate would
+ * have drifted the moment one copy gained a field.
+ *
+ * The component owns the field state and re-seeds it whenever `value` changes (switching agents, or
+ * toggling an override off). It never talks to the API: the host decides whether a change writes to
+ * `/v1/preferences` or to that instance's override, which is the entire difference between them.
+ */
+export interface VoiceFieldsProps {
+	/** The effective settings to display. */
+	value: Record<string, unknown>;
+	/** Persist one changed field. Rejecting shows the error inline. */
+	onPatch: (patch: Record<string, unknown>) => Promise<unknown>;
+	/** Whether the owner has an OpenAI key — Whisper STT and OpenAI TTS need one. */
+	hasOpenAiKey: boolean | null;
+	/** Shown under the controls after a successful save. */
+	savedNote?: string;
+}
+
+export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = "Saved — applies on your next turn" }: VoiceFieldsProps) {
+	const voiceSettings = value;
+	const [sttMode, setSttMode] = useState("browser");
+	const [ttsProvider, setTtsProvider] = useState("browser");
+	const [ttsVoice, setTtsVoice] = useState("alloy");
+	const [speed, setSpeed] = useState(100);
+	const [silenceMs, setSilenceMs] = useState(1500);
+	const [maxDictationMs, setMaxDictationMs] = useState(60000);
+	const [sensitivity, setSensitivity] = useState(0.8);
+	const [language, setLanguage] = useState("en-US");
+	const [commandsEnabled, setCommandsEnabled] = useState(true);
+	const [keepAwake, setKeepAwake] = useState(true);
+	const [repeatWords, setRepeatWords] = useState("");
+	const [muteWords, setMuteWords] = useState("");
+	const [stopWords, setStopWords] = useState("");
+	const [stopSpeechKeyword, setStopSpeechKeyword] = useState("");
+	const [confirmLanguage, setConfirmLanguage] = useState(true);
+	const [voiceMsg, setVoiceMsg] = useState("");
+
+	// Re-seed on every change of `value` — switching agents, or turning an override off, must
+	// repaint the controls rather than leave the previous agent's numbers on screen.
+	useEffect(() => {
+		const vs = value || {};
+		const list = (v: unknown) => (Array.isArray(v) ? (v as string[]).join(", ") : typeof v === "string" ? v : "");
+		setSttMode(typeof vs.sttMode === "string" ? vs.sttMode : "browser");
+		setTtsProvider(typeof vs.provider === "string" ? vs.provider : "browser");
+		setTtsVoice(((vs.openai as Record<string, unknown>)?.voice as string) || "alloy");
+		setSpeed(typeof vs.speed === "number" ? vs.speed : 100);
+		setSilenceMs(typeof vs.silenceMs === "number" ? vs.silenceMs : 1500);
+		setMaxDictationMs(typeof vs.maxDictationMs === "number" ? vs.maxDictationMs : 60000);
+		setSensitivity(typeof vs.sensitivity === "number" ? vs.sensitivity : 0.8);
+		setLanguage(typeof vs.language === "string" ? vs.language : "en-US");
+		setCommandsEnabled(vs.commandsEnabled !== false);
+		setKeepAwake(vs.keepAwake !== false);
+		setRepeatWords(list(vs.repeatWords));
+		setMuteWords(list(vs.muteWords));
+		setStopWords(list(vs.stopWords));
+		setStopSpeechKeyword(typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword : "");
+		setConfirmLanguage(vs.confirmLanguage !== false);
+	}, [value]);
+
+	const saveVoice = async (patch: Record<string, unknown>) => {
+		try {
+			await onPatch(patch);
+			setVoiceMsg(savedNote);
+			setTimeout(() => setVoiceMsg(""), 2500);
+		} catch (e) {
+			setVoiceMsg(e instanceof Error ? e.message : "Failed");
+		}
+	};
+
+	return (
+		<>
+			<label htmlFor="voice-stt-mode" className="block text-sm font-semibold mb-1">Speech recognition (how it hears you)</label>
+			<p className="text-xs text-muted mb-2">
+				<b>Dictation</b> shows words <b>live as you speak</b> (real-time) — on-device, instant, but error-prone with accents. <b>Smart (AI)</b> records your whole turn and transcribes it with OpenAI Whisper — far more accurate, but the text only appears <b>at the end</b> (no live words). Whisper needs your OpenAI key (Knowledge → Credentials; falls back to Dictation without it).
+			</p>
+			<select
+				id="voice-stt-mode"
+				value={sttMode}
+				onChange={(e) => { setSttMode(e.target.value); saveVoice({ sttMode: e.target.value }); }}
+				className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
+			>
+				<option value="browser">Dictation — real-time, words as you speak</option>
+				<option value="openai">Smart (AI) — Whisper, most accurate (appears at end)</option>
+			</select>
+			{sttMode === "openai" && hasOpenAiKey !== null && (
+				hasOpenAiKey ? (
+					<p className="text-xs text-green mb-4">✓ OpenAI key found — voice is transcribed with Whisper (AI).</p>
+				) : (
+					<p className="text-xs text-red mb-4">⚠ No OpenAI key found — Smart (AI) can't run, so it's still using plain dictation. Add your key in <b>Knowledge → Credentials</b> to enable Whisper.</p>
+				)
+			)}
+
+			<label htmlFor="voice-tts-provider" className="block text-sm font-semibold mb-1 mt-4">Voice output (how it speaks back)</label>
+			<p className="text-xs text-muted mb-2">
+				<b>Browser voice</b> is built-in and free. <b>Natural (OpenAI)</b> uses OpenAI TTS for a far more human voice (needs your OpenAI key; falls back to the browser voice without it).
+			</p>
+			<select
+				id="voice-tts-provider"
+				value={ttsProvider}
+				onChange={(e) => { setTtsProvider(e.target.value); saveVoice({ provider: e.target.value }); }}
+				className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
+			>
+				<option value="browser">Browser voice — free, on-device</option>
+				<option value="openai-realtime">Natural (OpenAI) — human-sounding</option>
+			</select>
+			{ttsProvider.includes("openai") && hasOpenAiKey === false && (
+				<p className="text-xs text-red mb-2">⚠ No OpenAI key — using the browser voice. Add your key in <b>Knowledge → Credentials</b>.</p>
+			)}
+			{ttsProvider.includes("openai") && (
+				<div className="mb-2">
+					<label htmlFor="voice-openai-voice" className="block text-xs font-semibold mb-1">Voice</label>
+					<select
+						id="voice-openai-voice"
+						value={ttsVoice}
+						onChange={(e) => { setTtsVoice(e.target.value); saveVoice({ openai: { ...((voiceSettings?.openai as Record<string, unknown>) || {}), voice: e.target.value } }); }}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+					>
+						{["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
+							<option key={v} value={v}>{v[0].toUpperCase() + v.slice(1)}</option>
+						))}
+					</select>
+				</div>
+			)}
+			<div className="mb-1">
+				<label htmlFor="voice-speed" className="block text-xs font-semibold mb-1">Speaking speed</label>
+				<select
+					id="voice-speed"
+					value={speed}
+					onChange={(e) => { setSpeed(Number(e.target.value)); saveVoice({ speed: Number(e.target.value) }); }}
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+				>
+					<option value={75}>Slow — 0.75×</option>
+					<option value={100}>Normal — 1×</option>
+					<option value={125}>Fast — 1.25×</option>
+					<option value={150}>Faster — 1.5×</option>
+				</select>
+			</div>
+
+			<div className="border-t border-line my-3" />
+
+			<label htmlFor="voice-silence" className="block text-sm font-semibold mb-1">Conversation — pause before sending</label>
+			<p className="text-xs text-muted mb-2">
+				How long to keep listening after you stop talking. Higher = pause mid-sentence without being cut off.
+			</p>
+			<div className="flex items-center gap-2 flex-wrap">
+				<select
+					id="voice-silence"
+					value={silenceMs}
+					onChange={(e) => { setSilenceMs(Number(e.target.value)); saveVoice({ silenceMs: Number(e.target.value) }); }}
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+				>
+					<option value={800}>Quick — 0.8s pause</option>
+					<option value={1500}>Normal — 1.5s pause</option>
+					<option value={2500}>Relaxed — 2.5s pause</option>
+					<option value={4000}>Patient — 4s pause</option>
+				</select>
+				{voiceMsg && <span className="text-sm text-muted">{voiceMsg}</span>}
+			</div>
+
+			<label htmlFor="voice-max-dictation" className="block text-sm font-semibold mb-1 mt-4">Max dictation time</label>
+			<p className="text-xs text-muted mb-2">
+				Hands-free stops listening and submits after this long, no matter what — so an open mic can't record forever.
+			</p>
+			<div className="flex items-center gap-2 flex-wrap">
+				<select
+					id="voice-max-dictation"
+					value={maxDictationMs}
+					onChange={(e) => { setMaxDictationMs(Number(e.target.value)); saveVoice({ maxDictationMs: Number(e.target.value) }); }}
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+				>
+					<option value={30000}>30 seconds</option>
+					<option value={60000}>1 minute</option>
+					<option value={120000}>2 minutes</option>
+					<option value={300000}>5 minutes</option>
+				</select>
+			</div>
+
+			{/* Mic sensitivity — only Whisper (AI) uses the mic-level pause detector. */}
+			{sttMode === "openai" && (
+				<div className="mt-4">
+					<label htmlFor="voice-sensitivity" className="block text-sm font-semibold mb-1">Mic sensitivity</label>
+					<p className="text-xs text-muted mb-2">
+						How readily background sound counts as speech. Lower = ignores more room/keyboard/fan noise (recommended). Raise it only if it cuts you off or misses a soft voice. If it keeps listening and never sends, lower it.
+					</p>
+					<select
+						id="voice-sensitivity"
+						value={sensitivity}
+						onChange={(e) => { setSensitivity(Number(e.target.value)); saveVoice({ sensitivity: Number(e.target.value) }); }}
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+					>
+						<option value={0.6}>Low — very noisy room</option>
+						<option value={0.8}>Standard — filters background noise (recommended)</option>
+						<option value={1}>Normal</option>
+						<option value={1.5}>High — quiet mic / soft voice</option>
+					</select>
+				</div>
+			)}
+
+			<div className="border-t border-line my-3" />
+
+			<label htmlFor="voice-language" className="block text-sm font-semibold mb-1">Language</label>
+			<p className="text-xs text-muted mb-2">Language for both speech recognition and the spoken voice.</p>
+			<select
+				id="voice-language"
+				value={language}
+				onChange={(e) => { setLanguage(e.target.value); saveVoice({ language: e.target.value }); }}
+				className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-1 block w-full sm:w-auto"
+			>
+				{[["en-US", "English (US)"], ["en-GB", "English (UK)"], ["en-AU", "English (Australia)"], ["es-ES", "Spanish"], ["fr-FR", "French"], ["de-DE", "German"], ["it-IT", "Italian"], ["pt-BR", "Portuguese (Brazil)"], ["hi-IN", "Hindi"], ["zh-CN", "Chinese (Mandarin)"], ["ja-JP", "Japanese"], ["ko-KR", "Korean"]].map(([code, label]) => (
+					<option key={code} value={code}>{label}</option>
+				))}
+			</select>
+
+			<div className="border-t border-line my-3" />
+
+			<div className="block text-sm font-semibold mb-1">Voice commands</div>
+			<p className="text-xs text-muted mb-2">
+				In hands-free mode, speak a command instead of a message and it acts locally:
+			</p>
+			<ul className="text-xs text-muted mb-2 space-y-1">
+				<li>• <b>"Repeat"</b> (or "say again", "pardon", "what did you say") — re-speaks the agent's last reply.</li>
+			</ul>
+			<label className="flex items-center gap-2 text-sm cursor-pointer">
+				<input
+					type="checkbox"
+					checked={commandsEnabled}
+					onChange={(e) => { setCommandsEnabled(e.target.checked); saveVoice({ commandsEnabled: e.target.checked }); }}
+					className="w-4 h-4 accent-accent"
+				/>
+				Enable voice commands
+			</label>
+			<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat"/"mute" is sent as a normal message.</p>
+
+			{/* Configurable command keywords. Comma-separated. Repeat/mute obey the toggle
+			    above; the stop-word works whenever it's set. */}
+			<p className="text-[0.7rem] text-muted-soft mt-3">These <b>override</b> your global voice commands (Profile → Hands-free voice commands) for this agent only. Leave blank to use your profile default.</p>
+			<div className="grid gap-2.5 mt-2">
+				<label className="block">
+					<span className="block text-xs font-semibold mb-0.5">Repeat keywords</span>
+					<input value={repeatWords} onChange={(e) => setRepeatWords(e.target.value)} onBlur={() => saveVoice({ repeatWords })} placeholder="repeat, say again  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+				</label>
+				<label className="block">
+					<span className="block text-xs font-semibold mb-0.5">Mute keywords</span>
+					<input value={muteWords} onChange={(e) => setMuteWords(e.target.value)} onBlur={() => saveVoice({ muteWords })} placeholder="mute, mute mic  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say one to mute the mic until you unmute it in the app.</span>
+				</label>
+				<label className="block">
+					<span className="block text-xs font-semibold mb-0.5">Stop-word — finish my turn</span>
+					<input value={stopWords} onChange={(e) => setStopWords(e.target.value)} onBlur={() => saveVoice({ stopWords })} placeholder="e.g. copy, over  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it at the end (“…do it, <b>copy</b>”) to send immediately without waiting for a pause — it's stripped from your message. Off by default since it's an everyday word.</span>
+				</label>
+				<label className="block">
+					<span className="block text-xs font-semibold mb-0.5">Stop-speech keyword — interrupt the agent</span>
+					<input value={stopSpeechKeyword} onChange={(e) => setStopSpeechKeyword(e.target.value)} onBlur={() => saveVoice({ stopSpeechKeyword })} placeholder="e.g. stop stop  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it <b>while the agent is talking</b> to halt playback immediately (hands-free keeps listening through TTS when this is set). Off by default; pick a distinctive phrase so the agent's own speech can't trigger it.</span>
+				</label>
+			</div>
+
+			<div className="border-t border-line my-3" />
+
+			<div className="block text-sm font-semibold mb-1">Confirm my language</div>
+			<p className="text-xs text-muted mb-2">
+				Lock speech recognition to your set language. If a phrase is briefly mis-heard as another language (e.g. Korean or Japanese), it's ignored and you're asked to repeat — the agent never responds in a language you didn't choose. Turn off to allow any detected language through.
+			</p>
+			<label className="flex items-center gap-2 text-sm cursor-pointer mb-3">
+				<input
+					type="checkbox"
+					checked={confirmLanguage}
+					onChange={(e) => { setConfirmLanguage(e.target.checked); saveVoice({ confirmLanguage: e.target.checked }); }}
+					className="w-4 h-4 accent-accent"
+				/>
+				Ignore speech detected as a different language
+			</label>
+
+			<div className="block text-sm font-semibold mb-1">Keep screen awake</div>
+			<p className="text-xs text-muted mb-2">
+				In hands-free mode, hold a screen wake lock so the display doesn't dim or lock and cut off the mic. Note: on iOS this only keeps it going while the app is open — switching apps or locking still pauses it (it resumes when you return).
+			</p>
+			<label className="flex items-center gap-2 text-sm cursor-pointer">
+				<input
+					type="checkbox"
+					checked={keepAwake}
+					onChange={(e) => { setKeepAwake(e.target.checked); saveVoice({ keepAwake: e.target.checked }); }}
+					className="w-4 h-4 accent-accent"
+				/>
+				Keep the screen awake during hands-free
+			</label>
+			<p className="text-[0.7rem] text-muted-soft mt-1">Off = the screen may sleep on its own timer (saves battery, but ends the conversation when it does).</p>
+		</>
+	);
+}

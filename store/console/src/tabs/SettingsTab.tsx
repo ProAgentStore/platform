@@ -1,4 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
+import PrefOverride from "../components/PrefOverride";
+import VoiceFields from "../components/VoiceFields";
+import TranslationFields from "../components/TranslationFields";
 import { api } from "@proagentstore/sdk/client";
 import type { SettingsField } from "../lib/types";
 import TeamworkSection from "./TeamworkSection";
@@ -165,23 +168,11 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		? [{ node: runnerNode, connected: false, instances: [] }, ...machines]
 		: machines;
 	const [voiceSettings, setVoiceSettings] = useState<Record<string, unknown> | null>(null);
-	const [silenceMs, setSilenceMs] = useState(1500);
-	const [maxDictationMs, setMaxDictationMs] = useState(60000);
-	const [sensitivity, setSensitivity] = useState(1);
-	const [sttMode, setSttMode] = useState("browser");
-	const [ttsProvider, setTtsProvider] = useState("browser");
-	const [ttsVoice, setTtsVoice] = useState("alloy");
-	const [speed, setSpeed] = useState(100);
-	const [language, setLanguage] = useState("en-US");
-	const [commandsEnabled, setCommandsEnabled] = useState(true);
-	const [confirmLanguage, setConfirmLanguage] = useState(true);
-	const [repeatWords, setRepeatWords] = useState("");
-	const [muteWords, setMuteWords] = useState("");
-	const [stopWords, setStopWords] = useState("");
-	const [stopSpeechKeyword, setStopSpeechKeyword] = useState("");
-	const [keepAwake, setKeepAwake] = useState(true);
+	// PRESENCE of a per-agent override (#211), not "do the values differ" — an override that
+	// happens to match your defaults is still a choice the user made.
+	const [voiceOverride, setVoiceOverride] = useState(false);
+	const [trOverride, setTrOverride] = useState(false);
 	const [hasOpenAiKey, setHasOpenAiKey] = useState<boolean | null>(null);
-	const [voiceMsg, setVoiceMsg] = useState("");
 	// Per-instance display name (distinguishes multiple instances of one agent).
 	const [instName, setInstName] = useState("");
 	const [instNameMsg, setInstNameMsg] = useState("");
@@ -192,7 +183,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [trWordTap, setTrWordTap] = useState(true);
 	const [trFontSize, setTrFontSize] = useState("medium");
 	const [trLanguages, setTrLanguages] = useState<Array<{ name: string; tag: string }>>([]);
-	const [trMsg, setTrMsg] = useState("");
 	// Account-level GitHub identity link (for Coder build status / repo access). Google
 	// sign-in leaves github_login = your email, which can't authorize the GitHub App —
 	// linking records your real GitHub username without switching accounts.
@@ -272,34 +262,23 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setGrantedConnectors((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
 			} catch {}
 			try {
-				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }> }>(`/v1/instances/${instanceId}/translation`);
+				const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string }; languages?: Array<{ name: string; tag: string }>; hasOverride?: boolean }>(`/v1/instances/${instanceId}/translation`);
 				setTrEnabled(d.translation?.enabled === true);
 				setTrTarget(d.translation?.target || "English");
 				setTrTranslit(d.translation?.transliterate === true);
 				setTrWordTap(d.translation?.wordTap !== false);
 				setTrFontSize(d.translation?.fontSize || "medium");
 				setTrLanguages(d.languages || []);
+				setTrOverride(d.hasOverride === true);
 			} catch {}
 			try {
-				const d = await api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`);
+				const d = await api<{ voiceSettings?: Record<string, unknown>; hasOverride?: boolean }>(`/v1/instances/${instanceId}/voice-settings`);
 				const vs = d.voiceSettings || {};
 				setVoiceSettings(vs);
-				if (typeof vs.silenceMs === "number") setSilenceMs(vs.silenceMs);
-				if (typeof vs.maxDictationMs === "number") setMaxDictationMs(vs.maxDictationMs);
-				if (typeof vs.sensitivity === "number") setSensitivity(vs.sensitivity);
-				if (typeof vs.sttMode === "string") setSttMode(vs.sttMode);
-				if (typeof vs.provider === "string") setTtsProvider(vs.provider);
-				if (typeof vs.speed === "number") setSpeed(vs.speed);
-				if (typeof vs.language === "string") setLanguage(vs.language);
-				if (typeof vs.commandsEnabled === "boolean") setCommandsEnabled(vs.commandsEnabled);
-				if (typeof vs.confirmLanguage === "boolean") setConfirmLanguage(vs.confirmLanguage);
-				if (Array.isArray(vs.repeatWords)) setRepeatWords((vs.repeatWords as string[]).join(", "));
-				if (Array.isArray(vs.muteWords)) setMuteWords((vs.muteWords as string[]).join(", "));
-				if (Array.isArray(vs.stopWords)) setStopWords((vs.stopWords as string[]).join(", "));
-				if (typeof vs.stopSpeechKeyword === "string") setStopSpeechKeyword(vs.stopSpeechKeyword);
-				if (typeof vs.keepAwake === "boolean") setKeepAwake(vs.keepAwake);
-				const oa = vs.openai as Record<string, unknown> | undefined;
-				if (oa && typeof oa.voice === "string") setTtsVoice(oa.voice);
+				setVoiceOverride(d.hasOverride === true);
+				// No per-field unpacking here any more: VoiceFields seeds itself from `value`, so
+				// this component only has to know WHICH object to hand it and whether it is an
+				// override. That is the whole benefit of sharing the controls with Preferences.
 			} catch {}
 			// Is there an OpenAI key? Smart (AI) recognition silently falls back to
 			// browser dictation without one, so surface it explicitly.
@@ -362,13 +341,15 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				body: JSON.stringify({ settings: { [id]: value } }),
 			});
 			if (d.settings) setAgentSettings(d.settings);
-			// A voiceLanguage field also updated the server's voice-settings language —
-			// mirror it locally so the Voice section's Language select (same page)
-			// doesn't show a stale value until reload.
+			// A voiceLanguage field drives STT/TTS, but the language is no longer COPIED into
+			// voice settings (#211) — the server resolves it live from the declared setting. So
+			// re-read the resolved object rather than mirroring a value locally, which would now
+			// disagree with the next GET.
 			const field = agentFields.find((f) => f.id === id);
 			if (field?.voiceLanguage && typeof value === "string") {
-				setLanguage(value);
-				setVoiceSettings((s) => ({ ...(s || {}), language: value }));
+				api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`)
+					.then((d) => d.voiceSettings && setVoiceSettings(d.voiceSettings))
+					.catch(() => undefined);
 			}
 			setSettingsMsg("Saved — applies on your next turn");
 			setTimeout(() => setSettingsMsg(""), 2500);
@@ -377,16 +358,55 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		}
 	};
 
-	// Merge so a PUT (which replaces the whole object) doesn't wipe other settings.
+	// Merge so a PUT (which replaces the whole object) doesn't wipe other settings. Writing at all
+	// CREATES the override, which is why the radio flips to "Customise" on the first change.
 	const saveVoice = async (patch: Record<string, unknown>) => {
 		const next = { ...(voiceSettings || {}), ...patch };
 		setVoiceSettings(next);
-		try {
-			await api(`/v1/instances/${instanceId}/voice-settings`, { method: "PUT", body: JSON.stringify(next) });
-			setVoiceMsg("Saved — applies on your next turn");
-			setTimeout(() => setVoiceMsg(""), 2500);
-		} catch (e) {
-			setVoiceMsg(e instanceof Error ? e.message : "Failed");
+		const d = await api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`, {
+			method: "PUT",
+			body: JSON.stringify(next),
+		});
+		setVoiceOverride(true);
+		if (d.voiceSettings) setVoiceSettings(d.voiceSettings);
+	};
+
+	/** "Use my defaults" — DELETE the override and repaint from what the account resolves to. */
+	const clearVoiceOverride = async () => {
+		const d = await api<{ voiceSettings?: Record<string, unknown> }>(`/v1/instances/${instanceId}/voice-settings`, { method: "DELETE" })
+			.catch(() => null);
+		setVoiceOverride(false);
+		if (d?.voiceSettings) setVoiceSettings(d.voiceSettings);
+	};
+
+	/** A one-line "what am I actually getting" for the radio, so the choice is informed. */
+	const voiceSummary = (() => {
+		const vs = voiceSettings || {};
+		const stt = vs.sttMode === "openai" ? "Whisper" : "Dictation";
+		const tts = typeof vs.provider === "string" && vs.provider.includes("openai") ? "OpenAI voice" : "Browser voice";
+		const spd = typeof vs.speed === "number" ? `${(vs.speed / 100).toFixed(2).replace(/0$/, "")}×` : "1×";
+		return `${stt} · ${tts} · ${spd}`;
+	})();
+
+	const saveTranslationOverride = async (next: { enabled: boolean; target: string; transliterate: boolean; wordTap: boolean; fontSize: string }) => {
+		setTrEnabled(next.enabled); setTrTarget(next.target); setTrTranslit(next.transliterate);
+		setTrWordTap(next.wordTap); setTrFontSize(next.fontSize);
+		await api(`/v1/instances/${instanceId}/translation`, { method: "PUT", body: JSON.stringify(next) });
+		setTrOverride(true);
+	};
+
+	const clearTrOverride = async () => {
+		const d = await api<{ translation?: { enabled: boolean; target: string; transliterate?: boolean; wordTap?: boolean; fontSize?: string } }>(
+			`/v1/instances/${instanceId}/translation`,
+			{ method: "DELETE" },
+		).catch(() => null);
+		setTrOverride(false);
+		if (d?.translation) {
+			setTrEnabled(d.translation.enabled === true);
+			setTrTarget(d.translation.target || "English");
+			setTrTranslit(d.translation.transliterate === true);
+			setTrWordTap(d.translation.wordTap !== false);
+			setTrFontSize(d.translation.fontSize || "medium");
 		}
 	};
 
@@ -540,21 +560,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		} catch (e) {
 			setEmailPermission(!on); // revert on failure
 			setEmailMsg(e instanceof Error ? e.message : "Failed");
-		}
-	};
-
-	const saveTranslation = async (enabled: boolean, target: string, transliterate: boolean, wordTap: boolean, fontSize: string) => {
-		setTrEnabled(enabled);
-		setTrTarget(target);
-		setTrTranslit(transliterate);
-		setTrWordTap(wordTap);
-		setTrFontSize(fontSize);
-		try {
-			await api(`/v1/instances/${instanceId}/translation`, { method: "PUT", body: JSON.stringify({ enabled, target, transliterate, wordTap, fontSize }) });
-			setTrMsg("Saved — applies on your next message");
-			setTimeout(() => setTrMsg(""), 2500);
-		} catch (e) {
-			setTrMsg(e instanceof Error ? e.message : "Failed");
 		}
 	};
 
@@ -1269,289 +1274,43 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				{triggerMsg && <div className="text-xs text-muted mt-2">{triggerMsg}</div>}
 			</div>
 
-			{/* Voice */}
+			{/* Voice — an OVERRIDE of your account defaults (#211). The controls themselves live in
+			    components/VoiceFields, shared verbatim with the Preferences page, so the two can
+			    never drift apart. This card only owns the choice of WHERE a change is written. */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-2">Voice</h3>
-
-				<label htmlFor="voice-stt-mode" className="block text-sm font-semibold mb-1">Speech recognition (how it hears you)</label>
-				<p className="text-xs text-muted mb-2">
-					<b>Dictation</b> shows words <b>live as you speak</b> (real-time) — on-device, instant, but error-prone with accents. <b>Smart (AI)</b> records your whole turn and transcribes it with OpenAI Whisper — far more accurate, but the text only appears <b>at the end</b> (no live words). Whisper needs your OpenAI key (Knowledge → Credentials; falls back to Dictation without it).
-				</p>
-				<select
-					id="voice-stt-mode"
-					value={sttMode}
-					onChange={(e) => { setSttMode(e.target.value); saveVoice({ sttMode: e.target.value }); }}
-					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
-				>
-					<option value="browser">Dictation — real-time, words as you speak</option>
-					<option value="openai">Smart (AI) — Whisper, most accurate (appears at end)</option>
-				</select>
-				{sttMode === "openai" && hasOpenAiKey !== null && (
-					hasOpenAiKey ? (
-						<p className="text-xs text-green mb-4">✓ OpenAI key found — voice is transcribed with Whisper (AI).</p>
-					) : (
-						<p className="text-xs text-red mb-4">⚠ No OpenAI key found — Smart (AI) can't run, so it's still using plain dictation. Add your key in <b>Knowledge → Credentials</b> to enable Whisper.</p>
-					)
+				<PrefOverride
+					label="voice settings"
+					hasOverride={voiceOverride}
+					summary={voiceSummary}
+					onUseDefaults={clearVoiceOverride}
+					onCustomise={() => setVoiceOverride(true)}
+				/>
+				{/* `voiceSettings || {}` — NOT `&& voiceSettings`. Gating on the fetched object means a
+				    failed or slow GET silently disables the customise UI with no explanation; the
+				    fields seed themselves from platform defaults instead, which is always editable. */}
+				{voiceOverride && (
+					<VoiceFields value={voiceSettings || {}} onPatch={saveVoice} hasOpenAiKey={hasOpenAiKey} />
 				)}
-
-				<label htmlFor="voice-tts-provider" className="block text-sm font-semibold mb-1 mt-4">Voice output (how it speaks back)</label>
-				<p className="text-xs text-muted mb-2">
-					<b>Browser voice</b> is built-in and free. <b>Natural (OpenAI)</b> uses OpenAI TTS for a far more human voice (needs your OpenAI key; falls back to the browser voice without it).
-				</p>
-				<select
-					id="voice-tts-provider"
-					value={ttsProvider}
-					onChange={(e) => { setTtsProvider(e.target.value); saveVoice({ provider: e.target.value }); }}
-					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
-				>
-					<option value="browser">Browser voice — free, on-device</option>
-					<option value="openai-realtime">Natural (OpenAI) — human-sounding</option>
-				</select>
-				{ttsProvider.includes("openai") && hasOpenAiKey === false && (
-					<p className="text-xs text-red mb-2">⚠ No OpenAI key — using the browser voice. Add your key in <b>Knowledge → Credentials</b>.</p>
-				)}
-				{ttsProvider.includes("openai") && (
-					<div className="mb-2">
-						<label htmlFor="voice-openai-voice" className="block text-xs font-semibold mb-1">Voice</label>
-						<select
-							id="voice-openai-voice"
-							value={ttsVoice}
-							onChange={(e) => { setTtsVoice(e.target.value); saveVoice({ openai: { ...((voiceSettings?.openai as Record<string, unknown>) || {}), voice: e.target.value } }); }}
-							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
-						>
-							{["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
-								<option key={v} value={v}>{v[0].toUpperCase() + v.slice(1)}</option>
-							))}
-						</select>
-					</div>
-				)}
-				<div className="mb-1">
-					<label htmlFor="voice-speed" className="block text-xs font-semibold mb-1">Speaking speed</label>
-					<select
-						id="voice-speed"
-						value={speed}
-						onChange={(e) => { setSpeed(Number(e.target.value)); saveVoice({ speed: Number(e.target.value) }); }}
-						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
-					>
-						<option value={75}>Slow — 0.75×</option>
-						<option value={100}>Normal — 1×</option>
-						<option value={125}>Fast — 1.25×</option>
-						<option value={150}>Faster — 1.5×</option>
-					</select>
-				</div>
-
-				<div className="border-t border-line my-3" />
-
-				<label htmlFor="voice-silence" className="block text-sm font-semibold mb-1">Conversation — pause before sending</label>
-				<p className="text-xs text-muted mb-2">
-					How long to keep listening after you stop talking. Higher = pause mid-sentence without being cut off.
-				</p>
-				<div className="flex items-center gap-2 flex-wrap">
-					<select
-						id="voice-silence"
-						value={silenceMs}
-						onChange={(e) => { setSilenceMs(Number(e.target.value)); saveVoice({ silenceMs: Number(e.target.value) }); }}
-						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
-					>
-						<option value={800}>Quick — 0.8s pause</option>
-						<option value={1500}>Normal — 1.5s pause</option>
-						<option value={2500}>Relaxed — 2.5s pause</option>
-						<option value={4000}>Patient — 4s pause</option>
-					</select>
-					{voiceMsg && <span className="text-sm text-muted">{voiceMsg}</span>}
-				</div>
-
-				<label htmlFor="voice-max-dictation" className="block text-sm font-semibold mb-1 mt-4">Max dictation time</label>
-				<p className="text-xs text-muted mb-2">
-					Hands-free stops listening and submits after this long, no matter what — so an open mic can't record forever.
-				</p>
-				<div className="flex items-center gap-2 flex-wrap">
-					<select
-						id="voice-max-dictation"
-						value={maxDictationMs}
-						onChange={(e) => { setMaxDictationMs(Number(e.target.value)); saveVoice({ maxDictationMs: Number(e.target.value) }); }}
-						className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
-					>
-						<option value={30000}>30 seconds</option>
-						<option value={60000}>1 minute</option>
-						<option value={120000}>2 minutes</option>
-						<option value={300000}>5 minutes</option>
-					</select>
-				</div>
-
-				{/* Mic sensitivity — only Whisper (AI) uses the mic-level pause detector. */}
-				{sttMode === "openai" && (
-					<div className="mt-4">
-						<label htmlFor="voice-sensitivity" className="block text-sm font-semibold mb-1">Mic sensitivity</label>
-						<p className="text-xs text-muted mb-2">
-							How readily background sound counts as speech. Lower = ignores more room/keyboard/fan noise (recommended). Raise it only if it cuts you off or misses a soft voice. If it keeps listening and never sends, lower it.
-						</p>
-						<select
-							id="voice-sensitivity"
-							value={sensitivity}
-							onChange={(e) => { setSensitivity(Number(e.target.value)); saveVoice({ sensitivity: Number(e.target.value) }); }}
-							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
-						>
-							<option value={0.6}>Low — very noisy room</option>
-							<option value={0.8}>Standard — filters background noise (recommended)</option>
-							<option value={1}>Normal</option>
-							<option value={1.5}>High — quiet mic / soft voice</option>
-						</select>
-					</div>
-				)}
-
-				<div className="border-t border-line my-3" />
-
-				<label htmlFor="voice-language" className="block text-sm font-semibold mb-1">Language</label>
-				<p className="text-xs text-muted mb-2">Language for both speech recognition and the spoken voice.</p>
-				<select
-					id="voice-language"
-					value={language}
-					onChange={(e) => { setLanguage(e.target.value); saveVoice({ language: e.target.value }); }}
-					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-1 block w-full sm:w-auto"
-				>
-					{[["en-US", "English (US)"], ["en-GB", "English (UK)"], ["en-AU", "English (Australia)"], ["es-ES", "Spanish"], ["fr-FR", "French"], ["de-DE", "German"], ["it-IT", "Italian"], ["pt-BR", "Portuguese (Brazil)"], ["hi-IN", "Hindi"], ["zh-CN", "Chinese (Mandarin)"], ["ja-JP", "Japanese"], ["ko-KR", "Korean"]].map(([code, label]) => (
-						<option key={code} value={code}>{label}</option>
-					))}
-				</select>
-
-				<div className="border-t border-line my-3" />
-
-				<div className="block text-sm font-semibold mb-1">Voice commands</div>
-				<p className="text-xs text-muted mb-2">
-					In hands-free mode, speak a command instead of a message and it acts locally:
-				</p>
-				<ul className="text-xs text-muted mb-2 space-y-1">
-					<li>• <b>"Repeat"</b> (or "say again", "pardon", "what did you say") — re-speaks the agent's last reply.</li>
-				</ul>
-				<label className="flex items-center gap-2 text-sm cursor-pointer">
-					<input
-						type="checkbox"
-						checked={commandsEnabled}
-						onChange={(e) => { setCommandsEnabled(e.target.checked); saveVoice({ commandsEnabled: e.target.checked }); }}
-						className="w-4 h-4 accent-accent"
-					/>
-					Enable voice commands
-				</label>
-				<p className="text-[0.7rem] text-muted-soft mt-1">Off = a spoken "repeat"/"mute" is sent as a normal message.</p>
-
-				{/* Configurable command keywords. Comma-separated. Repeat/mute obey the toggle
-				    above; the stop-word works whenever it's set. */}
-				<p className="text-[0.7rem] text-muted-soft mt-3">These <b>override</b> your global voice commands (Profile → Hands-free voice commands) for this agent only. Leave blank to use your profile default.</p>
-				<div className="grid gap-2.5 mt-2">
-					<label className="block">
-						<span className="block text-xs font-semibold mb-0.5">Repeat keywords</span>
-						<input value={repeatWords} onChange={(e) => setRepeatWords(e.target.value)} onBlur={() => saveVoice({ repeatWords })} placeholder="repeat, say again  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					</label>
-					<label className="block">
-						<span className="block text-xs font-semibold mb-0.5">Mute keywords</span>
-						<input value={muteWords} onChange={(e) => setMuteWords(e.target.value)} onBlur={() => saveVoice({ muteWords })} placeholder="mute, mute mic  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-						<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say one to mute the mic until you unmute it in the app.</span>
-					</label>
-					<label className="block">
-						<span className="block text-xs font-semibold mb-0.5">Stop-word — finish my turn</span>
-						<input value={stopWords} onChange={(e) => setStopWords(e.target.value)} onBlur={() => saveVoice({ stopWords })} placeholder="e.g. copy, over  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-						<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it at the end (“…do it, <b>copy</b>”) to send immediately without waiting for a pause — it's stripped from your message. Off by default since it's an everyday word.</span>
-					</label>
-					<label className="block">
-						<span className="block text-xs font-semibold mb-0.5">Stop-speech keyword — interrupt the agent</span>
-						<input value={stopSpeechKeyword} onChange={(e) => setStopSpeechKeyword(e.target.value)} onBlur={() => saveVoice({ stopSpeechKeyword })} placeholder="e.g. stop stop  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-						<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it <b>while the agent is talking</b> to halt playback immediately (hands-free keeps listening through TTS when this is set). Off by default; pick a distinctive phrase so the agent's own speech can't trigger it.</span>
-					</label>
-				</div>
-
-				<div className="border-t border-line my-3" />
-
-				<div className="block text-sm font-semibold mb-1">Confirm my language</div>
-				<p className="text-xs text-muted mb-2">
-					Lock speech recognition to your set language. If a phrase is briefly mis-heard as another language (e.g. Korean or Japanese), it's ignored and you're asked to repeat — the agent never responds in a language you didn't choose. Turn off to allow any detected language through.
-				</p>
-				<label className="flex items-center gap-2 text-sm cursor-pointer mb-3">
-					<input
-						type="checkbox"
-						checked={confirmLanguage}
-						onChange={(e) => { setConfirmLanguage(e.target.checked); saveVoice({ confirmLanguage: e.target.checked }); }}
-						className="w-4 h-4 accent-accent"
-					/>
-					Ignore speech detected as a different language
-				</label>
-
-				<div className="block text-sm font-semibold mb-1">Keep screen awake</div>
-				<p className="text-xs text-muted mb-2">
-					In hands-free mode, hold a screen wake lock so the display doesn't dim or lock and cut off the mic. Note: on iOS this only keeps it going while the app is open — switching apps or locking still pauses it (it resumes when you return).
-				</p>
-				<label className="flex items-center gap-2 text-sm cursor-pointer">
-					<input
-						type="checkbox"
-						checked={keepAwake}
-						onChange={(e) => { setKeepAwake(e.target.checked); saveVoice({ keepAwake: e.target.checked }); }}
-						className="w-4 h-4 accent-accent"
-					/>
-					Keep the screen awake during hands-free
-				</label>
-				<p className="text-[0.7rem] text-muted-soft mt-1">Off = the screen may sleep on its own timer (saves battery, but ends the conversation when it does).</p>
 			</div>
 
-			{/* Translation — translated text shown under each assistant reply */}
+			{/* Translation — same override contract as Voice. */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
 				<h3 className="text-base font-bold mb-1">Translation</h3>
-				<p className="text-sm text-muted mb-3">
-					Show a translation beneath each of the agent's replies — useful when it chats with you in a language you're learning. The agent stops translating inline; the platform does it instead.
-				</p>
-				<label className="flex items-center gap-2 text-sm cursor-pointer mb-2">
-					<input
-						type="checkbox"
-						checked={trEnabled}
-						onChange={(e) => saveTranslation(e.target.checked, trTarget, trTranslit, trWordTap, trFontSize)}
-						className="w-4 h-4 accent-accent"
+				<PrefOverride
+					label="translation settings"
+					hasOverride={trOverride}
+					summary={trEnabled ? `On — ${trTarget}` : "Off"}
+					onUseDefaults={clearTrOverride}
+					onCustomise={() => setTrOverride(true)}
+				/>
+				{trOverride && (
+					<TranslationFields
+						value={{ enabled: trEnabled, target: trTarget, transliterate: trTranslit, wordTap: trWordTap, fontSize: trFontSize }}
+						onSave={saveTranslationOverride}
+						languages={trLanguages}
 					/>
-					<span className="text-muted">Show translation under replies</span>
-				</label>
-				{trEnabled && (
-					<>
-						<label htmlFor="translation-target" className="block text-xs font-semibold mb-1">Translate into</label>
-						<select
-							id="translation-target"
-							value={trTarget}
-							onChange={(e) => saveTranslation(true, e.target.value, trTranslit, trWordTap, trFontSize)}
-							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 mb-2 block w-full sm:w-auto"
-						>
-							{(trLanguages.length ? trLanguages : [{ name: trTarget, tag: "" }]).map((l) => (
-								<option key={l.name} value={l.name}>{l.name}</option>
-							))}
-						</select>
-						<label className="flex items-center gap-2 text-sm cursor-pointer mb-2">
-							<input
-								type="checkbox"
-								checked={trTranslit}
-								onChange={(e) => saveTranslation(true, trTarget, e.target.checked, trWordTap, trFontSize)}
-								className="w-4 h-4 accent-accent"
-							/>
-							<span className="text-muted">Also show transliteration (pinyin / romaji / romanization)</span>
-						</label>
-						<label className="flex items-center gap-2 text-sm cursor-pointer mb-2">
-							<input
-								type="checkbox"
-								checked={trWordTap}
-								onChange={(e) => saveTranslation(true, trTarget, trTranslit, e.target.checked, trFontSize)}
-								className="w-4 h-4 accent-accent"
-							/>
-							<span className="text-muted">Tap a word to hear it pronounced (long-press still selects text)</span>
-						</label>
-						<label htmlFor="translation-text-size" className="block text-xs font-semibold mb-1">Text size</label>
-						<select
-							id="translation-text-size"
-							value={trFontSize}
-							onChange={(e) => saveTranslation(true, trTarget, trTranslit, trWordTap, e.target.value)}
-							className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5 block w-full sm:w-auto"
-						>
-							<option value="small">Small</option>
-							<option value="medium">Medium</option>
-							<option value="large">Large</option>
-						</select>
-					</>
 				)}
-				{trMsg && <div className="text-sm text-muted mt-2">{trMsg}</div>}
 			</div>
 
 			{/* Danger zone */}

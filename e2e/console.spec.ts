@@ -78,6 +78,8 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	let approvedTaskId: string | null = null;
 	let cancelledTaskId: string | null = null;
 	const profileUpdates: unknown[] = [];
+	let savedPreferences: unknown = null;
+	let voiceOverrideCleared = false;
 	const builderPlans: unknown[] = [];
 	const builderExecutes: unknown[] = [];
 
@@ -422,7 +424,17 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			return json({ id: "task-approval", status: "cancelled" });
 		}
 		if (path === "/v1/keys/status") return json({ providers: [] });
+		// Account preferences (#211) — voice/translation defaults shared by every agent.
+		if (path === "/v1/preferences") {
+			if (method === "PUT") { savedPreferences = JSON.parse(route.request().postData() || "{}"); return json({ preferences: savedPreferences }); }
+			return json({ preferences: { voice: { speed: 130, sttMode: "openai" } }, languages: [{ name: "Chinese", tag: "zh-CN" }, { name: "English", tag: "en-US" }] });
+		}
 		if (path === "/v1/profile") return json({ fields: [], profile: {} });
+		if (path === "/v1/instances/inst-1/voice-settings") {
+			if (method === "DELETE") { voiceOverrideCleared = true; return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false }); }
+			return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false });
+		}
+		if (path === "/v1/instances/inst-1/translation") return json({ translation: { enabled: false, target: "English" }, languages: [], hasOverride: false });
 		if (path === "/v1/dashboard/creator") return json({ totalAgents: 1, totalSubscribers: 0, totalUsage: 0, agents: [] });
 		if (path === "/v1/dashboard/usage") return json({ activeInstances: 1, dailyUsage: [] });
 
@@ -449,6 +461,12 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		},
 		get profileUpdates() {
 			return profileUpdates;
+		},
+		get savedPreferences() {
+			return savedPreferences;
+		},
+		get voiceOverrideCleared() {
+			return voiceOverrideCleared;
 		},
 		get approvedTaskId() {
 			return approvedTaskId;
@@ -586,6 +604,44 @@ test.describe("ProAgentStore Console smoke", () => {
 		// asynchronously, so reading the mock on the very next tick is a race that only loses on a
 		// slow machine — which is how it flaked in CI while passing every time locally.
 		await expect.poll(() => mock.approvedTaskId).toBe("task-approval");
+	});
+
+	test("Preferences holds the account-wide voice settings, not Profile", async ({ page }) => {
+		// The split (#211): Profile is identity + money; Preferences is how you speak, hear and read.
+		// Appearance moved with it, because a text-size preference is not an identity.
+		const mock = await mockSignedInConsole(page);
+		await page.goto("/console/preferences");
+		await expect(page.getByRole("heading", { name: "Preferences" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Voice" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Appearance" })).toBeVisible();
+		// The account value is what renders — Whisper, from the mocked /v1/preferences.
+		await expect(page.locator("#voice-stt-mode")).toHaveValue("openai");
+
+		// …and Profile no longer carries Appearance.
+		await page.goto("/console/profile");
+		await expect(page.getByRole("heading", { name: "Account" })).toBeVisible();
+		await expect(page.getByRole("heading", { name: "Appearance" })).toHaveCount(0);
+		expect(mock.savedPreferences).toBeNull(); // nothing saved just by looking
+	});
+
+	test("an agent shows 'Using your defaults' until you customise it", async ({ page }) => {
+		// The override control is ONE per section, deliberately not one per field — a per-field
+		// toggle would rebuild the per-agent sprawl this change exists to remove.
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/settings");
+		const usingDefaults = page.getByRole("radio", { name: /Using your defaults/ }).first();
+		await expect(usingDefaults).toBeChecked();
+		// The fields stay hidden while the agent follows the account.
+		await expect(page.locator("#voice-stt-mode")).toHaveCount(0);
+		// pageerror only — the settings page also fetches connector endpoints this mock doesn't
+		// cover, and those 500s are pre-existing noise, not a signal about this control.
+		const crashes: string[] = [];
+		page.on("pageerror", (e) => crashes.push(String(e)));
+		const customise = page.getByRole("radio", { name: /Customise for this agent/ }).first();
+		await customise.check();
+		await expect(customise).toBeChecked();
+		await expect(page.locator("#voice-stt-mode")).toBeVisible();
+		expect(crashes).toEqual([]);
 	});
 
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {
@@ -1078,6 +1134,7 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 		"/console/instances/inst-1/knowledge",
 		"/console/instances/inst-1/settings",
 		"/console/profile",
+		"/console/preferences",
 		"/console/notifications",
 	];
 
