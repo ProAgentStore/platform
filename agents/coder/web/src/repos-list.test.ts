@@ -70,3 +70,29 @@ describe("a one-repo agent gets the repo, not a list containing it", () => {
 	});
 });
 
+describe("Work on this issue actually starts work", () => {
+	const tab = src("CodingTab.tsx");
+
+	it("hands the issue to the LOOP, not to a box that no longer renders", () => {
+		// It called setChatInput, which only ever fed the Co-pilot's input. With the Co-pilot
+		// declared off for a configurable Repo Coder (#209) that box is gone, so "Work on this"
+		// opened an empty terminal and silently dropped the objective.
+		const fn = tab.slice(tab.indexOf("const workOnIssue"), tab.indexOf("const repoLabel"));
+		expect(fn).toContain("/loop`");
+		expect(fn).toContain("objective");
+	});
+
+	it("does not send it to the Assistant chat, which cannot drive the engine", () => {
+		// A Repo Coder declares drive:false, so its chat would TALK about the issue and change
+		// nothing — the failure #210 exists to prevent. The loop dispatches to the Pilot instead.
+		const fn = tab.slice(tab.indexOf("const workOnIssue"), tab.indexOf("const repoLabel"));
+		expect(fn).not.toContain("/chat`");
+	});
+
+	it("keeps the objective if starting the loop fails", () => {
+		// Losing the text you asked for is worse than an unstarted run you can retry.
+		const fn = tab.slice(tab.indexOf("const workOnIssue"), tab.indexOf("const repoLabel"));
+		expect(fn).toMatch(/catch \{[\s\S]*setChatInput\(objective\)/);
+	});
+});
+

@@ -61,11 +61,13 @@ describe("the hardcoded branch does not come back", () => {
 });
 
 describe("visibleSurfaces still derives tabs from declared capabilities", () => {
-	it("a coding agent gets Coding but not Repo or Board", () => {
+	it("a coding agent gets Coding and its work Board, but not Repo", () => {
+		// Board is intentional now: a coding agent writes session cards (#206) and delegation
+		// cards (#155), so hiding it left the owner unable to see work about their own agent.
 		const ids = visibleSurfaces(["coding"]).map((s) => s.id);
 		expect(ids).toContain("coding");
+		expect(ids).toContain("board");
 		expect(ids).not.toContain("repo");
-		expect(ids).not.toContain("board");
 	});
 
 	it("an agent declaring nothing still gets the generic board", () => {
@@ -119,6 +121,29 @@ describe("tabs are gated on what the agent DECLARES, not shown to everyone", () 
 		// the most restrictive declaration the most permissive UI.
 		expect(ids({ surfaces: ["coding"], tools: [] })).not.toContain("indexing");
 		expect(ids({ surfaces: ["coding"], tools: [] })).not.toContain("data");
+	});
+});
+
+describe("a coding agent can see its OWN work board", () => {
+	const ids = (caps: { surfaces: string[]; tools?: string[] }) => visibleSurfaces(caps).map((s) => s.id);
+
+	it("shows Board for a coding agent — it writes cards there", () => {
+		// #206 puts every coding session on the board and #155 every delegated goal. Hiding the tab
+		// meant the owner had work recorded about their own agent that only a supervisor could see,
+		// through subordinate_status, which reads exactly those rows.
+		expect(ids({ surfaces: ["coding"] })).toContain("board");
+	});
+
+	it("still hides it where a dedicated board exists or there is no work", () => {
+		// `apply` renders the same cards with its own columns — two boards would be two truths.
+		expect(ids({ surfaces: ["apply"] })).not.toContain("board");
+		expect(ids({ surfaces: ["apply"] })).toContain("apply");
+		// repo-chat is read-only chat over an indexed codebase; it produces no work cards.
+		expect(ids({ surfaces: ["repo"] })).not.toContain("board");
+	});
+
+	it("shows it for tmux, which also runs work on your machine", () => {
+		expect(ids({ surfaces: ["tmux"] })).toContain("board");
 	});
 });
 

@@ -117,8 +117,15 @@ export const SURFACES: SurfaceDef[] = [
 		id: "board",
 		label: "Board",
 		icon: "📋",
-		// Generic work board for agents without their own dedicated surface.
-		show: ({ surfaces: s }) => !s.includes("coding") && !s.includes("apply") && !s.includes("repo") && !s.includes("tmux"),
+		// The agent's work board. Hidden only for a surface that either has its OWN board
+		// (`apply` renders the same cards with apply-specific columns) or produces no work at all
+		// (`repo` is read-only chat over an indexed codebase).
+		//
+		// A CODING agent was excluded, and that was wrong once it started writing cards: #206 puts
+		// every coding session on the board and #155 puts every delegated goal there, so the owner
+		// had work recorded about their own agent that only a SUPERVISOR could see — via
+		// subordinate_status, which reads exactly these rows.
+		show: ({ surfaces: s }) => !s.includes("apply") && !s.includes("repo"),
 		scroll: true,
 		render: ({ instanceId, boardColumns }) => <BoardTab instanceId={instanceId} columns={boardColumns} />,
 	},

@@ -595,7 +595,29 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		const active = getActiveSession(repo.id);
 		if (active) await openTerminal(active);
 		else await startSession(repo.id);
-		setChatInput(objective);
+
+		// Hand the issue to the LOOP, which dispatches to the Pilot and actually drives the engine
+		// (#210) — and whose instructions now appear in the Assistant thread, so the work is
+		// visible rather than happening behind a terminal.
+		//
+		// It used to call setChatInput, which only ever fed the Co-pilot's box. With the Co-pilot
+		// declared off for a configurable Repo Coder (#209) that box no longer renders, so "Work on
+		// this" opened an empty terminal and dropped the objective on the floor. My regression.
+		//
+		// Not the Assistant chat directly: a Repo Coder declares `drive:false`, so its chat would
+		// TALK about the issue and change nothing — the exact failure #210 exists to prevent.
+		try {
+			await api(`/v1/instances/${instanceId}/loop`, {
+				method: "POST",
+				body: JSON.stringify({ objective, maxIterations: 10 }),
+			});
+			// Land where the work is now reported, so it is not silent again.
+			navigate(`/instances/${instanceId}`);
+		} catch {
+			// Keep the objective rather than losing it: the Co-pilot box still exists on the legacy
+			// multi-repo Coder, and on a configurable one the terminal is at least open and focused.
+			setChatInput(objective);
+		}
 	};
 
 	const repoLabel = (r: CodingRepo) => {
