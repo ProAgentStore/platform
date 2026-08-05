@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { resolveBuildsView } from "./builds-view";
+import { repoTitle } from "./repo-title";
 import { CheckCircle2, XCircle, Loader2, Clock, GitBranch, ExternalLink, HelpCircle, ArrowLeft, ChevronRight } from "lucide-react";
 
 /** One GitHub Actions run (from …/coding/builds → CODER-003, or …/deployments for history). */
@@ -19,6 +20,8 @@ interface DeploymentRun {
 interface Build {
 	repoId: string;
 	repoName: string;
+	/** Present when the repo is connected to GitHub — see repo-title.ts for the naming rule. */
+	githubRepo?: string | null;
 	available: boolean;
 	run: DeploymentRun | null;
 }
@@ -247,7 +250,7 @@ export default function BuildsPanel({ instanceId }: { instanceId: string }) {
 									<div className="flex justify-between items-start gap-3">
 										<div className="min-w-0">
 											<div className="font-semibold text-sm truncate flex items-center gap-1">
-												{b.repoName}
+												{repoTitle({ name: b.repoName, githubRepo: b.githubRepo })}
 												{b.available && <ChevronRight size={13} className="text-muted-soft shrink-0" />}
 											</div>
 											{b.available && b.run ? (

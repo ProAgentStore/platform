@@ -5,6 +5,7 @@ import type { CodingRepo, CodingSession, CodingEngine } from "./types";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
+import { repoTitle } from "./repo-title";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
@@ -640,10 +641,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					    mental model the Lead/Repo-Coder split exists to remove: you switch repos by
 					    switching AGENTS now. Plain label instead. */}
 					{singleRepo ? (
-						<span className="block truncate text-sm font-semibold max-w-[5.75rem] sm:max-w-[11rem]">{openRepo?.name || openSession.repoId}</span>
+						<span className="block truncate text-sm font-semibold max-w-[5.75rem] sm:max-w-[11rem]">{openRepo ? repoTitle(openRepo) : openSession.repoId}</span>
 					) : (
 					<button type="button" onClick={() => setRepoMenuOpen((v) => !v)} title="Switch repo" className="flex items-center gap-1 text-sm font-semibold hover:text-accent w-full max-w-[5.75rem] sm:max-w-[11rem] min-w-0">
-						<span className="truncate">{openRepo?.name || openSession.repoId}</span>
+						<span className="truncate">{openRepo ? repoTitle(openRepo) : openSession.repoId}</span>
 						<ChevronDown size={14} className="shrink-0 text-muted" />
 					</button>
 					)}
@@ -661,7 +662,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									const current = r.id === openSession.repoId;
 									return (
 										<button key={r.id} type="button" onClick={() => switchToRepo(r)} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-panel-hover flex items-center justify-between gap-2 ${current ? "text-accent font-bold" : ""}`}>
-											<span className="truncate">{r.name}</span>
+											<span className="truncate">{repoTitle(r)}</span>
 											{current ? <span className="text-accent text-xs shrink-0">●</span> : (st === "thinking" || st === "working") ? <span className="text-amber-500 text-[0.6rem] shrink-0">working</span> : null}
 										</button>
 									);

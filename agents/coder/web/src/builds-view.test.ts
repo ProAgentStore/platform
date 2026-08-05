@@ -48,3 +48,27 @@ describe("resolveBuildsView — several repos keep the overview", () => {
 		expect(resolveBuildsView([], "r1")).toEqual({ mode: "list" });
 	});
 });
+
+describe("resolveBuildsView — the title is resolved, so both views agree", () => {
+	it("uses the GitHub coordinate, not the add-time nickname", () => {
+		// The drill-down header used the raw name while the list row used the resolved one, so the
+		// same repo was called `fws/platform` in one place and `freewebstore-online/platform` in the
+		// other. Resolving inside the view function means there is only one answer.
+		const v = resolveBuildsView([{ repoId: "r1", repoName: "fws/platform", githubRepo: "freewebstore-online/platform", available: true }], null);
+		expect(v.mode === "history" && v.repoName).toBe("freewebstore-online/platform");
+	});
+
+	it("keeps the folder name for a local-only repo", () => {
+		const v = resolveBuildsView([{ repoId: "r1", repoName: "my-notes", available: true }], null);
+		expect(v.mode === "history" && v.repoName).toBe("my-notes");
+	});
+
+	it("resolves the drill-down title the same way", () => {
+		const v = resolveBuildsView([
+			{ repoId: "r1", repoName: "a/b", githubRepo: "owner/one", available: true },
+			{ repoId: "r2", repoName: "c/d", githubRepo: "owner/two", available: true },
+		], "r2");
+		expect(v.mode === "history" && v.repoName).toBe("owner/two");
+	});
+});
+

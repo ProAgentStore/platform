@@ -4,10 +4,20 @@ import { createTts, type VoiceTts } from "@proagentstore/sdk/hooks";
 import type { CodingRepo, CodingSession } from "./types";
 import { Settings, Cpu, Play, Square, Loader2 } from "lucide-react";
 import RepoIssues from "./RepoIssues";
+import { repoIsGitHub, repoTitle } from "./repo-title";
 
 type TimelineEntry = { type?: string; content?: string; text?: string };
 
-/** The all-repos landing view: add-repo form, runner CTA, and one row per repo. */
+/**
+ * The Coding landing view.
+ *
+ * ONE repo → the repo IS the page: identity, status and actions directly, with no
+ * "Repositories" card wrapping a list of one and no "1 active session" strip counting a single
+ * thing. A list exists so you can CHOOSE; a one-repo agent has nothing to choose between. Same
+ * argument the Builds panel follows.
+ *
+ * SEVERAL → the list, unchanged.
+ */
 export default function ReposList({
 	instanceId,
 	repos, sessions, repoStatuses, runnerOnline,
@@ -72,15 +82,92 @@ export default function ReposList({
 		if (playGenRef.current === myGen) setAudio(null); // finished/failed (not superseded)
 	};
 
+	/** One repo, rendered identically whether it is alone or a row in the list. */
+	const RepoCard = ({ r, bare }: { r: CodingRepo; bare?: boolean }) => {
+		const active = getActiveSession(r.id);
+		const status = repoStatuses[r.id];
+		const phase = audio?.id === r.id ? audio.phase : null;
+		return (
+			<div className={bare ? "" : "bg-paper border border-line rounded-lg p-3"}>
+				<div className="flex justify-between items-center gap-3">
+					<div className="min-w-0">
+						<div className="font-semibold text-sm truncate flex items-center gap-1.5">
+							{/* ONE identity rule: the GitHub coordinate when there is one, else the folder
+							    name — see repo-title.ts. `local` is explicit so a bare `a/b` folder name
+							    cannot be misread as an owner/repo slug. */}
+							{repoTitle(r)}
+							{!repoIsGitHub(r) && <span className="text-[0.6rem] px-1 py-0.5 bg-line/60 text-muted rounded font-bold shrink-0">local</span>}
+						</div>
+						<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
+							{status === "thinking" || status === "working" ? (
+								<span className="inline-block w-2.5 h-2.5 border-2 border-line border-t-amber-500 rounded-full animate-spin" />
+							) : (
+								<span className={`w-2 h-2 rounded-full ${active && status !== "offline" ? "bg-green" : "bg-muted"}`} />
+							)}
+							{repoLabel(r)}
+							{r.instructions && <span className="text-[0.6rem] px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
+						</div>
+					</div>
+					<div className="flex gap-1.5 shrink-0 items-center">
+						{active ? (
+							<button type="button" onClick={() => openTerminal(active)} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Open</button>
+						) : (
+							<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
+						)}
+						<button
+							type="button"
+							onClick={() => togglePlay(r)}
+							disabled={!sessionFor(r.id)}
+							title={phase === "playing" ? "Stop" : phase === "loading" ? "Loading…" : "Play last message"}
+							aria-label={phase === "playing" ? "Stop playback" : "Play last message"}
+							className={`text-xs px-1.5 py-1 rounded-md border text-muted disabled:opacity-40 ${phase ? "border-accent text-accent" : "border-line hover:border-accent hover:text-accent"}`}
+						>
+							{phase === "loading" ? <Loader2 size={14} className="animate-spin" /> : phase === "playing" ? <Square size={14} /> : <Play size={14} />}
+						</button>
+						<button type="button" onClick={() => setSettingsRepoId(r.id)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={14} /></button>
+					</div>
+				</div>
+				{r.githubRepo && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}
+			</div>
+		);
+	};
+
+	const offlineCta = runnerOnline === false && (
+		<div className="bg-orange-50 border border-amber-500 rounded-lg p-2.5 mt-3 text-sm text-orange-900">
+			<b>Your machine isn't connected.</b> Start the runner:
+			<code className="block mt-1.5 bg-white border border-amber-500 rounded-md p-1.5 text-sm">pags up</code>
+		</div>
+	);
+
+	const enginesButton = (
+		<button type="button" onClick={onOpenEngines} title="CLI engines & sign-in" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold flex items-center gap-1">
+			<Cpu size={13} /><span className="hidden sm:inline">Engines</span>
+		</button>
+	);
+
+	// ── One repo: the repo IS the page ──
+	if (singleRepo && repos.length === 1) {
+		return (
+			<div className="px-2 py-2 sm:px-4 sm:py-3 overflow-auto flex-1">
+				<div className="bg-panel border border-line rounded-xl p-3">
+					<div className="flex justify-between items-start gap-2">
+						<div className="min-w-0 flex-1"><RepoCard r={repos[0]} bare /></div>
+						<div className="shrink-0">{enginesButton}</div>
+					</div>
+					{offlineCta}
+				</div>
+			</div>
+		);
+	}
+
 	const activeCount = sessions.filter((s) => s.status === "active").length;
 	return (
 		<div className="px-2 py-2 sm:px-4 sm:py-3 overflow-auto flex-1">
-			{/* Repos section */}
 			<div className="bg-panel border border-line rounded-xl p-3">
 				<div className="flex justify-between items-center gap-2">
 					<span className="text-ink font-bold text-[0.95rem]">{singleRepo ? "Repository" : "Repositories"}</span>
 					<div className="flex gap-1.5">
-						<button type="button" onClick={onOpenEngines} title="CLI engines & sign-in" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold flex items-center gap-1"><Cpu size={13} /><span className="hidden sm:inline">Engines</span></button>
+						{enginesButton}
 						{/* A one-repo agent cannot use this — its repo comes from its settings. */}
 						{!singleRepo && (
 							<button type="button" onClick={() => setShowAddRepo(!showAddRepo)} className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add</button>
@@ -88,14 +175,12 @@ export default function ReposList({
 					</div>
 				</div>
 
-				{/* Activity strip */}
 				{activeCount > 0 && (
 					<div className="text-xs text-muted mt-1.5">
 						{activeCount} active session{activeCount !== 1 ? "s" : ""}
 					</div>
 				)}
 
-				{/* Add repo form */}
 				{showAddRepo && !singleRepo && (
 					<div className="mt-3">
 						<div className="flex gap-1.5 flex-wrap">
@@ -114,67 +199,15 @@ export default function ReposList({
 					</div>
 				)}
 
-				{/* Runner offline CTA */}
-				{runnerOnline === false && (
-					<div className="bg-orange-50 border border-amber-500 rounded-lg p-2.5 mt-3 text-sm text-orange-900">
-						<b>Your machine isn't connected.</b> Start the runner:
-						<code className="block mt-1.5 bg-white border border-amber-500 rounded-md p-1.5 text-sm">pags up</code>
-					</div>
-				)}
+				{offlineCta}
 
-				{/* Repo list */}
 				<div className="flex flex-col gap-1.5 mt-3">
 					{repos.length === 0 ? (
-						<p className="text-center py-4 text-muted-soft text-sm">No repos yet. Add one above.</p>
+						<p className="text-center py-4 text-muted-soft text-sm">
+							{singleRepo ? "No repository set yet — add its path in Settings → Agent settings." : "No repos yet. Add one above."}
+						</p>
 					) : (
-						repos.map((r) => {
-							const active = getActiveSession(r.id);
-							const status = repoStatuses[r.id];
-							return (
-								<div key={r.id} className="bg-paper border border-line rounded-lg p-3">
-									<div className="flex justify-between items-center gap-3">
-										<div className="min-w-0">
-											<div className="font-semibold text-sm truncate">{r.name}</div>
-											<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
-												{status === "thinking" || status === "working" ? (
-													<span className="inline-block w-2.5 h-2.5 border-2 border-line border-t-amber-500 rounded-full animate-spin" />
-												) : active ? (
-													<span className={`w-2 h-2 rounded-full ${status === "offline" ? "bg-muted" : "bg-green"}`} />
-												) : (
-													<span className="w-2 h-2 rounded-full bg-muted" />
-												)}
-												{repoLabel(r)}
-												{r.instructions && <span className="text-[0.6rem] px-1 py-0.5 bg-accent-soft text-accent rounded font-bold">Rules</span>}
-											</div>
-										</div>
-										<div className="flex gap-1.5 shrink-0 items-center">
-											{active ? (
-												<button type="button" onClick={() => openTerminal(active)} className="text-xs px-2.5 py-1 rounded-md bg-accent text-white font-bold">Open</button>
-											) : (
-												<button type="button" onClick={() => startSession(r.id)} className="text-xs px-2.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent">Start</button>
-											)}
-											{(() => {
-												const phase = audio?.id === r.id ? audio.phase : null;
-												return (
-													<button
-														type="button"
-														onClick={() => togglePlay(r)}
-														disabled={!sessionFor(r.id)}
-														title={phase === "playing" ? "Stop" : phase === "loading" ? "Loading…" : "Play last message"}
-														aria-label={phase === "playing" ? "Stop playback" : "Play last message"}
-														className={`text-xs px-1.5 py-1 rounded-md border text-muted disabled:opacity-40 ${phase ? "border-accent text-accent" : "border-line hover:border-accent hover:text-accent"}`}
-													>
-														{phase === "loading" ? <Loader2 size={14} className="animate-spin" /> : phase === "playing" ? <Square size={14} /> : <Play size={14} />}
-													</button>
-												);
-											})()}
-											<button type="button" onClick={() => setSettingsRepoId(r.id)} title="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent"><Settings size={14} /></button>
-										</div>
-									</div>
-									{r.githubRepo && <RepoIssues instanceId={instanceId} repo={r} onWorkOnIssue={onWorkOnIssue} />}
-								</div>
-							);
-						})
+						repos.map((r) => <RepoCard key={r.id} r={r} />)
 					)}
 				</div>
 			</div>

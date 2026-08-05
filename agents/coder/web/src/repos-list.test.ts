@@ -35,3 +35,38 @@ describe("single-repo agents hide the multi-repo affordances", () => {
 		expect(src("CodingTab.tsx")).toContain("singleRepo={singleRepo}");
 	});
 });
+
+describe("a one-repo agent gets the repo, not a list containing it", () => {
+	// A list exists so you can CHOOSE. With one repo there is nothing to choose between, so the
+	// card wrapper, the "Repositories" heading and the "1 active session" strip were all counting
+	// and framing a single thing — the same complaint that produced the Builds change.
+	const src_ = src("ReposList.tsx");
+
+	it("renders the repo directly when singleRepo and exactly one repo", () => {
+		expect(src_).toContain("if (singleRepo && repos.length === 1)");
+		// `bare` drops the row chrome so it reads as the page, not as a list item.
+		expect(src_).toContain("<RepoCard r={repos[0]} bare />");
+	});
+
+	it("does not count sessions in the single-repo view", () => {
+		// activeCount is computed only on the list path now.
+		const single = src_.slice(src_.indexOf("if (singleRepo && repos.length === 1)"), src_.indexOf("const activeCount"));
+		expect(single).not.toContain("activeCount");
+	});
+
+	it("uses ONE naming rule for the repo, whatever it was added as", () => {
+		// repoTitle: the GitHub coordinate when there is one, else the folder name — so the header
+		// stops showing `fws/platform` (last two PATH segments) as if it were an owner/repo slug.
+		expect(src_).toContain("repoTitle(r)");
+		expect(src_).not.toMatch(/>\{r\.name\}</);
+	});
+
+	it("marks a local-only repo as local, so a folder name is not misread as a slug", () => {
+		expect(src_).toContain("!repoIsGitHub(r)");
+	});
+
+	it("still offers add-repo on a MULTI-repo agent", () => {
+		expect(src_).toContain("!singleRepo && (");
+	});
+});
+

@@ -437,7 +437,9 @@ codingRoutes.get("/:instanceId/coding/builds", async (c) => {
 	// Preserve the instance's repo order; non-GitHub repos fall through to available:false.
 	const builds = repos.map((r) => {
 		const res = byRepo.get(r.id);
-		return { repoId: r.id, repoName: r.name, available: res?.available ?? false, run: res?.run ?? null };
+		// `githubRepo` travels too: the console applies ONE naming rule (repo-title.ts) — the GitHub
+		// coordinate when there is one, else the folder name — and cannot without it.
+		return { repoId: r.id, repoName: r.name, githubRepo: r.githubRepo ?? null, available: res?.available ?? false, run: res?.run ?? null };
 	});
 	return c.json({ builds });
 });
