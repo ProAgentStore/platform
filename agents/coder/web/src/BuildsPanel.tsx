@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { CheckCircle2, XCircle, Loader2, Clock, GitBranch, ExternalLink, HelpCircle } from "lucide-react";
+import { resolveBuildsView } from "./builds-view";
+import { CheckCircle2, XCircle, Loader2, Clock, GitBranch, ExternalLink, HelpCircle, ArrowLeft, ChevronRight } from "lucide-react";
 
-/** Latest GitHub Actions run for a repo (from GET …/coding/builds → CODER-003). */
+/** One GitHub Actions run (from …/coding/builds → CODER-003, or …/deployments for history). */
 interface DeploymentRun {
 	status?: string; // queued | in_progress | completed
 	conclusion?: string | null; // success | failure | cancelled | timed_out | null
@@ -66,17 +67,119 @@ function timeAgo(iso?: string): string {
 	return `${Math.floor(h / 24)}d ago`;
 }
 
+/** The identity line of a run: branch@sha · workflow #N. Shared by both views. */
+function RunMeta({ run }: { run: DeploymentRun }) {
+	return (
+		<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5 min-w-0">
+			<GitBranch size={12} className="shrink-0" />
+			<span className="truncate font-mono">{run.branch || "?"}{run.sha ? `@${run.sha}` : ""}</span>
+			{run.name && <span className="truncate">· {run.name}</span>}
+			{run.runNumber != null && <span className="shrink-0 text-muted-soft">#{run.runNumber}</span>}
+		</div>
+	);
+}
+
+function ViewRunLink({ url }: { url?: string }) {
+	if (!url) return null;
+	return (
+		<a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[0.65rem] font-semibold text-accent hover:underline mt-1.5">
+			<ExternalLink size={11} /> View run
+		</a>
+	);
+}
+
 /**
- * Builds view — one row per repo showing its latest CI/CD run (name/#runNumber, status
- * badge, relative timestamp, branch@sha summary, "View run" link). Data is the aggregate
- * /coding/builds endpoint (one call, latest run per repo). Repos that are local/non-GitHub
- * (available:false) are shown as a muted "not available" row, not hidden. Polls every 20s
- * while mounted (CodingTab only mounts this while the Builds view is open). Scrollable on
- * mobile (overflow-y-auto + overscroll-contain, flex-1 min-h-0). (CODER-004, #80)
+ * The run HISTORY for one repo — the last N Actions runs, newest first.
+ *
+ * "Latest run per repo" is the right shape for a fleet, and the wrong shape for one repo: it
+ * spends a whole panel on a single line and answers "did the last build pass" while hiding the
+ * question you actually have — "when did this start failing / is it flaky". A Repo Coder owns
+ * exactly one repo, so history is the useful view; for several repos it is the drill-down.
+ */
+function RepoHistory({ instanceId, repoId, repoName, onBack }: {
+	instanceId: string;
+	repoId: string;
+	repoName: string;
+	/** Absent for a one-repo agent — there is nothing to go back to. */
+	onBack?: () => void;
+}) {
+	const [runs, setRuns] = useState<DeploymentRun[]>([]);
+	const [available, setAvailable] = useState(true);
+	const [loaded, setLoaded] = useState(false);
+
+	const load = useCallback(async () => {
+		try {
+			const d = await api<{ available: boolean; runs?: DeploymentRun[] }>(
+				`/v1/instances/${instanceId}/coding/repos/${repoId}/deployments?perPage=15`,
+			);
+			setAvailable(d.available !== false);
+			if (d.runs) setRuns(d.runs);
+		} catch {
+			// Keep the last-known history on a transient error rather than blanking the panel.
+		}
+		setLoaded(true);
+	}, [instanceId, repoId]);
+
+	useEffect(() => { load(); }, [load]);
+	usePolling(load, 20000, true);
+
+	return (
+		<div className="bg-panel border border-line rounded-xl p-3">
+			<div className="flex justify-between items-center gap-2">
+				<div className="flex items-center gap-1.5 min-w-0">
+					{onBack && (
+						<button type="button" onClick={onBack} title="All repos" aria-label="All repos" className="text-muted hover:text-ink shrink-0">
+							<ArrowLeft size={15} />
+						</button>
+					)}
+					<span className="text-ink font-bold text-[0.95rem] truncate">{repoName}</span>
+				</div>
+				<span className="text-[0.65rem] text-muted-soft shrink-0">Recent GitHub Actions runs</span>
+			</div>
+
+			<div className="flex flex-col gap-1.5 mt-3">
+				{!loaded ? (
+					<p className="text-center py-4 text-muted-soft text-sm flex items-center justify-center gap-1.5">
+						<Loader2 size={14} className="animate-spin" /> Loading builds…
+					</p>
+				) : !available ? (
+					<p className="text-center py-4 text-muted-soft text-sm">
+						Not available — this is a local repo, or the GitHub App isn't installed for its owner.
+					</p>
+				) : runs.length === 0 ? (
+					<p className="text-center py-4 text-muted-soft text-sm">No workflow runs yet.</p>
+				) : (
+					runs.map((run) => (
+						<div key={run.url || `${run.runNumber}`} className="bg-paper border border-line rounded-lg p-3">
+							<div className="flex justify-between items-start gap-3">
+								<div className="min-w-0"><RunMeta run={run} /></div>
+								<div className="flex flex-col items-end gap-1 shrink-0">
+									<StatusBadge state={buildState(run)} />
+									{run.updatedAt && <span className="text-[0.6rem] text-muted-soft">{timeAgo(run.updatedAt)}</span>}
+								</div>
+							</div>
+							<ViewRunLink url={run.url} />
+						</div>
+					))
+				)}
+			</div>
+		</div>
+	);
+}
+
+/**
+ * Builds view.
+ *
+ * ONE repo → its run history directly (a list of one row is not a list).
+ * SEVERAL → latest-run-per-repo as an overview, each row a selector into that repo's history.
+ *
+ * The two are the same idea at different scales: the fleet list exists to choose a repo, so with
+ * one repo the choice is already made. Driven off how many repos there are, not off an agent slug.
  */
 export default function BuildsPanel({ instanceId }: { instanceId: string }) {
 	const [builds, setBuilds] = useState<Build[]>([]);
 	const [loaded, setLoaded] = useState(false);
+	const [openRepoId, setOpenRepoId] = useState<string | null>(null);
 
 	const load = useCallback(async () => {
 		try {
@@ -89,7 +192,25 @@ export default function BuildsPanel({ instanceId }: { instanceId: string }) {
 	}, [instanceId]);
 
 	useEffect(() => { load(); }, [load]);
-	usePolling(load, 20000, true);
+	// Only poll the aggregate while it is the visible view — inside a repo's history that view
+	// polls for itself, and both at once would fan out to GitHub twice for nothing.
+	usePolling(load, 20000, openRepoId === null);
+
+	const view = resolveBuildsView(builds, openRepoId);
+
+	if (loaded && view.mode === "history") {
+		return (
+			<div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-2 sm:px-4 sm:py-3">
+				<RepoHistory
+					instanceId={instanceId}
+					repoId={view.repoId}
+					repoName={view.repoName}
+					// No back arrow for a one-repo agent: there is no list behind this.
+					onBack={view.canGoBack ? () => setOpenRepoId(null) : undefined}
+				/>
+			</div>
+		);
+	}
 
 	return (
 		<div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2 py-2 sm:px-4 sm:py-3">
@@ -113,17 +234,24 @@ export default function BuildsPanel({ instanceId }: { instanceId: string }) {
 						builds.map((b) => {
 							const state = buildState(b.run);
 							return (
-								<div key={b.repoId} className="bg-paper border border-line rounded-lg p-3">
+								<button
+									key={b.repoId}
+									type="button"
+									// The row IS the selector into that repo's history. A repo with no GitHub
+									// connection has no history to open, so it stays inert rather than
+									// navigating to an empty view.
+									onClick={b.available ? () => setOpenRepoId(b.repoId) : undefined}
+									disabled={!b.available}
+									className={`bg-paper border border-line rounded-lg p-3 text-left w-full ${b.available ? "hover:border-accent cursor-pointer" : "cursor-default"}`}
+								>
 									<div className="flex justify-between items-start gap-3">
 										<div className="min-w-0">
-											<div className="font-semibold text-sm truncate">{b.repoName}</div>
+											<div className="font-semibold text-sm truncate flex items-center gap-1">
+												{b.repoName}
+												{b.available && <ChevronRight size={13} className="text-muted-soft shrink-0" />}
+											</div>
 											{b.available && b.run ? (
-												<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5 min-w-0">
-													<GitBranch size={12} className="shrink-0" />
-													<span className="truncate font-mono">{b.run.branch || "?"}{b.run.sha ? `@${b.run.sha}` : ""}</span>
-													{b.run.name && <span className="truncate">· {b.run.name}</span>}
-													{b.run.runNumber != null && <span className="shrink-0 text-muted-soft">#{b.run.runNumber}</span>}
-												</div>
+												<RunMeta run={b.run} />
 											) : (
 												<div className="text-xs text-muted-soft mt-0.5">
 													{b.available ? "No runs yet." : "Not available (local repo / GitHub App not installed)."}
@@ -135,17 +263,7 @@ export default function BuildsPanel({ instanceId }: { instanceId: string }) {
 											{b.run?.updatedAt && <span className="text-[0.6rem] text-muted-soft">{timeAgo(b.run.updatedAt)}</span>}
 										</div>
 									</div>
-									{b.run?.url && (
-										<a
-											href={b.run.url}
-											target="_blank"
-											rel="noreferrer"
-											className="inline-flex items-center gap-1 text-[0.65rem] font-semibold text-accent hover:underline mt-1.5"
-										>
-											<ExternalLink size={11} /> View run
-										</a>
-									)}
-								</div>
+								</button>
 							);
 						})
 					)}
