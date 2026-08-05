@@ -78,3 +78,43 @@ describe("the field table is not restated in the console", () => {
 		}
 	});
 });
+
+describe("saving is one request, not one per field", () => {
+	const SRC = readFileSync(join(__dirname, "BehaviourTab.tsx"), "utf8");
+	const CODE = SRC.replace(/\{?\/\*[\s\S]*?\*\/\}?/g, "").replace(/^\s*\/\/.*$/gm, "");
+
+	it("sends a whole patch, because the server read-modify-writes one config blob", () => {
+		// "Reset group" looped `save(f.id, null)` over five fields. Each PUT reads the same
+		// pre-patch config and the last write wins, so it cleared exactly one field at random.
+		expect(CODE).toContain("JSON.stringify({ behaviour: patch })");
+		expect(CODE).not.toMatch(/save\(\s*f\.id\s*,/);
+		expect(CODE).not.toMatch(/behaviour:\s*\{\s*\[id\]:\s*value\s*\}/);
+	});
+
+	it("resets a group in a single call", () => {
+		expect(CODE).toContain("Object.fromEntries(groupFields.filter((f) => isSet(behaviour, f.id)).map((f) => [f.id, null]))");
+	});
+
+	it("tracks several in-flight ids rather than one", () => {
+		expect(CODE).toContain("saving.includes(f.id)");
+	});
+});
+
+describe("controls reflect a save that has landed", () => {
+	const SRC = readFileSync(join(__dirname, "BehaviourTab.tsx"), "utf8");
+	const CODE = SRC.replace(/\{?\/\*[\s\S]*?\*\/\}?/g, "").replace(/^\s*\/\/.*$/gm, "");
+
+	it("remounts the uncontrolled inputs when the saved value changes", () => {
+		// defaultValue means React never updates them from props: after "reset" the box still
+		// showed the old text, so the reset looked broken. Three inputs use defaultValue.
+		expect((CODE.match(/key=\{inputKey\}/g) || []).length).toBe(3);
+		expect((CODE.match(/defaultValue=/g) || []).length).toBe(3);
+	});
+
+	it("commits a slider drag released outside the control", () => {
+		// onMouseUp only fires on the element. Release the mouse off it and the shown value was
+		// never saved AND `dragging` stayed set, pinning the slider to a phantom value.
+		expect(CODE).toContain("onBlur={commit}");
+		expect(CODE).toContain("onPointerUp={commit}");
+	});
+});

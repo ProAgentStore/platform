@@ -12,7 +12,15 @@ export interface ProfileFieldDef {
 	private: boolean;
 	/** Grouping for the UI: "identity" (candidate info), "preferences" (what they want), or
 	 *  "voice" (global hands-free control words). */
-	group?: "identity" | "preferences" | "voice";
+	/**
+	 * Which section of the console the field belongs to.
+	 *  identity    — general contact/PII any agent may need to fill a form. Always shown.
+	 *  job         — only meaningful to a job-application agent. Shown only when the user
+	 *                actually has an apply-surface instance (#222).
+	 *  preferences — job preferences (what roles/locations you want). Also apply-only.
+	 *  voice       — DEPRECATED, see the note on the voice fields below.
+	 */
+	group?: "identity" | "job" | "preferences" | "voice";
 }
 
 /**
@@ -30,8 +38,10 @@ export const PROFILE_FIELDS: ProfileFieldDef[] = [
 	{ key: "postalCode", column: "postal_code", label: "Postal code", private: true, group: "identity" },
 	{ key: "linkedin", column: "linkedin", label: "LinkedIn", private: false, group: "identity" },
 	{ key: "website", column: "website", label: "Website/Portfolio", private: false, group: "identity" },
-	{ key: "workAuthorization", column: "work_authorization", label: "Work authorization", private: false, group: "identity" },
-	{ key: "salaryExpectation", column: "salary_expectation", label: "Salary expectation", private: true, group: "identity" },
+	// Job-specific, not general contact info: nobody running a coding or repo-chat agent has a
+	// work authorization to declare. Grouped so the console can hide them (#222).
+	{ key: "workAuthorization", column: "work_authorization", label: "Work authorization", private: false, group: "job" },
+	{ key: "salaryExpectation", column: "salary_expectation", label: "Salary expectation", private: true, group: "job" },
 	// Job preferences (what you want) — stored in `custom`, no migration. They guide
 	// the agent's answers (location / work-type / relocation) and are the basis for
 	// future job discovery.
@@ -39,8 +49,16 @@ export const PROFILE_FIELDS: ProfileFieldDef[] = [
 	{ key: "targetLocations", label: "Target locations", private: false, group: "preferences" },
 	{ key: "workType", label: "Work type (Remote / Hybrid / Onsite)", private: false, group: "preferences" },
 	{ key: "openToRelocation", label: "Open to relocation? (Yes / No)", private: false, group: "preferences" },
-	// Hands-free voice control words — GLOBAL (apply across every agent/repo). Stored in
-	// `custom` (no migration); a per-instance value still overrides these. Comma-separated.
+	// DEPRECATED (#222) — hands-free control words used to be edited here, from the era before
+	// the Preferences page existed. Two UIs then wrote the same global setting through different
+	// endpoints, and this one silently lost: `users.preferences.voice` is merged server-side by
+	// effectiveVoice, while these are only a client-side fallback applied when the effective
+	// value is EMPTY (packages/sdk/src/voice/config.ts). So anyone who had ever touched
+	// Preferences found edits here did nothing.
+	//
+	// The console no longer renders them, so there is no write path. They are KEPT as a read
+	// fallback so a user whose words only ever existed here does not silently lose them; the
+	// canonical home is Preferences → Voice. Remove once a migration copies them across.
 	{ key: "voiceRepeatWords", label: "Repeat command words (blank = built-in defaults)", private: false, group: "voice" },
 	{ key: "voiceMuteWords", label: "Mute command words (blank = built-in defaults)", private: false, group: "voice" },
 	{ key: "voiceStopWords", label: "Stop-word — finish my turn (blank = off)", private: false, group: "voice" },

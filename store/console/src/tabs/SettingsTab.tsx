@@ -901,7 +901,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				<h3 className="text-base font-bold mb-1">Where things live</h3>
 				<ul className="text-sm text-muted leading-relaxed pl-4 list-disc">
 					{isApply && <li><b>Resume</b> & documents → Knowledge → Documents</li>}
-					{isApply && <li><b>Candidate profile</b> & job preferences → Profile</li>}
+					{isApply && <li><b>Job application details</b> & preferences → Profile</li>}
 					<li><b>Rules / special instructions</b> → Knowledge → Rules & Tips</li>
 					<li><b>Logins & secrets</b> → Knowledge → Credentials</li>
 				</ul>

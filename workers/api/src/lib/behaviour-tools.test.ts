@@ -8,7 +8,7 @@ import type { Env } from "../types.js";
  * In-memory D1 stub over a single `agent_instances.config` blob, so a set → get round trip goes
  * through the real handlers and the real store rather than asserting on the pure module twice.
  */
-function stubEnv(initialConfig: Record<string, unknown> = {}) {
+function stubEnv(initialConfig: Record<string, unknown> = {}, agentConfig: Record<string, unknown> | null = null) {
 	const state = { config: JSON.stringify(initialConfig) };
 	const env = {
 		DB: {
@@ -18,7 +18,7 @@ function stubEnv(initialConfig: Record<string, unknown> = {}) {
 						return {
 							async first() {
 								if (sql.includes("UPDATE")) return null;
-								return { config: state.config, agent_config: null };
+								return { config: state.config, agent_config: agentConfig ? JSON.stringify(agentConfig) : null };
 							},
 							async run() {
 								if (sql.includes("UPDATE")) state.config = String(args[0]);
@@ -155,5 +155,36 @@ describe("context requirements", () => {
 			const res = await runRegistryTool(name, { env }, {});
 			expect(res.success).toBe(false);
 		}
+	});
+});
+
+describe("a write reports the same thing a read would (creator defaults survive it)", () => {
+	const TEMPLATE = { behaviour: { technicality: 90, verbosity: "thorough" } };
+
+	it("set_behaviour reports the RESOLVED manner, not just the override it wrote", () => {
+		// The bug: the write path returned the subscriber's override alone while the read path
+		// returned it merged under the creator's default. On an agent that ships a character,
+		// changing one field made the agent report — and the console display — a manner it does
+		// not have, until something re-read.
+		const { env } = stubEnv({}, TEMPLATE);
+		return call(env, "set_behaviour", { tone: "casual" }).then((res) => {
+			expect(res.content).toContain("casually");
+			expect(res.content).toContain("senior-engineer"); // the creator's technicality: 90
+			expect(res.content).toContain("comprehensive"); // and their verbosity
+		});
+	});
+
+	it("clearing a field falls back to the creator default rather than to nothing", async () => {
+		const { env } = stubEnv({ behaviour: { technicality: 10 } }, TEMPLATE);
+		const res = await call(env, "set_behaviour", { technicality: null });
+		expect(res.content).toContain("senior-engineer");
+		expect(res.content).not.toContain("Avoid jargon");
+	});
+
+	it("still writes ONLY the override, never the creator's template", async () => {
+		// The subscriber (or their agent) must not edit the agent every other subscriber gets.
+		const { env, state } = stubEnv({}, TEMPLATE);
+		await call(env, "set_behaviour", { tone: "casual" });
+		expect(JSON.parse(state.config).behaviour).toEqual({ tone: "casual" });
 	});
 });

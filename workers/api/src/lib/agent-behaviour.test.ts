@@ -9,6 +9,7 @@ import {
 	fieldPrompt,
 	prefersTechnical,
 	resolveBehaviour,
+	resolveResponseStyle,
 	sanitizeBehaviour,
 	strayBehaviourKey,
 } from "./agent-behaviour.js";
@@ -296,5 +297,67 @@ describe("strayBehaviourKey — memory entries that belong in behaviour now (#22
 
 	it("requires the preference prefix, so a knowledge entry about tone is untouched", () => {
 		expect(strayBehaviourKey("context:tone")).toBe(false);
+	});
+});
+
+describe("resolveResponseStyle — a preference changes language, never capability", () => {
+	const plainAgent = { repoChatStyle: false, hasCodingContext: false };
+	const coder = { repoChatStyle: false, hasCodingContext: true };
+	const repoChat = { repoChatStyle: true, hasCodingContext: false };
+
+	it("does NOT give a plain chat agent a coding grounding block just because it was set technical", () => {
+		// The bug: `technical` and `codingContext` were one variable, so technicality 60 on an agent
+		// with no repos landed it in the Coder branch — told it has "Attached Repositories", "live
+		// terminal snapshots" and a Coding tab. A false self-model is exactly what those blocks
+		// exist to prevent.
+		const r = resolveResponseStyle({ ...plainAgent, behaviour: { technicality: 60 } });
+		expect(r.codingContext).toBe(false);
+		expect(r.technical).toBe(true);
+	});
+
+	it("does not fall back to the plain-speech block either — that is the opposite of the setting", () => {
+		// With no coding context and a technical preference, NEITHER block should fire; the
+		// behaviour band is the style instruction. Emitting plain-speech here told an agent
+		// "MAXIMUM 2 sentences, never mention filenames" right after its owner asked for detail.
+		const r = resolveResponseStyle({ ...plainAgent, behaviour: { technicality: 60 } });
+		expect(r.plainSpeech).toBe(false);
+	});
+
+	it("keeps the plain-speech block for an unconfigured plain agent", () => {
+		const r = resolveResponseStyle({ ...plainAgent, behaviour: {} });
+		expect(r).toMatchObject({ codingContext: false, technical: false, plainSpeech: true });
+		expect(r.styleReminder).toContain("MAX 2 sentences");
+	});
+
+	it("keeps a coding agent's grounding even when its owner asks for plain language", () => {
+		// Low technicality is a request about WORDS. The Coder still has live sessions and must
+		// still be grounded in them, or it starts inventing what the engine is doing.
+		const r = resolveResponseStyle({ ...coder, behaviour: { technicality: 10 } });
+		expect(r.codingContext).toBe(true);
+		expect(r.technical).toBe(false);
+		expect(r.plainSpeech).toBe(false); // the coding block owns the style, not plain-speech
+	});
+
+	it("keeps 'grounded in the code above' when only VERBOSITY is declared", () => {
+		// Replacing the whole reminder meant a length preference silently deleted an accuracy
+		// instruction from every post-tool round.
+		const r = resolveResponseStyle({ ...coder, behaviour: { verbosity: "thorough" } });
+		expect(r.styleReminder).toContain("grounded in the code above");
+		expect(r.styleReminder).toContain("comprehensive");
+	});
+
+	it("does not bolt a code-grounding clause onto a non-coding agent's reminder", () => {
+		const r = resolveResponseStyle({ ...plainAgent, behaviour: { verbosity: "brief" } });
+		expect(r.styleReminder).not.toContain("code above");
+		expect(r.styleReminder).toContain("Lead with the answer");
+	});
+
+	it("leaves both coding agents' grounding intact when nothing is configured", () => {
+		for (const caps of [coder, repoChat]) {
+			const r = resolveResponseStyle({ ...caps, behaviour: {} });
+			expect(r.codingContext).toBe(true);
+			expect(r.technical).toBe(true);
+			expect(r.styleReminder).toContain("grounded in the code above");
+		}
 	});
 });

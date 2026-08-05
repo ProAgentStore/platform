@@ -1,5 +1,5 @@
 import type { Env } from "../types.js";
-import { applyBehaviourPatch, resolveBehaviour, sanitizeBehaviour, type Behaviour } from "./agent-behaviour.js";
+import { applyBehaviourPatch, resolveBehaviour, type Behaviour } from "./agent-behaviour.js";
 
 /**
  * D1 access for agent behaviour (#223/#224).
@@ -37,9 +37,12 @@ export async function patchBehaviour(
 	patch: unknown,
 	allowedIds?: readonly string[],
 ): Promise<{ behaviour: Behaviour; rejected: string[] }> {
-	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
+	const row = await env.DB.prepare(
+		"SELECT i.config AS config, a.config AS agent_config FROM agent_instances i" +
+			" LEFT JOIN agents a ON a.id = i.agent_id WHERE i.id = ?1 AND i.user_id = ?2",
+	)
 		.bind(instanceId, userId)
-		.first<{ config: string | null }>();
+		.first<{ config: string | null; agent_config: string | null }>();
 	const cfg = parse(row?.config ?? null);
 	const { behaviour, rejected } = applyBehaviourPatch(cfg.behaviour, patch, allowedIds);
 	cfg.behaviour = behaviour;
@@ -48,15 +51,11 @@ export async function patchBehaviour(
 	)
 		.bind(JSON.stringify(cfg), instanceId, userId)
 		.run();
-	return { behaviour, rejected };
-}
-
-/** The subscriber's override alone, unmerged — for a UI that must show what IT set. */
-export async function readBehaviourOverride(env: Env, instanceId: string, userId: string): Promise<Behaviour> {
-	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2")
-		.bind(instanceId, userId)
-		.first<{ config: string | null }>();
-	return sanitizeBehaviour(parse(row?.config ?? null).behaviour).behaviour;
+	// RESOLVED, not the bare override. A read returns the creator default merged under the
+	// subscriber's, so returning only the override after a write made the two disagree: on an agent
+	// that ships defaults, changing one field appeared to erase all the others until reload, and
+	// set_behaviour reported a manner the agent does not actually have.
+	return { behaviour: resolveBehaviour(parse(row?.agent_config ?? null).behaviour, behaviour), rejected };
 }
 
 function parse(raw: string | null): Record<string, unknown> {

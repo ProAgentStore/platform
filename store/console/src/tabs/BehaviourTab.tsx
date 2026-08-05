@@ -74,7 +74,7 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 	const [fields, setFields] = useState<Field[]>([]);
 	const [behaviour, setBehaviour] = useState<Record<string, Value>>({});
 	const [loaded, setLoaded] = useState(false);
-	const [saving, setSaving] = useState<string | null>(null);
+	const [saving, setSaving] = useState<string[]>([]);
 	const [error, setError] = useState("");
 
 	useEffect(() => {
@@ -99,22 +99,31 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 		};
 	}, [instanceId]);
 
-	// `null` clears — the only way back to the platform default once a field has been set.
+	/**
+	 * Save a PATCH — one request, however many fields.
+	 *
+	 * Deliberately not one request per field. The server read-modify-writes the whole
+	 * `agent_instances.config` blob, so N concurrent PUTs each read the same pre-patch config and
+	 * the last write wins: "Reset group" fired five of them and cleared exactly one field, at
+	 * random. `null` clears a field — the only way back to the platform default once one is set.
+	 */
 	const save = useCallback(
-		async (id: string, value: Value | null) => {
-			setSaving(id);
+		async (patch: Record<string, Value | null>) => {
+			const ids = Object.keys(patch);
+			if (!ids.length) return;
+			setSaving(ids);
 			setError("");
 			try {
 				const res = await api<{ behaviour: Record<string, Value>; rejected?: string[] }>(
 					`/v1/instances/${instanceId}/behaviour`,
-					{ method: "PUT", body: JSON.stringify({ behaviour: { [id]: value } }) },
+					{ method: "PUT", body: JSON.stringify({ behaviour: patch }) },
 				);
 				setBehaviour(res.behaviour || {});
 				if (res.rejected?.length) setError(`Not saved: ${res.rejected.join(", ")}`);
 			} catch (e) {
 				setError(e instanceof Error ? e.message : "Could not save");
 			} finally {
-				setSaving(null);
+				setSaving([]);
 			}
 		},
 		[instanceId],
@@ -162,9 +171,9 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 								<button
 									type="button"
 									className="text-xs underline text-muted whitespace-nowrap"
-									onClick={() => {
-										for (const f of groupFields) if (isSet(behaviour, f.id)) void save(f.id, null);
-									}}
+									onClick={() =>
+										void save(Object.fromEntries(groupFields.filter((f) => isSet(behaviour, f.id)).map((f) => [f.id, null])))
+									}
 								>
 									Reset group
 								</button>
@@ -177,8 +186,8 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 									field={f}
 									value={behaviour[f.id]}
 									set={isSet(behaviour, f.id)}
-									busy={saving === f.id}
-									onChange={(v) => void save(f.id, v)}
+									busy={saving.includes(f.id)}
+									onChange={(v) => void save({ [f.id]: v })}
 								/>
 							))}
 						</div>
@@ -206,6 +215,20 @@ function FieldRow({
 	// other control commits immediately.
 	const [dragging, setDragging] = useState<number | null>(null);
 	const effective = value ?? field.default;
+	/**
+	 * Remount key for the uncontrolled inputs below.
+	 *
+	 * They use defaultValue so typing isn't fought by a re-render, but that also means React never
+	 * updates them from props — click "reset" on a text field and the box still showed the old
+	 * text, looking like the reset had failed. `value` only changes when a SAVE lands, so this
+	 * remounts then and never mid-keystroke.
+	 */
+	const inputKey = `${field.id}:${Array.isArray(value) ? value.join(",") : String(value ?? "")}`;
+
+	const commit = () => {
+		if (dragging !== null) onChange(dragging);
+		setDragging(null);
+	};
 
 	return (
 		<div>
@@ -233,17 +256,13 @@ function FieldRow({
 						className="w-full"
 						value={dragging ?? (effective as number)}
 						onChange={(e) => setDragging(Number(e.target.value))}
-						onMouseUp={() => {
-							if (dragging !== null) onChange(dragging);
-							setDragging(null);
-						}}
-						onTouchEnd={() => {
-							if (dragging !== null) onChange(dragging);
-							setDragging(null);
-						}}
-						onKeyUp={() => {
-							if (dragging !== null) onChange(dragging);
-							setDragging(null);
+						onPointerUp={commit}
+						onKeyUp={commit}
+						// Releasing the mouse OUTSIDE the input never fired pointerup on it, so the
+						// slider showed a value that was never saved and stayed stuck at it.
+						onBlur={commit}
+						onPointerLeave={(e) => {
+							if (e.buttons === 0) commit();
 						}}
 					/>
 					{/*
@@ -290,6 +309,7 @@ function FieldRow({
 
 			{field.type === "text" && (
 				<input
+					key={inputKey}
 					type="text"
 					className="mt-2 w-full rounded border border-border bg-transparent px-2 py-1 text-sm"
 					maxLength={field.maxLength}
@@ -304,6 +324,7 @@ function FieldRow({
 
 			{field.type === "number" && (
 				<input
+					key={inputKey}
 					type="number"
 					className="mt-2 w-32 rounded border border-border bg-transparent px-2 py-1 text-sm"
 					min={field.min}
@@ -315,6 +336,7 @@ function FieldRow({
 
 			{field.type === "list" && (
 				<input
+					key={inputKey}
 					type="text"
 					className="mt-2 w-full rounded border border-border bg-transparent px-2 py-1 text-sm"
 					placeholder="comma separated"

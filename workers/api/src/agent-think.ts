@@ -19,10 +19,9 @@ import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from 
 import {
 	behaviourField,
 	behaviourPrompt,
-	behaviourStyleReminder,
 	fieldPrompt,
-	prefersTechnical,
 	resolveBehaviour,
+	resolveResponseStyle,
 	strayBehaviourKey,
 } from "./lib/agent-behaviour.js";
 import type { Env } from "./types.js";
@@ -448,15 +447,17 @@ export async function runAgentThink(opts: {
 	// the explicit repo-chat explainer (responseStyle === "technical", read-only),
 	// and any coding-capable instance (it has attached repos). Everything else
 	// keeps the concise, read-aloud voice tuned for non-technical users.
+	//
+	// Response style: what the agent IS (grounding context) vs what its owner ASKED for (language
+	// level). Pure + tested in lib/agent-behaviour.ts — conflating the two told a plain chat agent
+	// it had repos and a terminal.
+	const { codingContext, technical, styleReminder, plainSpeech } = resolveResponseStyle({
+		repoChatStyle: state.guardrails?.responseStyle === "technical",
+		hasCodingContext,
+		behaviour,
+	});
+	// Repo Chat vs Coder is a distinction only the grounding blocks below care about.
 	const repoChatStyle = state.guardrails?.responseStyle === "technical";
-	// A DECLARED technicality wins over the guess. The guess ("has repos ⇒ wants jargon") is only
-	// ever a stand-in for asking, so once the subscriber has answered, it stops applying.
-	const technical = prefersTechnical(behaviour) ?? (repoChatStyle || hasCodingContext);
-	const styleReminder =
-		behaviourStyleReminder(behaviour) ||
-		(technical
-			? "Answer accurately and concretely, grounded in the code above. Lead with a plain-English explanation; cite real file paths/functions and add short snippets only when they help."
-			: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.");
 
 	// Unconditional until #223: there was no way to ask for the steps. Now the OFF state of
 	// `showWorking` carries this same rule (see the field's `offPrompt`), so leaving it here too
@@ -475,7 +476,7 @@ export async function runAgentThink(opts: {
 		" sent, saved, filed, created) when its tool result was an error. Never invent results, statuses," +
 		" or facts about the user such as their name. If something failed, report the failure and what" +
 		" you'll do next.";
-		if (technical && repoChatStyle) {
+		if (codingContext && repoChatStyle) {
 			// Repo Chat genuinely HAS a vector index of the code (RAG context injected
 			// above), so grounding answers in "the indexed code" is correct here.
 			systemPrompt +=
@@ -484,7 +485,7 @@ export async function runAgentThink(opts: {
 				"\n- Ground every claim about how the code works in the retrieved context. If something isn't in your indexed knowledge, say you didn't find it (suggest adding the repo in the Repo tab) rather than guessing." +
 				"\n- You are READ-ONLY: you explain and analyze the repository, you never modify it and you have no ability to change code." +
 				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
-		} else if (technical) {
+		} else if (codingContext) {
 			// Coder has NO vector index — its code lives in live tmux sessions, not RAG.
 			// Telling it to reference "the indexed code" made it search an empty knowledge
 			// base and report the code "isn't indexed / hasn't been populated" — a
@@ -496,7 +497,11 @@ export async function runAgentThink(opts: {
 				"\n- BUT you CAN still use your own tools directly from this chat — e.g. file a GitHub issue with github_create_issue, or list/read issues and CI status. That is not 'driving the engine'; if the user asks you to open/track an issue, just call the tool and do it (do NOT shell out to a terminal or tell them to run `gh`)." +
 				"\n- If asked to find or fix something in the code from this chat, say that work runs in the Coding tab and offer to summarize what the current session is doing." +
 				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
-		} else {
+		} else if (plainSpeech) {
+		// `!technical`, not a bare `else`: an agent with NO coding context whose owner asked for
+		// technical language used to land here and be told "MAXIMUM 2 sentences, never mention
+		// filenames or code" — the exact opposite of the setting. Emitting no block is right; the
+		// behaviour band above is then the only style instruction.
 		// The 2-sentence cap is a LENGTH rule that happened to live inside the plain-speech block.
 		// A subscriber who asked for thorough answers has already overruled it, so honour that
 		// rather than telling the model both things in the same prompt.

@@ -683,3 +683,52 @@ export function strayBehaviourKey(key: string): boolean {
 	if (!k.startsWith("preference:") && !k.startsWith("pref:")) return false;
 	return BEHAVIOURAL_KEY_HINTS.some((h) => k.includes(h));
 }
+
+export interface ResponseStyle {
+	/**
+	 * Does this agent have a code-grounding context (a vector index, or live coding sessions)?
+	 *
+	 * A FACT about the agent, never a preference. Kept separate from `technical` because they were
+	 * briefly one variable, and that was a real bug: a plain chat agent whose owner set technicality
+	 * to 60 fell into the Coder branch and was told it has "Attached Repositories", "live terminal
+	 * snapshots" and a Coding tab. Those blocks exist to stop a false self-model; conflating the two
+	 * handed one to an agent with none of it.
+	 */
+	codingContext: boolean;
+	/** Should the reply use technical language? Declared preference first, capability as fallback. */
+	technical: boolean;
+	/** The one-line reminder appended after tool rounds. */
+	styleReminder: string;
+	/** Emit the plain-speech block? False once the owner has asked for technical language. */
+	plainSpeech: boolean;
+}
+
+const GROUNDED = "Answer accurately and concretely, grounded in the code above.";
+
+/**
+ * Decide response style from what the agent IS and what its owner ASKED for.
+ *
+ * A preference may change the language level; it must never invent a capability.
+ */
+export function resolveResponseStyle(opts: {
+	repoChatStyle: boolean;
+	hasCodingContext: boolean;
+	behaviour: Behaviour;
+}): ResponseStyle {
+	const codingContext = opts.repoChatStyle || opts.hasCodingContext;
+	const technical = prefersTechnical(opts.behaviour) ?? codingContext;
+	const declared = behaviourStyleReminder(opts.behaviour);
+
+	// The grounding clause SURVIVES a declared style. Replacing the whole reminder meant setting
+	// verbosity alone silently dropped "grounded in the code above" from every post-tool round on a
+	// coding agent — a length preference quietly removing an accuracy instruction.
+	const styleReminder = declared
+		? codingContext
+			? `${GROUNDED} ${declared}`
+			: declared
+		: technical
+			? `${GROUNDED} Lead with a plain-English explanation; cite real file paths/functions and add short snippets only when they help.`
+			: "Reply in MAX 2 sentences, plain English, no filenames or code. This will be read aloud.";
+
+	return { codingContext, technical, styleReminder, plainSpeech: !codingContext && !technical };
+}

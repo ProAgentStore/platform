@@ -1,12 +1,7 @@
 import type { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
-import {
-	BEHAVIOUR_FIELDS,
-	applyBehaviourPatch,
-	describeBehaviour,
-	resolveBehaviour,
-	sanitizeBehaviour,
-} from "../lib/agent-behaviour.js";
+import { BEHAVIOUR_FIELDS, describeBehaviour, resolveBehaviour, sanitizeBehaviour } from "../lib/agent-behaviour.js";
+import { patchBehaviour, readBehaviour } from "../lib/behaviour-store.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
@@ -60,17 +55,11 @@ export function registerBehaviourRoutes(router: Hono<{ Bindings: Env }>): void {
 		const body = (await c.req.json().catch(() => ({}))) as { behaviour?: unknown };
 		const patch = (body.behaviour ?? {}) as Record<string, unknown>;
 
-		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 		// No allowlist: this is the owner editing their own agent in the UI, so guardrails are
 		// theirs to set. The allowlist exists for the agent's own tool (#224), not for the human.
-		const { behaviour: next, rejected } = applyBehaviourPatch(cfg.behaviour, patch);
-
-		cfg.behaviour = next;
-		await c.env.DB.prepare(
-			"UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3",
-		)
-			.bind(JSON.stringify(cfg), instanceId, session.uid)
-			.run();
+		// Returns the RESOLVED behaviour, matching GET — the console replaces its state with this,
+		// and an override-only reply made every creator-supplied default vanish from the page.
+		const { behaviour: next, rejected } = await patchBehaviour(c.env, instanceId, session.uid, patch);
 		// Rejections are reported, never swallowed — a half-applied patch that reports success is
 		// how a caller ends up believing it set something it did not.
 		return c.json({ behaviour: next, rejected, described: describeBehaviour(next) });
@@ -88,7 +77,10 @@ export function registerBehaviourRoutes(router: Hono<{ Bindings: Env }>): void {
 		)
 			.bind(JSON.stringify(cfg), instanceId, session.uid)
 			.run();
-		return c.json({ ok: true, behaviour: {} });
+		// Not `{}` — clearing the subscriber's override falls back to the creator's default, which
+		// may well be non-empty. Reporting {} would show the page as unconfigured while the agent
+		// still had a character.
+		return c.json({ ok: true, behaviour: await readBehaviour(c.env, instanceId, session.uid) });
 	});
 }
 

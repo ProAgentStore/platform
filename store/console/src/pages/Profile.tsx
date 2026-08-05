@@ -29,10 +29,14 @@ export default function Profile() {
 	const [twitter, setTwitter] = useState("");
 	const [slack, setSlack] = useState("");
 
-	// Candidate profile
+	// Profile details (personal + job-application fields)
 	const [cpFields, setCpFields] = useState<ProfileField[]>([]);
 	const [cpValues, setCpValues] = useState<Record<string, string>>({});
 	const [cpStatus, setCpStatus] = useState("");
+
+	// Does this user run an apply-surface agent? Job-application fields are shown only then
+	// (#222) — the same capability gate the instance UI already uses, applied at user level.
+	const [hasApplyAgent, setHasApplyAgent] = useState(false);
 
 	// API keys
 	const [providers, setProviders] = useState<Provider[]>([]);
@@ -49,7 +53,7 @@ export default function Profile() {
 		setTwitter(user.twitter || "");
 	}, [user]);
 
-	// Load candidate profile
+	// Load profile details
 	useEffect(() => {
 		(async () => {
 			try {
@@ -57,6 +61,18 @@ export default function Profile() {
 				setCpFields(d.fields || []);
 				setCpValues(d.profile || {});
 			} catch {}
+		})();
+	}, []);
+
+	// Resolve the apply gate from the instances the user actually has. Fails CLOSED: if the
+	// call errors we show fewer fields, never job-application PII to someone who has no use
+	// for it.
+	useEffect(() => {
+		(async () => {
+			try {
+				const d = await api<{ instances?: Array<{ capabilities?: { surfaces?: string[] } }> }>("/v1/instances/my/instances");
+				setHasApplyAgent((d.instances || []).some(i => i.capabilities?.surfaces?.includes("apply")));
+			} catch { setHasApplyAgent(false); }
 		})();
 	}, []);
 
@@ -81,7 +97,7 @@ export default function Profile() {
 		} catch (e) { alert(e instanceof Error ? e.message : String(e)); }
 	};
 
-	const saveCandidateProfile = async () => {
+	const saveProfileDetails = async () => {
 		try {
 			await api("/v1/profile", { method: "PUT", body: JSON.stringify(cpValues) });
 			setCpStatus("Saved");
@@ -115,9 +131,12 @@ export default function Profile() {
 
 	if (!user) return null;
 
-	const identityFields = cpFields.filter(f => f.group !== "preferences" && f.group !== "voice");
+	// The `voice` group is deliberately dropped, not rendered: those fields wrote a global
+	// setting that Preferences already owns, through a different endpoint, and lost (#222).
+	// Anything ungrouped falls in with personal details rather than disappearing.
+	const personalFields = cpFields.filter(f => f.group !== "preferences" && f.group !== "voice" && f.group !== "job");
+	const jobFields = cpFields.filter(f => f.group === "job");
 	const prefFields = cpFields.filter(f => f.group === "preferences");
-	const voiceFields = cpFields.filter(f => f.group === "voice");
 
 	return (
 		<Page>
@@ -186,49 +205,46 @@ export default function Profile() {
 					</div>
 				</div>
 
-				{/* Candidate Profile */}
-				{cpFields.length > 0 && (
+				{/* Personal details — general contact info any agent may need to fill a form.
+				    Shown to everyone; the job-specific fields below are gated separately (#222). */}
+				{personalFields.length > 0 && (
 					<div className="mb-6">
-						<h3 className="text-[0.95rem] font-semibold mb-1">Candidate Profile</h3>
+						<h3 className="text-[0.95rem] font-semibold mb-1">Personal details</h3>
 						<p className="text-sm text-muted mb-3">Structured info your agents use to fill forms. Private — never shown publicly.</p>
 						<div className="grid grid-cols-2 gap-2 max-sm:grid-cols-1">
-							{identityFields.map(f => (
+							{personalFields.map(f => (
 								<label key={f.key} className="flex flex-col gap-1">
 									<span className="text-xs text-muted font-semibold">{f.label}{f.private ? <span className="text-muted-soft"> · private</span> : ""}</span>
 									<input value={cpValues[f.key] || ""} onChange={e => setCpValues(p => ({ ...p, [f.key]: e.target.value }))} />
 								</label>
 							))}
 						</div>
-						{prefFields.length > 0 && (
+						{/* Job-application fields, only for a user who actually runs an apply agent.
+						    Previously everyone saw work authorization, salary expectation and target
+						    roles regardless of what their agents do — gated on whether the schema
+						    returned fields rather than on having any use for them. */}
+						{hasApplyAgent && (jobFields.length > 0 || prefFields.length > 0) && (
 							<>
-								<div className="mt-3 font-bold text-sm">Job Preferences <span className="font-normal text-muted text-xs">— guides the agent's answers</span></div>
+								<div className="mt-4 font-bold text-sm">Job application details <span className="font-normal text-muted text-xs">— used by your job-application agent</span></div>
 								<div className="grid grid-cols-2 gap-2 mt-1 max-sm:grid-cols-1">
-									{prefFields.map(f => (
+									{[...jobFields, ...prefFields].map(f => (
 										<label key={f.key} className="flex flex-col gap-1">
-											<span className="text-xs text-muted font-semibold">{f.label}</span>
+											<span className="text-xs text-muted font-semibold">{f.label}{f.private ? <span className="text-muted-soft"> · private</span> : ""}</span>
 											<input value={cpValues[f.key] || ""} onChange={e => setCpValues(p => ({ ...p, [f.key]: e.target.value }))} />
 										</label>
 									))}
 								</div>
 							</>
 						)}
-						{voiceFields.length > 0 && (
-							<>
-								<div className="mt-3 font-bold text-sm">Hands-free voice commands <span className="font-normal text-muted text-xs">— global; apply to every agent &amp; repo (a per-agent value overrides)</span></div>
-								<div className="grid grid-cols-2 gap-2 mt-1 max-sm:grid-cols-1">
-									{voiceFields.map(f => (
-										<label key={f.key} className="flex flex-col gap-1">
-											<span className="text-xs text-muted font-semibold">{f.label}</span>
-											<input value={cpValues[f.key] || ""} onChange={e => setCpValues(p => ({ ...p, [f.key]: e.target.value }))} placeholder="comma-separated" />
-										</label>
-									))}
-								</div>
-							</>
-						)}
 						<div className="flex items-center gap-2 mt-3">
-							<button type="button" onClick={saveCandidateProfile} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold">Save Candidate Profile</button>
+							<button type="button" onClick={saveProfileDetails} className="text-sm px-4 py-2 rounded-xl bg-accent text-white font-bold">Save Profile</button>
 							{cpStatus && <span className="text-xs text-muted">{cpStatus}</span>}
 						</div>
+						{/* Voice commands used to live here too, writing a global setting through a
+						    different endpoint than Preferences — and losing. One home now. */}
+						<p className="text-[0.7rem] text-muted-soft mt-3">
+							Looking for hands-free voice commands? They live in <a href="/preferences" className="text-accent">Preferences → Voice</a>.
+						</p>
 					</div>
 				)}
 
