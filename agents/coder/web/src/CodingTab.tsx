@@ -23,6 +23,14 @@ interface Props {
 	 * affordances it can never use is what made a configured agent look like the hardcoded Coder.
 	 */
 	singleRepo?: boolean;
+	/**
+	 * Does this agent have a Co-pilot — a SECOND conversation scoped to one session?
+	 *
+	 * False for a configurable Repo Coder: one chat per agent. Its Assistant carries the same
+	 * repo/git/issue read tools from the registry, so nothing is lost but the second brain. True
+	 * (default) for the legacy hardcoded Coder, which is deliberately left exactly as it was.
+	 */
+	copilot?: boolean;
 }
 
 // Remember the repo the user was last working on, per instance, so returning to the Coding
@@ -50,7 +58,7 @@ interface TimelineEntry {
 /** Returned by /capture when the engine is waiting for a human to sign in. */
 type AuthPrompt = { kind: "oauth-url" | "menu" | "unknown"; url: string | null; evidence: string; guidance: string };
 
-export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride, singleRepo = false }: Props) {
+export default function CodingTab({ instanceId, initialSessionId, onHeaderOverride, singleRepo = false, copilot = true }: Props) {
 	const navigate = useNavigate();
 	const [repos, setRepos] = useState<CodingRepo[]>([]);
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
@@ -60,7 +68,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	// Session view state
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
-	const [view, setView] = useState<"summary" | "terminal">("summary");
+	// With no Co-pilot there is only one view, and it is the terminal.
+	const [view, setView] = useState<"summary" | "terminal">(copilot ? "summary" : "terminal");
 	const [terminalText, setTerminalText] = useState("(waiting...)");
 	// Last persisted tmux snapshot (coding_timeline, DB) — shown in the Terminal view when
 	// the session has no LIVE pane (ended, or the runner isn't attached), so the terminal
@@ -266,7 +275,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		} catch {}
 	}, [instanceId, openSession]);
 
-	usePolling(pollSummary, 4500, !!openSession && view === "summary");
+	usePolling(pollSummary, 4500, copilot && !!openSession && view === "summary");
 
 	// Co-pilot auto-scroll now lives in CopilotView, gated on the user's scroll position (#132)
 	// — a new message no longer yanks the view down while the user is reading history.
@@ -289,7 +298,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		autoOpenedRef.current = true;
 		setOpenSession(session);
 		saveLastRepo(instanceId, session.repoId); // remember this repo for next visit
-		setView("summary");
+		setView(copilot ? "summary" : "terminal");
 		setSummaryHistory([]);
 		navigate(`/instances/${instanceId}/coding/${session.id}`, { replace: true });
 		setTerminalText("(waiting...)");
@@ -658,10 +667,12 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 				</div>
 				<AgentStatusBadge status={openStatus} />
 				{/* Icon-only on mobile (saves space); icon + label from sm up. */}
+				{copilot && (
 				<div className="flex border border-line rounded-lg overflow-hidden shrink-0">
 					<button type="button" onClick={() => setView("summary")} title="Co-pilot" aria-label="Co-pilot" aria-pressed={view === "summary"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "summary" ? "bg-accent-soft text-accent" : "text-muted"}`}><Eye size={14} /><span className="hidden sm:inline">Co-pilot</span></button>
 					<button type="button" onClick={() => setView("terminal")} title="Terminal" aria-label="Terminal" aria-pressed={view === "terminal"} className={`flex items-center justify-center gap-1 w-8 sm:w-auto sm:px-2 py-1 text-xs font-bold ${view === "terminal" ? "bg-accent-soft text-accent" : "text-muted"}`}><SquareTerminal size={14} /><span className="hidden sm:inline">Terminal</span></button>
 				</div>
+				)}
 				<div className="ml-auto flex gap-1 shrink-0">
 					{/* Agent settings = the instance-level Settings tab. While a coding session is
 					    open, CodingTab overrides the parent header (which holds the tab bar), so this
@@ -721,7 +732,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						then <button type="button" onClick={restartSession} className="underline font-semibold">Restart</button> this session.
 					</div>
 				)}
-				{view === "summary" && (
+				{copilot && view === "summary" && (
 					<CopilotView
 						instanceId={instanceId}
 						voice={voice}

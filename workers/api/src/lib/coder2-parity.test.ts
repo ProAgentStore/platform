@@ -128,6 +128,66 @@ describe("0067 — the Lead's declared tools stay real and never shrink", () => 
 	});
 });
 
+describe("0070 — the Repo Coder has ONE chat, and it can still do the job (#209)", () => {
+	const sql0070 = (): string => readFileSync(join(MIGRATIONS, "0070_coder_repo_one_chat.sql"), "utf8");
+	const declared0070 = (): string[] => {
+		const m = sql0070().match(/json\('(\[[^']*\])'\)/);
+		if (!m) throw new Error("0070 no longer sets capabilities.tools via json('[…]')");
+		return JSON.parse(m[1]) as string[];
+	};
+
+	it("declares the Co-pilot OFF", () => {
+		expect(sql0070()).toContain("$.capabilities.surfaceOptions.coding.copilot");
+		expect(sql0070()).toMatch(/copilot['"\s,]*,\s*json\('false'\)/);
+	});
+
+	it("only ever touches coder-repo — the legacy hardcoded Coder must be byte-identical", () => {
+		// The one hard constraint on this change. `coder` keeps its Co-pilot because it declares
+		// nothing and the option defaults true; an UPDATE that caught it would silently delete a
+		// view from a shipped agent.
+		expect(sql0070()).toContain("WHERE slug = 'coder-repo'");
+		expect(sql0070()).not.toMatch(/slug\s*=\s*'coder'/);
+		expect(sql0070()).not.toMatch(/slug\s+IN\s*\(/i);
+	});
+
+	it("replaces the Co-pilot's capability rather than removing it", async () => {
+		// The Co-pilot's read tools were: list_files, read_file, git_status/git_diff, list_issues,
+		// read_issue, plus the terminal it was handed. Every one has a registry equivalent that
+		// `repo-local`/`github`/`tmux` already publish — which is why deleting the second brain
+		// costs nothing. If a future edit drops one of these, the chat quietly gets dumber than
+		// the thing it replaced and no other test notices.
+		const tools = declared0070();
+		for (const n of ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_list_issues", "github_read_issue"]) {
+			expect(tools, n).toContain(n);
+		}
+		// The terminal is deliberately NOT a tool here: agent-think.ts already injects a fresh
+		// capture of every active session's pane each turn. A tool would be a third copy.
+		expect(tools).not.toContain("tmux_capture_pane");
+	});
+
+	it("declares nothing that is in the registry but NOT creator-selectable — the inert-tool trap", async () => {
+		// registryToolNameSet() is a weaker check than it looks: `toolNamesFor` only honours a
+		// declared name when CREATOR_SELECTABLE_TOOLS has it, so a real registry tool outside that
+		// set is declared, invisible to the agent, and passes every other assertion here.
+		const { CREATOR_SELECTABLE_TOOLS } = await import("../agent-do-tools.js");
+		expect(declared0070().filter((n) => !CREATOR_SELECTABLE_TOOLS.has(n))).toEqual([]);
+	});
+
+	it("grants NO write tool that would make its chat a second way to drive the engine", () => {
+		// `drive:false` already says the Lead steers a Repo Coder. Handing its chat
+		// tmux_run_command would reintroduce exactly the overlapping drive-path #154 removed.
+		for (const n of ["tmux_run_command", "tmux_send_keys", "tmux_kill_session", "tmux_new_session", "browser_act"]) {
+			expect(declared0070(), n).not.toContain(n);
+		}
+	});
+
+	it("declares no tool the registry does not actually provide", async () => {
+		const { registryToolNameSet } = await import("./tool-registry.js");
+		const known = registryToolNameSet();
+		expect(declared0070().filter((n) => !known.has(n))).toEqual([]);
+	});
+});
+
 describe("declared board vocabularies are fully claimed by the canonical bucketer", () => {
 	it("every status a seeded agent declares resolves to one of its own columns", async () => {
 		// The drift guard. `columnForStatus` falls back to catchAll and then null, so a future

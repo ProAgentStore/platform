@@ -34,9 +34,27 @@ export interface SurfaceSpec {
 	 * neither goes through chat tools.
 	 */
 	drive: boolean;
+	/**
+	 * Does this agent get a SECOND conversation — the Co-pilot, scoped to one coding session?
+	 *
+	 * Default true, because the legacy hardcoded Coder has one and removing it there is a
+	 * behaviour change nobody asked for. A configurable Repo Coder sets false.
+	 *
+	 * Why false is right for the new Coder: the Co-pilot exists to translate terminal output into
+	 * English for a human. That made sense when the pane held a compiler. It holds Claude Code —
+	 * a second model paid to summarise a model whose output is already English. Its one genuinely
+	 * useful trick, grounding an answer with read_file/git_diff/list_issues, is not a brain: those
+	 * are TOOLS, and `repo-local` + `github` already publish them in the registry (its own header
+	 * says it hits "the same read-only, traversal-guarded, byte-capped" runner endpoints the
+	 * Co-pilot uses). So the capability moves to the one chat and the second chat goes away.
+	 *
+	 * Every other agent on the platform — apply, repo-chat, site-builder, doc-chat, the pipelines —
+	 * already has exactly one chat. Nine to two. This makes the Coder stop being the exception.
+	 */
+	copilot: boolean;
 }
 
-export const SURFACE_DEFAULTS: SurfaceSpec = { repos: "many", drive: true };
+export const SURFACE_DEFAULTS: SurfaceSpec = { repos: "many", drive: true, copilot: true };
 
 /** Parse one surface's options, filling defaults. Junk yields defaults, never a broken shape. */
 export function parseSurfaceSpec(raw: unknown): SurfaceSpec {
@@ -46,6 +64,9 @@ export function parseSurfaceSpec(raw: unknown): SurfaceSpec {
 		// Only an explicit `false` opts out. An absent or malformed value keeps the drive tools,
 		// because silently dropping them is the failure this default exists to prevent.
 		drive: o.drive === false ? false : true,
+		// Same rule as `drive`: only an explicit false opts out, so a malformed config can never
+		// silently remove a surface the user is looking at.
+		copilot: o.copilot === false ? false : true,
 	};
 }
 
@@ -82,6 +103,7 @@ export function serializeSurfaceOptions(map: Record<string, SurfaceSpec>): Recor
 		const o: Record<string, unknown> = {};
 		if (spec.repos !== SURFACE_DEFAULTS.repos) o.repos = spec.repos;
 		if (spec.drive !== SURFACE_DEFAULTS.drive) o.drive = spec.drive;
+		if (spec.copilot !== SURFACE_DEFAULTS.copilot) o.copilot = spec.copilot;
 		if (Object.keys(o).length) out[id] = o;
 	}
 	return out;

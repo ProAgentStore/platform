@@ -35,7 +35,7 @@ export interface SurfaceContext {
 	settingsSchema?: SettingsField[];
 	/** Per-surface options (capabilities.surfaceOptions). `repos:"single"` hides the
 	 *  multi-repo affordances for an agent that owns exactly one repo. */
-	surfaceOptions?: Record<string, { repos?: string; drive?: boolean }>;
+	surfaceOptions?: Record<string, { repos?: string; drive?: boolean; copilot?: boolean }>;
 	setChildHeader: (node: ReactNode | null) => void;
 	onUnsubscribe: () => void;
 }
@@ -99,6 +99,11 @@ export const SURFACES: SurfaceDef[] = [
 				// A Repo Coder owns ONE repo by design; showing add-repo and a repo list it can
 				// never use is what made a configured agent look like the hardcoded Coder.
 				singleRepo={surfaceOptions?.coding?.repos === "single"}
+				// One chat per agent. A configurable Repo Coder declares `copilot:false`, so its
+				// Coding tab is the terminal only and every conversation happens in the Assistant
+				// — which carries the same repo/git/issue read tools from the registry. The
+				// legacy hardcoded Coder declares nothing and keeps its Co-pilot.
+				copilot={surfaceOptions?.coding?.copilot !== false}
 			/>
 		),
 	},

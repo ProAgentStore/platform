@@ -3,7 +3,7 @@ import { optionsFor, parseSurfaceOptions, parseSurfaceSpec, serializeSurfaceOpti
 
 describe("parseSurfaceSpec — defaults must be the safe ones", () => {
 	it("fills defaults for an absent spec", () => {
-		expect(parseSurfaceSpec(undefined)).toEqual({ repos: "many", drive: true });
+		expect(parseSurfaceSpec(undefined)).toEqual({ repos: "many", drive: true, copilot: true });
 	});
 
 	it("only an EXPLICIT false opts out of driving", () => {
@@ -30,7 +30,7 @@ describe("parseSurfaceSpec — defaults must be the safe ones", () => {
 describe("parseSurfaceOptions", () => {
 	it("normalizes a map of specs", () => {
 		expect(parseSurfaceOptions({ coding: { repos: "single", drive: false } })).toEqual({
-			coding: { repos: "single", drive: false },
+			coding: { repos: "single", drive: false, copilot: true },
 		});
 	});
 
@@ -57,12 +57,12 @@ describe("optionsFor — an option must never switch a surface ON", () => {
 	});
 
 	it("returns defaults for a declared surface with no options — the existing Coder's case", () => {
-		expect(optionsFor({ surfaces: ["coding"] }, "coding")).toEqual({ repos: "many", drive: true });
+		expect(optionsFor({ surfaces: ["coding"] }, "coding")).toEqual({ repos: "many", drive: true, copilot: true });
 	});
 
 	it("returns the declared options when both are present", () => {
 		const caps = { surfaces: ["coding"], surfaceOptions: { coding: { repos: "single", drive: false } } };
-		expect(optionsFor(caps, "coding")).toEqual({ repos: "single", drive: false });
+		expect(optionsFor(caps, "coding")).toEqual({ repos: "single", drive: false, copilot: true });
 	});
 
 	it("does not leak one surface's options onto another", () => {
@@ -73,17 +73,51 @@ describe("optionsFor — an option must never switch a surface ON", () => {
 
 describe("serializeSurfaceOptions — do not noisify stored configs", () => {
 	it("omits a surface whose options are all defaults", () => {
-		expect(serializeSurfaceOptions({ coding: { repos: "many", drive: true } })).toEqual({});
+		expect(serializeSurfaceOptions({ coding: { repos: "many", drive: true, copilot: true } })).toEqual({});
 	});
 
 	it("writes only the fields that differ", () => {
-		expect(serializeSurfaceOptions({ coding: { repos: "single", drive: true } })).toEqual({ coding: { repos: "single" } });
-		expect(serializeSurfaceOptions({ coding: { repos: "many", drive: false } })).toEqual({ coding: { drive: false } });
+		expect(serializeSurfaceOptions({ coding: { repos: "single", drive: true, copilot: true } })).toEqual({ coding: { repos: "single" } });
+		expect(serializeSurfaceOptions({ coding: { repos: "many", drive: false, copilot: true } })).toEqual({ coding: { drive: false } });
 	});
 
 	it("round-trips a non-default spec", () => {
-		const spec = { repos: "single", drive: false } as const;
+		const spec = { repos: "single", drive: false, copilot: false } as const;
 		const wire = serializeSurfaceOptions({ coding: { ...spec } });
 		expect(parseSurfaceOptions(wire).coding).toEqual(spec);
+	});
+});
+
+describe("copilot — one chat per agent (#209)", () => {
+	it("defaults TRUE, so the legacy hardcoded Coder is untouched by this existing", () => {
+		// The whole safety property of this change: `coder` declares no surfaceOptions, so it must
+		// come back with its Co-pilot intact. A default of false would silently delete a surface
+		// from a shipped agent nobody asked to change.
+		expect(parseSurfaceSpec({}).copilot).toBe(true);
+		expect(parseSurfaceSpec(undefined).copilot).toBe(true);
+		expect(optionsFor({ surfaces: ["coding"] }, "coding")?.copilot).toBe(true);
+	});
+
+	it("only an EXPLICIT false opts out", () => {
+		// Same rule as `drive`. A malformed config must never remove a view the user is looking at.
+		expect(parseSurfaceSpec({ copilot: false }).copilot).toBe(false);
+		for (const v of [undefined, null, 0, "", "false", "no", {}]) {
+			expect(parseSurfaceSpec({ copilot: v }).copilot, String(v)).toBe(true);
+		}
+	});
+
+	it("a Repo Coder's declared shape resolves to a single chat", () => {
+		const caps = { surfaces: ["coding"], surfaceOptions: { coding: { repos: "single", drive: false, copilot: false } } };
+		expect(optionsFor(caps, "coding")).toEqual({ repos: "single", drive: false, copilot: false });
+	});
+
+	it("cannot switch a Co-pilot ON for an agent with no coding surface", () => {
+		expect(optionsFor({ surfaces: ["repo"], surfaceOptions: { coding: { copilot: true } } }, "coding")).toBeNull();
+	});
+
+	it("round-trips through serialize, and stays out of a default config", () => {
+		expect(serializeSurfaceOptions({ coding: { repos: "many", drive: true, copilot: false } })).toEqual({ coding: { copilot: false } });
+		expect(parseSurfaceSpec(serializeSurfaceOptions({ coding: { repos: "single", drive: false, copilot: false } }).coding))
+			.toEqual({ repos: "single", drive: false, copilot: false });
 	});
 });

@@ -20,8 +20,19 @@
 import type { RegistryToolCtx, ToolDef } from "../tool-registry.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 
-/** The typed setting (settingsSchema) that names the checkout on the user's machine. */
-export const REPO_PATH_SETTING = "repo_path";
+/**
+ * The typed settings (settingsSchema) that can name the checkout on the user's machine.
+ *
+ * Two keys, because two agents name the same thing differently and neither should be renamed:
+ * `local-repo-chat` declares `repo_path`, and the configurable Repo Coder declares `repo` ("a
+ * local path (~/dev/my-repo) or owner/name"). Reading both is what lets a Repo Coder's ONE chat
+ * inspect its own code — the capability that made the Co-pilot look necessary.
+ *
+ * A `repo` holding `owner/name` rather than a path is not a checkout; the tools then report no
+ * repository is configured, which is honest, instead of guessing at a managed clone directory.
+ */
+export const REPO_PATH_SETTINGS = ["repo_path", "repo"] as const;
+export const REPO_PATH_SETTING = REPO_PATH_SETTINGS[0];
 
 /** Per-call byte budgets, mirroring coding-inspect's CAPS so one tool call can't eat the context. */
 const CAPS = { read_file: 8 * 1024, git: 12 * 1024 } as const;
@@ -42,12 +53,22 @@ export async function repoPathForInstance(ctx: RegistryToolCtx): Promise<string 
 	if (!row?.config) return null;
 	try {
 		const cfg = JSON.parse(row.config) as { settings?: Record<string, unknown> };
-		const raw = cfg.settings?.[REPO_PATH_SETTING];
-		const path = typeof raw === "string" ? raw.trim() : "";
-		return path || null;
+		for (const key of REPO_PATH_SETTINGS) {
+			const raw = cfg.settings?.[key];
+			const path = typeof raw === "string" ? raw.trim() : "";
+			// `owner/name` is a GitHub coordinate, not a checkout — skip it rather than hand the
+			// runner a relative path that would resolve somewhere arbitrary.
+			if (path && !isGithubCoordinate(path)) return path;
+		}
+		return null;
 	} catch {
 		return null;
 	}
+}
+
+/** `owner/name` — no slash-prefixed path, no `~`, exactly one slash, no dots at the start. */
+function isGithubCoordinate(v: string): boolean {
+	return /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(v);
 }
 
 /** Resolve both halves a read needs: a live runner AND a configured checkout. */

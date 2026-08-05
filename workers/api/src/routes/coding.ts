@@ -835,6 +835,12 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/system-message", asyn
  */
 codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
+	// An agent that declares `coding.copilot: false` has ONE conversation — its Assistant, which
+	// carries the repo/terminal read tools from the registry. Its UI is gone; the route is closed
+	// too, so a stale client can't resurrect a second brain the agent doesn't declare.
+	if (await copilotDisabled(c.env, instanceId)) {
+		throw new HttpError(404, "This agent has a single chat — ask its Assistant instead.");
+	}
 	const sessionId = c.req.param("sessionId");
 	// Verify the session belongs to this instance/user BEFORE touching its timeline —
 	// the timeline helpers are scoped by sessionId alone.
@@ -1085,6 +1091,24 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
  * True when the coding surface declares `drive:false` — the agent does not drive engines itself,
  * so a cross-repo driver on top of it is the duplicated hierarchy #154 removes.
  */
+/**
+ * Does this agent declare the Co-pilot off? Same shape as `overseerDisabled`, and for the same
+ * reason: the difference between the legacy Coder and a configurable one must be DATA, not a fork
+ * of the code. The legacy `coder` declares nothing and keeps its Co-pilot untouched.
+ */
+async function copilotDisabled(env: Env, instanceId: string): Promise<boolean> {
+	const row = await env.DB.prepare(
+		`SELECT a.slug AS slug, a.category AS category, a.config AS config
+		   FROM agent_instances i JOIN agents a ON a.id = i.agent_id
+		  WHERE i.id = ?1`,
+	)
+		.bind(instanceId)
+		.first<{ slug: string | null; category: string | null; config: string | null }>()
+		.catch(() => null);
+	if (!row) return false; // unknown shape → behave as before, never lock an agent out by accident
+	return optionsFor(agentCapabilities(row), "coding")?.copilot === false;
+}
+
 async function overseerDisabled(env: Env, instanceId: string): Promise<boolean> {
 	const row = await env.DB.prepare(
 		`SELECT a.slug AS slug, a.category AS category, a.config AS config
