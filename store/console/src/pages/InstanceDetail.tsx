@@ -441,10 +441,20 @@ export default function InstanceDetail() {
 		try {
 			// The server owns the loop now (#158) — it survives this tab closing, and its spend
 			// is bounded by a budget the browser could never have enforced.
-			const run = await api<{ runId: string }>(`/v1/instances/${id}/loop`, {
+			const run = await api<{ runId: string; driver?: string }>(`/v1/instances/${id}/loop`, {
 				method: "POST",
 				body: JSON.stringify({ objective: loopObjective.trim(), maxIterations: loopMax }),
 			});
+			// Say that it started, and — crucially — WHERE the work will happen. The Loop dispatches
+			// on the agent's declared workflow (#210), so on a coding agent it drives the ENGINE,
+			// not this chat: nothing appears in this thread while it works. Without this the run
+			// was completely silent until a one-line result, which reads as "the button did
+			// nothing" right up until it reads as "where did this commit come from".
+			emitSystemChat(
+				run.driver === "coding"
+					? `**Loop started** — working on: ${loopObjective.trim()}\n\nIt drives the coding engine, so progress shows on the **Coding** tab, not here. Up to ${loopMax} steps.`
+					: `**Loop started** — working on: ${loopObjective.trim()}\n\nUp to ${loopMax} steps.`,
+			);
 			setLoopRunId(run.runId);
 			setLoopOn(true);
 			setLoopIteration(0);
@@ -700,10 +710,22 @@ export default function InstanceDetail() {
 								}
 								// Regular system messages (loop status, etc.) — deliberately NOT collapsed.
 								if (classifyMessage(m) === "system") {
+									// A one-liner keeps the pill; anything longer or formatted gets a block and is
+									// rendered as markdown. The loop's result is full of `code` and **bold** — a
+									// whitespace-pre-wrap pill printed those as literal characters, in a shape
+									// built for six words.
+									const long = m.content.length > 90 || m.content.includes("\n");
 									return (
-										<div key={messageKey(m, i)} className="bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]">
-											<span className="whitespace-pre-wrap break-words">{m.content}</span>
-										</div>
+										<div
+											key={messageKey(m, i)}
+											className={
+												long
+													? "bg-yellow/10 text-yellow self-center rounded-xl px-4 py-2.5 text-xs border border-yellow/15 max-w-[90%] w-full msg-md leading-relaxed"
+													: "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]"
+											}
+											// biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by every chat surface.
+											dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
+										/>
 									);
 								}
 								// User + assistant messages

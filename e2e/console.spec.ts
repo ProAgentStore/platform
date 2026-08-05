@@ -79,6 +79,10 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 	let cancelledTaskId: string | null = null;
 	const profileUpdates: unknown[] = [];
 	let savedPreferences: unknown = null;
+	const loopStarts: unknown[] = [];
+	const systemMessages: string[] = [];
+	const persistedMessages: Array<Record<string, unknown>> = [];
+	let loopPolls = 0;
 	let voiceOverrideCleared = false;
 	const builderPlans: unknown[] = [];
 	const builderExecutes: unknown[] = [];
@@ -225,7 +229,7 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				],
 			});
 		}
-		if (path === "/v1/instances/inst-1/messages") return json({ messages: [] });
+		if (path === "/v1/instances/inst-1/messages") return json({ messages: persistedMessages });
 		if (path === "/v1/triggers" && method === "GET") {
 			return json({
 				triggers: [
@@ -271,6 +275,29 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		}
 		if (path === "/v1/triggers/trigger-1/run" && method === "POST") return json({ success: true });
 		if (path === "/v1/triggers/trigger-1" && method === "DELETE") return json({ success: true });
+		// Server-driven Loop (#158/#210): start returns the DRIVER it dispatched to, and the poll
+		// reports the run. A coding agent's loop drives the engine, not this chat.
+		if (path === "/v1/instances/inst-1/loop" && method === "POST") {
+			loopStarts.push(route.request().postDataJSON());
+			return json({ runId: "run-1", driver: "coding", maxIterations: 10, status: "running" }, 201);
+		}
+		if (path === "/v1/instances/inst-1/loop/run-1") {
+			// First poll: still running. After that: done, so the completion message renders.
+			loopPolls += 1;
+			return loopPolls < 2
+				? json({ status: "running", iteration: 1 })
+				: json({ status: "completed", iteration: 2, stopReason: "done", detail: "outcome: done — Fixed it on `fix/80` (commit `e599f2b`). **All 758 tests pass.**" });
+		}
+		if (path === "/v1/instances/inst-1/system-message" && method === "POST") {
+			// The real DO PERSISTS it, so the next /messages read returns it. Without that here the
+			// loop's own poll — which refetches the transcript — would wipe the optimistic message
+			// the client just added, and the test would be asserting against a mock that behaves
+			// differently from the server in exactly the way that matters.
+			const content = (route.request().postDataJSON() as { content: string }).content;
+			systemMessages.push(content);
+			persistedMessages.push({ role: "system", content, createdAt: new Date().toISOString() });
+			return json({ ok: true });
+		}
 		if (path === "/v1/instances/inst-1/chat" && method === "POST") {
 			return json(
 				options.instanceChatBody ?? {
@@ -461,6 +488,12 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 		},
 		get profileUpdates() {
 			return profileUpdates;
+		},
+		get loopStarts() {
+			return loopStarts;
+		},
+		get systemMessages() {
+			return systemMessages;
 		},
 		get savedPreferences() {
 			return savedPreferences;
@@ -677,6 +710,33 @@ test.describe("ProAgentStore Console smoke", () => {
 		// Give any straggling response the chance to clobber it; it must not.
 		await page.waitForTimeout(500);
 		await expect(customise).toBeChecked();
+	});
+
+	test("a Loop announces that it started, and says where the work happens", async ({ page }) => {
+		// Three real complaints from one run: nothing said the loop had begun; the result came back
+		// as raw markdown in a yellow pill built for six words; and on a coding agent the Loop
+		// drives the ENGINE (#210), so the Assistant thread stays silent while it works — which
+		// reads as "the button did nothing" until a commit appears out of nowhere.
+		const mock = await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1");
+		await page.getByRole("button", { name: "Loop" }).click();
+		await page.getByPlaceholder("What should the agent work on?").fill("Fix bugs");
+		await page.getByRole("button", { name: "Start Loop" }).click();
+
+		// Did the start request even reach the server?
+		await expect.poll(() => mock.loopStarts.length).toBe(1);
+		// It said it started, and named the objective.
+		await expect(page.getByText(/Loop started/)).toBeVisible();
+		await expect(page.getByText(/Fix bugs/).first()).toBeVisible();
+		// …and that this thread is NOT where the work will show up.
+		await expect(page.getByText(/Coding.*tab, not here/)).toBeVisible();
+
+		// The completion renders as MARKDOWN, not literal backticks and asterisks.
+		await expect(page.getByText(/Loop complete/)).toBeVisible({ timeout: 15000 });
+		const md = page.locator(".msg-md").filter({ hasText: "Loop complete" });
+		await expect(md.locator("strong")).toContainText("All 758 tests pass");
+		await expect(md.locator("code").first()).toContainText("fix/80");
+		await expect(page.getByText("**All 758 tests pass.**")).toHaveCount(0);
 	});
 
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {
