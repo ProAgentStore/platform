@@ -59,6 +59,32 @@ describe("coding-store session lifecycle (node-owned suspend/resume)", () => {
 		expect(writes[0].args).toEqual(["inst-1", "user-1", "node-A"]);
 	});
 
+	it("suspendSessionsFromOtherNodes also closes the board cards it parks (#206)", async () => {
+		// The third of the four exits from `active`. It reads the ids BEFORE the update, because
+		// afterwards nothing matches the predicate any more — get that order wrong and the cards
+		// stay "running" for sessions this machine no longer owns, which is worse than no card:
+		// a supervisor would report work on a machine that has gone.
+		const writes: Write[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async run() { writes.push({ sql, args }); return { meta: { changes: 2 } }; },
+							async all() { return { results: [{ id: "s1" }, { id: "s2" }] }; },
+							async first() { return null; },
+						};
+					},
+				};
+			},
+		};
+		await suspendSessionsFromOtherNodes({ DB } as unknown as Env, "inst-1", "user-1", "node-A");
+		const card = writes.find((w) => w.sql.includes("instance_runtime_tasks"));
+		expect(card).toBeDefined();
+		// "cancelled", not "failed" — a takeover on another machine is a relocation, not an error.
+		expect(card?.args).toEqual(["cancelled", "inst-1", "user-1", "csess-s1", "csess-s2"]);
+	});
+
 	it("reassignSessionNode relocates a session to the machine that's connected now (no status change)", async () => {
 		const { env, writes } = mockEnv();
 		await reassignSessionNode(env, "inst-1", "user-1", "csess-9", "node-B");
@@ -100,8 +126,14 @@ describe("reconcileOrphanedSessions (#139)", () => {
 		const { env, updates } = reconcileEnv(["a", "b", "c"]);
 		const reaped = await reconcileOrphanedSessions(env, "inst-1", "user-1", ["b"]); // runner tracks only b
 		expect(reaped.sort()).toEqual(["a", "c"]);
-		expect(updates).toHaveLength(2); // one endSession UPDATE each for a + c
-		for (const u of updates) {
+		// The reaper is one of the FOUR places a session leaves `active` (#206) — each reaped
+		// session must also close its board card, or a machine that rebooted leaves the supervisor
+		// reading "running" forever, which is the exact state the card exists to disprove.
+		const cards = updates.filter((u) => u.sql.includes("instance_runtime_tasks"));
+		expect(cards.flatMap((u) => u.args)).toEqual(expect.arrayContaining(["csess-a", "csess-c"]));
+		const sessions = updates.filter((u) => u.sql.includes("coding_sessions"));
+		expect(sessions).toHaveLength(2); // one endSession UPDATE each for a + c
+		for (const u of sessions) {
 			expect(u.sql).toContain("status = ?4"); // endSession sets status via bind
 			// Guarded WHERE clause — active OR suspended. `pags up --force` on another machine
 			// suspends this node's sessions, and since the Pilot no longer cancels on `suspended`
@@ -110,7 +142,7 @@ describe("reconcileOrphanedSessions (#139)", () => {
 			// kept spending BYOK decisions.
 			expect(u.sql).toContain("status IN ('active', 'suspended')");
 		}
-		expect(updates.flatMap((u) => u.args)).toEqual(expect.arrayContaining(["a", "c"]));
+		expect(sessions.flatMap((u) => u.args)).toEqual(expect.arrayContaining(["a", "c"]));
 	});
 
 	it("reaps nothing when the runner is tracking every candidate", async () => {

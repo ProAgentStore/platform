@@ -1,3 +1,4 @@
+import { closeCodingSessionCards, upsertCodingSessionCard } from "./coding-board.js";
 import type { Env } from "../types.js";
 import type {
 	CloneStatus,
@@ -293,6 +294,17 @@ export async function createSession(env: Env, instanceId: string, userId: string
 		.run();
 	const session = await getSession(env, instanceId, userId, id);
 	if (!session) throw new Error("session insert failed");
+	// A live session belongs on the work board — that is what makes it visible to a supervisor
+	// (and to the human) without anything having to read `coding_sessions` (#206).
+	const repo = await getRepo(env, instanceId, userId, input.repoId).catch(() => null);
+	await upsertCodingSessionCard(env, {
+		instanceId,
+		userId,
+		sessionId: id,
+		repoName: repo?.name ?? input.repoId,
+		engine: input.clientType ?? "claude",
+		status: "running",
+	});
 	return session;
 }
 
@@ -306,6 +318,15 @@ export async function suspendSessionsFromOtherNodes(env: Env, instanceId: string
 	// the old machine's (or legacy NULL-owner) sessions, kept as history until their owner
 	// returns. The registering node's own active sessions are left untouched (a heartbeat /
 	// reconnect from the same machine must not suspend its live work).
+	// Which ones, BEFORE the update — afterwards they no longer match the predicate, and a card
+	// left "running" for a session this machine no longer owns is exactly the stranded state.
+	const { results } = await env.DB.prepare(
+		`SELECT id FROM coding_sessions
+		  WHERE instance_id = ?1 AND user_id = ?2 AND status = 'active'
+		    AND (runner_node IS NULL OR runner_node != ?3)`,
+	)
+		.bind(instanceId, userId, runnerNode)
+		.all<{ id: string }>();
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions
 		 SET status = 'suspended', updated_at = datetime('now')
@@ -314,6 +335,8 @@ export async function suspendSessionsFromOtherNodes(env: Env, instanceId: string
 	)
 		.bind(instanceId, userId, runnerNode)
 		.run();
+	// "cancelled", not "failed": a takeover on another machine is a relocation, not an error.
+	await closeCodingSessionCards(env, instanceId, userId, (results ?? []).map((r) => r.id), "cancelled");
 	return res.meta.changes ?? 0;
 }
 
@@ -371,7 +394,10 @@ export async function endSession(env: Env, instanceId: string, userId: string, s
 	)
 		.bind(sessionId, instanceId, userId, status)
 		.run();
-	return (res.meta.changes ?? 0) > 0;
+	const changed = (res.meta.changes ?? 0) > 0;
+	// Only when the row actually moved: a no-op end (already ended) must not resurrect a card.
+	if (changed) await closeCodingSessionCards(env, instanceId, userId, [sessionId], status === "error" ? "failed" : "completed");
+	return changed;
 }
 
 /**

@@ -10,7 +10,7 @@ import {
 	type CodingResult,
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
-import { getSession, getRepo, reassignSessionNode } from "../lib/coding-store.js";
+import { endSession, getSession, getRepo, reassignSessionNode } from "../lib/coding-store.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
@@ -102,6 +102,18 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			}
 		}
 		/**
+		 * Steps this Pilot has driven, CUMULATIVE across handoff rounds.
+		 *
+		 * `runCodingLoop` restarts its own `step` counter at 0 each round (up to 12), so
+		 * `result.steps` is the LAST round's count, not the run's. The terminal
+		 * `recordIteration(runId, outcome.steps)` therefore understated even at the end — and
+		 * mid-run it reported nothing at all, so `check_delegation` and `subordinate_status` both
+		 * read "iteration 0 of 10" for a run a dozen steps deep. That is the supervisor's only
+		 * progress signal, permanently reading zero.
+		 */
+		let pilotSteps = 0;
+
+		/**
 		 * Close the rows a DELEGATED run opened — the loop-run row `check_delegation` reads and the
 		 * board card the supervisor watches. One writer for both, so they cannot disagree.
 		 *
@@ -123,7 +135,8 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// `check_delegation` reported "iteration: 0 of 10" for a run that took a dozen
 					// steps — the supervisor's only progress signal, permanently reading zero.
 					// Recorded at the terminal state, which is when the real count is known.
-					await recordIteration(env, event.payload.loopRunId as string, outcome.steps ?? 0).catch(() => undefined);
+					// max(): `outcome.steps` is only the last round's count (see pilotSteps above).
+					await recordIteration(env, event.payload.loopRunId as string, Math.max(pilotSteps, outcome.steps ?? 0)).catch(() => undefined);
 					await finishLoopRun(
 						env,
 						event.payload.loopRunId as string,
@@ -257,11 +270,21 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					}
 					return snap;
 				}) as Promise<CodingPaneSnapshot>,
-			onEvent: (type, message, data) =>
-				step.do(`s${n++}-event`, async () => {
+			onEvent: (type, message, data) => {
+				// Incremented OUTSIDE step.do: a step that exhausts its retries re-runs its body,
+				// and `++` inside would double-count every retry into the progress figure.
+				// `runCodingLoop` emits exactly one "action" per step, so this counts steps.
+				const at = type === "action" ? ++pilotSteps : pilotSteps;
+				return step.do(`s${n++}-event`, async () => {
 					await callRunner(conn, "/coding/event", { sessionId, type, message, data }).catch(() => undefined);
+					// The supervisor's progress signal. No extra durable step — it rides the event
+					// hook the loop already calls.
+					if (type === "action" && event.payload.loopRunId) {
+						await recordIteration(env, event.payload.loopRunId, at).catch(() => undefined);
+					}
 					return null;
-				}).then(() => undefined),
+				}).then(() => undefined);
+			},
 		};
 
 		let result: CodingResult = { outcome: "failed", detail: "did not start", steps: 0 };
@@ -342,9 +365,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// The runner session is now gone — sync the D1 row so it doesn't sit
 				// "active" forever (the row was created active by the /sessions route).
 				const status = result.outcome === "failed" || result.outcome === "max_steps" ? "error" : "ended";
-				await env.DB.prepare(
-					"UPDATE coding_sessions SET status = ?4, ended_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'",
-				).bind(sessionId, instanceId, userId, status).run();
+				// Through `endSession`, not raw SQL: it is the ONE place a session leaves `active`,
+				// so it is the one place the board card can reliably follow (#206). It also covers
+				// `suspended`, which the raw `status = 'active'` predicate here silently skipped —
+				// a Pilot finishing after a `--force` takeover elsewhere left the row suspended
+				// forever with nothing to close it.
+				await endSession(env, instanceId, userId, sessionId, status);
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "outcome", content: `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}` });
 				return null;
 			});
