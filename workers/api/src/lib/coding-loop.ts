@@ -1,4 +1,5 @@
 import { runUserWorkersAi } from "./user-ai.js";
+import { authorityInstruction, screenInstruction, type MergePolicy } from "./coding-authority.js";
 import type { UsageContext } from "./usage.js";
 import type { Env } from "../types.js";
 
@@ -25,6 +26,12 @@ export interface CodingGoal {
 	userHint?: string;
 	/** Test mode: plan + send guidance but NEVER let a destructive action through. */
 	dryRun?: boolean;
+	/**
+	 * What this run may do with the repo's trunk (#314). Resolved once by the workflow from the
+	 * repo override / agent setting / platform default — see lib/coding-authority.ts. Absent behaves
+	 * as `merge`, which is the pre-existing behaviour.
+	 */
+	mergePolicy?: MergePolicy;
 }
 
 /** What the orchestrator "sees": the current pane plus the CLI's run-state. */
@@ -35,6 +42,14 @@ export interface CodingPaneSnapshot {
 	alive: boolean;
 	/** True when the user pressed Stop — the loop halts immediately. */
 	cancelled?: boolean;
+	/**
+	 * Why the run was stopped, when it was stopped by something other than the user's Stop button.
+	 *
+	 * Without it every halt reported the bare outcome "cancelled", which is indistinguishable from
+	 * a human pressing Stop — so a run halted for merging against policy (#314) would look like the
+	 * owner had changed their mind.
+	 */
+	stopReason?: string;
 }
 
 export type CodingActionKind =
@@ -73,20 +88,32 @@ export interface CodingDeps {
 	onEvent?: (type: string, message: string, data?: unknown) => Promise<void> | void;
 }
 
+/**
+ * How many refusals the merge-authority screen may issue before the run finishes.
+ *
+ * The screen is a heuristic over natural language (see coding-authority.ts), so it needs a bound:
+ * a brain that keeps rephrasing the same forbidden instruction must not burn all 40 BYOK-Claude
+ * decisions doing it. Three is enough for the brain to genuinely change course after reading the
+ * refusal in its own step log, and small enough that a false positive costs a stopped run with a
+ * clear reason rather than a long silent one.
+ */
+const MAX_REFUSALS = 3;
+
 export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { maxSteps?: number } = {}): Promise<CodingResult> {
 	const maxSteps = opts.maxSteps ?? 30;
 	const transcript: string[] = [];
 	const actionLog: string[] = [];
+	let refusals = 0;
 
 	for (let step = 0; step < maxSteps; step++) {
 		let snap = await deps.snapshot();
-		if (snap.cancelled) return { outcome: "cancelled", steps: step, transcript };
+		if (snap.cancelled) return { outcome: "cancelled", detail: snap.stopReason, steps: step, transcript };
 		if (!snap.alive) return { outcome: "failed", detail: "coding session is not running", steps: step, transcript };
 
 		// Let the CLI finish whatever it's doing before deciding the next move.
 		if (snap.runState !== "idle") {
 			snap = await deps.waitIdle();
-			if (snap.cancelled) return { outcome: "cancelled", steps: step, transcript };
+			if (snap.cancelled) return { outcome: "cancelled", detail: snap.stopReason, steps: step, transcript };
 		}
 
 		const decision = await deps.decide({ goal, actionLog, snapshot: snap });
@@ -110,6 +137,28 @@ export async function runCodingLoop(deps: CodingDeps, goal: CodingGoal, opts: { 
 		if (!decision.action) {
 			// No action and no terminal verdict → treat prose as a stuck signal.
 			return { outcome: "stuck", detail: decision.thought ?? "no action chosen", steps: step, transcript };
+		}
+
+		// MERGE AUTHORITY (#314): the orchestrator's own instruction is screened before it reaches
+		// the Engine. This is the layer that would have stopped run 73ffc073 — its objective said
+		// "merge each before starting the next" and the Pilot dutifully relayed it three times.
+		//
+		// The refusal goes into `actionLog`, which is rendered back to the brain as "Steps so far"
+		// on the next decision, so it ADAPTS rather than repeating: the loop already communicates
+		// with itself through that log and this needs no new channel. A no-op under the default
+		// policy, where `screenInstruction` returns null for everything.
+		const refusal = decision.action.kind === "message" ? screenInstruction(goal.mergePolicy ?? "merge", decision.action.text) : null;
+		if (refusal) {
+			refusals++;
+			const note = `refused (merge authority): ${refusal}`;
+			actionLog.push(note);
+			transcript.push(note);
+			await deps.onEvent?.("refused", refusal);
+			// Finish with the reason rather than exhausting the step budget in silence. "failed" is
+			// the honest status: the objective as given cannot be completed under this policy, and
+			// the detail says exactly why so the owner can approve the merge themselves.
+			if (refusals >= MAX_REFUSALS) return { outcome: "failed", detail: refusal, steps: step, transcript };
+			continue;
 		}
 
 		const label = describe(decision.action);
@@ -184,6 +233,11 @@ function systemPrompt(goal: CodingGoal): string {
 		"- If you hit something a human must handle live (interactive login, captcha), call request_human.",
 		"Never output step-by-step thinking; just call one tool.",
 	);
+	// Placed AFTER the objective and the user rules, and worded as overriding both, because the
+	// conflict this exists for is with the objective itself — "merge each before starting the next"
+	// is what a human typed. Null under the default policy, so the unconfigured prompt is unchanged.
+	const authority = authorityInstruction(goal.mergePolicy ?? "merge");
+	if (authority) lines.push(`\n${authority}`);
 	if (goal.dryRun) lines.push("\nTEST MODE: avoid destructive or irreversible instructions; prefer read-only/plan steps.");
 	if (goal.userHint) lines.push(`\nThe user just told you: ${goal.userHint}`);
 	return lines.join("\n");

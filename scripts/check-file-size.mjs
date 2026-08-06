@@ -73,7 +73,13 @@ const PINS = {
 	// nine group modules (base/runtime/knowledge/observability/board/settings/triggers/
 	// composition/account), the largest of which is under 300 lines — so its entry is gone
 	// rather than lowered, which is what this guard asks for when a file drops under LIMIT.
-	"workers/api/src/routes/coding.ts": 1769,
+	//
+	// +5 at #314: `mergePolicy` on the repo-update route — the per-repo half of merge authority.
+	// Raised rather than split. The parsing and the whole policy vocabulary live in
+	// lib/coding-authority.ts (a split would have put them there anyway); what is left here is the
+	// three lines that read one field off a body, which belong with the other fields of the same
+	// PUT and would be worse anywhere else.
+	"workers/api/src/routes/coding.ts": 1774,
 	"workers/api/src/routes/instances.ts": 1696,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than

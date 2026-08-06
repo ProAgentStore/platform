@@ -33,6 +33,12 @@ export interface CodingRepo {
 	urls?: { dev?: string; staging?: string; prod?: string };
 	/** Per-repo special instructions (injected into co-pilot + Overseer prompts). */
 	instructions?: string;
+	/**
+	 * May an agent merge to THIS repo's trunk (#314)? Undefined = inherit the agent setting, then
+	 * the platform default. See lib/coding-authority.ts — the values are `merge` | `pr` | `none`,
+	 * typed there rather than here so this module keeps no policy vocabulary of its own.
+	 */
+	mergePolicy?: string;
 	createdAt: string;
 	updatedAt: string;
 }

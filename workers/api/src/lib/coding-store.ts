@@ -1,4 +1,5 @@
 import { closeCodingSessionCards, upsertCodingSessionCard } from "./coding-board.js";
+import { parseMergePolicy } from "./coding-authority.js";
 import type { Env } from "../types.js";
 import type {
 	CloneStatus,
@@ -36,6 +37,7 @@ interface RepoRow {
 	default_client: string;
 	urls: string | null;
 	instructions: string | null;
+	merge_policy: string | null;
 	created_at: string;
 	updated_at: string;
 }
@@ -67,6 +69,9 @@ function toRepo(r: RepoRow): CodingRepo {
 		defaultClient: client(r.default_client),
 		urls: parseRepoUrls(r.urls),
 		instructions: r.instructions || undefined,
+		// '' means "inherit" — resolved by `resolveMergePolicy`, never defaulted here, so there is
+		// exactly one place that decides what an unset policy means (#314).
+		mergePolicy: parseMergePolicy(r.merge_policy) ?? undefined,
 		createdAt: r.created_at,
 		updatedAt: r.updated_at,
 	};
@@ -145,13 +150,18 @@ export async function updateRepoClone(
 		.run();
 }
 
-/** Update a repo's editable fields (name and/or launch URLs). Scoped to the owner. */
+/** Update a repo's editable fields (name, launch URLs and/or merge policy). Scoped to the owner. */
 export async function updateRepo(
 	env: Env,
 	instanceId: string,
 	userId: string,
 	repoId: string,
-	patch: { name?: string; urls?: { dev?: string; staging?: string; prod?: string } },
+	patch: {
+		name?: string;
+		urls?: { dev?: string; staging?: string; prod?: string };
+		/** #314. A validated policy sets the override; `""` clears it back to "inherit". */
+		mergePolicy?: string;
+	},
 ): Promise<boolean> {
 	const urlsJson =
 		patch.urls === undefined
@@ -165,10 +175,19 @@ export async function updateRepo(
 		`UPDATE coding_repos
 		 SET name = COALESCE(?4, name),
 		     urls = CASE WHEN ?6 = 1 THEN ?5 ELSE urls END,
+		     merge_policy = COALESCE(?7, merge_policy),
 		     updated_at = datetime('now')
 		 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3`,
 	)
-		.bind(repoId, instanceId, userId, patch.name ? patch.name.slice(0, 120) : null, urlsJson, patch.urls === undefined ? 0 : 1)
+		.bind(
+			repoId,
+			instanceId,
+			userId,
+			patch.name ? patch.name.slice(0, 120) : null,
+			urlsJson,
+			patch.urls === undefined ? 0 : 1,
+			patch.mergePolicy === undefined ? null : patch.mergePolicy,
+		)
 		.run();
 	return (res.meta.changes ?? 0) > 0;
 }

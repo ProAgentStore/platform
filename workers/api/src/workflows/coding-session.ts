@@ -24,6 +24,14 @@ import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.j
 import { instanceSpendMicros, recordEngineUsage } from "../lib/usage.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineActs, sanitizeEngineActs, summarizeActs } from "../lib/engine-acts.js";
+import {
+	describeAuthority,
+	describeViolation,
+	readMergePolicyForRun,
+	recordAuthorityViolations,
+	unauthorizedActs,
+	type MergePolicy,
+} from "../lib/coding-authority.js";
 import { actsInWindow } from "../lib/instance-work.js";
 import { finishLoopRun, recordIteration } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
@@ -121,6 +129,22 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 */
 		const runStartedAt = (await step.do("run-started-at", async () => Date.now())) as number;
 
+		/**
+		 * May this run put code on the trunk? (#314)
+		 *
+		 * Resolved ONCE, here, rather than at each of the three route call sites that build a
+		 * `CodingGoal` — the Pilot is the only thing that drives the Engine autonomously, so a single
+		 * resolution point cannot drift and no caller can forget to pass it. Journalled for the same
+		 * reason `runStartedAt` is: a gate that means different things at different moments of one
+		 * run is not a gate. `merge` — today's behaviour — is what an unconfigured repo resolves to.
+		 */
+		const mergePolicy = (await step.do("merge-authority", () => readMergePolicyForRun(env, { instanceId, userId, repoId }))) as MergePolicy;
+		goal.mergePolicy = mergePolicy;
+		// What the owner is told about this run's authority — including, on an engine that reports no
+		// acts, that its commands could not be checked. Null under the default policy, so an
+		// unconfigured run claims no protection it does not have.
+		const authorityNote = describeAuthority(mergePolicy, goal.clientType);
+
 		let conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
 		// Machine-switch reclaim (matches the interactive /message path). A durable /run can be
 		// queued/resumed long after it was created, by which point the session's owning machine
@@ -208,7 +232,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				? await actsInWindow(env, userId, instanceId, runStartedAt, Date.now()).catch(() => [])
 				: [];
 			const actLine = summarizeActs(acts);
-			const note = `outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}${actLine ? ` | ${actLine}` : ""}`;
+			// Merge authority, in the two places a supervisor actually reads (#314 item 2). A breach is
+			// named AHEAD of the ordinary act summary — buried after "and 3 more" it would be the same
+			// invisibility the issue is about — and the policy line rides along whenever one is in
+			// force, so even a run that behaved shows the authority it ran under.
+			const breach = unauthorizedActs(mergePolicy, acts).map((a) => describeViolation(mergePolicy, a)).join(" ");
+			const head = `outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}`;
+			const note = [head, breach && `POLICY VIOLATION: ${breach}`, authorityNote, actLine].filter(Boolean).join(" | ");
 			if (event.payload.loopRunId) {
 				await step.do(`delegation-run-done${suffix}`, async () => {
 					const reason =
@@ -315,14 +345,28 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			]);
 			const { usage, acts, ...pane } = snap;
 			await recordEngineUsage(env, { userId, sessionId, instanceId }, sanitizeEngineUsage(usage));
+			const reported = sanitizeEngineActs(acts);
 			// What this run actually DID (#294). Stamped with the loop-run id when there is one, so
 			// `/trace?trace_id=<runId>` reconstructs exactly what a delegation did — the record whose
 			// absence let run 73ffc073 merge its own PRs to `main` and report only "done".
 			await recordEngineActs(
 				env,
 				{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null },
-				sanitizeEngineActs(acts),
+				reported,
 			).catch(() => undefined);
+			// MERGE AUTHORITY, the enforcing half (#314). The instruction screen keeps the Pilot from
+			// ASKING for a merge; this catches one that happened anyway — the Engine's own initiative,
+			// or an engine that ignored the prompt. Protocol fact, not prose: the act came from a
+			// `tool_use` event carrying the literal command. The run HALTS on a hit, which is the whole
+			// difference from #294: 73ffc073 merged three times because nothing stopped it after the
+			// first. It cannot undo that first merge — it bounds the blast radius and asks the owner.
+			const stopReason = await recordAuthorityViolations(
+				env,
+				{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
+				mergePolicy,
+				reported,
+			).catch(() => null);
+			if (stopReason) return { ...pane, cancelled: true, stopReason };
 			// A Pilot capturing is the session being USED (#275). The claim heartbeat already says
 			// so on every action, but a single round can sit in `waitIdle` for minutes with no
 			// action at all — so the invariant "anything driving the engine keeps it alive" is
@@ -413,6 +457,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					if (postProgress && event.payload.boardTaskId) {
 						await setWorkCardProgress(env, instanceId, userId, event.payload.boardTaskId, message);
 					}
+					// A refused instruction is ANNOUNCED. "Silently refusing" is one of the two failure
+					// modes #314 names, and it is the one a compliant agent would otherwise produce:
+					// the brain adapts after one refusal and the owner never learns a merge is waiting
+					// on them. Ungated by loopRunId — it is a policy decision, however the run started.
+					if (type === "refused") await postToChat(`**Merge authority** — instruction not sent to the engine: ${message}`);
 					// Only for a loop the OWNER started (or a supervisor delegated) — a session the
 					// human is driving by hand already shows every keystroke in the terminal, and
 					// echoing it into chat would be noise about work they are watching happen.
@@ -490,6 +539,10 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			await step.do("tl-start", async () => {
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${goal.objective}` });
 				if (stateNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: stateNote });
+				// State the authority up front, in the record the owner reads back. Only when one is
+				// actually in force — a line saying "may merge" on every run would be noise, and worse,
+				// would read as a decision somebody made.
+				if (authorityNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: authorityNote });
 				return null;
 			});
 
@@ -590,11 +643,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// Usage is drained by the same flag, so it has to be banked here too or this call
 				// would silently discard the closing turn's spend to record its acts (#267).
 				await recordEngineUsage(env, { userId, sessionId, instanceId }, sanitizeEngineUsage(snap.usage)).catch(() => undefined);
-				await recordEngineActs(
+				const closing = sanitizeEngineActs(snap.acts);
+				await recordEngineActs(env, { userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null }, closing).catch(() => undefined);
+				// A coding run routinely ends WITH the merge, so this drain is where the incident's own
+				// shape lands. Nothing is left to halt, but the breach still has to be recorded (#314).
+				await recordAuthorityViolations(
 					env,
-					{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null },
-					sanitizeEngineActs(snap.acts),
-				).catch(() => undefined);
+					{ userId, instanceId, sessionId, repoLabel: goal.repo, traceId: event.payload.loopRunId ?? null },
+					mergePolicy,
+					closing,
+				).catch(() => null);
 				return null;
 			});
 			await step.do("end", async () => {

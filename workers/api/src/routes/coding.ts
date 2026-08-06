@@ -49,6 +49,7 @@ import { recordEngineActs, sanitizeEngineActs } from "../lib/engine-acts.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineUsage } from "../lib/usage.js";
 import { startSessionOnRunner } from "../lib/coding-session-open.js";
+import { mergePolicyPatch } from "../lib/coding-authority.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
@@ -534,13 +535,17 @@ codingRoutes.put("/:instanceId/coding/repos/:repoId", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as {
 		name?: string;
 		urls?: { dev?: string; staging?: string; prod?: string };
+		mergePolicy?: string;
 	};
 	const name = typeof body.name === "string" ? body.name.trim() : undefined;
 	const hasUrls = body.urls !== undefined && typeof body.urls === "object";
-	if (!name && !hasUrls) return c.json({ error: "name or urls is required" }, 400);
+	const policy = mergePolicyPatch(body.mergePolicy); // #314 — merge authority for THIS repo
+	if (!policy.ok) return c.json({ error: policy.error }, 400);
+	if (!name && !hasUrls && policy.value === undefined) return c.json({ error: "name, urls or mergePolicy is required" }, 400);
 	const ok = await updateRepo(c.env, instanceId, uid, c.req.param("repoId"), {
 		name: name || undefined,
 		urls: hasUrls ? body.urls : undefined,
+		mergePolicy: policy.value,
 	});
 	if (!ok) throw new HttpError(404, "Repo not found");
 	return c.json({ ok: true });

@@ -168,6 +168,16 @@ tags:
       `…/coding/builds`, `…/coding/status`, `…/coding/browse`, `…/coding/diagnostics`.
       All are Bearer + owner-scoped. Shapes track the `@proagentstore/cli` runner version.
 
+      **Merge authority.** `PUT …/coding/repos/{repoId}` accepts `mergePolicy`:
+      `merge` (may merge to the trunk — the default, and today's behaviour), `pr` (may open a
+      pull request, never merge or push to `main`), `none` (commit only). `""` clears the repo
+      override so the agent-wide `merge_policy` setting applies. Enforced on the autonomous
+      Pilot: the orchestrator will not relay a merge instruction, and an observed merge the
+      policy forbids halts the run and is recorded as `act.unauthorized` (`level: error`) in
+      `GET …/trace`, plus a `needs_human` board card. Only a stream-json engine (Claude Code)
+      reports what it ran — on a raw Codex/Grok session the observed-act half sees nothing, and
+      the run note says so.
+
 components:
   securitySchemes:
     bearerAuth:
