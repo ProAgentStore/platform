@@ -266,15 +266,25 @@ instanceRoutes.post("/:agentId/subscribe", async (c) => {
 	return c.json({ instanceId, agentId: agent.id, status: "active" }, 201);
 });
 
-/** List my subscribed instances. */
+/**
+ * List my subscribed instances.
+ *
+ * Canceled instances are excluded by default (#67). `POST /:id/cancel` was the only
+ * non-destructive way to retire a duplicate, but this list returned canceled rows
+ * anyway — so a canceled instance kept showing in the console nav, kept being offered
+ * to MCP's `findInstanceForAgent`, and kept being registered by `pags up`. Cancelling
+ * therefore cancelled nothing the user could see, which is why dogfood duplicates
+ * accumulated. `?includeCanceled=1` still returns them, so nothing is stranded.
+ */
 instanceRoutes.get("/my/instances", async (c) => {
 	const session = await requireUser(c);
+	const includeCanceled = ["1", "true", "yes"].includes((c.req.query("includeCanceled") ?? "").toLowerCase());
 	const { results } = await c.env.DB.prepare(
 		`SELECT i.id, i.agent_id, i.status, i.created_at, i.config AS instance_config,
             a.name, a.slug, a.description, a.category, a.icon, a.icon_bg, a.config
      FROM agent_instances i
      JOIN agents a ON a.id = i.agent_id
-     WHERE i.user_id = ?1
+     WHERE i.user_id = ?1${includeCanceled ? "" : " AND i.status != 'canceled'"}
      ORDER BY i.updated_at DESC`,
 	)
 		.bind(session.uid)

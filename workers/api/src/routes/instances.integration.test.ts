@@ -46,6 +46,8 @@ interface Opts {
 
 function buildApp(opts: Opts = {}) {
 	const writes: Write[] = [];
+	/** Every SELECT the handlers prepare — lets a test assert on the generated SQL. */
+	const reads: string[] = [];
 	const doCalls: DoCall[] = [];
 	const owns = new Set((opts.owns ?? []).map(([i, u]) => `${i}::${u}`));
 	const instanceConfig = opts.instanceConfig ?? "{}";
@@ -92,6 +94,7 @@ function buildApp(opts: Opts = {}) {
 							return null;
 						},
 						async all() {
+							reads.push(sql);
 							if (sql.includes("FROM agent_instances i")) return { results: opts.myInstances ?? [] };
 							// The per-USER ATS tips cache. Non-empty so an ALLOWED read is
 							// distinguishable from a refusal — both return `{tips: […]}`, so a test
@@ -140,7 +143,7 @@ function buildApp(opts: Opts = {}) {
 		if (err instanceof HttpError) return c.json({ error: err.message }, err.status as 400);
 		return c.json({ error: (err as Error).message }, 500);
 	});
-	return { app, env, writes, doCalls };
+	return { app, env, writes, reads, doCalls };
 }
 
 function defaultDoResponse(path: string): Response {
@@ -279,6 +282,23 @@ describe("GET /v1/instances/my/instances (integration)", () => {
 		const body = await res.json() as { instances: Array<{ name: string; agentName: string }> };
 		expect(body.instances[0].name).toBe("My Second Coder");
 		expect(body.instances[0].agentName).toBe("Coder"); // original agent name preserved
+	});
+
+	// #67: cancelling was the only non-destructive way to retire a duplicate instance, but this
+	// list returned canceled rows anyway — so the console nav, MCP's instance resolution and
+	// `pags up` all kept offering an instance the user had already retired.
+	it("excludes canceled instances by default", async () => {
+		const { app, env, reads } = buildApp({ myInstances: [] });
+		await get(app, env, "/v1/instances/my/instances", await tokenFor("u1"));
+		const listSql = reads.find((s) => s.includes("FROM agent_instances i"));
+		expect(listSql).toContain("i.status != 'canceled'");
+	});
+
+	it("?includeCanceled=1 returns them, so a retired instance is never stranded", async () => {
+		const { app, env, reads } = buildApp({ myInstances: [] });
+		await get(app, env, "/v1/instances/my/instances?includeCanceled=1", await tokenFor("u1"));
+		const listSql = reads.find((s) => s.includes("FROM agent_instances i"));
+		expect(listSql).not.toContain("canceled");
 	});
 });
 
