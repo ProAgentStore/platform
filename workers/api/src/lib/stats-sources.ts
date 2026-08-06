@@ -26,7 +26,7 @@
  * why {@link statsPeriod} only ever builds midnight boundaries.
  */
 import type { CollectionRecord, CollectionSchema } from "../agent-storage-types.js";
-import { COLLECTION_SCAN_CAP, MAX_CARD_LIMIT, STATS_SOURCES, type StatsCard, type StatsCardKind } from "./stats-schema.js";
+import { COLLECTION_SCAN_CAP, MAX_CARD_LIMIT, STATS_SOURCES, type StatsCard, type StatsCardKind, type StatsUnit, unitFor } from "./stats-schema.js";
 import type { Env } from "../types.js";
 
 export interface StatsCtx {
@@ -47,7 +47,10 @@ export interface StatsPeriod {
 	endMs: number;
 }
 
-export type StatsUnit = "count" | "tokens" | "usd_micros";
+/** Declared once, in the source table beside the caveat (`stats-schema.ts`), because the SAME unit
+ *  has to reach both a scalar and a trend series. Re-exported here so existing importers of
+ *  `StatsUnit` are unaffected. */
+export type { StatsUnit };
 
 export type StatsValue =
 	| { type: "scalar"; value: number; unit: StatsUnit }
@@ -154,21 +157,21 @@ async function collectionCount(ctx: StatsCtx, name: string): Promise<number> {
 export const STATS_EXECUTORS: Record<string, Executor> = {
 	"usage.tokens": {
 		async point(ctx, _p, period) {
-			return { type: "scalar", unit: "tokens", value: await usageTokens(ctx, period) };
+			return { type: "scalar", unit: unitFor("usage.tokens"), value: await usageTokens(ctx, period) };
 		},
 		daily: (ctx, _p, period) => usageTokens(ctx, period),
 	},
 
 	"usage.cost": {
 		async point(ctx, _p, period) {
-			return { type: "scalar", unit: "usd_micros", value: await usageCost(ctx, period) };
+			return { type: "scalar", unit: unitFor("usage.cost"), value: await usageCost(ctx, period) };
 		},
 		daily: (ctx, _p, period) => usageCost(ctx, period),
 	},
 
 	"runs.count": {
 		async point(ctx, _p, period) {
-			return { type: "scalar", unit: "count", value: await runsCount(ctx, period) };
+			return { type: "scalar", unit: unitFor("runs.count"), value: await runsCount(ctx, period) };
 		},
 		daily: (ctx, _p, period) => runsCount(ctx, period),
 	},
@@ -189,7 +192,7 @@ export const STATS_EXECUTORS: Record<string, Executor> = {
 	"pipeline.runs": {
 		async point(ctx, params, period, kind) {
 			if (kind === "number" || kind === "line") {
-				return { type: "scalar", unit: "count", value: await pipelineRuns(ctx, period) };
+				return { type: "scalar", unit: unitFor("pipeline.runs"), value: await pipelineRuns(ctx, period) };
 			}
 			return groups(
 				ctx,
@@ -232,7 +235,7 @@ export const STATS_EXECUTORS: Record<string, Executor> = {
 	"triggers.fires": {
 		async point(ctx, params, period, kind) {
 			if (kind === "number" || kind === "line") {
-				return { type: "scalar", unit: "count", value: await triggerFires(ctx, period) };
+				return { type: "scalar", unit: unitFor("triggers.fires"), value: await triggerFires(ctx, period) };
 			}
 			return groups(
 				ctx,
@@ -252,7 +255,7 @@ export const STATS_EXECUTORS: Record<string, Executor> = {
 			// what happened in the last 30 days. The card's caveat says exactly that, because a
 			// number that ignores the window selector while sitting next to ones that don't is
 			// otherwise read as a bug.
-			return { type: "scalar", unit: "count", value: await collectionCount(ctx, String(params.collection)) };
+			return { type: "scalar", unit: unitFor("collection.count"), value: await collectionCount(ctx, String(params.collection)) };
 		},
 		// The rollup runs just after midnight UTC, so the value it stores for a completed day is the
 		// collection's size AT THE END of that day. That is the only history obtainable: records

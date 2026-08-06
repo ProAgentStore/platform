@@ -7299,6 +7299,7 @@ paths:
                         label: { type: string }
                         describes: { type: string }
                         caveat: { type: string, description: What this number does not count. }
+                        unit: { type: string, enum: [count, tokens, usd_micros], description: "Unit of this source's scalars AND of its daily series. usd_micros is 1,000,000 = $1." }
                         kinds: { type: array, items: { type: string, enum: [number, line, bar, table] } }
                         families: { type: array, items: { type: string, enum: [trend, point_in_time] } }
                         params: { type: array, items: { type: object, additionalProperties: true } }
@@ -7309,8 +7310,8 @@ paths:
       description: |
         The resolved card set (creator default merged per card under your override) with each
         card's value for ONE page-level window. `line` cards are trends read from the daily
-        rollup and carry `points: [{day, value}]` where **`value: null` means nothing ran that
-        day — it is not zero**. Everything else is a live aggregate over the window. A card that
+        rollup and carry `unit` plus `points: [{day, value}]` where **`value: null` means nothing
+        ran that day — it is not zero**. Everything else is a live aggregate over the window. A card that
         failed carries `error` instead of `data`, so "broken" stays distinguishable from "empty".
         `historyStart` is the first day the rollup has for this instance (there is no backfill);
         `throughDay` is the last completed UTC day, which is where every trend series ends.

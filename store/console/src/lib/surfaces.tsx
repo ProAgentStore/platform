@@ -8,6 +8,7 @@ import IndexingTab from "../tabs/IndexingTab";
 import KnowledgeTab from "../tabs/KnowledgeTab";
 import RepoTab from "../tabs/RepoTab";
 import SettingsTab from "../tabs/SettingsTab";
+import StatsTab from "../tabs/StatsTab";
 import TmuxTab from "../tabs/TmuxTab";
 import type { BoardColumn, SettingsField } from "./types";
 
@@ -24,7 +25,20 @@ import type { BoardColumn, SettingsField } from "./types";
 // See ../../../PLAN-agent-os.md.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type SurfaceId = "chat" | "apply" | "board" | "coding" | "repo" | "tmux" | "activity" | "indexing" | "knowledge" | "behaviour" | "data" | "settings";
+export type SurfaceId =
+	| "chat"
+	| "apply"
+	| "board"
+	| "coding"
+	| "repo"
+	| "tmux"
+	| "activity"
+	| "stats"
+	| "indexing"
+	| "knowledge"
+	| "behaviour"
+	| "data"
+	| "settings";
 
 /** What the shell hands a surface so it can render its body. */
 export interface SurfaceContext {
@@ -180,6 +194,20 @@ export const SURFACES: SurfaceDef[] = [
 		show: () => true,
 		scroll: true,
 		render: ({ instanceId }) => <ActivityTab instanceId={instanceId} />,
+	},
+	{
+		id: "stats",
+		label: "Stats",
+		icon: "📈",
+		// Universal, like Behaviour: every agent CAN be given a card, and the source vocabulary is
+		// closed and owner-scoped, so the tab is meaningful before anything is configured. It is
+		// deliberately not gated on "has cards" — the empty state is where a subscriber finds out
+		// the tab exists and how to fill it (#310 dropped the platform-default card set).
+		//
+		// Distinct from Activity, which is the raw per-event timeline: this is the aggregate.
+		show: () => true,
+		scroll: true,
+		render: ({ instanceId }) => <StatsTab instanceId={instanceId} />,
 	},
 	{
 		id: "knowledge",

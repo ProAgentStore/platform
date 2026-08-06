@@ -7,7 +7,7 @@
  * shows for the same window" — which is only structurally true if there is one implementation.
  */
 import { completedDay, readStatsSeries, type StatsPoint } from "./stats-rollup.js";
-import { familyForKind, statsSource, type StatsCard, type StatsCardFamily } from "./stats-schema.js";
+import { familyForKind, statsSource, type StatsCard, type StatsCardFamily, type StatsUnit, unitFor } from "./stats-schema.js";
 import { readPointInTime, statsPeriod, type StatsCtx, type StatsValue } from "./stats-sources.js";
 
 export interface ComputedCard {
@@ -20,7 +20,15 @@ export interface ComputedCard {
 	/** What this number does not count. Travels WITH the value so a caller cannot show one
 	 *  without the other — the Usage page's lesson, made structural. */
 	caveat: string;
-	data?: StatsValue | { type: "series"; points: StatsPoint[] };
+	/**
+	 * A series carries its UNIT for the same reason a scalar does.
+	 *
+	 * `usage.cost` counts USD micros; a series without a unit rendered "2,500,000" under a card
+	 * titled "Estimated AI cost" — wrong by six orders of magnitude. The console must not infer the
+	 * unit from the source id, because an inference in the UI is a second declaration that drifts
+	 * from this one.
+	 */
+	data?: StatsValue | { type: "series"; unit: StatsUnit; points: StatsPoint[] };
 	/**
 	 * Set INSTEAD of `data` when this one card failed.
 	 *
@@ -59,7 +67,11 @@ export async function computeStats(
 		try {
 			base.data =
 				base.family === "trend"
-					? { type: "series", points: await readStatsSeries(ctx.env, ctx.instanceId, ctx.userId, card.id, windowDays, now) }
+					? {
+							type: "series",
+							unit: unitFor(card.source),
+							points: await readStatsSeries(ctx.env, ctx.instanceId, ctx.userId, card.id, windowDays, now),
+						}
 					: await readPointInTime(ctx, card, period);
 		} catch (err) {
 			base.error = err instanceof Error ? err.message : String(err);
@@ -96,6 +108,10 @@ export function describeStats(cards: readonly ComputedCard[], windowDays: number
 		} else if (data.type === "series") {
 			const shown = data.points.map((p) => `${p.day}: ${p.value === null ? "no run" : p.value}`);
 			lines.push(shown.join("\n"));
+			// The unit, spelled out for the same reason the gap rule is: a model reading a bare
+			// "2500000" under a card titled "cost" will report two and a half million dollars.
+			if (data.unit === "usd_micros") lines.push("Values are USD micros (1,000,000 = $1).");
+			else if (data.unit === "tokens") lines.push("Values are token counts.");
 			if (data.points.some((p) => p.value === null)) {
 				lines.push('"no run" means nothing was recorded that day. It is NOT zero — do not report it as a day with no results.');
 			}

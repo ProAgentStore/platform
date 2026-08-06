@@ -435,6 +435,80 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				],
 			});
 		}
+		// Stats (#311). One card of every kind, plus the two states that must LOOK different from
+		// data: a gap inside a trend, and a card that failed.
+		if (path === "/v1/stats/sources") {
+			return json({
+				maxCards: 12,
+				sources: [
+					{
+						id: "runs.count",
+						label: "Agent runs",
+						describes: "Durable agent-loop runs started.",
+						caveat: "Counts runs STARTED in the period, including ones still running.",
+						unit: "count",
+						kinds: ["number", "line"],
+						families: ["point_in_time", "trend"],
+						params: [],
+					},
+				],
+			});
+		}
+		if (path === "/v1/instances/inst-1/stats" && method === "GET") {
+			return json({
+				window: 30,
+				throughDay: "2026-08-06",
+				historyStart: "2026-08-02",
+				cards: [
+					{
+						id: "runs",
+						title: "Agent runs",
+						kind: "number",
+						source: "runs.count",
+						family: "point_in_time",
+						caveat: "Counts runs STARTED in the period, including ones still running.",
+						data: { type: "scalar", value: 12, unit: "count" },
+					},
+					{
+						id: "daily-runs",
+						title: "Runs per day",
+						kind: "line",
+						source: "runs.count",
+						family: "trend",
+						caveat: "Counts runs STARTED in the period, including ones still running.",
+						data: {
+							type: "series",
+							unit: "count",
+							points: [
+								{ day: "2026-08-02", value: 3 },
+								{ day: "2026-08-03", value: 0 },
+								{ day: "2026-08-04", value: null },
+								{ day: "2026-08-05", value: 5 },
+								{ day: "2026-08-06", value: 4 },
+							],
+						},
+					},
+					{
+						id: "outcomes",
+						title: "Runs by outcome",
+						kind: "bar",
+						source: "runs.outcome",
+						family: "point_in_time",
+						caveat: "Groups by current status.",
+						data: { type: "groups", rows: [{ label: "done", value: 9 }, { label: "failed", value: 0 }] },
+					},
+					{
+						id: "broken",
+						title: "Leads by suburb",
+						kind: "table",
+						source: "collection.group_by",
+						family: "point_in_time",
+						caveat: "Scans at most 500 records.",
+						error: "no such collection: leads",
+					},
+				],
+			});
+		}
 		if (path === "/v1/instances/inst-1/credentials") return json({ credentials: [] });
 		if (path === "/v1/instances/inst-1/instructions") return json({ instructions: "" });
 		if (path === "/v1/instances/inst-1/apply-tips") return json({ tips: [] });
@@ -941,6 +1015,46 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByText("Pending contract notes", { exact: true })).toBeVisible();
 		await expect(page.getByText("Drive sync", { exact: true })).toBeVisible();
 		await expect(page.getByText("Imported", { exact: true })).toBeVisible();
+	});
+
+	/**
+	 * The Stats surface (#311). What is asserted here is the honesty, not the pixels: a card that
+	 * FAILED, a card with a GAP in its trend, and the three page-level disclosures.
+	 *
+	 * The gap is the load-bearing one. The server keeps a stored `0` and an absent day different
+	 * end to end, and the last place that chain can be undone is a renderer that draws `null` on
+	 * the axis. The mocked series has both — 0 on 08-03 and null on 08-04 — so a `?? 0` anywhere
+	 * would erase the sentence this asserts.
+	 */
+	test("stats cards disclose their caveat, their gaps and their failures (#311)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/stats");
+
+		await expect(page.getByRole("heading", { name: "Stats", exact: true })).toBeVisible();
+
+		// The caveat travels with the number and is rendered verbatim, not summarized.
+		await expect(page.getByText(/Counts runs STARTED in the period/).first()).toBeVisible();
+
+		// A gap says it is missing data, and says it is not a zero.
+		await expect(page.getByText(/1 day has no recorded run/)).toBeVisible();
+		await expect(page.getByText(/That is missing data, not a zero/)).toBeVisible();
+
+		// Today is absent on purpose, and the page says where it went.
+		await expect(page.getByText(/Trends end 2026-08-06, the last complete UTC day/)).toBeVisible();
+		// No backfill: history starts inside the window, so a short series explains itself.
+		await expect(page.getByText(/Daily history starts 2026-08-02/)).toBeVisible();
+
+		// A failed card says WHAT failed — never an empty chart, which would be a claim.
+		await expect(page.getByText("Couldn’t be read")).toBeVisible();
+		await expect(page.getByText("no such collection: leads")).toBeVisible();
+
+		// Narrow screen: cards stack and the chart scales to the container. #235 (Profile scrolling
+		// sideways) and #227 (issues list crushed) are both this, and a fixed-width SVG is the
+		// easiest way to reintroduce it.
+		await page.setViewportSize({ width: 390, height: 780 });
+		await expect(page.getByText(/1 day has no recorded run/)).toBeVisible();
+		const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+		expect(overflow).toBeLessThanOrEqual(0);
 	});
 
 	test("profile and notifications have refreshable routes", async ({ page }) => {

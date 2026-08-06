@@ -199,7 +199,7 @@ export function sanitizeBoardColumns(value: unknown): BoardColumn[] | undefined 
  * fails when the console gains a tab that is not listed here.
  */
 export const RESERVED_SURFACE_IDS = new Set([
-	"chat", "apply", "board", "repo", "coding", "tmux", "activity", "behaviour", "knowledge", "indexing", "data", "settings",
+	"chat", "apply", "board", "repo", "coding", "tmux", "activity", "stats", "behaviour", "knowledge", "indexing", "data", "settings",
 ]);
 const MAX_CUSTOM_SURFACES = 8;
 const CUSTOM_SURFACE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;

@@ -166,3 +166,22 @@ describe("a coding agent can see its OWN work board", () => {
 	});
 });
 
+describe("Stats is universal, and registered rather than hardcoded (#311)", () => {
+	const ids = (caps: { surfaces: string[]; tools?: string[] }) => visibleSurfaces(caps).map((s) => s.id);
+
+	it("appears for every agent, whatever it declares", () => {
+		// Like Behaviour: the source vocabulary is closed and owner-scoped, so a card is meaningful
+		// for any agent, and the platform-default card set was dropped in #310 — which makes the
+		// EMPTY state the place a subscriber learns the tab exists. Gating it on "has cards" would
+		// hide the only page that explains how to get one.
+		for (const caps of [{ surfaces: [] }, { surfaces: ["coding"], tools: [] }, { surfaces: ["repo"] }, { surfaces: ["apply"] }]) {
+			expect(ids(caps), JSON.stringify(caps)).toContain("stats");
+		}
+	});
+
+	it("does not take over the page header", () => {
+		// It is a scrolling page of cards inside the shell, not a full-viewport surface.
+		expect(surfaceOwnsHeader("stats")).toBe(false);
+	});
+});
+

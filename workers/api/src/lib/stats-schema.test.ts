@@ -10,6 +10,7 @@ import {
 	sanitizeStatsSchema,
 	STATS_SOURCE_IDS,
 	STATS_SOURCES,
+	unitFor,
 	validateStatsCard,
 	validateStatsCards,
 } from "./stats-schema.js";
@@ -40,6 +41,20 @@ describe("the source vocabulary", () => {
 		// The Usage page learned this the expensive way. A source with no stated limitation is a
 		// source claiming it has none, which is never true of an aggregate.
 		for (const s of STATS_SOURCES) expect(s.caveat.length).toBeGreaterThan(20);
+	});
+
+	it("gives every source a unit, declared ONCE for both its scalar and its series", () => {
+		// A series carrying no unit is not a cosmetic gap: `usage.cost` counts USD micros, so a
+		// trend rendered as a plain count reads as 2,500,000 under a card titled "Estimated AI
+		// cost" — wrong by six orders of magnitude. The console must be able to read the unit off
+		// the API rather than inferring it from the source id, which would be a second declaration
+		// free to drift from this one.
+		for (const s of STATS_SOURCES) expect(["count", "tokens", "usd_micros"]).toContain(s.unit);
+		expect(unitFor("usage.cost")).toBe("usd_micros");
+		expect(unitFor("usage.tokens")).toBe("tokens");
+		// An unknown source is a plain count rather than a throw — a card naming one is already
+		// refused at validation, and a formatter is the wrong place to fail.
+		expect(unitFor("nope.nope")).toBe("count");
 	});
 });
 

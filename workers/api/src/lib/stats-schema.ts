@@ -59,6 +59,18 @@ export function familyForKind(kind: StatsCardKind): StatsCardFamily {
  *  omits something says so here, in the source table, so the caveat cannot drift from the query. */
 export type StatsSourceCaveat = string;
 
+/**
+ * What a source's numbers ARE. Declared here, beside the caveat, and used by both the executor's
+ * scalar and the trend series so the two can never disagree.
+ *
+ * It is not cosmetic. `usage.cost` counts USD MICROS (1,000,000 = $1); a trend series that carried
+ * no unit rendered "2,500,000" under a card titled "Estimated AI cost" — off by six orders of
+ * magnitude, and exactly the kind of confidently-wrong figure this feature is built not to show.
+ * The console must not infer it from the source id, because an inference in the UI is a second
+ * declaration that drifts.
+ */
+export type StatsUnit = "count" | "tokens" | "usd_micros";
+
 export type StatsParamType = "collection" | "field" | "limit";
 
 export interface StatsParam {
@@ -80,7 +92,14 @@ export interface StatsSource {
 	/** Human description of what is being counted — shown in the card picker. */
 	describes: string;
 	caveat: StatsSourceCaveat;
+	/** The unit of this source's scalars AND of its daily series. One declaration, two readers. */
+	unit: StatsUnit;
 	params: readonly StatsParam[];
+}
+
+/** A source's unit, defaulting to a plain count for anything unknown. */
+export function unitFor(sourceId: string): StatsUnit {
+	return statsSource(sourceId)?.unit ?? "count";
 }
 
 /** Collection and field names come from the agent's own storage engine. The collection regex is
@@ -126,6 +145,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		label: "AI tokens",
 		kinds: ["number", "line"],
 		describes: "Input, output and cache tokens across every AI call this agent made.",
+		unit: "tokens",
 		caveat:
 			"Counts only calls brokered by the platform and recorded in the usage ledger, and adds cached tokens to the total (the Usage page reports them separately). Tokens spent by a coding engine running on your own machine under your own login are not metered here.",
 		params: [],
@@ -135,6 +155,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		label: "Estimated AI cost",
 		kinds: ["number", "line"],
 		describes: "Estimated USD spend across every AI call this agent made.",
+		unit: "usd_micros",
 		caveat:
 			"An ESTIMATE, not a bill. Keys are yours (BYOK) so the real provider invoice is never visible here; cached input is priced at 0.1x list, and rows tagged as reported-not-estimated carry a figure the engine reported rather than one we computed.",
 		params: [],
@@ -145,6 +166,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		kinds: ["number", "line"],
 		describes: "Durable agent-loop runs started.",
 		caveat: "Counts runs STARTED in the period, including ones still running — so a long run is counted on the day it began.",
+		unit: "count",
 		params: [],
 	},
 	{
@@ -153,6 +175,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		kinds: ["bar", "table"],
 		describes: "Agent-loop runs grouped by status.",
 		caveat: "Groups by current status, so a run still in flight appears as `running` and moves group when it ends.",
+		unit: "count",
 		params: [LIMIT_PARAM],
 	},
 	{
@@ -161,6 +184,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		kinds: ["number", "line", "bar", "table"],
 		describes: "Declarative-pipeline runs, grouped by status for bar/table.",
 		caveat: "Counts runs STARTED in the period. A pipeline that runs once and writes 500 records is one run, not 500.",
+		unit: "count",
 		params: [LIMIT_PARAM],
 	},
 	{
@@ -169,6 +193,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		kinds: ["bar", "table"],
 		describes: "Runtime tasks grouped by status.",
 		caveat: "A point-in-time view of items TOUCHED in the period, grouped by their status now — not by the status they had then.",
+		unit: "count",
 		params: [LIMIT_PARAM],
 	},
 	{
@@ -177,6 +202,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		kinds: ["bar", "table"],
 		describes: "Trace events grouped by event name.",
 		caveat: "Trace retention is opportunistic, so a long window can under-count the oldest days rather than showing them as empty.",
+		unit: "count",
 		params: [LIMIT_PARAM],
 	},
 	{
@@ -185,6 +211,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		kinds: ["number", "line", "bar", "table"],
 		describes: "Webhook and cron trigger events, grouped by status for bar/table.",
 		caveat: "Counts trigger EVENTS, which includes retries and failures — it is not a count of successful work.",
+		unit: "count",
 		params: [LIMIT_PARAM],
 	},
 	{
@@ -192,6 +219,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		label: "Collection size",
 		kinds: ["number", "line"],
 		describes: "How many records the named collection holds.",
+		unit: "count",
 		caveat:
 			"A running total, not a per-period count: the number is the collection's size, and as a trend it is its size at the end of each day. Deletions make it go down.",
 		params: [{ id: "collection", type: "collection", label: "Collection", required: true }],
@@ -202,6 +230,7 @@ export const STATS_SOURCES: readonly StatsSource[] = [
 		kinds: ["bar", "table"],
 		describes: "Records in the named collection grouped by one field.",
 		caveat: `Scans at most ${COLLECTION_SCAN_CAP} records; past that the breakdown is reported as partial rather than presented as the whole collection. Records missing the field are grouped as "(not set)".`,
+		unit: "count",
 		params: [
 			{ id: "collection", type: "collection", label: "Collection", required: true },
 			{ id: "field", type: "field", label: "Group by field", required: true },
