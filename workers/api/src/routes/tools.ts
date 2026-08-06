@@ -9,6 +9,7 @@ import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint
 import { getConnector } from "../lib/connectors/registry.js";
 import { connectorClient } from "../lib/connectors/client.js";
 import { probeMcpEndpoint } from "../lib/connectors/mcp.js";
+import { discoverAuthServer } from "../lib/connectors/discovery.js";
 import { connectionStatusFor, parseToolCatalog, summarizeConnection, summarizeTools, type McpConnectionReport } from "../lib/mcp-connection.js";
 import {
 	adoptLegacyMcpCredential,
@@ -575,6 +576,17 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 		useAuth,
 	);
 
+	// The connector only asks a server about its auth model when a credential is REJECTED (a 401/403
+	// is the moment that question matters to it). The panel needs the answer one step earlier: the
+	// most common state here is "no credential yet", and without the metadata the console cannot
+	// tell an OAuth server it could authorize in one click from one that genuinely wants a pasted
+	// token. Same guarded path (safeFetch), on a strictly rate-limited route, only when we have not
+	// already learned it.
+	let discovery = probe.discovery;
+	if (!discovery && (probe.failure === "no_credential" || probe.failure === "credential_expired")) {
+		discovery = await discoverAuthServer(endpoint).catch(() => undefined);
+	}
+
 	let discovered: Array<{ name: string; description?: string }> = [];
 	if (probe.success) {
 		try {
@@ -601,13 +613,14 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 		// Only the SHAPE of the auth model, never a token, an endpoint's query string, or a
 		// header. `probe.content` is already redacted upstream (redactText) before it reaches
 		// either the transcript or the log.
-		auth: probe.discovery
-			? probe.discovery.protected
+		auth: discovery
+			? discovery.protected
 				? {
 						protectedResource: true,
-						authorizationServer: probe.discovery.authorizationServer,
-						dynamicRegistration: probe.discovery.dcr,
-						unattended: probe.discovery.unattended,
+						authorizationServer: discovery.authorizationServer,
+						dynamicRegistration: discovery.dcr,
+						pkceS256: discovery.pkceS256,
+						unattended: discovery.unattended,
 					}
 				: { protectedResource: false }
 			: undefined,

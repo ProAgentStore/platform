@@ -50,6 +50,14 @@ export interface Env {
 	/** "1"/"true" = require Pro for signed-in platform APIs. Unset = soft launch:
 	 *  billing works but no platform gate blocks anything. */
 	PAYWALL_ENFORCE?: string;
+	/**
+	 * This deployment's OWN MCP server endpoint, e.g. `https://mcp.proagentstore.online/mcp` (#287).
+	 * Drives the first-party MCP preset in the console (lib/mcp-presets.ts) — resolved from
+	 * deployment config, never hardcoded in the connector, so local/staging/production each point
+	 * at their own server and an unset var means simply "no preset offered" rather than production
+	 * leaking into a developer's build.
+	 */
+	MCP_SELF_URL?: string;
 	/** Google OAuth client used for the Gmail email-access connection. */
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;

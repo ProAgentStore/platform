@@ -207,12 +207,24 @@ describe("authFailureGuidance — say what the server actually wants", () => {
 		unattended: "interactive-only" as const,
 	};
 
-	it("names the authorization server, the DCR gap, and the missing refresh grant", () => {
+	it("names the authorization server, the one-click remedy, and the missing refresh grant", () => {
+		// A DCR+S256 server is now connectable (#180/#258), so the message points at the Connect
+		// button rather than describing a gap — but it still warns that this particular server issues
+		// no refresh token, because authorizing it does not make it survivable in a cron-fired chain.
 		const msg = authFailureGuidance(401, discovered);
 		expect(msg).toContain("rejected the credential");
 		expect(msg).toContain("https://agent.freewebstore.online");
-		expect(msg).toContain("dynamic client registration");
+		expect(msg).toContain("Connect");
 		expect(msg).toContain("no refresh token");
+	});
+
+	it("says PKCE S256 is the blocker when a DCR server offers only plain", () => {
+		// Refusing to authorize as a public client without S256 is deliberate: a `plain` challenge
+		// equals its verifier. The user must be told that, not left reading "Connect" on a button
+		// the server will not honour.
+		const msg = authFailureGuidance(401, { ...discovered, pkceS256: false, unattended: "refresh" });
+		expect(msg).toContain("PKCE S256");
+		expect(msg).not.toContain("Connect it under");
 	});
 
 	it("points at the stored token when the server publishes no OAuth metadata", () => {

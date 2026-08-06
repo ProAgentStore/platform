@@ -45,6 +45,7 @@ import { adminTriggersRoutes } from "./routes/admin-triggers.js";
 import { adminSettingsRoutes } from "./routes/admin-settings.js";
 import { toolRoutes } from "./routes/tools.js";
 import { connectorRoutes } from "./routes/connectors.js";
+import { mcpRoutes } from "./routes/mcp.js";
 import { cloudflareAccessGate } from "./lib/cf-access.js";
 import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
@@ -117,6 +118,10 @@ app.use("/v1/keys/*/reveal", rateLimitStrict()); // hands out a raw decrypted ke
 // authenticated "make the Worker request this" button is still the shape of an SSRF/scanning
 // primitive, so it is throttled like the expensive routes rather than the read routes.
 app.use("/v1/instances/*/mcp/test", rateLimitStrict());
+// Same shape, one step further: starting an MCP authorization makes the Worker fetch a
+// caller-named server's metadata AND register a client with it. safeFetch guards where it can
+// point; this bounds how often, so the flow cannot be used to spray registrations across the net.
+app.use("/v1/mcp/oauth/start", rateLimitStrict());
 
 // Admin perimeter: Cloudflare Access gate in front of the whole operator API
 // (defense-in-depth). Inert until CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set;
@@ -148,6 +153,7 @@ app.route("/v1/instances", instanceStorageRoutes); // /v1/instances/:id/collecti
 app.route("/v1/instances", codingRoutes); // /v1/instances/:id/coding/repos, /sessions (AgentCoder port)
 app.route("/v1/instances", toolRoutes); // /v1/instances/:id/tools, /tools/:name (connector/registry tools)
 app.route("/v1/connectors", connectorRoutes); // generic OAuth2 authorize/callback for manifest oauth connectors (#147)
+app.route("/v1/mcp", mcpRoutes); // outbound MCP: DCR+PKCE authorize/callback (#180/#258) + first-party presets (#287)
 app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /installations, /callback
 app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/terminals", terminalRoutes); // platform: /v1/terminals/nodes — all the user's CLIs

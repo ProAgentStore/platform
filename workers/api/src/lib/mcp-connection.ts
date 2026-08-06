@@ -94,11 +94,18 @@ export interface McpConnectionReport {
 	/** How many of them this instance could actually call right now. */
 	callableCount: number;
 	gates: McpGateState;
-	/** What the server's own OAuth metadata says, when it published any (#180/#181). */
+	/**
+	 * What the server's own OAuth metadata says, when it published any (#180/#181).
+	 *
+	 * `dynamicRegistration` + `pkceS256` together are the precondition for the Connect button:
+	 * they are exactly what `/v1/mcp/oauth/start` requires, so the console can offer the flow only
+	 * where it will actually work instead of showing a button that fails on click.
+	 */
 	auth?: {
 		protectedResource: boolean;
 		authorizationServer?: string;
 		dynamicRegistration?: boolean;
+		pkceS256?: boolean;
 		unattended?: string;
 	};
 }

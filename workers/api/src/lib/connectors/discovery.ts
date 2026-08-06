@@ -15,9 +15,9 @@
  *   • #181 needs exactly the same fetch to learn whether the credential could survive unattended
  *     (`refresh_token` in `grant_types_supported`).
  *
- * What it deliberately does NOT ship is the RFC 7591 registration + PKCE browser flow. See
- * `docs/connector-auth.md` and the note on `discoverAuthServer` for why that was deferred rather
- * than half-built.
+ * The rest of the chain now exists alongside it: `dcr.ts` performs the RFC 7591 registration and
+ * `lib/mcp-oauth.ts` + `routes/mcp.ts` run the PKCE authorization. This file stays the part that
+ * only ASKS — it makes no decision and stores nothing, so it is safe to call on any 401.
  *
  * The chain is two hops of published metadata:
  *
@@ -184,22 +184,10 @@ async function probe(fetchImpl: DiscoveryFetch, url: string): Promise<unknown> {
  * as "the existing vault-bearer path is the right answer here" rather than an error. That is the
  * documented fallback: a server issuing genuine machine tokens has nothing to discover.
  *
- * WHAT THIS DOES NOT DO — and why it stops here (#180 is only partly delivered):
- *
- * Registration (RFC 7591) and the PKCE authorize/callback round trip are NOT implemented. The
- * ticket's acceptance ("a subscriber can connect an arbitrary OAuth-protected MCP server with no
- * pasted token") is therefore NOT met. That is a deliberate stop, not an omission, because of
- * what discovery itself reports about the only verified target: its metadata advertises
- * `grant_types_supported: ["authorization_code"]` with no `refresh_token` and a 24h token. A
- * completed DCR+PKCE flow against it yields an `interactive-only` credential — one that dies
- * daily and needs a human at a browser — which cannot serve the cron-driven pipelines that
- * motivate the connector in the first place. Building the flow now would add a registration
- * cache, a migration, new routes and per-origin grant keying in exchange for a credential the
- * companion ticket (#181) exists to warn people away from wiring up.
- *
- * So this ships the half that is useful and shared today — telling the user precisely what the
- * server wants and whether it could ever run unattended — and the flow waits on a target that
- * issues refresh tokens (freewebstore-online/platform#114).
+ * The `unattended` verdict rides along because it is decided by the same document and must be
+ * known BEFORE a server is wired into a cron trigger or a connection, not discovered from a pile
+ * of dead letters a day later (#181). `interactive-only` — no `refresh_token` grant — is the
+ * class that cannot survive unattended even after a perfect authorization.
  */
 export async function discoverAuthServer(resourceUrl: string, fetchImpl: DiscoveryFetch = defaultFetch): Promise<DiscoveryResult> {
 	let prm: ProtectedResourceMetadata | null = null;
@@ -247,14 +235,18 @@ export function authFailureGuidance(status: number, discovery: DiscoveryResult):
 		return `MCP server rejected the credential (HTTP ${status}). It publishes no OAuth metadata, so it expects a token you supply — check the token stored for the "mcp" connector.`;
 	}
 	const parts = [`MCP server rejected the credential (HTTP ${status}). It is OAuth-protected by ${discovery.authorizationServer}.`];
-	parts.push(
-		discovery.dcr
-			? "The server supports dynamic client registration, which ProAgentStore cannot yet complete automatically (#180)."
-			: "The server requires a pre-registered OAuth client.",
-	);
-	if (discovery.unattended === "interactive-only") {
-		parts.push("It also issues no refresh token, so any access it grants expires and cannot be renewed unattended.");
+	if (discovery.dcr && discovery.pkceS256) {
+		// The actionable case, and now the common one: the server will register us itself, so the
+		// remedy is one button rather than hunting for a token the server never issues to humans.
+		parts.push('Connect it under Settings → Permissions & Connections → MCP connections ("Connect" on that server) to authorize ProAgentStore.');
+	} else if (discovery.dcr) {
+		parts.push("The server registers clients dynamically but does not offer PKCE S256, which ProAgentStore requires before authorizing as a public client.");
+	} else {
+		parts.push("The server requires a pre-registered OAuth client, which cannot be created for an endpoint the operator has never seen.");
 	}
-	parts.push('For now, store an access token the server accepts under the "mcp" connector, or use auth:"none" if it has an open endpoint.');
+	if (discovery.unattended === "interactive-only") {
+		parts.push("It also issues no refresh token, so any access it grants expires and cannot be renewed unattended — avoid wiring it into a cron trigger or a chain.");
+	}
+	parts.push('Alternatively store an access token this server accepts for this endpoint, or use auth:"none" if it has an open endpoint.');
 	return parts.join(" ");
 }

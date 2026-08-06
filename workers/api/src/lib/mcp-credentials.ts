@@ -176,16 +176,31 @@ export interface SaveMcpCredentialInput {
 	scopes?: string | null;
 	expiresAt?: string | null;
 	accountLabel?: string | null;
+	/** OAuth only (#180/#258). Envelope-encrypted separately from the access token. */
+	refreshToken?: string | null;
+	/** Where to renew it, recorded so a 3am refresh is one POST, not the whole discovery chain. */
+	tokenEndpoint?: string | null;
 }
 
-/** Store (or replace) the credential for ONE endpoint. Replacing one endpoint's credential
- *  touches no other endpoint — that isolation is the whole point of the primary key. */
+/**
+ * Store (or replace) the credential for ONE endpoint. Replacing one endpoint's credential
+ * touches no other endpoint — that isolation is the whole point of the primary key.
+ *
+ * FULL-REPLACE semantics, including the OAuth columns: writing a credential means "this is now
+ * the credential for this server", so a pasted bearer clears leftover refresh material rather
+ * than leaving a refresh token that would silently resurrect a revoked authorization. The
+ * rotate-in-place path is `updateMcpAccessToken`, which is the one that preserves it.
+ */
 export async function saveMcpCredential(env: Env, input: SaveMcpCredentialInput): Promise<void> {
 	if (!env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
 	const { ciphertext, dekWrapped, iv } = await encryptKey(input.token, env.KEY_ENCRYPTION_KEY);
+	// A separate DEK for the refresh token: the access token is copied into an Authorization header
+	// on every call while the refresh token never leaves the token endpoint, so they do not share a
+	// key even though they share a row.
+	const refresh = input.refreshToken ? await encryptKey(input.refreshToken, env.KEY_ENCRYPTION_KEY) : null;
 	await env.DB.prepare(
-		`INSERT INTO mcp_credentials (user_id, endpoint, auth_mode, issuer, scopes, expires_at, key_ciphertext, dek_wrapped, iv, account_label, created_at, updated_at)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'), datetime('now'))
+		`INSERT INTO mcp_credentials (user_id, endpoint, auth_mode, issuer, scopes, expires_at, key_ciphertext, dek_wrapped, iv, account_label, token_endpoint, refresh_ciphertext, refresh_dek_wrapped, refresh_iv, created_at, updated_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, datetime('now'), datetime('now'))
 		 ON CONFLICT(user_id, endpoint) DO UPDATE SET
 		   auth_mode = excluded.auth_mode,
 		   issuer = excluded.issuer,
@@ -195,6 +210,10 @@ export async function saveMcpCredential(env: Env, input: SaveMcpCredentialInput)
 		   dek_wrapped = excluded.dek_wrapped,
 		   iv = excluded.iv,
 		   account_label = excluded.account_label,
+		   token_endpoint = excluded.token_endpoint,
+		   refresh_ciphertext = excluded.refresh_ciphertext,
+		   refresh_dek_wrapped = excluded.refresh_dek_wrapped,
+		   refresh_iv = excluded.refresh_iv,
 		   updated_at = datetime('now')`,
 	)
 		.bind(
@@ -208,6 +227,100 @@ export async function saveMcpCredential(env: Env, input: SaveMcpCredentialInput)
 			dekWrapped,
 			iv,
 			input.accountLabel ?? null,
+			input.tokenEndpoint ?? null,
+			refresh?.ciphertext ?? null,
+			refresh?.dekWrapped ?? null,
+			refresh?.iv ?? null,
+		)
+		.run();
+}
+
+/** What a renewal needs, decrypted. Null when this endpoint holds no refreshable credential. */
+export interface McpRefreshMaterial {
+	issuer: string | null;
+	tokenEndpoint: string;
+	refreshToken: string;
+	expiresAt: string | null;
+}
+
+/**
+ * Read the material for an unattended renewal — refresh token plus where to spend it.
+ *
+ * Deliberately separate from `resolveMcpCredential`: that function answers "what may be sent to
+ * this server right now" and must stay a pure read that fails closed. A refresh token is not
+ * sendable to the resource at all, so returning it there would put a credential the MCP server
+ * must never see one field away from the header we build.
+ */
+export async function readMcpRefreshMaterial(env: Env, userId: string, endpoint: string): Promise<McpRefreshMaterial | null> {
+	if (!env.KEY_ENCRYPTION_KEY) return null;
+	try {
+		const row = await env.DB.prepare(
+			"SELECT auth_mode, issuer, token_endpoint, expires_at, refresh_ciphertext, refresh_dek_wrapped, refresh_iv FROM mcp_credentials WHERE user_id = ?1 AND endpoint = ?2",
+		)
+			.bind(userId, endpoint)
+			.first<{
+				auth_mode: string;
+				issuer: string | null;
+				token_endpoint: string | null;
+				expires_at: string | null;
+				refresh_ciphertext: ArrayBuffer | null;
+				refresh_dek_wrapped: ArrayBuffer | null;
+				refresh_iv: ArrayBuffer | null;
+			}>();
+		if (!row || authModeOf(row.auth_mode) !== "oauth") return null;
+		if (!row.token_endpoint || !row.refresh_ciphertext || !row.refresh_dek_wrapped || !row.refresh_iv) return null;
+		const refreshToken = await decryptKey(
+			new Uint8Array(row.refresh_ciphertext),
+			new Uint8Array(row.refresh_dek_wrapped),
+			new Uint8Array(row.refresh_iv),
+			env.KEY_ENCRYPTION_KEY,
+		);
+		if (!refreshToken) return null;
+		return { issuer: row.issuer, tokenEndpoint: row.token_endpoint, refreshToken, expiresAt: row.expires_at };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Rotate an OAuth credential in place after a successful refresh.
+ *
+ * The refresh token is updated ONLY when the server issued a new one. Servers that rotate
+ * refresh tokens send a replacement and invalidate the old; servers that don't send nothing —
+ * and overwriting with NULL there would throw away the only thing that can renew this credential,
+ * turning a working unattended chain into one that dies at the next expiry.
+ */
+export async function updateMcpAccessToken(
+	env: Env,
+	input: { userId: string; endpoint: string; token: string; expiresAt: string | null; scopes?: string | null; refreshToken?: string | null },
+): Promise<void> {
+	if (!env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
+	const { ciphertext, dekWrapped, iv } = await encryptKey(input.token, env.KEY_ENCRYPTION_KEY);
+	const refresh = input.refreshToken ? await encryptKey(input.refreshToken, env.KEY_ENCRYPTION_KEY) : null;
+	await env.DB.prepare(
+		`UPDATE mcp_credentials SET
+		   key_ciphertext = ?3,
+		   dek_wrapped = ?4,
+		   iv = ?5,
+		   expires_at = ?6,
+		   scopes = COALESCE(?7, scopes),
+		   refresh_ciphertext = COALESCE(?8, refresh_ciphertext),
+		   refresh_dek_wrapped = COALESCE(?9, refresh_dek_wrapped),
+		   refresh_iv = COALESCE(?10, refresh_iv),
+		   updated_at = datetime('now')
+		 WHERE user_id = ?1 AND endpoint = ?2`,
+	)
+		.bind(
+			input.userId,
+			input.endpoint,
+			ciphertext,
+			dekWrapped,
+			iv,
+			input.expiresAt ?? null,
+			input.scopes ?? null,
+			refresh?.ciphertext ?? null,
+			refresh?.dekWrapped ?? null,
+			refresh?.iv ?? null,
 		)
 		.run();
 }

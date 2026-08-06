@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { blockerHint, connectionsFromGrants, credentialNote, hasMcpCapability, normalizeEndpoint, statusBadge, type McpCredential, type McpStatus } from "./mcpConnections";
+import {
+	blockerHint,
+	canAuthorize,
+	connectionsFromGrants,
+	credentialNote,
+	hasMcpCapability,
+	normalizeEndpoint,
+	presetFor,
+	statusBadge,
+	summarizeSmoke,
+	type McpCredential,
+	type McpStatus,
+} from "./mcpConnections";
 
 describe("connectionsFromGrants", () => {
 	it("groups grants into one entry per server", () => {
@@ -107,5 +119,65 @@ describe("credentialNote (#286)", () => {
 		// https://a.example.com/mcp has one — a different server entirely.
 		const creds = [cred("https://a.example.com/mcp")];
 		expect(credentialNote(creds, "https://a.example.com/mcp-admin").label).toBe("No token");
+	});
+});
+
+describe("canAuthorize — only offer Connect where the flow can succeed", () => {
+	const auth = (over: Record<string, unknown> = {}) => ({ auth: { protectedResource: true, dynamicRegistration: true, pkceS256: true, ...over } }) as never;
+
+	it("offers the flow for a DCR + PKCE-S256 server", () => {
+		expect(canAuthorize(auth())).toBe(true);
+	});
+
+	it("stays hidden for a server that publishes no OAuth metadata", () => {
+		// That server wants a token. A Connect button here would start a flow the API refuses,
+		// which reads as a broken feature rather than as "this one takes a token".
+		expect(canAuthorize({ auth: { protectedResource: false } } as never)).toBe(false);
+		expect(canAuthorize(null)).toBe(false);
+	});
+
+	it("stays hidden without dynamic registration or S256", () => {
+		// Both are hard requirements of /v1/mcp/oauth/start: nobody can pre-register a client for a
+		// URL the operator has never seen, and a `plain` PKCE challenge equals its verifier.
+		expect(canAuthorize(auth({ dynamicRegistration: false }))).toBe(false);
+		expect(canAuthorize(auth({ pkceS256: false }))).toBe(false);
+		// An older API response that says nothing about PKCE is not an invitation to try anyway.
+		expect(canAuthorize(auth({ pkceS256: undefined }))).toBe(false);
+	});
+});
+
+describe("summarizeSmoke — what the live check reports", () => {
+	const envelope = (data: unknown, ok = true) => JSON.stringify({ tool: "list_agents", ok, data });
+
+	it("counts a list and samples its names", () => {
+		const s = summarizeSmoke(envelope([{ name: "Coder" }, { slug: "repo-chat" }, { id: "x" }, { name: "Fourth" }]));
+		expect(s).toMatchObject({ ok: true, count: 4, sample: ["Coder", "repo-chat", "x"] });
+	});
+
+	it("treats a tool that reported failure as a failure", () => {
+		// `ok:false` is the remote tool failing while the RPC succeeded. Reading that as success is
+		// exactly the "green badge, nothing works" lie the connection panel exists to prevent.
+		expect(summarizeSmoke(envelope([], false)).ok).toBe(false);
+	});
+
+	it("shows a refusal message verbatim rather than pretending there was a payload", () => {
+		// A consent denial comes back as prose, not JSON. The user needs to read it.
+		const s = summarizeSmoke('Not permitted: this agent has no consent to call "list_agents"');
+		expect(s.count).toBeNull();
+		expect(s.detail).toContain("no consent");
+	});
+
+	it("finds the list inside a wrapper object", () => {
+		expect(summarizeSmoke(envelope({ agents: [{ name: "One" }] })).count).toBe(1);
+	});
+});
+
+describe("presetFor", () => {
+	it("matches a preset only on the exact normalized endpoint", () => {
+		// Prefix matching would attach the first-party smoke test — and its scope — to a different
+		// server that merely shares a path prefix.
+		const presets = [{ id: "p", label: "P", url: "https://mcp.example/mcp", scope: "read", smokeTool: "list_agents", description: "" }];
+		expect(presetFor(presets, "https://mcp.example/mcp")?.id).toBe("p");
+		expect(presetFor(presets, "https://mcp.example/mcp-admin")).toBeUndefined();
 	});
 });

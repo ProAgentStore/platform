@@ -55,11 +55,13 @@
 // we do not know, and sending it anyway IS the disclosure. Used on the wire only — never in
 // inputs, schema, or result.
 //
-// Servers fronted by OAuth 2.1 + dynamic client registration STILL cannot be reached headlessly
-// — that flow is not implemented (#180). What changed is that a rejected credential now says so
-// precisely: `discoverAuthServer` reads the server's own RFC 9728/8414 metadata and reports which
-// authorization server fronts it, whether it would register a client dynamically, and whether it
-// issues refresh tokens at all (#181). Diagnosis, not a connection.
+// Servers fronted by OAuth 2.1 + dynamic client registration ARE reachable now (#180/#258).
+// `discoverAuthServer` reads the server's own RFC 9728/8414 metadata; `routes/mcp.ts` registers a
+// client at runtime (RFC 7591) and runs a PKCE S256 authorization; the credential lands in
+// `mcp_credentials` with `auth_mode:"oauth"`. `ensureMcpAccessToken` renews it from the refresh
+// token before each call, so a cron-fired chain survives with nobody present — the property #181
+// exists to insist on. A server that publishes no metadata still uses a pasted bearer, which
+// remains legitimate for the servers that issue genuine machine tokens.
 //
 // Consent: `mcp_call_tool` is gated per (instance, endpoint, tool) — see lib/mcp-consent.ts
 // and migration 0079 — on top of the connector-level write consent, because one `mcp` write
@@ -73,7 +75,8 @@ import { safeFetch, SsrfError } from "../ssrf.js";
 import { authFailureGuidance, discoverAuthServer, type DiscoveryResult } from "./discovery.js";
 import { consentInstanceOf } from "../execution-authority.js";
 import { hasMcpConsent, mcpConsentDenial, normalizeMcpEndpoint } from "../mcp-consent.js";
-import { mcpCredentialDenial, resolveMcpCredential } from "../mcp-credentials.js";
+import { mcpCredentialDenial } from "../mcp-credentials.js";
+import { ensureMcpAccessToken } from "../mcp-oauth-store.js";
 import { logEvent } from "../events.js";
 import { redactSecrets, redactText } from "../redact.js";
 
@@ -565,7 +568,11 @@ async function mcpCall(
 	// credential for one endpoint can neither authorize nor be leaked to another.
 	let token: string | null = null;
 	if (endpoint.useAuth) {
-		const cred = await resolveMcpCredential(ctx.env, ctx.userId, key);
+		// `ensureMcpAccessToken`, not the bare resolver: an OAuth credential (#180/#258) is renewed
+		// here, with nobody present, using the refresh token stored beside it. Without that a 24h
+		// access token turns every cron-fired chain into a daily outage — the run dead-letters and
+		// only a human at a browser can restart it. A pasted bearer is unaffected: nothing to renew.
+		const cred = await ensureMcpAccessToken(ctx.env, ctx.userId, key);
 		if (cred.status !== "ok") {
 			// Fail CLOSED, both ways: no silent fallback to the old provider-wide token (that is the
 			// vulnerability), and no silent unauthenticated retry (which turns "your token is gone"

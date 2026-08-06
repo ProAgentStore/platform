@@ -57,7 +57,17 @@ export interface McpReport {
 	toolCount: number;
 	callableCount: number;
 	gates: { callToolEnabled: boolean; writeConsent: boolean };
-	auth?: { protectedResource: boolean; authorizationServer?: string; dynamicRegistration?: boolean; unattended?: string };
+	auth?: { protectedResource: boolean; authorizationServer?: string; dynamicRegistration?: boolean; pkceS256?: boolean; unattended?: string };
+}
+
+/** A first-party MCP server this deployment knows about (#287). Mirrors lib/mcp-presets.ts. */
+export interface McpPreset {
+	id: string;
+	label: string;
+	url: string;
+	scope: string | null;
+	smokeTool: string | null;
+	description: string;
 }
 
 export interface McpConnection {
@@ -193,4 +203,71 @@ export function blockerHint(blocker: McpBlocker): string {
  */
 export function hasMcpCapability(tools: ReadonlyArray<{ connector?: string; allowed: boolean; disabled: boolean }>): boolean {
 	return tools.some((t) => t.connector === "mcp" && (t.allowed || t.disabled));
+}
+
+/**
+ * Can this server be authorized in-browser (#180/#258)?
+ *
+ * The same two conditions `/v1/mcp/oauth/start` enforces, restated here so the button only appears
+ * where the flow will actually work. A "Connect" that always fails is worse than no button: it
+ * reads as a broken feature rather than a server that wants something else, and it teaches the
+ * user to distrust the panel. `pkceS256` must be explicitly true — a server that omits it is one
+ * we refuse to authorize as a public client, not one to try optimistically.
+ */
+export function canAuthorize(report: Pick<McpReport, "auth"> | null | undefined): boolean {
+	const a = report?.auth;
+	return !!a?.protectedResource && a.dynamicRegistration === true && a.pkceS256 === true;
+}
+
+/** The preset that names this endpoint, if any — endpoints are already normalized on both sides. */
+export function presetFor(presets: readonly McpPreset[], endpoint: string): McpPreset | undefined {
+	return presets.find((p) => p.url === endpoint);
+}
+
+/**
+ * Read a smoke-test result into a count and a few names.
+ *
+ * DELIBERATELY SHALLOW. The point of the dogfood test (#287) is "did a real remote tool call go
+ * all the way through and come back with something recognisable" — not to render the payload. So
+ * it counts and samples NAMES only: an MCP result is remote, attacker-shaped data heading for the
+ * DOM, and a panel that displayed whatever fields came back would be a place to put them.
+ */
+export function summarizeSmoke(raw: unknown): { ok: boolean; count: number | null; sample: string[]; detail: string } {
+	let payload: unknown = raw;
+	if (typeof raw === "string") {
+		try {
+			payload = JSON.parse(raw);
+		} catch {
+			// Not JSON — a plain-text tool result, or a refusal message. Show it as-is, truncated.
+			return { ok: true, count: null, sample: [], detail: raw.slice(0, 200) };
+		}
+	}
+	if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+		const r = payload as Record<string, unknown>;
+		// The connector's envelope: {tool, ok, data}. `ok:false` is the server reporting that the
+		// TOOL failed while the call itself succeeded — surfacing that as success would be the
+		// "green badge, nothing works" lie this whole surface exists to avoid.
+		if ("ok" in r && "data" in r) {
+			const inner = summarizeSmoke(r.data);
+			return { ...inner, ok: r.ok === true && inner.ok };
+		}
+		for (const key of ["agents", "items", "results", "tools"]) {
+			if (Array.isArray(r[key])) payload = r[key];
+		}
+	}
+	if (!Array.isArray(payload)) {
+		return { ok: true, count: null, sample: [], detail: typeof payload === "object" ? "returned an object" : String(payload).slice(0, 200) };
+	}
+	const sample = payload
+		.slice(0, 3)
+		.map((e) => {
+			if (e && typeof e === "object") {
+				const o = e as Record<string, unknown>;
+				const name = o.name ?? o.slug ?? o.title ?? o.id;
+				return typeof name === "string" ? name.slice(0, 60) : "";
+			}
+			return typeof e === "string" ? e.slice(0, 60) : "";
+		})
+		.filter(Boolean);
+	return { ok: true, count: payload.length, sample, detail: "" };
 }

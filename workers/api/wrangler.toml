@@ -31,6 +31,11 @@ ADMIN_ALLOWLIST = "serge.the.dev@gmail.com,serge-ivo"
 # Unset = inert (fail-closed). First-party/self-use ONLY — do NOT enable for third-party
 # creators until the browser trust model (#75). Uncomment to turn on.
 BROWSER_TOOLS_ENABLED = "1"
+# This deployment's OWN MCP server (#287) — drives the first-party "ProAgentStore" preset in the
+# console's MCP connections panel. Deliberately deployment CONFIG rather than a constant in
+# lib/connectors/mcp.ts, which contains no host at all so that a configured MCP server stays user
+# data. Unset (a local build) = no preset offered, which is what keeps production out of dev.
+MCP_SELF_URL = "https://mcp.proagentstore.online/mcp"
 # Custom (agent-published) console surfaces (#186). Unset = inert (fail-closed): the PUT
 # capabilities route refuses to store them and resolved capabilities carry none, so the console
 # renders no third-party bundle. Deliberately OFF — a surface bundle is CODE in the console

@@ -5900,10 +5900,140 @@ paths:
                       protectedResource: { type: boolean }
                       authorizationServer: { type: string }
                       dynamicRegistration: { type: boolean }
+                      pkceS256: { type: boolean, description: "Together with `dynamicRegistration`, the precondition for `POST /v1/mcp/oauth/start` — the console offers Connect only when both hold." }
                       unattended: { type: string, description: Whether a credential from this server could survive unattended. }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/mcp/presets:
+    get:
+      summary: First-party MCP servers this deployment knows about
+      description: |
+        A preset is a PREFILLED URL and nothing more. It carries no credential, grants no tool and
+        skips no gate: the endpoint it names goes through the same connection test, the same
+        per-(endpoint, tool) consent and the same authorization flow as one the user typed.
+
+        The endpoint is resolved from deployment config (`MCP_SELF_URL`), never from a constant in
+        the connector — `lib/connectors/mcp.ts` deliberately contains no server host at all, so
+        that a configured MCP server stays user data and PAGS stays self-contained. A deployment
+        that names no server returns an empty list, which is the normal state of a local build.
+
+        `smokeTool` names a read-only tool worth trying first. It is advisory: the console offers a
+        button, and the call still goes through `mcp_call_tool` and its consent gate.
+      operationId: listMcpPresets
+      tags: [Tools]
+      responses:
+        "200":
+          description: The presets, possibly none
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  presets:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        label: { type: string }
+                        url: { type: string, description: Normalized https MCP endpoint. }
+                        scope: { type: string, nullable: true, description: OAuth scope requested at authorization — least privilege, e.g. `read`. }
+                        smokeTool: { type: string, nullable: true }
+                        description: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/mcp/oauth/start:
+    post:
+      summary: Begin OAuth authorization for a user-named MCP endpoint
+      description: |
+        Modern MCP servers are OAuth public clients: PKCE S256, `token_endpoint_auth_method: none`,
+        and a client registered at runtime (RFC 7591) because the operator has never heard of the
+        server a subscriber just named. There is no token for a human to paste, and those servers'
+        own docs say not to ask for one. This starts the flow they implement.
+
+        The response is the provider's authorize URL, for the caller to open in a browser. The
+        response ALSO sets an `HttpOnly` nonce cookie that binds the flow to this browser: the
+        callback refuses without it, because a signed state alone is bearer-grade (an attacker's
+        consent link, completed by a victim, would file the victim's grant under the attacker's
+        account).
+
+        Refused, with a reason, for: a server publishing no OAuth metadata (store a token instead);
+        one that will not register clients dynamically; one offering no PKCE S256 (a `plain`
+        challenge equals its verifier, so there is deliberately no fallback); and metadata whose
+        `issuer` is not the server that published it (the RFC 8414 mix-up).
+
+        Discovery, registration and the token exchange all go through the SSRF guard (https-only,
+        redirect-revalidated, private/metadata addresses refused) — the endpoint is user config, so
+        an authenticated "connect this URL" is otherwise a server-side request forgery primitive.
+        Strictly rate-limited for the same reason.
+
+        Authorizing a server is NOT consent to its tools: per-(instance, endpoint, tool) grants are
+        untouched, and a freshly authorized server can still call nothing until they are granted.
+      operationId: startMcpOauth
+      tags: [Tools]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, description: An https MCP endpoint, e.g. `https://example.com/mcp`. }
+                scope: { type: string, maxLength: 200, description: "OAuth scope to request. Omitted = let the server decide; least privilege is preferred (the first-party preset asks for `read`)." }
+      responses:
+        "200":
+          description: The authorize URL to open, plus what discovery learned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  url: { type: string, description: The provider's authorize URL (PKCE S256, RFC 8707 `resource`). }
+                  endpoint: { type: string, description: Normalized MCP endpoint the resulting credential will be bound to. }
+                  issuer: { type: string }
+                  unattended: { type: string, enum: [yes, refresh, interactive-only], description: "`interactive-only` = the server issues no refresh token, so access cannot be renewed with nobody present — do not wire it into a cron trigger or a chain." }
+                  expiresIn: { type: integer, description: Seconds this authorization may sit unfinished. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/mcp/oauth/callback:
+    get:
+      summary: OAuth redirect target that completes an MCP authorization
+      description: |
+        Unauthenticated by construction — a top-level navigation arriving from a server we do not
+        control — so the signed `state` is the only evidence about who to credit. It carries three
+        pins, all failing closed: a nonce matching the `HttpOnly` cookie set at start (the browser
+        that began the flow), the flow type (`SESSION_SIGNING_KEY` also signs sessions and
+        connector states), and the RESOURCE, which must equal the claimed flow's endpoint so a
+        state minted for one MCP server can never complete — or write a credential for — another.
+
+        Every parameter of the token exchange comes from the flow row recorded at start time from
+        metadata we discovered ourselves; nothing but `code` is read from this request. The row is
+        claimed atomically, so a replayed callback loses the race here rather than reaching the
+        token endpoint twice.
+
+        Returns an HTML page, not JSON: the browser lands here, not an API client.
+      operationId: mcpOauthCallback
+      tags: [Tools]
+      security: []
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string }, description: Set when the user declined or the server refused. Nothing is stored. }
+      responses:
+        "200":
+          description: Authorized — the credential is stored for that endpoint
+          content:
+            text/html:
+              schema: { type: string }
+        "400":
+          description: State could not be verified, the link expired or was replayed, or the token exchange was refused
+          content:
+            text/html:
+              schema: { type: string }
 
   /v1/instances/{instanceId}/tools/{name}:
     put:
