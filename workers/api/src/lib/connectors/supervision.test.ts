@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SUPERVISION_TOOLS } from "./supervision.js";
+import { MAX_ACTS_PER_SUBORDINATE, SUPERVISION_TOOLS } from "./supervision.js";
 import type { Env } from "../../types.js";
 
 const tool = (name: string) => {
@@ -278,6 +278,20 @@ describe("subordinate_status — the observe verb", () => {
 		expect(out.subordinates[0].acts).toEqual([
 			{ kind: "pr.merge", summary: "merged a pull request #42", command: "gh pr merge 42 --squash", irreversible: true, traceId: "run-1", at: 1700 },
 		]);
+	});
+
+	it("bounds the acts payload — it sits OUTSIDE the observation char budget", async () => {
+		// Acts are attached after summarizeSubordinates has already trimmed work to
+		// MAX_OBSERVATION_CHARS, so nothing else caps them. A loop force-pushing in circles would
+		// otherwise put tens of kilobytes of command text into every prompt this supervisor builds.
+		const env = buildEnv();
+		let limit = "";
+		const spied = { ...env, DB: { prepare(sql: string) {
+			if (sql.includes("act.consequential")) limit = sql.match(/LIMIT (\d+)/)?.[1] ?? "";
+			return (env as unknown as { DB: { prepare(s: string): unknown } }).DB.prepare(sql);
+		} } } as unknown as Env;
+		await tool("subordinate_status").handler(ctx(spied) as never, {});
+		expect(limit).toBe(String(MAX_ACTS_PER_SUBORDINATE));
 	});
 
 	it("omits `acts` rather than sending an empty array", async () => {

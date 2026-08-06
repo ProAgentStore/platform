@@ -121,7 +121,14 @@ async function observeSubordinates(
 		runtimeConnectivityMany(ctx.env as never, userId, ids).catch(() => new Map<string, RuntimeFacts>()),
 		// What each subordinate has actually DONE (#294). One more indexed read, on the same
 		// per-instance UNION-ALL shape as work/runs — not a fan-out.
-		recentActsForInstances(ctx.env, userId, ids).catch(() => [] as ActItem[]),
+		//
+		// MAX_ACTS_PER_SUBORDINATE, not the reader's default: acts are attached AFTER
+		// `summarizeSubordinates` has trimmed to MAX_OBSERVATION_CHARS, so they are outside that
+		// budget and a runaway loop force-pushing in circles would otherwise push tens of kilobytes
+		// of command text into every prompt this supervisor builds. Small because acts are RARE by
+		// construction — an ordinary run produces none — so this only bites the pathological case,
+		// and in that case the newest few already say what is happening.
+		recentActsForInstances(ctx.env, userId, ids, MAX_ACTS_PER_SUBORDINATE).catch(() => [] as ActItem[]),
 	]);
 	const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
 	// Connectivity is attached HERE rather than inside `summarizeSubordinates` because it is a
@@ -198,6 +205,15 @@ async function observeSubordinates(
 		success: true,
 	};
 }
+
+/**
+ * Consequential acts reported per subordinate in one status call (#294).
+ *
+ * A PROMPT BUDGET, like `MAX_REPO_PROBES` is a latency budget. Acts are attached after
+ * `summarizeSubordinates` has already trimmed work to `MAX_OBSERVATION_CHARS`, so nothing else
+ * bounds them — and each carries up to 400 characters of command text.
+ */
+export const MAX_ACTS_PER_SUBORDINATE = 5;
 
 const NO_SUBORDINATES = "You do not supervise any agents yet. Add a supervision link in Settings first.";
 
