@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { BoardColumn } from "../lib/types";
 import { formatTime } from "@proagentstore/sdk/ui";
-import { usePolling } from "@proagentstore/sdk/hooks";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
+import { boardBusy } from "../lib/pollBusy";
 import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
 
 type BoardView = "kanban" | "list";
@@ -83,7 +84,12 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	}, [instanceId]);
 
 	useEffect(() => { loadBoard(); }, [loadBoard]);
-	usePolling(loadBoard, 2500);
+	// The fastest poll in the console (#272). 2.5s is right while a job is actually moving —
+	// a card can change column in that time and the board is where the user watches it. It is
+	// wrong for a settled board, which is what a board mostly is: the same seven columns of
+	// finished work, re-fetched 24 times a minute forever, in tabs nobody is looking at.
+	// A hidden idle board stops entirely and re-fetches the instant it is looked at again.
+	useTieredPolling(loadBoard, { activeMs: 2500, passiveMs: 15000 }, boardBusy(items));
 
 	// Detect a browser-task agent (show the Run control) + restore its last-used start URL.
 	useEffect(() => {

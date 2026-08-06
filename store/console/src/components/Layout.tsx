@@ -4,9 +4,10 @@ import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
 import ErrorBoundary from "./ErrorBoundary";
 import { api } from "@proagentstore/sdk/client";
-import { usePolling } from "@proagentstore/sdk/hooks";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal } from "lucide-react";
 import { pushPermission, pushSupported, ensurePushSubscribed, enablePush } from "../lib/push";
+import { isSuppressedPush } from "../lib/pushMessages";
 import { rememberRoute } from "../lib/lastRoute";
 
 const navItems = [
@@ -52,7 +53,24 @@ export default function Layout() {
 	}, [user]);
 
 	useEffect(() => { loadBadge(); }, [loadBadge]);
-	usePolling(loadBadge, 30000, !!user);
+	// The bell badge is the IN-APP half of a notification; Web Push is the other half, and the
+	// service worker already suppresses a push while a console tab is visible (#176). So the two
+	// are exact complements: while you are looking, this poll is what tells you; while you are
+	// not, the OS notification is — and this poll has nothing to do but spend battery. Hence no
+	// busy tier and a hard halt when hidden, plus the catch-up fetch on return so the count is
+	// right the instant the tab is back. A push that arrives while you ARE looking now nudges
+	// this same fetch through the service-worker message below, so nothing waits out the 30s.
+	useTieredPolling(loadBadge, { activeMs: 30000, passiveMs: 30000 }, false, !!user);
+
+	// A push the service worker suppressed because this tab is on screen (#176). It forwards the
+	// payload rather than dropping it, so the thing the user would have been told about shows up
+	// in the app immediately instead of up to 30s later.
+	useEffect(() => {
+		if (!user || typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+		const onMessage = (e: MessageEvent) => { if (isSuppressedPush(e.data)) void loadBadge(); };
+		navigator.serviceWorker.addEventListener("message", onMessage);
+		return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+	}, [user, loadBadge]);
 
 	// Remember the last visited top-level screen so a reload/re-open restores it (#161).
 	useEffect(() => { rememberRoute(location.pathname); }, [location.pathname]);

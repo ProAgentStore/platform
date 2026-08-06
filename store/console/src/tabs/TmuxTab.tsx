@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { renderTerminal } from "@proagentstore/sdk/ui";
 import { api } from "@proagentstore/sdk/client";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Clipboard, Keyboard, Loader2, Play, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
+import { tmuxBusy } from "../lib/pollBusy";
 
 interface Props {
 	instanceId: string;
@@ -148,13 +150,17 @@ export default function TmuxTab({ instanceId }: Props) {
 		if (selected) void capture(selected);
 	}, [selected, capture]);
 
-	useEffect(() => {
-		const timer = window.setInterval(() => {
-			void refreshTargets();
-			if (selectedRef.current) void capture(selectedRef.current);
-		}, 4000);
-		return () => window.clearInterval(timer);
+	const tick = useCallback(() => {
+		void refreshTargets();
+		if (selectedRef.current) void capture(selectedRef.current);
 	}, [refreshTargets, capture]);
+
+	// Two tool calls per tick — a target list AND a 500-line pane capture — each of which is a
+	// relay round-trip to the user's own machine (#272). Full rate while a pane is actually
+	// running something, or while the last call FAILED: a failure here means the runner could
+	// not be reached, and backing off then is how the tab stays showing an error long after the
+	// machine came back (#241). A rack of panes all sitting at a prompt is the slow case.
+	useTieredPolling(tick, { activeMs: 4000, passiveMs: 20000 }, tmuxBusy(targets, !!error));
 
 	const selectedInfo = useMemo(() => targets.find((s) => targetKey(s) === selected), [targets, selected]);
 	const canRunCommand = allowedTools.has("terminal_run_command");

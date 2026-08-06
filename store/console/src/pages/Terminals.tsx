@@ -3,7 +3,8 @@ import Page from "../components/Page";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { renderTerminal, terminalTail } from "@proagentstore/sdk/ui";
-import { usePolling } from "@proagentstore/sdk/hooks";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
+import { terminalsBusy } from "../lib/pollBusy";
 import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin } from "lucide-react";
 
 interface TerminalInstance { instanceId: string; name: string; agentSlug: string | null; status: string; connected: boolean; bound: boolean }
@@ -37,13 +38,19 @@ export default function Terminals() {
 		setLoading(false);
 	}, []);
 
-	// usePolling only fires on the interval, so without a mount fetch the page showed "Loading…"
+	// The poll hook only fires on the interval (its catch-up fetch is for tier CHANGES, and first
+	// mount is deliberately not one), so without a mount fetch the page showed "Loading…"
 	// for 5s on every visit even with machines already connected.
 	useEffect(() => {
 		void load();
 	}, [load]);
-	// Poll so connect/disconnect + session status stay live without a manual refresh.
-	usePolling(load, 5000, true);
+	// Poll so connect/disconnect + session status stay live without a manual refresh — but only
+	// while there is something to see change (#272). Full 5s while a machine is believed OFFLINE
+	// or missing (the state the user is fixing with `pags up`, and the one #241 showed must never
+	// slow down) or while a coding session is active; 20s for a settled, fully-connected fleet,
+	// which is a set of booleans that change about twice a day; nothing in a hidden tab, with an
+	// immediate re-fetch the moment it is looked at again.
+	useTieredPolling(load, { activeMs: 5000, passiveMs: 20000 }, terminalsBusy(nodes));
 
 	return (
 		<Page width={1040}>

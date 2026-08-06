@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
 import { formatTime } from "@proagentstore/sdk/ui";
-import { usePolling } from "@proagentstore/sdk/hooks";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
+import { activityBusy } from "../lib/pollBusy";
 
 // The agent's activity log as a readable, live timeline — everything it DID (tool
 // calls, record writes, cron/webhook fires, summaries, errors), newest first. This is
@@ -63,7 +64,11 @@ export default function ActivityTab({ instanceId }: { instanceId: string }) {
 	useEffect(() => {
 		load();
 	}, [load]);
-	usePolling(load, 4000);
+	// A live timeline while the agent is doing things, and a static page when it is not (#272).
+	// The log itself is the only liveness signal this surface has, so "busy" is the age of its
+	// newest event: a working agent emits several events per turn, and one that stopped an hour
+	// ago emits none. 100 events re-fetched every 4s forever is the shape being paid for here.
+	useTieredPolling(load, { activeMs: 4000, passiveMs: 20000 }, activityBusy(events));
 
 	return (
 		<div>

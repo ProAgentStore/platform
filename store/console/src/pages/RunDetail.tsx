@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } fro
 import Page from "../components/Page";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, getToken, API } from "@proagentstore/sdk/client";
-import { usePolling } from "@proagentstore/sdk/hooks";
+import { usePolling, useTieredPolling } from "@proagentstore/sdk/hooks";
 import type { RuntimeTask, RuntimeEvent } from "../lib/types";
 import { ArrowLeft, Play, Pause, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 
@@ -79,7 +79,23 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 	}, [instanceId, taskId]);
 
 	useEffect(() => { poll(); }, [poll]);
-	usePolling(poll, 500, true); // ~2 fps; shares the high-rate takeover bucket
+	// ~2 fps; shares the high-rate takeover bucket. The highest-frequency poll in the product,
+	// and the only one whose payload is a JPEG of a remote screen (#272).
+	//
+	// It is NOT a mechanical conversion, because it has no idle tier to fall back to: this
+	// component only exists while the takeover overlay is open, and a remote screen at 1 fps is
+	// not a cheaper version of the feature, it is a broken one. So the two tiers are the same
+	// 500ms and the whole decision is the hidden one.
+	//
+	// Hidden it stops — even mid-takeover, which is exactly the state the ticket flags as real:
+	// the user tabs away BECAUSE the takeover asked them to do something elsewhere (read the
+	// verification email, find the code). That is 120 frames a minute of a screen nobody can
+	// see, relayed off their own laptop. Nothing is lost by stopping, because nothing here
+	// advances off the frame poll — input is user-driven (and a hidden tab has no user input),
+	// the run's own status stays live on the page's separate `load` poll, and the resume that
+	// ends a takeover is decided server-side. The catch-up fetch means the first thing they see
+	// on returning is a fresh frame, not the stale one they left.
+	useTieredPolling(poll, { activeMs: 500, passiveMs: 500 }, false);
 	// Full-screen overlay: focus for keyboard capture + lock body scroll while open.
 	useEffect(() => {
 		boxRef.current?.focus();
@@ -221,6 +237,11 @@ export default function RunDetail() {
 
 	useEffect(() => { load(); }, [load]);
 	const running = task?.status === "running" || task?.status === "needs_human" || task?.needs_human;
+	// Left on a plain interval on purpose (#272): it is already gated on the run being in
+	// flight, which is precisely the "busy" a tiered poll would compute — and busy beats hidden,
+	// so it would resolve to this same 3s anyway. It is also what keeps the run itself live
+	// while the frame poll above is halted, so a user who tabs away mid-takeover still comes
+	// back to the right status. A finished run turns it off entirely.
 	usePolling(load, 3000, !!running);
 
 	const needsHuman = task?.status === "needs_human" || task?.needs_human;

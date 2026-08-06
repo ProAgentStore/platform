@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import Page from "../components/Page";
 import { api } from "@proagentstore/sdk/client";
-import { usePolling } from "@proagentstore/sdk/hooks";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { BarChart3, Info, RefreshCw } from "lucide-react";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
@@ -118,14 +118,19 @@ export default function Usage() {
 		setLoading(false);
 	}, [range]);
 
-	// usePolling ONLY fires on the interval — it keeps `fn` in a ref and its effect deps are
+	// The poll hook ONLY fires on the interval — it keeps `fn` in a ref and its effect deps are
 	// [ms, enabled], so without this the page sat on "Loading…" for a full 30s on every visit,
 	// and switching the range kept rendering the old range's numbers (with no spinner) until the
 	// next tick. `load` changes identity with `range`, so one effect covers both.
 	useEffect(() => {
 		void load();
 	}, [load]);
-	usePolling(load, 30000, true);
+	// No busy tier, deliberately (#272). Usage aggregates a ledger written by work happening
+	// somewhere else entirely — there is no local signal that says spend is accruing right now,
+	// and inventing one (e.g. "the totals moved") would just be the poll watching itself. So both
+	// tiers stay at the existing 30s and the only change is that a backgrounded tab stops
+	// re-aggregating the last 30 days of usage twice a minute, then catches up on return.
+	useTieredPolling(load, { activeMs: 30000, passiveMs: 30000 }, false);
 
 	const totals = data?.totals;
 	// null when there is nothing to report on — no calls, or only pre-0074 rows where the split was
