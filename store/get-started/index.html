@@ -258,7 +258,7 @@ npx @proagentstore/cli publish  # creates repo, deploys, registers</pre>
     <h2>Connect via webhook</h2>
     <p>Send documents from Zapier, Make, n8n, or any service:</p>
     <pre>curl -X POST https://api.proagentstore.online/v1/public/webhook/INSTANCE_ID/ingest \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Authorization: Bearer $PAGS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title":"Meeting Notes","content":"...","source":"zapier"}'</pre>
 

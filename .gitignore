@@ -15,6 +15,12 @@ playwright-report/
 test-results/
 .vibe-check/
 .gstack/
+# Claude Code's per-session state, including `.claude/worktrees/<agent>/` — a full checkout
+# of this repo per live agent session. Untracked and unignored, those showed as `?? .claude/`
+# in every `git status` on a machine running agents (#295), which is how a real untracked
+# file gets lost in the noise. `.vcqa.json`, `.gitleaks.toml` and `biome.json` already skip
+# the same path for their own reasons; scripts/check-qa-config.mjs checks all four together.
+.claude/
 package-lock.json
 ios/.build/
 ios/build/

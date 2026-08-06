@@ -11,6 +11,15 @@ import type { Env } from "../types.js";
  * in-memory `user_api_keys` table → JSON response. The PUT→reveal round-trip proves the
  * bytes that leave the browser can only be recovered by the same owner, decrypted by the
  * real AES-256-GCM path — not a stub. Only the D1 boundary is faked (with real state).
+ *
+ * Fixture keys keep the `sk-` prefix, because provider-shape validation is genuinely under
+ * test here ("`sk-…` without `sk-ant-` is an OpenAI-shaped key in the Anthropic slot"), and
+ * are otherwise deliberately low-entropy and self-labelling (#295). The previous ones ended in
+ * long digit runs, which was enough for gitleaks to report them as real keys — in a file whose
+ * whole subject is key handling, which is the worst possible place for a scanner to be crying
+ * wolf. They are not reproduced here, because a comment quoting the value it removed is scanned
+ * exactly like the value was. Nothing asserts on entropy or length; the round-trip only needs
+ * the string that went in to come back out.
  */
 
 const SECRET = "keys-integration-secret";
@@ -143,15 +152,15 @@ describe("PUT → reveal round-trip (integration, real AES-256-GCM)", () => {
 	it("reveals exactly the plaintext the owner stored", async () => {
 		const { app, env } = buildApp();
 		const tok = await tokenFor("owner-1");
-		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-round-trip-1234567890" }, tok);
+		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-example-roundtrip-not-a-real-key" }, tok);
 		const res = await app.request("/v1/keys/openai/reveal", { headers: { Authorization: `Bearer ${tok}` } }, env);
 		expect(res.status).toBe(200);
-		expect((await res.json() as any).key).toBe("sk-round-trip-1234567890");
+		expect((await res.json() as any).key).toBe("sk-example-roundtrip-not-a-real-key");
 	});
 
 	it("404s reveal for a different user (owner scoping — can't read another's key)", async () => {
 		const { app, env } = buildApp();
-		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-owner-only-000000" }, await tokenFor("owner-1"));
+		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-example-owner-scoped-not-a-real-key" }, await tokenFor("owner-1"));
 		const other = await tokenFor("attacker-2");
 		const res = await app.request("/v1/keys/openai/reveal", { headers: { Authorization: `Bearer ${other}` } }, env);
 		expect(res.status).toBe(404);
@@ -162,7 +171,7 @@ describe("GET /v1/keys/status + DELETE (integration)", () => {
 	it("reflects stored keys, then clears them on delete", async () => {
 		const { app, env } = buildApp();
 		const tok = await tokenFor("u1");
-		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-x1234567890abc" }, tok);
+		await json(app, env, "PUT", "/v1/keys/openai", { key: "sk-status-example-not-a-real-key" }, tok);
 
 		const before = await (await app.request("/v1/keys/status", { headers: { Authorization: `Bearer ${tok}` } }, env)).json() as any;
 		expect(before.providers.find((p: any) => p.id === "openai").hasKey).toBe(true);

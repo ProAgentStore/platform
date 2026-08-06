@@ -7,7 +7,7 @@
 // report untrustworthy in exactly the way that cost that time — so the config is checked
 // the same way `agents/` and the test split already are.
 //
-// Four failures, each of which has either happened or was one edit away.
+// Five failures, each of which has either happened or was one edit away.
 import { readFileSync } from "node:fs";
 
 const problems = [];
@@ -157,9 +157,38 @@ for (const key of ["regexes", "stopwords", "commits"]) {
 	}
 }
 
+// ── 5. .gitignore must ignore .claude/ (#295).
+//
+// The fourth tool that walks this directory is git itself, and it was the last one still
+// reporting the worktrees: `git status -sb` on any machine with a live agent session showed
+// `?? .claude/`. That is not a scan artefact, it is worse — a permanent line of noise in the
+// output a developer reads most often, which is exactly how a genuinely untracked file gets
+// skimmed past. The other three configs (.vcqa.json, .gitleaks.toml, biome.json) all skip
+// this path already; checking the four together in one place is the reason this script
+// exists, rather than four half-remembered conventions.
+//
+// Matched against the `.claude/` line specifically rather than `git check-ignore`, so the
+// guard needs no git invocation and gives the same answer in a bare checkout. A negation
+// (`!.claude/...`) anywhere would re-expose it, so those are rejected too.
+const gitignore = readFileSync(".gitignore", "utf-8")
+	.split("\n")
+	.map((l) => l.trim())
+	.filter((l) => l && !l.startsWith("#"));
+if (!gitignore.some((l) => l === ".claude/" || l === ".claude")) {
+	problems.push(
+		".gitignore does not ignore `.claude/` — every machine running agent sessions shows `?? .claude/` " +
+			"in `git status`, burying real untracked files in noise (#295).",
+	);
+}
+for (const line of gitignore) {
+	if (line.startsWith("!") && line.slice(1).replace(/^\/*/, "").startsWith(".claude")) {
+		problems.push(`.gitignore re-includes .claude via "${line}" — agent worktrees would become untracked repo files again.`);
+	}
+}
+
 if (problems.length) {
-	console.error("✗ Quality-scan config problems (#290):\n");
+	console.error("✗ Quality-scan config problems (#290, #295):\n");
 	for (const p of problems) console.error(`  - ${p}\n`);
 	process.exit(1);
 }
-console.log(`✓ QA config OK — ${ignore.length} VCQA ignore patterns, biome skips .claude, gitleaks allowlists worktrees.`);
+console.log(`✓ QA config OK — ${ignore.length} VCQA ignore patterns, biome + git skip .claude, gitleaks allowlists worktrees.`);

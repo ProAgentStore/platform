@@ -27,13 +27,15 @@ jobs:
           cache: pnpm
       - name: Guard agents/ Tier-0 allowlist (#49)
         run: node scripts/check-agents-allowlist.mjs
-      - name: Guard quality-scan config (#290)
+      - name: Guard quality-scan config (#290, #295)
         # The scan config only earns trust if it keeps excluding local/generated
-        # artifacts and keeps INCLUDING live source. Checks the three files together:
-        # a .vcqa.json pattern that can never match, an `agents/` exclusion that would
-        # blind the scan to Tier-0 code, a biome.json that has lost `!**/.claude` (which
-        # makes `pnpm lint` abort outright), and a .gitleaks.toml weakened past skipping
-        # worktrees into silencing findings.
+        # artifacts and keeps INCLUDING live source. Checks the four files that all
+        # walk this directory: a .vcqa.json pattern that can never match, an `agents/`
+        # exclusion that would blind the scan to Tier-0 code, a biome.json that has lost
+        # `!.claude` (which makes `pnpm lint` abort outright — and note the pattern is
+        # NOT `!**/.claude`, which matches an agent worktree's own ancestor and excludes
+        # the whole checkout from itself), a .gitleaks.toml weakened past skipping
+        # worktrees into silencing findings, and a .gitignore that stopped hiding them.
         run: node scripts/check-qa-config.mjs
       - name: Guard heavy-test isolation (#253)
         # Keeps real-browser / real-socket tests inside the `integration` project, which
