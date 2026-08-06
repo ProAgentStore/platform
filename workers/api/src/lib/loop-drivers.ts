@@ -21,7 +21,11 @@
 import { createLoopRun } from "./agent-loop-store.js";
 import { sanitizeMaxIterations } from "./agent-loop.js";
 import { delegationTaskRecord } from "./delegation.js";
-import { claimSessionDriver, getActiveSessionForRepo, listRepos } from "./coding-store.js";
+import { claimSessionDriver, endSession, listRepos } from "./coding-store.js";
+import { ensureActiveSession } from "./coding-session-open.js";
+import { noSessionMessage } from "./coding-session-lifecycle.js";
+import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
+import { runtimeConnectivity } from "./instance-connectivity.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import type { Env } from "../types.js";
 
@@ -114,14 +118,33 @@ const codingDriver: LoopDriver = {
 		if (!repo) {
 			return { ok: false, status: 409, error: "This coding agent has no repository yet — add one on its Coding tab first." };
 		}
-		const session = await getActiveSessionForRepo(env, instanceId, userId, repo.id);
-		if (!session) {
-			return {
-				ok: false,
-				status: 409,
-				error: `${repo.name} has no live coding session — start one on its Coding tab (and run \`pags up\`), then try again.`,
-			};
+		// Connectivity FIRST, and from the same resolver delegation itself uses — so the refusal
+		// names the real blocker. The old code went straight to "no live session" and appended
+		// "(and run `pags up`)" unconditionally, which fired with the runner connected and
+		// heartbeating and sent a real user chasing a runner that was already up (#271).
+		const facts = await runtimeConnectivity(env, instanceId, userId).catch(() => null);
+		const connectivity = classifySubordinateConnectivity({
+			// This driver only ever runs for `workflow: "CODING_SESSION"`, which by definition has
+			// local hands — so a runner is required, unconditionally.
+			requiresRunner: true,
+			hasRuntimeRow: facts?.hasRuntimeRow ?? false,
+			relayConnected: facts?.relayConnected ?? false,
+			node: facts?.node,
+			runnerVersion: facts?.runnerVersion,
+			lastSeenAt: facts?.lastSeenAt,
+		});
+		if (!connectivity.canWork) {
+			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity }) };
 		}
+
+		// Open one if there isn't one. Requiring a live session made delegation SINGLE-USE — the
+		// Pilot ended the session its own driver required, so the second goal always 409'd — and
+		// meant a supervisor could not supervise unless a human first sat in the console.
+		const ensured = await ensureActiveSession(env, instanceId, userId, repo);
+		if (!ensured.ok) {
+			return { ok: false, status: 409, error: noSessionMessage({ repoName: repo.name, connectivity, startError: ensured.startError }) };
+		}
+		const { session, opened } = ensured;
 
 		// Single-flight, same as `/sessions/:id/run` (#208). Without it a Lead delegating a goal —
 		// or the owner pressing Loop — starts a SECOND Pilot on a session that is already being
@@ -130,6 +153,10 @@ const codingDriver: LoopDriver = {
 		// reach the same engine and were left open, so the guarantee was a sixth of a guarantee.
 		const driverId = crypto.randomUUID();
 		if (!(await claimSessionDriver(env, instanceId, userId, session.id, driverId))) {
+			// Only reachable on a reused session (a freshly opened one has no driver), but if we
+			// DID open it, close it — a session opened purely for a run that never started is
+			// litter that the next attempt would then reuse and never own.
+			if (opened) await endSession(env, instanceId, userId, session.id, "ended").catch(() => undefined);
 			return {
 				ok: false,
 				status: 409,
@@ -181,6 +208,10 @@ const codingDriver: LoopDriver = {
 				depth: input.depth,
 				loopRunId: runId,
 				driverId,
+				// Ownership (#271). TRUE only when this call created the session, which is what
+				// licenses the Pilot to close it. A session the user opened by hand outlives the
+				// run — taking it away is what made delegation single-use.
+				sessionOpenedByRun: opened,
 			},
 		});
 		return { ok: true, runId, driver: codingDriver.id };

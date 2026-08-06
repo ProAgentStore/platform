@@ -35,10 +35,25 @@ describe("loopDriverFor — the ONE Loop dispatches on what the agent DECLARES (
 	});
 });
 
-/** Env stub recording the writes + which Workflow binding was created. */
-function stubEnv(opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean } = {}) {
+/**
+ * Env stub recording the writes + which Workflow binding was created.
+ *
+ * It models a CONNECTED runner by default (`runnerOnline`), because that is the state the coding
+ * driver now reads before it does anything: connectivity is checked first so a refusal can name
+ * the real blocker instead of blaming the runner (#271). A stub with no relay would make every
+ * coding test assert against the offline path by accident.
+ */
+function stubEnv(opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean; runnerOnline?: boolean; hasRuntimeRow?: boolean } = {}) {
 	const sql: string[] = [];
 	const created: Array<{ binding: string; params: Record<string, unknown> }> = [];
+	const runnerOnline = opts.runnerOnline ?? true;
+	const hasRuntimeRow = opts.hasRuntimeRow ?? true;
+	const runtimeRow = hasRuntimeRow
+		? { instance_id: "i1", endpoint_url: "https://runner.local", token_plaintext: "t", runner_node: "macbook", runner_version: "0.4.32", last_seen_at: "2026-08-06 06:00:00" }
+		: null;
+	// Stateful: `getActiveSessionForRepo` must read null BEFORE the driver opens one and the row
+	// afterwards, or the on-demand-open path can never be exercised at all.
+	let sessionRow: unknown = opts.session ?? null;
 	const wf = (binding: string) => ({ create: vi.fn(async (a: { params: Record<string, unknown> }) => { created.push({ binding, params: a.params }); return { id: "wf" }; }) });
 	const env = {
 		DB: {
@@ -48,13 +63,36 @@ function stubEnv(opts: { repos?: unknown[]; session?: unknown; claimTaken?: bool
 					bind() {
 						return {
 							// A claim whose predicate matched nothing = somebody else holds it.
-							async run() { return { meta: { changes: opts.claimTaken && q.includes("driver_id") ? 0 : 1 } }; },
-							async all() { return { results: opts.repos ?? [] }; },
-							async first() { return opts.session ?? null; },
+							async run() {
+								if (q.includes("INSERT INTO coding_sessions")) sessionRow = { id: "csess_new", client_type: "claude", status: "active", repo_id: "r1", runner_node: "macbook" };
+								return { meta: { changes: opts.claimTaken && q.includes("driver_id") ? 0 : 1 } };
+							},
+							async all() {
+								if (q.includes("FROM instance_runtimes")) return { results: runtimeRow ? [runtimeRow] : [] };
+								if (q.includes("FROM instance_runtime_nodes")) return { results: [] };
+								return { results: opts.repos ?? [] };
+							},
+							async first() {
+								// `agent_instances.config` is read for the node pin — an unpinned agent
+								// routes to whichever machine actually holds a live socket.
+								if (q.includes("FROM agent_instances")) return { config: null };
+								if (q.includes("FROM instance_runtimes") || q.includes("FROM instance_runtime_nodes")) return runtimeRow;
+								if (q.includes("FROM coding_repos")) return (opts.repos ?? [])[0] ?? null;
+								return sessionRow;
+							},
 						};
 					},
 				};
 			},
+		},
+		RELAY: {
+			idFromName: (n: string) => n,
+			get: () => ({
+				async fetch(req: Request) {
+					if (new URL(req.url).pathname === "/status") return new Response(JSON.stringify({ connected: runnerOnline }));
+					return new Response(JSON.stringify({ ok: true }));
+				},
+			}),
 		},
 		AGENT_LOOP: wf("AGENT_LOOP"),
 		CODING_SESSION: wf("CODING_SESSION"),
@@ -107,11 +145,38 @@ describe("the coding driver's preconditions are refusals, not crashes", () => {
 		if (!out.ok) expect(out.error).toMatch(/no repository/i);
 	});
 
-	it("says what to do when nothing is running", async () => {
-		const { env } = stubEnv({ repos: [{ id: "r1", name: "fws/platform" }], session: null });
+	it("blames the runner ONLY when the runner is actually unreachable", async () => {
+		// The runner really is down here, so `pags up` is the right advice and the machine is
+		// named — a multi-machine user otherwise has to guess which laptop to wake.
+		const { env } = stubEnv({ repos: [{ id: "r1", name: "fws/platform" }], session: null, runnerOnline: false });
 		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
 		expect(out).toMatchObject({ ok: false, status: 409 });
 		if (!out.ok) expect(out.error).toMatch(/pags up/);
+	});
+
+	it("opens a session itself when none is live and the runner is connected", async () => {
+		// #271. Requiring a live session made delegation SINGLE-USE — the Pilot ended the session
+		// its own driver required, so the second goal always 409'd — and meant a supervisor could
+		// not supervise unless a human first sat in the console opening one by hand.
+		const { env, created } = stubEnv({ repos: [{ id: "r1", name: "fws/platform" }], session: null });
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(created[0].binding).toBe("CODING_SESSION");
+		// And it OWNS what it opened, so the Pilot cleans it up rather than leaking an idle session.
+		expect(created[0].params.sessionOpenedByRun).toBe(true);
+	});
+
+	it("does not claim ownership of a session it merely reused", async () => {
+		// The other half of the ownership rule. A human who opens a session by hand, hands it a
+		// goal, and watches the session disappear has had their thing taken away by a background
+		// job — and the next delegated goal then 409s, which is the bug.
+		const { env, created } = stubEnv({
+			repos: [{ id: "r1", name: "fws/platform" }],
+			session: { id: "s1", client_type: "claude", status: "active" },
+		});
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+		expect(out.ok).toBe(true);
+		expect(created[0].params.sessionOpenedByRun).toBe(false);
 	});
 });
 

@@ -13,8 +13,27 @@ const tool = (name: string) => {
  * one is an error rather than a null. Live use hit exactly this — `SELECT i.name` took the whole
  * tool down with a D1_ERROR, which the model surfaced to the user as a platform failure.
  */
-function buildEnv(opts: { edges?: Array<[string, string]>; instances?: Array<Record<string, unknown>>; work?: unknown[]; runs?: unknown[] } = {}) {
+function buildEnv(
+	opts: {
+		edges?: Array<[string, string]>;
+		instances?: Array<Record<string, unknown>>;
+		work?: unknown[];
+		runs?: unknown[];
+		/** A registered runner for the subordinate, and whether its relay socket is live. */
+		runtime?: { node?: string; version?: string; lastSeenAt?: string; connected: boolean };
+	} = {},
+) {
 	const INSTANCE_COLUMNS = new Set(["id", "user_id", "agent_id", "status", "config", "created_at", "updated_at"]);
+	const runtimeRow = opts.runtime
+		? {
+				instance_id: "sub",
+				endpoint_url: "https://runner.local",
+				token_plaintext: "t",
+				runner_node: opts.runtime.node ?? "macbook",
+				runner_version: opts.runtime.version ?? "0.4.32",
+				last_seen_at: opts.runtime.lastSeenAt ?? new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, ""),
+			}
+		: null;
 	const env = {
 		DB: {
 			prepare(sql: string) {
@@ -39,18 +58,35 @@ function buildEnv(opts: { edges?: Array<[string, string]>; instances?: Array<Rec
 								}
 								if (sql.includes("FROM instance_runtime_tasks")) return { results: opts.work ?? [] };
 								if (sql.includes("FROM agent_loop_runs")) return { results: opts.runs ?? [] };
+								if (sql.includes("FROM instance_runtimes")) return { results: runtimeRow ? [runtimeRow] : [] };
 								return { results: [] };
 							},
-							async first() { return null; },
+							async first() {
+								if (sql.includes("FROM instance_runtimes") || sql.includes("FROM instance_runtime_nodes")) return runtimeRow;
+								return null;
+							},
 							async run() { return { meta: { changes: 1 } }; },
 						};
 					},
 				};
 			},
 		},
+		RELAY: {
+			idFromName: (n: string) => n,
+			get: () => ({
+				async fetch() { return new Response(JSON.stringify({ connected: opts.runtime?.connected === true })); },
+			}),
+		},
 	} as unknown as Env;
 	return env;
 }
+
+/** A subordinate whose work genuinely needs a machine — `capabilities.runtime: "coding"`. */
+const codingSubordinate = [{
+	id: "sub", status: "active", config: null, agent_name: "Repo Coder",
+	slug: "coder-repo", category: "code",
+	agent_config: JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } }),
+}];
 
 const ctx = (env: Env) => ({ env, userId: "u1", instanceId: "sup" });
 
@@ -137,6 +173,39 @@ describe("subordinate_status — the observe verb", () => {
 		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
 		expect(out.subordinates[0].work[0]).toMatchObject({ status: "running", columnTitle: "Running", title: "Delegated: green the suite" });
 		expect(out.subordinates[0].runs[0]).toMatchObject({ objective: "green the suite", iteration: 4, maxIterations: 10 });
+	});
+
+	it("reports a connected runner for an IDLE subordinate — the refusal that started this (#259)", async () => {
+		// The live failure: asked to delegate a typecheck, the Coder Lead read four subordinates
+		// with no work in flight, reported "No active runner" for all four, and told the user to
+		// run `pags up` — which was running, relay connected, health ok. It had no connectivity
+		// field to read, so it inferred one from `activeSessions: 0`. Two different questions.
+		const env = buildEnv({ instances: codingSubordinate, runtime: { connected: true, node: "macbook" } });
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].work).toEqual([]); // idle …
+		expect(out.subordinates[0].connectivity).toMatchObject({ canWork: true, state: "attached", node: "macbook", runnerVersion: "0.4.32" });
+	});
+
+	it("reports a cloud-only subordinate as reachable, never as a missing runner", async () => {
+		// The default agent here declares no runtime. Telling a supervisor to run `pags up` for a
+		// pipeline agent would invent a blocker that cannot exist.
+		const out = JSON.parse((await t.handler(ctx(buildEnv()) as never, {})).content);
+		expect(out.subordinates[0].connectivity).toMatchObject({ canWork: true, requiresRunner: false, remedy: null });
+	});
+
+	it("says the runner is down, and which machine, when it really is", async () => {
+		const env = buildEnv({ instances: codingSubordinate, runtime: { connected: false, node: "studio", lastSeenAt: "2020-01-01 00:00:00" } });
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].connectivity).toMatchObject({ canWork: false, state: "runner-offline", remedy: "pags up" });
+		expect(out.subordinates[0].connectivity.message).toContain("studio");
+	});
+
+	it("carries a legend saying idle is not offline", async () => {
+		// The tool description is a long way from this JSON by the time the model reads it, and
+		// the failure being prevented is precisely a model reasoning from an empty board.
+		const out = JSON.parse((await t.handler(ctx(buildEnv()) as never, {})).content);
+		expect(out.legend).toMatch(/canWork/);
+		expect(out.legend).toMatch(/IDLE/);
 	});
 
 	it("REFUSES an instanceId outside the supervision graph rather than reading it", async () => {

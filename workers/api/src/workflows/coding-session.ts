@@ -11,6 +11,7 @@ import {
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
 import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionDriver } from "../lib/coding-store.js";
+import { shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
 import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
@@ -75,6 +76,20 @@ export interface CodingSessionParams {
 	 * stranded and lock the session out of every future run.
 	 */
 	driverId?: string | null;
+	/**
+	 * Did THIS run open the session it drives? (#271)
+	 *
+	 * Absent/false means a human (or an earlier run) opened it, and the Pilot leaves it live when
+	 * it finishes. It used to end the session unconditionally, which made delegation single-use:
+	 * `loop-drivers.ts` required a live session, the Pilot consumed it, and the next goal 409'd
+	 * with a message blaming the runner. It also quietly deleted a session the user had opened by
+	 * hand and expected to still be there.
+	 *
+	 * Defaulting to false is the safe direction: the worst case is an idle session left live,
+	 * which the user can end from the Coding tab. The reverse — closing someone else's session —
+	 * is not recoverable.
+	 */
+	sessionOpenedByRun?: boolean;
 }
 
 /** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
@@ -448,16 +463,26 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			result = { outcome: "failed", detail: `run error: ${e instanceof Error ? e.message : String(e)}`, steps: result.steps, transcript: result.transcript };
 		} finally {
 			await step.do("end", async () => {
-				await callRunner<{ ok?: boolean }>(conn, "/coding/end", { sessionId }).catch(() => undefined);
-				// The runner session is now gone — sync the D1 row so it doesn't sit
-				// "active" forever (the row was created active by the /sessions route).
-				const status = result.outcome === "failed" || result.outcome === "max_steps" ? "error" : "ended";
-				// Through `endSession`, not raw SQL: it is the ONE place a session leaves `active`,
-				// so it is the one place the board card can reliably follow (#206). It also covers
-				// `suspended`, which the raw `status = 'active'` predicate here silently skipped —
-				// a Pilot finishing after a `--force` takeover elsewhere left the row suspended
-				// forever with nothing to close it.
-				await endSession(env, instanceId, userId, sessionId, status);
+				// A run closes only the session it OPENED (#271). Ending one a human opened made
+				// delegation single-use and took away a thing the user had created.
+				if (shouldEndSessionAfterRun({ openedByRun: event.payload.sessionOpenedByRun === true })) {
+					await callRunner<{ ok?: boolean }>(conn, "/coding/end", { sessionId }).catch(() => undefined);
+					// The runner session is now gone — sync the D1 row so it doesn't sit
+					// "active" forever (the row was created active by the /sessions route).
+					const status = result.outcome === "failed" || result.outcome === "max_steps" ? "error" : "ended";
+					// Through `endSession`, not raw SQL: it is the ONE place a session leaves `active`,
+					// so it is the one place the board card can reliably follow (#206). It also covers
+					// `suspended`, which the raw `status = 'active'` predicate here silently skipped —
+					// a Pilot finishing after a `--force` takeover elsewhere left the row suspended
+					// forever with nothing to close it.
+					await endSession(env, instanceId, userId, sessionId, status);
+				} else if (event.payload.driverId) {
+					// The session survives, so `endSession` — which is what normally frees the
+					// single-flight claim — never runs. Release it here or the repo is locked out
+					// of every further run for STALE_DRIVER_MS (15 minutes), which would turn
+					// "delegation is single-use" into "delegation is once every quarter hour".
+					await releaseSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId);
+				}
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "outcome", content: `${result.outcome}${result.detail ? ` — ${result.detail}` : ""}` });
 				return null;
 			});

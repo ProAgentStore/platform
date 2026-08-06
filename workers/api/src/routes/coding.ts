@@ -15,7 +15,6 @@ import {
 	engineAuthReport,
 	readEngines,
 	resolveEngine,
-	resolveEngineEnv,
 	type CodingEngine,
 	type EngineAuth,
 	type EngineAuthResolved,
@@ -33,10 +32,8 @@ import {
 	getSession,
 	listRepos,
 	listSessions,
-	reassignSessionNode,
 	reconcileOrphanedSessions,
 	updateRepo,
-	updateRepoClone,
 } from "../lib/coding-store.js";
 import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask } from "./instances-runtime.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
@@ -48,8 +45,9 @@ import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetR
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineUsage } from "../lib/usage.js";
+import { startSessionOnRunner } from "../lib/coding-session-open.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
-import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
+import type { CodingClientType, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 
@@ -65,68 +63,9 @@ function parseJsonOr<T>(raw: string | null | undefined, fallback: T): T {
 	}
 }
 
-/**
- * Ensure a session is live on the user's runner: clone the repo (idempotent on
- * the runner) and launch the CLI. Returns the connection it actually used (null if
- * no runner is connected). Used both when creating a session and when re-attaching
- * an orphaned one (created while the runner was offline, or after a runner restart).
- *
- * IMPORTANT: on a machine switch this RELOCATES the session to the live machine and
- * returns THAT machine's connection — callers retrying a command must use the returned
- * conn, not one they captured earlier (which may point at the now-dead old machine).
- */
-async function startSessionOnRunner(
-	env: Env,
-	instanceId: string,
-	uid: string,
-	session: CodingSessionRecord,
-	repo: CodingRepo,
-): Promise<RunnerConn | null> {
-	let conn = await getSessionRunnerConn(env, instanceId, uid, session);
-	// Machine-switch reclaim. `conn` resolves from the DB (endpoint+token) even for a machine
-	// that's gone offline — the `status` column isn't cleared on disconnect — so verify the
-	// session's own machine actually holds a live relay socket. If it doesn't, but the user is
-	// now running the agent on another machine, relocate the session there so switching laptops
-	// "just works" instead of dead-ending on the offline node. `getBoundRunnerConn` is live +
-	// pin-aware: pinned-elsewhere stays put (returns that node), pinned-to-this-offline → null.
-	const sessionLive = session.runnerNode
-		? await relayConnected(env, instanceId, session.runnerNode).catch(() => false)
-		: await relayConnected(env, instanceId, null).catch(() => false);
-	if (!sessionLive) {
-		const fallback = await getBoundRunnerConn(env, instanceId, uid);
-		if (fallback && normalizeRunnerNode(fallback.runnerNode) !== normalizeRunnerNode(session.runnerNode)) {
-			await reassignSessionNode(env, instanceId, uid, session.id, fallback.runnerNode ?? null);
-			session.runnerNode = fallback.runnerNode ?? null;
-			conn = fallback;
-		}
-	}
-	if (!conn) return null;
-	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
-	const token = owner ? await installationTokenForOwner(env, uid, owner) : null;
-	const engineEnv = await resolveEngineEnv(env, instanceId, uid, session);
-	try {
-		await callRunner(conn, "/coding/start", {
-			sessionId: session.id,
-			repoId: repo.id,
-			// Local checkout → run in that dir (no clone). Else clone to a managed dir.
-			workDir: repo.workdir || undefined,
-			cloneUrl: repo.cloneUrl,
-			branch: repo.branch || undefined,
-			token: token ?? undefined,
-			clientType: session.clientType,
-			// The exact CLI command for this session's engine (Claude default, or a
-			// user-configured Codex/Grok/custom). The runner spawns it.
-			command: session.launchCommand || undefined,
-			env: engineEnv,
-		});
-		await updateRepoClone(env, repo.id, { cloneStatus: "ready", cloneError: null });
-		return conn;
-	} catch (e) {
-		const msg = e instanceof Error ? e.message.slice(0, 300) : String(e);
-		await updateRepoClone(env, repo.id, { cloneStatus: "error", cloneError: msg });
-		return null;
-	}
-}
+// `startSessionOnRunner` moved to `lib/coding-session-open.ts` (#271): it was private to this
+// module, which is why the autonomous delegation path could not open a session and had to 409
+// instead. Same implementation, now reachable from both.
 
 async function getSessionRunnerConn(env: Env, instanceId: string, uid: string, session: CodingSessionRecord) {
 	return getRunnerConn(env, instanceId, uid, session.runnerNode ?? null);

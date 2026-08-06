@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { delegateToInstance } from "./delegate-instance.js";
 import type { Env } from "../types.js";
 
+/** A registered, heartbeating runner — the default state these tests reason from. */
+const RUNTIME_ROW = {
+	instance_id: "sub",
+	endpoint_url: "https://runner.local",
+	token_plaintext: "t",
+	runner_node: "macbook",
+	runner_version: "0.4.32",
+	last_seen_at: "2026-08-06 06:00:00",
+};
+
 /** D1 + workflow stub. `edges` seeds the owner's supervision graph. */
 function buildEnv(
 	edges: Array<[string, string]> = [["sup", "sub"]],
@@ -27,6 +37,10 @@ function buildEnv(
 										: { slug: "doc-chat", category: "productivity", config: null };
 								}
 								if (sql.includes("FROM coding_sessions")) return opts.session ?? null;
+								// A CONNECTED runner. The coding driver reads connectivity before it
+								// does anything now (#271), so without this every coding case would
+								// silently assert against the runner-offline path instead.
+								if (sql.includes("FROM instance_runtimes") || sql.includes("FROM instance_runtime_nodes")) return RUNTIME_ROW;
 								if (sql.includes("FROM delegation_budgets")) {
 									return {
 										id: "new-budget", user_id: "u1", root_instance_id: "sup",
@@ -40,6 +54,8 @@ function buildEnv(
 							},
 							async all() {
 								if (sql.includes("FROM coding_repos")) return { results: opts.repos ?? [] };
+								if (sql.includes("FROM instance_runtimes")) return { results: [RUNTIME_ROW] };
+								if (sql.includes("FROM instance_runtime_nodes")) return { results: [] };
 								if (sql.includes("FROM agent_supervision")) {
 									return {
 										results: edges.map(([s, sub]) => ({
@@ -58,6 +74,15 @@ function buildEnv(
 					},
 				};
 			},
+		},
+		RELAY: {
+			idFromName: (n: string) => n,
+			get: () => ({
+				async fetch(req: Request) {
+					if (new URL(req.url).pathname === "/status") return new Response(JSON.stringify({ connected: true }));
+					return new Response(JSON.stringify({ ok: true }));
+				},
+			}),
 		},
 		AGENT_LOOP: {
 			async create(arg: Record<string, unknown>) {

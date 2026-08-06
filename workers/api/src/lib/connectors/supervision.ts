@@ -23,6 +23,8 @@ import { subordinatesOf } from "../supervision-graph.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "../agent-capabilities.js";
 import { recentRunsForInstances, recentWorkForInstances } from "../instance-work.js";
 import { summarizeSubordinates } from "../subordinate-observation.js";
+import { runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
+import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
 import type { ToolDef } from "../tool-registry.js";
 
 /** Names of the instances a supervisor may drive, with their display names for the model. */
@@ -33,6 +35,8 @@ interface SubordinateRow {
 	subscription: string;
 	/** Resolved per-instance override → agent declaration → per-surface default. */
 	columns: BoardColumn[];
+	/** `capabilities.runtime != null` — does its work need a machine running `pags up`? */
+	requiresRunner: boolean;
 }
 
 async function subordinateSummaries(
@@ -77,12 +81,15 @@ async function subordinateSummaries(
 		} catch {
 			/* malformed config — fall through to the agent's declared columns */
 		}
-		const declared = agentCapabilities({ slug: r.slug ?? undefined, category: r.category ?? undefined, config: r.agent_config ?? undefined }).boardColumns;
+		const caps = agentCapabilities({ slug: r.slug ?? undefined, category: r.category ?? undefined, config: r.agent_config ?? undefined });
 		return {
 			instanceId: r.id,
 			name: displayName ?? r.agent_name ?? r.id,
 			subscription: r.status,
-			columns: override ?? declared,
+			columns: override ?? caps.boardColumns,
+			// Read from the capability registry rather than guessed from the slug — a declarative
+			// agent that needs no local hands must not be reported as "runner offline" (#259).
+			requiresRunner: caps.runtime != null,
 		};
 	});
 }
@@ -105,13 +112,47 @@ async function observeSubordinates(
 	}
 	const userId = ctx.userId ?? "";
 	const ids = subs.map((s) => s.instanceId);
-	// Two statements total, regardless of fan-out — see instance-work.ts.
-	const [work, runs] = await Promise.all([
+	// Two statements for the work picture, regardless of fan-out — see instance-work.ts. The
+	// connectivity read is a third plus one relay probe per subordinate (see MAX_RELAY_PROBES).
+	const [work, runs, facts] = await Promise.all([
 		recentWorkForInstances(ctx.env, userId, ids, limit).catch(() => []),
 		recentRunsForInstances(ctx.env, userId, ids).catch(() => []),
+		runtimeConnectivityMany(ctx.env as never, userId, ids).catch(() => new Map<string, RuntimeFacts>()),
 	]);
 	const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
-	return { content: JSON.stringify({ asOf: new Date().toISOString(), ...view }, null, 2), success: true };
+	// Connectivity is attached HERE rather than inside `summarizeSubordinates` because it is a
+	// live probe, and that function is pure by design (it is the testable-without-a-DB half).
+	const withConnectivity = view.subordinates.map((s) => {
+		const src = subs.find((x) => x.instanceId === s.instanceId);
+		const f = facts.get(s.instanceId);
+		return {
+			...s,
+			connectivity: classifySubordinateConnectivity({
+				requiresRunner: src?.requiresRunner ?? false,
+				hasRuntimeRow: f?.hasRuntimeRow ?? false,
+				relayConnected: f?.relayConnected ?? false,
+				node: f?.node,
+				runnerVersion: f?.runnerVersion,
+				lastSeenAt: f?.lastSeenAt,
+			}),
+		};
+	});
+	return {
+		content: JSON.stringify(
+			{
+				asOf: new Date().toISOString(),
+				// Stated in the payload, not only in the tool description, because the description
+				// is far away by the time the model reads this JSON — and the failure it prevents
+				// is precisely a model reasoning from an empty board to "no runner" (#259).
+				legend: "`connectivity.canWork` is the ONLY field that says whether an agent can be given work now. Empty `work`/`runs` means IDLE — which is normal and ready, not offline.",
+				...view,
+				subordinates: withConnectivity,
+			},
+			null,
+			2,
+		),
+		success: true,
+	};
 }
 
 const NO_SUBORDINATES = "You do not supervise any agents yet. Add a supervision link in Settings first.";
@@ -143,7 +184,11 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			"what finished, what is waiting on a human, and how long anything has been quiet. Call this " +
 			"FIRST whenever you are asked about status, progress, or what is happening, and answer from " +
 			"it — never start a run just to find out. Each item's `status` is that agent's own word for " +
-			"it; `columnTitle` is what THAT agent says the word means.",
+			"it; `columnTitle` is what THAT agent says the word means. " +
+			"`connectivity` is a SEPARATE question from busyness: `connectivity.canWork` says whether " +
+			"an agent is reachable and can be given work now. An agent with no work in flight is IDLE " +
+			"— that is the normal ready state, NOT a reason to refuse. Never infer reachability from " +
+			"empty work, empty runs, or finished sessions; `connectivity` is the only field that says it.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -165,7 +210,8 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		// the per-instance write-consent gate (#90) like every other write tool.
 		scope: "write",
 		description:
-			"Hand a GOAL to an agent you supervise. It runs autonomously with its own tools and knowledge and reports back — you do not micro-manage it. Give an outcome ('get the test suite green'), not a single command. Returns a run id you can check with check_delegation.",
+			"Hand a GOAL to an agent you supervise. It runs autonomously with its own tools and knowledge and reports back — you do not micro-manage it. Give an outcome ('get the test suite green'), not a single command. Returns a run id you can check with check_delegation. " +
+			"It does NOT need an open coding session or a session you prepared — a coding subordinate starts its own. The only thing that blocks delegation is a subordinate whose `connectivity.canWork` is false; a cloud-only agent needs no runner at all. Do not ask the user to set anything up before trying.",
 		jsonSchema: {
 			type: "object",
 			properties: {
