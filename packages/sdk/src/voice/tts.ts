@@ -3,6 +3,23 @@
 import { API, getToken, reportClientError } from "../client.js";
 
 /**
+ * How much of a reply is spoken aloud (#179). Was a bare `1500` inside `cleanForSpeech`,
+ * so a user who wanted the whole of a long answer read out had no way to ask for it, and
+ * a user who only ever wants the gist had no way to cut it short.
+ *
+ * The bounds are not taste, they're physics:
+ * - **Floor 200.** Below roughly two sentences the cap truncates a normal reply mid-thought,
+ *   which reads as "the voice is broken" rather than "I chose a short cap". Anyone wanting
+ *   less than that wants TTS off, not a 20-character cap.
+ * - **Ceiling 4096.** OpenAI's `/v1/audio/speech` REJECTS input longer than 4096 characters,
+ *   so a higher setting would silently 400 the request (or, on the browser voice, queue
+ *   minutes of speech nobody listens to). Uncapped is the one value that must not exist.
+ */
+export const DEFAULT_TTS_MAX_CHARS = 1500;
+export const MIN_TTS_MAX_CHARS = 200;
+export const MAX_TTS_MAX_CHARS = 4096;
+
+/**
  * Prepare text for TTS. Two modes:
  *
  * - **consumer** (default): strip ALL technical noise — paths, URLs, filenames, code,
@@ -11,8 +28,12 @@ import { API, getToken, reportClientError } from "../client.js";
  *   gutting it to "a file … a file" makes the spoken reply useless. Keep identifiers and
  *   file basenames (drop only the long directory chain), and condense only what is
  *   genuinely unspeakable aloud (fenced code, URLs, git hashes).
+ *
+ * `opts.maxChars` caps the spoken length (default {@link DEFAULT_TTS_MAX_CHARS}); it is
+ * clamped here as well as server-side, because this is the last line before the text
+ * reaches a provider that will reject an over-long body.
  */
-export function cleanForSpeech(raw: string, opts: { technical?: boolean } = {}): string {
+export function cleanForSpeech(raw: string, opts: { technical?: boolean; maxChars?: number } = {}): string {
 	let s = raw;
 	// Fenced code blocks are noise read aloud in either mode — summarize.
 	s = s.replace(/```[\s\S]*?```/g, " (code) ");
@@ -46,7 +67,10 @@ export function cleanForSpeech(raw: string, opts: { technical?: boolean } = {}):
 	s = s.replace(/[\u{1F000}-\u{1FFFF}]|[\u{2600}-\u{27BF}]|[\u{FE00}-\u{FEFF}]/gu, "");
 	// Collapse whitespace + cap length.
 	s = s.replace(/\s+/g, " ").trim();
-	return s.slice(0, 1500);
+	const cap = typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)
+		? Math.max(MIN_TTS_MAX_CHARS, Math.min(MAX_TTS_MAX_CHARS, Math.round(opts.maxChars)))
+		: DEFAULT_TTS_MAX_CHARS;
+	return s.slice(0, cap);
 }
 
 export interface TtsOptions {
@@ -60,6 +84,9 @@ export interface TtsOptions {
 	/** Technical agent (code explainer / coding): keep identifiers + file basenames in
 	 *  spoken output instead of gutting them to "a file". Default false (plain speech). */
 	technical?: boolean;
+	/** How much of a reply to speak, in characters (#179). Default
+	 *  {@link DEFAULT_TTS_MAX_CHARS}; clamped to 200–4096 by `cleanForSpeech`. */
+	maxChars?: number;
 }
 
 /**
@@ -78,6 +105,7 @@ export class VoiceTts {
 	speed: number;
 	language: string;
 	technical: boolean;
+	maxChars: number;
 	speaking = false;
 	private _audioCtx: AudioContext | null = null;
 	private _queue: Array<{ text: string; lang?: string }> = [];
@@ -92,6 +120,7 @@ export class VoiceTts {
 		this.speed = opts.speed || 100;
 		this.language = opts.language || "en-US";
 		this.technical = opts.technical === true;
+		this.maxChars = opts.maxChars ?? DEFAULT_TTS_MAX_CHARS;
 		liveTts.add(this);
 	}
 
@@ -107,7 +136,7 @@ export class VoiceTts {
 	 */
 	async speak(text: string, opts: { lang?: string } = {}) {
 		if (!text?.trim()) return;
-		const clean = cleanForSpeech(String(text), { technical: this.technical });
+		const clean = cleanForSpeech(String(text), { technical: this.technical, maxChars: this.maxChars });
 		if (!clean) return;
 		// Claim the floor: cut off any other instance mid-utterance BEFORE we queue ours,
 		// so the Assistant and the Co-pilot never talk over each other (#127).

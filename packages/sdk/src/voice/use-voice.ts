@@ -508,13 +508,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 			ttsRef.current = await createTts(instanceId, { technical: technicalRef.current });
 		} else {
 			// The single TTS instance lives for the whole page session — keep it in sync
-			// with current settings (provider/voice/speed/language can all change in
+			// with current settings (provider/voice/speed/language/length can all change in
 			// Settings mid-session; getVoiceConfig is cached so this is cheap).
 			const cfg = await getVoiceConfig(instanceId);
 			ttsRef.current.provider = cfg.ttsProvider;
 			ttsRef.current.voice = cfg.voice;
 			ttsRef.current.speed = cfg.speed;
 			ttsRef.current.language = cfg.language;
+			ttsRef.current.maxChars = cfg.ttsMaxChars;
 			ttsRef.current.technical = technicalRef.current === true;
 		}
 		return ttsRef.current;

@@ -106,6 +106,21 @@ describe("sanitizeVoiceSettings — the clamps, now in ONE place", () => {
 		expect(low.sensitivity).toBe(0.4);
 	});
 
+	// #179 — spoken length is an account preference like every other voice tunable, and it must
+	// clamp to the SAME 200–4096 window the SDK enforces, or a value accepted here would be
+	// silently rewritten on the client and the saved number would stop describing what happens.
+	it("clamps ttsMaxChars to 200–4096 and defaults to 1500", () => {
+		expect(defaultVoiceSettings().ttsMaxChars).toBe(1500);
+		expect(sanitizeVoiceSettings({ ttsMaxChars: 1 }).ttsMaxChars).toBe(200);
+		expect(sanitizeVoiceSettings({ ttsMaxChars: 999999 }).ttsMaxChars).toBe(4096);
+		expect(sanitizeVoiceSettings({ ttsMaxChars: 800 }).ttsMaxChars).toBe(800);
+		// Absent means "inherit", not "reset" — the same presence rule as every other field.
+		const account = sanitizeVoiceSettings({ ttsMaxChars: 3000 });
+		expect(sanitizeVoiceSettings({ speed: 90 }, account).ttsMaxChars).toBe(3000);
+		expect(resolveVoice(account, { ttsMaxChars: 400 }).ttsMaxChars).toBe(400);
+		expect(resolveVoice(account, undefined).ttsMaxChars).toBe(3000);
+	});
+
 	it("does NOT round sensitivity — it is fractional", () => {
 		// Reusing the integer clamp here would collapse 0.8 to 1 and quietly change every user's
 		// mic threshold.

@@ -1,6 +1,6 @@
 import { api } from "../client.js";
 import { DEFAULT_STT_MODEL, VoiceStt, type SttOptions } from "./stt.js";
-import { VoiceTts } from "./tts.js";
+import { DEFAULT_TTS_MAX_CHARS, MAX_TTS_MAX_CHARS, MIN_TTS_MAX_CHARS, VoiceTts } from "./tts.js";
 
 interface VoiceConfig {
 	sttProvider: string;
@@ -17,6 +17,10 @@ interface VoiceConfig {
 	/** Hands-free max recording duration (ms): stop listening + submit after this long
 	 *  regardless, so a runaway/open mic can't record forever. Default 60000 (60s). */
 	maxDictationMs: number;
+	/** How much of a reply is read aloud, in characters (#179). A long answer is fine to
+	 *  read but exhausting to listen to, and OpenAI TTS hard-rejects over 4096 — so this is
+	 *  bounded 200–4096 rather than offered as "unlimited". Default 1500. */
+	ttsMaxChars: number;
 	/** Mic sensitivity for silence detection (0.4–2): higher = more sensitive
 	 *  (needs a smaller gap above the noise floor to count as speech). Default 1. */
 	sensitivity: number;
@@ -89,6 +93,7 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		language: (vs.language as string) || "en-US",
 		silenceMs: clamp(vs.silenceMs, 500, 6000, 1500),
 		maxDictationMs: clamp(vs.maxDictationMs, 10000, 300000, 60000),
+		ttsMaxChars: clamp(vs.ttsMaxChars, MIN_TTS_MAX_CHARS, MAX_TTS_MAX_CHARS, DEFAULT_TTS_MAX_CHARS),
 		// Conservative default (0.8, was 1): lower = needs a clearer gap above the noise floor,
 		// so background noise is less likely to be treated as speech. Raise it for a soft voice.
 		sensitivity: clamp(vs.sensitivity, 0.4, 2, 0.8),
@@ -158,6 +163,7 @@ export async function createTts(
 		speed: cfg.speed,
 		language: cfg.language,
 		technical: opts.technical,
+		maxChars: cfg.ttsMaxChars,
 	});
 }
 

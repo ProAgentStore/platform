@@ -123,6 +123,16 @@ describe("resolveVoiceConfig — clamping", () => {
 		expect(resolveVoiceConfig({ silenceMs: "nope" }, false).silenceMs).toBe(1500);
 	});
 
+	// #179 — how much of a reply is read aloud. 4096 is OpenAI TTS's hard input limit, so a
+	// larger saved value must be clamped rather than passed through into a 400.
+	it("clamps ttsMaxChars to 200–4096 and defaults to 1500", () => {
+		expect(resolveVoiceConfig({ ttsMaxChars: 10 }, false).ttsMaxChars).toBe(200);
+		expect(resolveVoiceConfig({ ttsMaxChars: 99999 }, false).ttsMaxChars).toBe(4096);
+		expect(resolveVoiceConfig({ ttsMaxChars: 800 }, false).ttsMaxChars).toBe(800);
+		expect(resolveVoiceConfig({}, false).ttsMaxChars).toBe(1500);
+		expect(resolveVoiceConfig({ ttsMaxChars: "nope" }, false).ttsMaxChars).toBe(1500);
+	});
+
 	it("clamps sensitivity to 0.4–2 and defaults to a conservative 0.8", () => {
 		expect(resolveVoiceConfig({ sensitivity: 0 }, false).sensitivity).toBe(0.4);
 		expect(resolveVoiceConfig({ sensitivity: 5 }, false).sensitivity).toBe(2);

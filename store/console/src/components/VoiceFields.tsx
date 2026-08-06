@@ -30,6 +30,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 	const [ttsProvider, setTtsProvider] = useState("browser");
 	const [ttsVoice, setTtsVoice] = useState("alloy");
 	const [speed, setSpeed] = useState(100);
+	const [ttsMaxChars, setTtsMaxChars] = useState(1500);
 	const [silenceMs, setSilenceMs] = useState(1500);
 	const [maxDictationMs, setMaxDictationMs] = useState(60000);
 	const [sensitivity, setSensitivity] = useState(0.8);
@@ -55,6 +56,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 		setTtsProvider(typeof vs.provider === "string" ? vs.provider : "browser");
 		setTtsVoice(((vs.openai as Record<string, unknown>)?.voice as string) || "alloy");
 		setSpeed(typeof vs.speed === "number" ? vs.speed : 100);
+		setTtsMaxChars(typeof vs.ttsMaxChars === "number" ? vs.ttsMaxChars : 1500);
 		setSilenceMs(typeof vs.silenceMs === "number" ? vs.silenceMs : 1500);
 		setMaxDictationMs(typeof vs.maxDictationMs === "number" ? vs.maxDictationMs : 60000);
 		setSensitivity(typeof vs.sensitivity === "number" ? vs.sensitivity : 0.8);
@@ -166,6 +168,27 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 					<option value={125}>Fast — 1.25×</option>
 					<option value={150}>Faster — 1.5×</option>
 				</select>
+			</div>
+
+			{/* #179 — this was a hardcoded 1500-char cut inside cleanForSpeech, so a long answer
+			    was silently clipped mid-sentence with no way to hear the rest (or, for someone who
+			    only wants the gist, no way to make it shorter). The list stops at 4096 because
+			    OpenAI TTS refuses a longer body — "read all of it" is not a value we can honour. */}
+			<div className="mt-3">
+				<label htmlFor="voice-tts-max-chars" className="block text-xs font-semibold mb-1">How much to read aloud</label>
+				<select
+					id="voice-tts-max-chars"
+					value={ttsMaxChars}
+					onChange={(e) => { setTtsMaxChars(Number(e.target.value)); saveVoice({ ttsMaxChars: Number(e.target.value) }); }}
+					className="text-sm bg-paper border border-line rounded-lg px-3 py-1.5"
+				>
+					<option value={400}>Just the gist — first ~400 characters</option>
+					<option value={800}>Short — first ~800 characters</option>
+					<option value={1500}>Standard — first ~1500 characters</option>
+					<option value={3000}>Long — first ~3000 characters</option>
+					<option value={4096}>Maximum — ~4096 characters</option>
+				</select>
+				<p className="text-[0.7rem] text-muted-soft mt-1">A long reply is cut off at this point when spoken — the full text is always on screen. Maximum is the most the natural (OpenAI) voice will accept in one go.</p>
 			</div>
 
 			<div className="border-t border-line my-3" />

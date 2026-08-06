@@ -49,6 +49,24 @@ describe("cleanForSpeech", () => {
 	it("caps the spoken length at 1500 chars", () => {
 		expect(cleanForSpeech("a".repeat(3000)).length).toBe(1500);
 	});
+
+	// #179 — the cap used to be a literal, so neither a longer nor a shorter reading was reachable.
+	it("honours an explicit maxChars", () => {
+		expect(cleanForSpeech("a".repeat(9000), { maxChars: 400 }).length).toBe(400);
+		expect(cleanForSpeech("a".repeat(9000), { maxChars: 4096 }).length).toBe(4096);
+	});
+
+	it("clamps maxChars to 200–4096 — a useless cap and an over-long one are both refused", () => {
+		// Under 200 the cap truncates an ordinary reply mid-thought; over 4096 the OpenAI
+		// speech endpoint rejects the body outright, so neither extreme may reach a provider.
+		expect(cleanForSpeech("a".repeat(9000), { maxChars: 5 }).length).toBe(200);
+		expect(cleanForSpeech("a".repeat(9000), { maxChars: 100000 }).length).toBe(4096);
+		expect(cleanForSpeech("a".repeat(9000), { maxChars: Number.NaN }).length).toBe(1500);
+	});
+
+	it("applies maxChars in technical mode too", () => {
+		expect(cleanForSpeech("b".repeat(9000), { technical: true, maxChars: 300 }).length).toBe(300);
+	});
 });
 
 describe("cleanForSpeech (technical mode)", () => {

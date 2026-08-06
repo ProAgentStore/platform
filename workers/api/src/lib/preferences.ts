@@ -51,6 +51,10 @@ export interface VoiceSettings {
 	speed: number;
 	silenceMs: number;
 	maxDictationMs: number;
+	/** How much of a reply is read aloud, in characters (#179). Bounded 200–4096: below ~200 the
+	 *  cap truncates an ordinary reply mid-thought, and OpenAI TTS rejects input over 4096, so
+	 *  "unlimited" is not an offerable value. Mirrors the SDK clamp in `voice/tts.ts`. */
+	ttsMaxChars: number;
 	sttMode: "browser" | "openai";
 	sttModel: string;
 	sensitivity: number;
@@ -105,6 +109,7 @@ export function defaultVoiceSettings(): VoiceSettings {
 		speed: 100,
 		silenceMs: 1500,
 		maxDictationMs: 60000,
+		ttsMaxChars: 1500,
 		sttMode: "browser",
 		sttModel: STT_MODELS[0],
 		// Conservative (0.8): lower means background noise is less likely to read as speech.
@@ -141,6 +146,7 @@ export function sanitizeVoiceSettings(raw: unknown, base: VoiceSettings = defaul
 		speed: has("speed") ? num(o.speed, 50, 200, base.speed) : base.speed,
 		silenceMs: has("silenceMs") ? num(o.silenceMs, 500, 6000, base.silenceMs) : base.silenceMs,
 		maxDictationMs: has("maxDictationMs") ? num(o.maxDictationMs, 10000, 300000, base.maxDictationMs) : base.maxDictationMs,
+		ttsMaxChars: has("ttsMaxChars") ? num(o.ttsMaxChars, 200, 4096, base.ttsMaxChars) : base.ttsMaxChars,
 		sttMode: o.sttMode === "openai" ? "openai" : o.sttMode === "browser" ? "browser" : base.sttMode,
 		sttModel: STT_MODELS.includes(o.sttModel as never) ? String(o.sttModel) : base.sttModel,
 		// Not rounded — sensitivity is fractional (0.4–2), so `num`'s Math.round would collapse it.
