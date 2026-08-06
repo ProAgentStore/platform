@@ -98,6 +98,28 @@ export interface TtsOptions {
  */
 const liveTts = new Set<VoiceTts>();
 
+/**
+ * ONE Web Audio context for OpenAI TTS, page-wide (#278).
+ *
+ * It used to be per-instance, created lazily and `close()`d on dispose, which was right about
+ * the leak (browsers cap how many contexts a page may open) and wrong about the gesture. iOS
+ * and Safari only let a context start from a real user tap, and every `useVoice` primes one on
+ * the mode-switch tap. That priming is a property of the CONTEXT, so a route change — which
+ * unmounts the page, disposes its VoiceTts and closes its context — threw the permission away:
+ * the next agent built a fresh, suspended context outside any gesture and silently degraded to
+ * the browser voice. Switching agents by voice (#277) makes that a routine event rather than a
+ * rare one.
+ *
+ * A single shared context answers both: one per page can't leak, and once a tap has started it
+ * the whole app keeps speaking across navigations. Instances still own their own queue and
+ * source node, so `cancel()` remains per-instance and speech stays globally exclusive.
+ */
+let _sharedCtx: AudioContext | null = null;
+function sharedAudioCtx(): AudioContext {
+	if (!_sharedCtx || _sharedCtx.state === "closed") _sharedCtx = new AudioContext();
+	return _sharedCtx;
+}
+
 export class VoiceTts {
 	provider: string;
 	apiKey: string;
@@ -107,7 +129,6 @@ export class VoiceTts {
 	technical: boolean;
 	maxChars: number;
 	speaking = false;
-	private _audioCtx: AudioContext | null = null;
 	private _queue: Array<{ text: string; lang?: string }> = [];
 	private _processing = false;
 	private _currentSource: AudioBufferSourceNode | null = null;
@@ -172,8 +193,8 @@ export class VoiceTts {
 	async unlock() {
 		if (this.provider === "openai") {
 			try {
-				if (!this._audioCtx) this._audioCtx = new AudioContext();
-				if (this._audioCtx.state !== "running") await this._audioCtx.resume();
+				const ctx = sharedAudioCtx();
+				if (ctx.state !== "running") await ctx.resume();
 			} catch { /* falls back to browser voice at speak time */ }
 		}
 		try {
@@ -201,16 +222,13 @@ export class VoiceTts {
 		if (window.speechSynthesis) speechSynthesis.cancel();
 	}
 
-	/** Release the Web Audio context — call on teardown (unmount). Without this, each
-	 *  mounted VoiceTts leaks an AudioContext, and browsers cap how many can exist
-	 *  before `new AudioContext()` throws and TTS stops working entirely. */
+	/** Teardown (unmount): stop this instance's speech and leave the roster. The Web Audio
+	 *  context is deliberately NOT closed — it is shared page-wide (see sharedAudioCtx), so
+	 *  there is nothing per-instance left to leak, and closing it here is what used to throw
+	 *  away the iOS gesture priming on every navigation. */
 	dispose() {
 		this.cancel();
 		liveTts.delete(this);
-		if (this._audioCtx) {
-			this._audioCtx.close().catch(() => {});
-			this._audioCtx = null;
-		}
 	}
 
 	private _speakBrowser(text: string, langOverride?: string): Promise<void> {
@@ -293,30 +311,30 @@ export class VoiceTts {
 				reportClientError("voice-tts", "OpenAI TTS returned an empty audio body — using browser voice");
 				return this._speakBrowser(text);
 			}
-			if (!this._audioCtx) this._audioCtx = new AudioContext();
+			const ctx = sharedAudioCtx();
 			// iOS/Safari parks the context in "suspended" (no gesture yet) or "interrupted"
 			// (Siri, a call, or another app grabbed the audio session). BOTH can be revived
 			// with resume() — the old code only tried "suspended", so a transient iOS
 			// interruption dropped every reply to the browser voice AND logged a false error.
-			if (this._audioCtx.state !== "running") {
-				try { await this._audioCtx.resume(); } catch { /* recovers below, or falls back */ }
+			if (ctx.state !== "running") {
+				try { await ctx.resume(); } catch { /* recovers below, or falls back */ }
 			}
 			// Still not running (needs a fresh user gesture): playing OpenAI TTS would produce
 			// NO sound, silently. Fall back to the browser voice (needs no AudioContext) and
 			// surface it — but only now that resume() genuinely failed, not on every blip.
-			if (this._audioCtx.state !== "running") {
-				reportClientError("voice-tts", `AudioContext is "${this._audioCtx.state}" (Web Audio blocked) — using browser voice`);
+			if (ctx.state !== "running") {
+				reportClientError("voice-tts", `AudioContext is "${ctx.state}" (Web Audio blocked) — using browser voice`);
 				return this._speakBrowser(text);
 			}
-			const audioBuf = await this._audioCtx.decodeAudioData(
+			const audioBuf = await ctx.decodeAudioData(
 				arrayBuf.slice(0),
 			);
 			// cancel() bumped the generation while we were fetching/decoding — abort so
 			// we don't start playing audio the user already tried to stop (tap/Esc).
 			if (gen !== this._gen) return;
-			const source = this._audioCtx.createBufferSource();
+			const source = ctx.createBufferSource();
 			source.buffer = audioBuf;
-			source.connect(this._audioCtx.destination);
+			source.connect(ctx.destination);
 			this._currentSource = source;
 			await new Promise<void>((resolve) => {
 				source.onended = () => resolve();

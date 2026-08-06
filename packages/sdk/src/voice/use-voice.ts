@@ -46,7 +46,7 @@ import { isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
+import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
@@ -92,6 +92,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 	 * exactly the old behaviour.
 	 */
 	onRecoveredText?: (text: string) => void;
+	/**
+	 * The user said "next" (#277) — move them to the agent that is asking for them.
+	 *
+	 * Passing a handler is what ENABLES the command: this hook knows nothing about agent
+	 * rosters, so on a surface with no switcher (the Coder's Co-pilot) "next" stays an
+	 * ordinary word and reaches the agent as speech. `carryMode` is the voice mode to resume
+	 * on the other side, so hands-free survives the move rather than dumping the user on a
+	 * silent screen they then have to touch — which would defeat the whole point.
+	 *
+	 * The session is already torn down when this fires: TTS cut, the pending utterance
+	 * resolved (recovered via `onRecoveredText` if it held real words). See
+	 * {@link prepareConversationSwitch} — the same guard #279's agent-mediated transfer will
+	 * use, so the two triggers can never disagree about the mic.
+	 */
+	onNext?: (carry: { carryMode: VoiceMode | null }) => void;
 	/** Vocabulary-bias prompt for transcription (see voice/prompt.ts) so domain words
 	 *  aren't mis-heard (a developer's "bugs" shouldn't transcribe as "bars"). */
 	transcribePrompt?: string;
@@ -260,9 +275,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 						) {
 							const cmd = matchVoiceCommand(
 								text,
-								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current },
+								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current },
 								voiceLangRef.current,
-								{ muted: mutedRef.current },
+								{ muted: mutedRef.current, canSwitch: canSwitchRef.current },
 							);
 							if (cmd) {
 								// Act NOW — the user asked for silence and should get it immediately,
@@ -277,6 +292,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 								if (cmd === "mute") muteFromCommandRef.current();
 								else if (cmd === "unmute") unmuteFromCommandRef.current();
 								else if (cmd === "exit") exitFromCommandRef.current();
+								// "next" LEAVES this agent, so — unlike mute — the clip still recording
+								// must not go on to be transcribed and sent here. Latch the utterance and
+								// let nextFromCommand decide what happens to the words already heard
+								// (recovered to the composer, never fired at the agent being left).
+								else if (cmd === "next") { handledUtteranceRef.current = true; nextFromCommandRef.current(); }
 								else if (cmd === "repeat") { handledUtteranceRef.current = true; flushSync(() => clearVoiceText()); repeatLastRef.current(); }
 								return;
 							}
@@ -370,6 +390,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 	onSendRef.current = opts.onSend;
 	const onRecoveredTextRef = useRef(opts.onRecoveredText);
 	onRecoveredTextRef.current = opts.onRecoveredText;
+	const onNextRef = useRef(opts.onNext);
+	onNextRef.current = opts.onNext;
+	/** "next" is only a COMMAND where something can act on it (#277) — see the option's doc.
+	 *  A ref so the matchers read it live rather than closing over the mount-time value. */
+	const canSwitchRef = useRef(false);
+	canSwitchRef.current = !!opts.onNext;
+	/** Declared up top (like ctrlSttRef) because the four command call sites are defined ABOVE
+	 *  the teardown this needs — see `nextFromCommand`, assigned far below. */
+	const nextFromCommandRef = useRef<() => void>(() => {});
 	// Ref so a changing prompt (e.g. repos attach later) is picked up on the next mic start.
 	const transcribePromptRef = useRef(opts.transcribePrompt);
 	transcribePromptRef.current = opts.transcribePrompt;
@@ -472,6 +501,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const muteWordsRef = useRef<string[]>([]);
 	const unmuteWordsRef = useRef<string[]>([]);
 	const exitWordsRef = useRef<string[]>([]);
+	const nextWordsRef = useRef<string[]>([]);
 	const stopWordsRef = useRef<string[]>([]);
 	// Say this (normalized) word/phrase while the agent is speaking to halt playback. Empty ⇒
 	// off; when set, the recognizer is kept alive through TTS so it can hear it.
@@ -508,6 +538,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		muteWordsRef.current = c.muteWords;
 		unmuteWordsRef.current = c.unmuteWords;
 		exitWordsRef.current = c.exitWords;
+		nextWordsRef.current = c.nextWords;
 		stopWordsRef.current = c.stopWords;
 		stopSpeechKeywordRef.current = c.stopSpeechKeyword;
 		confirmLanguageRef.current = c.confirmLanguage;
@@ -735,13 +766,16 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// muted (and mute/repeat are inert there); see matchVoiceCommand.
 		const cmd = matchVoiceCommand(
 			text,
-			{ mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current },
+			{ mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current },
 			voiceLangRef.current,
-			{ muted: mutedRef.current },
+			{ muted: mutedRef.current, canSwitch: canSwitchRef.current },
 		);
 		if (cmd === "mute") muteFromCommandRef.current();
 		else if (cmd === "unmute") unmuteFromCommandRef.current();
 		else if (cmd === "exit") exitFromCommandRef.current();
+		// This listener is the ONLY one running while the agent speaks or thinks and the mic is
+		// closed — i.e. exactly when a hands-free user has nothing to look at and most wants out.
+		else if (cmd === "next") nextFromCommandRef.current();
 	}, []);
 	const handleControlResultRef = useRef(handleControlResult);
 	handleControlResultRef.current = handleControlResult;
@@ -836,9 +870,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const cmd = combined
 				? matchVoiceCommand(
 						combined,
-						{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current },
+						{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current },
 						voiceLangRef.current,
-						{ muted: mutedRef.current },
+						{ muted: mutedRef.current, canSwitch: canSwitchRef.current },
 					)
 				: null;
 			if (cmd) {
@@ -848,6 +882,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (cmd === "repeat") {
 					flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
 					repeatLastRef.current();
+				} else if (cmd === "next") {
+					// The utterance WAS the command, so clear it first: nextFromCommand would
+					// otherwise "recover" the word "next" into the composer of the agent we land on.
+					flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+					nextFromCommandRef.current();
 				} else {
 					flushSync(() => clearVoiceText());
 					if (cmd === "mute") muteFromCommandRef.current();
@@ -860,7 +899,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 		// Conversation mode.
 		if (convoOnRef.current) {
-			const cmdWords = { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current };
+			const cmdWords = { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current };
 			// Finalize a hands-free turn: honor a repeat/mute command, else strip a trailing
 			// stop-word and send. Shared by the Whisper path, the silence timer, and the
 			// stop-word early-flush so all three behave identically.
@@ -869,12 +908,16 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (maxDictationTimerRef.current) { clearTimeout(maxDictationTimerRef.current); maxDictationTimerRef.current = null; }
 				pendingTextRef.current = "";
 				let body = msg;
+				// "…, next" is a message AND a departure, and the ORDER is the point: the message
+				// belongs to the agent being LEFT, so it is sent from here before the switch tears
+				// the session down. Switching first would fire it at whoever we land on.
+				let switchAfter = false;
 				if (commandsEnabledRef.current) {
 					// A control word at the END of a turn is BOTH a command and a finished message
 					// ("run the tests, mute"). Acting on it and dropping the turn threw away what
 					// the user dictated — they asked for silence and lost their request with it.
 					// Split instead: apply the command, send what came before.
-					const split = splitTrailingCommand(msg, cmdWords, voiceLangRef.current, { muted: mutedRef.current });
+					const split = splitTrailingCommand(msg, cmdWords, voiceLangRef.current, { muted: mutedRef.current, canSwitch: canSwitchRef.current });
 					body = split.text;
 					if (split.command === "repeat") {
 						flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
@@ -884,9 +927,16 @@ export function useVoice(instanceId: string | undefined, opts: {
 					if (split.command === "mute") muteFromCommandRef.current();
 					else if (split.command === "unmute") unmuteFromCommandRef.current();
 					else if (split.command === "exit") exitFromCommandRef.current();
+					else if (split.command === "next") switchAfter = true;
 				}
 				const t = stripStopWord(body, stopWordsRef.current).text.trim();
-				if (!t) { flushSync(() => clearVoiceText()); return; } // stop-word only / empty — nothing to send
+				if (!t) {
+					// Nothing to send — the turn was the command. Leave now rather than sitting on
+					// a mic the user has already walked away from.
+					flushSync(() => clearVoiceText());
+					if (switchAfter) nextFromCommandRef.current();
+					return;
+				}
 				flushSync(() => {
 					clearVoiceText();
 					stopAudioMonitor();
@@ -896,6 +946,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 					playThinkingChime();
 				});
 				emitSendRef.current(t);
+				// The reply to this turn lands in the agent's own transcript and outlives the tab
+				// (#252) — the #278 indicator is what makes that visible from wherever we go next.
+				if (switchAfter) nextFromCommandRef.current();
 			};
 			finalizeRef.current = finalize; // so the max-duration timer can end the turn identically
 			// Whisper: `text` is the full transcribed turn (our VAD already detected the
@@ -956,12 +1009,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 			if (commandsEnabledRef.current) {
 				const cmd = matchVoiceCommand(
 					text.trim(),
-					{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current },
+					{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current },
 					voiceLangRef.current,
-					{ muted: mutedRef.current },
+					{ muted: mutedRef.current, canSwitch: canSwitchRef.current },
 				);
 				if (cmd === "repeat") { repeatLastRef.current(); return; }
 				if (cmd === "mute") { muteFromCommandRef.current(); return; }
+				// clearVoiceText already ran in the flushSync above, so there is no pending
+				// utterance for the switch to mistake for words worth recovering.
+				if (cmd === "next") { nextFromCommandRef.current(); return; }
 			}
 			const sent = stripStopWord(text.trim(), stopWordsRef.current).text.trim();
 			if (sent) emitSendRef.current(sent);
@@ -1136,6 +1192,41 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [stopAudioMonitor, releaseWakeLock, setPaused, clearVoiceText]);
 	const stopConvoRef = useRef(stopConvo);
 	stopConvoRef.current = stopConvo;
+
+	/**
+	 * "next" voice command (#277) — hand the conversation to the agent that is asking for you.
+	 *
+	 * Unlike the other four commands this one does not change a setting: it ENDS the session on
+	 * this agent and asks the consumer to open another. The order is the whole reason the
+	 * decision is a pure function (`prepareConversationSwitch`) instead of four lines repeated at
+	 * each of the command call sites:
+	 *
+	 *   1. resolve what the switch would destroy, from ONE snapshot;
+	 *   2. hand back any real words it would have destroyed (the #175 contract);
+	 *   3. cut the outgoing agent's TTS — it must not talk over the agent you arrive at;
+	 *   4. stop the mic here, and tell the consumer which mode to REOPEN it in over there.
+	 *
+	 * `stopConvo` also releases the app-wide hands-free slot, so the session started on the
+	 * other agent claims it cleanly rather than racing a recognizer on its way out. The consumer
+	 * then navigates, which unmounts this hook — nothing after `onNext` may assume otherwise.
+	 */
+	const nextFromCommand = useCallback(() => {
+		const prep = prepareConversationSwitch({
+			mode: resolveVoiceMode(convoOnRef.current, speakOnRef.current),
+			ttsSpeaking: !!ttsRef.current?.speaking,
+			dictation: dictationRef.current,
+		});
+		if (prep.recoverText && !isNoiseTranscript(prep.recoverText)) onRecoveredTextRef.current?.(prep.recoverText);
+		if (prep.cancelSpeech) ttsRef.current?.cancel();
+		setSpeaking(false);
+		speakEndedAtRef.current = Date.now();
+		mutedRef.current = false;
+		setMuted(false);
+		stopConvoRef.current();
+		clearVoiceText();
+		onNextRef.current?.({ carryMode: prep.carryMode });
+	}, [clearVoiceText]);
+	nextFromCommandRef.current = nextFromCommand;
 
 	// One hands-free session app-wide: entering hands-free stops any OTHER active session first,
 	// then claims the shared slot; leaving it (or unmounting) releases the slot. Keyed on convoOn

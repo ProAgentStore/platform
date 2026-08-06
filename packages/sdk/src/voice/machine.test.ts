@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, resolveToggleAction, reduceDictation, dictationDiverged, type Dictation } from "./machine.js";
+import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, type Dictation } from "./machine.js";
 
 const NOW = 1_000_000;
 
@@ -246,5 +246,49 @@ describe("dictationDiverged (#281 — a lost tail should be observable, not a va
 	});
 	it("nothing heard live (iOS, no gate) can never accuse the final", () => {
 		expect(dictationDiverged("", "a perfectly good transcript")).toBe(false);
+	});
+});
+
+describe("prepareConversationSwitch (#277/#279 — one guard for changing who you talk to)", () => {
+	const dict = (over: Partial<Dictation> = {}): Dictation => ({ text: "", status: "dictating", startedAt: NOW, heard: "", ...over });
+
+	// The whole reason hands-free breaks today: switching agent has to keep the mic ON the other
+	// side, or "next" would drop the user into a silent screen they then have to touch.
+	it("carries the voice mode across so hands-free stays hands-free", () => {
+		expect(prepareConversationSwitch({ mode: "handsfree", ttsSpeaking: false, dictation: null }).carryMode).toBe("handsfree");
+		expect(prepareConversationSwitch({ mode: "ptt", ttsSpeaking: false, dictation: null }).carryMode).toBe("ptt");
+	});
+
+	// The mirror of that, and the privacy half of #278: a typist must not land in a live mic.
+	it("carries nothing when the user was typing", () => {
+		expect(prepareConversationSwitch({ mode: "text", ttsSpeaking: false, dictation: null }).carryMode).toBeNull();
+	});
+
+	// The agent you are leaving must not keep talking over the one you arrive at — the switch
+	// has to be audible as a switch, which is what the spoken announcement is for.
+	it("cuts the outgoing agent's speech, and only when it is speaking", () => {
+		expect(prepareConversationSwitch({ mode: "handsfree", ttsSpeaking: true, dictation: null }).cancelSpeech).toBe(true);
+		expect(prepareConversationSwitch({ mode: "handsfree", ttsSpeaking: false, dictation: null }).cancelSpeech).toBe(false);
+	});
+
+	// #175's loss class, in its new form: "next" heard by the control listener while a Whisper
+	// clip of REAL words is mid-upload. Sending them is wrong (that thread is gone); dropping
+	// them silently is the bug. They go back to the composer.
+	it("recovers words that were spoken for the agent being left", () => {
+		const p = prepareConversationSwitch({
+			mode: "handsfree",
+			ttsSpeaking: false,
+			dictation: dict({ text: "run the deploy", status: "transcribing", heard: "run the deploy" }),
+		});
+		expect(p.recoverText).toBe("run the deploy");
+		expect(p.clearDictation).toBe(true);
+	});
+
+	// The common case: the utterance WAS the command, so the caller has already cleared it and
+	// there is nothing to hand back. Recovering "next" into the composer would be absurd.
+	it("recovers nothing when the utterance was the command itself", () => {
+		const p = prepareConversationSwitch({ mode: "handsfree", ttsSpeaking: false, dictation: null });
+		expect(p.recoverText).toBe("");
+		expect(p.clearDictation).toBe(false);
 	});
 });

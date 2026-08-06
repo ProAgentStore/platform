@@ -3,6 +3,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useAuth } from "../lib/AuthContext";
 import { useNavHidden, useHeaderSlotContent } from "../lib/HeaderContext";
 import ErrorBoundary from "./ErrorBoundary";
+import ConversationPill from "./ConversationPill";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Zap, Bell, Menu, BellRing, X, Bot, Library, Server, BarChart3, Wrench, Terminal, Gauge, SlidersHorizontal } from "lucide-react";
@@ -132,9 +133,13 @@ export default function Layout() {
 					</div>
 				)}
 
-				{/* Right: notifications + avatar — always visible */}
+				{/* Right: conversation indicator + notifications + avatar — always visible.
+				    The pill sits FIRST so the destinations you can always reach (bell, avatar)
+				    keep their position; it renders nothing unless a conversation is live
+				    somewhere else, so the bar is unchanged the rest of the time (#278). */}
 				{user && (
 					<span className={`flex items-center shrink-0 ${navHidden ? "gap-1.5" : "gap-2.5"}`}>
+						<ConversationPill />
 						<NavLink to="/notifications" className="relative no-underline text-muted" title="Notifications">
 							<Bell size={navHidden ? 16 : 18} />
 							{unreadCount > 0 && (

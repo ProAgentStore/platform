@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./lib/AuthContext";
 import { HeaderProvider } from "./lib/HeaderContext";
+import { ConversationProvider } from "./lib/ConversationContext";
 import ErrorBoundary from "./components/ErrorBoundary";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
@@ -35,7 +36,10 @@ function AuthGate() {
 
 	if (!user) return <Login />;
 
+	// Inside the router (it navigates) and outside the routes (it must survive them): the
+	// conversation you are in is a property of the APP, not of the instance page (#278).
 	return (
+		<ConversationProvider>
 		<Routes>
 			<Route element={<Layout />}>
 				<Route index element={<DefaultRedirect />} />
@@ -57,6 +61,7 @@ function AuthGate() {
 				<Route path="*" element={<DefaultRedirect />} />
 			</Route>
 		</Routes>
+		</ConversationProvider>
 	);
 }
 

@@ -24,6 +24,10 @@ export { createTts } from "./voice/config.js";
 // on the very next mic start rather than the one after it.
 export { invalidateVoiceConfig } from "./voice/config.js";
 export type { Dictation, DictationStatus, VoicePhase } from "./voice/machine.js";
+// The ONE guard for changing which agent you are talking to (#277/#279) — exported so a
+// consumer driving a switch from the UI side (a tap on the conversation indicator) makes the
+// same decision the voice command does.
+export { prepareConversationSwitch, type SwitchPrep } from "./voice/machine.js";
 export type { VoiceTts } from "./voice/tts.js";
 
 /** Call `fn` every `ms` milliseconds while the component is mounted (and `enabled`). */

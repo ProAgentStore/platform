@@ -108,10 +108,10 @@ export function resolveVoiceStatus(input: {
 }
 
 /** A spoken command the hook acts on locally instead of sending as a chat message. */
-export type VoiceCommand = "repeat" | "mute" | "unmute" | "exit";
+export type VoiceCommand = "repeat" | "mute" | "unmute" | "exit" | "next";
 
 /** Per-instance overrides for the command keywords (Settings → Voice). Empty/absent =
- *  use the built-in defaults for repeat/mute/unmute/exit; stop-words are OFF unless configured. */
+ *  use the built-in defaults for repeat/mute/unmute/exit/next; stop-words are OFF unless configured. */
 export interface VoiceCommandWords {
 	/** Phrases that re-speak the last reply. Overrides the built-in multilingual set. */
 	repeat?: string[];
@@ -121,6 +121,8 @@ export interface VoiceCommandWords {
 	unmute?: string[];
 	/** Phrases that leave voice entirely and return to text mode (#165). */
 	exit?: string[];
+	/** Phrases that move you to the next agent asking for you (#277). */
+	next?: string[];
 }
 
 /** "Unmute" phrasings per language. The mirror of MUTE_BY_LANG — matched ONLY while muted
@@ -153,6 +155,34 @@ const EXIT_BY_LANG: Record<string, string[]> = {
 	ja: ["音声モード終了", "テキストモード"],
 	ko: ["음성 모드 종료", "텍스트 모드"],
 	hi: ["वॉइस बंद करो", "टेक्स्ट मोड"],
+};
+
+/**
+ * "Next agent" phrasings per language (#277) — move to the agent that is asking for you.
+ *
+ * Deliberately SHORT lists, and NOUN PHRASES ARE EXCLUDED. `phraseMatchesTranscript` lets a
+ * multi-word phrase match as a whole-word run anywhere in an utterance, so "next agent" would
+ * fire on "the next agent in the chain is the builder" — a sentence a coordinator agent's user
+ * says constantly, and one where being teleported away mid-thought is the worst possible
+ * outcome. Only IMPERATIVE forms ("switch agent") survive: those read as an instruction to the
+ * app wherever they appear.
+ *
+ * The bare word is safe by construction — a single-word phrase must BE the whole utterance —
+ * which is what keeps "what's next for this repo?" a message, exactly as the ticket requires.
+ * German's bare word is "nächster" and not "weiter", which means "carry on" and is something a
+ * user genuinely says TO an agent.
+ */
+const NEXT_BY_LANG: Record<string, string[]> = {
+	en: ["next", "switch agent", "switch agents", "who needs me"],
+	es: ["siguiente", "cambiar de agente"],
+	fr: ["suivant", "changer d'agent"],
+	de: ["nächster", "agent wechseln"],
+	it: ["prossimo", "cambia agente"],
+	pt: ["próximo", "trocar de agente"],
+	zh: ["下一个", "切换代理"],
+	ja: ["次", "エージェント切り替え"],
+	ko: ["다음", "에이전트 전환"],
+	hi: ["अगला", "एजेंट बदलो"],
 };
 
 /** "Mute" phrasings per language (2-letter code). Whole-utterance only. English is the
@@ -273,28 +303,39 @@ export function matchVoiceCommand(
 	text: string,
 	words?: VoiceCommandWords,
 	lang?: string,
-	state?: { muted?: boolean },
+	state?: { muted?: boolean; canSwitch?: boolean },
 ): VoiceCommand | null {
 	const t = normalizeTranscript(text);
 	const l = langKey(lang);
 	const pick = (custom: string[] | undefined, table: Record<string, string[]>) =>
 		custom?.length ? custom : (table[l] ?? table.en);
 	const hit = (phrases: string[]) => phrases.some((p) => phraseMatchesTranscript(t, p));
+	// "next" is a command ONLY where something can act on it (#277). The voice stack has no
+	// idea what an agent roster is, so the consumer opting in — by passing a handler — is what
+	// turns the word on. Everywhere else ("next" said to the Coder's Co-pilot, which has no
+	// switcher) it stays an ordinary word and reaches the agent as speech, which is the
+	// conservative half of the same rule that keeps "what's next?" a message.
+	const canSwitch = state?.canSwitch === true;
 
 	// Order matters. "unmute" is checked FIRST and only while muted: several languages build
 	// the unmute phrase out of the mute phrase (de "stummschaltung aufheben" contains "stumm"),
 	// so a mute-first order would swallow it. English is safe by whole-utterance matching —
 	// other languages are not.
 	if (state?.muted) {
-		// While muted the ONLY meaningful commands are unmute and exit. Checking mute here
+		// While muted the ONLY meaningful commands are unmute, exit and next. Checking mute here
 		// would be a no-op at best; checking repeat would speak while the user asked for silence.
+		// "next" IS meaningful muted, deliberately: mute silences the microphone, not the user's
+		// ability to leave. Being unable to walk away from a muted agent by voice is the exact
+		// "it demands the screen" failure #277 exists to remove.
 		if (hit(pick(words?.unmute, UNMUTE_BY_LANG))) return "unmute";
 		if (hit(pick(words?.exit, EXIT_BY_LANG))) return "exit";
+		if (canSwitch && hit(pick(words?.next, NEXT_BY_LANG))) return "next";
 		return null;
 	}
 	// Not muted: unmute is meaningless, and matching it here would fire on someone SAYING the
 	// word ("say unmute to turn the mic back on") rather than commanding it.
 	if (hit(pick(words?.exit, EXIT_BY_LANG))) return "exit";
+	if (canSwitch && hit(pick(words?.next, NEXT_BY_LANG))) return "next";
 	if (hit(pick(words?.repeat, REPEAT_BY_LANG))) return "repeat";
 	if (hit(pick(words?.mute, MUTE_BY_LANG))) return "mute";
 	return null;
@@ -374,8 +415,14 @@ export function stripStopWord(text: string, stopWords?: string[]): { ended: bool
  *  out of a message without re-deriving the precedence rules. */
 export function commandPhrases(command: VoiceCommand, words?: VoiceCommandWords, lang?: string): string[] {
 	const l = langKey(lang);
-	const table =
-		command === "repeat" ? REPEAT_BY_LANG : command === "mute" ? MUTE_BY_LANG : command === "unmute" ? UNMUTE_BY_LANG : EXIT_BY_LANG;
+	const TABLES: Record<VoiceCommand, Record<string, string[]>> = {
+		repeat: REPEAT_BY_LANG,
+		mute: MUTE_BY_LANG,
+		unmute: UNMUTE_BY_LANG,
+		exit: EXIT_BY_LANG,
+		next: NEXT_BY_LANG,
+	};
+	const table = TABLES[command];
 	const custom = words?.[command];
 	return custom?.length ? custom : (table[l] ?? table.en);
 }
@@ -395,11 +442,14 @@ export function splitTrailingCommand(
 	text: string,
 	words?: VoiceCommandWords,
 	lang?: string,
-	state?: { muted?: boolean },
+	state?: { muted?: boolean; canSwitch?: boolean },
 ): { command: VoiceCommand | null; text: string } {
 	// Same candidate set and ordering as matchVoiceCommand, so the two can never disagree
 	// about what a word means.
-	const candidates: VoiceCommand[] = state?.muted ? ["unmute", "exit"] : ["exit", "repeat", "mute"];
+	const canSwitch = state?.canSwitch === true;
+	const candidates: VoiceCommand[] = state?.muted
+		? (["unmute", "exit", ...(canSwitch ? (["next"] as const) : [])] as VoiceCommand[])
+		: (["exit", ...(canSwitch ? (["next"] as const) : []), "repeat", "mute"] as VoiceCommand[]);
 	const norm = normalizeTranscript(text);
 
 	// The turn IS the command → nothing to send.

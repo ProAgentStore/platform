@@ -69,6 +69,8 @@ export interface VoiceSettings {
 	unmuteWords: string[];
 	/** Phrases that leave voice mode entirely (#165). */
 	exitWords: string[];
+	/** Phrases that move you to the agent asking for you (#277). */
+	nextWords: string[];
 	stopWords: string[];
 	stopSpeechKeyword: string;
 	confirmLanguage: boolean;
@@ -121,6 +123,7 @@ export function defaultVoiceSettings(): VoiceSettings {
 		muteWords: [],
 		unmuteWords: [],
 		exitWords: [],
+		nextWords: [],
 		stopWords: [],
 		stopSpeechKeyword: "",
 		confirmLanguage: true,
@@ -164,6 +167,7 @@ export function sanitizeVoiceSettings(raw: unknown, base: VoiceSettings = defaul
 		muteWords: has("muteWords") ? parseVoiceWords(o.muteWords) : base.muteWords,
 		unmuteWords: has("unmuteWords") ? parseVoiceWords(o.unmuteWords) : base.unmuteWords,
 		exitWords: has("exitWords") ? parseVoiceWords(o.exitWords) : base.exitWords,
+		nextWords: has("nextWords") ? parseVoiceWords(o.nextWords) : base.nextWords,
 		stopWords: has("stopWords") ? parseVoiceWords(o.stopWords) : base.stopWords,
 		stopSpeechKeyword: typeof o.stopSpeechKeyword === "string" ? o.stopSpeechKeyword.trim().slice(0, 40) : base.stopSpeechKeyword,
 		confirmLanguage: has("confirmLanguage") ? o.confirmLanguage !== false : base.confirmLanguage,

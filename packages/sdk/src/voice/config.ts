@@ -37,6 +37,9 @@ export interface VoiceConfig {
 	unmuteWords: string[];
 	/** Phrases that leave voice mode entirely and return to typing (#165). */
 	exitWords: string[];
+	/** Phrases that move you to the agent asking for you (#277). Inert on a surface that
+	 *  cannot switch conversations — see `useVoice`'s `onNext`. */
+	nextWords: string[];
 	stopWords: string[];
 	/** Say this word/phrase while the agent is speaking to immediately halt playback
 	 *  (e.g. "stop stop"). Empty ⇒ off. Per-instance. Case-insensitive substring match. */
@@ -105,6 +108,7 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 		muteWords: parseWords(vs.muteWords),
 		unmuteWords: parseWords(vs.unmuteWords),
 		exitWords: parseWords(vs.exitWords),
+		nextWords: parseWords(vs.nextWords),
 		stopWords: parseWords(vs.stopWords),
 		stopSpeechKeyword: typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword.trim().slice(0, 40) : "",
 		confirmLanguage: vs.confirmLanguage !== false, // default ON

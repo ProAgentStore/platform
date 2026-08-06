@@ -41,6 +41,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 	const [muteWords, setMuteWords] = useState("");
 	const [unmuteWords, setUnmuteWords] = useState("");
 	const [exitWords, setExitWords] = useState("");
+	const [nextWords, setNextWords] = useState("");
 	const [stopWords, setStopWords] = useState("");
 	const [stopSpeechKeyword, setStopSpeechKeyword] = useState("");
 	const [confirmLanguage, setConfirmLanguage] = useState(true);
@@ -67,6 +68,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 		setMuteWords(list(vs.muteWords));
 		setUnmuteWords(list(vs.unmuteWords));
 		setExitWords(list(vs.exitWords));
+		setNextWords(list(vs.nextWords));
 		setStopWords(list(vs.stopWords));
 		setStopSpeechKeyword(typeof vs.stopSpeechKeyword === "string" ? vs.stopSpeechKeyword : "");
 		setConfirmLanguage(vs.confirmLanguage !== false);
@@ -308,6 +310,11 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 					<span className="block text-xs font-semibold mb-0.5">Exit-voice keywords</span>
 					<input value={exitWords} onChange={(e) => setExitWords(e.target.value)} onBlur={() => saveVoice({ exitWords })} placeholder="exit voice, text mode  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
 					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Leaves voice entirely and returns to typing — unlike mute, which keeps the session live.</span>
+				</label>
+				<label className="block">
+					<span className="block text-xs font-semibold mb-0.5">Next-agent keywords</span>
+					<input value={nextWords} onChange={(e) => setNextWords(e.target.value)} onBlur={() => saveVoice({ nextWords })} placeholder="next, switch agent  (blank = built-in defaults)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Moves you to the agent that's asking for you, and says which one out loud. Nothing waiting? It says so and stays put. A one-word keyword only fires when it's your whole sentence, so “what's next?” is still a message.</span>
 				</label>
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Stop-word — finish my turn</span>

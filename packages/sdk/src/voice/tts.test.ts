@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanForSpeech, VoiceTts } from "./tts.js";
 
 describe("cleanForSpeech", () => {
@@ -222,6 +222,16 @@ describe("VoiceTts global exclusivity (#127 — never two voices at once)", () =
 describe("VoiceTts OpenAI playback — iOS AudioContext recovery", () => {
 	afterEach(() => { vi.unstubAllGlobals(); });
 
+	/**
+	 * The Web Audio context is a MODULE-level singleton (#278: it carries the iOS gesture
+	 * priming across a route change, which is what stops a voice-driven agent switch dropping
+	 * silently to the browser voice). So each case here has to reload the module, or the second
+	 * test inherits the first one's context and its `resume` spy is never called — the cached
+	 * context is already "running".
+	 */
+	const freshTts = async () => (await import("./tts.js")).VoiceTts;
+	beforeEach(() => { vi.resetModules(); });
+
 	/** A fetch that returns audio bytes for the TTS proxy and OK for the error log. */
 	const stubAudioFetch = () =>
 		vi.stubGlobal("fetch", vi.fn(async (url: string) =>
@@ -249,7 +259,8 @@ describe("VoiceTts OpenAI playback — iOS AudioContext recovery", () => {
 		vi.stubGlobal("speechSynthesis", { cancel() {}, resume() {}, speak: synthSpeak });
 		vi.stubGlobal("window", { speechSynthesis: { cancel() {}, resume() {}, speak: synthSpeak } });
 
-		await new VoiceTts("openai").speak("hello there");
+		const Tts = await freshTts();
+		await new Tts("openai").speak("hello there");
 
 		expect(resume).toHaveBeenCalled();
 		expect(decodeAudioData).toHaveBeenCalled(); // played through Web Audio
@@ -275,7 +286,8 @@ describe("VoiceTts OpenAI playback — iOS AudioContext recovery", () => {
 		vi.stubGlobal("window", { speechSynthesis: synth });
 		vi.stubGlobal("SpeechSynthesisUtterance", class { rate = 1; onend: (() => void) | null = null; onerror: (() => void) | null = null; constructor(public text: string) {} });
 
-		await new VoiceTts("openai").speak("hello");
+		const Tts = await freshTts();
+		await new Tts("openai").speak("hello");
 
 		expect(resume).toHaveBeenCalled();
 		expect(decodeAudioData).not.toHaveBeenCalled(); // never got a running context

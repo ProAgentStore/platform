@@ -168,6 +168,63 @@ export function resolveToggleAction(s: { starting: boolean; active: boolean }): 
 	return s.active ? "stop" : "start";
 }
 
+// ── Switching which agent you are talking to (#277, #278, #279) ──────────────
+
+/**
+ * What the voice session must do before the conversation moves to another agent.
+ *
+ * There is exactly ONE way to change who you are talking to, and this is its guard. #277
+ * ("next" — the user picks) and #279 (an agent hands you over) are two triggers for the same
+ * move; building them separately would produce two teardown paths that disagree about the mic,
+ * which is how the #175 loss class happens — an utterance captured for agent A being sent to,
+ * or dropped by, agent B.
+ *
+ * The rule the shape encodes: a switch NEVER silently discards speech, and never leaves the
+ * previous agent talking over the new one. It is a decision, not an action, so the two triggers
+ * can share it and it can be tested without a browser.
+ */
+export interface SwitchPrep {
+	/** Cut the outgoing agent's TTS — it is answering a question you have left. */
+	cancelSpeech: boolean;
+	/** Drop the pending utterance. Only ever true when there is nothing to lose. */
+	clearDictation: boolean;
+	/** The words the user had already spoken and which the switch would destroy — hand them
+	 *  back to the composer (the #175 "recover" contract) instead of dropping them silently. */
+	recoverText: string;
+	/** The voice mode to resume on the OTHER side, so hands-free stays hands-free across the
+	 *  move. `null` = the user was typing; arriving in a live mic they did not ask for would be
+	 *  the privacy surprise #278 warns about. */
+	carryMode: VoiceMode | null;
+}
+
+/**
+ * Resolve the teardown + carry-over for a conversation switch.
+ *
+ * `dictation` is the utterance the switch is about to destroy — so a caller whose utterance WAS
+ * the command ("next", nothing else) passes `null`, having already cleared it. What is left is
+ * the case that matters: a control word caught mid-capture, over words the user meant for the
+ * agent they are leaving. A `transcribing` utterance is the sharpest form of it — they finished
+ * speaking and the clip is mid-upload, so the speech exists but its text does not yet. That is
+ * recovered to the composer rather than sent, because by the time it lands, the thread it was
+ * meant for is not the one on screen (the #175 contract).
+ */
+export function prepareConversationSwitch(s: {
+	mode: VoiceMode;
+	ttsSpeaking: boolean;
+	dictation: Dictation | null;
+}): SwitchPrep {
+	// A dictation whose words ARE the command ("next") has nothing worth keeping; one with real
+	// content spoken before it does. `heard` covers the transcribing case, where `text` is the
+	// live transcript and the final one will never arrive anywhere useful.
+	const pending = (s.dictation?.status === "transcribing" ? s.dictation.heard || s.dictation.text : s.dictation?.text) ?? "";
+	return {
+		cancelSpeech: s.ttsSpeaking,
+		clearDictation: !!s.dictation,
+		recoverText: pending.trim(),
+		carryMode: s.mode === "text" ? null : s.mode,
+	};
+}
+
 // ── The pending utterance (#281) ─────────────────────────────────────────────
 
 /**

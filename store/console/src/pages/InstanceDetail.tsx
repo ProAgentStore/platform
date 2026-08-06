@@ -11,6 +11,7 @@ import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
+import { useConversation, useConversationSwitch } from "../lib/ConversationContext";
 import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import type { LoopPreset } from "../lib/loopPresets";
@@ -162,10 +163,40 @@ function InstancePage() {
 	// the continueLoop chain firing chat rounds + setState on a dead component.
 	useEffect(() => () => { loopOnRef.current = false; loopPausedRef.current = true; }, []);
 
+	// The conversation, as the whole app sees it (#277/#278). Read here so this page can report
+	// who you are talking to, and so "next" has one switch primitive to go through.
+	const { setConversation, detachConversation, takeHandoff } = useConversation();
+	const { switchToNext } = useConversationSwitch();
+	// The name is read from a callback that runs long after the render that built it, and the
+	// instance loads asynchronously — so the announcement gets the live name, not "".
+	const instanceNameRef = useRef("");
+
 	// Voice: both push-to-talk and conversation mode auto-send via this ref
 	const doSendRef = useRef<(text: string, audioKey?: string) => void>(() => {});
 	const voice = useVoice(id, {
 		onSend: (text, meta) => doSendRef.current(text, meta?.audioKey),
+		/**
+		 * "next" (#277) — move to the agent asking for you, without touching the screen.
+		 *
+		 * Passing this handler is also what TURNS THE COMMAND ON (see `useVoice`'s `onNext`):
+		 * this is the only surface in the app that can change which agent you are talking to,
+		 * so everywhere else "next" stays an ordinary word. By the time it fires the voice
+		 * session here is already torn down, and `carryMode` is the mode to reopen on the far
+		 * side — passed through the handoff baton so hands-free survives the move.
+		 */
+		onNext: ({ carryMode }) => {
+			if (!id) return;
+			void (async () => {
+				const r = await switchToNext({ instanceId: id, name: instanceNameRef.current || "this agent", mode: carryMode });
+				if (r.moved) return; // the announcement is spoken on ARRIVAL — see the handoff effect
+				// Staying put has to mean staying put. The switch guard tore the session down
+				// before we knew whether there was anywhere to go (it must — a hands-free mic left
+				// open across the lookup would capture speech destined for nobody), so put the user
+				// back in the mode they were in before saying why nothing happened.
+				if (carryMode && carryMode !== "text") await voiceRef.current.setVoiceMode(carryMode);
+				if (r.say) await voiceRef.current.speak(r.say);
+			})();
+		},
 		// #175: a turn spoken while the agent was replying used to be transcribed and then
 		// silently dropped. It lands in the composer instead — the user can see their words
 		// survived and press send, rather than having them fired into a thread that moved on.
@@ -180,6 +211,11 @@ function InstancePage() {
 		// basenames in the spoken reply instead of gutting them to "a file … a file".
 		technical: surfaces.includes("repo") || surfaces.includes("coding") || surfaces.includes("tmux"),
 	});
+	// `onNext` above is defined inside the very expression that initialises `voice`, so it cannot
+	// name it directly; and the arrival effect below is mount-only, so it would close over the
+	// first render's hook. Both reach the live one through this.
+	const voiceRef = useRef(voice);
+	voiceRef.current = voice;
 
 	// Auto-grow the chat input so the FULL live transcript (or a long typed message) is readable
 	// as it grows, instead of truncating to one line (#164). Caps at ~40vh, then scrolls.
@@ -212,6 +248,59 @@ function InstancePage() {
 		})();
 		return () => { live = false; };
 	}, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+	// ── The conversation, reported UP so the app can show it from anywhere (#278) ──────────
+	//
+	// This page owns the chat and the voice session, and it is keyed on the instance id, so it
+	// unmounts on every switch. What it publishes here is the identity + state of the
+	// conversation, which has to outlive it: the top bar renders from this, and "next" reads
+	// `lastEngagedId` off it to decide whether a switch is a toggle or a walk.
+	instanceNameRef.current = instance?.name ?? "";
+	const runActive = thinking || remoteWork || !!loopRunId;
+	useEffect(() => {
+		if (!id || !instance) return;
+		const ident = identityFor(instance);
+		setConversation({
+			instanceId: id,
+			name: instance.name,
+			emoji: ident.emoji,
+			bg: ident.bg,
+			mode: voice.mode,
+			live: true,
+			runActive,
+		});
+	}, [id, instance, voice.mode, runActive, setConversation]);
+	// Unmount = the mic is CLOSED, whatever mode we were in: `useVoice` tears the recognizer,
+	// the stream and the TTS down. Say so rather than clearing the conversation — who you were
+	// talking to is exactly what you need to get back, and an indicator that claimed to be
+	// listening here would be lying about a microphone.
+	useEffect(() => {
+		if (!id) return;
+		return () => detachConversation(id);
+	}, [id, detachConversation]);
+
+	/**
+	 * Arrival: consume the handoff baton (#277).
+	 *
+	 * The mic genuinely closed on the way out and is reopened here — #279's "reopen with a
+	 * spoken cue" answer. Order matters: the mode first, so the session (and its echo guard)
+	 * exists before the announcement plays; then the announcement, whose `speak` pauses the mic
+	 * for its own duration and reopens it after. Announcing from the OUTGOING page instead would
+	 * be cut off mid-sentence by its own unmount.
+	 *
+	 * Runs once per mounted instance page — the component is keyed on the id (#240), and
+	 * `takeHandoff` is one-shot besides.
+	 */
+	// biome-ignore lint/correctness/useExhaustiveDependencies: mount-only by design — a re-run would re-announce a switch that already happened.
+	useEffect(() => {
+		if (!id) return;
+		const h = takeHandoff(id);
+		if (!h) return;
+		void (async () => {
+			if (h.mode && h.mode !== "text") await voiceRef.current.setVoiceMode(h.mode);
+			if (h.say) await voiceRef.current.speak(h.say);
+		})();
+	}, [id]);
 
 	// Under-message translation + transliteration (the learning display) — see lib/use-gloss.
 	const gloss = useGloss(id, tab, messages);

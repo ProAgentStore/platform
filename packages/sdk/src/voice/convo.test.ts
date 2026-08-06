@@ -464,4 +464,89 @@ describe("commandPhrases", () => {
 	it("falls back to English for a language with no table entry", () => {
 		expect(commandPhrases("unmute", undefined, "sv-SE")).toContain("unmute");
 	});
+
+	// A table lookup that forgot a command used to fall through to the EXIT phrases, which in
+	// splitTrailingCommand would strip the wrong words off the end of a real message.
+	it("has its own phrases for every command in the vocabulary", () => {
+		expect(commandPhrases("next", undefined, "en")).toContain("next");
+		expect(commandPhrases("next", undefined, "en")).not.toContain("exit voice");
+		expect(commandPhrases("exit", undefined, "en")).toContain("exit voice");
+	});
+});
+
+describe('matchVoiceCommand — "next" (#277: switch agent without touching the screen)', () => {
+	const CAN = { canSwitch: true };
+
+	it("fires when the utterance IS the command", () => {
+		expect(matchVoiceCommand("next", undefined, "en", CAN)).toBe("next");
+		expect(matchVoiceCommand("Next.", undefined, "en", CAN)).toBe("next");
+		expect(matchVoiceCommand("switch agent", undefined, "en", CAN)).toBe("next");
+	});
+
+	// The ticket's own verification bullet, and the reason the bare word is whole-utterance
+	// only: a question ABOUT the work must never steer the app somewhere else.
+	it('"what\'s next for this repo?" is a MESSAGE, never the command', () => {
+		expect(matchVoiceCommand("what's next for this repo?", undefined, "en", CAN)).toBeNull();
+		expect(matchVoiceCommand("tell me what to do next", undefined, "en", CAN)).toBeNull();
+	});
+
+	// Why the table carries no noun phrases: a multi-word phrase matches as a whole-word run
+	// ANYWHERE in an utterance, so "next agent" would teleport a user mid-sentence out of a
+	// conversation about agents — which is most of what people say to a coordinator.
+	it("a sentence ABOUT agents is not a command to leave", () => {
+		expect(matchVoiceCommand("the next agent in the chain is the builder", undefined, "en", CAN)).toBeNull();
+		expect(matchVoiceCommand("show me the next agent's board", undefined, "en", CAN)).toBeNull();
+	});
+
+	// The voice stack has no idea what an agent roster is. A surface with no switcher (the
+	// Coder's Co-pilot) must pass "next" through as ordinary speech rather than swallow it
+	// into a command nothing can act on.
+	it("is inert unless the consumer can actually switch", () => {
+		expect(matchVoiceCommand("next", undefined, "en")).toBeNull();
+		expect(matchVoiceCommand("next", undefined, "en", { canSwitch: false })).toBeNull();
+	});
+
+	// Mute silences the microphone, not the user's ability to leave. Being unable to walk away
+	// from a muted agent without the screen is the exact failure #277 exists to remove.
+	it("still fires while muted — mute is about the mic, not about being trapped", () => {
+		expect(matchVoiceCommand("next", undefined, "en", { muted: true, canSwitch: true })).toBe("next");
+		// …and the muted branch still refuses the commands that are meaningless there.
+		expect(matchVoiceCommand("repeat", undefined, "en", { muted: true, canSwitch: true })).toBeNull();
+	});
+
+	it("respects the per-language table and custom overrides", () => {
+		expect(matchVoiceCommand("下一个", undefined, "zh", CAN)).toBe("next");
+		expect(matchVoiceCommand("next", undefined, "zh", CAN)).toBeNull(); // English words on a Chinese agent
+		expect(matchVoiceCommand("hop", { next: ["hop"] }, "en", CAN)).toBe("next");
+		expect(matchVoiceCommand("next", { next: ["hop"] }, "en", CAN)).toBeNull(); // custom REPLACES built-ins
+	});
+
+	// The other four commands must behave exactly as before for a consumer that never opts in.
+	it("does not disturb the existing vocabulary", () => {
+		expect(matchVoiceCommand("repeat", undefined, "en")).toBe("repeat");
+		expect(matchVoiceCommand("mute", undefined, "en")).toBe("mute");
+		expect(matchVoiceCommand("wake up", undefined, "en", { muted: true })).toBe("unmute");
+		expect(matchVoiceCommand("exit voice", undefined, "en")).toBe("exit");
+	});
+});
+
+describe('splitTrailingCommand — "next" (#277)', () => {
+	// The contract every other command already has: a control word at the end is BOTH a command
+	// and a finished message. Dropping the message would mean asking a question and being moved
+	// away before it was ever asked.
+	it("sends what came before, then switches", () => {
+		const r = splitTrailingCommand("deploy the worker, switch agent", undefined, "en", { canSwitch: true });
+		expect(r.command).toBe("next");
+		expect(r.text).toBe("deploy the worker");
+	});
+
+	it("an utterance that IS the command sends nothing", () => {
+		expect(splitTrailingCommand("next", undefined, "en", { canSwitch: true })).toEqual({ command: "next", text: "" });
+	});
+
+	it("is inert without canSwitch, so the words stay in the message", () => {
+		const r = splitTrailingCommand("deploy the worker, switch agent", undefined, "en");
+		expect(r.command).toBeNull();
+		expect(r.text).toBe("deploy the worker, switch agent");
+	});
 });
