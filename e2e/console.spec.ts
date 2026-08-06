@@ -20,6 +20,15 @@ interface OpsMockOptions {
 	verifyBody?: Record<string, unknown>;
 	deployStatus?: number;
 	deployBody?: Record<string, unknown>;
+	/**
+	 * Real-shaped account data. The defaults below are deliberately tiny ("user-1", "tester", no
+	 * profile fields, no providers), which is why the mobile-overflow guard passed on a Profile
+	 * page that overflows in production: three of that page's sections never rendered under the
+	 * fixture, and the two that did held strings a real account never has (#235).
+	 */
+	user?: Record<string, unknown>;
+	profile?: { fields: Array<Record<string, unknown>>; profile: Record<string, string> };
+	providers?: Array<Record<string, unknown>>;
 }
 
 function defaultOpsPayload() {
@@ -116,6 +125,7 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				avatar: "https://example.com/avatar.png",
 				roles: ["user", "creator"],
 				boardConfig: options.boardConfig ?? null,
+				...(options.user ?? {}),
 			});
 		}
 		if (path === "/v1/notifications") return json({ notifications: [], unreadCount: 0 });
@@ -506,13 +516,13 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			cancelledTaskId = "task-approval";
 			return json({ id: "task-approval", status: "cancelled" });
 		}
-		if (path === "/v1/keys/status") return json({ providers: [] });
+		if (path === "/v1/keys/status") return json({ providers: options.providers ?? [] });
 		// Account preferences (#211) — voice/translation defaults shared by every agent.
 		if (path === "/v1/preferences") {
 			if (method === "PUT") { savedPreferences = JSON.parse(route.request().postData() || "{}"); return json({ preferences: savedPreferences }); }
 			return json({ preferences: { voice: { speed: 130, sttMode: "openai" } }, languages: [{ name: "Chinese", tag: "zh-CN" }, { name: "English", tag: "en-US" }] });
 		}
-		if (path === "/v1/profile") return json({ fields: [], profile: {} });
+		if (path === "/v1/profile") return json(options.profile ?? { fields: [], profile: {} });
 		if (path === "/v1/instances/inst-1/voice-settings") {
 			if (method === "DELETE") { voiceOverrideCleared = true; return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false }); }
 			return json({ voiceSettings: { speed: 130, sttMode: "openai" }, hasOverride: false });
@@ -1458,10 +1468,47 @@ test.describe("ProAgentStore authenticated Console", () => {
 	});
 });
 
+/**
+ * Overflow measurement shared by the guards below.
+ *
+ * `<main>` is the scroll region and the header nav is an intentional `overflow-x-auto` strip, so
+ * those two are what the assertions look at — plus any OTHER element inside main that has quietly
+ * become horizontally pannable, which is what a user feels as "the page scrolls sideways" even
+ * when the document does not (#235).
+ */
+async function measureOverflow(page: Page) {
+	return page.evaluate(() => {
+		const m = document.querySelector("main");
+		const scrollers: string[] = [];
+		for (const el of Array.from(m?.querySelectorAll("*") ?? [])) {
+			const h = el as HTMLElement;
+			const over = h.scrollWidth - h.clientWidth;
+			if (over <= 1) continue;
+			const ox = getComputedStyle(h).overflowX;
+			if (ox !== "auto" && ox !== "scroll") continue;
+			const cls = typeof h.className === "string" ? h.className : "";
+			scrollers.push(`${h.tagName.toLowerCase()}${h.id ? `#${h.id}` : ""}.${cls.split(/\s+/).slice(0, 3).join(".")} (+${over}px)`);
+		}
+		const nav = document.querySelector('header nav[aria-label="Primary"]');
+		return {
+			mainOv: m ? m.scrollWidth - m.clientWidth : 0,
+			docOv: document.documentElement.scrollWidth - window.innerWidth,
+			// The primary nav used to be the ONLY thing that panned on a phone, and the guard
+			// explicitly excused it — so the guard was green on the page users said scrolled
+			// sideways. It is hidden below sm now (the hamburger carries it), so it must measure 0
+			// at these widths. Hidden ⇒ scrollWidth/clientWidth are both 0.
+			navOv: nav ? nav.scrollWidth - nav.clientWidth : 0,
+			scrollers,
+		};
+	});
+}
+
 test.describe("mobile — no horizontal overflow (regression guard for the missing-w-full bug)", () => {
 	// Phones. The bug (page container sizing to max-content instead of the viewport)
 	// only shows below the sm: breakpoint (640px) and needs real content to trigger.
-	test.use({ viewport: { width: 375, height: 812 } });
+	// 320px is the narrowest phone still in use (iPhone SE 1st gen) and the width where a row
+	// of fixed-width controls stops fitting; 375 is the common floor.
+	const WIDTHS = [320, 375];
 
 	// Routes rendered with the mock's seeded content — empty pages can't reproduce the
 	// bug (their max-content is small), so we cover the content-bearing pages that had it.
@@ -1479,25 +1526,92 @@ test.describe("mobile — no horizontal overflow (regression guard for the missi
 		"/console/notifications",
 	];
 
-	for (const route of routes) {
-		test(`no horizontal scroll at 375px — ${route}`, async ({ page }) => {
-			await mockSignedInConsole(page);
-			await page.goto(route);
+	for (const width of WIDTHS) {
+		for (const route of routes) {
+			test(`no horizontal scroll at ${width}px — ${route}`, async ({ page }) => {
+				await page.setViewportSize({ width, height: 812 });
+				await mockSignedInConsole(page);
+				await page.goto(route);
+				await page.waitForLoadState("networkidle");
+				await page.locator("main").waitFor();
+				await page.waitForTimeout(300); // let async content settle
+
+				const { mainOv, docOv, navOv } = await measureOverflow(page);
+				expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
+				expect(docOv, `page overflows by ${docOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
+				expect(navOv, `primary nav pans by ${navOv}px at ${width}w on ${route}`).toBeLessThanOrEqual(1);
+			});
+		}
+	}
+});
+
+/**
+ * Profile, with the data a real account actually has (#235).
+ *
+ * The sweep above ran Profile with the default fixture: no profile fields, no API providers, a
+ * 15-character token, `user-1` / `tester`. Under that fixture three of the page's five sections
+ * never render and the two that do hold strings shorter than any real value — so the guard was
+ * green while users saw the page pan sideways. A regression guard is only as honest as its
+ * fixture, and this is the fixture the page is actually used with.
+ */
+test.describe("mobile — Profile with real-shaped account data", () => {
+	const realistic = {
+		user: {
+			id: "9f1c2b84-6d3e-4a55-9c07-2f8ab41d7e63",
+			login: "serge-ivo-development",
+			display_name: "Serge Ivochkin (ProAgentStore)",
+			roles: ["user", "creator", "admin"],
+		},
+		profile: {
+			fields: [
+				{ key: "full_name", label: "Full name", group: "personal" },
+				{ key: "phone", label: "Phone number", group: "personal", private: true },
+				{ key: "city", label: "City / suburb", group: "personal" },
+				{ key: "country", label: "Country of residence", group: "personal" },
+				{ key: "linkedin", label: "LinkedIn profile URL", group: "personal" },
+				{ key: "work_auth", label: "Work authorization status", group: "job", private: true },
+				{ key: "salary", label: "Salary expectation (annual)", group: "job", private: true },
+			],
+			profile: {
+				full_name: "Serge Ivochkin",
+				phone: "+61 400 000 000",
+				city: "Sydney",
+				country: "Australia",
+				linkedin: "https://www.linkedin.com/in/a-fairly-long-profile-slug-here",
+				work_auth: "Permanent resident — full working rights",
+				salary: "180000",
+			},
+		},
+		providers: [
+			{ id: "anthropic", name: "Anthropic Claude", hasKey: true },
+			{ id: "openai", name: "OpenAI", hasKey: false },
+			{ id: "cloudflare", name: "Cloudflare Workers AI", hasKey: true },
+			{ id: "google", name: "Google Gemini", hasKey: false },
+		],
+	};
+
+	for (const width of [320, 360, 375]) {
+		test(`no horizontal scroll at ${width}px — /console/profile`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockSignedInConsole(page, realistic);
+			await page.goto("/console/profile");
 			await page.waitForLoadState("networkidle");
 			await page.locator("main").waitFor();
-			await page.waitForTimeout(300); // let async content settle
+			// Every section rendered — otherwise this is the old, hollow version of the check.
+			await expect(page.getByRole("heading", { name: "API Token" })).toBeVisible();
+			await expect(page.getByText("Anthropic Claude")).toBeVisible();
+			await expect(page.getByText("Work authorization status")).toBeVisible();
+			// Worst case for the token row: the full value on screen, not the 12-char preview.
+			await page.getByRole("button", { name: "Show" }).click();
+			await page.waitForTimeout(200);
 
-			// <main> is the scroll region (the header nav is an intentional overflow-x-auto);
-			// a horizontal scrollbar there is exactly the user-visible bug.
-			const { mainOv, docOv } = await page.evaluate(() => {
-				const m = document.querySelector("main");
-				return {
-					mainOv: m ? m.scrollWidth - m.clientWidth : 0,
-					docOv: document.documentElement.scrollWidth - window.innerWidth,
-				};
-			});
-			expect(mainOv, `<main> overflows by ${mainOv}px at 375w on ${route}`).toBeLessThanOrEqual(1);
-			expect(docOv, `page overflows by ${docOv}px at 375w on ${route}`).toBeLessThanOrEqual(1);
+			const { mainOv, docOv, navOv, scrollers } = await measureOverflow(page);
+			expect(mainOv, `<main> overflows by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			// A pannable strip inside the page reads as horizontal page scroll on a touch device
+			// even when nothing reports document overflow. Profile has no legitimate one.
+			expect(scrollers, `unexpected horizontal scrollers at ${width}w: ${scrollers.join(", ")}`).toEqual([]);
 		});
 	}
 });

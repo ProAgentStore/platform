@@ -82,10 +82,15 @@ export default function Layout() {
 				{/* Nav links — hidden when instance detail injects its controls */}
 				{!navHidden && (
 					<>
-						{/* flex-1 + overflow-x-auto so the icons SCROLL horizontally when there isn't
-						    room (many nav items on a narrow phone) instead of being clipped or pushing
-						    the avatar/menu off-screen. Scrollbar hidden for a clean bar. */}
-						<nav className="flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto overflow-y-hidden scrollbar-none" aria-label="Primary">
+						{/* Below sm the strip is HIDDEN, not scrolled (#235).
+						    Eight destinations never fit a phone header, so `overflow-x-auto` meant the
+						    bar panned by 25px at 375 and 80px at 320 — which is what users reported as
+						    "the page scrolls sideways", even though neither the document nor <main>
+						    ever overflowed. It was also redundant: the hamburger beside it already
+						    lists exactly these items, with labels. From sm up they fit, so they stay.
+						    The spacer keeps the avatar/menu cluster pinned right without it. */}
+						<div className="flex-1 sm:hidden" />
+						<nav className="hidden sm:flex items-center gap-0.5 flex-1 min-w-0 overflow-x-auto overflow-y-hidden scrollbar-none" aria-label="Primary">
 							{navItems.map(({ to, label, icon: Icon }) => (
 								<NavLink
 									key={to}

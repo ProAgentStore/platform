@@ -251,8 +251,12 @@ export default function Profile() {
 				{/* API Token */}
 				<div className="mb-6">
 					<h3 className="text-[0.95rem] font-semibold mb-3">API Token</h3>
-					<div className="flex items-center gap-2">
-						<span className="bg-paper border border-line rounded-md px-2.5 py-1.5 font-mono text-xs text-muted max-w-[220px] truncate">
+					{/* Wraps rather than pushes (#235): a revealed token is long, and the row is one
+					    fixed-width span plus two buttons. `min-w-0` is what lets the span shrink at
+					    all — without it a flex child refuses to go below its content width, and the
+					    row grows the card instead of truncating the string. */}
+					<div className="flex items-center gap-2 flex-wrap">
+						<span className="bg-paper border border-line rounded-md px-2.5 py-1.5 font-mono text-xs text-muted max-w-[220px] min-w-0 flex-1 truncate">
 							{tokenVisible && token ? token : token ? `${token.slice(0, 12)}...` : "Not signed in"}
 						</span>
 						<button type="button" onClick={() => { if (token) navigator.clipboard.writeText(token); }} className="text-xs px-2 py-1 border border-line rounded text-muted">Copy</button>
@@ -277,8 +281,10 @@ export default function Profile() {
 					{keysLoading ? <p className="text-sm text-muted">Loading keys...</p> : (
 						<div className="flex flex-col gap-2">
 							{providers.map(p => (
-								<div key={p.id} className="flex items-center gap-3 p-2.5 bg-paper border border-line rounded-lg">
-									<span className="text-sm font-medium flex-1">{p.name}</span>
+								<div key={p.id} className="flex items-center gap-2 sm:gap-3 p-2.5 bg-paper border border-line rounded-lg">
+									{/* A provider name is the only elastic part of this row; everything else is
+									    a fixed control. Let it truncate instead of widening the card. */}
+									<span className="text-sm font-medium flex-1 min-w-0 truncate">{p.name}</span>
 									<span className={`text-xs ${p.hasKey ? "text-green" : "text-muted-soft"}`}>{p.hasKey ? "Stored" : "Not set"}</span>
 									{p.hasKey ? (
 										<button type="button" onClick={() => removeKey(p.id, p.name)} className="text-xs px-2 py-1 rounded border border-line text-muted">Remove</button>
