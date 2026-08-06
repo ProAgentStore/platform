@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockerHint, connectionsFromGrants, hasMcpCapability, normalizeEndpoint, statusBadge, type McpStatus } from "./mcpConnections";
+import { blockerHint, connectionsFromGrants, credentialNote, hasMcpCapability, normalizeEndpoint, statusBadge, type McpCredential, type McpStatus } from "./mcpConnections";
 
 describe("connectionsFromGrants", () => {
 	it("groups grants into one entry per server", () => {
@@ -46,7 +46,7 @@ describe("statusBadge", () => {
 	});
 
 	it("gives every status its own label — none falls through to a generic failure", () => {
-		const all: McpStatus[] = ["connected", "credential_missing", "auth_required", "unsupported_protocol", "unreachable", "blocked", "permission_denied", "invalid_url"];
+		const all: McpStatus[] = ["connected", "credential_missing", "credential_expired", "auth_required", "unsupported_protocol", "unreachable", "blocked", "permission_denied", "invalid_url"];
 		const labels = all.map((s) => statusBadge(s).label);
 		expect(new Set(labels).size).toBe(all.length);
 	});
@@ -72,5 +72,40 @@ describe("hasMcpCapability", () => {
 	it("hides it for an agent that declares no MCP tool at all", () => {
 		expect(hasMcpCapability([{ connector: "github", allowed: true, disabled: false }])).toBe(false);
 		expect(hasMcpCapability([{ connector: "mcp", allowed: false, disabled: false }])).toBe(false);
+	});
+});
+
+describe("credentialNote (#286)", () => {
+	const cred = (endpoint: string, over: Partial<McpCredential> = {}): McpCredential => ({
+		endpoint,
+		authMode: "bearer",
+		issuer: null,
+		scopes: null,
+		expiresAt: null,
+		expired: false,
+		accountLabel: null,
+		createdAt: "2026-01-01T00:00:00Z",
+		updatedAt: "2026-01-01T00:00:00Z",
+		...over,
+	});
+
+	it("reports a credential per server, so one connected server never implies another", () => {
+		// The panel used to show one account-wide "MCP token" state, which is the UI half of the
+		// bug: it said "connected" for a server that had never been given a credential.
+		const creds = [cred("https://a.example.com/mcp")];
+		expect(credentialNote(creds, "https://a.example.com/mcp").label).toBe("Token stored");
+		expect(credentialNote(creds, "https://b.example.com/mcp")).toEqual({ label: "No token", tone: "amber" });
+	});
+
+	it("flags an expired credential rather than showing it as stored", () => {
+		const creds = [cred("https://a.example.com/mcp", { expired: true, expiresAt: "2020-01-01T00:00:00Z" })];
+		expect(credentialNote(creds, "https://a.example.com/mcp")).toEqual({ label: "Token expired", tone: "amber" });
+	});
+
+	it("matches on the exact normalized endpoint, never a prefix", () => {
+		// A prefix match would show "token stored" for https://a.example.com/mcp-admin because
+		// https://a.example.com/mcp has one — a different server entirely.
+		const creds = [cred("https://a.example.com/mcp")];
+		expect(credentialNote(creds, "https://a.example.com/mcp-admin").label).toBe("No token");
 	});
 });

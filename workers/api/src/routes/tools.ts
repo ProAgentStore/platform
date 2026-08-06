@@ -10,6 +10,15 @@ import { getConnector } from "../lib/connectors/registry.js";
 import { connectorClient } from "../lib/connectors/client.js";
 import { probeMcpEndpoint } from "../lib/connectors/mcp.js";
 import { connectionStatusFor, parseToolCatalog, summarizeConnection, summarizeTools, type McpConnectionReport } from "../lib/mcp-connection.js";
+import {
+	adoptLegacyMcpCredential,
+	deleteMcpCredential,
+	discardLegacyMcpCredential,
+	hasLegacyMcpCredential,
+	listMcpCredentials,
+	saveMcpCredential,
+	type McpAuthMode,
+} from "../lib/mcp-credentials.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { pipelineDefForKey, validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import { listRuns } from "../lib/pipeline-runs.js";
@@ -410,6 +419,108 @@ toolRoutes.put("/:id/mcp/consent", async (c) => {
 		await revokeMcpConsent(c.env, instanceId, endpoint, tool);
 	}
 	return c.json({ ok: true, endpoint, tool, enabled: !!body.enabled });
+});
+
+/**
+ * Endpoint-scoped MCP credentials (#286, migration 0083).
+ *
+ * WHY THESE EXIST AT ALL. The connector's credential used to be the account's single
+ * `user_api_keys` row at provider `mcp` — one bearer slot shared by every authenticated MCP
+ * server the user could name, while the endpoint itself is config supplied at call time. A token
+ * issued by server A therefore went to server B as soon as anything pointed at B. These routes
+ * bind credential material to the SAME normalized endpoint consent already keys on, so the two
+ * cannot disagree and a credential cannot reach a server it was not issued for.
+ *
+ * WHAT THEY ARE NOT. Not a connection record: no id, no nickname, no cached status. #266's model
+ * stands — a connection is derived from grants on an endpoint and health is tested live.
+ *
+ * A TOKEN NEVER COMES BACK OUT. GET returns metadata only. There is no reveal route: unlike the
+ * user's own AI provider key (which their browser needs to re-display), an MCP server token has
+ * no client-side use, so read-back would be pure attack surface.
+ *
+ * GET    /v1/instances/:id/mcp/credentials              → metadata per endpoint + legacy state
+ * PUT    /v1/instances/:id/mcp/credentials { url, token | adoptLegacy, authMode?, expiresAt? }
+ * DELETE /v1/instances/:id/mcp/credentials?url=…  |  ?legacy=1
+ *
+ * Instance-scoped for UI locality and the ownership check; the STORAGE is per (user, endpoint),
+ * matching the connector's `grantModel: "user"` — a credential belongs to the account, reach
+ * belongs to the instance.
+ */
+toolRoutes.get("/:id/mcp/credentials", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	return c.json({
+		credentials: await listMcpCredentials(c.env, session.uid),
+		// Reported so the console can say "you have a token bound to nothing, bind or discard it"
+		// instead of the user reading a suddenly-failing agent as data loss. Never sent anywhere.
+		legacy: { present: await hasLegacyMcpCredential(c.env, session.uid) },
+	});
+});
+
+toolRoutes.put("/:id/mcp/credentials", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as {
+		url?: string;
+		token?: string;
+		adoptLegacy?: boolean;
+		authMode?: string;
+		issuer?: string;
+		scopes?: string;
+		expiresAt?: string;
+		accountLabel?: string;
+	};
+
+	// Normalize FIRST, and refuse anything that isn't an https MCP endpoint. Storing under an
+	// un-normalized key would create a credential the connector can never find (it resolves on the
+	// normalized form) — a silent no-op that looks like a successful save.
+	const endpoint = normalizeMcpEndpoint(String(body.url ?? ""));
+	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
+
+	if (body.adoptLegacy) {
+		// Bind the old account-wide token to this one server without the user re-typing it. The
+		// ciphertext is copied verbatim, so no plaintext is produced to perform the move.
+		const adopted = await adoptLegacyMcpCredential(c.env, session.uid, endpoint);
+		if (!adopted) throw new HttpError(404, "There is no account-wide MCP token to bind.");
+		return c.json({ ok: true, endpoint, adoptedLegacy: true });
+	}
+
+	const token = String(body.token ?? "").trim();
+	if (!token) throw new HttpError(400, "`token` is required — the access token this MCP server issued.");
+	if (token.length > 8192) throw new HttpError(400, "`token` is too long to be an access token.");
+	const authMode: McpAuthMode = body.authMode === "oauth" ? "oauth" : "bearer";
+	if (body.expiresAt && !Number.isFinite(Date.parse(String(body.expiresAt)))) {
+		throw new HttpError(400, "`expiresAt` must be an ISO-8601 timestamp.");
+	}
+
+	await saveMcpCredential(c.env, {
+		userId: session.uid,
+		endpoint,
+		token,
+		authMode,
+		issuer: body.issuer ? String(body.issuer).slice(0, 300) : null,
+		scopes: body.scopes ? String(body.scopes).slice(0, 500) : null,
+		expiresAt: body.expiresAt ? String(body.expiresAt) : null,
+		accountLabel: body.accountLabel ? String(body.accountLabel).slice(0, 120) : null,
+	});
+	// Deliberately echoes the endpoint and NOTHING derived from the token — not a prefix, not a
+	// length. A "saved ••••abcd" confirmation is a credential fragment in a response body, a log
+	// and a browser history entry, for no diagnostic value the endpoint doesn't already carry.
+	return c.json({ ok: true, endpoint, authMode });
+});
+
+toolRoutes.delete("/:id/mcp/credentials", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+
+	if (c.req.query("legacy")) {
+		return c.json({ ok: true, legacy: true, removed: await discardLegacyMcpCredential(c.env, session.uid) });
+	}
+	const endpoint = normalizeMcpEndpoint(String(c.req.query("url") ?? ""));
+	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
+	// Removing one endpoint's credential touches no other endpoint — that isolation is the point
+	// of keying on the endpoint, and is the acceptance criterion this route exists to satisfy.
+	return c.json({ ok: true, endpoint, removed: await deleteMcpCredential(c.env, session.uid, endpoint) });
 });
 
 /**

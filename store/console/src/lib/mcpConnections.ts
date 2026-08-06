@@ -19,6 +19,7 @@
 export type McpStatus =
 	| "connected"
 	| "credential_missing"
+	| "credential_expired"
 	| "auth_required"
 	| "unsupported_protocol"
 	| "unreachable"
@@ -66,6 +67,44 @@ export interface McpConnection {
 	wildcard: boolean;
 }
 
+/**
+ * A stored credential's METADATA (#286). There is no `token` field and no reveal route: an MCP
+ * server token has no client-side use, so reading it back would be pure attack surface.
+ *
+ * Mirrors McpCredentialInfo in workers/api/src/lib/mcp-credentials.ts.
+ */
+export interface McpCredential {
+	endpoint: string;
+	authMode: "bearer" | "oauth";
+	issuer: string | null;
+	scopes: string | null;
+	expiresAt: string | null;
+	expired: boolean;
+	accountLabel: string | null;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface McpCredentialState {
+	credentials: McpCredential[];
+	/** The old account-wide token, if the user still has one. Bound to no server, so never sent. */
+	legacy: { present: boolean };
+}
+
+/**
+ * The one-line credential state for a server row.
+ *
+ * A credential is per (account, endpoint), so this is a lookup and not a join over grants — and
+ * the endpoint compared is the normalized one the server returned, never the string the user
+ * typed, or a connection would show "token stored" for a URL the connector resolves differently.
+ */
+export function credentialNote(credentials: readonly McpCredential[], endpoint: string): { label: string; tone: "muted" | "amber" } {
+	const cred = credentials.find((c) => c.endpoint === endpoint);
+	if (!cred) return { label: "No token", tone: "amber" };
+	if (cred.expired) return { label: "Token expired", tone: "amber" };
+	return { label: cred.authMode === "oauth" ? "Authorized" : "Token stored", tone: "muted" };
+}
+
 /** Group an instance's grants into one entry per server, endpoints in stable alphabetical order. */
 export function connectionsFromGrants(grants: readonly McpGrant[]): McpConnection[] {
 	const byEndpoint = new Map<string, McpGrant[]>();
@@ -110,6 +149,8 @@ export function statusBadge(status: McpStatus): { label: string; tone: "green" |
 			return { label: "Connected", tone: "green" };
 		case "credential_missing":
 			return { label: "Token needed", tone: "amber" };
+		case "credential_expired":
+			return { label: "Token expired", tone: "amber" };
 		case "auth_required":
 			return { label: "Credential rejected", tone: "amber" };
 		case "permission_denied":

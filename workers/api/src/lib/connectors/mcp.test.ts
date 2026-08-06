@@ -3,6 +3,10 @@ import { getRegistryTool } from "../tool-registry.js";
 import type { RegistryToolCtx } from "../tool-registry.js";
 import type { ConnectorClient } from "./client.js";
 import { ALL_TOOLS } from "../mcp-consent.js";
+import { encryptKey } from "../crypto.js";
+
+/** A throwaway 256-bit KEK in the hex form lib/crypto.ts expects. */
+const TEST_KEK = "0".repeat(64);
 import {
 	classifyModernFailure,
 	encodeHeaderValue,
@@ -36,10 +40,24 @@ interface LoggedEvent {
  * captures the #265 trace rows. Both live on the same stub because the handler touches both in
  * one call and a test needs to assert on the pair (denied → logged, allowed → logged).
  */
-function makeCtx(opts: { token?: string | null; grants?: string[]; instanceId?: string } = {}) {
+function makeCtx(
+	opts: {
+		token?: string | null;
+		grants?: string[];
+		instanceId?: string;
+		/** Which endpoints hold a credential. Undefined = every endpoint (the pre-#286 shape, kept
+		 *  as the default so the transport tests stay about transport). */
+		credentialFor?: string[];
+		expiresAt?: string | null;
+		/** Does the account still hold the old unbound provider-wide token? */
+		legacy?: boolean;
+	} = {},
+) {
 	const token = opts.token === undefined ? "tok-abc" : opts.token;
 	const grants = opts.grants ?? [ALL_TOOLS];
 	const events: LoggedEvent[] = [];
+	/** Which endpoints the connector asked for a credential for — the #286 isolation assertion. */
+	const credentialReads: string[] = [];
 
 	const DB = {
 		prepare: (sql: string) => ({
@@ -51,7 +69,20 @@ function makeCtx(opts: { token?: string | null; grants?: string[]; instanceId?: 
 					}
 					return { results: [] };
 				},
-				first: async () => null,
+				first: async () => {
+					if (sql.includes("mcp_credentials")) {
+						const [, endpoint] = args as string[];
+						credentialReads.push(endpoint);
+						if (!token) return null;
+						if (opts.credentialFor && !opts.credentialFor.includes(endpoint)) return null;
+						// Encrypt for real with the platform envelope scheme, so the resolver's decrypt
+						// path is exercised rather than stubbed past.
+						const { ciphertext, dekWrapped, iv } = await encryptKey(token, TEST_KEK);
+						return { auth_mode: "bearer", expires_at: opts.expiresAt ?? null, key_ciphertext: ciphertext, dek_wrapped: dekWrapped, iv };
+					}
+					if (sql.includes("user_api_keys")) return opts.legacy ? { present: 1 } : null;
+					return null;
+				},
 				run: async () => {
 					if (sql.includes("INSERT INTO agent_events")) {
 						const [, , , , , source, level, event, message, context] = args as string[];
@@ -65,19 +96,20 @@ function makeCtx(opts: { token?: string | null; grants?: string[]; instanceId?: 
 	};
 
 	const ctx = {
-		env: { DB } as never,
+		env: { DB, KEY_ENCRYPTION_KEY: TEST_KEK } as never,
 		userId: "user-1",
 		instanceId: opts.instanceId ?? "inst-1",
+		// Still injected, because runRegistryTool injects it for every connector tool — but the MCP
+		// tools must no longer reach for it. A test below asserts that by counting.
 		connectorClient: () =>
 			({
 				token: async () => {
-					if (!token) throw new Error("no key");
-					return token;
+					throw new Error("connectorClient must not be the MCP credential path (#286)");
 				},
 			}) as unknown as ConnectorClient,
 	} as unknown as RegistryToolCtx;
 
-	return { ctx, events };
+	return { ctx, events, credentialReads };
 }
 
 interface ScriptEntry {
@@ -428,21 +460,13 @@ describe("mcp_call_tool — consent is per server and per tool", () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	it("does not consult the vault for a refused call", async () => {
-		// A refusal must not mint a credential — that is a token use the owner never authorised,
-		// and on an OAuth-backed provider it is a side effect visible to the remote service.
+	it("does not resolve a credential for a refused call", async () => {
+		// A refusal must not read a credential — that is a token use the owner never authorised,
+		// and on an OAuth-backed credential it is a side effect visible to the remote service.
 		mockRpc({ "tools/call": { body: textResult({}) } });
-		let minted = 0;
-		const { ctx } = makeCtx({ grants: [] });
-		(ctx as { connectorClient?: unknown }).connectorClient = () =>
-			({
-				token: async () => {
-					minted++;
-					return "tok";
-				},
-			}) as unknown as ConnectorClient;
+		const { ctx, credentialReads } = makeCtx({ grants: [] });
 		await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
-		expect(minted).toBe(0);
+		expect(credentialReads).toHaveLength(0);
 	});
 
 	it("allows an ordinary tool under a wildcard grant but not a destructive one", async () => {
@@ -578,7 +602,11 @@ describe("mcp_call_tool — credentials, errors and input validation", () => {
 		const { ctx } = makeCtx({ token: null });
 		const r = await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
 		expect(r.success).toBe(false);
-		expect(r.content).toMatch(/No credential connected/);
+		// Names the SERVER, not the connector: since #286 a credential belongs to one endpoint, so
+		// "no credential for the mcp connector" would point the user at a setting that no longer
+		// exists. Falling back to an unauthenticated call is equally wrong — the server's opaque 401
+		// teaches the user to blame the server for a missing token.
+		expect(r.content).toMatch(/No credential stored for https:\/\/example\.com\/mcp/);
 		expect(calls).toHaveLength(0); // nothing hit the network
 	});
 
@@ -647,5 +675,86 @@ describe("mcp_list_tools", () => {
 		// tools/list has no name to mirror, so the header must be absent rather than empty.
 		expect(calls[0].headers.get("Mcp-Name")).toBeNull();
 		expect(calls[0].headers.get("Mcp-Method")).toBe("tools/list");
+	});
+});
+
+/**
+ * #286 — credential material is scoped to ONE endpoint.
+ *
+ * The bug these guard: `connectorClient("mcp").token()` read `user_api_keys` at
+ * `(user_id, provider)` with the provider being the bare string "mcp", so one user had one MCP
+ * bearer slot for EVERY authenticated endpoint. Since the endpoint is config supplied at call
+ * time, a token issued by server A went to server B the moment anything named B.
+ */
+describe("mcp credentials are per endpoint, not per connector (#286)", () => {
+	it("never sends one server's credential to another server", async () => {
+		// THE ticket. Without endpoint scoping this call succeeds and puts server A's bearer on a
+		// request to server B — credential disclosure to a party chosen by whatever wrote the URL.
+		const calls = mockRpc({ "tools/call": { body: textResult({ ok: true }) } });
+		const { ctx } = makeCtx({ token: "tok-for-A", credentialFor: ["https://a.example.com/mcp"] });
+
+		const toB = await callTool.handler(ctx, { url: "https://b.example.com/mcp", tool: "create_site" });
+		expect(toB.success).toBe(false);
+		expect(toB.content).toMatch(/No credential stored for https:\/\/b\.example\.com\/mcp/);
+		expect(calls).toHaveLength(0); // and nothing reached B at all
+
+		const toA = await callTool.handler(ctx, { url: "https://a.example.com/mcp", tool: "create_site" });
+		expect(toA.success).toBe(true);
+		expect(calls[0].headers.get("Authorization")).toBe("Bearer tok-for-A");
+	});
+
+	it("resolves the credential on the NORMALIZED endpoint, so a cache-buster cannot fragment it", async () => {
+		// Consent already normalizes (query and fragment dropped, host lowercased). If credential
+		// lookup used the raw URL instead, `…/mcp?v=2` would be consented-but-credential-less —
+		// a working server that intermittently reports "no token" depending on the caller's URL.
+		mockRpc({ "tools/call": { body: textResult({ ok: true }) } });
+		const { ctx, credentialReads } = makeCtx({ credentialFor: ["https://example.com/mcp"] });
+		const r = await callTool.handler(ctx, { url: "https://EXAMPLE.com/mcp/?v=2#frag", tool: "create_site" });
+		expect(r.success).toBe(true);
+		expect(credentialReads).toEqual(["https://example.com/mcp"]);
+	});
+
+	it("does not fall back to the legacy account-wide token, and says where it went", async () => {
+		// The compatibility trap: keeping the old provider-wide token as a fallback would restore
+		// the vulnerability in full while looking like a kindness. It is reported, never sent.
+		const calls = mockRpc({});
+		const { ctx } = makeCtx({ token: null, legacy: true });
+		const r = await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+		expect(r.success).toBe(false);
+		expect(calls).toHaveLength(0);
+		expect(r.content).toMatch(/older account-wide MCP token/);
+		expect(r.content).toMatch(/not bound to any server/);
+	});
+
+	it("fails closed on an expired credential instead of sending it", async () => {
+		// Sending a known-dead token buys nothing and costs a 401 the user must then diagnose;
+		// worse, "the server rejected it" is indistinguishable from "revoked" or "wrong server".
+		const calls = mockRpc({});
+		const { ctx, events } = makeCtx({ expiresAt: "2020-01-01T00:00:00Z" });
+		const r = await callTool.handler(ctx, { url: "https://example.com/mcp", tool: "create_site" });
+		expect(r.success).toBe(false);
+		expect(calls).toHaveLength(0);
+		expect(r.content).toMatch(/expired at 2020-01-01/);
+		expect(events.at(-1)?.context.failure).toBe("credential_expired");
+	});
+
+	it("keeps a credential out of the refusal text and the trace row", async () => {
+		// A refusal is rendered into a chat transcript and written to agent_events. Naming the
+		// endpoint is diagnosis; echoing any part of the token would put a credential in both.
+		const { ctx, events } = makeCtx({ token: "sk-live-should-never-appear", credentialFor: ["https://a.example.com/mcp"] });
+		const r = await callTool.handler(ctx, { url: "https://b.example.com/mcp", tool: "create_site" });
+		expect(r.content).not.toContain("sk-live-should-never-appear");
+		expect(JSON.stringify(events)).not.toContain("sk-live-should-never-appear");
+	});
+
+	it("still sends nothing at all for an explicitly open server", async () => {
+		// auth:"none" must not start requiring a credential row — an open MCP server has none, and
+		// making one mandatory would break every public endpoint on the way to fixing the private ones.
+		const calls = mockRpc({ "tools/list": { body: { jsonrpc: "2.0", id: 1, result: { tools: [] } } } });
+		const { ctx, credentialReads } = makeCtx({ token: null });
+		const r = await listTools.handler(ctx, { url: "https://open.example.com/mcp", auth: "none" });
+		expect(r.success).toBe(true);
+		expect(credentialReads).toHaveLength(0);
+		expect(calls[0].headers.get("Authorization")).toBeNull();
 	});
 });

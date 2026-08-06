@@ -147,10 +147,14 @@ export const CONNECTORS: Connector[] = [
 	{
 		id: "mcp",
 		label: "MCP server (generic, outbound)",
-		// auth:"token", no tokenEnv → connectorClient.token() reads the user's vault entry
-		// (user_api_keys, provider "mcp"); the tools send it as `Authorization: Bearer`.
-		// Deliberately generic: the SERVER is a tool input, so no sibling store or third
-		// party is a dependency of this Worker — a configured endpoint is user data.
+		// auth:"token" describes the SHAPE of the credential (an opaque bearer), not where it is
+		// found. Since #286 the MCP tools do NOT resolve through connectorClient's vault slot:
+		// `user_api_keys` is keyed (user_id, provider), which gave one token to every MCP server a
+		// user could name, and the server here is a tool input. They resolve per normalized
+		// endpoint instead (lib/mcp-credentials.ts) — the same key consent uses — with no fallback
+		// to the provider-wide slot. Deliberately generic: the SERVER is a tool input, so no
+		// sibling store or third party is a dependency of this Worker; a configured endpoint is
+		// user data.
 		auth: "token",
 		// unattended is DERIVED as "yes", which is right for the credential this connector
 		// actually holds: a vault bearer the user pasted does not expire on us. The fragile case

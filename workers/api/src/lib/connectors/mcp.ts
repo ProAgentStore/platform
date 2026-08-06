@@ -45,13 +45,21 @@
 // copy of the user's data; key names and byte counts answer "did it send the field?" without
 // becoming that. Everything that IS recorded goes through redactSecrets on the way out.
 //
-// Auth: `Authorization: Bearer <token>` from the vault (user_api_keys, provider "mcp") via
-// ctx.connectorClient("mcp").token(). Used on the wire only — never in inputs, schema, or
-// result. Servers fronted by OAuth 2.1 + dynamic client registration STILL cannot be reached
-// headlessly this way — that flow is not implemented (#180). What changed is that a rejected
-// credential now says so precisely: `discoverAuthServer` reads the server's own RFC 9728/8414
-// metadata and reports which authorization server fronts it, whether it would register a client
-// dynamically, and whether it issues refresh tokens at all (#181). Diagnosis, not a connection.
+// Auth: `Authorization: Bearer <token>`, resolved PER ENDPOINT (#286, lib/mcp-credentials.ts).
+// It used to come from `ctx.connectorClient("mcp").token()`, which reads `user_api_keys` at
+// `(user_id, provider)` with the provider being the bare string "mcp" — one bearer slot for every
+// authenticated MCP server a user could name. Since the endpoint is config supplied at call time,
+// a token issued by server A was sent verbatim to server B the moment anything pointed at B. So
+// credential material is now keyed on the same normalized endpoint reach is keyed on, and there
+// is deliberately NO fallback to the old provider-wide slot: an unbound token is one whose server
+// we do not know, and sending it anyway IS the disclosure. Used on the wire only — never in
+// inputs, schema, or result.
+//
+// Servers fronted by OAuth 2.1 + dynamic client registration STILL cannot be reached headlessly
+// — that flow is not implemented (#180). What changed is that a rejected credential now says so
+// precisely: `discoverAuthServer` reads the server's own RFC 9728/8414 metadata and reports which
+// authorization server fronts it, whether it would register a client dynamically, and whether it
+// issues refresh tokens at all (#181). Diagnosis, not a connection.
 //
 // Consent: `mcp_call_tool` is gated per (instance, endpoint, tool) — see lib/mcp-consent.ts
 // and migration 0079 — on top of the connector-level write consent, because one `mcp` write
@@ -65,6 +73,7 @@ import { safeFetch, SsrfError } from "../ssrf.js";
 import { authFailureGuidance, discoverAuthServer, type DiscoveryResult } from "./discovery.js";
 import { consentInstanceOf } from "../execution-authority.js";
 import { hasMcpConsent, mcpConsentDenial, normalizeMcpEndpoint } from "../mcp-consent.js";
+import { mcpCredentialDenial, resolveMcpCredential } from "../mcp-credentials.js";
 import { logEvent } from "../events.js";
 import { redactSecrets, redactText } from "../redact.js";
 
@@ -347,6 +356,10 @@ async function rpc(call: RpcCall): Promise<RpcOutcome> {
 export type McpFailureClass =
 	| "bad_input"
 	| "no_credential"
+	/** A credential IS stored for this endpoint, and it has run out. Different remedy from
+	 *  `no_credential` (reconnect, not paste), and different from `auth` (we know, rather than
+	 *  inferring from a 401 that says nothing about why). */
+	| "credential_expired"
 	| "denied"
 	| "auth"
 	| "unsupported_version"
@@ -546,15 +559,23 @@ async function mcpCall(
 	}
 	const key = normalizeMcpEndpoint(endpoint.url) ?? endpoint.url;
 
+	// The credential is resolved on the NORMALIZED endpoint, not on the connector (#286). `key` is
+	// the same string consent keys on and the trace records, so the credential sent to a server,
+	// the grants checked for it, and the row logged about it are all bound to one identity — and a
+	// credential for one endpoint can neither authorize nor be leaked to another.
 	let token: string | null = null;
 	if (endpoint.useAuth) {
-		token = (await ctx.connectorClient?.("mcp").token().catch(() => null)) ?? null;
-		if (!token) {
-			const content =
-				'No credential connected for the mcp connector — add the server\'s access token in the instance\'s Connections settings, or pass auth:"none" for an open server.';
-			await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, ok: false, failure: "no_credential" });
-			return { content, success: false, failure: "no_credential", durationMs: Date.now() - started };
+		const cred = await resolveMcpCredential(ctx.env, ctx.userId, key);
+		if (cred.status !== "ok") {
+			// Fail CLOSED, both ways: no silent fallback to the old provider-wide token (that is the
+			// vulnerability), and no silent unauthenticated retry (which turns "your token is gone"
+			// into an opaque 401 from the server and teaches the user to blame the server).
+			const failure: McpFailureClass = cred.status === "expired" ? "credential_expired" : "no_credential";
+			const content = mcpCredentialDenial(key, cred);
+			await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, ok: false, failure });
+			return { content, success: false, failure, durationMs: Date.now() - started };
 		}
+		token = cred.token;
 	}
 
 	let outcome: CallOutcome;

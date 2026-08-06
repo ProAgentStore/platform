@@ -10,6 +10,13 @@ describe("connectionStatusFor", () => {
 		expect(connectionStatusFor("auth", false)).toBe("auth_required");
 	});
 
+	it("separates a credential we know has expired from one we never had (#286)", () => {
+		// Expiry is a fact here, not the guess it would be from a 401: we stored the expiry
+		// ourselves and nothing was sent. Folding it into `credential_missing` would tell a user
+		// to add a token for a server they already connected, instead of to reconnect it.
+		expect(connectionStatusFor("credential_expired", false)).toBe("credential_expired");
+	});
+
 	it("maps every protocol-negotiation failure onto unsupported_protocol", () => {
 		// These three mean "we and this server cannot agree on a wire format" — a client/server
 		// version problem with no credential and no network remedy. Reporting them as

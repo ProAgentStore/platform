@@ -5683,6 +5683,138 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/mcp/credentials:
+    get:
+      summary: Which MCP servers this account holds a credential for
+      description: |
+        Credential material for the outbound MCP connector is scoped to ONE normalized endpoint —
+        the same key `/mcp/consent` grants on. It used to live in the account's single
+        `user_api_keys` row at provider `mcp`, which meant one bearer token for every
+        authenticated MCP server the user could name; since the endpoint is config supplied at
+        call time, a token issued by server A was sent verbatim to server B the moment anything
+        pointed at B.
+
+        Metadata only. There is no reveal route: unlike an AI provider key, an MCP server token
+        has no client-side use, so reading it back would be attack surface for no benefit. The
+        response never contains a token, a token prefix, or a token length.
+
+        `legacy.present` reports whether the account still holds the old provider-wide token. It
+        is bound to no server and is never sent — it is reported so the console can offer to bind
+        it to one server (`adoptLegacy`) or discard it, rather than leaving a user whose agent
+        stopped working to read the change as data loss.
+      operationId: listInstanceMcpCredentials
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: Credential metadata per endpoint, plus the legacy-token state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  credentials:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        endpoint: { type: string, description: Normalized https MCP endpoint this credential is bound to. }
+                        authMode: { type: string, enum: [bearer, oauth], description: How the credential was obtained. }
+                        issuer: { type: string, nullable: true, description: Authorization server, when the endpoint published one. }
+                        scopes: { type: string, nullable: true, description: Space-delimited, when the issuer stated them. }
+                        expiresAt: { type: string, nullable: true, description: ISO-8601. Null means it does not expire on us. }
+                        expired: { type: boolean, description: Derived from `expiresAt` at read time, never stored — so it cannot go stale. }
+                        accountLabel: { type: string, nullable: true }
+                        createdAt: { type: string }
+                        updatedAt: { type: string }
+                  legacy:
+                    type: object
+                    properties:
+                      present: { type: boolean, description: The account still holds the old provider-wide `mcp` token. Never sent to any server. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Store the access token for one MCP server
+      description: |
+        Binds credential material to ONE normalized endpoint. Replacing or removing a credential
+        for one server does not affect any other server — that isolation is the point of keying on
+        the endpoint.
+
+        Pass `adoptLegacy: true` instead of `token` to bind the account's old provider-wide token
+        to this server without re-typing it. The ciphertext is copied verbatim under the same KEK,
+        so no plaintext is produced to perform the move.
+
+        The token is envelope-encrypted at rest (per-row AES-256-GCM DEK wrapped with AES-KW under
+        `KEY_ENCRYPTION_KEY`), and the response echoes only the endpoint — not a token prefix, not
+        a length — because a confirmation string is a credential fragment in a response body, a log
+        and a browser history entry.
+      operationId: setInstanceMcpCredential
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, description: An https MCP endpoint, e.g. `https://example.com/mcp`. Normalized before storage, so it matches what the connector resolves on. }
+                token: { type: string, maxLength: 8192, description: The access token this server issued. Required unless `adoptLegacy` is set. }
+                adoptLegacy: { type: boolean, description: Bind the account's unbound legacy MCP token to this endpoint instead of supplying a new one. }
+                authMode: { type: string, enum: [bearer, oauth], default: bearer }
+                issuer: { type: string, description: Authorization server, when known. }
+                scopes: { type: string, description: Space-delimited scopes, when known. }
+                expiresAt: { type: string, description: ISO-8601. Past this, calls fail closed with a reconnect prompt rather than sending a dead token. }
+                accountLabel: { type: string, description: Non-secret display hint. }
+      responses:
+        "200":
+          description: The credential was stored for that endpoint
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  endpoint: { type: string }
+                  authMode: { type: string }
+                  adoptedLegacy: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      summary: Forget one MCP server's credential, or discard the unbound legacy token
+      description: |
+        Pass `url` to remove the credential for that endpoint; every other endpoint's credential is
+        untouched. Pass `legacy=1` to discard the account's old provider-wide token, so the
+        "bound to no server" notice is clearable rather than permanent.
+
+        `removed` reports whether anything was actually deleted, so the console can tell
+        "disconnected" from "there was never a credential here" instead of claiming success either way.
+      operationId: deleteInstanceMcpCredential
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: url, in: query, schema: { type: string }, description: An https MCP endpoint. Required unless `legacy` is set. }
+        - { name: legacy, in: query, schema: { type: string }, description: Any value discards the account's unbound legacy MCP token instead. }
+      responses:
+        "200":
+          description: What was removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  endpoint: { type: string }
+                  legacy: { type: boolean }
+                  removed: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/mcp/test:
     post:
       summary: Connect to an MCP endpoint and report what is actually true about it

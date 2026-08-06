@@ -31,7 +31,7 @@ An agent gets a connector's tools only when it declares them in `capabilities.to
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
 | `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_git`, `repo_remote` |
 | `supervision` | none (internal) | read + write | `list_subordinates`, `delegate_goal`, `check_delegation` |
-| `mcp` | vault bearer token | read + write | `mcp_list_tools`, `mcp_call_tool` against user-configured MCP servers |
+| `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 
 **Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:
@@ -56,6 +56,19 @@ Reach is therefore also named per **(instance, endpoint, remote tool)** in `inst
 server's ordinary tools but **not** ones whose names read as destructive — and that test runs on
 the name *we* put on the wire, deliberately not on the server's own `destructiveHint`, because the
 annotation is authored by the party being defended against.
+
+**And to connector-level credentials (#286).** For the same reason, the *credential* is scoped to
+the endpoint too. `connectorClient` resolves a `token` connector from `user_api_keys` at
+`(user_id, provider)` — one bearer slot for the whole connector — which for outbound MCP meant one
+token shared by every authenticated server a user could name, and therefore a token issued by
+server A being sent verbatim to server B as soon as anything pointed at B. MCP credentials live in
+`mcp_credentials` (migration 0083) keyed on `(user_id, normalized endpoint)` — the *same* key
+consent uses — under the same envelope encryption as every other stored secret (per-row AES-256-GCM
+DEK wrapped with AES-KW under `KEY_ENCRYPTION_KEY`). There is deliberately **no fallback** to the
+provider-wide slot: an unbound token is one whose server we do not know, and sending it anyway is
+the disclosure. Manage them at `GET/PUT/DELETE /v1/instances/:id/mcp/credentials`; a stored token is
+never readable back, an expired one fails closed with a reconnect prompt rather than being sent, and
+the pre-#286 account-wide token is reported so it can be bound to one server or discarded.
 
 **Connecting a server** (`POST /v1/instances/:id/mcp/test`, console → Settings → MCP connections):
 enter a URL → it is validated and normalized → the protocol era is negotiated → the server's own

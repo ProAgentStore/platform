@@ -34,14 +34,19 @@ import type { McpEra, McpFailureClass } from "./connectors/mcp.js";
  * of these has a DIFFERENT remedy and a single "connection failed" sends the user to check the
  * wrong thing.
  *
- * On "expired" (asked for by #266): a server rejecting a token answers 401/403 and says nothing
- * about why, so expired, revoked and never-valid are indistinguishable on the wire. Inventing an
- * `expired` status would be a guess presented as a diagnosis; `auth_required` names what we
- * actually know and the detail text says the token was rejected.
+ * On a REJECTED token: a server answers 401/403 and says nothing about why, so expired, revoked
+ * and never-valid are indistinguishable on the wire. There is no status that claims otherwise —
+ * `auth_required` names what we actually know and the detail text says the token was rejected.
+ *
+ * `credential_expired` is the one case where expiry is a FACT rather than a guess: we stored an
+ * expiry alongside the credential ourselves (#286), it has passed, and nothing was sent. It is
+ * distinct from `credential_missing` because the remedies differ — reconnect that server, versus
+ * add a token for it — and a single "not connected" sends people to do the wrong one.
  */
 export type McpConnectionStatus =
 	| "connected"
 	| "credential_missing"
+	| "credential_expired"
 	| "auth_required"
 	| "unsupported_protocol"
 	| "unreachable"
@@ -111,6 +116,8 @@ export function connectionStatusFor(failure: McpFailureClass | undefined, ok: bo
 			return "invalid_url";
 		case "no_credential":
 			return "credential_missing";
+		case "credential_expired":
+			return "credential_expired";
 		case "auth":
 			return "auth_required";
 		case "denied":
