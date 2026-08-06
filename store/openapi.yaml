@@ -684,6 +684,26 @@ components:
         fontSize: { type: string, enum: [small, medium, large] }
         wordTap: { type: boolean, description: Tap a word to hear just it. }
 
+    LoopPreset:
+      type: object
+      required: [id, label, objective]
+      properties:
+        id: { type: string, description: "Stable slug — what an edit is matched on." }
+        label: { type: string, maxLength: 60, description: The button text. }
+        objective: { type: string, description: What gets put in the objective box when it is pressed. }
+
+    LoopPresets:
+      type: object
+      properties:
+        presets:
+          type: array
+          items: { $ref: "#/components/schemas/LoopPreset" }
+        source:
+          type: string
+          enum: [instance, agent, default]
+          description: "Which layer these came from: the subscriber's own list, the creator template's, or the driver default."
+        driver: { type: string, description: What this instance's loop actually drives. }
+
     Trigger:
       type: object
       properties:
@@ -5924,6 +5944,57 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+
+  /v1/instances/{instanceId}/loop-presets:
+    get:
+      summary: Read this instance's loop presets
+      description: |
+        The one-tap objectives offered wherever a loop starts. Resolution order is the
+        subscriber's own list, then the creator template's, then the driver default —
+        `source` says which one you are looking at, so a UI can avoid offering to "reset"
+        a value nobody ever set. `driver` is what this instance's loop actually drives.
+      operationId: getLoopPresets
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: Resolved presets
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoopPresets" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Replace the subscriber's loop presets
+      description: |
+        Sends the whole list, not a patch. An EMPTY list CLEARS the override rather than
+        storing `[]`, so "remove the last one" and "give me the defaults back" are the same
+        gesture and the instance resumes inheriting whatever the creator ships. Max 12
+        presets; labels are truncated at 60 characters. Returns the newly resolved set.
+      operationId: setLoopPresets
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                presets:
+                  type: array
+                  maxItems: 12
+                  items: { $ref: "#/components/schemas/LoopPreset" }
+      responses:
+        "200":
+          description: Resolved presets after the write
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoopPresets" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /v1/instances/{instanceId}/supervision:
     get:

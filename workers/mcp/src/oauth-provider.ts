@@ -2,6 +2,7 @@ import type { AuthRequest, OAuthHelpers } from "@cloudflare/workers-oauth-provid
 import { apiBase, type McpEnv } from "./http.js";
 import { parseScopes } from "./safety.js";
 import { verifyMcpSession } from "./session.js";
+import { MCP_TOOL_COUNT } from "./tool-count.js";
 
 type AuthProvider = "github" | "google";
 
@@ -45,8 +46,12 @@ export const loginHandler: ExportedHandler<LoginEnv> = {
 			return oauthCallback(request, env, issuer);
 		}
 		if (path === "/health") {
+			// `tools` is the only size signal this server publishes. It read a
+			// hardcoded 41 while 124 were registered — see tool-count.ts for why the
+			// number now comes from a constant that a test and a docs check both hold
+			// to the real registration count.
 			return new Response(
-				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: 41 }),
+				JSON.stringify({ ok: true, service: "proagentstore-mcp", tools: MCP_TOOL_COUNT }),
 				{
 					headers: {
 						"Content-Type": "application/json",

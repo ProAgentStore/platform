@@ -83,6 +83,15 @@ function walkFiles(dir) {
 }
 
 function docsFileMap(docsDir) {
+	// store/docs is generated, not committed (see .gitignore). Say so plainly: without
+	// this the failure is a bare ENOENT from readdir, and the site would otherwise be
+	// happy to deploy with /docs/* silently missing.
+	if (!fs.existsSync(docsDir)) {
+		throw new Error(
+			`No docs at ${docsDir}. It is build output — run \`pnpm docs:build\` first ` +
+				"(both ci.yml and deploy-host.yml do, before this script).",
+		);
+	}
 	const files = {};
 	for (const filePath of walkFiles(docsDir)) {
 		const relative = path.relative(docsDir, filePath).replaceAll(path.sep, "/");

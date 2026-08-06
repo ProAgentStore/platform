@@ -23,7 +23,16 @@ jobs:
           cache: pnpm
       - name: Guard agents/ Tier-0 allowlist (#49)
         run: node scripts/check-agents-allowlist.mjs
+      - name: Guard heavy-test isolation (#253)
+        # Keeps real-browser / real-socket tests inside the `integration` project, which
+        # is where they get a budget sized for real I/O instead of vitest's 5s default.
+        run: node scripts/check-test-isolation.mjs
       - run: pnpm install --frozen-lockfile
+      - name: Docs drift (#210)
+        # Documented claims vs the code that defines them: nav, MCP tool table and
+        # count, removed commands, and (via scripts/openapi-coverage.mjs) the route
+        # surface. Runs before the docs build so it reads the committed state.
+        run: pnpm docs:drift
       - name: Install Zensical
         run: python3 -m pip install zensical==0.0.44
       - name: Build SDK

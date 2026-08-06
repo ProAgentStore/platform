@@ -6,6 +6,7 @@ import type {
 } from "@cloudflare/workers-oauth-provider";
 import { describe, expect, it, vi } from "vitest";
 import { type LoginEnv, loginHandler } from "./oauth-provider.js";
+import { MCP_TOOL_COUNT } from "./tool-count.js";
 
 function makeKv(seed: Record<string, string> = {}): KVNamespace {
 	const data = new Map(Object.entries(seed));
@@ -72,10 +73,14 @@ describe("loginHandler health + root", () => {
 	it("serves a health probe", async () => {
 		const res = await run(makeEnv(), "https://mcp.proagentstore.online/health");
 		expect(res.status).toBe(200);
+		// `tools` was asserted here as a literal 41 while the server registered 124 —
+		// the test locked the wrong number in rather than catching it. It now reads the
+		// same constant the handler does, and `index.test.ts` holds that constant to the
+		// real registration count.
 		await expect(res.json()).resolves.toEqual({
 			ok: true,
 			service: "proagentstore-mcp",
-			tools: 41,
+			tools: MCP_TOOL_COUNT,
 		});
 	});
 

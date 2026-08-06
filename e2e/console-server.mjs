@@ -107,8 +107,14 @@ createServer((req, res) => {
 
 	const file = resolved.path;
 	if (!file || !existsSync(file) || !statSync(file).isFile()) {
+		// store/docs is generated and not committed (see .gitignore), so a fresh
+		// checkout that has not run the docs build has no /docs/* at all. Say which
+		// command is missing — a bare 404 here reads as a broken test.
+		const body = url.pathname.startsWith("/docs/")
+			? "store/docs is build output and is missing. Run `pnpm docs:build` first (CI does, before test:e2e)."
+			: "Not found";
 		res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
-		res.end("Not found");
+		res.end(body);
 		return;
 	}
 

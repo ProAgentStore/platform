@@ -275,6 +275,91 @@ That is a way to find the operator's user id on the production database, and it 
 - **Observability** — browser + server errors flow to a durable log (`client:voice*`, `keys-proxy`, `job-apply`, …) surfaced via MCP `list_errors`; a unified per-run timeline via `agent_events` + MCP `agent_trace`.
 - **Agent-configurable work board** — one board per instance; columns are declared per agent (`capabilities.boardColumns`), one card per job, with move / retry / attempts. Driven from MCP via `instance_board`. (Replaces the old two-board / "runtime board" design.)
 
+## Developing
+
+### Tests — two projects, not one pool
+
+`pnpm test` runs everything. Underneath it is split (`vitest.config.ts`):
+
+| Project | What | How it runs |
+|---|---|---|
+| `unit` | ~3100 tests, pure functions and mocked I/O | parallel fork pool |
+| `integration` | `packages/browser-runner/**` — a real Chrome per test over CDP, bound sockets, spawned tmux panes, real `git clone` | one file at a time, after `unit`, alone |
+
+Ten tests in `integration` take longer than the other ~3100 combined. They are also the
+only ones people see flake locally — so it is worth being precise about why.
+
+```bash
+pnpm test               # both, integration last and alone
+pnpm test:unit          # the fast ~3100 — what you want in a tight loop
+pnpm test:integration   # the real-browser / real-socket set
+```
+
+**These tests are sensitive to CPU availability, not to anything in the code under test.**
+There is no race, no port collision, no leaked browser between files. Every failure ever
+observed was `Test timed out in Nms` on code that passes whenever the machine is quiet.
+Measured: the same passing browser test took 11.4s alone, 20.6s inside the suite, and 39.3s
+with a second full suite running beside it. And when the box was fully saturated, the run
+that failed failed in `rate-limit.test.ts`, `publish.test.ts` and `storage-tools.test.ts` —
+three *pure unit* files with no browser and no socket in them. Browser tests starve first
+because they are the heaviest, not because they are browser tests.
+
+So if this flakes for you, do not weaken an assertion — look at what else is running.
+CI is not affected and never has been: it executes the suite alone on a dedicated runner,
+which is exactly why it is green. The split exists for the shared dev machine, and mostly
+to give real-I/O tests a timeout budget sized for real I/O instead of vitest's 5s default.
+
+If you add a test that launches a browser or binds a listening socket, put it under
+`packages/browser-runner/` so it inherits that budget; `scripts/check-test-isolation.mjs`
+fails CI if it lands anywhere else.
+
+> **Orphaned Chromes.** Playwright's cleanup does not run when a test runner is SIGKILLed,
+> so aborted runs leave whole browsers behind — measured on this repo's dev machine: 174
+> live browser profiles, the oldest 26 hours old, ~1000 processes, load average 190. They
+> are invisible and they make every later run slower, which is most of why "flaky" feels
+> random. If local tests feel inexplicably slow:
+> `ps ax | grep -c playwright_chromiumdev_profile`.
+
+### Docs artifacts — what is a source and what is generated
+
+| Artifact | Status | How to update |
+|---|---|---|
+| `platform-docs/*.md` | **source** | edit directly; add the page to `nav` in `zensical.toml` |
+| `store/docs/**` | **generated, not committed** | `pnpm docs:build`; never hand-edit, never `git add` |
+| `store/openapi.yaml` | source | edit when you add or change a route |
+| `store/llms.txt`, `store/llms-full.txt` | source | edit by hand; they are what an agent reads first |
+| `workers/mcp/README.md` tool table | source | add a row whenever you register a tool |
+| `workers/mcp/src/tool-count.ts` | source of truth for the count | bump when you add or remove a tool |
+
+`store/docs` is build output in the same sense as `workers/host/src/pages.ts`: both
+`ci.yml` and `deploy-host.yml` run `pnpm docs:build` before anything reads it, so a
+committed copy could only ever be stale — and was. Run `pnpm docs:build` once on a fresh
+checkout before `pnpm test:e2e` or `node workers/host/build.js`; both read `/docs/*`.
+
+### Drift checks
+
+Prose is the one part of this repo that nothing else validates, so it rots quietly and
+then teaches an agent something false. Two commands catch the classes that have actually
+bitten us (#209, #210):
+
+```bash
+pnpm docs:drift        # nav ↔ pages, MCP tool table + count, removed commands, docs links,
+                       # and (delegated) the route/spec check below
+pnpm openapi:coverage  # every Hono route is documented or explicitly excluded, and every
+                       # documented path resolves to a real handler
+```
+
+Both run in CI. When one fails it names the file and the number it expected — fix the docs,
+or fix the code they describe, but do not silence a check without moving the thing it was
+watching. Deliberately-undocumented routes go in the `EXCLUSIONS` array in
+`scripts/openapi-coverage.mjs`, each with a reason.
+
+**When you add a route**, update `store/openapi.yaml` (or add an exclusion).
+**When you add an MCP tool**, add its row to `workers/mcp/README.md` and bump
+`workers/mcp/src/tool-count.ts` — `index.test.ts` asserts that constant against a real
+registration run, and `/health` plus three docs quote it.
+**When you add a docs page**, add it to `nav` in `zensical.toml`.
+
 ## Part of the FreeStore ecosystem
 
 | Store | URL | Product |

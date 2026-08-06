@@ -4,6 +4,12 @@ dist/
 .env
 .env.*
 *.tsbuildinfo
+# Build output, same class as pages.ts below: `zensical build` renders platform-docs
+# into store/docs, and BOTH ci.yml and deploy-host.yml run `pnpm docs:build` before
+# anything reads it — so the committed copy was never what shipped, only what went
+# stale. It had: the checked-in MCP page was missing a whole section that
+# platform-docs/mcp.md had carried for weeks. Enforced by scripts/docs-drift.mjs.
+store/docs/
 workers/host/src/pages.ts
 playwright-report/
 test-results/

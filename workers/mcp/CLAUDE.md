@@ -121,8 +121,13 @@ Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 - **`userGroups()` swallows its error.** An unauthenticated or transient failure yields
   an empty set, i.e. no agent-specific tools this connection. That is intentional, but it
   means "my tool disappeared" is usually an auth problem, not a registration bug.
-- **`/health` reports a hardcoded `tools: 41`.** It is stale; it is a liveness probe, not
-  a count. Do not treat it as ground truth, and prefer `tools/list`.
+- **`/health`'s `tools` count comes from `src/tool-count.ts`.** It answered a hardcoded
+  `41` for months while 124 were registered — and `oauth-provider.test.ts` asserted the
+  41, so the test locked the wrong number in rather than catching it. `index.test.ts` now
+  holds `MCP_TOOL_COUNT` / `MCP_TOOL_ALWAYS_ON` to a REAL registration run, and
+  `scripts/docs-drift.mjs` holds every prose claim to the constants. Adding a tool fails
+  the test until the constant moves. `tools/list` is still the authoritative surface for a
+  given connection, because 18 tools are surface-gated.
 
 ## Bindings and secrets
 

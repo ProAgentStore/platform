@@ -49,6 +49,7 @@ vi.mock("@modelcontextprotocol/sdk/server/mcp.js", () => ({
 }));
 
 const { PagsMcp } = await import("./index.js");
+const { MCP_TOOL_ALWAYS_ON, MCP_TOOL_COUNT, MCP_TOOL_GATED } = await import("./tool-count.js");
 
 // A fetch stub with programmable per-path responses (shared shape with the
 // instance-tools test).
@@ -195,6 +196,22 @@ describe("PagsMcp.init — tool registration", () => {
 		expect(withCoding.has("coding_session_capture")).toBe(true);
 		expect(withCoding.has("coding_session_message")).toBe(true);
 		expect(withCoding.has("coding_diagnostics")).toBe(true);
+	});
+
+	it("registers exactly the number of tools it advertises (/health + three docs quote it)", async () => {
+		// `GET /health` answered `tools: 41` while 124 were registered, and the test that
+		// covered it asserted the 41. A count nobody derives from the registration is a
+		// count that rots. These constants are that derivation's fixed point: this test
+		// holds them to the REAL init, and scripts/docs-drift.mjs holds every prose claim
+		// to the constants. Adding a tool fails here until the number moves.
+		const everySurface = (await setup({ groups: ["apply", "repo", "coding"] })).tools;
+		expect(everySurface.size).toBe(MCP_TOOL_COUNT);
+
+		// Surface-gated tools are the difference: a user with no matching agent gets the
+		// always-on set, which is what makes the surface per-connection.
+		const noSurface = (await setup({ groups: [] })).tools;
+		expect(noSurface.size).toBe(MCP_TOOL_ALWAYS_ON);
+		expect(MCP_TOOL_ALWAYS_ON + MCP_TOOL_GATED).toBe(MCP_TOOL_COUNT);
 	});
 
 	it("registers tools only once even if init runs again (idempotent guard)", async () => {
