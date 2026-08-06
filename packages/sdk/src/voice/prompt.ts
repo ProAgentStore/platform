@@ -29,6 +29,14 @@ export function buildTranscribePrompt(surfaces: string[] = [], extra: string[] =
 	const extraStr = extra.filter((t) => t?.trim()).join(", ");
 	if (extraStr) parts.push(extraStr);
 	if (!parts.length) return "";
-	// Framed as context, not a command — the prompt primes vocabulary, it isn't spoken.
-	return `The speaker is talking to an AI assistant about their work. Expect terms like: ${parts.join(", ")}.`;
+	// A BARE TERM LIST, deliberately — no sentence, no first person, no "the speaker …" framing.
+	//
+	// The prompt used to open "The speaker is talking to an AI assistant about their work. Expect
+	// terms like: …". Given silence, Whisper does not return nothing: it continues the prompt in
+	// the prompt's own style. A prose, first-person framing produced fluent phantom user messages
+	// — "I just need to refactor this function before I commit the changes to the repo" — built
+	// entirely from the term list below and logged as something the user said. A comma-separated
+	// list has no grammatical continuation to fall into, and it is the form OpenAI documents for
+	// vocabulary bias anyway.
+	return parts.join(", ");
 }

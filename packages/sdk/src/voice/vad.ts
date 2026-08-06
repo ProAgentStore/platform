@@ -45,7 +45,25 @@ export interface VadConfig {
  *  (b) kept steady noise "speaking" so the turn never ended (the mic-never-stops bug). Real
  *  speech peaks well above this (~0.15–0.4). Users who need to pick up a very soft voice raise
  *  Mic sensitivity. */
-const VOICE_FLOOR = 0.1;
+export const VOICE_FLOOR = 0.1;
+
+/**
+ * Did this recording contain actual speech, or only room tone?
+ *
+ * Load-bearing against a specific, real failure: silence uploaded to Whisper does not come back
+ * empty — with a vocabulary `prompt` attached, the decoder CONTINUES THE PROMPT and returns a
+ * fluent, domain-plausible sentence. A real conversation logged "I just need to refactor this
+ * function before I commit the changes to the repo" as a user message, assembled entirely out of
+ * the coding term list. In hands-free that is auto-sent to an agent holding `start_work`, so a
+ * hallucination can start real work.
+ *
+ * `vadStep` already tracks this as `seen`, but it only runs in hands-free — tap-to-talk
+ * deliberately disables the auto-VAD so it can't cut you off mid-thought, which left that mode
+ * with no speech gate at all. This is the mode-independent check.
+ */
+export function hadSpeech(peakLevel: number): boolean {
+	return peakLevel > VOICE_FLOOR;
+}
 
 /**
  * Should the automatic end-of-turn VAD run this frame? Only in Whisper hands-free, and

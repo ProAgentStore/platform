@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig } from "./vad.js";
+import { initVad, shouldAutoDetectEndOfTurn, vadStep, type VadConfig, hadSpeech, VOICE_FLOOR } from "./vad.js";
 
 const cfg = (o: Partial<VadConfig> = {}): VadConfig => ({ silenceMs: 1000, sensitivity: 1, ...o });
 
@@ -120,5 +120,26 @@ describe("shouldAutoDetectEndOfTurn", () => {
 		// The regression this guards: the auto-VAD cutting off a manual turn mid-sentence
 		// and sending a half-formed message (e.g. "Debugging the function.").
 		expect(shouldAutoDetectEndOfTurn({ ...base, manualTalk: true })).toBe(false);
+	});
+});
+
+describe("hadSpeech — the mode-independent speech gate", () => {
+	it("rejects room tone and accepts real speech", () => {
+		// Typical room/keyboard/fan noise sits ~0.05–0.08; speech peaks ~0.15–0.4.
+		expect(hadSpeech(0)).toBe(false);
+		expect(hadSpeech(0.08)).toBe(false);
+		expect(hadSpeech(VOICE_FLOOR)).toBe(false);
+		expect(hadSpeech(0.2)).toBe(true);
+	});
+
+	it("agrees with the threshold vadStep already uses", () => {
+		// Two different silence gates with two different floors is how one mode ends up
+		// transcribing what the other correctly discards.
+		const s = initVad();
+		vadStep(s, 0.3, 1000, { silenceMs: 800, sensitivity: 1 });
+		expect(s.seen).toBe(hadSpeech(0.3));
+		const q = initVad();
+		vadStep(q, 0.05, 1000, { silenceMs: 800, sensitivity: 1 });
+		expect(q.seen).toBe(hadSpeech(0.05));
 	});
 });

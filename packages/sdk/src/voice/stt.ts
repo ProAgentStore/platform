@@ -3,6 +3,7 @@
 import { API, getToken } from "../client.js";
 import { drainSseData, isTooShortToTranscribe, parseUpstreamErrorDetail, pickRecorderMimeType, whisperFilename } from "./audio.js";
 import { finalizeTranscript, initialTranscriptState, reduceTranscriptPayload } from "./transcript.js";
+import { hadSpeech } from "./vad.js";
 
 /** OpenAI's real-time transcription model — replaces the legacy batch `whisper-1`.
  *  Same upload endpoint, far better accuracy/latency, no verbose_json (we use json). */
@@ -78,6 +79,8 @@ export class VoiceStt {
 	private _discard = false;
 	/** When the current recording started — used to drop sub-threshold captures. */
 	private _recStartedAt = 0;
+	/** Loudest mic level seen during the current recording, fed by noteLevel(). */
+	private _peakLevel = 0;
 
 	/** The recorder's mic stream (Whisper mode) so the audio meter can reuse it
 	 *  instead of opening a SECOND getUserMedia — a second capture mutes the recorder
@@ -132,6 +135,17 @@ export class VoiceStt {
 	 *  recycle a silent recording when the mic has sat open with no speech — avoids
 	 *  uploading a long, mostly-silent blob to Whisper. Still fires onEnd so
 	 *  conversation mode reopens the mic. No-op for browser dictation. */
+	/**
+	 * Feed the current mic level (0–1) from the caller's analyser loop.
+	 *
+	 * Deliberately not gated on listening mode: the auto-VAD runs only in hands-free, so gating
+	 * this the same way would leave tap-to-talk — the mode where a stray double-tap records pure
+	 * silence — with no speech gate at all.
+	 */
+	noteLevel(level: number) {
+		if (level > this._peakLevel) this._peakLevel = level;
+	}
+
 	stopDiscard() {
 		if (this.provider === "browser") return this.stop();
 		this._discard = true;
@@ -209,6 +223,7 @@ export class VoiceStt {
 
 	private async _startRecording() {
 		this._discard = false;
+		this._peakLevel = 0;
 		try {
 			this._stream = await navigator.mediaDevices.getUserMedia({
 				// noiseSuppression keeps the silence floor low (so the VAD can detect a
@@ -234,6 +249,16 @@ export class VoiceStt {
 				// — the dominant Whisper error in the log — so never send it.
 				if (this._discard || !chunks.length || isTooShortToTranscribe(blob.size, durationMs)) {
 					this._discard = false;
+					this.onEnd();
+					return;
+				}
+				// SPEECH GATE. Silence sent to Whisper does not come back empty — with a
+				// vocabulary prompt attached it continues the prompt and returns a fluent
+				// sentence built from those terms, which is then attributed to the user and (in
+				// hands-free) auto-sent. See hadSpeech() for the real transcript this produced.
+				// Skipped when nothing ever called noteLevel(), so a caller with no analyser
+				// keeps working rather than going silently deaf.
+				if (this._peakLevel > 0 && !hadSpeech(this._peakLevel)) {
 					this.onEnd();
 					return;
 				}
