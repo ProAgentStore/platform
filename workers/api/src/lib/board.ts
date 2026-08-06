@@ -1,6 +1,7 @@
 import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "./agent-capabilities.js";
+import { patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
 
 /** How the board can be viewed in the console. Persisted per-instance so the choice
  *  follows the user across devices and is settable via UI, MCP, and the agent itself. */
@@ -344,9 +345,12 @@ export async function setInstanceBoardConfig(
 		else delete cfg.boardColumns; // null / empty / invalid → reset to the agent's columns
 	}
 	if (patch.view === "list" || patch.view === "kanban") cfg.boardView = patch.view;
-	await env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instanceId, userId)
-		.run();
+	// Patch the two board keys individually rather than rewriting the whole blob (#231): the
+	// agent's own `configure_board` tool can fire while the owner is saving Settings in the
+	// console, and a whole-blob write would silently discard whichever landed first.
+	if (cfg.boardColumns === undefined) await removeInstanceConfigKey(env, instanceId, userId, "boardColumns");
+	else await patchInstanceConfig(env, instanceId, userId, "boardColumns", cfg.boardColumns);
+	if (cfg.boardView !== undefined) await patchInstanceConfig(env, instanceId, userId, "boardView", cfg.boardView);
 	return boardConfigForInstance(env, instanceId, userId);
 }
 

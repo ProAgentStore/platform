@@ -450,7 +450,7 @@ describe("PUT /v1/instances/:id/tools/:name — the owner's off-switch", () => {
 							? { id: "i1", agent_id: "a1", user_id: "u1", status: "active", config: "{}" }
 							: null,
 				run: async () => {
-					if (sql.includes("UPDATE agent_instances")) written = String(args[0]);
+					if (sql.includes("json_set(") && sql.includes("$.disabledTools")) written = String(args[0]);
 					return { meta: { changes: 1 } };
 				},
 				all: async () => ({ results: [] }),
@@ -458,7 +458,9 @@ describe("PUT /v1/instances/:id/tools/:name — the owner's off-switch", () => {
 		});
 		const res = await req(app, env, "/v1/instances/i1/tools/http_request", { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
 		expect(res.status).toBe(200);
-		expect(JSON.parse(written).disabledTools).toEqual(["http_request"]);
+		// Targeted json_set on $.disabledTools, not a whole-blob rewrite (#231) — a whole-blob
+		// write here would drop a Settings change saved from another tab between read and write.
+		expect(written).toEqual(JSON.stringify(["http_request"]));
 	});
 
 	it("refuses to record an off-switch for a tool the agent never had", async () => {

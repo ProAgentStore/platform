@@ -3,6 +3,7 @@ import { HttpError, requireUser } from "../lib/auth.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { getRegistryTool, registryTools, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
 import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledTools } from "../lib/instance-tool-policy.js";
+import { patchInstanceConfig } from "../lib/instance-config.js";
 import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { getConnector } from "../lib/connectors/registry.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
@@ -105,19 +106,13 @@ toolRoutes.put("/:id/tools/:name", async (c) => {
 		throw new HttpError(403, explainRefusal(name, "not_declared"));
 	}
 
-	let cfg: Record<string, unknown> = {};
-	try {
-		cfg = JSON.parse(instance.config || "{}") as Record<string, unknown>;
-	} catch {
-		/* malformed config → rebuild from empty rather than fail the toggle */
-	}
 	const disabled = new Set(readDisabledTools(instance.config));
 	if (body.enabled) disabled.delete(name);
 	else disabled.add(name);
-	cfg[DISABLED_TOOLS_KEY] = [...disabled];
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instance.id, session.uid)
-		.run();
+	// Patch only this key (#231). Rewriting the whole blob here would drop a Settings or
+	// behaviour change saved from another tab between our read and our write — and the toggle
+	// is exactly the kind of thing done while other settings are open.
+	await patchInstanceConfig(c.env, instance.id, session.uid, DISABLED_TOOLS_KEY, [...disabled]);
 	return c.json({ name, enabled: body.enabled, disabledTools: [...disabled] });
 });
 

@@ -17,6 +17,20 @@ import type { Env } from "../types.js";
 interface Write { sql: string; args: unknown[] }
 
 /**
+ * Board config is now written with targeted `json_set` / `json_remove` per key (#231) rather
+ * than one whole-blob assignment, so the merged result no longer exists in JS for a test to
+ * inspect — SQLite does the merge. These read the patch that was issued instead.
+ */
+function patchFor(writes: Write[], key: string): unknown | undefined {
+	const w = writes.find((x) => x.sql.includes("json_set(") && x.sql.includes(`'$.${key}'`));
+	return w ? JSON.parse(w.args[0] as string) : undefined;
+}
+function removedKey(writes: Write[], key: string): boolean {
+	return writes.some((x) => x.sql.includes("json_remove(") && x.sql.includes(`'$.${key}'`));
+}
+
+
+/**
  * Configurable D1 stub for board.ts. `first(sql,args)` / `all(sql,args)` are resolved by
  * the test against the query text, and every INSERT/UPDATE/DELETE is recorded so a test
  * can assert exactly which mutation ran with which bound args (the real behavior — the
@@ -95,11 +109,8 @@ describe("setInstanceBoardConfig", () => {
 			columns: [{ id: "c", title: "C", color: "#fff" }],
 			view: "list",
 		});
-		const update = writes.find((w) => w.sql.includes("UPDATE agent_instances"));
-		expect(update).toBeTruthy();
-		const savedCfg = JSON.parse(update!.args[0] as string);
-		expect(savedCfg.boardColumns).toEqual([{ id: "c", title: "C", color: "#fff", statuses: undefined, catchAll: false }]);
-		expect(savedCfg.boardView).toBe("list");
+		expect(patchFor(writes, "boardColumns")).toEqual([{ id: "c", title: "C", color: "#fff", catchAll: false }]);
+		expect(patchFor(writes, "boardView")).toBe("list");
 		// Returns the freshly resolved config (source=instance from the readback).
 		expect(cfg.source).toBe("instance");
 	});
@@ -111,10 +122,10 @@ describe("setInstanceBoardConfig", () => {
 				: { config: JSON.stringify({ boardColumns: [{ id: "old", title: "Old" }], keepMe: 1 }) },
 		});
 		await setInstanceBoardConfig(env, "inst-1", "u1", { columns: null });
-		const update = writes.find((w) => w.sql.includes("UPDATE agent_instances"));
-		const savedCfg = JSON.parse(update!.args[0] as string);
-		expect(savedCfg.boardColumns).toBeUndefined(); // override deleted
-		expect(savedCfg.keepMe).toBe(1); // sibling config fields preserved
+		expect(removedKey(writes, "boardColumns")).toBe(true); // override deleted
+		// Siblings are preserved by construction now: the UPDATE only touches $.boardColumns,
+		// so an unrelated key cannot be lost even by a concurrent writer (#231).
+		expect(writes.every((w) => !w.sql.includes("SET config = ?1"))).toBe(true);
 	});
 
 	it("caps the stored columns at MAX_BOARD_COLUMNS", async () => {
@@ -125,9 +136,7 @@ describe("setInstanceBoardConfig", () => {
 				: { config: "{}" },
 		});
 		await setInstanceBoardConfig(env, "inst-1", "u1", { columns: many });
-		const update = writes.find((w) => w.sql.includes("UPDATE agent_instances"));
-		const savedCfg = JSON.parse(update!.args[0] as string);
-		expect(savedCfg.boardColumns).toHaveLength(MAX_BOARD_COLUMNS);
+		expect(patchFor(writes, "boardColumns")).toHaveLength(MAX_BOARD_COLUMNS);
 	});
 });
 
@@ -201,8 +210,7 @@ describe("configureBoardForAgent (the agent's own configure_board tool)", () => 
 		});
 		const res = await configureBoardForAgent(env, "inst-1", "u1", { reset: true });
 		expect(res.success).toBe(true);
-		const update = writes.find((w) => w.sql.includes("UPDATE agent_instances"));
-		expect(JSON.parse(update!.args[0] as string).boardColumns).toBeUndefined();
+		expect(removedKey(writes, "boardColumns")).toBe(true);
 	});
 });
 
