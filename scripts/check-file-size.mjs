@@ -67,7 +67,12 @@ const SLACK = 40;
  */
 const PINS = {
 	// The five worst, and the two the #302 evidence is actually about.
-	"workers/mcp/src/instance-tools/base.ts": 1871,
+	//
+	// `workers/mcp/src/instance-tools/base.ts` was the largest of them at 1871 lines and 67
+	// tool registrations. #305 split it along the registration boundaries it already had into
+	// nine group modules (base/runtime/knowledge/observability/board/settings/triggers/
+	// composition/account), the largest of which is under 300 lines — so its entry is gone
+	// rather than lowered, which is what this guard asks for when a file drops under LIMIT.
 	"workers/api/src/routes/coding.ts": 1769,
 	"workers/api/src/routes/instances.ts": 1696,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio

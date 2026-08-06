@@ -58,41 +58,70 @@ src/
 ├── storage-tools.ts      13 tools — collections, records, agent files, KB search, activity
 ├── repo-tools.ts         GitHub helpers + starter templates (no tool registrations)
 └── instance-tools/
-    ├── index.ts          builds the ctx, calls the six group registrars
+    ├── index.ts          builds the ctx, calls the fourteen group registrars
     ├── shared.ts         TokenResolver/SafetyResolver, trigger config, board grouping
-    ├── base.ts           67 tools — the bulk of the instance surface
+    │   ── ungated: every subscriber gets these ──
+    ├── base.ts           7 tools — the connector-tool gate, subscribe/cancel, chat
+    ├── runtime.ts        7 tools — the `pags up` runtime + its task queue
+    ├── knowledge.ts      10 tools — documents, files, vectors, memory
+    ├── observability.ts  6 tools — messages, activity, errors, trace, pipeline runs
+    ├── board.ts          8 tools — the board, its columns, the per-ticket thread (#150)
+    ├── settings.ts       11 tools — settings, name, instructions, model, translation, state
+    ├── triggers.ts       5 tools — webhook / cron / connector-sync triggers
+    ├── composition.ts    8 tools — supervision (#183), connections (#182), loops
+    ├── account.ts        5 tools — billing, usage, keys, email, profile
+    ├── connectors.ts     4 tools — connector status and folder grants
+    ├── stats.ts          4 tools — declarative stats cards (creator schema + subscriber override)
+    │   ── surface-gated ──
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
-    ├── coding.ts         system_status (gated to surfaces:["coding"]) + 3 loop tools
-    ├── connectors.ts     4 tools — connector status and folder grants
-    └── stats.ts          4 tools — declarative stats cards (creator schema + subscriber override)
+    └── coding.ts         system_status (gated to surfaces:["coding"]) + 3 loop tools
 ```
 
 **130 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
 inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 86 across
 `instance-tools/`. 112 are always registered; 18 are surface-gated.
 
+`base.ts` was 1871 lines and 67 of those 86 tools until #305 — the file a tool landed in
+when nobody decided where it went, and the largest in the repo. The nine ungated groups
+above are that file split along the registration boundaries it already had; the blocks
+moved verbatim.
+
 Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
-`instance-tools.test.ts`, `oauth-provider.test.ts`, `repo-tools.test.ts`,
-`safety.test.ts`, `storage-tools.test.ts`.
+`instance-tools.test.ts`, `instance-tools/contract.test.ts`, `oauth-provider.test.ts`,
+`repo-tools.test.ts`, `safety.test.ts`, `storage-tools.test.ts`.
+
+`instance-tools/contract.test.ts` is the one to know about. It holds all 86 instance tools
+to a table of **group, scope, confirmation string, dry-run behaviour and input fields** —
+and every value in that table is DERIVED by driving the registered handler (call it holding
+only `read`, then holding everything but `read`, and read the required scope out of the
+refusal), not declared. So it catches the failure mode this surface is actually prone to: a
+tool that keeps working while quietly losing its gate. If you add or move a tool, that test
+tells you exactly what you changed about it.
 
 ## Adding a tool
 
-1. Pick the file by group. A new instance tool goes in `instance-tools/base.ts` unless it
-   belongs to a gated surface.
+1. Pick the file by group — the layout above says what each one is for. There is no
+   default file any more: `base.ts` is the lifecycle group, not the overflow bin (#305).
+   If nothing fits, add a group and register it from `instance-tools/index.ts`.
 2. Signature: `server.tool(name, description, zodShape, handler)`. `name` is
    `snake_case`. The description is what a calling model reads — say what it does, what
    it does *not* do, and which tool to call first.
 3. Every authenticated tool takes
    `token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in.")`
    and starts with `const sessionToken = tokenFor(token); if (!sessionToken) return authRequired();`.
-4. Then, in this order: `requirePermission` → `requireConfirmation` (destructive only) →
-   `if (dry_run) return dryRun(...)` → `authedCall` → `audit(..., {action:"completed"})` →
-   `jsonText`.
+4. Then, in this order: `requirePermission` → `if (dry_run) return dryRun(...)` →
+   `requireConfirmation` (destructive only) → `authedCall` →
+   `audit(..., {action:"completed"})` → `jsonText`. Dry run comes BEFORE confirmation on
+   purpose and in every tool: asking what a destructive call *would* do must not itself
+   require the confirmation token. (This step used to claim the opposite order; #305's
+   contract test drives every tool with `dry_run:true` and no `confirm`, and none of them
+   refuses.)
 5. Choose the scope honestly. `write` widens what exists; `runtime` spends or drives
    something; `destructive` deletes, overwrites, or commits an irreversible external
    action. `call_instance_tool` is `write` even for reads because it is a generic
-   invoker.
+   invoker. Whatever you choose, `instance-tools/contract.test.ts` will read it back out
+   of the handler and fail until it is written down.
 6. If it is agent-specific, wrap it in `if (groups.has("<surface>"))` — otherwise a user
    who has no such agent sees a tool that can never apply to them.
 7. Update the table in `README.md` and, if it changes the contract, `AGENTS.md` and
