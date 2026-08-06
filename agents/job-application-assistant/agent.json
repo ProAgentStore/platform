@@ -1,7 +1,7 @@
 {
 	"id": "job-application-assistant",
 	"name": "Job Application Assistant",
-	"description": "Turns a job URL into a tailored application packet, checks whether the job can be safely submitted, and submits only after explicit confirmation.",
+	"description": "Applies to jobs for you. Give it a job URL and an LLM brain (JobApplyWorkflow) drives a real browser on your own machine to fill the form from your saved Profile and résumé. Safe fill-only by default; pauses and asks on captcha, a stuck widget, or a value it does not have.",
 	"storeType": "agent",
 	"category": "productivity",
 	"model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
