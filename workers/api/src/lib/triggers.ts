@@ -2,6 +2,15 @@ import { HttpError } from "./auth.js";
 import { requireConnectorGrant, type ConnectorProvider } from "./connector-grants.js";
 import { cronFields, isValidTimeZone, nextCronInstant } from "./cron-time.js";
 import { applyMapping } from "./trigger-config.js";
+import {
+	describeSync,
+	resolveTraversalLimits,
+	syncDecision,
+	versionedTitle,
+	walkFolderTree,
+	SYNC_MAX_DEPTH,
+	type PriorSyncState,
+} from "./connector-sync.js";
 import { readConnectorRefreshToken } from "./connector-oauth.js";
 import {
 	driveFileDescendsFrom,
@@ -59,6 +68,14 @@ export interface TriggerConfig {
 	folderId?: string;
 	limit?: number;
 	query?: string;
+	/** sync_connector (#20): walk subfolders of the granted root, not just its top level.
+	 *  Absent/false keeps the exact pre-#20 behaviour, so existing triggers are unchanged. */
+	recursive?: boolean;
+	/** sync_connector (#20): how deep to walk when `recursive`. Clamped to SYNC_MAX_DEPTH. */
+	maxDepth?: number;
+	/** sync_connector (#20): keep a NEW document per change instead of updating in place. Opt-in,
+	 *  because unexplained duplicates were the bug — an explicit version history is a choice. */
+	versioned?: boolean;
 	/** run_pipeline: the name of the declarative pipeline (from instance config) to run. */
 	pipeline?: string;
 	/** insert_record: the target collection for a webhook → collection ingest. */
@@ -231,6 +248,10 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			folderId: typeof parsed.folderId === "string" ? parsed.folderId.slice(0, 500) : undefined,
 			limit: typeof parsed.limit === "number" ? Math.max(1, Math.min(Math.trunc(parsed.limit), 20)) : undefined,
 			query: typeof parsed.query === "string" ? parsed.query.slice(0, 200) : undefined,
+			// #20: absent must keep meaning "shallow", so only an explicit true turns recursion on.
+			recursive: parsed.recursive === true ? true : undefined,
+			maxDepth: typeof parsed.maxDepth === "number" ? Math.max(0, Math.min(Math.trunc(parsed.maxDepth), SYNC_MAX_DEPTH)) : undefined,
+			versioned: parsed.versioned === true ? true : undefined,
 			pipeline: typeof parsed.pipeline === "string" ? parsed.pipeline.slice(0, 200) : undefined,
 			collection: typeof parsed.collection === "string" ? parsed.collection.slice(0, 200) : undefined,
 			url: typeof parsed.url === "string" ? parsed.url.slice(0, 2000) : undefined,
@@ -550,7 +571,19 @@ function stringifyPayload(payload: unknown): string {
 
 function successMessage(action: TriggerAction, payload: unknown): string {
 	const result = payloadRecord(payload);
-	if (action === "sync_connector") return `connector sync imported ${Number(result.imported || 0)} file(s), skipped ${Number(result.skipped || 0)}`;
+	if (action === "sync_connector") {
+		return describeSync(
+			{
+				scanned: Number(result.scanned || 0),
+				imported: Number(result.imported || 0),
+				updated: Number(result.updated || 0),
+				skipped: Number(result.skipped || 0),
+				foldersScanned: Number(result.foldersScanned || 0),
+				truncated: result.truncated === true,
+			},
+			Array.isArray(result.errors) ? result.errors.length : 0,
+		);
+	}
 	if (action === "run_pipeline") return `started pipeline "${stringValue(result.pipeline) || "?"}" (run ${stringValue(result.runId).slice(0, 8)})`;
 	if (action === "insert_record") return `inserted a record into "${stringValue(result.collection) || "?"}"`;
 	if (action === "run_browse") return result.skipped ? `browser run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started browser run (task ${stringValue(result.taskId).slice(0, 8)})`;
@@ -571,28 +604,46 @@ async function syncConnectorTrigger(
 	env: Env,
 	trigger: TriggerRow,
 	config: TriggerConfig,
-): Promise<{ provider: ConnectorProvider; grantId: string; scanned: number; imported: number; skipped: number; errors: string[] }> {
+): Promise<{
+	provider: ConnectorProvider;
+	grantId: string;
+	scanned: number;
+	imported: number;
+	updated: number;
+	skipped: number;
+	foldersScanned: number;
+	truncated: boolean;
+	errors: string[];
+}> {
 	const provider = config.provider;
 	const grantId = config.grantId;
 	if (!provider) throw new Error("sync_connector requires config.provider");
 	if (!grantId) throw new Error("sync_connector requires config.grantId");
 	const grant = await requireConnectorGrant(env, trigger.instance_id, trigger.user_id, provider, grantId);
 	const limit = config.limit ?? 10;
-	const items = provider === "google_drive"
+	const errors: string[] = [];
+	const listing = provider === "google_drive"
 		? await listDriveSyncItems(env, trigger, grant.resourceId, config)
 		: await listWorkDriveSyncItems(env, trigger, grant.resourceId, config);
+	// A subtree we could not list is reported but does not fail the sync — one folder with a
+	// permission hole must not stop every other document from syncing.
+	for (const e of listing.errors) errors.push(`folder ${e.folderId}: ${e.message}`.slice(0, 300));
 	let scanned = 0;
 	let imported = 0;
+	let updated = 0;
 	let skipped = 0;
-	const errors: string[] = [];
 	const stub = env.AGENT.get(env.AGENT.idFromName(trigger.instance_id));
-	for (const item of items) {
+	for (const item of listing.items) {
 		scanned++;
-		if (imported >= limit) {
+		// `limit` bounds WRITES per run (imports + updates), so a big changed batch still costs
+		// a bounded number of DO round trips; the rest are picked up on the next run.
+		if (imported + updated >= limit) {
 			skipped++;
 			continue;
 		}
-		if (await syncStateMatches(env, trigger, item.provider, item.id, item.fingerprint)) {
+		const prior = await readSyncState(env, trigger, item.provider, item.id);
+		const decision = syncDecision(prior, item.fingerprint, config.versioned === true);
+		if (decision === "skip") {
 			skipped++;
 			continue;
 		}
@@ -602,25 +653,71 @@ async function syncConnectorTrigger(
 				skipped++;
 				continue;
 			}
-			const res = await stub.fetch(new Request("https://agent/knowledge", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					title: exported.title.slice(0, 500),
-					content: exported.content.slice(0, 100_000),
-					source: item.provider === "google_drive" ? "drive" : "workdrive",
-					sourceUrl: exported.sourceUrl || item.sourceUrl,
-				}),
-			}));
-			if (!res.ok) throw new Error(`knowledge import failed (${res.status})`);
-			const doc = await res.json().catch(() => ({})) as { id?: string };
-			await upsertSyncState(env, trigger, item, doc.id);
-			imported++;
+			const title = decision === "import" && config.versioned === true && prior
+				? versionedTitle(exported.title, new Date())
+				: exported.title;
+			const body = JSON.stringify({
+				title: title.slice(0, 500),
+				content: exported.content.slice(0, 100_000),
+				source: item.provider === "google_drive" ? "drive" : "workdrive",
+				sourceUrl: exported.sourceUrl || item.sourceUrl,
+			});
+
+			let docId: string | undefined;
+			let didUpdate = false;
+			if (decision === "update" && prior?.importedDocId) {
+				// PUT re-vectorizes in place (agent-do-knowledge `updateKnowledge`), so the agent
+				// retrieves ONE current copy instead of one per edit.
+				const res = await stub.fetch(new Request(`https://agent/knowledge/${encodeURIComponent(prior.importedDocId)}`, {
+					method: "PUT",
+					headers: { "Content-Type": "application/json" },
+					body,
+				}));
+				if (res.ok) {
+					docId = prior.importedDocId;
+					didUpdate = true;
+				} else if (res.status !== 404) {
+					throw new Error(`knowledge update failed (${res.status})`);
+				}
+				// 404 = the doc was deleted in the console since we imported it. Fall through and
+				// re-import rather than erroring: the source file still exists and is still granted.
+			}
+			if (!didUpdate) {
+				const res = await stub.fetch(new Request("https://agent/knowledge", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body,
+				}));
+				if (!res.ok) throw new Error(`knowledge import failed (${res.status})`);
+				const doc = await res.json().catch(() => ({})) as { id?: string };
+				docId = doc.id;
+			}
+			await upsertSyncState(env, trigger, item, docId);
+			if (didUpdate) updated++;
+			else imported++;
 		} catch (err) {
 			errors.push(`${item.name}: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300));
 		}
 	}
-	return { provider, grantId, scanned, imported, skipped, errors };
+	return {
+		provider,
+		grantId,
+		scanned,
+		imported,
+		updated,
+		skipped,
+		foldersScanned: listing.foldersScanned,
+		truncated: listing.truncated,
+		errors,
+	};
+}
+
+/** What one provider listing produced, plus how far the walk actually got (#20). */
+interface SyncListing {
+	items: SyncItem[];
+	foldersScanned: number;
+	truncated: boolean;
+	errors: { folderId: string; message: string }[];
 }
 
 async function listDriveSyncItems(
@@ -628,15 +725,32 @@ async function listDriveSyncItems(
 	trigger: TriggerRow,
 	grantedRootId: string,
 	config: TriggerConfig,
-): Promise<SyncItem[]> {
+): Promise<SyncListing> {
 	const refresh = await readConnectorRefreshToken(env, trigger.user_id, "google_drive", "Google Drive");
 	const accessToken = await mintDriveAccessToken(env, refresh);
 	const folder = config.folderId || grantedRootId;
+	// The ONE grant check. Everything below is reached by descending from this folder, so every
+	// descendant is inside the grant by construction — there is no path by which the walk can
+	// leave it.
 	if (!await driveFileDescendsFrom(accessToken, folder, grantedRootId)) {
 		throw new Error("Drive sync folder is outside the granted folder");
 	}
-	const files = await listDriveFolderFiles(accessToken, folder, { query: config.query, pageSize: 50 });
-	return files.filter((file) => !isDriveFolder(file) && isDriveSyncable(file)).map((file) => driveSyncItem(accessToken, file));
+	const walk = await walkFolderTree(
+		folder,
+		async (folderId) => {
+			const files = await listDriveFolderFiles(accessToken, folderId, { query: config.query, pageSize: 50 });
+			return files
+				.filter((file) => isDriveFolder(file) || isDriveSyncable(file))
+				.map((file) => ({ id: file.id, isFolder: isDriveFolder(file), file }));
+		},
+		resolveTraversalLimits(config),
+	);
+	return {
+		items: walk.files.map((n) => driveSyncItem(accessToken, n.file)),
+		foldersScanned: walk.foldersScanned,
+		truncated: walk.truncated,
+		errors: walk.errors,
+	};
 }
 
 function driveSyncItem(accessToken: string, file: DriveFile): SyncItem {
@@ -663,15 +777,30 @@ async function listWorkDriveSyncItems(
 	trigger: TriggerRow,
 	grantedRootId: string,
 	config: TriggerConfig,
-): Promise<SyncItem[]> {
+): Promise<SyncListing> {
 	const refresh = await readConnectorRefreshToken(env, trigger.user_id, "zoho_workdrive", "Zoho WorkDrive");
 	const accessToken = await mintWorkDriveAccessToken(env, refresh);
 	const folder = config.folderId || grantedRootId;
+	// As with Drive: one grant check at the root, and the walk can only go downwards from it.
 	if (!await workDriveFolderContainsFile(env, accessToken, grantedRootId, folder)) {
 		throw new Error("WorkDrive sync folder is outside the granted folder");
 	}
-	const page = await listWorkDriveFolder(env, accessToken, folder, { limit: 50 });
-	return page.files.filter((file) => !file.isFolder && isWorkDriveSyncable(file)).map((file) => workDriveSyncItem(env, accessToken, file));
+	const walk = await walkFolderTree(
+		folder,
+		async (folderId) => {
+			const page = await listWorkDriveFolder(env, accessToken, folderId, { limit: 50 });
+			return page.files
+				.filter((file) => file.isFolder || isWorkDriveSyncable(file))
+				.map((file) => ({ id: file.id, isFolder: file.isFolder, file }));
+		},
+		resolveTraversalLimits(config),
+	);
+	return {
+		items: walk.files.map((n) => workDriveSyncItem(env, accessToken, n.file)),
+		foldersScanned: walk.foldersScanned,
+		truncated: walk.truncated,
+		errors: walk.errors,
+	};
 }
 
 function workDriveSyncItem(env: Env, accessToken: string, file: WorkDriveFile): SyncItem {
@@ -719,18 +848,24 @@ function isWorkDriveSyncable(file: WorkDriveFile): boolean {
 	);
 }
 
-async function syncStateMatches(
+/**
+ * The recorded state for one source file, or null when this trigger has never imported it.
+ *
+ * This used to return only "does the fingerprint match", which is why the duplicate bug existed:
+ * `imported_doc_id` was WRITTEN on every import and never read, so a changed file had nothing to
+ * update and could only be re-created (#20).
+ */
+async function readSyncState(
 	env: Env,
 	trigger: TriggerRow,
 	provider: ConnectorProvider,
 	resourceId: string,
-	fingerprint: string,
-): Promise<boolean> {
+): Promise<PriorSyncState | null> {
 	const row = await env.DB.prepare(
-		`SELECT fingerprint FROM agent_trigger_sync_state
+		`SELECT fingerprint, imported_doc_id FROM agent_trigger_sync_state
      WHERE trigger_id = ?1 AND provider = ?2 AND resource_id = ?3`,
-	).bind(trigger.id, provider, resourceId).first<{ fingerprint: string }>();
-	return row?.fingerprint === fingerprint;
+	).bind(trigger.id, provider, resourceId).first<{ fingerprint: string; imported_doc_id: string | null }>();
+	return row ? { fingerprint: row.fingerprint, importedDocId: row.imported_doc_id } : null;
 }
 
 async function upsertSyncState(

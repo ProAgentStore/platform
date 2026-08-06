@@ -109,6 +109,31 @@ describe("validateTriggerConfig", () => {
 		expect(validateTriggerConfig("sync_connector", "webhook", { limit: 99 }).join(" ")).toContain("between 1 and 20");
 	});
 
+	it("accepts the recursive-sync fields (#20) rather than silently dropping them", () => {
+		expect(validateTriggerConfig("sync_connector", "cron", { provider: "google_drive", grantId: "g1", recursive: true, maxDepth: 3, versioned: true })).toEqual([]);
+	});
+
+	it("says a maxDepth without recursion will do nothing — the sync would stay shallow", () => {
+		const problems = validateTriggerConfig("sync_connector", "cron", { provider: "google_drive", grantId: "g1", maxDepth: 3 });
+		expect(problems.join(" ")).toContain('only applies when "recursive" is true');
+	});
+
+	it("bounds the traversal depth a sync may ask for", () => {
+		expect(validateTriggerConfig("sync_connector", "cron", { provider: "google_drive", grantId: "g1", recursive: true, maxDepth: 99 }).join(" "))
+			.toContain("between 0 and 10");
+	});
+
+	it("rejects non-boolean recursive/versioned", () => {
+		expect(validateTriggerConfig("sync_connector", "cron", { provider: "google_drive", grantId: "g1", recursive: "yes" }).join(" "))
+			.toContain("recursive must be true or false");
+		expect(validateTriggerConfig("sync_connector", "cron", { provider: "google_drive", grantId: "g1", versioned: 1 }).join(" "))
+			.toContain("versioned must be true or false");
+	});
+
+	it("still refuses the sync fields on an action that does not read them", () => {
+		expect(validateTriggerConfig("create_task", "cron", { recursive: true }).join(" ")).toContain("not used by the create_task action");
+	});
+
 	it("rejects a mapping onto a field the action does not have, naming the ones it does", () => {
 		const problems = validateTriggerConfig("create_task", "webhook", { mapping: { content: "body.text" } });
 		expect(problems.join(" ")).toContain('"content" is not a mappable field of create_task');

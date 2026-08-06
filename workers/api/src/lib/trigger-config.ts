@@ -17,6 +17,7 @@
  * whole of that problem.
  */
 
+import { SYNC_MAX_DEPTH } from "./connector-sync.js";
 import { isValidTimeZone } from "./cron-time.js";
 import type { TriggerAction, TriggerType } from "./triggers.js";
 
@@ -31,6 +32,9 @@ export const TRIGGER_CONFIG_KEYS = [
 	"folderId",
 	"limit",
 	"query",
+	"recursive",
+	"maxDepth",
+	"versioned",
 	"pipeline",
 	"collection",
 	"url",
@@ -51,7 +55,7 @@ const ACTION_KEYS: Record<TriggerAction, readonly string[]> = {
 	create_task: ["title", "description", "mapping"],
 	add_knowledge: ["title", "source", "sourceUrl", "mapping"],
 	log_event: ["mapping"],
-	sync_connector: ["provider", "grantId", "folderId", "limit", "query"],
+	sync_connector: ["provider", "grantId", "folderId", "limit", "query", "recursive", "maxDepth", "versioned"],
 	run_pipeline: ["pipeline", "params"],
 	insert_record: ["collection"],
 	run_browse: ["url", "dryRun"],
@@ -200,6 +204,19 @@ export function validateTriggerConfig(action: TriggerAction, type: TriggerType, 
 			problems.push("limit must be a whole number between 1 and 20.");
 		}
 	}
+	// #20: a depth is meaningless without recursion, and saying so at the save button is the
+	// whole point of this validator — otherwise the sync stays shallow and the config implies
+	// it does not.
+	if (raw.maxDepth !== undefined) {
+		const d = raw.maxDepth;
+		if (typeof d !== "number" || !Number.isInteger(d) || d < 0 || d > SYNC_MAX_DEPTH) {
+			problems.push(`maxDepth must be a whole number between 0 and ${SYNC_MAX_DEPTH}.`);
+		} else if (raw.recursive !== true) {
+			problems.push('maxDepth only applies when "recursive" is true — without it the sync reads just the granted folder.');
+		}
+	}
+	if (raw.recursive !== undefined && typeof raw.recursive !== "boolean") problems.push("recursive must be true or false.");
+	if (raw.versioned !== undefined && typeof raw.versioned !== "boolean") problems.push("versioned must be true or false.");
 	if (raw.mapping !== undefined) problems.push(...validateMapping(raw.mapping, action));
 
 	if (type === "cron") {
