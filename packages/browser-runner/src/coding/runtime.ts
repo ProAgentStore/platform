@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 import type { ClientType } from "./handlers.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
-import { ensureRepo, sanitizeSessionName } from "./tmux.js";
+import { ensureRepo, sanitizeSessionName } from "./repo.js";
 
 /**
  * The coding runtime: the local "hands" that hold live tmux coding sessions, the
@@ -186,18 +186,18 @@ export class CodingRuntime {
 		return { ok: true };
 	}
 
-	list(): Array<{ sessionId: string; alive: boolean; tmuxSession: string }> {
+	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string }> {
 		return [...this.sessions.entries()].map(([sessionId, s]) => ({
 			sessionId,
 			alive: s.alive,
-			tmuxSession: s.sessionName,
+			engineLabel: s.engineLabel,
 		}));
 	}
 
 	/** Rich diagnostics for every tracked session — the console's transparency view. */
 	diagnostics(): Array<{
 		sessionId: string;
-		tmuxSession: string;
+		engineLabel: string;
 		alive: boolean;
 		runState: "idle" | "thinking" | "responding";
 		ready: boolean;
@@ -208,7 +208,7 @@ export class CodingRuntime {
 	}> {
 		return [...this.sessions.entries()].map(([sessionId, s]) => ({
 			sessionId,
-			tmuxSession: s.sessionName,
+			engineLabel: s.engineLabel,
 			alive: s.alive,
 			runState: s.alive ? s.runState() : "idle",
 			ready: s.alive ? s.ready : false,

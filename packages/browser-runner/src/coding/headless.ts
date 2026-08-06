@@ -81,7 +81,16 @@ interface StreamEvent {
 }
 
 export class HeadlessSession {
-	readonly sessionName: string;
+	/**
+	 * A human-readable label for this engine process (#247).
+	 *
+	 * Was `sessionName`, formatted `pags-<client>-<id>` — which looked exactly like a tmux
+	 * target and was reported to the console as `tmuxSession`. The engine has not used tmux
+	 * since it moved to the stream-json interface, so a user who did the obvious thing with a
+	 * name like that (`tmux attach -t pags-claude-…`) got "session not found" and reasonably
+	 * concluded their engine was broken. It addresses nothing — it is only ever displayed.
+	 */
+	readonly engineLabel: string;
 	private proc: ChildProcess | null = null;
 	private buf = "";
 	private transcript: string[] = [];
@@ -112,7 +121,7 @@ export class HeadlessSession {
 	private spawnFailed = false;
 
 	constructor(readonly config: HeadlessSessionConfig) {
-		this.sessionName = `pags-${config.clientType}-${config.id}`;
+		this.engineLabel = `${config.clientType}:${config.id}`;
 		this.claudeSessionId = readState(config.statePath, config.id);
 		// Claude is the structured engine; everything else is a raw CLI.
 		this.mode = config.clientType === "claude" ? "stream-json" : "raw";

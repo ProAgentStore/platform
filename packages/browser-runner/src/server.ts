@@ -187,18 +187,12 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, { sessions: runner.coding.list() });
 	}
 	if ((req.method === "GET" || req.method === "POST") && path === "/coding/diagnostics") {
-		const { listSessions: tmuxList } = await import("./coding/tmux.js");
-		const allTmux = tmuxList();
-		const pagsTmux = allTmux.filter((n: string) => n.startsWith("pags-"));
-		const tracked = runner.coding.diagnostics();
-		const trackedNames = new Set(tracked.map((s) => s.tmuxSession));
-		const orphanedTmux = pagsTmux.filter((n: string) => !trackedNames.has(n));
-		return json(res, 200, {
-			tracked,
-			orphanedTmux,
-			tmuxTotal: allTmux.length,
-			pagsTmuxTotal: pagsTmux.length,
-		});
+		// No tmux figures here any more (#247). The coding engine spawns a child process
+		// directly, so `pagsTmuxTotal` was structurally always 0 and `tmuxTotal` counted the
+		// user's own unrelated sessions — this is the panel someone opens BECAUSE something is
+		// wrong, and it pointed them at a false cause. The terminal-operator agents, which do
+		// use tmux, have their own /tmux/* endpoints and are unaffected.
+		return json(res, 200, { tracked: runner.coding.diagnostics() });
 	}
 	if (req.method === "POST" && path === "/coding/browse") {
 		const { readdirSync, statSync } = await import("node:fs");
@@ -221,25 +215,14 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 			return json(res, 400, { error: e instanceof Error ? e.message : String(e), dir });
 		}
 	}
-	if (req.method === "POST" && path === "/coding/kill-tmux") {
-		const { killSession: tmuxKill, listSessions: tmuxList } = await import("./coding/tmux.js");
-		const b = await readJson<{ sessions?: string[]; orphansOnly?: boolean }>(req);
-		let targets: string[] = [];
-		if (b.orphansOnly) {
-			const allTmux = tmuxList();
-			const pagsTmux = allTmux.filter((n: string) => n.startsWith("pags-"));
-			const tracked = new Set(runner.coding.diagnostics().map((s) => s.tmuxSession));
-			targets = pagsTmux.filter((n: string) => !tracked.has(n));
-		} else if (b.sessions?.length) {
-			targets = b.sessions.filter((n) => typeof n === "string" && n.startsWith("pags-"));
-		} else {
-			// Kill all pags-* tmux sessions
-			targets = tmuxList().filter((n: string) => n.startsWith("pags-"));
-			runner.coding.closeAll();
-		}
-		let killed = 0;
-		for (const name of targets) { if (tmuxKill(name)) killed++; }
-		return json(res, 200, { killed, sessions: targets });
+	// Close every tracked coding session. The path still says "kill-tmux" ON PURPOSE: an older
+	// runner must keep answering a newer API, and renaming it would 404 across that skew (#247).
+	// The tmux half is gone — it only ever targeted `pags-*` sessions, which the coding engine
+	// has never created. `closeAll()` is the part that always worked, and is now the whole job.
+	if (req.method === "POST" && (path === "/coding/kill-tmux" || path === "/coding/close-sessions")) {
+		const closed = runner.coding.diagnostics().map((s) => s.sessionId);
+		runner.coding.closeAll();
+		return json(res, 200, { closed: closed.length, sessions: closed });
 	}
 	// ── Read-only code inspection (the Co-pilot/Chat's "eyes" — no CLI driving) ──
 	// Confined to the session's workDir by inspect.ts; errors surface as 400.

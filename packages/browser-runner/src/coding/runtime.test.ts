@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CodingRuntime } from "./runtime.js";
-import { ensureRepo } from "./tmux.js";
+import { ensureRepo } from "./repo.js";
+import { HeadlessSession } from "./headless.js";
 
 // A fake `claude` that speaks stream-json: init on start, then for each user turn
 // echoes a result. Lets us drive the runtime without a real Claude install.
@@ -160,5 +161,18 @@ describe("CodingRuntime over the stream-json engine", () => {
 		expect(rt.snapshot("s3").pane).toContain("REPLY:human-says-hi");
 		rt.endTakeover("s3");
 		expect(rt.isUnderTakeover("s3")).toBe(false);
+	});
+});
+
+// ── #247: nothing on the coding path may look like a tmux target ─────────────
+describe("engine label", () => {
+	// The bug this closes: the label was `pags-<client>-<id>` and was reported to the console
+	// as `tmuxSession`, so the obvious move — `tmux attach -t pags-claude-…` — returned
+	// "session not found" and users concluded their engine was broken. It never addressed
+	// anything; the engine is a child process.
+	it("does not use the pags- prefix that invited tmux attach", () => {
+		const s = new HeadlessSession({ id: "csess_abc", clientType: "claude", workDir: "/tmp", command: "claude" } as never);
+		expect(s.engineLabel).not.toMatch(/^pags-/);
+		expect(s.engineLabel).toBe("claude:csess_abc");
 	});
 });

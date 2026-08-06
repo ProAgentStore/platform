@@ -201,6 +201,9 @@ interface SessionRow {
 	user_id: string;
 	client_type: string;
 	status: string;
+	/** Legacy column name (#247): holds the engine LABEL, not a tmux target — the coding
+	 *  engine spawns a child process. Kept as-is because renaming a D1 column is a table
+	 *  rewrite for a cosmetic gain; surfaced through the API as `engineLabel`. */
 	tmux_session: string | null;
 	runner_node: string | null;
 	launch_command: string | null;
@@ -342,7 +345,7 @@ export async function suspendSessionsFromOtherNodes(env: Env, instanceId: string
 
 /**
  * Reactivate the reconnecting machine's OWN suspended sessions. The runner reattaches to the
- * tmux sessions on the next /start. Index-safe: resumes at most the newest suspended session
+ * engine sessions on the next /start. Index-safe: resumes at most the newest suspended session
  * per repo, and ONLY for repos with no active session already, so it can never violate
  * idx_coding_sessions_one_active (which an unconditional bulk resume would).
  */
@@ -406,8 +409,8 @@ export async function endSession(env: Env, instanceId: string, userId: string, s
 }
 
 /**
- * Reconcile stale "active" sessions against the runner's live tmux set (#139). When the
- * runner is reachable but reports NO live tmux for a D1-`active` session, that session was
+ * Reconcile stale "active" sessions against the runner's live tracked set (#139). When the
+ * runner is reachable but is NOT tracking a D1-`active` session, that session was
  * orphaned by a runner restart / machine reboot — mark it `ended` so it stops showing as
  * active forever and can't be handed back by getActiveSessionForRepo as a dead session.
  * A short grace window (updated_at older than 3 minutes) protects a just-created session
@@ -441,8 +444,8 @@ export async function reconcileOrphanedSessions(
  *
  * A claim with no expiry was a permanent lockout. Release happens in `endSession`, and the
  * reasoning was that a dead workflow would be cleaned up by `reconcileOrphanedSessions` — but that
- * only fires when the RUNNER reports no tmux. A workflow that dies while its tmux is perfectly
- * healthy leaves the session `active` forever, and every later run gets "already being worked on"
+ * only fires when the RUNNER stops tracking the session. A workflow that dies while its engine
+ * process is perfectly healthy leaves the session `active` forever, and every later run gets "already being worked on"
  * with nothing to stop and no way back. That happened in production within hours.
  *
  * Fifteen minutes because a live Pilot heartbeats on every action (`touchSessionDriver`), so the

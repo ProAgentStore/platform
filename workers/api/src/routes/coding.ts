@@ -1410,14 +1410,25 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 });
 
 /** Kill tmux sessions on the runner (orphaned, specific, or all pags-*). */
-codingRoutes.post("/:instanceId/coding/kill-tmux", async (c) => {
+/**
+ * Close every tracked coding session on the runner.
+ *
+ * `close-sessions` is the real name; `kill-tmux` remains as a deprecated alias because
+ * renaming a route buys nothing when nothing calls it, and an older console might (#247). The
+ * runner endpoint keeps its legacy path for the same version-skew reason.
+ */
+codingRoutes.post("/:instanceId/coding/close-sessions", async (c) => closeCodingSessions(c));
+codingRoutes.post("/:instanceId/coding/kill-tmux", async (c) => closeCodingSessions(c));
+
+async function closeCodingSessions(c: Context<{ Bindings: Env }>) {
 	const { uid, instanceId } = await requireOwned(c);
 	const conn = await getDefaultRunnerConn(c.env, instanceId, uid);
 	if (!conn) return c.json({ error: "Runner not connected", runnerConnected: false }, 502);
-	const body = await c.req.json<{ sessions?: string[]; orphansOnly?: boolean }>();
-	const result = await callRunner(conn, "/coding/kill-tmux", body, { timeoutMs: READ_TIMEOUT_MS });
+	// Legacy runner path on purpose — an older runner has no /coding/close-sessions, and this
+	// is the only endpoint that ever did the useful work.
+	const result = await callRunner(conn, "/coding/kill-tmux", {}, { timeoutMs: READ_TIMEOUT_MS });
 	return c.json(result);
-});
+}
 
 /** List directories on the runner (for remote browsing). */
 codingRoutes.get("/:instanceId/coding/browse", async (c) => {
@@ -1491,7 +1502,11 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 
 	// 4. Cross-reference D1 active sessions vs runner's tracked sessions
 	const trackedIds = new Set<string>();
-	const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; tmuxSession: string; takeover: boolean }>; orphanedTmux?: string[]; tmuxTotal?: number; pagsTmuxTotal?: number } | null;
+	// No tmux fields (#247): the coding engine spawns a child process, so the old
+	// orphanedTmux/tmuxTotal/pagsTmuxTotal figures described something that could never exist
+	// for these sessions. `engineLabel` replaces `tmuxSession`, which only ever looked like a
+	// tmux target a user could attach to.
+	const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; engineLabel: string; takeover: boolean }> } | null;
 	if (diagData?.tracked) {
 		for (const t of diagData.tracked) trackedIds.add(t.sessionId);
 	}
@@ -1513,7 +1528,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 			return {
 				id: s.id, repoId: s.repoId, repoName: repo?.name ?? s.repoId,
 				status: "ended" as const, clientType: s.clientType,
-				launchCommand: s.launchCommand ?? null, tmuxSession: s.tmuxSession ?? null,
+				launchCommand: s.launchCommand ?? null, engineLabel: s.tmuxSession ?? null,
 				startedAt: s.startedAt, endedAt: new Date().toISOString(), live: null,
 				issue: null, reconciled: true,
 			};
@@ -1531,7 +1546,9 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 			status: s.status,
 			clientType: s.clientType,
 			launchCommand: s.launchCommand ?? null,
-			tmuxSession: s.tmuxSession ?? null,
+			// The D1 column is still called tmux_session (renaming it is a table rewrite for a
+			// cosmetic gain); what it holds is an engine label. Surfaced honestly.
+			engineLabel: s.tmuxSession ?? null,
 			startedAt: s.startedAt,
 			endedAt: s.endedAt ?? null,
 			// Live state from the runner (null if runner is offline or session not tracked)
@@ -1594,10 +1611,6 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 		if (r.issue) issues.push({ severity: "warn", message: `Repo "${r.name}": ${r.issue}`, fix: r.cloneStatus === "error" ? "Delete and re-add the repo, or fix the clone URL" : undefined });
 	}
 
-	if (diagData?.orphanedTmux?.length) {
-		issues.push({ severity: "info", message: `${diagData.orphanedTmux.length} orphaned tmux session(s): ${diagData.orphanedTmux.join(", ")}`, fix: "Use the 'Kill orphaned' button in the tmux section above" });
-	}
-
 	const activeSessions = sessions.filter((s) => s.status === "active");
 	const healthySessions = activeSessions.filter((s) => s.live?.alive);
 
@@ -1615,12 +1628,11 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 		},
 		runner,
 		relay: { connected: relayIsConnected, relayName, runnerNode: runtimeRow?.runner_node ?? null },
-		tmux: diagData ? {
-			trackedSessions: diagData.tracked?.length ?? 0,
-			orphanedSessions: diagData.orphanedTmux ?? [],
-			tmuxTotal: diagData.tmuxTotal ?? 0,
-			pagsTmuxTotal: diagData.pagsTmuxTotal ?? 0,
-		} : null,
+		// `tmux: {...}` is gone (#247). Every figure in it described something that cannot exist
+		// for a coding session: pagsTmuxTotal was structurally 0, and tmuxTotal counted the
+		// user's own unrelated tmux sessions. `engine.trackedSessions` is the honest version —
+		// how many engine processes the runner is actually tracking.
+		engine: diagData ? { trackedSessions: diagData.tracked?.length ?? 0 } : null,
 		sessions,
 		repos,
 		githubApp,
