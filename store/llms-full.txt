@@ -93,12 +93,13 @@ Do not bypass MCP with direct database writes, private API calls, browser-only s
 
 ## MCP Safety Contract
 
-- OAuth scopes: `read`, `write`, `runtime`, `destructive`.
-- Server-side read-only mode: set `MCP_READ_ONLY=1` on the MCP worker.
-- Use `dry_run: true` on mutating tools before making uncertain changes.
-- Repository overwrite tools require exact confirmation: `write_agent_file` or `batch_write_agent_files`.
-- Destructive tools require exact confirmation: `unregister_instance_runtime`, `cancel_instance_task`, `delete_instance_knowledge`, or `cancel_instance`.
-- Use `mcp_audit_log` to read recent write, runtime, dry-run, denied, and destructive MCP audit events for the authenticated account.
+- OAuth scopes: `read`, `write`, `runtime`, `destructive`. The default grant from a browser sign-in is `read write runtime`; `destructive` is never included by default and a client must request it explicitly at authorization time.
+- Server-side read-only mode: set `MCP_READ_ONLY=1` on the MCP worker. It denies every non-`read` scope server-wide.
+- Use `dry_run: true` on mutating tools before making uncertain changes. It returns `{dryRun, tool, action, wouldDo}`, is audited, and changes nothing. The scope check runs first, so a dry run of a tool you lack scope for still denies.
+- Twelve tools require an exact `confirm` value (compared with `===`, never fuzzy-matched). Eleven use the tool's own name: `write_agent_file`, `batch_write_agent_files`, `unregister_instance_runtime`, `cancel_instance_task`, `cancel_instance`, `delete_instance_knowledge`, `delete_instance_memory`, `delete_instance_file`, `delete_instance_trigger`, `delete_instance_connector_grant`, `clear_instance_messages`. `remove_repo` is the exception: `confirm: "remove_all_repos"`, and only when removing every repo.
+- The tool surface is per-connection. Some tools are registered only when the connected account subscribes to an agent with the matching console surface (`apply`, `repo`, `coding`). A tool being absent normally means a missing subscription, not an outage — call `tools/list` rather than assuming a name exists.
+- Failures are not signalled with `isError`. A failed call returns a text block beginning `Error: `, or JSON carrying an `error` key (the HTTP layer turns any non-2xx into `{"error": "API <status>", …}`).
+- Use `mcp_audit_log` to read recent write, runtime, dry-run, denied, and destructive MCP audit events for the authenticated account. Audit rows are written only for OAuth-connected callers; passing a per-call `token` argument carries no subject and is intentionally unaudited.
 - There is no generic shell, arbitrary API proxy, or platform-owned AI spend path.
 
 ## Project-local MCP Config
@@ -154,6 +155,8 @@ Add your Cloudflare Workers AI account ID and API token before running this agen
 That response means the private instance path is working and correctly refusing to spend platform-owned AI.
 
 ## Main MCP Tool Groups
+
+The server registers 124 tools; 106 are always present and 18 are gated to the `apply`, `repo`, and `coding` surfaces. The lists below are the commonly used subset, not the full surface — call `tools/list` for the authoritative set, and see the tool table in `workers/mcp/README.md` for scopes, `dry_run` support, and confirmation values.
 
 Creator tools:
 

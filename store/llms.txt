@@ -59,11 +59,12 @@ Agents must use ProAgentStore account state only through the configured MCP serv
 
 MCP safety:
 
-- OAuth scopes: `read`, `write`, `runtime`, `destructive`.
+- OAuth scopes: `read`, `write`, `runtime`, `destructive`. A plain browser sign-in grants `read write runtime` — `destructive` is never a default and must be requested explicitly at authorization time.
 - Server-side read-only mode: `MCP_READ_ONLY=1`.
 - Use `dry_run: true` on mutating tools before making uncertain changes.
-- Repository overwrite tools require `confirm: "write_agent_file"` or `confirm: "batch_write_agent_files"`.
-- Destructive tools require exact confirmation: `unregister_instance_runtime`, `cancel_instance_task`, `delete_instance_knowledge`, or `cancel_instance`.
+- Twelve tools require an exact `confirm` value, compared with `===`. In eleven cases the value is the tool's own name: `write_agent_file`, `batch_write_agent_files`, `unregister_instance_runtime`, `cancel_instance_task`, `cancel_instance`, `delete_instance_knowledge`, `delete_instance_memory`, `delete_instance_file`, `delete_instance_trigger`, `delete_instance_connector_grant`, `clear_instance_messages`. The exception is `remove_repo`, which takes `confirm: "remove_all_repos"` and only when removing every repo.
+- The tool list is per-connection: some tools are gated to the console surfaces of the agents you actually subscribe to (`apply`, `repo`, `coding`). Call `tools/list` — a missing tool usually means a missing subscription, not an outage.
+- Failures do not set `isError`. A failed call returns text beginning `Error: `, or JSON carrying an `error` key.
 - Use `mcp_audit_log` to inspect recent write, runtime, dry-run, denied, and destructive MCP events.
 
 Use public trial chat only for discovery:
