@@ -213,8 +213,12 @@ export class LocalRunner {
 	async close(): Promise<void> {
 		try {
 			this.coding.closeAll();
-		} catch {
-			// a stuck coding session must not block the browser teardown below
+		} catch (e) {
+			// A stuck coding session must not block the browser teardown below — but it must not
+			// vanish either. `closeAll` now stops every session independently and only throws to
+			// report which ones refused, so reaching here means a child process may have outlived
+			// the runner. Silence here is what let that read as a clean shutdown.
+			console.warn(`[runner] ${e instanceof Error ? e.message : String(e)} — a CLI process may still be running; check \`ps\` if a repo keeps changing`);
 		}
 		await this.mcp?.stop().catch(() => undefined);
 		this.mcp = null;

@@ -327,11 +327,34 @@ export class CodingRuntime {
 		return this.takeovers.has(sessionId);
 	}
 
-	/** Stop every session (runner shutdown). */
+	/**
+	 * Stop every session (runner shutdown).
+	 *
+	 * Each `stop()` is isolated (#274 lineage). `stop()` kills a child process, and killing an
+	 * already-dead or wedged one throws — so a single bad session used to abort the loop, leaving
+	 * every LATER session's engine running and skipping `sessions.clear()` entirely. The caller
+	 * (`LocalRunner.close`) wraps this in a `catch {}`, so that escape was silent: the runner
+	 * reported a clean shutdown while orphaned CLI processes kept editing the user's repo with
+	 * nothing left holding their ids. Same shape as the `browserContext.close()` leak — a throw
+	 * on the teardown path is what MAKES the leak, so every session is stopped independently and
+	 * the maps always clear.
+	 */
 	closeAll(): void {
-		for (const s of this.sessions.values()) s.stop();
+		const failures: unknown[] = [];
+		for (const s of this.sessions.values()) {
+			try {
+				s.stop();
+			} catch (e) {
+				failures.push(e);
+			}
+		}
 		this.sessions.clear();
 		this.takeovers.clear();
+		if (failures.length) {
+			// Cleared the state, then report: teardown completed as far as it could, but the
+			// operator needs to know a child process may have survived it.
+			throw new AggregateError(failures, `${failures.length} coding session(s) failed to stop`);
+		}
 	}
 
 	/** True if any session this runtime owns still has a live agent process. */

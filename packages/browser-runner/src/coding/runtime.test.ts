@@ -176,3 +176,65 @@ describe("engine label", () => {
 		expect(s.engineLabel).toBe("claude:csess_abc");
 	});
 });
+
+// ── #291: a throw on the teardown path is what MAKES a process leak (#274 lineage) ──
+describe("closeAll isolates a failing session", () => {
+	// The bug this closes: `closeAll` was `for (const s of …) s.stop()`. `stop()` kills a child
+	// process, and killing an already-dead or wedged one throws — which aborted the loop, so every
+	// LATER session's engine kept running and `sessions.clear()` never ran. `LocalRunner.close()`
+	// wrapped the call in `catch {}`, so the runner reported a clean shutdown while orphaned CLI
+	// processes kept editing the user's repo with nothing left holding their ids.
+	function runtimeWith(sessions: Array<{ id: string; stop: () => void }>) {
+		const rt = new CodingRuntime("/tmp/does-not-matter");
+		const map = (rt as unknown as { sessions: Map<string, unknown> }).sessions;
+		for (const s of sessions) map.set(s.id, s);
+		return rt;
+	}
+
+	it("stops EVERY session even when an earlier one throws", () => {
+		const stopped: string[] = [];
+		const rt = runtimeWith([
+			{
+				id: "a",
+				stop: () => {
+					stopped.push("a");
+				},
+			},
+			{
+				id: "b",
+				stop: () => {
+					stopped.push("b");
+					throw new Error("process already dead");
+				},
+			},
+			{
+				id: "c",
+				stop: () => {
+					stopped.push("c");
+				},
+			},
+		]);
+
+		expect(() => rt.closeAll()).toThrow(/failed to stop/);
+		// "c" is the regression: before the fix the throw from "b" skipped it entirely.
+		expect(stopped).toEqual(["a", "b", "c"]);
+	});
+
+	it("clears its session map even when a stop throws, so a leaked engine is not also unreachable", () => {
+		const rt = runtimeWith([
+			{
+				id: "b",
+				stop: () => {
+					throw new Error("boom");
+				},
+			},
+		]);
+		expect(() => rt.closeAll()).toThrow();
+		expect(rt.hasLiveSessions()).toBe(false);
+	});
+
+	it("stays silent when every session stops cleanly", () => {
+		const rt = runtimeWith([{ id: "a", stop: () => {} }]);
+		expect(() => rt.closeAll()).not.toThrow();
+	});
+});

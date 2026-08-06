@@ -50,3 +50,75 @@ describe("Whisper transcription request", () => {
 		expect(bodies[1].get("prompt")).toBeNull();
 	});
 });
+
+// ── #291: a swallowed failure that leaves the microphone live is not "degraded" ──
+describe("stop() always releases the microphone", () => {
+	/** A fake mic track that records whether it was stopped. */
+	function track(opts: { throws?: boolean } = {}) {
+		return {
+			stopped: false,
+			stop() {
+				this.stopped = true;
+				if (opts.throws) throw new Error("track is wedged");
+			},
+		};
+	}
+
+	/** Wire fake `_mediaRec` + `_stream` internals onto a real VoiceStt. */
+	function sttWith(mediaRec: unknown, tracks: Array<{ stop(): void }>) {
+		const stt = new VoiceStt("openai", {});
+		const priv = stt as unknown as { _mediaRec: unknown; _stream: unknown };
+		priv._mediaRec = mediaRec;
+		priv._stream = { getTracks: () => tracks };
+		return stt;
+	}
+
+	it("stops the mic tracks when MediaRecorder.stop() throws", () => {
+		// The bug this closes: `stop()` was `try { this._mediaRec.stop() } catch {}`, and the
+		// track teardown lived only in the recorder's `onstop`. If `stop()` threw, `onstop` never
+		// fired and the `else if` branch was unreachable — so the MediaStream stayed live: the
+		// browser's recording indicator stayed lit and the mic kept capturing after the user
+		// turned voice off.
+		const t = track();
+		const stt = sttWith(
+			{
+				state: "recording",
+				stop() {
+					throw new Error("InvalidStateError");
+				},
+			},
+			[t],
+		);
+
+		expect(() => stt.stop()).not.toThrow();
+		expect(t.stopped).toBe(true);
+	});
+
+	it("does NOT pre-empt onstop when the recorder stops cleanly", () => {
+		// The inverse must hold: tearing tracks down here races the final `dataavailable` and
+		// drops the recording (→ empty blob → no transcription). Only the throwing path releases.
+		const t = track();
+		const stt = sttWith({ state: "recording", stop() {} }, [t]);
+
+		stt.stop();
+		expect(t.stopped).toBe(false);
+	});
+
+	it("releases every track even when one of them throws", () => {
+		const bad = track({ throws: true });
+		const good = track();
+		const stt = sttWith(
+			{
+				state: "recording",
+				stop() {
+					throw new Error("InvalidStateError");
+				},
+			},
+			[bad, good],
+		);
+
+		expect(() => stt.stop()).not.toThrow();
+		// `good` is the regression: one wedged track used to strand every later one.
+		expect(good.stopped).toBe(true);
+	});
+});

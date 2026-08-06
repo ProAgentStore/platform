@@ -124,11 +124,31 @@ export class VoiceStt {
 			// can drop the recorded audio (→ empty blob → no transcription).
 			try {
 				this._mediaRec.stop();
-			} catch {}
+			} catch {
+				// …but if `stop()` THREW, `onstop` will never fire, so nothing is left to release
+				// the tracks: the mic stayed open and the browser's recording indicator stayed lit
+				// after the user turned voice off. The race the branch above avoids cannot happen
+				// on this path (there is no pending `dataavailable`), so release them here. A
+				// swallowed failure that leaves the microphone live is not a degraded state.
+				this._releaseStream();
+			}
 		} else if (this._stream) {
-			for (const t of this._stream.getTracks()) t.stop();
-			this._stream = null;
+			this._releaseStream();
 		}
+	}
+
+	/** Stop every mic track and drop the stream. Safe to call twice. */
+	private _releaseStream() {
+		if (!this._stream) return;
+		for (const t of this._stream.getTracks()) {
+			try {
+				t.stop();
+			} catch {
+				// One wedged track must not strand the others — the same reason `closeAll` isolates
+				// its sessions. Any track left running keeps the mic indicator on.
+			}
+		}
+		this._stream = null;
 	}
 
 	/** Stop the Whisper recorder but DROP the audio (no transcription). Used to
@@ -240,8 +260,9 @@ export class VoiceStt {
 				if (e.data.size > 0) chunks.push(e.data);
 			};
 			mediaRec.onstop = async () => {
-				for (const t of this._stream?.getTracks() ?? []) t.stop();
-				this._stream = null;
+				// Via `_releaseStream`: one throwing track used to strand every later track AND skip
+				// `_stream = null`, so the reference was lost and nothing could ever release them.
+				this._releaseStream();
 				const durationMs = this._recStartedAt ? Date.now() - this._recStartedAt : 0;
 				const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
 				// Drop when: idle-recycled (stopDiscard), empty, OR too short to be real
