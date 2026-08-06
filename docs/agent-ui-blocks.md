@@ -105,3 +105,9 @@ import, or the components move to CSS-variable-backed inline styles.
 Sandboxing custom surfaces (iframe / Shadow DOM). Worth doing — a bundle today shares the
 document and can monkey-patch `window.fetch` — but it is a separate change, and Shadow DOM in
 particular would break every Tailwind class an injected component relies on. See #186.
+
+Note this is now the **blocking** work, not merely deferred: custom surfaces ship **disabled**
+(`CUSTOM_SURFACES_ENABLED`, unset in production — see `docs/custom-surfaces.md`), because the
+same-origin requirement means only platform-served bundles are loadable, and the platform serves
+none. A third-party surface becomes possible when this sandbox exists, not before. The UI blocks
+described above are unaffected — they are first-party components consumed inside the console.

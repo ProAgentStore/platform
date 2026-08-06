@@ -20,6 +20,9 @@ export function isAllowedReturnTo(returnTo: string): boolean {
 	}
 }
 
+/** The origin a ROOT-relative bundle path is judged against — the platform's own. */
+const PLATFORM_BUNDLE_BASE = "https://proagentstore.online/";
+
 /**
  * May this URL be loaded as a custom-surface CODE bundle?
  *
@@ -32,16 +35,32 @@ export function isAllowedReturnTo(returnTo: string): boolean {
  *
  * Deliberately reuses the OAuth return_to allowlist: "our own hosts" is the same question, and
  * two lists would drift.
+ *
+ * Two forms are accepted, and nothing else:
+ *  - a ROOT-relative path (`/console/surfaces/notes.js`) — the form `docs/custom-surfaces.md`
+ *    and the shipped example both use, and the only form a creator can write without naming a
+ *    host. The absolute-only version of this check silently rejected every documented example.
+ *  - an absolute `https://` URL on a platform host.
+ *
+ * The relative form is RESOLVED rather than string-matched, which is what closes the classic
+ * looks-relative-but-isn't bypasses: `//evil.example/x.js` and `/\evil.example/x.js` both parse
+ * to a foreign origin (WHATWG treats `\` as `/` for special schemes) and are refused here, the
+ * same way `new URL(u, location.href).origin` refuses them in the console.
  */
 export function isAllowedBundleUrl(bundleUrl: string): boolean {
-	try {
-		const u = new URL(bundleUrl);
-		// No localhost exception here, unlike return_to: a dev-only bundle host would be a
-		// production-reachable code-execution path if the env were ever misread.
-		if (u.protocol !== "https:") return false;
-		const host = u.hostname.toLowerCase();
-		return host === "proagentstore.online" || host.endsWith(".proagentstore.online");
-	} catch {
-		return false;
+	const raw = typeof bundleUrl === "string" ? bundleUrl.trim() : "";
+	if (!raw) return false;
+	let u: URL | null = null;
+	try { u = new URL(raw); } catch { /* not absolute — may still be a root-relative path */ }
+	if (!u) {
+		// A bare `notes.js` would resolve against whatever page happened to load it, so it is not
+		// a contract the server can honour; only a root-anchored path is.
+		if (!raw.startsWith("/")) return false;
+		try { u = new URL(raw, PLATFORM_BUNDLE_BASE); } catch { return false; }
 	}
+	// No localhost exception here, unlike return_to: a dev-only bundle host would be a
+	// production-reachable code-execution path if the env were ever misread.
+	if (u.protocol !== "https:") return false;
+	const host = u.hostname.toLowerCase();
+	return host === "proagentstore.online" || host.endsWith(".proagentstore.online");
 }

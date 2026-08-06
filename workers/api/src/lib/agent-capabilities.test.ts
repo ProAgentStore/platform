@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { agentCapabilities, columnForStatus, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
+import { agentCapabilities, columnForStatus, customSurfacesEnabled, hasSurface, sanitizeDeclaredCapabilities, sanitizeSettingsSchema, sanitizeToolList, sanitizeCustomSurfaces } from "./agent-capabilities.js";
 import { optionsFor } from "./surface-options.js";
+
+/** Custom surfaces are fail-closed (#186); the shape rules only run once a platform enables them. */
+const ON = { CUSTOM_SURFACES_ENABLED: "1" };
 
 describe("agentCapabilities", () => {
 	it("uses declared config.capabilities when present", () => {
@@ -219,9 +222,52 @@ describe("agentCapabilities", () => {
 	});
 });
 
+describe("customSurfacesEnabled — the feature is OFF unless a platform operator says otherwise", () => {
+	// #186: a surface bundle is third-party CODE in the console origin holding the viewer's
+	// session, and the platform serves NO bundles (workers/host answers every /console/* with the
+	// HTML shell), so the feature could not be used legitimately while remaining a code-execution
+	// path. Fail-closed, same shape as browserToolsEnabled (#103).
+	it('is on only for exactly "1" or "true"', () => {
+		expect(customSurfacesEnabled({ CUSTOM_SURFACES_ENABLED: "1" })).toBe(true);
+		expect(customSurfacesEnabled({ CUSTOM_SURFACES_ENABLED: "true" })).toBe(true);
+	});
+
+	it("fails closed for absent, empty, or unrecognised values", () => {
+		for (const v of [undefined, "", "0", "false", "yes", "TRUE", "on"]) {
+			expect(customSurfacesEnabled({ CUSTOM_SURFACES_ENABLED: v }), String(v)).toBe(false);
+		}
+		expect(customSurfacesEnabled()).toBe(false);
+		expect(customSurfacesEnabled(null)).toBe(false);
+		expect(customSurfacesEnabled({})).toBe(false);
+	});
+
+	it("drops every declared surface when the gate is off, however well-formed", () => {
+		const perfect = [{ id: "notes", label: "Notes", bundleUrl: "https://proagentstore.online/s.js" }];
+		expect(sanitizeCustomSurfaces(perfect)).toBeUndefined();
+		expect(sanitizeCustomSurfaces(perfect, {})).toBeUndefined();
+		expect(sanitizeCustomSurfaces(perfect, { CUSTOM_SURFACES_ENABLED: "0" })).toBeUndefined();
+		expect(sanitizeCustomSurfaces(perfect, ON)).toHaveLength(1);
+	});
+
+	it("resolves no customSurfaces off a stored config while the gate is off", () => {
+		// The read/serve path (agentCapabilities → /v1/instances/my/instances) is what the console
+		// renders tabs from, so a row persisted while the flag was on must not keep rendering.
+		const agent = { slug: "x", config: JSON.stringify({ capabilities: { surfaces: [], customSurfaces: [{ id: "notes", label: "Notes", bundleUrl: "https://proagentstore.online/s.js" }] } }) };
+		expect(agentCapabilities(agent).customSurfaces).toBeUndefined();
+		expect(agentCapabilities(agent, ON)?.customSurfaces).toHaveLength(1);
+	});
+
+	it("leaves every OTHER capability untouched when the gate is off", () => {
+		// The gate must switch off one feature, not degrade capability resolution.
+		const agent = { slug: "x", config: JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } }) };
+		expect(agentCapabilities(agent)).toMatchObject({ surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" });
+	});
+});
+
 describe("custom surfaces — a bundle must not be able to impersonate a built-in tab", () => {
 	// Bundles must live on a platform host (see isAllowedBundleUrl) — a surface runs as code
-	// in the console origin, so the fixture uses a real allowed host.
+	// in the console origin, so the fixture uses a real allowed host. Every call passes the
+	// enabled env: these assert the SHAPE rules, which only run once the gate is open.
 	const surf = (over: Record<string, unknown> = {}) => ({
 		id: "notes", label: "Notes", bundleUrl: "https://proagentstore.online/s.js", ...over,
 	});
@@ -231,40 +277,40 @@ describe("custom surfaces — a bundle must not be able to impersonate a built-i
 		// would render a third-party bundle where the real Settings tab belongs — a
 		// credential-phishing surface under a legitimate label.
 		for (const id of ["settings", "chat", "board", "coding", "tmux", "knowledge", "apply"]) {
-			expect(sanitizeCustomSurfaces([surf({ id })])).toBeUndefined();
+			expect(sanitizeCustomSurfaces([surf({ id })], ON)).toBeUndefined();
 		}
 	});
 
 	it("rejects a reserved id regardless of case or padding", () => {
-		expect(sanitizeCustomSurfaces([surf({ id: " SETTINGS " })])).toBeUndefined();
+		expect(sanitizeCustomSurfaces([surf({ id: " SETTINGS " })], ON)).toBeUndefined();
 	});
 
 	it("drops duplicate ids — they also produced duplicate React keys", () => {
-		const out = sanitizeCustomSurfaces([surf({ id: "notes" }), surf({ id: "notes", label: "Other" })]);
+		const out = sanitizeCustomSurfaces([surf({ id: "notes" }), surf({ id: "notes", label: "Other" })], ON);
 		expect(out).toHaveLength(1);
 		expect(out?.[0].label).toBe("Notes");
 	});
 
 	it("enforces an id charset instead of accepting any non-empty string", () => {
 		for (const id of ["../evil", "a b", "Notes!", "", "-leading", "9start"]) {
-			expect(sanitizeCustomSurfaces([surf({ id })])).toBeUndefined();
+			expect(sanitizeCustomSurfaces([surf({ id })], ON)).toBeUndefined();
 		}
-		expect(sanitizeCustomSurfaces([surf({ id: "my-notes2" })])).toHaveLength(1);
+		expect(sanitizeCustomSurfaces([surf({ id: "my-notes2" })], ON)).toHaveLength(1);
 	});
 
 	it("caps the count and the field lengths", () => {
 		// Sibling validators cap (settings 12, tools 40); this one capped nothing, so an owner
 		// could persist thousands of megabyte-labelled surfaces into every instance response.
 		const many = Array.from({ length: 50 }, (_, i) => surf({ id: `s${i}` }));
-		expect(sanitizeCustomSurfaces(many)?.length).toBeLessThanOrEqual(8);
-		const long = sanitizeCustomSurfaces([surf({ label: "x".repeat(5000), icon: "y".repeat(500) })]);
+		expect(sanitizeCustomSurfaces(many, ON)?.length).toBeLessThanOrEqual(8);
+		const long = sanitizeCustomSurfaces([surf({ label: "x".repeat(5000), icon: "y".repeat(500) })], ON);
 		expect(long?.[0].label.length).toBe(80);
 		expect((long?.[0].icon ?? "").length).toBeLessThanOrEqual(8);
 	});
 
 	it("still requires an https bundle URL", () => {
 		for (const u of ["http://proagentstore.online/s.js", "javascript:alert(1)", "//x/s.js", ""]) {
-			expect(sanitizeCustomSurfaces([surf({ bundleUrl: u })])).toBeUndefined();
+			expect(sanitizeCustomSurfaces([surf({ bundleUrl: u })], ON)).toBeUndefined();
 		}
 	});
 
@@ -274,13 +320,20 @@ describe("custom surfaces — a bundle must not be able to impersonate a built-i
 		// (mobile shell, SSR/preview, admin preview) that mounted a bundle without re-doing that
 		// check inherited account takeover.
 		for (const u of ["https://evil.example/x.js", "https://proagentstore.online.evil.com/x.js"]) {
-			expect(sanitizeCustomSurfaces([surf({ bundleUrl: u })])).toBeUndefined();
+			expect(sanitizeCustomSurfaces([surf({ bundleUrl: u })], ON)).toBeUndefined();
 		}
 	});
 
 	it("accepts a bundle on the platform's own hosts", () => {
-		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "https://proagentstore.online/s.js" })])).toHaveLength(1);
-		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "https://cdn.proagentstore.online/s.js" })])).toHaveLength(1);
+		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "https://proagentstore.online/s.js" })], ON)).toHaveLength(1);
+		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "https://cdn.proagentstore.online/s.js" })], ON)).toHaveLength(1);
+	});
+
+	it("accepts the ROOT-RELATIVE form the docs actually document", () => {
+		// The docs, the AgentDetail editor's help text and the shipped example all use
+		// `/console/surfaces/*.js`; the absolute-only check silently dropped every one of them.
+		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "/console/surfaces/notes.js" })], ON)).toHaveLength(1);
+		expect(sanitizeCustomSurfaces([surf({ bundleUrl: "//evil.example/notes.js" })], ON)).toBeUndefined();
 	});
 });
 
@@ -365,22 +418,22 @@ describe("customSurfaces.ownsHeader — a published surface is not a second-clas
 		// The whole point: a whitelist sanitizer that drops an unknown field lets a creator declare
 		// a capability and watch it silently do nothing — the failure `parseConfig` is already
 		// documented for. If this field is not carried through, the console never sees it.
-		expect(sanitizeCustomSurfaces(surf({ ownsHeader: true }))?.[0].ownsHeader).toBe(true);
+		expect(sanitizeCustomSurfaces(surf({ ownsHeader: true }), ON)?.[0].ownsHeader).toBe(true);
 	});
 
 	it("is absent unless EXPLICITLY true — a truthy string must not grant it", () => {
 		// Replacing the page header is a takeover of shell chrome; it should need a real boolean,
 		// not any value that happens to be truthy in JSON.
 		for (const v of [undefined, null, 0, 1, "", "true", "yes", {}, []]) {
-			expect(sanitizeCustomSurfaces(surf({ ownsHeader: v }))?.[0].ownsHeader, String(v)).toBeUndefined();
+			expect(sanitizeCustomSurfaces(surf({ ownsHeader: v }), ON)?.[0].ownsHeader, String(v)).toBeUndefined();
 		}
-		expect(sanitizeCustomSurfaces(surf())?.[0].ownsHeader).toBeUndefined();
+		expect(sanitizeCustomSurfaces(surf(), ON)?.[0].ownsHeader).toBeUndefined();
 	});
 
 	it("does not weaken the checks that keep a bundle safe", () => {
 		// Declaring a capability must not become a way past the same-origin + reserved-id gates.
-		expect(sanitizeCustomSurfaces([{ id: "chat", label: "X", bundleUrl: "https://proagentstore.online/x.js", ownsHeader: true }])).toBeUndefined();
-		expect(sanitizeCustomSurfaces([{ id: "notes", label: "X", bundleUrl: "https://evil.example/x.js", ownsHeader: true }])).toBeUndefined();
+		expect(sanitizeCustomSurfaces([{ id: "chat", label: "X", bundleUrl: "https://proagentstore.online/x.js", ownsHeader: true }], ON)).toBeUndefined();
+		expect(sanitizeCustomSurfaces([{ id: "notes", label: "X", bundleUrl: "https://evil.example/x.js", ownsHeader: true }], ON)).toBeUndefined();
 	});
 });
 

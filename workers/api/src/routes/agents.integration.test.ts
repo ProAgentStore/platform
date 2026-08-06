@@ -23,6 +23,8 @@ interface Opts {
 	agents?: Array<Record<string, unknown>>;
 	/** slugs that already exist (uniqueness check) */
 	takenSlugs?: string[];
+	/** Custom surfaces are fail-closed (#186) — opt a test in to the enabled platform. */
+	customSurfaces?: boolean;
 }
 
 function buildApp(opts: Opts = {}) {
@@ -34,6 +36,7 @@ function buildApp(opts: Opts = {}) {
 
 	const env = {
 		SESSION_SIGNING_KEY: SECRET,
+		...(opts.customSurfaces ? { CUSTOM_SURFACES_ENABLED: "1" } : {}),
 		// GITHUB_TOKEN intentionally unset.
 		DB: {
 			prepare(sql: string) {
@@ -353,23 +356,39 @@ describe("settings-schema + capabilities (owner-gated config merge)", () => {
 		expect(merged.settingsSchema[0].id).toBe("target_language");
 	});
 
+	it("PUT capabilities REFUSES custom surfaces while the feature is gated off (the default)", async () => {
+		// #186: a surface bundle is code in the console origin holding the viewer's session, and
+		// the platform serves no bundles at all, so the feature is fail-closed. Refusing (rather
+		// than silently sanitizing to []) both tells the creator why and avoids wiping surfaces an
+		// operator declared while the flag was on.
+		const { app, env, writes } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: null }] });
+		const res = await json(app, env, "PUT", "/v1/agents/a1/capabilities", {
+			customSurfaces: [{ id: "s1", label: "Ok", bundleUrl: "https://proagentstore.online/s1.js" }],
+		}, await tokenFor("u1"));
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as any).error).toMatch(/disabled/i);
+		expect(writes.find((w) => w.sql.includes("UPDATE agents SET config"))).toBeUndefined();
+	});
+
 	it("PUT capabilities keeps only a bundle on a PLATFORM host", async () => {
 		// Tightened from "any https": a surface bundle executes as code in the console origin
 		// with the viewer's session, and the console's same-origin check used to be the ONLY
 		// enforcement. A cross-origin bundle is now refused server-side too.
-		const { app, env } = buildApp({ agents: [{ id: "a1", slug: "a", owner_id: "u1", config: null }] });
+		const { app, env } = buildApp({ customSurfaces: true, agents: [{ id: "a1", slug: "a", owner_id: "u1", config: null }] });
 		const res = await json(app, env, "PUT", "/v1/agents/a1/capabilities", {
 			customSurfaces: [
 				{ id: "s1", label: "Ok", bundleUrl: "https://proagentstore.online/s1.js" },
+				{ id: "rel", label: "Root-relative", bundleUrl: "/console/surfaces/notes.js" },
 				{ id: "xorigin", label: "Cross origin", bundleUrl: "https://cdn.example.com/s1.js" },
+				{ id: "protorel", label: "Protocol-relative", bundleUrl: "//cdn.example.com/s1.js" },
 				{ id: "bad", label: "Bad", bundleUrl: "http://insecure/s2.js" },
 				{ id: "js", label: "XSS", bundleUrl: "javascript:alert(1)" },
 			],
 		}, await tokenFor("u1"));
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as any;
-		expect(body.customSurfaces).toHaveLength(1);
-		expect(body.customSurfaces[0].id).toBe("s1");
+		expect(body.customSurfaces.map((s: any) => s.id)).toEqual(["s1", "rel"]);
+		expect(body.customSurfacesEnabled).toBe(true);
 	});
 
 	it("POST /agents persists declarative capabilities (#141 — a Coder-equivalent as data)", async () => {

@@ -15,6 +15,12 @@ export interface Env {
 	 *  (browser_navigate / browser_snapshot / browser_act) are live. Unset = inert
 	 *  (fail-closed) — first-party/self-use only until the browser trust model (#75). */
 	BROWSER_TOOLS_ENABLED?: string;
+	/** Custom (agent-published) console surfaces, #186: when "1"/"true" a creator may declare
+	 *  `capabilities.customSurfaces` and the console will load those bundles. Unset = inert
+	 *  (fail-closed). OFF in production — a surface bundle is code in the console origin with
+	 *  the viewer's session, the platform serves no bundles, and the isolation model (sandboxed
+	 *  iframe) is unbuilt. See lib/agent-capabilities.ts `customSurfacesEnabled`. */
+	CUSTOM_SURFACES_ENABLED?: string;
 	/** Remote LLM brain that drives the runner through a job application. */
 	JOB_APPLY: Workflow;
 	/** Remote LLM brain that drives a local coding CLI toward an objective (AgentCoder port). */

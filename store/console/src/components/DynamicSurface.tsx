@@ -22,10 +22,26 @@ import { renderMd, mdLite, esc, escAttr, formatTime } from "@proagentstore/sdk/u
 // ONLY same-origin bundles (surfaces ship from the platform itself, e.g.
 // /console/surfaces/notes.js). Until bundles are isolated in a sandboxed iframe, this
 // same-origin gate is the security boundary — do not loosen it to accept creator URLs.
+//
+// This component is now DEFENCE-IN-DEPTH rather than the whole defence (#186). The server
+// enforces the same origin rule when a surface is declared AND when capabilities are resolved
+// (lib/origins.ts isAllowedBundleUrl), and the whole feature is fail-closed behind the API's
+// CUSTOM_SURFACES_ENABLED flag — off in production, so no bundleUrl reaches this component at
+// all. Keep this check anyway: it is what makes a future second consumer safe by default.
+//
+// KNOWN, DELIBERATELY UNFIXED: `import()` caches by URL, so module-level state in a bundle
+// persists across different INSTANCES of the same agent within one page session. A bundle must
+// therefore keep its state inside mount() (documented in docs/custom-surfaces.md). Cache-busting
+// the URL would instead leak a fresh module per mount, which is worse.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** A surface bundle runs with the user's session token, so it must be served from the
- *  platform's own origin — never a creator-controlled host. */
+ *  platform's own origin — never a creator-controlled host.
+ *
+ *  Note this tests the URL, not the response: a same-origin URL that 302s cross-origin would
+ *  still import. Not reachable today (the host worker has no open redirect, and the server-side
+ *  allowlist gates what can be declared), but the gate is one open redirect away from void —
+ *  which is part of why the feature stays off until bundles are iframe-isolated. */
 function isSameOriginBundle(bundleUrl: string): boolean {
 	try {
 		return new URL(bundleUrl, window.location.href).origin === window.location.origin;

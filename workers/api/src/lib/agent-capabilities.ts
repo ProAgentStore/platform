@@ -189,15 +189,57 @@ export function sanitizeBoardColumns(value: unknown): BoardColumn[] | undefined 
 
 /** Validate declared custom surfaces — these load as CODE into the console origin,
  *  so require an https bundle URL and reject anything malformed. */
-/** Built-in tab ids a custom surface may NOT claim (store/console/src/lib/surfaces.tsx). */
+/**
+ * Built-in tab ids a custom surface may NOT claim — one entry per `SURFACES` id in
+ * `store/console/src/lib/surfaces.tsx`.
+ *
+ * This list is a hand-kept mirror of a registry in another package, so it DRIFTS: `behaviour` was
+ * added to the console registry after this list was written and was therefore claimable, which is
+ * the exact tab-shadowing hole the list exists to close. `surfaces.test.ts` now reads this set and
+ * fails when the console gains a tab that is not listed here.
+ */
 export const RESERVED_SURFACE_IDS = new Set([
-	"chat", "apply", "board", "repo", "coding", "tmux", "activity", "knowledge", "indexing", "data", "settings",
+	"chat", "apply", "board", "repo", "coding", "tmux", "activity", "behaviour", "knowledge", "indexing", "data", "settings",
 ]);
 const MAX_CUSTOM_SURFACES = 8;
 const CUSTOM_SURFACE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
+/** The env fields the custom-surface gate reads. Structural, so a pure test passes a literal. */
+export interface CustomSurfaceEnv {
+	CUSTOM_SURFACES_ENABLED?: string;
+}
+
+/**
+ * Is the custom-surface feature switched on for this platform? FAIL-CLOSED — an absent or
+ * unrecognised flag means OFF, exactly like `browserToolsEnabled` (#103) gates browser tools.
+ *
+ * WHY IT IS OFF BY DEFAULT (#186). A surface bundle is third-party CODE executed in the console
+ * origin with the viewer's session token (`ctx.sdk.getToken`), so the only thing making it
+ * survivable is that the bundle must be served by the platform itself. But the platform serves
+ * NO surface bundles: `workers/host` answers every `/console/*` path with the console HTML shell
+ * and its `build.js` never embeds `store/console/public/surfaces/*`, so a production bundle URL
+ * returns `text/html` and the dynamic import dies on MIME. That leaves the feature in the worst
+ * of both states — a code-execution path that no one can legitimately use. (Nothing declares one:
+ * no migration, seed, or template sets `customSurfaces`.)
+ *
+ * Rather than half-build the hosting for a model that is admittedly unfinished — bundles need a
+ * sandboxed iframe before a creator-authored one is safe at all — the whole feature is gated off
+ * and stays authorable only where a platform operator deliberately turns it on. A clearly
+ * disabled feature is safer than a half-validated one.
+ *
+ * The gate lives INSIDE `sanitizeCustomSurfaces`, which both the write route and the read/serve
+ * path already share, so there is no second validator to forget.
+ */
+export function customSurfacesEnabled(env?: CustomSurfaceEnv | null): boolean {
+	return env?.CUSTOM_SURFACES_ENABLED === "1" || env?.CUSTOM_SURFACES_ENABLED === "true";
+}
+
 /**
  * Validate declared custom surfaces.
+ *
+ * Gated: with the feature off (the default — see `customSurfacesEnabled`) this returns nothing,
+ * whatever is stored. `env` is optional and its absence means OFF, so a caller that has no env to
+ * hand cannot accidentally enable code loading.
  *
  * The reserved-id check is a SECURITY control, not tidiness: the console resolves a custom
  * surface BEFORE the built-in registry, so an agent declaring `{id:"settings"}` would render its
@@ -209,7 +251,8 @@ const CUSTOM_SURFACE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * missing entirely, so an owner could persist thousands of surfaces with megabyte labels into
  * `agents.config` — a payload then serialized into every instance response.
  */
-export function sanitizeCustomSurfaces(value: unknown): CustomSurface[] | undefined {
+export function sanitizeCustomSurfaces(value: unknown, env?: CustomSurfaceEnv | null): CustomSurface[] | undefined {
+	if (!customSurfacesEnabled(env)) return undefined;
 	if (!Array.isArray(value)) return undefined;
 	const out: CustomSurface[] = [];
 	const seen = new Set<string>();
@@ -381,13 +424,17 @@ function parseConfig(config: string | null | undefined): Record<string, unknown>
 /**
  * Resolve an agent's capabilities. Explicit `config.capabilities` wins; otherwise
  * derive from the well-known first-party agents so legacy rows keep working.
+ *
+ * `env` is only consulted for the fail-closed custom-surface gate (#186). Omitting it resolves
+ * everything else identically and simply yields no `customSurfaces` — which is what the callers
+ * that never render a surface (board columns, runtime lookups, tool policy) want anyway.
  */
-export function agentCapabilities(agent: AgentLike): AgentCapabilities {
+export function agentCapabilities(agent: AgentLike, env?: CustomSurfaceEnv | null): AgentCapabilities {
 	const cfg = parseConfig(agent.config);
 	const declared = cfg.capabilities as Partial<AgentCapabilities> | undefined;
 	// Honor declared custom surfaces in EVERY path — even an agent that doesn't declare
 	// a `surfaces` array (e.g. a generic agent that only ships its own UI).
-	const customSurfaces = sanitizeCustomSurfaces((declared as Record<string, unknown> | undefined)?.customSurfaces);
+	const customSurfaces = sanitizeCustomSurfaces((declared as Record<string, unknown> | undefined)?.customSurfaces, env);
 	// Declared columns win; otherwise the per-surface default is filled in below so the
 	// console/MCP always get a concrete board without any client-side default.
 	const declaredColumns = sanitizeBoardColumns((declared as Record<string, unknown> | undefined)?.boardColumns);
@@ -452,7 +499,7 @@ export function hasSurface(agent: AgentLike, surface: AgentSurface): boolean {
  * `userId` scopes to the owner when supplied. Returns null when the instance isn't there.
  */
 export async function capabilitiesForInstance(
-	env: { DB: D1Database },
+	env: { DB: D1Database } & CustomSurfaceEnv,
 	instanceId: string,
 	userId?: string,
 ): Promise<AgentCapabilities | null> {
@@ -467,5 +514,5 @@ export async function capabilitiesForInstance(
 	const row = await (userId ? stmt.bind(instanceId, userId) : stmt.bind(instanceId))
 		.first<{ slug: string | null; category: string | null; config: string | null }>()
 		.catch(() => null);
-	return row ? agentCapabilities(row as never) : null;
+	return row ? agentCapabilities(row as never, env) : null;
 }

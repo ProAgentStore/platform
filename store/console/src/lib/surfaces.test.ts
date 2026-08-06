@@ -60,6 +60,25 @@ describe("the hardcoded branch does not come back", () => {
 	});
 });
 
+describe("every built-in tab id is RESERVED against a custom surface (#186)", () => {
+	it("the worker's reserved list covers this registry", () => {
+		// The console resolves a custom surface BEFORE this registry, so a bundle declaring an id
+		// that matches a built-in tab renders third-party code where a first-party tab belongs — a
+		// credential-phishing surface under a legitimate label. `RESERVED_SURFACE_IDS` blocks that,
+		// but it lives in another package (workers/api) and is hand-kept, so it DRIFTED: `behaviour`
+		// was added here and never added there. Reading the source keeps the two honest without
+		// creating a cross-package import (the console builds standalone).
+		const src = readFileSync(join(__dirname, "../../../../workers/api/src/lib/agent-capabilities.ts"), "utf8");
+		const block = /RESERVED_SURFACE_IDS\s*=\s*new Set\(\[([\s\S]*?)\]\)/.exec(src);
+		expect(block, "RESERVED_SURFACE_IDS not found — was it renamed or moved?").toBeTruthy();
+		const reserved = new Set([...(block?.[1] ?? "").matchAll(/"([a-z0-9-]+)"/g)].map((m) => m[1]));
+		expect(reserved.size).toBeGreaterThan(0);
+		for (const s of SURFACES) {
+			expect(reserved.has(s.id), `built-in tab "${s.id}" is claimable by a custom surface`).toBe(true);
+		}
+	});
+});
+
 describe("visibleSurfaces still derives tabs from declared capabilities", () => {
 	it("a coding agent gets Coding and its work Board, but not Repo", () => {
 		// Board is intentional now: a coding agent writes session cards (#206) and delegation

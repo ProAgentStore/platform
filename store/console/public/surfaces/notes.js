@@ -4,8 +4,11 @@
 // DynamicSurface and calls mount(ctx). It uses ONLY ctx.sdk (the platform's
 // authenticated API client + escape helpers) — no bundled dependencies.
 //
-// Served by the console at /console/surfaces/notes.js, so its bundleUrl is
-// https://<host>/console/surfaces/notes.js. See docs/custom-surfaces.md.
+// DEV ONLY. Vite dev serves this at /console/surfaces/notes.js, but the PRODUCTION host worker
+// does not: it answers every /console/* path with the console HTML shell and its build.js never
+// embeds public/surfaces/*, so this URL returns text/html in prod and the import fails on MIME.
+// That, plus the unfinished isolation model, is why custom surfaces ship disabled behind the
+// API's CUSTOM_SURFACES_ENABLED flag (#186). See docs/custom-surfaces.md.
 
 export function mount(ctx) {
   const { el, instanceId, sdk } = ctx;

@@ -304,7 +304,9 @@ instanceRoutes.get("/my/instances", async (c) => {
 		return {
 			...rest,
 			...(displayName ? { name: displayName, agentName: r.name } : {}),
-			capabilities: agentCapabilities({ slug: r.slug as string, category: r.category as string, config: config as string }),
+			// env carries the fail-closed custom-surface gate (#186) — this is the one response the
+			// console renders tabs from, so it is the path that must consult it.
+			capabilities: agentCapabilities({ slug: r.slug as string, category: r.category as string, config: config as string }, c.env),
 		};
 	});
 	return c.json({ instances });

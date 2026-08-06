@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
+import { customSurfacesEnabled, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { lintAgentClaims } from "../lib/agent-claims-lint.js";
 import { HttpError, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
@@ -483,7 +483,9 @@ agentRoutes.get("/:id/capabilities", async (c) => {
 		workflow = caps?.workflow ?? null;
 		tools = Array.isArray(caps?.tools) ? caps.tools : [];
 	} catch { /* malformed config */ }
-	return c.json({ customSurfaces, surfaces, runtime, workflow, tools });
+	// Report the gate so the creator editor can say "this feature is off" instead of letting a
+	// creator author a surface that will never render and never be told why (#186).
+	return c.json({ customSurfaces, surfaces, runtime, workflow, tools, customSurfacesEnabled: customSurfacesEnabled(c.env) });
 });
 
 /** Declare the agent's custom (published) console surfaces — owner only. Stored in
@@ -504,13 +506,21 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 	const caps = (config.capabilities && typeof config.capabilities === "object" ? config.capabilities : {}) as Record<string, unknown>;
 
 	// customSurfaces load as CODE into the console origin — only overwrite when the key is
-	// present (so a capabilities-only PATCH doesn't wipe them), and require an https bundle URL.
-	// Shares the READ path's sanitizer rather than re-implementing it. The two had already
-	// drifted (this one trimmed, the other did not), and only one of them knew about reserved
-	// ids — so whichever validator you happened not to look at was the one that let a
+	// present (so a capabilities-only PATCH doesn't wipe them), and require a bundle URL on a
+	// platform host. Shares the READ path's sanitizer rather than re-implementing it. The two had
+	// already drifted (this one trimmed, the other did not), and only one of them knew about
+	// reserved ids — so whichever validator you happened not to look at was the one that let a
 	// tab-shadowing surface through.
+	//
+	// With the feature gated off (the default, #186) an attempt to declare surfaces is REFUSED
+	// rather than silently sanitized to `[]` — silently storing an empty array would also wipe
+	// whatever an operator had declared while the flag was on, and silence is exactly the
+	// no-feedback failure this ticket called out.
 	if (Array.isArray(body.customSurfaces)) {
-		caps.customSurfaces = sanitizeCustomSurfaces(body.customSurfaces) ?? [];
+		if (!customSurfacesEnabled(c.env)) {
+			throw new HttpError(400, "Custom surfaces are disabled on this platform — a surface bundle runs as code in the console origin and the isolation model is not finished. See docs/custom-surfaces.md.");
+		}
+		caps.customSurfaces = sanitizeCustomSurfaces(body.customSurfaces, c.env) ?? [];
 	}
 
 	// The declarative power fields (#141) — closed-enum validated, merged per-key so an
@@ -531,6 +541,7 @@ agentRoutes.put("/:id/capabilities", async (c) => {
 		runtime: caps.runtime ?? null,
 		workflow: caps.workflow ?? null,
 		tools: caps.tools ?? [],
+		customSurfacesEnabled: customSurfacesEnabled(c.env),
 	});
 });
 

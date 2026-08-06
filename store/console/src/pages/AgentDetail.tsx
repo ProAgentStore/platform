@@ -66,7 +66,7 @@ export default function AgentDetail() {
 	const [capRuntime, setCapRuntime] = useState("");
 	const [capWorkflow, setCapWorkflow] = useState("");
 	const [capToolsText, setCapToolsText] = useState("");
-	type CapsResp = { customSurfaces?: Array<Omit<CSurface, "clientId">>; surfaces?: string[]; runtime?: string | null; workflow?: string | null; tools?: string[] };
+	type CapsResp = { customSurfaces?: Array<Omit<CSurface, "clientId">>; surfaces?: string[]; runtime?: string | null; workflow?: string | null; tools?: string[]; customSurfacesEnabled?: boolean };
 	const applyCaps = useCallback((d: CapsResp) => {
 		setCapSurfaces(Array.isArray(d.surfaces) ? d.surfaces : []);
 		setCapRuntime(d.runtime ?? "");
@@ -92,16 +92,25 @@ export default function AgentDetail() {
 	// Custom surfaces (Phase 3 — agent-published UIs)
 	type CSurface = { clientId: string; id: string; label: string; icon?: string; bundleUrl: string };
 	const [surfaces, setSurfaces] = useState<CSurface[]>([]);
+	// The server owns this decision (#186): custom surfaces are fail-closed behind
+	// CUSTOM_SURFACES_ENABLED, so the editor asks rather than guessing — a creator authoring a
+	// surface that can never render deserves to be told, not to save into silence.
+	const [surfacesEnabled, setSurfacesEnabled] = useState(true);
 	const loadSurfaces = useCallback(async () => {
 		try {
 			const d = await api<CapsResp>(`/v1/agents/${id}/capabilities`);
 			setSurfaces((d.customSurfaces || []).map((s) => ({ ...s, clientId: localRowId() })));
+			setSurfacesEnabled(d.customSurfacesEnabled !== false);
 			applyCaps(d);
 		} catch { /* none */ }
 	}, [id, applyCaps]);
 	const saveSurfaces = async () => {
+		// Only obviously-empty rows are dropped here; the bundle-URL rule is the SERVER's
+		// (isAllowedBundleUrl — root-relative or absolute https on a platform host). The old
+		// client-side /^https:\/\// filter silently dropped the documented `/console/surfaces/*.js`
+		// form and disagreed with the server, so it was validation in name only.
 		const clean = surfaces
-			.filter((s) => s.id.trim() && s.label.trim() && /^https:\/\//.test(s.bundleUrl.trim()))
+			.filter((s) => s.id.trim() && s.label.trim() && s.bundleUrl.trim())
 			.map(({ clientId: _clientId, ...surface }) => surface);
 		try {
 			const d = await api<{ customSurfaces: Array<Omit<CSurface, "clientId">> }>(`/v1/agents/${id}/capabilities`, { method: "PUT", body: JSON.stringify({ customSurfaces: clean }) });
@@ -461,7 +470,12 @@ export default function AgentDetail() {
 					{/* Custom surfaces (Phase 3) */}
 					<div className="bg-panel border border-line rounded-xl p-4 mb-4">
 						<h3 className="text-base font-semibold mb-1">Custom surfaces</h3>
-						<p className="text-xs text-muted mb-3">Ship your own UI as a published bundle — each loads from an https URL that exports <code>mount(ctx)</code>. See docs/custom-surfaces.md (example: <code>/console/surfaces/notes.js</code>).</p>
+						{!surfacesEnabled && (
+							<p className="text-xs text-amber bg-amber/10 border border-amber/30 rounded-lg px-2.5 py-2 mb-3">
+								<strong>Disabled on this platform.</strong> A surface bundle runs as code in the console origin with your subscribers' session, and the isolation model isn't finished — so declaring one is refused and none are rendered. Tracked in issue #186.
+							</p>
+						)}
+						<p className="text-xs text-muted mb-3">Ship your own UI as a published bundle exporting <code>mount(ctx)</code>. The bundle must be served by the platform itself — a path like <code>/console/surfaces/notes.js</code>, or an absolute <code>https://…proagentstore.online/…</code> URL. See docs/custom-surfaces.md.</p>
 						<div className="flex flex-col gap-3">
 							{surfaces.map((s, i) => (
 								<div key={s.clientId} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
@@ -477,8 +491,8 @@ export default function AgentDetail() {
 							{surfaces.length === 0 && <div className="text-xs text-muted-soft">No custom surfaces yet — add one to ship your own UI.</div>}
 						</div>
 						<div className="flex gap-2 mt-3">
-							<button type="button" onClick={() => setSurfaces(cs => [...cs, { clientId: localRowId(), id: "", label: "", bundleUrl: "" }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">+ Add surface</button>
-							<button type="button" onClick={saveSurfaces} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save surfaces</button>
+							<button type="button" disabled={!surfacesEnabled} onClick={() => setSurfaces(cs => [...cs, { clientId: localRowId(), id: "", label: "", bundleUrl: "" }])} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold disabled:opacity-40">+ Add surface</button>
+							<button type="button" disabled={!surfacesEnabled} onClick={saveSurfaces} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Save surfaces</button>
 						</div>
 					</div>
 

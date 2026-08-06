@@ -31,6 +31,13 @@ ADMIN_ALLOWLIST = "serge.the.dev@gmail.com,serge-ivo"
 # Unset = inert (fail-closed). First-party/self-use ONLY — do NOT enable for third-party
 # creators until the browser trust model (#75). Uncomment to turn on.
 BROWSER_TOOLS_ENABLED = "1"
+# Custom (agent-published) console surfaces (#186). Unset = inert (fail-closed): the PUT
+# capabilities route refuses to store them and resolved capabilities carry none, so the console
+# renders no third-party bundle. Deliberately OFF — a surface bundle is CODE in the console
+# origin holding the viewer's session, the host worker serves no bundles (every /console/* path
+# returns the HTML shell), and the isolation model (sandboxed iframe) is unbuilt. Do NOT enable
+# in production until that lands; set it locally to work on the feature.
+# CUSTOM_SURFACES_ENABLED = "1"
 # Google Drive / Docs connector:
 # GOOGLE_CLIENT_ID = "…"        # Google OAuth web client id.
 # GOOGLE_CLIENT_SECRET is a Worker secret.
