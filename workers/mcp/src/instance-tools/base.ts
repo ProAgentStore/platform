@@ -70,9 +70,21 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 		},
 	);
 
+	// NO `dry_run`, on purpose (#328). This tool is a generic invoker: what a call would do
+	// is decided entirely by the registry entry for `tool` over in `workers/api`, which this
+	// worker deliberately cannot import and does not model. A dry run could therefore only
+	// echo back the caller's own `tool` and `input` — a preview that reads like a safety
+	// check while actually knowing nothing about the side effect it is previewing, which is
+	// worse than not offering one.
+	//
+	// The real preview already exists as a separate READ tool: `list_instance_tools` returns
+	// every registry tool with this instance's verdict (`allowed`, `scope`, `disabled`,
+	// `reason`) and its input schema. That answers both questions a caller has — may this
+	// run, and does it mutate — without touching anything, and it answers them from the
+	// registry rather than from a guess made here.
 	server.tool(
 		"call_instance_tool",
-		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. `input` is the tool's argument object — see list_instance_tools for schemas.",
+		"Invoke a connector tool (e.g. github_workflow_runs, github_list_issues) on one of your instances. `input` is the tool's argument object. No dry run: call list_instance_tools first for the schema and for whether this instance may run it at all.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID from my_instances"),

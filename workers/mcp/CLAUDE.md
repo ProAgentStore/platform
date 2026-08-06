@@ -39,7 +39,7 @@ behaves wrongly, the bug is usually in `workers/api`, not here.
 | Scopes | `src/safety.ts` | `MCP_SCOPES = read write runtime destructive`. `DEFAULT_SCOPES = read write runtime` — `destructive` is **never** a default. `parseScopes` falls back to the default set when it finds no valid PAGS scope (so `openid email profile` yields the default, not nothing). |
 | Read-only mode | `src/safety.ts` | `requirePermission` denies any non-`read` scope when `ctx.readOnly` or `env.MCP_READ_ONLY === "1"`. Set the var in `wrangler.toml` `[vars]` to force it server-wide. |
 | Confirmation | `src/safety.ts` | `requireConfirmation(ctx, tool, confirm, expected)` — exact `===`. By convention `expected` is the tool's own name; `remove_repo` is the exception (`remove_all_repos`, and only when removing all). |
-| Dry run | `src/safety.ts` | `dryRun(ctx, tool, action, input, wouldDo)` returns `{dryRun:true, tool, action, wouldDo}` and audits `action:"dry_run"`. Always place it **after** the permission check. |
+| Dry run | `src/safety.ts` | `dryRun(ctx, tool, action, input, wouldDo)` returns `{dryRun:true, tool, action, wouldDo}` and audits `action:"dry_run"`. Always place it **after** the permission check and **before** the confirmation. A dry run must not touch the network — `contract.test.ts` fails any handler that does. |
 | Audit | `src/safety.ts` | `audit()` writes `audit:{subject}:{iso}:{uuid}` to `OAUTH_KV` with a 90-day TTL. No-ops without both `OAUTH_KV` and `ctx.subject` — so a per-call `token` argument (which sets `subject: undefined`) is intentionally unaudited. `listAuditEvents` reads back, newest first, cap 200. |
 | Redaction | `src/safety.ts` | `redact()` runs on every audited event: key-name match (`token|secret|password|credential|authorization|api_key|…`) plus a value-shape regex (`sk-…`, `gh[pousr]_…`, `xox…`, `AIza…`, JWT, `Bearer …`). Strings truncate at 500 chars, recursion at depth 8. |
 
@@ -117,15 +117,23 @@ tells you exactly what you changed about it.
    require the confirmation token. (This step used to claim the opposite order; #305's
    contract test drives every tool with `dry_run:true` and no `confirm`, and none of them
    refuses.)
-5. Choose the scope honestly. `write` widens what exists; `runtime` spends or drives
+5. A mutating tool takes `dry_run` unless you can say why a preview is meaningless for
+   it, in a comment above the registration (#328). The caller is usually a model: without
+   `dry_run` the only way to learn what a call would do is to perform it. Two tools are
+   exempt, both because a better preview already exists as a READ tool —
+   `call_instance_tool` (`list_instance_tools` reads the registry verdict this Worker
+   cannot see) and `stop_instance_loop` (`check_instance_loop` names the run). Every
+   `destructive` tool takes BOTH `dry_run` and `confirm`; `delete_supervision` was the
+   last one that took neither, and `contract.test.ts` now asserts the set is empty.
+6. Choose the scope honestly. `write` widens what exists; `runtime` spends or drives
    something; `destructive` deletes, overwrites, or commits an irreversible external
    action. `call_instance_tool` is `write` even for reads because it is a generic
    invoker. Whatever you choose, `instance-tools/contract.test.ts` will read it back out
    of the handler and fail until it is written down.
-6. If it is agent-specific, wrap it in `if (groups.has("<surface>"))` — otherwise a user
+7. If it is agent-specific, wrap it in `if (groups.has("<surface>"))` — otherwise a user
    who has no such agent sees a tool that can never apply to them.
-7. Update the table in `README.md` and, if it changes the contract, `AGENTS.md` and
-   `platform-docs/mcp.md`.
+8. Update the table in `README.md` (its Scope / Dry / Confirm columns are what an agent
+   reads) and, if it changes the contract, `AGENTS.md` and `platform-docs/mcp.md`.
 
 ## Gotchas
 

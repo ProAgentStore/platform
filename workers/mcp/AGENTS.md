@@ -103,6 +103,7 @@ OIDC scopes like `openid email profile`: `read write runtime`.
 | `delete_instance_trigger` | `delete_instance_trigger` | always |
 | `clear_instance_messages` | `clear_instance_messages` | always |
 | `delete_instance_connector_grant` | `delete_instance_connector_grant` | always |
+| `delete_supervision` | `delete_supervision` | always |
 | `remove_repo` | `remove_all_repos` | only when removing **all** repos (omit `repo_url`) |
 
 A `dry_run` never needs `confirm` — `remove_repo` checks confirmation only on a real run.

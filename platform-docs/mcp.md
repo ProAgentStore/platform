@@ -145,6 +145,7 @@ Destructive or overwrite-style tools require an exact `confirm` value. By conven
 - `delete_instance_trigger`: `confirm: "delete_instance_trigger"`
 - `clear_instance_messages`: `confirm: "clear_instance_messages"`
 - `delete_instance_connector_grant`: `confirm: "delete_instance_connector_grant"`
+- `delete_supervision`: `confirm: "delete_supervision"`
 - `remove_repo`: `confirm: "remove_all_repos"`, and only when removing **all** indexed repos
 
 Use `mcp_audit_log` to inspect recent MCP write, runtime, dry-run, denied, and destructive tool events for the authenticated account. Audit events are redacted before storage — both by key name (`token`, `secret`, `password`, `credential`, `api_key`, …) and by value shape (`sk-…`, `ghp_…`, `xox…`, `AIza…`, JWTs, bearer headers) — and expire after 90 days.

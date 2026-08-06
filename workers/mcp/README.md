@@ -284,10 +284,10 @@ sit outside its surface gate.
 
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
-| `start_instance_loop` | Give an agent an objective and let it run on the server, budget-bounded | write | | |
+| `start_instance_loop` | Give an agent an objective and let it run on the server, budget-bounded | write | yes | |
 | `check_instance_loop` | Status, steps taken, stop reason (omit `run_id` to list runs) | read | | |
-| `stop_instance_loop` | Cooperative stop — the in-flight step finishes | write | | |
-| `coding_loop_start` | Client-side loop: send objective, then iterate via loop-decide | runtime | | |
+| `stop_instance_loop` | Cooperative stop — the in-flight step finishes | write | no ([why](#tools-with-no-dry-run)) | |
+| `coding_loop_start` | Client-side loop: send objective, then iterate via loop-decide — runs every iteration before returning | runtime | yes | |
 | `coding_loop_status` | Status of that loop | — | | |
 | `coding_loop_stop` | Stop it (in-memory only; no scope check) | — | | |
 
@@ -307,7 +307,7 @@ sit outside its surface gate.
 |---|---|---|---|---|
 | `list_instance_tools` | Every registry tool with this instance's verdict (`allowed`, `scope`, `disabled`, `reason`) + input schemas | — | | |
 | `set_instance_tool` | Switch one tool on or off for this instance | write | yes | |
-| `call_instance_tool` | Invoke a connector tool directly (`tool` + `input`) | write | | |
+| `call_instance_tool` | Invoke a connector tool directly (`tool` + `input`) | write | no ([why](#tools-with-no-dry-run)) | |
 | `connector_status` | Is a file connector connected, and is this deployment configured for it? | — | | |
 | `list_instance_connector_grants` | Folders granted to this instance — the grant *is* the permission | — | | |
 | `grant_instance_connector_folder` | Grant a folder (folders only; files refused server-side) | write | yes | |
@@ -318,10 +318,10 @@ sit outside its surface gate.
 | Tool | Purpose | Scope | Dry | Confirm |
 |---|---|---|---|---|
 | `list_supervision` | Agents a supervisor oversees | read | | |
-| `create_supervision` | Put one agent in charge of another (loop/depth/fan-out checked) | write | | |
-| `delete_supervision` | Remove a supervision link | destructive | | |
+| `create_supervision` | Put one agent in charge of another (loop/depth/fan-out checked) | write | yes | |
+| `delete_supervision` | Remove a supervision link — silent afterwards: the supervisor stops reaching that subordinate rather than erroring | destructive | yes | `delete_supervision` |
 | `list_connections` | Event connections leaving an instance | read | | |
-| `create_connection` | Route an emitted fact to another agent (the pump) | write | | |
+| `create_connection` | Route an emitted fact to another agent (the pump) | write | yes | |
 
 ### Repo Chat (gated to `surfaces: ["repo"]`)
 
@@ -354,6 +354,20 @@ sit outside its surface gate.
 | `usage_summary` | Token usage + estimated cost by agent/model/activity | — | | |
 | `keys_status` | Which providers have a BYOK key — **names only** | — | | |
 | `email_status` | Gmail configured/connected | — | | |
+
+### Tools with no dry run
+
+`dry_run` is how a caller — usually a model — finds out what a call would do without
+doing it. Every mutating tool offers one except these two, and the reason in both cases
+is that a preview here would be *less* informative than something that already exists:
+
+| Tool | Why not | Read this instead |
+|---|---|---|
+| `call_instance_tool` | A generic invoker. What the call does is decided by the connector registry in `workers/api`, which this Worker cannot see. Its preview could only echo your own `tool` and `input` back — a safety check that knows nothing about the side effect it is previewing. | `list_instance_tools` — the registry's own verdict (`allowed`, `scope`, `disabled`, `reason`) plus the input schema, as a read. |
+| `stop_instance_loop` | Fully described by `run_id`; there is nothing else to get wrong. Stopping is also the safe direction — cooperative, the in-flight step settles its own spend. | `check_instance_loop` — the objective, steps taken and stop reason for the run you are about to stop. |
+
+Both carry that reasoning in a comment above their registration, and
+`instance-tools/contract.test.ts` lists them, so the set moves only deliberately.
 
 ## Not exposed via MCP
 

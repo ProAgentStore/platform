@@ -218,19 +218,19 @@ const TABLE: Record<string, Row> = {
 	check_instance_loop: ["composition", "read", null, null, "instance_id,run_id,token"],
 	clear_finished_tasks: ["board", "write", null, "envelope", "dry_run,instance_id,token"],
 	clear_instance_messages: ["observability", "destructive", "clear_instance_messages", "envelope", "confirm,dry_run,instance_id,token"],
-	coding_loop_start: ["coding", "runtime", null, null, "instance_id,max_iterations,objective,token"],
+	coding_loop_start: ["coding", "runtime", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
 	coding_loop_status: ["coding", "none", null, null, "instance_id,token"],
 	coding_loop_stop: ["coding", "none", null, null, "instance_id,token"],
 	connector_status: ["connectors", "none", null, null, "provider,token"],
-	create_connection: ["composition", "write", null, null, "action,config,event_type,instance_id,target_instance_id,token"],
+	create_connection: ["composition", "write", null, "envelope", "action,config,dry_run,event_type,instance_id,target_instance_id,token"],
 	create_instance_trigger: ["triggers", "write", null, "envelope", "action,config,dry_run,instance_id,name,schedule,token,type"],
-	create_supervision: ["composition", "write", null, null, "subordinate_instance_id,supervisor_instance_id,token"],
+	create_supervision: ["composition", "write", null, "envelope", "dry_run,subordinate_instance_id,supervisor_instance_id,token"],
 	delete_instance_connector_grant: ["connectors", "destructive", "delete_instance_connector_grant", "envelope", "confirm,dry_run,grant_id,instance_id,provider,token"],
 	delete_instance_file: ["knowledge", "destructive", "delete_instance_file", "envelope", "confirm,dry_run,file_id,instance_id,token"],
 	delete_instance_knowledge: ["knowledge", "destructive", "delete_instance_knowledge", "envelope", "confirm,document_id,dry_run,instance_id,token"],
 	delete_instance_memory: ["knowledge", "destructive", "delete_instance_memory", "envelope", "confirm,dry_run,instance_id,key,token"],
 	delete_instance_trigger: ["triggers", "destructive", "delete_instance_trigger", "envelope", "confirm,dry_run,token,trigger_id"],
-	delete_supervision: ["composition", "destructive", null, null, "supervision_id,supervisor_instance_id,token"],
+	delete_supervision: ["composition", "destructive", "delete_supervision", "envelope", "confirm,dry_run,supervision_id,supervisor_instance_id,token"],
 	email_status: ["account", "none", null, null, "token"],
 	get_agent_settings_schema: ["settings", "none", null, null, "agent_id,token"],
 	get_agent_stats_schema: ["stats", "none", null, null, "agent_id,token"],
@@ -280,7 +280,7 @@ const TABLE: Record<string, Row> = {
 	set_instance_stats: ["stats", "write", null, "envelope", "dry_run,instance_id,ops,token"],
 	set_instance_tool: ["base", "write", null, "text", "dry_run,enabled,instance_id,token,tool"],
 	set_translation_config: ["settings", "write", null, "envelope", "dry_run,enabled,font_size,instance_id,target,token,transliterate,word_tap"],
-	start_instance_loop: ["composition", "write", null, null, "instance_id,max_iterations,objective,token"],
+	start_instance_loop: ["composition", "write", null, "envelope", "dry_run,instance_id,max_iterations,objective,token"],
 	stop_instance_loop: ["composition", "write", null, null, "instance_id,run_id,token"],
 	subscribe_agent: ["base", "write", null, "envelope", "agent_id,dry_run,token"],
 	system_status: ["coding", "none", null, null, "instance_id,token"],
@@ -383,14 +383,14 @@ describe("conventions the table has to keep", () => {
 		expect(rows.filter(([, r]) => r[2] !== null && r[1] !== "destructive").map(([n]) => n)).toEqual([]);
 	});
 
-	it("every destructive tool is confirmed, except the one known gap", () => {
-		// `delete_supervision` (#183) takes `destructive` scope but no confirm string and
-		// offers no dry run, unlike every other destructive tool. Recorded here rather
-		// than quietly fixed: this commit moves code and changes no behaviour, and a gap
-		// named in a test is a gap someone can close on purpose.
-		expect(rows.filter(([, r]) => r[1] === "destructive" && r[2] === null).map(([n]) => n)).toEqual([
-			"delete_supervision",
-		]);
+	it("every destructive tool is confirmed", () => {
+		// This assertion used to carry one exemption. `delete_supervision` (#183) took the
+		// `destructive` scope but demanded no confirmation and offered no preview — the only
+		// tool in the surface like that. #305 recorded it here rather than fixing it, because
+		// that commit moved code and changed no behaviour; #328 closed it, and the exemption
+		// went with it. There is no list any more, and adding one back needs a reason good
+		// enough to survive being written next to this paragraph.
+		expect(rows.filter(([, r]) => r[1] === "destructive" && r[2] === null).map(([n]) => n)).toEqual([]);
 	});
 
 	it("remove_repo escalates to destructive only when it removes everything", async () => {
@@ -415,20 +415,26 @@ describe("conventions the table has to keep", () => {
 	});
 
 	it("names the mutating tools that offer no dry run at all", () => {
-		// Not a failure — a list. `dry_run` is a convention, not a requirement, and these
-		// seven predate or opt out of it. It is here so the number is visible and moves
-		// only when someone means it to.
+		// Not a failure — a list, and a short one now. It held seven until #328, which went
+		// through them one at a time rather than adding `dry_run` to all seven by reflex:
+		// five gained a preview that says something the caller could not otherwise learn
+		// without performing the mutation, and two did not, because for them it could not.
+		//
+		//   call_instance_tool   a generic invoker over the API's connector registry, which
+		//                        this worker cannot see. Its preview would only echo the
+		//                        caller's own arguments back. `list_instance_tools` is the
+		//                        real preview: it reads the verdict and the schema out of
+		//                        the registry, and it is a read tool.
+		//   stop_instance_loop   the call is fully described by `run_id`, and the question
+		//                        worth asking ("which run is that?") is answered better by
+		//                        `check_instance_loop`. Stopping is also the safe direction:
+		//                        cooperative, the in-flight step settles its own spend.
+		//
+		// Both carry that reasoning in a comment above their registration. Anything joining
+		// this list needs the same — the entry here is the index, not the argument.
 		expect(
 			rows.filter(([, r]) => ["write", "runtime", "destructive"].includes(r[1]) && r[3] === null).map(([n]) => n),
-		).toEqual([
-			"call_instance_tool",
-			"coding_loop_start",
-			"create_connection",
-			"create_supervision",
-			"delete_supervision",
-			"start_instance_loop",
-			"stop_instance_loop",
-		]);
+		).toEqual(["call_instance_tool", "stop_instance_loop"]);
 	});
 
 	it("every tool takes the standard optional session token", () => {

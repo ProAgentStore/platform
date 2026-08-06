@@ -755,6 +755,85 @@ describe("coding loop state machine", () => {
 	});
 });
 
+// ── delete_supervision: the destructive gate, asserted as an absence ─────────
+//
+// `contract.test.ts` derives that this tool demands `confirm` and previews with `dry_run`,
+// by reading its refusal text. What it cannot say is whether the DELETE was nevertheless
+// sent — a tool that refuses in words and mutates anyway reads identical from there. That
+// is the failure mode worth pinning here, because cutting a supervision edge is silent:
+// `delegate_goal` re-checks membership on the resolved id, so afterwards nothing errors,
+// the subordinate merely stops being reachable.
+
+describe("delete_supervision requires confirmation before it cuts anything", () => {
+	const args = { supervisor_instance_id: "sup-1", supervision_id: "link-9" };
+
+	it("sends no DELETE when confirm is missing or wrong", async () => {
+		const h = setup();
+		const missing = await h.tools.get("delete_supervision")!.handler({ ...args });
+		expect(missing.content[0].text).toContain('requires confirm="delete_supervision"');
+		const wrong = await h.tools.get("delete_supervision")!.handler({ ...args, confirm: "yes" });
+		expect(wrong.content[0].text).toContain('requires confirm="delete_supervision"');
+		expect(h.fetchStub.calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+	});
+
+	it("previews the link without confirm and without touching the network", async () => {
+		// Dry run runs BEFORE the confirmation on purpose and in every tool: asking what a
+		// destructive call would do must not itself require the destructive token.
+		const h = setup();
+		const res = await h.tools.get("delete_supervision")!.handler({ ...args, dry_run: true });
+		const body = JSON.parse(res.content[0].text) as { dryRun: boolean; wouldDo: { method: string } };
+		expect(body.dryRun).toBe(true);
+		expect(body.wouldDo.method).toBe("DELETE");
+		expect(h.fetchStub.calls).toHaveLength(0);
+		expect(h.auditEvents().some((e) => e.tool === "delete_supervision" && e.action === "dry_run")).toBe(true);
+	});
+
+	it("deletes and audits once confirmed", async () => {
+		const h = setup();
+		const res = await h.tools.get("delete_supervision")!.handler({ ...args, confirm: "delete_supervision" });
+		expect(res.content[0].text).toContain("ok");
+		const del = h.fetchStub.calls.filter((c) => c.method === "DELETE");
+		expect(del).toHaveLength(1);
+		expect(del[0].url).toContain("/v1/instances/sup-1/supervision/link-9");
+		expect(h.auditEvents().some((e) => e.tool === "delete_supervision" && e.action === "completed")).toBe(true);
+	});
+
+	it("refuses on a connection holding write but not destructive", async () => {
+		const h = setup({ scopes: ["read", "write", "runtime"] });
+		const res = await h.tools.get("delete_supervision")!.handler({ ...args, confirm: "delete_supervision" });
+		expect(res.content[0].text).toContain('requires MCP scope "destructive"');
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+});
+
+// ── coding_loop_start: the gate runs before the server does any work ─────────
+
+describe("coding_loop_start dry run", () => {
+	it("commits no model spend and does not even resolve the instance", async () => {
+		// The instance lookup is a network call, so it has to sit AFTER the dry-run branch
+		// (and after the scope check) or a preview would still make the server fetch.
+		const h = setup({ groups: ["coding"] });
+		const res = await h.tools.get("coding_loop_start")!.handler({
+			instance_id: "coder",
+			objective: "do the thing",
+			max_iterations: 50,
+			dry_run: true,
+		});
+		const body = JSON.parse(res.content[0].text) as { dryRun: boolean; wouldDo: { spend: string } };
+		expect(body.dryRun).toBe(true);
+		// The number a caller is really committing to when it leaves max_iterations at the cap.
+		expect(body.wouldDo.spend).toContain("50 agent turns");
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+
+	it("refuses without the runtime scope before making any call", async () => {
+		const h = setup({ groups: ["coding"], scopes: ["read"] });
+		const res = await h.tools.get("coding_loop_start")!.handler({ instance_id: "coder", objective: "x" });
+		expect(res.content[0].text).toContain('requires MCP scope "runtime"');
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+});
+
 // ── upload_resume: input validation before any network / audit ────────────────
 
 describe("upload_resume validation", () => {

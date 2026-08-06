@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { authedCall, authRequired, jsonText, text } from "../http.js";
-import { audit, requirePermission } from "../safety.js";
+import { audit, dryRun, requirePermission } from "../safety.js";
 import { type InstanceToolsCtx, findInstanceForAgent } from "./shared.js";
 
 /** Coding tools — the surface-gated system_status plus the always-on Agent Loop tools. */
@@ -41,23 +41,43 @@ export function registerCodingTools(server: McpServer, ctx: InstanceToolsCtx): v
 
 	server.tool(
 		"coding_loop_start",
-		"Start an autonomous agent loop on an instance. Sends the objective as the first message, then iteratively asks the loop-decide endpoint to continue, stop, or escalate.",
+		"Start an autonomous agent loop on an instance. Sends the objective as the first message, then iteratively asks the loop-decide endpoint to continue, stop, or escalate. Runs the WHOLE loop before returning — dry-run it first to see how many model calls that is.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string().describe("Instance ID or slug"),
 			objective: z.string().describe("What the agent should accomplish"),
 			max_iterations: z.number().int().min(1).max(50).optional().describe("Maximum loop iterations (default 10)"),
+			dry_run: z.boolean().optional().describe("Report the calls and the model spend the loop would commit, without starting it."),
 		},
-		async ({ token, instance_id, objective, max_iterations }) => {
+		async ({ token, instance_id, objective, max_iterations, dry_run }) => {
 			const sessionToken = tokenFor(token);
 			if (!sessionToken) return authRequired();
-			const inst = await findInstanceForAgent(env, sessionToken, instance_id);
-			const id = inst?.id || instance_id;
 			const maxIter = max_iterations ?? 10;
 			// An autonomous loop drives chat + engine for up to 50 iterations —
 			// runtime-scoped, gated by MCP_READ_ONLY, and audited (was ungated).
-			const denied = await requirePermission(safetyFor(token), "runtime", "coding_loop_start", { instance_id: id, max_iterations: maxIter });
+			//
+			// The gate runs BEFORE the instance is resolved (#328). Resolution is itself a
+			// network call, so doing it first meant a caller the scope check was about to
+			// refuse still made the server fetch on their behalf — and a dry run could not
+			// honour its one promise of touching nothing.
+			const denied = await requirePermission(safetyFor(token), "runtime", "coding_loop_start", { instance_id, max_iterations: maxIter });
 			if (denied) return denied;
+			if (dry_run) {
+				// This loop is unusual and the preview is mostly about that: it is not a
+				// request to start something, it runs every iteration inline and returns the
+				// whole transcript. `max_iterations` is therefore a spend commitment made at
+				// call time, and a model that defaults it to 50 has no other way to find out.
+				return dryRun(safetyFor(token), "coding_loop_start", "run an autonomous agent loop", { instance_id, max_iterations: maxIter }, {
+					first: `POST /v1/instances/${instance_id}/chat with the objective, verbatim`,
+					thenPerIteration: [`POST /v1/instances/${instance_id}/loop-decide`, `POST /v1/instances/${instance_id}/chat with the instruction it returns`],
+					iterations: `up to ${maxIter - 1} after the first message (max_iterations ${maxIter})`,
+					spend: `Up to ${maxIter} agent turns and ${maxIter - 1} loop-decide calls, all on the instance's own BYOK model, all before this tool returns.`,
+					objectiveBytes: new TextEncoder().encode(objective).length,
+					note: `instance_id is resolved against my_instances on the real call; this dry run does not resolve it, so a slug that does not exist still fails then.`,
+				});
+			}
+			const inst = await findInstanceForAgent(env, sessionToken, instance_id);
+			const id = inst?.id || instance_id;
 			await audit(safetyFor(token), { tool: "coding_loop_start", action: "completed", input: { instance_id: id, objectiveBytes: new TextEncoder().encode(objective).length, maxIterations: maxIter } });
 
 			// Send the objective as the first message
