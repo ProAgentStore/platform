@@ -112,6 +112,10 @@ app.use("/v1/instances/*/apply", rateLimitStrict()); // workflow + LLM + browser
 app.use("/v1/push/test", rateLimitStrict());
 app.use("/v1/errors/client", rateLimitStrict()); // browser-driven writes to the durable log — throttle hard
 app.use("/v1/keys/*/reveal", rateLimitStrict()); // hands out a raw decrypted key — throttle hard
+// Fetches a URL the CALLER supplied. safeFetch already refuses internal targets, but an
+// authenticated "make the Worker request this" button is still the shape of an SSRF/scanning
+// primitive, so it is throttled like the expensive routes rather than the read routes.
+app.use("/v1/instances/*/mcp/test", rateLimitStrict());
 
 // Admin perimeter: Cloudflare Access gate in front of the whole operator API
 // (defense-in-depth). Inert until CF_ACCESS_TEAM_DOMAIN + CF_ACCESS_AUD are set;

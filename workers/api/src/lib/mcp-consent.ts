@@ -97,9 +97,25 @@ export function isDestructiveToolName(tool: string): boolean {
 }
 
 /**
- * May `instanceId` call `tool` on `endpoint`? An exact per-tool row always wins; a wildcard
- * row covers everything except a destructive-looking name. Fail-closed: no instance, no
- * endpoint, no row, or a D1 error → false.
+ * THE grant rule, over rows already fetched: an exact per-tool row always wins; a wildcard row
+ * covers everything except a destructive-looking name.
+ *
+ * Pure and exported because two callers need the same verdict from different places — the
+ * enforcement below (one tool, a targeted query) and the connection diagnostics (every tool a
+ * server published, against the endpoint's grants read once). A diagnostic that restated the
+ * rule would eventually disagree with the gate, and the direction it would disagree in is
+ * "the test says you may call it and the call is refused".
+ */
+export function grantsAllowTool(rows: ReadonlyArray<{ tool: string }>, tool: string): boolean {
+	if (!tool) return false;
+	if (rows.some((r) => r.tool === tool)) return true;
+	// Only a wildcard matched — good enough unless the name is one we can see is destructive.
+	return rows.some((r) => r.tool === ALL_TOOLS) && !isDestructiveToolName(tool);
+}
+
+/**
+ * May `instanceId` call `tool` on `endpoint`? Fail-closed: no instance, no endpoint, no row,
+ * or a D1 error → false.
  */
 export async function hasMcpConsent(
 	env: Env,
@@ -114,10 +130,7 @@ export async function hasMcpConsent(
 		)
 			.bind(instanceId, endpoint, tool, ALL_TOOLS)
 			.all<{ tool: string }>();
-		const rows = row.results ?? [];
-		if (rows.some((r) => r.tool === tool)) return true;
-		// Only a wildcard matched — good enough unless the name is one we can see is destructive.
-		return rows.some((r) => r.tool === ALL_TOOLS) && !isDestructiveToolName(tool);
+		return grantsAllowTool(row.results ?? [], tool);
 	} catch {
 		return false;
 	}

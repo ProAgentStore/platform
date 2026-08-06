@@ -422,12 +422,18 @@ interface CallOutcome {
 	status?: number;
 	era?: McpEra;
 	version?: string;
+	/**
+	 * What the server's own OAuth metadata said, when we had to ask (#180/#181). Carried
+	 * STRUCTURALLY rather than only rendered into `content`, so the connection-test surface can
+	 * show "OAuth-protected by X, no refresh token" as fields instead of re-parsing a sentence.
+	 */
+	discovery?: DiscoveryResult;
 }
 
 /** Shared 401/403 handling: ask the server what auth model it wants instead of guessing (#180). */
 async function authFailure(url: string, status: number): Promise<CallOutcome> {
 	const discovery = await discoverAuthServer(url).catch(() => ({ protected: false }) as DiscoveryResult);
-	return { content: authFailureGuidance(status, discovery), success: false, failure: "auth", status };
+	return { content: authFailureGuidance(status, discovery), success: false, failure: "auth", status, discovery };
 }
 
 /** Turn a completed RPC into a CallOutcome. Body excerpts are redacted — a server that echoes
@@ -522,7 +528,13 @@ async function modernCall(url: string, token: string | null, method: string, par
  * endpoint is already known to be legacy; the verdict is cached, and dropped on any failure so
  * the next attempt re-probes.
  */
-async function mcpCall(ctx: RegistryToolCtx, input: Record<string, unknown>, method: string, params: Record<string, unknown>, log: { tool?: string; argKeys?: string[]; argBytes?: number }): Promise<CallOutcome> {
+async function mcpCall(
+	ctx: RegistryToolCtx,
+	input: Record<string, unknown>,
+	method: string,
+	params: Record<string, unknown>,
+	log: { tool?: string; argKeys?: string[]; argBytes?: number },
+): Promise<CallOutcome & { durationMs: number }> {
 	const started = Date.now();
 	let endpoint: { url: string; useAuth: boolean };
 	try {
@@ -530,7 +542,7 @@ async function mcpCall(ctx: RegistryToolCtx, input: Record<string, unknown>, met
 	} catch (e) {
 		const content = e instanceof Error ? e.message : String(e);
 		await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: String(input.url ?? "(none)").slice(0, 120), method, tool: log.tool, ok: false, failure: "bad_input", reason: content });
-		return { content, success: false, failure: "bad_input" };
+		return { content, success: false, failure: "bad_input", durationMs: Date.now() - started };
 	}
 	const key = normalizeMcpEndpoint(endpoint.url) ?? endpoint.url;
 
@@ -541,7 +553,7 @@ async function mcpCall(ctx: RegistryToolCtx, input: Record<string, unknown>, met
 			const content =
 				'No credential connected for the mcp connector — add the server\'s access token in the instance\'s Connections settings, or pass auth:"none" for an open server.';
 			await recordMcp(ctx, { event: "mcp.call", level: "warn", endpoint: key, method, tool: log.tool, ok: false, failure: "no_credential" });
-			return { content, success: false, failure: "no_credential" };
+			return { content, success: false, failure: "no_credential", durationMs: Date.now() - started };
 		}
 	}
 
@@ -571,6 +583,7 @@ async function mcpCall(ctx: RegistryToolCtx, input: Record<string, unknown>, met
 	if (outcome.success && outcome.era && outcome.version) rememberEra(key, outcome.era, outcome.version);
 	else if (!outcome.success) forgetEra(key);
 
+	const durationMs = Date.now() - started;
 	await recordMcp(ctx, {
 		event: "mcp.call",
 		level: outcome.success ? "info" : "warn",
@@ -580,14 +593,40 @@ async function mcpCall(ctx: RegistryToolCtx, input: Record<string, unknown>, met
 		era: outcome.era,
 		protocolVersion: outcome.version,
 		status: outcome.status,
-		durationMs: Date.now() - started,
+		durationMs,
 		ok: outcome.success,
 		failure: outcome.failure,
 		argKeys: log.argKeys,
 		argBytes: log.argBytes,
 		resultBytes: outcome.success ? outcome.content.length : undefined,
 	});
-	return outcome;
+	return { ...outcome, durationMs };
+}
+
+/** What a connection probe learned about the transport. Consent/gate reasoning lives elsewhere. */
+export interface McpProbeOutcome extends CallOutcome {
+	/** The normalized endpoint — the form consent and the trace log key on. */
+	endpoint: string;
+	durationMs: number;
+}
+
+/**
+ * Run `tools/list` against an endpoint and report precisely what happened (#265/#266).
+ *
+ * This is the SAME path a real call takes — `mcpCall`, therefore `safeFetch`, therefore
+ * https-only and SSRF-guarded, therefore era detection and the redacted `agent_events` row.
+ * A "test this connection" button is a textbook SSRF primitive precisely because the endpoint
+ * is user-supplied config, so it deliberately gets no shortcut of its own: there is one way out
+ * of this Worker to an MCP server, and the test uses it.
+ *
+ * `tools/list` and not a synthetic ping: it is read-scoped and needs no consent, so a test can
+ * enumerate a server before anything has been granted — which is what makes per-tool consent
+ * (#262) approachable — and it proves the protocol negotiation end to end rather than only that
+ * a socket opened.
+ */
+export async function probeMcpEndpoint(ctx: RegistryToolCtx, url: string, useAuth: boolean): Promise<McpProbeOutcome> {
+	const out = (await mcpCall(ctx, { url, auth: useAuth ? "vault" : "none" }, "tools/list", {}, {})) as CallOutcome & { durationMs?: number };
+	return { ...out, endpoint: normalizeMcpEndpoint(url) ?? url, durationMs: out.durationMs ?? 0 };
 }
 
 export const MCP_TOOLS: ToolDef[] = [

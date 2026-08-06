@@ -48,6 +48,35 @@ reject write-scoped calls outright. So `github_create_issue`, Meta messaging, an
 can only write where the instance owner has granted that connector's write scope. Reads
 (`github_list_issues`, `browser_snapshot`, …) need only the connector granted / the runner online.
 
+**Outbound MCP is the exception to connector-level consent (#262).** Every other connector IS the
+remote system, so granting `github` write names GitHub. An MCP endpoint is *configuration supplied
+at call time*, so one `mcp`/write row used to authorise every server the instance could name.
+Reach is therefore also named per **(instance, endpoint, remote tool)** in `instance_mcp_consent`
+(migration 0079), checked before anything touches the network or the vault. A `*` grant covers a
+server's ordinary tools but **not** ones whose names read as destructive — and that test runs on
+the name *we* put on the wire, deliberately not on the server's own `destructiveHint`, because the
+annotation is authored by the party being defended against.
+
+**Connecting a server** (`POST /v1/instances/:id/mcp/test`, console → Settings → MCP connections):
+enter a URL → it is validated and normalized → the protocol era is negotiated → the server's own
+`tools/list` is read (read-scoped, no consent needed — you cannot approve tools you cannot
+enumerate) → tick the ones this agent may call. The report says which of the discovered tools are
+*actually* callable and which of the three gates (declared tool · connector write consent ·
+per-tool grant) blocks each one: a test that reported "connected" while consent still refused every
+call would be worse than no test. The request goes out through the same SSRF-guarded, https-only
+path as any other outbound MCP call — there is no test-only fast path, because a "test this URL"
+button on user-supplied config is exactly the shape of an SSRF primitive.
+
+**Every outbound MCP call is traced** (#265) as one redacted `agent_events` row (`source: "mcp"`):
+endpoint, method, remote tool, era + negotiated version, HTTP status, duration and a failure class,
+plus an `mcp.denied` row written *before* dispatch when consent refuses. Argument and result
+**values are never recorded** — only argument key names and byte counts. A log that keeps the
+arguments of an arbitrary remote tool is a second copy of the user's data with the audit trail's
+retention; key names answer "did it send the field?" without becoming that. Owners read their own
+via `GET /v1/instances/:id/trace?source=mcp`; operators get cross-tenant filtering by user,
+instance, endpoint and remote tool on `/v1/admin/trace`, with `/v1/admin/trace-endpoints` listing
+which endpoints and tools exist at all.
+
 **The browser connector is experimental** and additionally gated behind the API worker's
 `BROWSER_TOOLS_ENABLED` env flag (fail-closed when unset) — first-party / self-use only until the
 browser trust model lands. It bridges the runner's real-Chrome hands (`/browser/snapshot` +

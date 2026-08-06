@@ -4,9 +4,12 @@ import { requireOwnedInstance } from "./instances-runtime.js";
 import { getRegistryTool, registryTools, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
 import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
-import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
+import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint, revokeMcpConsent, setMcpConsent } from "../lib/mcp-consent.js";
 import { getConnector } from "../lib/connectors/registry.js";
+import { connectorClient } from "../lib/connectors/client.js";
+import { probeMcpEndpoint } from "../lib/connectors/mcp.js";
+import { connectionStatusFor, parseToolCatalog, summarizeConnection, summarizeTools, type McpConnectionReport } from "../lib/mcp-connection.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { pipelineDefForKey, validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import { listRuns } from "../lib/pipeline-runs.js";
@@ -407,6 +410,98 @@ toolRoutes.put("/:id/mcp/consent", async (c) => {
 		await revokeMcpConsent(c.env, instanceId, endpoint, tool);
 	}
 	return c.json({ ok: true, endpoint, tool, enabled: !!body.enabled });
+});
+
+/**
+ * POST /v1/instances/:id/mcp/test { url, auth? } — connect to a user-named MCP endpoint and
+ * report what is actually true about it (#266, and #265's "connection test exposes actionable
+ * diagnostics").
+ *
+ * WHAT MAKES THIS HONEST. The obvious version of this button answers "did the HTTP call work",
+ * which is the failure mode the ticket names: a test that reports success while consent would
+ * still refuse every real call is a lie the user only discovers when the agent silently does
+ * nothing. So the answer carries all three gates a real `mcp_call_tool` passes — the agent's
+ * declared tool allowlist, the connector-level write kill switch (#90), and the per-(endpoint,
+ * tool) grant (#262) — and every discovered tool says whether it is callable and, if not, which
+ * gate to fix.
+ *
+ * SSRF. The endpoint is user-supplied config, which makes a "test this" button a textbook
+ * server-side request forgery primitive: it is an authenticated, low-friction way to make our
+ * Worker fetch an arbitrary URL. It therefore gets NO fast path of its own — it goes through
+ * `probeMcpEndpoint` → the ordinary connector call → `safeFetch` (https-only, redirect
+ * revalidated, metadata/RFC1918/CGNAT refused), and a refusal comes back as `status:"blocked"`
+ * rather than as a network error the user would read as "the server is down".
+ *
+ * It is also rate-limited strictly (index.ts) for the same reason, and — like every other
+ * outbound MCP call — writes one redacted `agent_events` row, so a test is as auditable as a
+ * real call rather than being a side channel around the log.
+ */
+toolRoutes.post("/:id/mcp/test", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	const instance = await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { url?: string; auth?: string };
+
+	// Normalize FIRST and refuse anything that isn't an https MCP endpoint, so the URL the panel
+	// echoes back is the one consent and the trace log key on — a test that reported success for
+	// `https://Host/mcp/` while grants were stored under `https://host/mcp` would be a lie of a
+	// subtler kind.
+	const endpoint = normalizeMcpEndpoint(String(body.url ?? ""));
+	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
+	const useAuth = body.auth !== "none";
+
+	// The three gates, read once, before any network call.
+	const policy = await instanceToolPolicy(c.env, instanceId, session.uid, instance.config);
+	const gates = {
+		callToolEnabled: policy.find((t) => t.name === "mcp_call_tool")?.allowed === true,
+		writeConsent: await hasConsent(c.env, instanceId, "mcp", "write"),
+	};
+	const grantsForEndpoint = (await listMcpConsents(c.env, instanceId)).filter((g) => g.endpoint === endpoint);
+
+	const probe = await probeMcpEndpoint(
+		{ env: c.env, userId: session.uid, instanceId, connectorClient: (provider: string) => connectorClient(c.env, provider, { userId: session.uid, instanceId }) },
+		endpoint,
+		useAuth,
+	);
+
+	let discovered: Array<{ name: string; description?: string }> = [];
+	if (probe.success) {
+		try {
+			discovered = parseToolCatalog(JSON.parse(probe.content));
+		} catch {
+			/* a success whose body won't parse is a server bug, not a connection failure — report
+			   the connection as up with an empty catalog rather than inventing a transport error */
+		}
+	}
+	const tools = summarizeTools(discovered, grantsForEndpoint, gates);
+
+	const base: Omit<McpConnectionReport, "detail"> = {
+		endpoint,
+		status: connectionStatusFor(probe.failure, probe.success),
+		failure: probe.failure,
+		era: probe.era,
+		protocolVersion: probe.version,
+		httpStatus: probe.status,
+		durationMs: probe.durationMs,
+		tools,
+		toolCount: tools.length,
+		callableCount: tools.filter((t) => t.callable).length,
+		gates,
+		// Only the SHAPE of the auth model, never a token, an endpoint's query string, or a
+		// header. `probe.content` is already redacted upstream (redactText) before it reaches
+		// either the transcript or the log.
+		auth: probe.discovery
+			? probe.discovery.protected
+				? {
+						protectedResource: true,
+						authorizationServer: probe.discovery.authorizationServer,
+						dynamicRegistration: probe.discovery.dcr,
+						unattended: probe.discovery.unattended,
+					}
+				: { protectedResource: false }
+			: undefined,
+	};
+	return c.json({ ...base, detail: summarizeConnection(base, probe.content.slice(0, 600)) } satisfies McpConnectionReport);
 });
 
 /**

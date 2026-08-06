@@ -8,6 +8,8 @@ import TeamworkSection from "./TeamworkSection";
 import LoopPresetsSection from "./LoopPresetsSection";
 import LoopRunsSection from "./LoopRunsSection";
 import TriggersSection from "./TriggersSection";
+import McpConnections from "../components/McpConnections";
+import { hasMcpCapability, type McpGrant } from "../lib/mcpConnections";
 
 /** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
 type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean; nodeOnline?: boolean }> };
@@ -87,13 +89,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [grantedConnectors, setGrantedConnectors] = useState<string[]>([]);
 	const [consentMsg, setConsentMsg] = useState("");
 	// Outbound-MCP grants (#262). The connector checkbox above cannot name a server — the
-	// endpoint is config supplied at call time — so `mcp` write is granted per (server, tool)
-	// here. Without this list, granting `mcp` above authorised every MCP server the agent
-	// could name and every tool on it.
-	const [mcpGrants, setMcpGrants] = useState<Array<{ endpoint: string; tool: string; destructive?: boolean }>>([]);
-	const [mcpUrl, setMcpUrl] = useState("");
-	const [mcpTool, setMcpTool] = useState("");
-	const [mcpMsg, setMcpMsg] = useState("");
+	// endpoint is config supplied at call time — so `mcp` write is granted per (server, tool).
+	// The panel that edits them lives in <McpConnections/> (#266); this component only owns the
+	// list, because the connector checkboxes above have to reflect what granting a server did.
+	const [mcpGrants, setMcpGrants] = useState<McpGrant[]>([]);
 	// Tool policy: every registry tool with THIS instance's verdict on it. The answer to
 	// "what can this agent actually do", including what it can't and why — an allow-list you
 	// can't read is not something you can trust.
@@ -123,30 +122,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		} catch (e) {
 			setGrantedConnectors((g) => (enabled ? g.filter((c) => c !== connector) : [...new Set([...g, connector])]));
 			setConsentMsg(e instanceof Error ? e.message : "Failed");
-		}
-	};
-
-	// Grant or revoke one (MCP server, remote tool) pair. Not optimistic: unlike a checkbox,
-	// the server normalizes the URL it stores, so the row shown must be the row saved — an
-	// optimistic entry would show a grant under a URL the enforcement doesn't use.
-	const setMcpGrant = async (url: string, tool: string, enabled: boolean) => {
-		try {
-			const r = await api<{ endpoint: string; tool: string }>(`/v1/instances/${instanceId}/mcp/consent`, {
-				method: "PUT",
-				body: JSON.stringify({ url, tool, enabled }),
-			});
-			const d = await api<{ grants?: Array<{ endpoint: string; tool: string; destructive?: boolean }> }>(`/v1/instances/${instanceId}/mcp/consent`);
-			setMcpGrants(d.grants || []);
-			setMcpMsg(enabled ? `Allowed ${r.tool} on ${r.endpoint}` : `Revoked ${r.tool} on ${r.endpoint}`);
-			setTimeout(() => setMcpMsg(""), 3000);
-			if (enabled) {
-				setMcpTool("");
-				// Granting a server implies the connector-level write gate; reflect what the
-				// server just did rather than leaving the checkbox looking off.
-				setGrantedConnectors((g) => [...new Set([...g, "mcp"])]);
-			}
-		} catch (e) {
-			setMcpMsg(e instanceof Error ? e.message : "Could not change that grant");
 		}
 	};
 
@@ -268,7 +243,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				setGrantedConnectors((consentRes.consents || []).filter((x) => x.scope === "write").map((x) => x.connector));
 			} catch {}
 			try {
-				const d = await api<{ grants?: Array<{ endpoint: string; tool: string; destructive?: boolean }> }>(`/v1/instances/${instanceId}/mcp/consent`);
+				const d = await api<{ grants?: McpGrant[] }>(`/v1/instances/${instanceId}/mcp/consent`);
 				setMcpGrants(d.grants || []);
 			} catch {}
 			try {
@@ -909,56 +884,25 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 					</div>
 				)}
 
-				{/* Outbound-MCP grants (#262). Every other connector IS the remote system, so a
-				    connector-level grant names it. An MCP endpoint is config supplied at call
-				    time, so reach has to be named per server and per tool. */}
-				{writeConnectors.includes("mcp") && (
-					<div className="mb-3 pb-3 border-b border-line">
-						<div className="text-sm font-semibold mb-0.5">MCP servers</div>
-						<p className="text-[0.7rem] text-muted-soft mb-2">
-							Which remote MCP servers this agent may operate, and which of their tools. Use <code className="font-mono">*</code> for every tool on a server — tools whose
-							names look destructive (delete, purge, drop…) still need approving by name.
-						</p>
-						{mcpGrants.length > 0 && (
-							<ul className="mb-2">
-								{mcpGrants.map((g) => (
-									<li key={`${g.endpoint}::${g.tool}`} className="flex items-center gap-2 text-xs mb-1">
-										<code className="font-mono text-muted truncate max-w-[16rem]">{g.endpoint}</code>
-										<span className="font-semibold">{g.tool === "*" ? "all tools" : g.tool}</span>
-										{g.destructive && <span className="text-red text-[0.65rem]">destructive</span>}
-										<button type="button" className="ml-auto text-muted-soft hover:text-red" onClick={() => setMcpGrant(g.endpoint, g.tool, false)}>
-											Revoke
-										</button>
-									</li>
-								))}
-							</ul>
-						)}
-						<div className="flex flex-wrap gap-1.5">
-							<input
-								type="url"
-								value={mcpUrl}
-								onChange={(e) => setMcpUrl(e.target.value)}
-								placeholder="https://example.com/mcp"
-								className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-surface border border-line rounded"
-							/>
-							<input
-								type="text"
-								value={mcpTool}
-								onChange={(e) => setMcpTool(e.target.value)}
-								placeholder="tool name or *"
-								className="w-32 px-2 py-1 text-xs bg-surface border border-line rounded"
-							/>
-							<button
-								type="button"
-								disabled={!mcpUrl.trim() || !mcpTool.trim()}
-								onClick={() => setMcpGrant(mcpUrl.trim(), mcpTool.trim(), true)}
-								className="px-2.5 py-1 text-xs font-semibold bg-accent text-white rounded disabled:opacity-40"
-							>
-								Allow
-							</button>
-						</div>
-						{mcpMsg && <p className="text-xs text-green mt-1">{mcpMsg}</p>}
-					</div>
+				{/* Outbound-MCP connections (#262 grants + #266 setup lifecycle). Every other
+				    connector IS the remote system, so a connector-level grant names it. An MCP
+				    endpoint is config supplied at call time, so reach has to be named per server
+				    and per tool — and you can only name a tool you have been shown, which is why
+				    this is a discover-then-approve panel rather than two text inputs.
+				    Gated on ANY mcp tool, read or write: gating on write hid the panel until the
+				    user had already granted a capability they couldn't yet see. */}
+				{hasMcpCapability(toolPolicy) && (
+					<McpConnections
+						instanceId={instanceId}
+						grants={mcpGrants}
+						onGrantsChanged={(g) => {
+							setMcpGrants(g);
+							// Granting a server implies the connector-level write gate (the PUT sets it
+							// server-side); reflect what actually happened rather than leaving the
+							// checkbox above looking off.
+							if (g.length) setGrantedConnectors((c) => [...new Set([...c, "mcp"])]);
+						}}
+					/>
 				)}
 
 				{emailStatus && !emailStatus.configured && (

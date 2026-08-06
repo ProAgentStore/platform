@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
+import { resetEraCache } from "../lib/connectors/mcp.js";
 import { toolRoutes } from "./tools.js";
 
 const SECRET = "test-secret";
@@ -13,7 +14,20 @@ const FIXTURE_AGENT_CONFIG = JSON.stringify({
 	capabilities: { tools: ["github_workflow_runs", "github_list_issues", "github_read_issue", "github_create_issue", "http_request"] },
 });
 
-function testApp(opts: { owned?: boolean; config?: string; agentConfig?: string; create?: (arg: unknown) => Promise<{ id: string }>; runs?: unknown[]; loopCreate?: (arg: unknown) => Promise<{ id: string }> } = { owned: true }) {
+function testApp(
+	opts: {
+		owned?: boolean;
+		config?: string;
+		agentConfig?: string;
+		create?: (arg: unknown) => Promise<{ id: string }>;
+		runs?: unknown[];
+		loopCreate?: (arg: unknown) => Promise<{ id: string }>;
+		/** Rows in instance_mcp_consent for this instance (#262). */
+		mcpGrants?: Array<{ instance_id: string; user_id: string; endpoint: string; tool: string; created_at: string }>;
+		/** Connectors with write consent granted (#90). */
+		writeConsents?: string[];
+	} = { owned: true },
+) {
 	const app = new Hono();
 	app.route("/v1/instances", toolRoutes);
 	app.onError((err, c) => {
@@ -28,9 +42,14 @@ function testApp(opts: { owned?: boolean; config?: string; agentConfig?: string;
 		DB: {
 			prepare(sql: string) {
 				return {
-					bind() {
+					bind(...binds: unknown[]) {
 						return {
 							first: async () => {
+								// Connector write-consent (#90): a row means granted. The connector name is
+								// the 2nd bind (instance, connector, scope).
+								if (sql.includes("instance_connector_consent")) {
+									return (opts.writeConsents ?? []).includes(String(binds[1])) ? { ok: 1 } : null;
+								}
 								// Supervision (#183): the read-back after INSERT.
 								if (sql.includes("FROM agent_loop_runs")) {
 									return { run_id: "r1", user_id: "u1", instance_id: "i1", objective: "ship it", status: "running", stop_reason: null, detail: null, iteration: 2, max_iterations: 10, cancel_requested: 0, budget_id: "b1", started_at: 1, finished_at: null };
@@ -57,7 +76,11 @@ function testApp(opts: { owned?: boolean; config?: string; agentConfig?: string;
 							run: async () => ({ meta: { changes: 1 } }),
 							// listRuns (#98) reads via .all(); return the seeded runs for the
 							// pipeline_runs query, empty otherwise.
-							all: async () => ({ results: sql.includes("FROM pipeline_runs") ? opts.runs ?? [] : [] }),
+							all: async () => {
+								if (sql.includes("FROM pipeline_runs")) return { results: opts.runs ?? [] };
+								if (sql.includes("instance_mcp_consent")) return { results: opts.mcpGrants ?? [] };
+								return { results: [] };
+							},
 						};
 					},
 				};
@@ -522,5 +545,111 @@ describe("PUT /v1/instances/:id/connectors/:connector/consent", () => {
 			const res = await req(app, env, `/v1/instances/i1/connectors/${conn}/consent`, { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
 			expect(res.status).toBe(200);
 		}
+	});
+});
+
+/**
+ * POST /v1/instances/:id/mcp/test — the connection setup diagnostics (#266 / #265).
+ *
+ * The agent fixture declares the outbound MCP tools so the tool-policy gate is satisfied;
+ * `writeConsents`/`mcpGrants` move the other two gates independently, which is the whole point
+ * of the surface: each gate must be reportable on its own.
+ */
+const MCP_AGENT_CONFIG = JSON.stringify({ capabilities: { tools: ["mcp_list_tools", "mcp_call_tool"] } });
+const CATALOG = { jsonrpc: "2.0", id: 1, result: { tools: [{ name: "create_site", description: "Make a site" }, { name: "delete_site" }] } };
+
+/** Answer any MCP POST with one canned body — the era probe takes the modern path and stops. */
+function mockMcpServer(body: unknown, status = 200) {
+	const calls: string[] = [];
+	vi.spyOn(globalThis, "fetch").mockImplementation(async (url: unknown) => {
+		calls.push(String(url));
+		return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+	});
+	return calls;
+}
+
+describe("POST /v1/instances/:id/mcp/test (connection diagnostics)", () => {
+	afterEach(() => vi.restoreAllMocks());
+	beforeEach(() => resetEraCache());
+
+	it("refuses a non-https endpoint before any network call is attempted", async () => {
+		// The endpoint is user-supplied config, so this route is an authenticated "make the
+		// Worker fetch this URL" button. Everything downstream also goes through safeFetch, but
+		// the cheapest refusal is the one that never opens a socket.
+		const calls = mockMcpServer(CATALOG);
+		const { app, env } = testApp({ agentConfig: MCP_AGENT_CONFIG });
+		const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "http://internal.local/mcp" }) }, await tok("u1"));
+		expect(res.status).toBe(400);
+		expect(calls).toHaveLength(0);
+	});
+
+	it("echoes the NORMALIZED endpoint, so the panel shows the URL consent actually keys on", async () => {
+		// A test that reported success for `https://Host/mcp/` while grants are stored under
+		// `https://host/mcp` would be a subtler lie than an outright wrong verdict.
+		mockMcpServer(CATALOG);
+		const { app, env } = testApp({ agentConfig: MCP_AGENT_CONFIG });
+		const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://EXAMPLE.com/mcp/?k=secret", auth: "none" }) }, await tok("u1"));
+		const body = (await res.json()) as Record<string, unknown>;
+		expect(body.endpoint).toBe("https://example.com/mcp");
+		expect(JSON.stringify(body)).not.toContain("secret");
+	});
+
+	it("does NOT call a reachable server ready when consent would refuse every tool", async () => {
+		// THE lie this route exists to prevent. Reachability and permission are different
+		// questions, and answering only the first is what makes an agent look broken later.
+		mockMcpServer(CATALOG);
+		const { app, env } = testApp({ agentConfig: MCP_AGENT_CONFIG });
+		const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp", auth: "none" }) }, await tok("u1"));
+		const body = (await res.json()) as { status: string; toolCount: number; callableCount: number; detail: string; tools: Array<{ name: string; blockedBy?: string }> };
+		expect(body.status).toBe("connected");
+		expect(body.toolCount).toBe(2);
+		expect(body.callableCount).toBe(0);
+		expect(body.detail).toMatch(/may call none/i);
+		expect(body.tools.find((t) => t.name === "create_site")?.blockedBy).toBe("no_write_consent");
+	});
+
+	it("reports each gate separately, so the user fixes the one that is actually blocking", async () => {
+		mockMcpServer(CATALOG);
+		const { app, env } = testApp({
+			agentConfig: MCP_AGENT_CONFIG,
+			writeConsents: ["mcp"],
+			mcpGrants: [{ instance_id: "i1", user_id: "u1", endpoint: "https://example.com/mcp", tool: "*", created_at: "" }],
+		});
+		const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp", auth: "none" }) }, await tok("u1"));
+		const body = (await res.json()) as { gates: unknown; callableCount: number; tools: Array<{ name: string }> };
+		expect(body.gates).toEqual({ callToolEnabled: true, writeConsent: true });
+		expect(body.callableCount).toBe(1);
+		// The wildcard covers create_site but deliberately not delete_site — judged on the name
+		// we would put on the wire, never on anything the server said about its own tools.
+		expect(body.tools.find((t) => t.name === "delete_site")).toMatchObject({ destructive: true, callable: false, blockedBy: "wildcard_excludes_destructive" });
+	});
+
+	it("classifies a rejected credential as auth_required rather than unreachable", async () => {
+		// 401 means the token is wrong/expired/revoked — indistinguishable on the wire, but
+		// definitely not a network problem. Telling the user to check the host would be wrong.
+		mockMcpServer({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "unauthorized" } }, 401);
+		const { app, env } = testApp({ agentConfig: MCP_AGENT_CONFIG });
+		const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp", auth: "none" }) }, await tok("u1"));
+		const body = (await res.json()) as { status: string; toolCount: number };
+		expect(body.status).toBe("auth_required");
+		expect(body.toolCount).toBe(0);
+	});
+
+	it("never puts the bearer token in the report", async () => {
+		// The report is rendered in a browser and may be pasted into a bug ticket. The
+		// connector's own guarantee is that the credential stays on the wire; this pins it at
+		// the surface a human actually copies.
+		mockMcpServer(CATALOG);
+		const { app, env } = testApp({ agentConfig: MCP_AGENT_CONFIG });
+		const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp", auth: "none" }) }, await tok("u1"));
+		expect(JSON.stringify(await res.json())).not.toMatch(/authorization|bearer/i);
+	});
+
+	it("404s when the caller does not own the instance", async () => {
+		const calls = mockMcpServer(CATALOG);
+		const { app, env } = testApp({ owned: false, agentConfig: MCP_AGENT_CONFIG });
+		const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp" }) }, await tok("u1"));
+		expect(res.status).toBe(404);
+		expect(calls).toHaveLength(0);
 	});
 });

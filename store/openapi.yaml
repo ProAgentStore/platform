@@ -5613,6 +5613,96 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/mcp/test:
+    post:
+      summary: Connect to an MCP endpoint and report what is actually true about it
+      description: |
+        The connection-setup diagnostic: validate the URL, negotiate the protocol, discover the
+        server's tool catalog, and say which of those tools THIS agent could actually call.
+
+        The last part is the point. Reachability and permission are different questions, and a
+        test that answers only the first reports success while every real call is still refused —
+        a failure the owner then discovers as "the agent silently does nothing". So the response
+        carries all three gates a real `mcp_call_tool` passes (the agent's declared tool
+        allowlist, the connector-level write consent, the per-server/per-tool grant) and every
+        discovered tool says whether it is callable and which gate blocks it.
+
+        Discovery uses `tools/list`, which is read-scoped and needs no consent — you cannot
+        approve tools you cannot enumerate.
+
+        The endpoint is user-supplied config, so this request goes out through the same
+        SSRF-guarded, https-only path as any other outbound MCP call (no test-only fast path),
+        it is rate-limited strictly, and it writes the same redacted `agent_events` row — a test
+        is as auditable as a real call rather than a side channel around the log. Nothing in the
+        response contains a credential: the endpoint is normalized (query string dropped) and
+        server error text is redacted before it is returned.
+      operationId: testInstanceMcpConnection
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, description: An https MCP endpoint, e.g. `https://example.com/mcp`. }
+                auth: { type: string, description: '`none` to test an open server without sending the vault credential. Default: send it.' }
+      responses:
+        "200":
+          description: What the connection attempt learned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  endpoint: { type: string, description: The normalized endpoint — the form consent and the trace log key on. }
+                  status:
+                    type: string
+                    enum: [connected, credential_missing, auth_required, unsupported_protocol, unreachable, blocked, permission_denied, invalid_url]
+                    description: |
+                      `credential_missing` (no token stored) is deliberately distinct from `auth_required`
+                      (the server rejected the token we have). There is no `expired`: a server answering
+                      401 says nothing about why, so expired, revoked and never-valid are indistinguishable
+                      on the wire and naming one would be a guess presented as a diagnosis.
+                  detail: { type: string, description: One actionable sentence. On success it states how many of the discovered tools are callable. }
+                  failure: { type: string, description: "The connector's failure class, e.g. `auth`, `unsupported_version`, `blocked`, `network`." }
+                  era: { type: string, enum: [modern, legacy], description: Which Streamable-HTTP era was negotiated. }
+                  protocolVersion: { type: string }
+                  httpStatus: { type: integer }
+                  durationMs: { type: integer }
+                  toolCount: { type: integer, description: Tools the server published. }
+                  callableCount: { type: integer, description: How many of them this instance could call right now. }
+                  gates:
+                    type: object
+                    properties:
+                      callToolEnabled: { type: boolean, description: The agent declares `mcp_call_tool` and the owner has not switched it off. }
+                      writeConsent: { type: boolean, description: "Connector-level write consent for `mcp` — the kill switch." }
+                  tools:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        description: { type: string }
+                        destructive: { type: boolean, description: "Judged on the tool NAME we would send — never the server's own `destructiveHint`, which is authored by the party being defended against." }
+                        granted: { type: boolean }
+                        callable: { type: boolean }
+                        blockedBy: { type: string, enum: [no_grant, wildcard_excludes_destructive, no_write_consent, tool_disabled] }
+                  auth:
+                    type: object
+                    description: The shape of the server's OAuth model when it publishes RFC 9728/8414 metadata. Never a token.
+                    properties:
+                      protectedResource: { type: boolean }
+                      authorizationServer: { type: string }
+                      dynamicRegistration: { type: boolean }
+                      unattended: { type: string, description: Whether a credential from this server could survive unattended. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/tools/{name}:
     put:
       summary: Turn one tool off (or back on)
