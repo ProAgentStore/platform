@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { MAX_ACTS_PER_SUBORDINATE, SUPERVISION_TOOLS } from "./supervision.js";
+import { stripCommentsAndLiterals } from "../source-guard.js";
 import type { Env } from "../../types.js";
 
 const tool = (name: string) => {
@@ -396,5 +398,32 @@ describe("check_delegation without a runId — the model reaches for the tool it
 		const out = await tool("check_delegation").handler(ctx(buildEnv()) as never, {});
 		expect(out.success).toBe(true);
 		expect(out.content).not.toMatch(/Give either a runId/);
+	});
+});
+
+// ── #303: the compiler is not switched off at the delegation boundary ────────
+describe("the supervision module's types are load-bearing", () => {
+	it("declares no `never` env or context, and casts to none", () => {
+		// `env: never` reads like a narrow type and is the opposite of one: `never` is assignable to
+		// everything, so eleven calls into graph loading, delegation, runtime connectivity, loop-run
+		// lookup, repo probing and activity reads type-checked unconditionally — at exactly the
+		// boundary that decides who may drive whom. A callee could change its env or context
+		// contract and every call site here would keep compiling and fail in production.
+		//
+		// Scanned over the lexed source so the explanation in the module's own doc comment (which
+		// has to quote the old shape) does not fail its own guard.
+		const src = stripCommentsAndLiterals(readFileSync(new URL("./supervision.ts", import.meta.url).pathname, "utf-8"));
+		const offenders = src
+			.split("\n")
+			.map((line, i) => ({ line: i + 1, text: line }))
+			.filter(({ text }) => /\bas\s+never\b/.test(text) || /:\s*never\b/.test(text))
+			.map(({ line, text }) => `supervision.ts:${line} ${text.trim()}`);
+		expect(
+			offenders,
+			`Type these against what they actually use — every callee here takes the real Env, and\n` +
+				`RegistryToolCtx already carries it plus the userId/instanceId/traceId/budgetId a whole-\n` +
+				`context cast erases. Do NOT swap \`as never\` for \`as any\`; the goal is compile-time checking.\n` +
+				`Offenders:\n${offenders.join("\n")}`,
+		).toEqual([]);
 	});
 });

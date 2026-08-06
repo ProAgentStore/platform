@@ -13,6 +13,7 @@ import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
 import type { Connector } from "./types.js";
 import { safeFetch, SsrfError } from "../ssrf.js";
+import { fenceUntrusted } from "../untrusted-fence.js";
 
 const CSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1";
 const MAX_RESULTS = 10;
@@ -75,7 +76,16 @@ export const webSearchHandler: ToolDef["handler"] = async (ctx: RegistryToolCtx,
 		snippet: typeof it.snippet === "string" ? it.snippet : "",
 	}));
 
-	return { content: JSON.stringify({ query, count: results.length, results }, null, 2), success: true };
+	// #308: titles and snippets are written by whoever ranked for the query — the most cheaply
+	// attacker-authored text on the platform, since anyone can publish a page whose <title> is an
+	// instruction and wait for an agent to search for it. Fenced in the connector, not at the chat
+	// surface, so the pipeline step / tools route / MCP surfaces are covered by the same line.
+	// The pipeline binder unwraps it (`unfenceUntrusted` in pipeline.ts), so `$ref: "hits.results"`
+	// still resolves — the fence is for the model, and the binder is not one.
+	return {
+		content: fenceUntrusted(JSON.stringify({ query, count: results.length, results }, null, 2), `a web search for ${query}`),
+		success: true,
+	};
 };
 
 /** Declarative manifest for the web-search connector. Shape is data; the tool binds its custom

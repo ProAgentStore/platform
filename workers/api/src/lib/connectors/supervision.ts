@@ -26,7 +26,24 @@ import { summarizeSubordinates } from "../subordinate-observation.js";
 import { runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
 import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
 import { repoStateForInstances, type RepoStateReport } from "../repo-state.js";
-import type { ToolDef } from "./types.js";
+import type { RegistryToolCtx, ToolDef } from "./types.js";
+
+/**
+ * The context these helpers run on — the SAME shape a tool handler is given (#303).
+ *
+ * It used to be `{ env: never; … }`, with every call site casting `ctx.env as never` or `ctx as
+ * never`. That is not a narrower type, it is the ABSENCE of one: `never` is assignable to
+ * everything, so eleven calls into graph loading, delegation, runtime connectivity, loop-run
+ * lookup, repo probing and activity reads type-checked unconditionally — at exactly the boundary
+ * where supervision decides who may drive whom. A callee could change its env or context contract
+ * and every one of these would keep compiling and fail in production instead.
+ *
+ * Every callee takes the real `Env`, and `RegistryToolCtx` already carries it along with the
+ * `userId`/`instanceId`/`traceId`/`budgetId` the whole-context casts were erasing. So the honest
+ * type is simply the handler's own — no structural stand-in, no cast, and a contract change now
+ * lands as a compile error here.
+ */
+type SupervisionCtx = RegistryToolCtx;
 
 /** Names of the instances a supervisor may drive, with their display names for the model. */
 interface SubordinateRow {
@@ -40,14 +57,11 @@ interface SubordinateRow {
 	requiresRunner: boolean;
 }
 
-async function subordinateSummaries(
-	ctx: { env: { DB: D1Database }; userId?: string; instanceId?: string },
-	only?: string,
-): Promise<SubordinateRow[]> {
+async function subordinateSummaries(ctx: SupervisionCtx, only?: string): Promise<SubordinateRow[]> {
 	const userId = ctx.userId ?? "";
 	const supervisorId = ctx.instanceId ?? "";
 	if (!userId || !supervisorId) return [];
-	let ids = subordinatesOf(await loadGraph(ctx.env as never, userId), supervisorId);
+	let ids = subordinatesOf(await loadGraph(ctx.env, userId), supervisorId);
 	// A named instance is INTERSECTED with the graph, never trusted — same posture as
 	// delegate_goal, which re-checks membership inside delegateToInstance rather than relying on
 	// the tool description to discourage a model from naming someone else's agent.
@@ -100,11 +114,11 @@ async function subordinateSummaries(
  * no-run-id branch, so the answer does not depend on which tool the model happens to reach for.
  */
 async function observeSubordinates(
-	ctx: { env: never; userId?: string; instanceId?: string },
+	ctx: SupervisionCtx,
 	only?: string,
 	limit?: number,
 ): Promise<{ content: string; success: boolean }> {
-	const subs = await subordinateSummaries(ctx as never, only);
+	const subs = await subordinateSummaries(ctx, only);
 	if (!subs.length) {
 		return {
 			content: only ? "You do not supervise that agent. Call list_subordinates to see who you may address." : NO_SUBORDINATES,
@@ -118,7 +132,7 @@ async function observeSubordinates(
 	const [work, runs, facts, acts] = await Promise.all([
 		recentWorkForInstances(ctx.env, userId, ids, limit).catch(() => []),
 		recentRunsForInstances(ctx.env, userId, ids).catch(() => []),
-		runtimeConnectivityMany(ctx.env as never, userId, ids).catch(() => new Map<string, RuntimeFacts>()),
+		runtimeConnectivityMany(ctx.env, userId, ids).catch(() => new Map<string, RuntimeFacts>()),
 		// What each subordinate has actually DONE (#294). One more indexed read, on the same
 		// per-instance UNION-ALL shape as work/runs — not a fan-out.
 		//
@@ -154,7 +168,7 @@ async function observeSubordinates(
 	// Probed only where a runner is actually reachable: the read goes over the same relay, so
 	// asking an unreachable subordinate buys a guaranteed timeout for a guaranteed null.
 	const repoStates = await repoStateForInstances(
-		ctx.env as never,
+		ctx.env,
 		userId,
 		ids.filter((id) => connectivityById.get(id)?.canWork && connectivityById.get(id)?.requiresRunner),
 	).catch(() => new Map<string, RepoStateReport>());
@@ -227,7 +241,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			"The roster of agents this one supervises — instance id, name, and SUBSCRIPTION state (active/paused), which is NOT what they are doing. Use subordinate_status to see what each is working on. You may only delegate to agents that appear here.",
 		jsonSchema: { type: "object", properties: {} },
 		handler: async (ctx) => {
-			const subs = await subordinateSummaries(ctx as never);
+			const subs = await subordinateSummaries(ctx);
 			if (!subs.length) return { content: NO_SUBORDINATES, success: true };
 			// Roster only — the columns are an implementation detail of subordinate_status.
 			const roster = subs.map((s) => ({ instanceId: s.instanceId, name: s.name, subscription: s.subscription }));
@@ -267,7 +281,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		handler: async (ctx, input) => {
 			const only = typeof input.instanceId === "string" && input.instanceId.trim() ? input.instanceId.trim() : undefined;
 			const limit = typeof input.limit === "number" ? input.limit : undefined;
-			return observeSubordinates(ctx as never, only, limit);
+			return observeSubordinates(ctx, only, limit);
 		},
 	},
 	{
@@ -292,7 +306,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		handler: async (ctx, input) => {
 			// The graph is re-checked inside delegateToInstance — a model naming an instance it
 			// does not supervise is refused there, not merely discouraged by the description.
-			const res = await delegateToInstance(ctx.env as never, {
+			const res = await delegateToInstance(ctx.env, {
 				userId: ctx.userId ?? "",
 				supervisorInstanceId: ctx.instanceId ?? "",
 				subordinateInstanceId: String(input.instanceId ?? ""),
@@ -331,13 +345,13 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			const userId = ctx.userId ?? "";
 			const runId = String(input.runId ?? "").trim();
 			if (runId) {
-				const run = await getLoopRun(ctx.env as never, userId, runId);
+				const run = await getLoopRun(ctx.env, userId, runId);
 				if (!run) return { content: `No delegated run with id ${runId}.`, success: false };
 				// What the run DID, not only how it ended (#294). Read over the run's own window —
 				// see `actsInWindow` for why the trace id is not the key. A finished run reports
 				// `detail: "objective completed"`; that is the whole gap this closes.
 				const acts = await actsInWindow(
-					ctx.env as never,
+					ctx.env,
 					userId,
 					run.instanceId,
 					run.startedAt,
@@ -372,7 +386,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			// has to be DISCOVERED; the one already in the model's habit does not. Making both
 			// paths return the good answer is robust to which one it picks.
 			const only = String(input.instanceId ?? "").trim() || undefined;
-			return observeSubordinates(ctx as never, only);
+			return observeSubordinates(ctx, only);
 		},
 	},
 ];

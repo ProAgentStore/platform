@@ -63,3 +63,31 @@ export function fenceUntrusted(body: string, origin: string): string {
 		`</${FENCE_TAG}>`
 	);
 }
+
+/** The exact shape `fenceUntrusted` emits — one preamble line, a blank line, the body. */
+const FENCED_RE = new RegExp(`^<${FENCE_TAG} origin="[^"]*">\\n[^\\n]*\\n\\n([\\s\\S]*)\\n</${FENCE_TAG}>$`);
+
+/**
+ * The inverse of `fenceUntrusted`, for the ONE consumer that is not a model.
+ *
+ * WHY THIS EXISTS, and why it is not a hole. A tool result reaches a model (fence it) and it
+ * reaches the pipeline binder (`parseOutput` in pipeline.ts), which `JSON.parse`s it so a later
+ * step can `$ref` fields off it. Fencing at the source — the only place that covers chat, a
+ * pipeline step, `POST /v1/instances/:id/tools/:name` and MCP at once — therefore has to survive
+ * a non-model reader, and a fenced `web_search` result would otherwise resolve every downstream
+ * `$ref` to undefined: the site-builder pipeline would quietly build a site with no contacts.
+ *
+ * It cannot be used to escape a fence, because `fenceUntrusted` ran `neutralizeFenceMarkers`
+ * over the body FIRST: the wrapper we emit is the only one that can match, so unwrapping is
+ * unambiguous and an attacker cannot smuggle a closing marker in to terminate it early. The
+ * regex is anchored at both ends for the same reason — a body that merely CONTAINS something
+ * fence-shaped is left exactly as it is.
+ *
+ * Unfenced (or differently shaped) text is returned untouched, so this is safe to apply to any
+ * tool result without knowing whether it was fenced.
+ */
+export function unfenceUntrusted(text: string): string {
+	const s = String(text ?? "");
+	const m = FENCED_RE.exec(s);
+	return m ? m[1] : s;
+}

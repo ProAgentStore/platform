@@ -21,6 +21,9 @@ import type { RegistryToolCtx, RegistryToolResult, ToolDef } from "./connectors/
 import { getPath } from "./connectors/http.js";
 import { safeFetch, SsrfError } from "./ssrf.js";
 import { parseStepNumber, stepNumberError } from "./step-number.js";
+// #308: the three steps below read a tool result as DATA, not as model input, so they unwrap the
+// source-applied fence first — see `unfenceUntrusted` for why that cannot be used to escape one.
+import { unfenceUntrusted } from "./untrusted-fence.js";
 
 // ── shared helpers ───────────────────────────────────────────────────────────
 
@@ -657,7 +660,7 @@ export const STEP_TOOLS: ToolDef[] = [
 				const pageReq = { ...reqTemplate, inputs };
 				const r = await runRegistryTool("http_request", ctx, pageReq);
 				if (!r.success) return fail(`page ${pages + 1}: ${r.content}`);
-				const parsed = JSON.parse(r.content) as { data?: unknown; nextCursor?: unknown };
+				const parsed = JSON.parse(unfenceUntrusted(r.content)) as { data?: unknown; nextCursor?: unknown };
 				const pageItems = getPath(parsed, itemsPath);
 				if (Array.isArray(pageItems)) aggregated.push(...pageItems);
 				else if (pageItems !== undefined && pageItems !== null) aggregated.push(pageItems);
@@ -711,7 +714,7 @@ export const STEP_TOOLS: ToolDef[] = [
 				}
 				let result: unknown;
 				try {
-					result = JSON.parse(r.content);
+					result = JSON.parse(unfenceUntrusted(r.content));
 				} catch {
 					result = r.content;
 				}
@@ -789,7 +792,7 @@ export const STEP_TOOLS: ToolDef[] = [
 				body: { textQuery: address },
 			});
 			if (!r.success) return fail(`geocode request failed: ${r.content}`);
-			const body = JSON.parse(r.content) as { data?: unknown };
+			const body = JSON.parse(unfenceUntrusted(r.content)) as { data?: unknown };
 			const places = getPath(body.data, "places");
 			const top = Array.isArray(places) ? places[0] : undefined;
 			if (!isRecord(top)) return fail(`No geocode result for "${address}".`);

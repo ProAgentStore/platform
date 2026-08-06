@@ -8,6 +8,7 @@
 // wraps executePipelineStep in step.do for durability/resumability past the 30s DO limit.
 import type { Env } from "../types.js";
 import { getRegistryTool, runRegistryTool } from "./tool-registry.js";
+import { unfenceUntrusted } from "./untrusted-fence.js";
 
 /**
  * A reference into the run's data: `{ "$ref": "stepBind.field" }` reads a bound step's
@@ -339,9 +340,17 @@ export function resolveInputs(
 	return resolved;
 }
 
-/** Parse a tool's string content as JSON when it looks like JSON, else return the string. */
+/**
+ * Parse a tool's string content as JSON when it looks like JSON, else return the string.
+ *
+ * The unwrap (#308): connectors that return remote text fence it at the source, because that is
+ * the only place that covers chat, a pipeline step, the tools route and MCP at once. The binder is
+ * not a model, and a fenced `web_search` result would make every downstream `$ref` resolve to
+ * undefined — so the wrapper is removed before parsing. Non-JSON content is returned AS WRITTEN,
+ * fence included: prose bound here can still end up in a prompt, and there it needs its fence.
+ */
 function parseOutput(content: string): unknown {
-	const t = content.trim();
+	const t = unfenceUntrusted(content).trim();
 	if (t && (t[0] === "{" || t[0] === "[")) {
 		try {
 			return JSON.parse(t);

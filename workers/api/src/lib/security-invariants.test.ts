@@ -194,34 +194,53 @@ describe("mutating registry tools pass the write-consent gate", () => {
 		).toEqual([]);
 	});
 
-	it("a tool that lets the caller pick the HTTP method cannot be scope:\"read\"", () => {
+	it("a tool that lets the caller pick the HTTP method gates the mutating call per CALL", () => {
 		// The name test cannot see this one: `http_request` reads as a fetch and IS one — until
 		// the caller sets `method: "DELETE"` and it mutates a third-party system with the
-		// owner's vault key, having passed no consent gate at all.
-		const KNOWN_UNGATED: Record<string, string> = {
-			// Found by this pass. Flipping the whole tool to "write" would put every read-only
-			// GET (Places lookups in the site-builder pipeline, the lead-finder's enrichment)
-			// behind a write consent it has never needed, so the fix is a per-CALL gate inside
-			// executeHttpRequest, not a scope flip. Tracked separately; see the issue.
-			http_request: "ProAgentStore/platform#307 — needs a per-call consent gate on non-GET methods",
+		// owner's vault key, having passed no consent gate at all (#307).
+		//
+		// The ratchet turned over here. It previously listed `http_request` in a `KNOWN_UNGATED`
+		// map and asserted the hole was STILL open, so fixing it failed the guard — deliberately,
+		// so the exception could not be left behind. The fix was NOT a scope flip (that would put
+		// every read-only GET behind a consent nobody has granted); it is a gate on the method
+		// resolved for each call, inside `executeHttpRequest`. So the invariant this guard asserts
+		// changed shape with it: a method-choosing read tool is fine, PROVIDED the module behind it
+		// asks for write consent itself.
+		//
+		// Both directions still ratchet. A NEW method-choosing read tool fails the first assertion
+		// (the set is compared exactly, not as a subset). Deleting the gate from the module that
+		// provides the known one fails the second.
+		const PER_CALL_GATED: Record<string, string> = {
+			// executeHttpRequest → hasConsent(env, instance, connectorId, "write") on any method
+			// that is not read-shaped. Also covers every manifest connector compiled onto the same
+			// executor, and the pipeline/tools-route/MCP surfaces, which a gate in the tool handler
+			// would not.
+			http_request: "lib/connectors/http.ts",
 		};
-		const offenders = connectorTools
+		const methodChoosing = connectorTools
 			.filter((t) => t.jsonSchema?.properties?.method !== undefined && t.scope === "read")
 			.map((t) => t.name)
-			.filter((name) => !KNOWN_UNGATED[name]);
+			.sort();
 		expect(
-			offenders,
-			`These tools accept a caller-chosen HTTP method while declaring scope:"read", so a POST/PUT/DELETE\n` +
-				`to a third-party system runs with the owner's credential and no write consent.\n` +
-				`Offenders:\n${listing(offenders)}`,
-		).toEqual([]);
+			methodChoosing,
+			`These tools accept a caller-chosen HTTP method while declaring scope:"read", so runRegistryTool's\n` +
+				`write-consent gate (#90) never runs for them and a POST/PUT/DELETE to a third-party system goes\n` +
+				`out with the owner's credential. Declare the tool scope:"write", or gate per CALL on the resolved\n` +
+				`method the way lib/connectors/http.ts does — and add it here with the module that gates it.\n` +
+				`Offenders:\n${listing(methodChoosing)}`,
+		).toEqual(Object.keys(PER_CALL_GATED).sort());
 
-		// Ratchet: when the known hole is fixed, this fails and the entry must be deleted.
-		const stillOpen = Object.keys(KNOWN_UNGATED).filter((name) => {
-			const t = connectorTools.find((x) => x.name === name);
-			return t && t.jsonSchema?.properties?.method !== undefined && t.scope === "read";
-		});
-		expect(stillOpen.sort(), "A KNOWN_UNGATED entry is fixed (or gone) — delete it from the list.").toEqual(Object.keys(KNOWN_UNGATED).sort());
+		for (const [tool, rel] of Object.entries(PER_CALL_GATED)) {
+			const f = ALL.find((s) => s.rel === rel);
+			expect(f, `${rel} moved — repoint the per-call gate entry for ${tool}`).toBeTruthy();
+			// A CALL to hasConsent, not a mention: the import line alone satisfied an identifier
+			// test in this file's first draft while the actual check had been deleted.
+			expect(
+				findCalls(f?.code ?? "", "hasConsent").length,
+				`${rel} provides ${tool} (a method-choosing scope:"read" tool) and no longer calls hasConsent —\n` +
+					`the per-call write gate is gone, so a DELETE runs with the owner's vault key and no consent.`,
+			).toBeGreaterThan(0);
+		}
 	});
 
 	it("a write-scoped tool names the connector its consent is keyed on", () => {
@@ -351,6 +370,36 @@ describe("the untrusted-content fence is not re-implemented", () => {
 			`Import fenceUntrusted from lib/untrusted-fence.ts. Writing the marker by hand produces a fence\n` +
 				`without neutralizeFenceMarkers, which the fenced body can close early (#263) — everything after\n` +
 				`the injected marker then reads to the model as trusted system text.\n` +
+				`Offenders:\n${listing(offenders)}`,
+		).toEqual([]);
+	});
+
+	it("every tool that returns remote text fences it in the connector", () => {
+		// #308. The fence covered RAG and MCP resources; the three tools carrying the most
+		// obviously attacker-authored text of all — an arbitrary page, an arbitrary API response,
+		// third-party search titles — returned it bare. Each now wraps at the SOURCE rather than at
+		// the chat surface, for the reason #263 gives: these handlers also answer a pipeline step,
+		// `POST /v1/instances/:id/tools/:name` and MCP, so one surface's fence leaves three bare.
+		//
+		// Pinned per module, so deleting a fence fails here rather than being noticed by whoever
+		// eventually reads a transcript in which a web page gave the agent an instruction.
+		const FENCES_REMOTE_TEXT: Record<string, string> = {
+			"lib/tools.ts": "fetch_url — up to 4000 chars of an arbitrary page",
+			"lib/connectors/http.ts": "http_request — an arbitrary API response envelope",
+			"lib/connectors/web-search.ts": "web_search — third-party titles and snippets",
+			"lib/connectors/mcp.ts": "resources/read + prompts/get (#263)",
+		};
+		const offenders = Object.entries(FENCES_REMOTE_TEXT)
+			.filter(([rel]) => {
+				const f = ALL.find((s) => s.rel === rel);
+				return !f || findCalls(f.code, "fenceUntrusted").length === 0;
+			})
+			.map(([rel, why]) => `${rel} — ${why}`);
+		expect(
+			offenders,
+			`These modules return remote text on the model's instruction path and no longer call\n` +
+				`fenceUntrusted (lib/untrusted-fence.ts). Unfenced remote text is prompt injection with a\n` +
+				`nicer name. If a module moved, repoint the entry; do not delete it.\n` +
 				`Offenders:\n${listing(offenders)}`,
 		).toEqual([]);
 	});

@@ -5,6 +5,7 @@
 import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { AgentTask, MemoryEntry } from "../agent-types.js";
 import { safeFetch, SsrfError } from "./ssrf.js";
+import { fenceUntrusted } from "./untrusted-fence.js";
 
 export interface ToolDef {
 	name: string;
@@ -335,12 +336,21 @@ export async function executeTool(
 				const text = await res.text();
 				const truncated =
 					text.length > 4000 ? `${text.slice(0, 4000)}...[truncated]` : text;
+				// #308: up to 4000 characters of an arbitrary page, straight onto the instruction
+				// path — and the URL routinely comes from a document the agent just read, so this is
+				// the most obviously attacker-authored text any tool returns. Fenced with the same
+				// module RAG and the MCP resource reads use (#263); a hand-written wrapper here would
+				// lack `neutralizeFenceMarkers` and the body could close its own block.
+				//
+				// The BODY only. Our own framing — the status line below — stays outside, or the
+				// model loses the ability to tell a 500 from a page containing the word 500.
+				const fenced = fenceUntrusted(truncated, `the page at ${url}`);
 				// On a failure, lead with the HTTP status so the agent (and the durable log)
 				// know HOW it failed — a bare "Internal Server Error" body hid that it was a
 				// 500 vs a 4xx, which let an agent misread it as "queued".
 				return {
 					name: call.name,
-					content: res.ok ? truncated : `HTTP ${res.status} ${res.statusText}: ${truncated || "(no response body)"}`,
+					content: res.ok ? fenced : `HTTP ${res.status} ${res.statusText}: ${truncated ? fenced : "(no response body)"}`,
 					success: res.ok,
 				};
 			}

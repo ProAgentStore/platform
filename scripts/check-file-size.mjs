@@ -78,7 +78,10 @@ const PINS = {
 	"workers/mcp/src/index.ts": 1151,
 	"store/console/src/tabs/SettingsTab.tsx": 1149,
 	"workers/api/src/agent-do.ts": 1073,
-	"workers/api/src/lib/steps.ts": 985,
+	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
+	// connectors now apply at the source. Raised rather than split — the growth is a comment and
+	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
+	"workers/api/src/lib/steps.ts": 988,
 	"workers/api/src/agent-think.ts": 879,
 	"workers/api/src/routes/instances-runtime.ts": 849,
 	"workers/api/src/lib/triggers.ts": 838,

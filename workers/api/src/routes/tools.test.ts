@@ -4,6 +4,7 @@ import { HttpError } from "../lib/auth.js";
 import { signSession } from "../lib/session.js";
 import { resetEraCache } from "../lib/connectors/mcp.js";
 import { toolRoutes } from "./tools.js";
+import { unfenceUntrusted } from "../lib/untrusted-fence.js";
 
 const SECRET = "test-secret";
 
@@ -194,7 +195,10 @@ describe("POST /v1/instances/:id/tools/:name", () => {
 		const body = (await res.json()) as any;
 		expect(body.name).toBe("http_request");
 		expect(body.success).toBe(true);
-		expect(JSON.parse(body.content).data).toEqual([{ id: "p1", name: "Cafe" }]);
+		// #308: the envelope is fenced as untrusted remote text at the connector, so this surface
+		// gets it fenced too — which is the point (fencing at the chat surface would leave this
+		// route, the pipeline step and MCP bare). Unwrapped the way the pipeline binder does.
+		expect(JSON.parse(unfenceUntrusted(body.content)).data).toEqual([{ id: "p1", name: "Cafe" }]);
 		fetchSpy.mockRestore();
 	});
 });

@@ -18,15 +18,17 @@ vi.mock("../ssrf.js", async () => {
 const { getRegistryTool } = await import("../tool-registry.js");
 const { SsrfError } = await import("../ssrf.js");
 import type { RegistryToolCtx } from "../tool-registry.js";
+import { unfenceUntrusted } from "../untrusted-fence.js";
 
 const httpRequest = getRegistryTool("http_request")!;
 const baseCtx = { env: {} as any } as RegistryToolCtx;
 
-async function run(input: Record<string, unknown>) {
-	const r = await httpRequest.handler(baseCtx, input);
+async function run(input: Record<string, unknown>, ctx: RegistryToolCtx = baseCtx) {
+	const r = await httpRequest.handler(ctx, input);
 	let parsed: any;
 	try {
-		parsed = JSON.parse(r.content);
+		// #308: a successful envelope is fenced; unwrap the way the pipeline binder does.
+		parsed = JSON.parse(unfenceUntrusted(r.content));
 	} catch {
 		parsed = undefined;
 	}
@@ -77,13 +79,18 @@ describe("http_request — SSRF guard surfaced via the shared safeFetch (mocked 
 		safeFetch.mockResolvedValueOnce(
 			new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "Content-Type": "application/json" } }),
 		);
-		const r = await run({
-			method: "POST",
-			base: "https://api.example.com",
-			path: "v1/thing",
-			body: { q: "{{term}}" },
-			inputs: { term: "hi" },
-		});
+		const r = await run(
+			{
+				method: "POST",
+				base: "https://api.example.com",
+				path: "v1/thing",
+				body: { q: "{{term}}" },
+				inputs: { term: "hi" },
+			},
+			// A POST is a write, so it needs the instance's http write consent (#307) before it can
+			// reach safeFetch at all. Granted here because the subject of this test is the dispatch.
+			{ env: { DB: { prepare: () => ({ bind: () => ({ first: async () => ({ ok: 1 }) }) }) } } as any, instanceId: "inst1", userId: "u1" } as RegistryToolCtx,
+		);
 		expect(r.success).toBe(true);
 		expect(safeFetch).toHaveBeenCalledTimes(1);
 		const [calledUrl, init] = safeFetch.mock.calls[0];
