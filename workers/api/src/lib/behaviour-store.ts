@@ -1,5 +1,6 @@
 import type { Env } from "../types.js";
 import { applyBehaviourPatch, resolveBehaviour, type Behaviour } from "./agent-behaviour.js";
+import { patchInstanceConfig } from "./instance-config.js";
 
 /**
  * D1 access for agent behaviour (#223/#224).
@@ -46,11 +47,10 @@ export async function patchBehaviour(
 	const cfg = parse(row?.config ?? null);
 	const { behaviour, rejected } = applyBehaviourPatch(cfg.behaviour, patch, allowedIds);
 	cfg.behaviour = behaviour;
-	await env.DB.prepare(
-		"UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3",
-	)
-		.bind(JSON.stringify(cfg), instanceId, userId)
-		.run();
+	// Patch only `$.behaviour` (#231). A whole-blob write here is the live version of that bug:
+	// `set_behaviour` is a tool the AGENT calls, so it fires while the owner may be saving
+	// Settings in the console — two writers, different keys, and the loser vanished silently.
+	await patchInstanceConfig(env, instanceId, userId, "behaviour", behaviour);
 	// RESOLVED, not the bare override. A read returns the creator default merged under the
 	// subscriber's, so returning only the override after a write made the two disagree: on an agent
 	// that ships defaults, changing one field appeared to erase all the others until reload, and

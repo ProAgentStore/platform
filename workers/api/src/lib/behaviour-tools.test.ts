@@ -21,7 +21,19 @@ function stubEnv(initialConfig: Record<string, unknown> = {}, agentConfig: Recor
 								return { config: state.config, agent_config: agentConfig ? JSON.stringify(agentConfig) : null };
 							},
 							async run() {
-								if (sql.includes("UPDATE")) state.config = String(args[0]);
+								// Emulate the SQL the store now issues: a targeted json_set/json_remove on
+								// one key (#231), not a whole-blob assignment. Keeping the round trip
+								// honest matters more than keeping the stub simple — a stub that accepted
+								// `SET config = ?` would still pass if the store regressed to clobbering
+								// the blob, which is exactly the bug being prevented.
+								if (sql.includes("UPDATE")) {
+									const path = /'\$\.([A-Za-z_][A-Za-z0-9_]*)'/.exec(sql)?.[1];
+									if (!path) throw new Error(`unexpected whole-blob config write: ${sql}`);
+									const cfg = JSON.parse(state.config || "{}") as Record<string, unknown>;
+									if (sql.includes("json_remove(")) delete cfg[path];
+									else cfg[path] = JSON.parse(String(args[0]));
+									state.config = JSON.stringify(cfg);
+								}
 								return { meta: { changes: 1 } };
 							},
 							async all() {
