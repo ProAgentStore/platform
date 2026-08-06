@@ -47,6 +47,14 @@ import {
 	UserAiCredentialsError,
 	UserAiProviderError,
 } from "./lib/user-ai.js";
+import {
+	INFLIGHT_PREFIX,
+	inflightKey,
+	interruptedNotice,
+	partitionTurns,
+	previewOf,
+	type InflightTurn,
+} from "./lib/chat-inflight.js";
 import { safeFetch, SsrfError } from "./lib/ssrf.js";
 import { logError } from "./lib/error-log.js";
 import { isTransientInfraError } from "./lib/on-error.js";
@@ -71,6 +79,11 @@ export class AgentDO extends DurableObject<Env> {
 	 *  can cross the threshold and write overlapping summaries. Lives on the DO instance
 	 *  (persistent) — the per-call storage engine can't hold cross-request state. */
 	private summarizing = false;
+
+	/** Turn ids this DO instance is running RIGHT NOW (#251). A persisted in-flight marker whose
+	 *  id is missing here belongs to a turn that died — the object restarted under it, or the
+	 *  work was killed — which is the only way to tell "still thinking" from "silently lost". */
+	private liveTurns = new Set<string>();
 
 	private getStorageEngine(agentId: string, userId?: string): AgentStorageEngine {
 		// Platform-paid internal AI (embeddings + summary) is gated behind one master
@@ -341,6 +354,12 @@ export class AgentDO extends DurableObject<Env> {
 		ensureStateDefaults(state);
 		await this.ctx.storage.put("state", state);
 
+		// A turn that died with its request (tab closed, client gone) leaves its side effects
+		// committed and no reply in the transcript. Say so before building this turn's context —
+		// otherwise the model reasons from a history it can see is missing an answer it in fact
+		// gave, and the honesty rules in the prompt cannot help, because the record itself is wrong.
+		await this.reapAbandonedTurns(channel);
+
 		// Save user message
 		const userMsg: AgentMessage = {
 			id: crypto.randomUUID(),
@@ -363,6 +382,40 @@ export class AgentDO extends DurableObject<Env> {
 		await this.ctx.storage.put("state", { ...state, status: "thinking" });
 		this.broadcast({ type: "status", status: "thinking" });
 
+		// Detach the turn from the request (#251). The work below persists its own results, so
+		// once it is started the reply lands in the transcript whether or not the caller is still
+		// listening. The request still awaits it — a connected client sees exactly what it saw
+		// before — but it no longer OWNS it: navigating away mid-turn can no longer strand the
+		// tool side effects with no assistant message beside them.
+		const turn = this.runTurn(state, engine, userId, channel, message, delegation);
+		this.keepAlive(turn);
+		return turn;
+	}
+
+	/**
+	 * One chat turn, owned by the DO rather than by the request that asked for it (#251).
+	 * Registers an in-flight marker for its lifetime so an interrupted turn is a fact the next
+	 * reader can see, instead of a silent gap. Never rejects — every path returns a Response.
+	 */
+	private async runTurn(
+		state: AgentState,
+		engine: AgentStorageEngine,
+		userId: string | undefined,
+		channel: string | undefined,
+		message: string,
+		delegation: { budgetId: string | null; onBehalfOf: string | null; traceId: string | null } | undefined,
+	): Promise<Response> {
+		const turnId = crypto.randomUUID();
+		this.liveTurns.add(turnId);
+		await this.ctx.storage
+			.put(inflightKey(turnId), {
+				turnId,
+				startedAt: Date.now(),
+				userId: userId ?? null,
+				channel: channel || "chat",
+				preview: previewOf(message),
+			} satisfies InflightTurn)
+			.catch(() => undefined);
 		try {
 			const { response, toolCalls } = await this.think(state, engine, userId, delegation);
 
@@ -462,7 +515,64 @@ export class AgentDO extends DurableObject<Env> {
 			this.broadcast({ type: "message", message: errorMsg });
 
 			return json({ error: errMsg }, status);
+		} finally {
+			this.liveTurns.delete(turnId);
+			await this.ctx.storage.delete(inflightKey(turnId)).catch(() => undefined);
 		}
+	}
+
+	/**
+	 * Keep a promise the DO owns alive past the request that started it. `waitUntil` is a no-op
+	 * on some runtimes/test doubles (a Durable Object is not evicted while work is pending), so
+	 * it is called defensively — and the promise's rejection is swallowed here, never dropped as
+	 * an unhandled one, because nothing else is awaiting this copy of it.
+	 */
+	private keepAlive(work: Promise<unknown>): void {
+		const settled = work.then(
+			() => undefined,
+			() => undefined,
+		);
+		const ctx = this.ctx as unknown as { waitUntil?: (p: Promise<unknown>) => void };
+		if (typeof ctx.waitUntil === "function") {
+			try {
+				ctx.waitUntil(settled);
+			} catch {
+				/* runtime doesn't support it here — the DO keeps the promise alive anyway */
+			}
+		}
+	}
+
+	/** The in-flight turn markers this DO instance has persisted. */
+	private async listInflightTurns(): Promise<InflightTurn[]> {
+		const all = await this.ctx.storage.list<InflightTurn>({ prefix: INFLIGHT_PREFIX });
+		return [...all.values()].filter((t) => t && typeof t.turnId === "string");
+	}
+
+	/**
+	 * Turn every abandoned marker into a visible line in the transcript, then clear it (#251).
+	 * Idempotent — the marker is deleted with the notice, so a reader that runs this twice
+	 * announces the interruption once.
+	 */
+	private async reapAbandonedTurns(channel?: string): Promise<InflightTurn[]> {
+		const turns = await this.listInflightTurns().catch(() => [] as InflightTurn[]);
+		if (turns.length === 0) return [];
+		const { running, abandoned } = partitionTurns(turns, {
+			isLive: (id) => this.liveTurns.has(id),
+			now: Date.now(),
+		});
+		for (const turn of abandoned) {
+			const msg: AgentMessage = {
+				id: crypto.randomUUID(),
+				role: "system",
+				content: interruptedNotice(turn),
+				channel: turn.channel || channel || "chat",
+				createdAt: new Date().toISOString(),
+			};
+			await this.appendMessage(msg).catch(() => undefined);
+			this.broadcast({ type: "message", message: msg });
+			await this.ctx.storage.delete(inflightKey(turn.turnId)).catch(() => undefined);
+		}
+		return running;
 	}
 
 	/**
@@ -769,8 +879,14 @@ export class AgentDO extends DurableObject<Env> {
 			ensureStateDefaults(state);
 			await this.ctx.storage.put("state", state);
 		}
+		// "Is it still working?" is answered here, and it has to be answered honestly (#252):
+		// `state.status` is only trustworthy while the object is warm (ensureStateDefaults resets
+		// a stale `thinking` on reload), so the live turn markers are the real answer. Reading
+		// also REAPS — a client coming back to the page is exactly when an interrupted turn
+		// should stop being invisible, and it must not have to send another message to find out.
+		const inflight = await this.reapAbandonedTurns().catch(() => [] as InflightTurn[]);
 		const { systemPrompt: _, ...public_ } = state;
-		return json(public_);
+		return json({ ...public_, inflight });
 	}
 
 	private async handleUpdateState(request: Request): Promise<Response> {
