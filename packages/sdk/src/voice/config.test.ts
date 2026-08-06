@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// getVoiceConfig does I/O (voice-settings + profile); mock the SDK api client so we can
-// unit-test the profile→muteWords merge (the #129 wiring, previously untested).
+// getVoiceConfig does I/O (voice-settings); mock the SDK api client so the control-word
+// resolution is unit-testable without a network.
 vi.mock("../client.js", () => ({ api: vi.fn() }));
 import { api } from "../client.js";
 import { getVoiceConfig, invalidateVoiceConfig, resolveVoiceConfig, voiceWantsOpenAi } from "./config.js";
@@ -14,47 +14,52 @@ function routeApi(map: Record<string, unknown>) {
 	});
 }
 
-describe("getVoiceConfig — profile → control-words merge (#129)", () => {
+describe("getVoiceConfig — control words come from ONE place (#222)", () => {
 	afterEach(() => { invalidateVoiceConfig(); mockApi.mockReset(); });
 
-	it("uses the profile voiceMuteWords when the instance sets none", async () => {
-		routeApi({
-			"/voice-settings": { voiceSettings: { provider: "browser" } },
-			"/v1/profile": { profile: { voiceMuteWords: "shush, quiet please" } },
-		});
+	// /v1/instances/:id/voice-settings already merges the ACCOUNT preferences server-side
+	// (effectiveVoice), so its response is the whole answer. The old client-side fallback to
+	// the profile's voice* fields was a second home for the same setting that silently lost;
+	// migration 0075 moved the values and it is gone.
+	it("takes the words from the (already server-merged) voice-settings response", async () => {
+		routeApi({ "/voice-settings": { voiceSettings: { provider: "browser", muteWords: ["shush", "quiet please"] } } });
 		expect((await getVoiceConfig("inst-1")).muteWords).toEqual(["shush", "quiet please"]);
 	});
 
-	it("a non-empty per-instance muteWords overrides the profile default", async () => {
-		routeApi({
-			"/voice-settings": { voiceSettings: { provider: "browser", muteWords: ["foo"] } },
-			"/v1/profile": { profile: { voiceMuteWords: "shush" } },
-		});
+	it("a per-instance override still wins — that precedence is server-side and unchanged", async () => {
+		routeApi({ "/voice-settings": { voiceSettings: { provider: "browser", muteWords: ["foo"] } } });
 		expect((await getVoiceConfig("inst-2")).muteWords).toEqual(["foo"]);
 	});
 
-	it("an EMPTY instance array falls through to the profile (the common case)", async () => {
-		routeApi({
-			"/voice-settings": { voiceSettings: { provider: "browser", muteWords: [] } },
-			"/v1/profile": { profile: { voiceMuteWords: "shush" } },
-		});
-		expect((await getVoiceConfig("inst-3")).muteWords).toEqual(["shush"]);
+	// The regression this guards: reading the profile again here is what created the second
+	// writable home in the first place. It also cost an extra round-trip on every load.
+	it("never calls /v1/profile", async () => {
+		routeApi({ "/voice-settings": { voiceSettings: { provider: "browser" } } });
+		await getVoiceConfig("inst-3");
+		const paths = mockApi.mock.calls.map((c) => String(c[0]));
+		expect(paths.some((p) => p.includes("/v1/profile"))).toBe(false);
 	});
 
-	it("merges repeat/stop words + stop-speech keyword from the profile too", async () => {
-		routeApi({
-			"/voice-settings": { voiceSettings: { provider: "browser" } },
-			"/v1/profile": { profile: { voiceRepeatWords: "again", voiceStopWords: "over", voiceStopSpeechKeyword: "hush" } },
-		});
+	it("no words anywhere ⇒ empty (the matcher then uses the built-in per-language defaults)", async () => {
+		routeApi({ "/voice-settings": { voiceSettings: { provider: "browser" } } });
 		const c = await getVoiceConfig("inst-4");
+		expect(c.muteWords).toEqual([]);
+		expect(c.repeatWords).toEqual([]);
+		expect(c.stopSpeechKeyword).toBe("");
+	});
+
+	it("carries every control-word field through, including the new unmute/exit", async () => {
+		routeApi({
+			"/voice-settings": {
+				voiceSettings: { provider: "browser", repeatWords: ["again"], stopWords: ["over"], stopSpeechKeyword: "hush", unmuteWords: ["wake up"], exitWords: ["bye voice"] },
+			},
+		});
+		const c = await getVoiceConfig("inst-5");
 		expect(c.repeatWords).toEqual(["again"]);
 		expect(c.stopWords).toEqual(["over"]);
 		expect(c.stopSpeechKeyword).toBe("hush");
-	});
-
-	it("no profile + no instance words ⇒ empty (matcher then uses the built-in defaults)", async () => {
-		routeApi({ "/voice-settings": { voiceSettings: { provider: "browser" } }, "/v1/profile": { profile: {} } });
-		expect((await getVoiceConfig("inst-5")).muteWords).toEqual([]);
+		expect(c.unmuteWords).toEqual(["wake up"]);
+		expect(c.exitWords).toEqual(["bye voice"]);
 	});
 });
 

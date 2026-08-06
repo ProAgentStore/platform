@@ -131,10 +131,10 @@ export default function Profile() {
 
 	if (!user) return null;
 
-	// The `voice` group is deliberately dropped, not rendered: those fields wrote a global
-	// setting that Preferences already owns, through a different endpoint, and lost (#222).
-	// Anything ungrouped falls in with personal details rather than disappearing.
-	const personalFields = cpFields.filter(f => f.group !== "preferences" && f.group !== "voice" && f.group !== "job");
+	// Anything ungrouped falls in with personal details rather than disappearing. The old
+	// `voice` group no longer exists server-side (#222, migration 0075) — control words live
+	// in Preferences → Voice, the only place that was ever actually read.
+	const personalFields = cpFields.filter(f => f.group !== "preferences" && f.group !== "job");
 	const jobFields = cpFields.filter(f => f.group === "job");
 	const prefFields = cpFields.filter(f => f.group === "preferences");
 

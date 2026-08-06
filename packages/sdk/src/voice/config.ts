@@ -119,25 +119,13 @@ export async function getVoiceConfig(
 		} catch {}
 	}
 
-	// Hands-free control words live in the GLOBAL user profile so they apply across every
-	// agent/repo. Use them as the default; a per-instance value (already in `vs`) still wins.
-	try {
-		const p = await api<{ profile?: Record<string, string> }>("/v1/profile");
-		const prof = p.profile || {};
-		const fromProfile: Array<[string, string]> = [
-			["repeatWords", "voiceRepeatWords"],
-			["muteWords", "voiceMuteWords"],
-			["unmuteWords", "voiceUnmuteWords"],
-			["exitWords", "voiceExitWords"],
-			["stopWords", "voiceStopWords"],
-			["stopSpeechKeyword", "voiceStopSpeechKeyword"],
-		];
-		for (const [vsKey, profKey] of fromProfile) {
-			const inst = vs[vsKey];
-			const instSet = Array.isArray(inst) ? inst.length > 0 : typeof inst === "string" ? inst.trim() !== "" : inst != null;
-			if (!instSet && prof[profKey]) vs[vsKey] = prof[profKey]; // profile default (parseWords accepts the string)
-		}
-	} catch {}
+	// Control words used to be read from a SECOND home, the user profile's `voice*` fields —
+	// a client-side fallback from before the Preferences page existed. Two UIs then wrote the
+	// same global setting through different endpoints and this one silently lost, because
+	// `/v1/instances/:id/voice-settings` already merges the account preferences server-side
+	// (effectiveVoice). Migration 0075 moved the surviving values into
+	// `users.preferences.voice`, so the response above is now the whole answer and the extra
+	// round-trip to /v1/profile on every voice-config load is gone with it (#222).
 
 	// We only need to know the key EXISTS — the actual requests go through the key
 	// proxy, which injects it server-side. So check presence via /status instead of

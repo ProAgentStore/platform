@@ -10,17 +10,14 @@ export interface ProfileFieldDef {
 	label: string; // human label (console + prompts)
 	/** Private fields are gated behind per-instance consent (Phase 2). */
 	private: boolean;
-	/** Grouping for the UI: "identity" (candidate info), "preferences" (what they want), or
-	 *  "voice" (global hands-free control words). */
 	/**
 	 * Which section of the console the field belongs to.
 	 *  identity    — general contact/PII any agent may need to fill a form. Always shown.
 	 *  job         — only meaningful to a job-application agent. Shown only when the user
 	 *                actually has an apply-surface instance (#222).
 	 *  preferences — job preferences (what roles/locations you want). Also apply-only.
-	 *  voice       — DEPRECATED, see the note on the voice fields below.
 	 */
-	group?: "identity" | "job" | "preferences" | "voice";
+	group?: "identity" | "job" | "preferences";
 }
 
 /**
@@ -49,20 +46,11 @@ export const PROFILE_FIELDS: ProfileFieldDef[] = [
 	{ key: "targetLocations", label: "Target locations", private: false, group: "preferences" },
 	{ key: "workType", label: "Work type (Remote / Hybrid / Onsite)", private: false, group: "preferences" },
 	{ key: "openToRelocation", label: "Open to relocation? (Yes / No)", private: false, group: "preferences" },
-	// DEPRECATED (#222) — hands-free control words used to be edited here, from the era before
-	// the Preferences page existed. Two UIs then wrote the same global setting through different
-	// endpoints, and this one silently lost: `users.preferences.voice` is merged server-side by
-	// effectiveVoice, while these are only a client-side fallback applied when the effective
-	// value is EMPTY (packages/sdk/src/voice/config.ts). So anyone who had ever touched
-	// Preferences found edits here did nothing.
-	//
-	// The console no longer renders them, so there is no write path. They are KEPT as a read
-	// fallback so a user whose words only ever existed here does not silently lose them; the
-	// canonical home is Preferences → Voice. Remove once a migration copies them across.
-	{ key: "voiceRepeatWords", label: "Repeat command words (blank = built-in defaults)", private: false, group: "voice" },
-	{ key: "voiceMuteWords", label: "Mute command words (blank = built-in defaults)", private: false, group: "voice" },
-	{ key: "voiceStopWords", label: "Stop-word — finish my turn (blank = off)", private: false, group: "voice" },
-	{ key: "voiceStopSpeechKeyword", label: "Stop-speech keyword — interrupt the agent (blank = off)", private: false, group: "voice" },
+	// The `voice` group is GONE (#222). Hands-free control words were once edited here, from
+	// before the Preferences page existed; they now live only in `users.preferences.voice`,
+	// which is what the runtime actually reads. Migration 0075 moved the surviving values and
+	// renamed the originals to `voice*Legacy` in `custom`, so nothing is lost and nothing here
+	// offers a second place to write them.
 ];
 
 const COL_BY_KEY = new Map(PROFILE_FIELDS.filter((f) => f.column).map((f) => [f.key, f.column as string]));
