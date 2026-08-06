@@ -9,18 +9,36 @@
  * - R2: binary file storage (resumes, documents, media)
  * - Vectorize: semantic embeddings for RAG retrieval
  * - Collections: agent-defined structured storage (like tables)
+ *
+ * What stays HERE is what needs the object itself: the routing table, the conversation, the
+ * turn lifecycle (#251 — a turn is a promise the DO owns, with an in-flight marker only this
+ * instance can vouch for), the WebSockets, memory/tasks/state, and the alarm. What only needs
+ * the storage engine or a storage prefix lives beside it and is unit-tested there:
+ *   agent-think.ts             the agent loop (context → model → tools)
+ *   agent-do-tools.ts          the tool catalog
+ *   agent-do-storage-routes.ts collections, records, files, search, activity, summaries
+ *   agent-do-knowledge.ts      the `kb:` documents and their vectors
+ *   lib/repo-ingest-runner.ts  the repo-ingest state machine the alarm advances
  */
 import { DurableObject } from "cloudflare:workers";
 import { AgentStorageEngine } from "./agent-storage.js";
-import { bytesFromBase64 } from "./agent-storage-utils.js";
 import type {
 	AgentMessage,
 	AgentState,
 	AgentTask,
 	Guardrails,
-	KnowledgeDoc,
 	MemoryEntry,
 } from "./agent-types.js";
+import * as storageRoutes from "./agent-do-storage-routes.js";
+import {
+	addKnowledge,
+	deleteKnowledge,
+	getKnowledge,
+	ingestUrl,
+	readKnowledge,
+	updateKnowledge,
+	type KnowledgeCtx,
+} from "./agent-do-knowledge.js";
 import {
 	buildSystemPrompt,
 	defaultGuardrails,
@@ -55,7 +73,7 @@ import {
 	previewOf,
 	type InflightTurn,
 } from "./lib/chat-inflight.js";
-import { safeFetch, SsrfError } from "./lib/ssrf.js";
+import { json } from "./lib/do-json.js";
 import { logError } from "./lib/error-log.js";
 import { isTransientInfraError } from "./lib/on-error.js";
 import type { Env } from "./types.js";
@@ -103,6 +121,33 @@ export class AgentDO extends DurableObject<Env> {
 			agentId,
 			meter,
 		);
+	}
+
+	/**
+	 * Run a storage-only route: resolve this agent's engine, or answer 404 exactly as every
+	 * one of those handlers used to do inline. The 404 is decided BEFORE the handler reads the
+	 * request body — same order as before, so a body-less 404 stays a body-less 404.
+	 */
+	private async withEngine(
+		fn: (engine: AgentStorageEngine, state: AgentState) => Promise<Response>,
+	): Promise<Response> {
+		const state = await this.getState();
+		if (!state) return json({ error: "Not initialized" }, 404);
+		return fn(this.getStorageEngine(state.agentId), state);
+	}
+
+	/** Dependencies the knowledge-base routes need (see agent-do-knowledge.ts). */
+	private knowledgeCtx(): KnowledgeCtx {
+		return {
+			storage: this.ctx.storage,
+			env: this.env,
+			resolve: async () => {
+				const state = await this.getState();
+				return state
+					? { agentId: state.agentId, engine: this.getStorageEngine(state.agentId) }
+					: null;
+			},
+		};
 	}
 
 	/**
@@ -203,20 +248,20 @@ export class AgentDO extends DurableObject<Env> {
 				return json({ ok: true });
 			}
 
-			// Knowledge base
+			// Knowledge base (handlers in agent-do-knowledge.ts)
 			if (path === "/knowledge" && request.method === "GET")
-				return this.handleGetKnowledge();
+				return getKnowledge(this.knowledgeCtx());
 			if (path === "/knowledge" && request.method === "POST")
-				return this.handleAddKnowledge(request);
+				return addKnowledge(this.knowledgeCtx(), request);
 			if (path.startsWith("/knowledge/") && request.method === "DELETE") {
-				return this.handleDeleteKnowledge(path.slice("/knowledge/".length));
+				return deleteKnowledge(this.knowledgeCtx(), path.slice("/knowledge/".length));
 			}
 			if (path === "/knowledge/ingest-url" && request.method === "POST")
-				return this.handleIngestUrl(request);
+				return ingestUrl(this.knowledgeCtx(), request);
 			if (path.startsWith("/knowledge/") && request.method === "GET")
-				return this.handleReadKnowledge(path.slice("/knowledge/".length));
+				return readKnowledge(this.knowledgeCtx(), path.slice("/knowledge/".length));
 			if (path.startsWith("/knowledge/") && request.method === "PUT")
-				return this.handleUpdateKnowledge(path.slice("/knowledge/".length), request);
+				return updateKnowledge(this.knowledgeCtx(), path.slice("/knowledge/".length), request);
 
 			// Repo ingestion (read-only "chat with a repository" agent)
 			if (path === "/ingest-repo" && request.method === "POST")
@@ -236,57 +281,61 @@ export class AgentDO extends DurableObject<Env> {
 			if (path === "/state" && request.method === "PUT")
 				return this.handleUpdateState(request);
 
+			// Everything below is the storage engine and nothing else — the handlers live in
+			// agent-do-storage-routes.ts; `withEngine` resolves the engine (404 if the DO was
+			// never initialised), which is the only DO state they ever needed.
+
 			// Collections (structured storage)
 			if (path === "/collections" && request.method === "GET")
-				return this.handleListCollections();
+				return this.withEngine((e) => storageRoutes.listCollections(e));
 			if (path === "/collections" && request.method === "POST")
-				return this.handleCreateCollection(request);
+				return this.withEngine((e) => storageRoutes.createCollection(e, request));
 			if (path.match(/^\/collections\/[^/]+$/) && request.method === "GET")
-				return this.handleGetCollection(path.slice("/collections/".length));
+				return this.withEngine((e) => storageRoutes.getCollection(e, path.slice("/collections/".length)));
 			if (path.match(/^\/collections\/[^/]+$/) && request.method === "DELETE")
-				return this.handleDeleteCollection(path.slice("/collections/".length));
+				return this.withEngine((e) => storageRoutes.deleteCollection(e, path.slice("/collections/".length)));
 			if (path.match(/^\/collections\/[^/]+\/records$/) && request.method === "GET")
-				return this.handleQueryRecords(path.split("/")[2], url);
+				return this.withEngine((e) => storageRoutes.queryRecords(e, path.split("/")[2], url));
 			if (path.match(/^\/collections\/[^/]+\/records$/) && request.method === "POST")
-				return this.handleInsertRecord(path.split("/")[2], request);
+				return this.withEngine((e) => storageRoutes.insertRecord(e, path.split("/")[2], request));
 			if (path.match(/^\/collections\/[^/]+\/records\/[^/]+$/) && request.method === "GET")
-				return this.handleGetRecord(path.split("/")[2], path.split("/")[4]);
+				return this.withEngine((e) => storageRoutes.getRecord(e, path.split("/")[2], path.split("/")[4]));
 			if (path.match(/^\/collections\/[^/]+\/records\/[^/]+$/) && request.method === "PUT")
-				return this.handleUpdateRecord(path.split("/")[2], path.split("/")[4], request);
+				return this.withEngine((e) => storageRoutes.updateRecord(e, path.split("/")[2], path.split("/")[4], request));
 			if (path.match(/^\/collections\/[^/]+\/records\/[^/]+$/) && request.method === "DELETE")
-				return this.handleDeleteRecord(path.split("/")[2], path.split("/")[4]);
+				return this.withEngine((e) => storageRoutes.deleteRecord(e, path.split("/")[2], path.split("/")[4]));
 
 			// Files
 			if (path === "/files" && request.method === "GET")
-				return this.handleListFiles(url);
+				return this.withEngine((e) => storageRoutes.listFiles(e, url));
 			if (path === "/files" && request.method === "POST")
-				return this.handleUploadFile(request);
+				return this.withEngine((e) => storageRoutes.uploadFile(e, request));
 			if (path === "/files/register" && request.method === "POST")
-				return this.handleRegisterFile(request);
+				return this.withEngine((e) => storageRoutes.registerFile(e, request));
 			if (path.match(/^\/files\/[^/]+$/) && request.method === "GET")
-				return this.handleGetFile(path.slice("/files/".length));
+				return this.withEngine((e) => storageRoutes.getFile(e, path.slice("/files/".length)));
 			if (path.match(/^\/files\/[^/]+$/) && request.method === "DELETE")
-				return this.handleDeleteFile(path.slice("/files/".length));
+				return this.withEngine((e) => storageRoutes.deleteFile(e, path.slice("/files/".length)));
 
 			// Vector search
 			if (path === "/search" && request.method === "POST")
-				return this.handleVectorSearch(request);
+				return this.withEngine((e) => storageRoutes.vectorSearch(e, request));
 			if (path === "/vectors" && request.method === "GET")
-				return this.handleVectorStats();
+				return this.withEngine((e) => storageRoutes.vectorStats(e));
 
 			// Activity log
 			if (path === "/activity" && request.method === "GET")
-				return this.handleGetActivity(url);
+				return this.withEngine((e) => storageRoutes.getActivity(e, url));
 
 			// Summaries
 			if (path === "/summaries" && request.method === "GET")
-				return this.handleGetSummaries(url);
+				return this.withEngine((e) => storageRoutes.getSummaries(e, url));
 			if (path === "/summarize" && request.method === "POST")
-				return this.handleForceSummarize();
+				return this.withEngine((e, state) => storageRoutes.forceSummarize(e, state.model));
 
 			// User context
 			if (path.match(/^\/users\/[^/]+\/context$/) && request.method === "GET")
-				return this.handleGetUserContext(path.split("/")[2]);
+				return this.withEngine((e) => storageRoutes.getUserContext(e, path.split("/")[2]));
 
 			return json({ error: "Not found" }, 404);
 		} catch (err) {
@@ -923,239 +972,6 @@ export class AgentDO extends DurableObject<Env> {
 		return json({ success: true });
 	}
 
-	// ── Knowledge Base ─────────────────────────────────────────────────────────
-
-	private async getAllKnowledge(): Promise<KnowledgeDoc[]> {
-		const all = await this.ctx.storage.list<KnowledgeDoc>({ prefix: "kb:" });
-		return [...all.values()];
-	}
-
-	private async handleGetKnowledge(): Promise<Response> {
-		return json({ documents: await this.getAllKnowledge() });
-	}
-
-	private async handleAddKnowledge(request: Request): Promise<Response> {
-		const body = await request.json<{
-			title: string;
-			content: string;
-			source?: KnowledgeDoc["source"];
-			sourceUrl?: string;
-		}>();
-		// Content may be empty — a document can be created title-first and filled in
-		// later (in the editor or by the agent via update_knowledge).
-		const content = typeof body.content === "string" ? body.content : "";
-		if (!body.title)
-			return json({ error: "title required" }, 400);
-		if (content.length > 100_000)
-			return json({ error: "Document too large (max 100KB)" }, 400);
-
-		// Limit total knowledge base size (max 20 docs)
-		const existing = await this.ctx.storage.list({ prefix: "kb:" });
-		if (existing.size >= 20)
-			return json({ error: "Knowledge base full (max 20 documents)" }, 400);
-
-		const doc: KnowledgeDoc = {
-			id: crypto.randomUUID(),
-			title: body.title.slice(0, 500),
-			content,
-			source: body.source || "paste",
-			sourceUrl: body.sourceUrl,
-			addedAt: new Date().toISOString(),
-		};
-		await this.ctx.storage.put(`kb:${doc.id}`, doc);
-
-		// Vectorize the document for semantic retrieval. The doc is saved either way, but we
-		// must NOT report an unqualified success if it isn't searchable — surface it via a
-		// `vectorized` flag + the error log so callers (résumé parse, MCP) can tell the user.
-		let vectorized = true;
-		const state = await this.getState();
-		if (state) {
-			const engine = this.getStorageEngine(state.agentId);
-			// Indexing off (no Vectorize/AI binding, e.g. PLATFORM_AI_ENABLED=false): vectorizeStore
-			// no-ops WITHOUT throwing, so report vectorized:false rather than a false green (#22).
-			if (!engine.indexingEnabled) {
-				vectorized = false;
-			} else {
-				try {
-					await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${doc.content}`);
-				} catch (err) {
-					vectorized = false;
-					await logError(this.env, {
-						source: "knowledge-vectorize",
-						message: `knowledge doc saved but not searchable: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-						context: { agentId: state.agentId, docId: doc.id },
-					}).catch(() => undefined);
-				}
-			}
-			await engine.logEvent("knowledge.added", undefined, {
-				docId: doc.id,
-				title: doc.title,
-				size: doc.content.length,
-				vectorized,
-			}).catch(() => {});
-		}
-
-		return json({ ...doc, vectorized }, 201);
-	}
-
-	/** Read one document's full content (for the console viewer/editor). */
-	private async handleReadKnowledge(id: string): Promise<Response> {
-		const doc = await this.ctx.storage.get<KnowledgeDoc>(`kb:${decodeURIComponent(id)}`);
-		if (!doc) return json({ error: "not found" }, 404);
-		return json({ document: doc });
-	}
-
-	/** Amend a document's title/content from the console editor, re-vectorizing it. */
-	private async handleUpdateKnowledge(id: string, request: Request): Promise<Response> {
-		const decodedId = decodeURIComponent(id);
-		const existing = await this.ctx.storage.get<KnowledgeDoc>(`kb:${decodedId}`);
-		if (!existing) return json({ error: "not found" }, 404);
-		const body = await request.json<{ title?: string; content?: string }>();
-		if (typeof body.content === "string" && body.content.length > 100_000)
-			return json({ error: "Document too large (max 100KB)" }, 400);
-		const updated: KnowledgeDoc = {
-			...existing,
-			title: (typeof body.title === "string" && body.title.trim() ? body.title.trim() : existing.title).slice(0, 500),
-			content: typeof body.content === "string" ? body.content : existing.content,
-			updatedAt: new Date().toISOString(),
-		};
-		await this.ctx.storage.put(`kb:${decodedId}`, updated);
-
-		let vectorized = true;
-		const state = await this.getState();
-		if (state) {
-			const engine = this.getStorageEngine(state.agentId);
-			if (!engine.indexingEnabled) {
-				vectorized = false; // indexing off (#22) — don't claim a searchable update
-			} else try {
-				await engine.vectorDelete("knowledge", decodedId).catch(() => undefined);
-				await engine.vectorizeStore("knowledge", decodedId, `${updated.title}\n\n${updated.content}`);
-			} catch (err) {
-				vectorized = false;
-				await logError(this.env, {
-					source: "knowledge-vectorize",
-					message: `knowledge doc updated but not searchable: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-					context: { agentId: state.agentId, docId: decodedId },
-				}).catch(() => undefined);
-			}
-			await engine.logEvent("knowledge.updated", undefined, { docId: decodedId, title: updated.title, vectorized }).catch(() => undefined);
-		}
-		return json({ ...updated, vectorized });
-	}
-
-	private async handleDeleteKnowledge(id: string): Promise<Response> {
-		const decodedId = decodeURIComponent(id);
-
-		// Vectors FIRST, then the record (#242). The other order deletes the doc from the console
-		// and, if Vectorize then errors, strands its chunks in the index with nothing left to
-		// retry against — RAG keeps citing a document the user deleted, permanently. Failing here
-		// leaves the document listed, so the user can simply delete it again.
-		const state = await this.getState();
-		if (state) {
-			const engine = this.getStorageEngine(state.agentId);
-			try {
-				await engine.vectorDelete("knowledge", decodedId);
-			} catch (err) {
-				await logError(this.env, {
-					source: "knowledge-vectorize",
-					message: `knowledge doc NOT deleted — its indexed content could not be removed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
-					context: { agentId: state.agentId, docId: decodedId },
-				}).catch(() => undefined);
-				return json({ error: "Couldn't remove this document's indexed content, so it was not deleted — it would keep answering searches. Try again." }, 503);
-			}
-			await this.ctx.storage.delete(`kb:${decodedId}`);
-			await engine.logEvent("knowledge.removed", undefined, { docId: decodedId });
-			return json({ success: true });
-		}
-
-		// No state (an uninitialised DO) — there is no vector index to reconcile against.
-		await this.ctx.storage.delete(`kb:${decodedId}`);
-		return json({ success: true });
-	}
-
-	private async handleIngestUrl(request: Request): Promise<Response> {
-		const { url, title } = await request.json<{
-			url: string;
-			title?: string;
-		}>();
-		if (!url) return json({ error: "url required" }, 400);
-
-		// Same 20-doc ceiling as handleAddKnowledge — Import URL must not be a backdoor
-		// past the cap (a prompt-injected agent could otherwise ingest-url in a loop).
-		const existingUrlDocs = await this.ctx.storage.list({ prefix: "kb:" });
-		if (existingUrlDocs.size >= 20)
-			return json({ error: "Knowledge base full (max 20 documents)" }, 400);
-
-		try {
-			// SSRF protection: https-only + reject non-public hosts, re-validated on EVERY
-			// redirect hop (default follow would let a public host 302 us to a private one).
-			let res: Response;
-			try {
-				res = await safeFetch(url, { headers: { "User-Agent": "ProAgentStore-Ingest" } });
-			} catch (e) {
-				return json({ error: e instanceof SsrfError ? e.message : `Failed to fetch: ${e instanceof Error ? e.message : String(e)}` }, 400);
-			}
-			if (!res.ok)
-				return json({ error: `Failed to fetch: ${res.status}` }, 400);
-
-			const contentType = res.headers.get("content-type") || "";
-			let text = await res.text();
-
-			// Strip HTML tags for web pages
-			if (contentType.includes("html")) {
-				text = text
-					.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-					.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-					.replace(/<[^>]+>/g, " ")
-					.replace(/\s+/g, " ")
-					.trim();
-			}
-
-			// Truncate to 50KB per doc
-			if (text.length > 50_000)
-				text = `${text.slice(0, 50_000)}\n...[truncated]`;
-
-			const doc: KnowledgeDoc = {
-				id: crypto.randomUUID(),
-				title: title || new URL(url).hostname,
-				content: text,
-				source: "url",
-				sourceUrl: url,
-				addedAt: new Date().toISOString(),
-			};
-			await this.ctx.storage.put(`kb:${doc.id}`, doc);
-
-			// Vectorize so the imported page is actually RETRIEVABLE. The agent only surfaces
-			// knowledge via RAG (buildRAGContext → vectorSearch) — a doc with no vectors is
-			// invisible forever. handleAddKnowledge/handleUpdateKnowledge already do this; without
-			// it, Import URL silently succeeded but the agent could never answer about the page.
-			let vectorized = true;
-			const state = await this.getState();
-			if (state) {
-				const engine = this.getStorageEngine(state.agentId);
-				try {
-					await engine.vectorizeStore("knowledge", doc.id, `${doc.title}\n\n${text}`);
-				} catch (e) {
-					vectorized = false;
-					await logError(this.env, {
-						source: "knowledge-vectorize",
-						message: `ingested URL saved but not searchable: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300),
-						context: { agentId: state.agentId, docId: doc.id, url },
-					}).catch(() => undefined);
-				}
-				await engine.logEvent("knowledge.added", undefined, { docId: doc.id, title: doc.title, size: text.length, source: "url", vectorized }).catch(() => {});
-			}
-			return json({ ...doc, vectorized }, 201);
-		} catch (err) {
-			return json(
-				{
-					error: `Ingest failed: ${err instanceof Error ? err.message : String(err)}`,
-				},
-				400,
-			);
-		}
-	}
-
 	// ── Repo ingestion (multi-repo) — logic lives in lib/repo-ingest-runner.ts ───
 
 	/** GitHub + parsing deps injected into the runner. */
@@ -1220,280 +1036,4 @@ export class AgentDO extends DurableObject<Env> {
 			throw err;
 		}
 	}
-
-	// ── Collections ───────────────────────────────────────────────────────────
-
-	private async handleListCollections(): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const collections = await engine.collectionList();
-		return json({ collections });
-	}
-
-	private async handleCreateCollection(request: Request): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const { name, fields } = await request.json<{ name: string; fields: unknown[] }>();
-		if (!name || !fields) return json({ error: "name and fields required" }, 400);
-		const schema = await engine.collectionCreate(name, fields as import("./agent-storage-types.js").CollectionField[]);
-		return json(schema, 201);
-	}
-
-	private async handleGetCollection(name: string): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const schema = await engine.collectionGet(decodeURIComponent(name));
-		return schema ? json(schema) : json({ error: "Not found" }, 404);
-	}
-
-	private async handleDeleteCollection(name: string): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		await engine.collectionDelete(decodeURIComponent(name));
-		return json({ success: true });
-	}
-
-	private async handleQueryRecords(collection: string, url: URL): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const where = url.searchParams.get("where");
-		const result = await engine.recordQuery(decodeURIComponent(collection), {
-			where: where ? JSON.parse(where) : undefined,
-			orderBy: url.searchParams.get("order_by") || undefined,
-			orderDir: (url.searchParams.get("order_dir") as "asc" | "desc") || undefined,
-			limit: Number(url.searchParams.get("limit")) || 50,
-			offset: Number(url.searchParams.get("offset")) || 0,
-		});
-		return json(result);
-	}
-
-	private async handleInsertRecord(collection: string, request: Request): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const { data } = await request.json<{ data: Record<string, unknown> }>();
-		if (!data) return json({ error: "data required" }, 400);
-		const record = await engine.recordInsert(decodeURIComponent(collection), data);
-		return json(record, 201);
-	}
-
-	private async handleGetRecord(collection: string, id: string): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const record = await engine.recordGet(decodeURIComponent(collection), decodeURIComponent(id));
-		return record ? json(record) : json({ error: "Not found" }, 404);
-	}
-
-	private async handleUpdateRecord(collection: string, id: string, request: Request): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const { data } = await request.json<{ data: Record<string, unknown> }>();
-		if (!data) return json({ error: "data required" }, 400);
-		const record = await engine.recordUpdate(
-			decodeURIComponent(collection),
-			decodeURIComponent(id),
-			data,
-		);
-		return record ? json(record) : json({ error: "Not found" }, 404);
-	}
-
-	private async handleDeleteRecord(collection: string, id: string): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const deleted = await engine.recordDelete(
-			decodeURIComponent(collection),
-			decodeURIComponent(id),
-		);
-		return deleted ? json({ success: true }) : json({ error: "Not found" }, 404);
-	}
-
-	// ── Files ─────────────────────────────────────────────────────────────────
-
-	private async handleListFiles(url: URL): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const tags = url.searchParams.get("tags")?.split(",").filter(Boolean);
-		const files = await engine.fileList({
-			userId: url.searchParams.get("user_id") || undefined,
-			tags: tags?.length ? tags : undefined,
-			mimeType: url.searchParams.get("mime_type") || undefined,
-		});
-		return json({ files });
-	}
-
-	private async handleUploadFile(request: Request): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const body = await request.json<{
-			name: string;
-			content: string;
-			contentBase64?: string;
-			mime_type?: string;
-			path?: string;
-			tags?: string[];
-			user_id?: string;
-			extract_text?: boolean;
-		}>();
-		if (!body.name || (!body.content && !body.contentBase64))
-			return json({ error: "name and content or contentBase64 required" }, 400);
-		const data = body.contentBase64
-			? bytesFromBase64(body.contentBase64).slice().buffer
-			: body.content;
-		const meta = await engine.fileUpload({
-			name: body.name,
-			path: body.path,
-			mimeType: body.mime_type || "text/plain",
-			data,
-			userId: body.user_id,
-			tags: body.tags,
-			extractText: body.extract_text !== false,
-		});
-		return json(meta, 201);
-	}
-
-	/** Register an object the multipart upload already placed in R2 (see fileRegister). */
-	private async handleRegisterFile(request: Request): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const body = await request.json<{
-			id: string;
-			name: string;
-			r2_key: string;
-			mime_type?: string;
-			user_id?: string;
-		}>();
-		if (!body.id || !body.name || !body.r2_key)
-			return json({ error: "id, name, r2_key required" }, 400);
-		const meta = await engine.fileRegister({
-			id: body.id,
-			name: body.name,
-			r2Key: body.r2_key,
-			mimeType: body.mime_type || "application/octet-stream",
-			userId: body.user_id,
-		});
-		if (!meta) return json({ error: "Object not found in storage" }, 404);
-		return json(meta, 201);
-	}
-
-	private async handleGetFile(id: string): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const file = await engine.fileGet(decodeURIComponent(id));
-		if (!file) return json({ error: "Not found" }, 404);
-		return new Response(file.body, {
-			headers: {
-				"Content-Type": file.meta.mimeType,
-				"Content-Disposition": `inline; filename="${file.meta.name}"`,
-				"X-File-Meta": JSON.stringify({
-					id: file.meta.id,
-					name: file.meta.name,
-					size: file.meta.size,
-					tags: file.meta.tags,
-				}),
-			},
-		});
-	}
-
-	private async handleDeleteFile(id: string): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const deleted = await engine.fileDelete(decodeURIComponent(id));
-		return deleted ? json({ success: true }) : json({ error: "Not found" }, 404);
-	}
-
-	// ── Vector Search ─────────────────────────────────────────────────────────
-
-	private async handleVectorSearch(request: Request): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const { query, top_k, source_type } = await request.json<{
-			query: string;
-			top_k?: number;
-			source_type?: string;
-		}>();
-		if (!query) return json({ error: "query required" }, 400);
-		const results = await engine.vectorSearch(query, top_k || 5, {
-			sourceType: source_type as "knowledge" | "message" | "file" | "collection" | undefined,
-		});
-		return json({ results });
-	}
-
-	/** What's in the vector store, grouped by source — the Knowledge → Index panel. */
-	private async handleVectorStats(): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		return json(await engine.vectorStats());
-	}
-
-	// ── Activity Log ──────────────────────────────────────────────────────────
-
-	private async handleGetActivity(url: URL): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const events = await engine.getEvents({
-			limit: Number(url.searchParams.get("limit")) || 50,
-			type: url.searchParams.get("type") as import("./agent-storage-types.js").ActivityEvent["type"] | undefined,
-			userId: url.searchParams.get("user_id") || undefined,
-		});
-		return json({ events });
-	}
-
-	// ── Summaries ─────────────────────────────────────────────────────────────
-
-	private async handleGetSummaries(url: URL): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const limit = Number(url.searchParams.get("limit")) || 20;
-		const summaries = await engine.getSummaries(limit);
-		return json({ summaries });
-	}
-
-	private async handleForceSummarize(): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const summary = await engine.maybeSummarize(state.model);
-		return summary
-			? json({ summary })
-			: json({ message: "Not enough messages to summarize" });
-	}
-
-	// ── User Context ──────────────────────────────────────────────────────────
-
-	private async handleGetUserContext(userId: string): Promise<Response> {
-		const state = await this.getState();
-		if (!state) return json({ error: "Not initialized" }, 404);
-		const engine = this.getStorageEngine(state.agentId);
-		const ctx = await engine.getUserContext(decodeURIComponent(userId));
-		return json(ctx);
-	}
-}
-
-/**
- * Parse tool calls from response text when the model embeds them as JSON
- * instead of using the structured tool_calls field.
- * Handles single or multiple: {"name":"...",...}; {"name":"...",...}
- */
-function json(data: unknown, status = 200): Response {
-	return new Response(JSON.stringify(data), {
-		status,
-		headers: { "Content-Type": "application/json" },
-	});
 }
