@@ -9,6 +9,7 @@ copyright = "ProAgentStore"
 nav = [
   { "Overview" = "index.md" },
   { "Connectors" = "connectors.md" },
+  { "Agent Behaviour" = "agent-behaviour.md" },
   { "Triggers" = "triggers.md" },
   { "MCP" = "mcp.md" },
   { "Voice" = "voice.md" },

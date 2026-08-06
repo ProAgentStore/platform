@@ -502,6 +502,39 @@ Risk:
   acceptable only while Serge is the sole user. This must be flipped off before
   real multi-user onboarding unless billing and policy intentionally change.
 
+## Agent Behaviour (issues #223-#226)
+
+How an agent *communicates* is declared configuration, resolved by the pure
+`lib/agent-behaviour.ts`: 19 fields over Style / Reasoning / Formatting /
+Interaction / Guardrails, stored sparsely as `config.behaviour` on the agent
+(creator default) and the instance (subscriber override), merged per field.
+
+Two properties are load-bearing:
+
+- **A field's prompt text is data, not a callback.** Bands and option prose live in
+  the field table as strings, so `GET /v1/instances/behaviour-schema` serialises the
+  whole table and the console renders the exact instruction the prompt will carry.
+  A callback here would force the UI to restate the copy and the two would drift.
+- **Absent means unconfigured, not default.** A missing field emits nothing and
+  leaves the pre-existing heuristic in charge, which is what made it safe to deploy
+  to every live instance at once.
+
+`resolveResponseStyle` deliberately separates *capability* (which grounding block an
+agent gets - repo-chat index, live coding sessions, or neither) from *preference*
+(language level). Conflating them told a plain chat agent it had attached
+repositories and a terminal, which is the false-self-model failure those blocks
+exist to prevent.
+
+Injection order matters: behaviour goes in BEFORE the honesty/safety text, so the
+free-text `persona` field cannot be positioned to outrank "never claim an action
+succeeded when it failed".
+
+Boundary: `set_behaviour` (the agent's own tool) is restricted to
+`SELF_WRITABLE_FIELDS`, which excludes every guardrail. An agent that reads
+untrusted repository files and issue bodies must not be able to widen its own
+restrictions - clearing obeys the same allowlist, or the escape is just spelled
+differently.
+
 ## Security Model
 
 Current protections:
