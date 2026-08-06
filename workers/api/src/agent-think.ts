@@ -21,7 +21,7 @@ import { lastTerminal } from "./lib/coding-timeline.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
 import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "./lib/runner-client.js";
 import { executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./lib/agent-self-description.js";
-import { listLoopRuns } from "./lib/agent-loop-store.js";
+import { listDelegatedRuns, listLoopRuns } from "./lib/agent-loop-store.js";
 import { recentWorkPrompt } from "./lib/work-report.js";
 import {
 	behaviourField,
@@ -333,16 +333,23 @@ export async function runAgentThink(opts: {
 	//
 	// Skipped entirely for an agent with no engine and no executor: telling a language tutor it
 	// cannot run shell commands answers a question nobody asked.
-	if (selfModel.canStartWork || selfModel.canDrive || selfModel.surfaces.includes("coding")) {
+	if (selfModel.canStartWork || selfModel.canDrive || selfModel.canDelegate || selfModel.surfaces.includes("coding")) {
 		systemPrompt += `\n${executionAuthorityPrompt(selfModel)}`;
 	}
 
 	// What it has actually DONE (#256). Injected rather than left to a tool call because the
 	// denial happened in ONE turn, in reply to a direct challenge — a model that must first decide
 	// to call a tool before it can defend a true statement will often just apologise instead.
-	if (selfModel.canStartWork && userId && state.agentId) {
-		const recentRuns = await listLoopRuns(env, userId, state.agentId, 3).catch(() => []);
-		systemPrompt += recentWorkPrompt(recentRuns);
+	//
+	// A delegator's runs are on its SUBORDINATES (#318), so the instance-scoped list is empty for
+	// it by construction and the block never fired at all — the Lead in #318 did call `check_work`
+	// and still recanted, which is why the answer belongs in the prompt before the challenge.
+	if ((selfModel.canStartWork || selfModel.canDelegate) && userId && state.agentId) {
+		const [recentRuns, delegated] = await Promise.all([
+			listLoopRuns(env, userId, state.agentId, 3).catch(() => []),
+			selfModel.canDelegate ? listDelegatedRuns(env, userId, state.agentId, 3).catch(() => []) : [],
+		]);
+		systemPrompt += recentWorkPrompt(recentRuns, Date.now(), { delegated });
 	}
 
 	// Under-message translation is on → the PLATFORM displays translations (and, when

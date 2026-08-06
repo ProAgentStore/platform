@@ -35,7 +35,17 @@ export interface RepoWorkingState {
 
 export interface RepoStateReport extends RepoWorkingState {
 	repoId: string;
+	/** The display label the owner gave it. NOT a GitHub path, even when it looks like one. */
 	name: string;
+	/**
+	 * `owner/name` on GitHub, when this repo is linked to one (#320).
+	 *
+	 * The supervisor had no GitHub coordinates for its subordinates at all, so asked for open
+	 * tickets it passed `repo.name` — "fws" — to `github_list_issues`, got "no github access", and
+	 * asked the human for a path `coding_repos.github_repo` already held. Same class as #259: a
+	 * fact the platform has, missing from the picture, so the model guesses and then escalates.
+	 */
+	githubRepo: string | null;
 	/** The repo's configured branch, when it has one. Null → the trunk is assumed. */
 	configuredBranch: string | null;
 	/**
@@ -166,6 +176,7 @@ export async function repoStateForInstance(env: Env, instanceId: string, userId:
 		...state,
 		repoId: repo.id,
 		name: repo.name,
+		githubRepo: (repo.githubRepo || "").trim() || null,
 		configuredBranch: (repo.branch || "").trim() || null,
 		note: describeRepoState(state, { configuredBranch: repo.branch }),
 		otherRepos: Math.max(0, repos.length - 1),

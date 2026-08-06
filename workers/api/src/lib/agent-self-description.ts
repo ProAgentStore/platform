@@ -41,6 +41,15 @@ export interface SelfModel {
 	canStartWork: boolean;
 	/** May its chat type into the engine (`send_to_cli`)? `drive:false` says no. */
 	canDrive: boolean;
+	/**
+	 * Can it hand a goal to an agent it SUPERVISES (`delegate_goal`)?
+	 *
+	 * A third way to act, and the one the #254 prompt had no branch for: a Coder Lead has no
+	 * executor of its own and no drive tools, so it fell into "you cannot act at all" — which is
+	 * false for the only thing it exists to do, and is half of why it retracted a true delegation
+	 * report (#318).
+	 */
+	canDelegate: boolean;
 	/** Does it have a real vector index of code (the `repo` surface / Repo Chat)? */
 	hasCodeIndex: boolean;
 	/** Does it own exactly ONE repository (`surfaceOptions.coding.repos === "single"`)? */
@@ -92,6 +101,7 @@ export function resolveSelfModel(capabilities: AgentCapabilities): SelfModel {
 		// story-the-tools-contradict failure this module exists to prevent.
 		canStartWork: tools.has("start_work") && loopDriverFor(capabilities).id !== DEFAULT_LOOP_DRIVER.id,
 		canDrive: tools.has("send_to_cli"),
+		canDelegate: tools.has("delegate_goal"),
 		hasCodeIndex: (capabilities.surfaces ?? []).includes("repo"),
 		singleRepo: optionsFor(capabilities, "coding")?.repos === "single",
 	};
@@ -117,7 +127,7 @@ export function executionAuthorityPrompt(model: SelfModel): string {
 	// Composed, not a three-way switch. The legacy Coder has BOTH — an executor and the drive tools
 	// — and an if/else chain silently told it about only whichever branch came first. Describing
 	// half of an agent's real reach is the same class of error as describing none of it.
-	if (!model.canStartWork && !model.canDrive) {
+	if (!model.canStartWork && !model.canDrive && !model.canDelegate) {
 		return (
 			"\nWHAT YOU CAN ACTUALLY DO: you cannot run shell commands, drive the coding engine, or change code." +
 			" From this chat you explain and summarize. Never claim you ran a command, made a commit, or fixed a" +
@@ -131,6 +141,18 @@ export function executionAuthorityPrompt(model: SelfModel): string {
 				" and it really does drive the coding engine on the user's machine — running commands, editing files," +
 				" making commits. That is real work, done by you, through it.",
 			"- DO say plainly when you have started work, and report what the run reports back.",
+		);
+	}
+	if (model.canDelegate) {
+		lines.push(
+			"- You do not run commands yourself. You hand a GOAL to an agent you supervise with `delegate_goal`," +
+				" and it really does that work — on its machine, in its repository. A run you delegated is work" +
+				" YOU started, and reporting it as something you did is accurate, not an over-claim.",
+			// The direct cause of #318: the run lives on the SUBORDINATE, so "nothing on my own
+			// instance" is the normal state for a supervisor and says nothing about what it did.
+			"- Your runs are recorded on the agent that ran them, never on you. `check_work` reports both yours and" +
+				" the ones you delegated; `check_delegation` and `subordinate_status` report theirs in more detail." +
+				" NEVER conclude from an empty record on your own instance that you delegated nothing.",
 		);
 	}
 	if (model.canDrive) {

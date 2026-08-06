@@ -172,6 +172,31 @@ a supervisor cannot read silence as an all-clear. Read a run's acts with
 Whether an agent should be *allowed* to merge unattended is a separate, open policy question — this
 only makes it visible.
 
+**A supervisor can read back the work it delegated** (#318). `check_work` answers "did I really do
+that?" from the run record, scoped to the calling instance — deliberately, so an agent cannot
+describe a sibling agent's run as its own. But a supervisor's runs are never on its own instance:
+`delegate_goal` starts them on the subordinate. So a Lead that had delegated 90 seconds earlier, and
+said so truthfully, read back *"you have not started any work on this instance — there are no runs.
+If you told the user you did something, that was wrong; say so"* and retracted a true statement:
+the anti-hallucination guard producing the exact failure it exists to prevent. Runs now record the
+supervisor that asked for them (`agent_loop_runs.delegated_by`, migration 0090, audit-only and never
+an authority), `check_work` reports own **and** delegated runs, and the correction sentence is
+withheld from a delegator — for whom an empty own-instance record is the normal state and says
+nothing about what happened. For an agent that delegates to nobody it is unchanged. A delegator's
+delegations are also injected into its prompt directly, because the Lead in #318 *did* call
+`check_work` and still recanted.
+
+**Name a subordinate however you have it** (#320). `subordinate_status`, `check_delegation` and
+`delegate_goal` accept a subordinate's **name** ("FAS platform") or a unique fragment of it, not
+only its instance id — resolved against the supervision graph, so a looser spelling never widens
+*who* is reachable, and refused rather than guessed when it is ambiguous. The answer echoes back
+which agent it resolved to. Previously every turn cost a round trip (`subordinate_status(name)` →
+refused → `list_subordinates` → `subordinate_status(uuid)`), and that refusal reported
+`success: true`, so a tool log showed twice as many successful status calls as there had been. A
+refusal is now `success: false`. Each subordinate's `repo` block also carries `githubRepo` — the
+repository's `owner/name` on GitHub, the only value a GitHub tool accepts; `repo.name` is a display
+label that may look like a path and not be one.
+
 **The browser connector is experimental** and additionally gated behind the API worker's
 `BROWSER_TOOLS_ENABLED` env flag (fail-closed when unset) — first-party / self-use only until the
 browser trust model lands. It bridges the runner's real-Chrome hands (`/browser/snapshot` +

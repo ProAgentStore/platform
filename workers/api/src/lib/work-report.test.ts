@@ -19,6 +19,7 @@ function run(over: Partial<LoopRunView> = {}): LoopRunView {
 		startedAt: NOW - 60_000,
 		finishedAt: NOW - 30_000,
 		lastProgressAt: NOW - 40_000,
+		delegatedBy: null,
 		...over,
 	};
 }
@@ -81,6 +82,42 @@ describe("describeWorkCheck — the answer to 'did you actually do that?'", () =
 		expect(s.indexOf("a")).toBeLessThan(s.indexOf("b"));
 		expect(s).toContain("2 most recent runs");
 	});
+
+	// ── #318 ──────────────────────────────────────────────────────────────
+	describe("a delegator's work is not on its own instance", () => {
+		const delegated = run({ runId: "d1", instanceId: "sub-1", delegatedBy: "lead-1" });
+
+		it("reports delegated runs as work the supervisor started", () => {
+			const s = describeWorkCheck([], NOW, { delegated: [delegated] });
+			expect(s).toContain("d1");
+			// Named with the agent it ran on, so the supervisor can cite both halves of the fact.
+			expect(s).toContain("sub-1");
+			expect(s).toMatch(/do not soften or retract/);
+		});
+
+		it("does NOT accuse a supervisor of misleading the user when it has run nothing itself", () => {
+			// The live failure: a Lead that had delegated 90 seconds earlier, and said so truthfully,
+			// was told "if you told the user you did something, that was wrong; say so" — and
+			// complied. Whether the user was misled is not something this record can see for an
+			// agent whose work lives elsewhere.
+			const s = describeWorkCheck([], NOW, { supervises: true });
+			expect(s).not.toMatch(/that was wrong/);
+			expect(s).toMatch(/check_delegation/);
+		});
+
+		it("leaves #254's correction exactly as it was for a non-delegator", () => {
+			// The guard earns its place there — an agent that ran nothing and claimed it did.
+			expect(describeWorkCheck([], NOW, { supervises: false })).toMatch(/that was wrong; say so/);
+			expect(describeWorkCheck([], NOW)).toMatch(/that was wrong; say so/);
+		});
+
+		it("reports own runs and delegated runs together, separately labelled", () => {
+			const s = describeWorkCheck([run({ runId: "own-1" })], NOW, { delegated: [delegated] });
+			expect(s).toContain("own-1");
+			expect(s).toContain("d1");
+			expect(s.indexOf("own-1")).toBeLessThan(s.indexOf("delegating"));
+		});
+	});
 });
 
 describe("recentWorkPrompt — the context block that removes the tool-call decision", () => {
@@ -93,5 +130,14 @@ describe("recentWorkPrompt — the context block that removes the tool-call deci
 		expect(p).toContain("## Your recent work");
 		expect(p).toContain("check_work");
 		expect(p).toContain("git pull");
+	});
+
+	it("carries a supervisor's delegations, which are the only work it ever has (#318)", () => {
+		// The stronger half of the fix: the Lead in #318 DID call check_work and still recanted, so
+		// the answer belongs in the prompt before the challenge arrives.
+		const p = recentWorkPrompt([], NOW, { delegated: [run({ runId: "d1", instanceId: "sub-1", delegatedBy: "lead-1" })] });
+		expect(p).toContain("## Your recent work");
+		expect(p).toContain("d1");
+		expect(p).toMatch(/Never deny one of these/);
 	});
 });

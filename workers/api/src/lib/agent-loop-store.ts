@@ -22,6 +22,8 @@ export interface LoopRunRow {
 	finished_at: number | null;
 	/** ms epoch of the last recorded iteration (0067). Null for a run that never reported. */
 	last_progress_at: number | null;
+	/** Supervisor instance that delegated this run (0090). Null when the owner started it. */
+	delegated_by: string | null;
 }
 
 export interface LoopRunView {
@@ -41,6 +43,15 @@ export interface LoopRunView {
 	 *  stalled — the only queryable staleness signal there is, since a Workflow that dies mid-step
 	 *  leaves `status` at `running` forever. */
 	lastProgressAt: number | null;
+	/**
+	 * The supervisor instance that delegated this run, or null when its owner started it (#318).
+	 *
+	 * AUDIT ONLY — never an authority (`lib/execution-authority.ts`). It exists so a supervisor can
+	 * READ BACK work it started somewhere else: its runs live on its subordinates, so an
+	 * instance-scoped `check_work` truthfully found nothing and then told a truthful agent it had
+	 * misled the user.
+	 */
+	delegatedBy: string | null;
 }
 
 export function toLoopRunView(row: LoopRunRow): LoopRunView {
@@ -58,6 +69,7 @@ export function toLoopRunView(row: LoopRunRow): LoopRunView {
 		startedAt: row.started_at,
 		finishedAt: row.finished_at,
 		lastProgressAt: row.last_progress_at ?? null,
+		delegatedBy: row.delegated_by ?? null,
 	};
 }
 
@@ -71,13 +83,24 @@ export async function createLoopRun(
 		maxIterations: number;
 		budgetId?: string | null;
 		startedAt: number;
+		/** The supervisor that asked for this (`onBehalfOf`). Omit for a run its owner started. */
+		delegatedBy?: string | null;
 	},
 ): Promise<void> {
 	await env.DB.prepare(
-		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status)
-		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running')`,
+		`INSERT INTO agent_loop_runs (run_id, user_id, instance_id, objective, max_iterations, budget_id, started_at, status, delegated_by)
+		 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'running', ?8)`,
 	)
-		.bind(input.runId, input.userId, input.instanceId, input.objective.slice(0, 2000), input.maxIterations, input.budgetId ?? null, input.startedAt)
+		.bind(
+			input.runId,
+			input.userId,
+			input.instanceId,
+			input.objective.slice(0, 2000),
+			input.maxIterations,
+			input.budgetId ?? null,
+			input.startedAt,
+			input.delegatedBy ?? null,
+		)
 		.run();
 }
 
@@ -93,6 +116,32 @@ export async function listLoopRuns(env: Env, userId: string, instanceId: string,
 		"SELECT * FROM agent_loop_runs WHERE user_id = ?1 AND instance_id = ?2 ORDER BY started_at DESC LIMIT ?3",
 	)
 		.bind(userId, instanceId, Math.max(1, Math.min(200, limit)))
+		.all<LoopRunRow>();
+	return (res.results ?? []).map(toLoopRunView);
+}
+
+/**
+ * The runs one SUPERVISOR started on other agents (#318).
+ *
+ * The counterpart to `listLoopRuns`, which answers "what did this instance run itself". A
+ * supervisor delegates, so its own instance has no runs at all and the two lists together are what
+ * "your work" actually means for it.
+ *
+ * Keyed on `delegated_by` rather than on the supervision graph on purpose: "runs on an agent I
+ * supervise" also contains runs the OWNER started there, and claiming those would be the
+ * over-claim the instance scoping exists to prevent.
+ */
+export async function listDelegatedRuns(
+	env: Env,
+	userId: string,
+	supervisorInstanceId: string,
+	limit = 50,
+): Promise<LoopRunView[]> {
+	if (!supervisorInstanceId) return [];
+	const res = await env.DB.prepare(
+		"SELECT * FROM agent_loop_runs WHERE user_id = ?1 AND delegated_by = ?2 ORDER BY started_at DESC LIMIT ?3",
+	)
+		.bind(userId, supervisorInstanceId, Math.max(1, Math.min(200, limit)))
 		.all<LoopRunRow>();
 	return (res.results ?? []).map(toLoopRunView);
 }

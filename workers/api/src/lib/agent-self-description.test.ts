@@ -136,6 +136,18 @@ describe("executionAuthorityPrompt — #254, the prompt must not forbid what sta
 		expect(executionAuthorityPrompt(resolveSelfModel(CODER_REPO))).not.toContain("send_to_cli");
 	});
 
+	it("a Lead is told delegating IS acting, and that its runs live on its subordinates (#318)", () => {
+		// It had no executor and no drive tools, so it fell into "you cannot run shell commands…
+		// never claim you fixed a bug" — false for the only thing it exists to do. Combined with a
+		// check_work that found nothing on its own instance, that is what made it retract a true
+		// delegation report.
+		const p = executionAuthorityPrompt(resolveSelfModel(CODER_LEAD));
+		expect(resolveSelfModel(CODER_LEAD).canDelegate).toBe(true);
+		expect(p).not.toMatch(/cannot run shell commands/);
+		expect(p).toContain("delegate_goal");
+		expect(p).toMatch(/never on you/i);
+	});
+
 	it("an agent with NEITHER still gets the strict version", () => {
 		// The verification #254 asks for: an agent that genuinely cannot act must still refuse.
 		const p = executionAuthorityPrompt(resolveSelfModel(REPO_CHAT));

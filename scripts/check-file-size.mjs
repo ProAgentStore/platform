@@ -90,7 +90,11 @@ const PINS = {
 	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
 	// are already in hand) or the prompt costs an extra query per turn. Everything else about
 	// stats lives in `lib/stats-*.ts`.
-	"workers/api/src/agent-think.ts": 887,
+	// +6 more for #318: the recent-work block now also reads the runs this agent DELEGATED, since a
+	// supervisor's runs are never on its own instance and the block therefore never fired for one.
+	// Not split — the change is one `Promise.all` inside the existing selfModel section, and the
+	// rendering it feeds already lives in `lib/work-report.ts`.
+	"workers/api/src/agent-think.ts": 894,
 	"workers/api/src/routes/instances-runtime.ts": 849,
 	"workers/api/src/lib/triggers.ts": 838,
 	"packages/browser-runner/src/coding/headless.ts": 819,

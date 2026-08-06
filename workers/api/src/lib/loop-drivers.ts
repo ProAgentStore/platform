@@ -84,6 +84,10 @@ const chatDriver: LoopDriver = {
 			maxIterations,
 			budgetId: input.budgetId,
 			startedAt: Date.now(),
+			// #318: the run record is the only thing a supervisor can later read back, and its runs
+			// are never on its own instance. Recorded on EVERY driver for the same reason every
+			// driver opens a run row at all — a supervisor must not have to know which one ran.
+			delegatedBy: input.onBehalfOf ?? null,
 		});
 		await input.env.AGENT_LOOP.create({
 			id: runId,
@@ -182,6 +186,7 @@ const codingDriver: LoopDriver = {
 				maxIterations,
 				budgetId: input.budgetId,
 				startedAt: Date.now(),
+				delegatedBy: input.onBehalfOf ?? null,
 			});
 		} catch (e) {
 			await releaseSessionDriver(env, instanceId, userId, session.id, driverId).catch(() => undefined);

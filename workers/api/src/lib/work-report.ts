@@ -68,20 +68,73 @@ export function describeLoopRun(run: LoopRunView, now: number = Date.now()): str
 }
 
 /**
+ * What ELSE counts as this agent's work (#318).
+ *
+ * A supervisor's runs are not on its own instance — `delegate_goal` starts them on the subordinate
+ * — so for a delegator the instance-scoped list is structurally empty and says nothing about what
+ * it has done.
+ */
+export interface WorkCheckContext {
+	/** Runs this instance started on agents it supervises, newest first. */
+	delegated?: readonly LoopRunView[];
+	/**
+	 * Does this instance supervise anyone at all?
+	 *
+	 * Read ONLY in the nothing-to-report case, where it decides what the answer is entitled to
+	 * assert. See {@link describeWorkCheck}.
+	 */
+	supervises?: boolean;
+}
+
+/** One delegated run, named with the agent it was handed to so the supervisor can cite both. */
+function describeDelegatedRun(run: LoopRunView, now: number): string {
+	return `${describeLoopRun(run, now)} · delegated to instance ${run.instanceId}`;
+}
+
+/**
  * The `check_work` tool result.
  *
  * The empty case is a real answer, not an error: "you have not started any work" is exactly what an
  * agent needs to hear before it agrees with a user who thinks it did something. An error would be
  * read as "could not tell", which is the state that produces a guess.
+ *
+ * But there are TWO empty cases and they license different sentences. For an agent that runs its
+ * own work, an empty record IS the whole record, so #254's correction stands unchanged: it was
+ * written for an agent that ran nothing and claimed it had. For a DELEGATOR the same emptiness is
+ * expected — its work lives on its subordinates — and the correction fired on a Lead that had
+ * delegated 90 seconds earlier and reported it truthfully, instructing it to retract a true
+ * statement. Asserting the user was misled is an inference this record cannot support unless it
+ * can see everything the agent could have done, which for a supervisor it cannot.
  */
-export function describeWorkCheck(runs: readonly LoopRunView[], now: number = Date.now()): string {
-	if (!runs.length) {
-		return "You have not started any work on this instance — there are no runs. If you told the user you did something, that was wrong; say so.";
+export function describeWorkCheck(
+	runs: readonly LoopRunView[],
+	now: number = Date.now(),
+	ctx: WorkCheckContext = {},
+): string {
+	const delegated = ctx.delegated ?? [];
+	const sections: string[] = [];
+	if (runs.length) {
+		sections.push(
+			`${runs.length === 1 ? "The run" : `Your ${runs.length} most recent runs`} on this instance, newest first:\n` +
+				runs.map((r) => `- ${describeLoopRun(r, now)}`).join("\n"),
+		);
+	}
+	if (delegated.length) {
+		sections.push(
+			`${delegated.length === 1 ? "One run" : `${delegated.length} runs`} YOU started by delegating to an agent you` +
+				" supervise, newest first. You started these — the work runs on them, and saying you did it is accurate:\n" +
+				delegated.map((r) => `- ${describeDelegatedRun(r, now)}`).join("\n"),
+		);
+	}
+	if (!sections.length) {
+		return ctx.supervises
+			? "No runs on this instance, and none you delegated to the agents you supervise. Your own work would be" +
+					" delegated, so check `check_delegation` and `subordinate_status` before agreeing that nothing happened —" +
+					" and do not tell the user you were wrong on the strength of this answer alone."
+			: "You have not started any work on this instance — there are no runs. If you told the user you did something, that was wrong; say so.";
 	}
 	return (
-		`${runs.length === 1 ? "The run" : `Your ${runs.length} most recent runs`}, newest first:\n` +
-		runs.map((r) => `- ${describeLoopRun(r, now)}`).join("\n") +
-		"\n\nThis is the record of what you actually started. Report it as-is; do not soften or retract it."
+		`${sections.join("\n\n")}\n\nThis is the record of what you actually started. Report it as-is; do not soften or retract it.`
 	);
 }
 
@@ -94,12 +147,26 @@ export function describeWorkCheck(runs: readonly LoopRunView[], now: number = Da
  * the prompt removes the decision.
  *
  * Capped at a few runs — this is orientation, not a log; `check_work` is there for the rest.
+ *
+ * `ctx.delegated` is the same fix as in `describeWorkCheck` and for the stronger reason: the Lead
+ * in #318 DID call `check_work` and still recanted, so a supervisor's delegations belong in the
+ * prompt before the challenge arrives, not only in a tool it has to decide to reach for.
  */
-export function recentWorkPrompt(runs: readonly LoopRunView[], now: number = Date.now()): string {
-	if (!runs.length) return "";
+export function recentWorkPrompt(
+	runs: readonly LoopRunView[],
+	now: number = Date.now(),
+	ctx: WorkCheckContext = {},
+): string {
+	const delegated = ctx.delegated ?? [];
+	if (!runs.length && !delegated.length) return "";
+	const lines = [
+		...runs.map((r) => `- ${describeLoopRun(r, now)}`),
+		...delegated.map((r) => `- ${describeDelegatedRun(r, now)}`),
+	];
 	return (
-		"\n\n## Your recent work\nRuns YOU started with `start_work` (newest first). This is fact, from the run record —" +
-		" if the user asks whether you did something, answer from here, and call `check_work` for more:\n" +
-		runs.map((r) => `- ${describeLoopRun(r, now)}`).join("\n")
+		"\n\n## Your recent work\nRuns YOU started — with `start_work`, or by delegating to an agent you supervise" +
+		" (newest first). This is fact, from the run record: if the user asks whether you did something, answer from" +
+		" here, and call `check_work` for more. Never deny one of these because you do not remember it:\n" +
+		lines.join("\n")
 	);
 }

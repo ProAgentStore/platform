@@ -12,7 +12,8 @@ import type { JsonSchema, RegistryTool, RegistryToolCtx, RegistryToolResult, Too
 import { hasConsent } from "./connector-consent.js";
 import { STEP_TOOLS } from "./steps.js";
 import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
-import { getLoopRun, listLoopRuns } from "./agent-loop-store.js";
+import { getLoopRun, listDelegatedRuns, listLoopRuns, type LoopRunView } from "./agent-loop-store.js";
+import { subordinateIdsOf } from "./supervision.js";
 import { describeWorkCheck } from "./work-report.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { openBudget } from "./delegation-budget-store.js";
@@ -78,12 +79,12 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 	{
 		name: "check_work",
 		description:
-			"Look up work YOU started with start_work: its status, how far it got, and how it ended. Call this whenever the user asks whether something actually happened, or challenges a report you gave — answer from this record, never from memory and never by apologising. With no runId it returns your most recent runs.",
+			"Look up work YOU started — with start_work, or by handing a goal to an agent you supervise: its status, how far it got, and how it ended. Call this whenever the user asks whether something actually happened, or challenges a report you gave — answer from this record, never from memory and never by apologising. With no runId it returns your most recent runs, including the ones you delegated.",
 		tier: "base",
 		jsonSchema: {
 			type: "object",
 			properties: {
-				runId: { type: "string", description: "A specific run id (as returned by start_work). Omit for your most recent runs." },
+				runId: { type: "string", description: "A specific run id (as returned by start_work or delegate_goal). Omit for your most recent runs." },
 			},
 			required: [],
 		},
@@ -95,13 +96,31 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				// Scoped to THIS instance, not just the owner: `getLoopRun` is user-scoped, so
 				// without this an agent could read another of the owner's agents' runs and report
 				// it as its own — a fresh way to describe work it did not do.
-				if (!run || run.instanceId !== ctx.instanceId) {
+				//
+				// `delegatedBy` is the OTHER way a run can be yours (#318): a supervisor's runs are
+				// never on its own instance, so instance identity alone made a Lead disown the run
+				// `delegate_goal` had handed back to it 90 seconds earlier. Still an ownership test,
+				// not a widening — the column names the one instance that asked for the run.
+				const own = !!run && run.instanceId === ctx.instanceId;
+				if (!run || !(own || run.delegatedBy === ctx.instanceId)) {
 					return { content: `No run ${runId} belongs to you. Do not describe it as if it happened.`, success: false };
 				}
-				return { content: describeWorkCheck([run]), success: true };
+				return { content: describeWorkCheck(own ? [run] : [], Date.now(), own ? {} : { delegated: [run] }), success: true };
 			}
-			const runs = await listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 5);
-			return { content: describeWorkCheck(runs), success: true };
+			const [runs, delegatedRuns] = await Promise.all([
+				listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 5),
+				// Tolerated rather than required: an API deployed ahead of migration 0090 has no
+				// `delegated_by` column, and a supervisor losing its delegations is a far better
+				// failure than every agent losing `check_work` outright.
+				listDelegatedRuns(ctx.env, ctx.userId, ctx.instanceId, 5).catch(() => [] as LoopRunView[]),
+			]);
+			// Asked ONLY when there is nothing to report — the one branch whose wording turns on it,
+			// and it costs a graph read. A supervisor with an empty record must not be told it misled
+			// the user: for a delegator, emptiness here is the normal state.
+			const supervises =
+				runs.length + delegatedRuns.length === 0 &&
+				(await subordinateIdsOf(ctx.env, ctx.userId, ctx.instanceId).catch(() => [])).length > 0;
+			return { content: describeWorkCheck(runs, Date.now(), { delegated: delegatedRuns, supervises }), success: true };
 		},
 	},
 	{

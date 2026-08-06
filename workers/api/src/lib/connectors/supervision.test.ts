@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { MAX_ACTS_PER_SUBORDINATE, SUPERVISION_TOOLS } from "./supervision.js";
+import { MAX_ACTS_PER_SUBORDINATE, SUPERVISION_TOOLS, resolveSubordinate, type SubordinateRow } from "./supervision.js";
 import { stripCommentsAndLiterals } from "../source-guard.js";
 import type { Env } from "../../types.js";
 
@@ -153,6 +153,48 @@ describe("list_subordinates", () => {
 	});
 });
 
+describe("resolveSubordinate — a name is what the model actually holds (#320)", () => {
+	const row = (over: Partial<SubordinateRow>): SubordinateRow => ({
+		instanceId: "id-1", name: "FAS platform", subscription: "active", columns: [], requiresRunner: false, ...over,
+	});
+	const roster = [row({}), row({ instanceId: "id-2", name: "FWS platform" })];
+
+	it("resolves the instance id, which must keep working", () => {
+		const r = resolveSubordinate(roster, "id-2");
+		expect(r.ok && r.row.name).toBe("FWS platform");
+	});
+
+	it("resolves an exact name, case-insensitively", () => {
+		const r = resolveSubordinate(roster, "fas platform");
+		expect(r.ok && r.row.instanceId).toBe("id-1");
+	});
+
+	it("resolves a unique prefix or fragment — 'FAS' is how a user says it", () => {
+		expect(resolveSubordinate(roster, "FAS").ok).toBe(true);
+		expect(resolveSubordinate(roster, "fws").ok).toBe(true);
+	});
+
+	it("REFUSES an ambiguous name instead of picking one", () => {
+		// Guessing here sends a goal to the wrong repository, which is precisely the failure a
+		// supervisor cannot see. The refusal names the candidates so the next call can be right.
+		const r = resolveSubordinate(roster, "platform");
+		expect(r.ok).toBe(false);
+		expect(!r.ok && r.message).toMatch(/FAS platform and FWS platform/);
+	});
+
+	it("prefers an EXACT name over a longer one it is a prefix of", () => {
+		// Otherwise an agent literally called "FAS" becomes unreachable the moment a sibling is
+		// named "FAS platform" — the fuzzy arm would report both and refuse forever.
+		const two = [row({ instanceId: "a", name: "FAS" }), row({ instanceId: "b", name: "FAS platform" })];
+		expect(resolveSubordinate(two, "FAS")).toMatchObject({ ok: true, row: { instanceId: "a" } });
+	});
+
+	it("lists the roster in a refusal, so the model does not need a second call to recover", () => {
+		const r = resolveSubordinate(roster, "PAS");
+		expect(!r.ok && r.message).toContain("FAS platform (id-1)");
+	});
+});
+
 describe("tool shape", () => {
 	it("gates delegate_goal as a write — it starts real work and spends real money", () => {
 		expect(tool("delegate_goal").scope).toBe("write");
@@ -162,6 +204,14 @@ describe("tool shape", () => {
 
 	it("belongs to the supervision connector so registry gating applies", () => {
 		for (const t of SUPERVISION_TOOLS) expect(t.connector).toBe("supervision");
+	});
+
+	it("delegate_goal refuses an agent it cannot resolve, before spending anything", async () => {
+		// Resolution happens against the ROSTER, so widening how a subordinate may be named cannot
+		// widen who is reachable. `delegateToInstance` re-checks the graph on the resolved id too.
+		const out = await tool("delegate_goal").handler(ctx(buildEnv()) as never, { instanceId: "not-mine", objective: "x" });
+		expect(out.success).toBe(false);
+		expect(out.content).toMatch(/do not supervise/i);
 	});
 });
 
@@ -316,8 +366,46 @@ describe("subordinate_status — the observe verb", () => {
 		// instead of trusting the tool description to discourage a model from naming another
 		// owner's agent. A read is not exempt: it would leak what that agent is working on.
 		const out = await t.handler(ctx(buildEnv()) as never, { instanceId: "someone-elses" });
-		expect(out.content).toMatch(/do not supervise that agent/i);
+		expect(out.content).toMatch(/do not supervise/i);
+		// `success: false`, not true (#320). A refusal reported as success put a green tick on four
+		// consecutive no-ops in one conversation — each followed by a retry — so a reader scanning
+		// the tool log saw eight successful status calls where there had been four.
+		expect(out.success).toBe(false);
+	});
+
+	it("names an agent by NAME, so the model can use the words the user used (#320)", async () => {
+		// The measured cost: every one of four turns went subordinate_status("FAS platform") →
+		// refused → list_subordinates → subordinate_status("<uuid>"). The retry was the DOCUMENTED
+		// path (the refusal itself says to read the roster), so it was not a mistake the model
+		// could learn its way out of. The user says "Focus on FAS platform"; a name is all it has.
+		const env = buildEnv({ instances: [{ id: "sub", status: "active", config: JSON.stringify({ displayName: "FAS platform" }), agent_name: "Repo Coder" }] });
+		const out = await t.handler(ctx(env) as never, { instanceId: "FAS platform" });
 		expect(out.success).toBe(true);
+		expect(JSON.parse(out.content).subordinates).toHaveLength(1);
+	});
+
+	it("says which agent it resolved a name to, rather than silently redefining the question", async () => {
+		const env = buildEnv({ instances: [{ id: "sub", status: "active", config: JSON.stringify({ displayName: "FAS platform" }), agent_name: "Repo Coder" }] });
+		const out = JSON.parse((await t.handler(ctx(env) as never, { instanceId: "fas" })).content);
+		expect(out.resolved).toEqual({ asked: "fas", instanceId: "sub", name: "FAS platform" });
+	});
+
+	it("carries the repo's GitHub owner/name, not only its display label (#320)", async () => {
+		// Asked for open tickets, the Lead passed `repo.name` — "fws" — to github_list_issues,
+		// got "No github access", and asked the human for a path `coding_repos.github_repo`
+		// already held. Same class as #259: a fact the platform has, missing from the picture.
+		const env = buildEnv({
+			instances: codingSubordinate,
+			runtime: { connected: true, node: "macbook" },
+			repos: [{ id: "repo_1", instance_id: "sub", user_id: "u1", name: "fws/platform", github_repo: "freewebstore-online/platform",
+			          branch: "", workdir: "/dev/fws", clone_status: "ready", default_client: "claude", created_at: "", updated_at: "" }],
+			gitStatus: "## main\n",
+		});
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].repo.githubRepo).toBe("freewebstore-online/platform");
+		// And the legend has to SAY which of the two is a GitHub path — the description is a long
+		// way away by the time the model is reading this JSON (the #259 precedent).
+		expect(out.legend).toMatch(/githubRepo/);
 	});
 
 	it("says so plainly when there is nobody to observe", async () => {

@@ -46,7 +46,7 @@ import type { RegistryToolCtx, ToolDef } from "./types.js";
 type SupervisionCtx = RegistryToolCtx;
 
 /** Names of the instances a supervisor may drive, with their display names for the model. */
-interface SubordinateRow {
+export interface SubordinateRow {
 	instanceId: string;
 	name: string;
 	/** `active | paused | canceled` — the SUBSCRIPTION lifecycle, not work state. */
@@ -57,15 +57,55 @@ interface SubordinateRow {
 	requiresRunner: boolean;
 }
 
-async function subordinateSummaries(ctx: SupervisionCtx, only?: string): Promise<SubordinateRow[]> {
+/**
+ * Resolve however the model named a subordinate against the roster (#320).
+ *
+ * The tool took an instance id and the model has a NAME. Live, in four consecutive turns, every
+ * one went `subordinate_status("FAS platform")` → "you do not supervise that agent" →
+ * `list_subordinates` → `subordinate_status("964594b6…")`. The retry was the documented path — the
+ * refusal itself says to go read the roster — so the round trip was not a mistake the model could
+ * learn out of. It said "Focus on FAS platform"; that is all it ever has.
+ *
+ * PURE, and it resolves only WITHIN rows that are already the caller's subordinates, so widening
+ * how a subordinate may be named cannot widen WHICH agents are reachable: the graph intersection
+ * happened before this ran, and `delegate_goal` re-checks membership inside `delegateToInstance`
+ * regardless.
+ *
+ * Ambiguity is refused, not guessed. Picking one of two agents whose names both start with "FAS"
+ * would send a goal to the wrong repository, which is exactly the failure a supervisor cannot see.
+ */
+export function resolveSubordinate(
+	rows: readonly SubordinateRow[],
+	query: string,
+): { ok: true; row: SubordinateRow } | { ok: false; message: string } {
+	const q = query.trim();
+	const roster = rows.map((r) => `${r.name} (${r.instanceId})`).join(", ");
+	const nope = (why: string) => ({ ok: false as const, message: `${why} You supervise: ${roster || "nobody"}.` });
+	if (!q) return nope("No agent was named.");
+	const norm = (s: string) => s.trim().toLowerCase();
+	const key = norm(q);
+	// Order matters: an exact match on either identifier wins outright, so a name that happens to
+	// be a prefix of another agent's name is still reachable by typing it in full.
+	const exact = rows.filter((r) => r.instanceId === q || norm(r.name) === key);
+	if (exact.length === 1) return { ok: true, row: exact[0] };
+	if (exact.length > 1) return nope(`"${q}" matches more than one of your agents — use the instance id.`);
+	const fuzzy = rows.filter((r) => norm(r.name).startsWith(key) || norm(r.name).includes(key) || r.instanceId.startsWith(q));
+	if (fuzzy.length === 1) return { ok: true, row: fuzzy[0] };
+	if (fuzzy.length > 1) {
+		return nope(`"${q}" matches ${fuzzy.map((r) => r.name).join(" and ")} — name one exactly, or use its instance id.`);
+	}
+	return nope(`You do not supervise "${q}".`);
+}
+
+async function subordinateSummaries(ctx: SupervisionCtx): Promise<SubordinateRow[]> {
 	const userId = ctx.userId ?? "";
 	const supervisorId = ctx.instanceId ?? "";
 	if (!userId || !supervisorId) return [];
-	let ids = subordinatesOf(await loadGraph(ctx.env, userId), supervisorId);
-	// A named instance is INTERSECTED with the graph, never trusted — same posture as
-	// delegate_goal, which re-checks membership inside delegateToInstance rather than relying on
-	// the tool description to discourage a model from naming someone else's agent.
-	if (only) ids = ids.filter((id) => id === only);
+	// The graph is the ONLY source of who may be read or driven — same posture as delegate_goal,
+	// which re-checks membership inside delegateToInstance rather than relying on the tool
+	// description to discourage a model from naming someone else's agent. Whatever the caller
+	// passed is matched against these rows afterwards, never queried directly.
+	const ids = subordinatesOf(await loadGraph(ctx.env, userId), supervisorId);
 	if (!ids.length) return [];
 	const placeholders = ids.map((_, i) => `?${i + 2}`).join(",");
 	// `agent_instances` has NO name column — a per-instance display name lives in
@@ -118,12 +158,23 @@ async function observeSubordinates(
 	only?: string,
 	limit?: number,
 ): Promise<{ content: string; success: boolean }> {
-	const subs = await subordinateSummaries(ctx, only);
-	if (!subs.length) {
-		return {
-			content: only ? "You do not supervise that agent. Call list_subordinates to see who you may address." : NO_SUBORDINATES,
-			success: true,
-		};
+	const roster = await subordinateSummaries(ctx);
+	// An empty ROSTER is a true answer to "what is everyone doing" — nobody is doing anything —
+	// so it stays a success. A named agent that is not yours is a REFUSAL: nothing was looked up,
+	// and reporting `success: true` put a green tick on four consecutive no-ops in one
+	// conversation, each followed by a retry, so the tool log showed eight successful status calls
+	// where there had been four (#320).
+	if (!roster.length) return { content: NO_SUBORDINATES, success: true };
+	let subs = roster;
+	let resolved: { asked: string; instanceId: string; name: string } | undefined;
+	if (only) {
+		const hit = resolveSubordinate(roster, only);
+		if (!hit.ok) return { content: hit.message, success: false };
+		subs = [hit.row];
+		// Echoed back because the model asked about a NAME and everything below is keyed by id.
+		// Without it the answer silently redefines the question, which is how a supervisor ends up
+		// reporting on the wrong agent with complete confidence.
+		resolved = { asked: only, instanceId: hit.row.instanceId, name: hit.row.name };
 	}
 	const userId = ctx.userId ?? "";
 	const ids = subs.map((s) => s.instanceId);
@@ -201,12 +252,17 @@ async function observeSubordinates(
 		content: JSON.stringify(
 			{
 				asOf: new Date().toISOString(),
+				// What the tool decided the caller meant, when they named an agent rather than an id.
+				...(resolved ? { resolved } : {}),
 				// Stated in the payload, not only in the tool description, because the description
 				// is far away by the time the model reads this JSON — and the failure it prevents
 				// is precisely a model reasoning from an empty board to "no runner" (#259).
 				legend:
 					"`connectivity.canWork` is the ONLY field that says whether an agent can be given work now. Empty `work`/`runs` means IDLE — which is normal and ready, not offline. " +
 					"`repo` is the CURRENT state of the checkout a goal would run in — the branch it is parked on and any uncommitted work a previous run left. It is context, not a gate: a run starts from wherever the repo was left, and nothing resets or discards it. Relay `repo.note` to the human when it is present, and never instruct an agent to clear a working tree you did not put there. " +
+					// #320: the Lead passed "fws" to github_list_issues because `repo.name` was all it
+					// had, got "No github access", and asked the HUMAN for a path the platform stores.
+					"`repo.githubRepo` is that repository's `owner/name` on GitHub and is the ONLY value to pass to a GitHub tool. `repo.name` is a display label chosen by the owner — it may look like a path and still not be one. When `githubRepo` is absent the repo is not linked to GitHub; say that rather than guessing an owner or asking the human to supply one. " +
 					"`acts` is what an agent actually DID — a pull request opened or merged, a push, a force-push, a delete, a deploy — with the literal command as evidence. Anything with `irreversible: true` changed something that cannot simply be undone, so REPORT IT to the human unprompted: an outcome of 'done' says only that the agent believes it finished, never what it changed on the way. " +
 					"An act with `ok: false` FAILED and one with `ok: null` was not observed to succeed — neither is a completed action and neither may be described as one. " +
 					"ABSENT `acts` means NOT OBSERVED, never 'it did nothing': only some engines report acts at all. Never read a missing `acts` as an all-clear or tell the human the agent changed nothing.",
@@ -270,11 +326,14 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 				"`acts` is what each agent actually DID — pull requests opened and MERGED, pushes, force-pushes, " +
 				"deletes, deploys — with the literal command as evidence. Read it whenever you report on a " +
 				"subordinate, and volunteer anything marked `irreversible` without being asked: a finished run " +
-				"says it met its objective, never what it changed to get there.",
+				"says it met its objective, never what it changed to get there. " +
+				"Name the agent however you have it — \"FAS platform\" or its instance id both work, and the answer " +
+				"says which one it resolved to. `repo.githubRepo` is that agent's repository on GitHub, and the only " +
+				"value a GitHub tool will accept; `repo.name` is a display label, not a path.",
 		jsonSchema: {
 			type: "object",
 			properties: {
-				instanceId: { type: "string", description: "Only this subordinate. Omit for all of them." },
+				instanceId: { type: "string", description: "Only this subordinate — its NAME (\"FAS platform\") or its instance id. Omit for all of them." },
 				limit: { type: "number", description: "Recent items per agent (1-25, default 8)." },
 			},
 		},
@@ -297,19 +356,25 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		jsonSchema: {
 			type: "object",
 			properties: {
-				instanceId: { type: "string", description: "The subordinate's instance id, from list_subordinates." },
+				instanceId: { type: "string", description: "Which subordinate — its NAME (\"FAS platform\") or its instance id." },
 				objective: { type: "string", description: "The outcome you want, in plain language." },
 				maxIterations: { type: "number", description: "Optional cap on how many steps it may take." },
 			},
 			required: ["instanceId", "objective"],
 		},
 		handler: async (ctx, input) => {
-			// The graph is re-checked inside delegateToInstance — a model naming an instance it
-			// does not supervise is refused there, not merely discouraged by the description.
+			// Resolved from the roster first, so a Lead can delegate to "FAS platform" the way the
+			// user said it (#320). This does NOT widen who is reachable: the roster it matches
+			// against is the graph, and delegateToInstance re-checks membership on the resolved id
+			// anyway — a model naming an instance it does not supervise is refused there, not
+			// merely discouraged by the description.
+			const asked = String(input.instanceId ?? "");
+			const target = resolveSubordinate(await subordinateSummaries(ctx), asked);
+			if (!target.ok) return { content: target.message, success: false };
 			const res = await delegateToInstance(ctx.env, {
 				userId: ctx.userId ?? "",
 				supervisorInstanceId: ctx.instanceId ?? "",
-				subordinateInstanceId: String(input.instanceId ?? ""),
+				subordinateInstanceId: target.row.instanceId,
 				objective: String(input.objective ?? ""),
 				maxIterations: typeof input.maxIterations === "number" ? input.maxIterations : undefined,
 				// Correlate the child run with whatever run asked for it, so a multi-level
@@ -322,7 +387,9 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			});
 			if (!res.ok) return { content: res.error, success: false };
 			return {
-				content: `Delegated. Run ${res.runId} started at depth ${res.depth}. Check it with check_delegation.`,
+				// Names WHO it went to, not only the run id — the caller may have said "FAS platform"
+				// and must be able to see that is what got the goal.
+				content: `Delegated to ${target.row.name} (${target.row.instanceId}). Run ${res.runId} started at depth ${res.depth}. Check it with check_delegation, or check_work.`,
 				success: true,
 			};
 		},
@@ -338,7 +405,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			type: "object",
 			properties: {
 				runId: { type: "string", description: "A run id from delegate_goal. Omit to list recent runs." },
-				instanceId: { type: "string", description: "Subordinate to list runs for, when omitting runId." },
+				instanceId: { type: "string", description: "Subordinate to list runs for, when omitting runId — its name or its instance id." },
 			},
 		},
 		handler: async (ctx, input) => {

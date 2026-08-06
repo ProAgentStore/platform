@@ -23,8 +23,32 @@ vi.mock("./delegate-instance.js", () => ({
 
 const tool = getRegistryTool("delegate_goal")!;
 
+/**
+ * Enough D1 for the roster read `delegate_goal` now does before delegating (#320): the target may
+ * be named ("FAS platform") instead of identified, and it is resolved against the graph — which is
+ * also what keeps a looser spelling from widening WHO is reachable.
+ */
+const env = {
+	DB: {
+		prepare(sql: string) {
+			return {
+				bind() {
+					return {
+						async all() {
+							if (sql.includes("agent_supervision")) {
+								return { results: [{ supervisor_instance_id: "sup", subordinate_instance_id: "sub" }] };
+							}
+							return { results: [{ id: "sub", status: "active", config: null, agent_name: "Repo Coder" }] };
+						},
+					};
+				},
+			};
+		},
+	},
+} as never;
+
 async function delegateWith(ctx: Partial<RegistryToolCtx>) {
-	await tool.handler({ env: {} as never, userId: "u1", instanceId: "sup", ...ctx } as RegistryToolCtx, {
+	await tool.handler({ env, userId: "u1", instanceId: "sup", ...ctx } as RegistryToolCtx, {
 		instanceId: "sub",
 		objective: "get the tests green",
 	});
