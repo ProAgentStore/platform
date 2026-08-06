@@ -25,6 +25,7 @@ import {
 	markDelivered,
 	parseJsonColumn,
 	MAX_ATTEMPTS,
+	type DeliveryClaim,
 } from "./connection-deliveries.js";
 
 /** Actions a connection may deliver. `sync_connector` is deliberately excluded — a connection
@@ -228,7 +229,7 @@ export async function deliverEvent(
 				filtered++;
 				continue;
 			}
-			const deliveryId = await enqueueDelivery(env, {
+			const claim = await enqueueDelivery(env, {
 				connectionId: conn.id,
 				userId: conn.user_id,
 				sourceInstanceId,
@@ -240,14 +241,14 @@ export async function deliverEvent(
 				traceId: opts.traceId ?? null,
 				claimedInline: true, // attempted immediately below — keep the cron off it meanwhile
 			});
-			if (!deliveryId) {
+			if (!claim) {
 				// The idempotency key collided: this exact emission is already recorded.
 				duplicate++;
 				continue;
 			}
 			queued++;
 			const outcome = await attemptDelivery(env, {
-				deliveryId,
+				claim,
 				attempts: 0,
 				connectionId: conn.id,
 				userId: conn.user_id,
@@ -292,7 +293,9 @@ export function matchesConnectionFilter(config: Record<string, unknown>, payload
 }
 
 interface AttemptInput {
-	deliveryId: string;
+	/** This attempt's claim on the outbox row — presented on the terminal write so a slow
+	 *  attempt can't overwrite an outcome another attempt already recorded (#239). */
+	claim: DeliveryClaim;
 	attempts: number;
 	connectionId: string;
 	userId: string;
@@ -312,7 +315,7 @@ interface AttemptInput {
  * Run one delivery's action and record the outcome on its outbox row. Never throws — the
  * emitter must not fail because a consumer did, and the sweep must not stop on one bad row.
  */
-export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"delivered" | "retrying" | "dead"> {
+export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"delivered" | "retrying" | "dead" | "stale"> {
 	try {
 		await executeTriggerAction(
 			env,
@@ -336,11 +339,26 @@ export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"d
 			"webhook",
 			input.payload,
 		);
-		await markDelivered(env, input.deliveryId);
+		// A stale claim means another attempt already settled this row while this one was in
+		// flight. Report it rather than writing over that outcome — and log it, because a
+		// delivery slow enough to outlive a 5-minute hold is worth seeing.
+		if (!(await markDelivered(env, input.claim))) {
+			await logEvent(env, {
+				source: input.source === "trigger" ? "trigger" : "connection",
+				event: "connection.delivery_stale",
+				level: "warn",
+				message: "attempt succeeded but its claim had lapsed — another attempt already settled this delivery; outcome not overwritten",
+				userId: input.userId,
+				instanceId: input.sourceInstanceId,
+				traceId: input.traceId ?? undefined,
+				context: { deliveryId: input.claim.id, connectionId: input.connectionId, eventType: input.eventType, action: input.action },
+			}).catch(() => undefined);
+			return "stale";
+		}
 		return "delivered";
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		const outcome = await markAttemptFailed(env, input.deliveryId, input.attempts, message);
+		const outcome = await markAttemptFailed(env, input.claim, input.attempts, message);
 		const kind = input.source === "trigger" ? "trigger" : "connection";
 		await logEvent(env, {
 			// Label by the producing edge so a human reading the trace can tell a stuck trigger
@@ -353,7 +371,7 @@ export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"d
 			instanceId: input.sourceInstanceId,
 			traceId: input.traceId ?? undefined,
 			context: {
-				deliveryId: input.deliveryId,
+				deliveryId: input.claim.id,
 				connectionId: input.connectionId,
 				eventType: input.eventType,
 				action: input.action,
@@ -370,16 +388,19 @@ export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"d
  * runDueTriggers. This is what turns a transient consumer failure into a delay instead of a
  * silently dropped lead.
  */
-export async function runDueDeliveries(env: Env, now = new Date(), limit = 25): Promise<{ checked: number; delivered: number; retrying: number; dead: number }> {
+export async function runDueDeliveries(env: Env, now = new Date(), limit = 25): Promise<{ checked: number; delivered: number; retrying: number; dead: number; stale: number }> {
 	const due = await dueDeliveries(env, now, limit);
 	let delivered = 0;
 	let retrying = 0;
 	let dead = 0;
+	let stale = 0;
 	for (const row of due) {
 		// Claim before attempting, or an overlapping tick (or the enqueuer's own inline attempt)
 		// executes the same delivery a second time — a `run_pipeline` consumer would build and
-		// bill twice. See claimDelivery.
-		if (!(await claimDelivery(env, row, now))) continue;
+		// bill twice. See claimDelivery. The claim is carried into the attempt so its terminal
+		// write can't land on a row someone else has since settled (#239).
+		const claim = await claimDelivery(env, row, now);
+		if (!claim) continue;
 		let payload: unknown = null;
 		try {
 			payload = JSON.parse(row.payload);
@@ -387,7 +408,7 @@ export async function runDueDeliveries(env: Env, now = new Date(), limit = 25): 
 			/* a payload we can't parse is delivered as null rather than wedging the sweep */
 		}
 		const outcome = await attemptDelivery(env, {
-			deliveryId: row.id,
+			claim,
 			attempts: row.attempts,
 			connectionId: row.connection_id,
 			userId: row.user_id,
@@ -402,7 +423,8 @@ export async function runDueDeliveries(env: Env, now = new Date(), limit = 25): 
 		});
 		if (outcome === "delivered") delivered++;
 		else if (outcome === "dead") dead++;
+		else if (outcome === "stale") stale++;
 		else retrying++;
 	}
-	return { checked: due.length, delivered, retrying, dead };
+	return { checked: due.length, delivered, retrying, dead, stale };
 }

@@ -147,6 +147,24 @@ describe("flatten", () => {
 		const r = await flattenT.handler(baseCtx, { items: perCell, path: "data" });
 		expect(parse(r.content).items.map((x: any) => x.place_id)).toEqual(["a", "b", "c"]);
 	});
+
+	// ── #243, milder sibling of slice.limit ───────────────────────────────────
+	// `Number(depth) || 0` turned an unreadable depth into 0, so the flatten silently did
+	// NOTHING and passed the array-of-arrays it exists to collapse straight to the next step —
+	// which then mapped/filtered over arrays instead of records, successfully.
+	it("FAILS on an unreadable depth instead of silently no-opping the flatten", async () => {
+		for (const depth of ["", "deep", false]) {
+			const r = await flattenT.handler(baseCtx, { items: [[1], [2]], depth });
+			expect(r.success, `depth ${JSON.stringify(depth)} must not be treated as 0`).toBe(false);
+			expect(r.content).toContain('"depth"');
+		}
+	});
+
+	it("keeps the documented default of 1 when depth is absent, and honours an explicit 0", async () => {
+		expect(parse((await flattenT.handler(baseCtx, { items: [[1], [2]] })).content).items).toEqual([1, 2]);
+		expect(parse((await flattenT.handler(baseCtx, { items: [[1], [2]], depth: 0 })).content).items).toEqual([[1], [2]]);
+		expect(parse((await flattenT.handler(baseCtx, { items: [[[1]]], depth: "2" })).content).items).toEqual([1]);
+	});
 });
 
 // ── 3. dedupe_upsert ─────────────────────────────────────────────────────────────
@@ -560,6 +578,45 @@ describe("slice", () => {
 		expect(parse((await sliceT.handler(baseCtx, { items, limit: 99 })).content).count).toBe(5);
 		expect(parse((await sliceT.handler(baseCtx, { items: [], limit: 3 })).content).count).toBe(0);
 		expect(parse((await sliceT.handler(baseCtx, { items, limit: 0 })).content).count).toBe(0);
+	});
+
+	// ── #243 ──────────────────────────────────────────────────────────────────
+	// `Number(x) || 0` mapped "", "abc" and false to 0, and 0 means KEEP NOTHING — while an
+	// ABSENT limit keeps everything. So a blank `$param` (a settings or trigger field left
+	// empty) emptied the list mid-chain, every downstream step succeeded over nothing, and the
+	// run COMPLETED reporting "0 leads" — indistinguishable from "nothing matched". Nobody
+	// debugs a successful run that found nothing.
+	//
+	// Each case below returned `{count: 0, success: true}` before the fix.
+	it("FAILS on an unreadable limit instead of silently keeping zero records", async () => {
+		for (const limit of ["", "  ", "fifty", false, [], {}]) {
+			const r = await sliceT.handler(baseCtx, { items, limit });
+			expect(r.success, `limit ${JSON.stringify(limit)} must not be treated as 0`).toBe(false);
+			expect(r.content).toContain('"limit"');
+		}
+	});
+
+	it("says what to do about it — the reference feeding the field is the actual fault", async () => {
+		const r = await sliceT.handler(baseCtx, { items, limit: "" });
+		expect(r.content).toContain("keep ZERO records");
+		expect(r.content).toContain("leave it unset to keep all");
+		expect(r.content).toContain("$param");
+	});
+
+	it("fails on an unreadable offset too, rather than quietly starting from the top", async () => {
+		const r = await sliceT.handler(baseCtx, { items, offset: "abc", limit: 2 });
+		expect(r.success).toBe(false);
+		expect(r.content).toContain('"offset"');
+	});
+
+	it("still accepts every legitimate way to say a number", async () => {
+		// A numeric string is the normal shape of a $param off a settings field.
+		expect(parse((await sliceT.handler(baseCtx, { items, limit: "2" })).content).count).toBe(2);
+		expect(parse((await sliceT.handler(baseCtx, { items, limit: 2, offset: "1" })).content).items[0].n).toBe(2);
+		// An explicit 0 is a real request for zero records and must keep working.
+		expect((await sliceT.handler(baseCtx, { items, limit: 0 })).success).toBe(true);
+		// Absent means "all" — a blank param must NOT reach this branch, which is the bug.
+		expect(parse((await sliceT.handler(baseCtx, { items, limit: null })).content).count).toBe(5);
 	});
 });
 

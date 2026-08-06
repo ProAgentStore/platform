@@ -153,6 +153,94 @@ export function attachAudit(records: unknown[], trail: AuditEntry[], collection:
 	return out;
 }
 
+/** One reference found inside a step's input tree. */
+export interface PipelineReference {
+	kind: "ref" | "param";
+	/** The reference as authored, e.g. "geo.lat" or "item.lng". */
+	name: string;
+	/** The first dotted segment — the only part knowable before the run. */
+	root: string;
+}
+
+/**
+ * Every `$ref` / `$param` in a value tree, in document order.
+ *
+ * Mirrors `resolveInputValue`'s dispatch EXACTLY (including `$param` winning over `$ref` on an
+ * object carrying both), so what this walk sees is what the runner will actually resolve. Any
+ * other object is a literal and is recursed into, which is how a reference nested inside an
+ * `args`/`body`/`params` object is found.
+ */
+export function collectReferences(value: unknown): PipelineReference[] {
+	const out: PipelineReference[] = [];
+	const walk = (v: unknown): void => {
+		if (v === null || typeof v !== "object") return;
+		if (Array.isArray(v)) {
+			for (const el of v) walk(el);
+			return;
+		}
+		const obj = v as Record<string, unknown>;
+		if (typeof obj.$param === "string") {
+			out.push({ kind: "param", name: obj.$param, root: obj.$param.split(".")[0] });
+			return;
+		}
+		if (typeof obj.$ref === "string") {
+			out.push({ kind: "ref", name: obj.$ref, root: obj.$ref.split(".")[0] });
+			return;
+		}
+		for (const nested of Object.values(obj)) walk(nested);
+	};
+	walk(value);
+	return out;
+}
+
+/**
+ * Static reference check for ONE step (issue #244) — the cheap half of "did the author mean
+ * this?".
+ *
+ * `readPath` returns `undefined` the instant a segment is missing, and handlers treat absent as
+ * *default* rather than error (`asArray(undefined)` → `[]`, `Number(undefined) || 0` → `0`). So a
+ * typo'd bind, a forward reference to a LATER step's output, or an undeclared param all produce a
+ * pipeline where every step succeeds, the run completes, and the data is empty or wrong — with no
+ * failed step and no error row to notice. Nobody debugs a successful run.
+ *
+ * `knownBinds` is deliberately "the binds seen SO FAR", which is precisely the set of outputs that
+ * will exist when this step runs — so typos and ordering mistakes are one check.
+ *
+ * Only the ROOT segment is checkable: a `$ref` into a step's output SHAPE isn't knowable ahead of
+ * time. The root is where typos and ordering mistakes live.
+ *
+ * @param declaredParams the def's declared param names, or null to skip the param check (a def
+ *   that declares none is not asserting a complete set — legacy/ad-hoc defs stay valid).
+ */
+export function stepReferenceError(
+	step: PipelineStep,
+	index: number,
+	knownBinds: ReadonlySet<string>,
+	declaredParams: ReadonlySet<string> | null,
+): string | null {
+	// `forEach` resolves against the same scope as the inputs, so it is checked identically.
+	const refs = [...collectReferences(step.inputs ?? {}), ...collectReferences(step.forEach ?? null)];
+	for (const r of refs) {
+		if (r.kind === "ref") {
+			if (!knownBinds.has(r.root)) {
+				const known = [...knownBinds];
+				return `Step ${index}: $ref "${r.name}" reads "${r.root}", which no earlier step binds${
+					known.length ? ` (available: ${known.join(", ")})` : " (it is the first step — nothing is bound yet)"
+				}. A $ref to a later step, or to a misspelt bind, resolves to undefined and the run completes on missing data.`;
+			}
+			continue;
+		}
+		// `item` / `item.<path>` inside a forEach body is scope-provided by the fan-out, not a
+		// run param — resolveInputValue reads it off the current item.
+		if (step.forEach !== undefined && (r.root === "item" || r.name === "item")) continue;
+		if (declaredParams && !declaredParams.has(r.root)) {
+			const known = [...declaredParams];
+			return `Step ${index}: $param "${r.name}" is not declared in the pipeline's "params" (declared: ${known.join(", ") || "none"}). An undeclared param resolves to undefined and the run completes on missing data — declare it, or fix the name.`;
+		}
+	}
+	return null;
+}
+
 /** Validate a candidate pipeline definition. Returns an error string, or null if valid.
  *  Boundary validation only (definitions come from stored config / API callers). */
 export function validatePipeline(def: unknown): string | null {
@@ -160,6 +248,13 @@ export function validatePipeline(def: unknown): string | null {
 	const p = def as Record<string, unknown>;
 	if (typeof p.name !== "string" || !p.name.trim()) return "Pipeline.name is required";
 	if (!Array.isArray(p.steps) || p.steps.length === 0) return "Pipeline.steps must be a non-empty array";
+	// The declared params, when the def declares any. A def that declares NONE isn't asserting a
+	// complete set (`params` is optional and predates this check), so we don't reject its
+	// `$param`s — but a def that does declare them gets the typo protection.
+	const declared =
+		p.params && typeof p.params === "object" && !Array.isArray(p.params) && Object.keys(p.params).length > 0
+			? new Set(Object.keys(p.params as Record<string, unknown>))
+			: null;
 	const binds = new Set<string>();
 	for (let i = 0; i < p.steps.length; i++) {
 		const s = p.steps[i] as Record<string, unknown>;
@@ -169,11 +264,18 @@ export function validatePipeline(def: unknown): string | null {
 		if (s.inputs !== undefined && (typeof s.inputs !== "object" || s.inputs === null || Array.isArray(s.inputs))) {
 			return `Step ${i}: "inputs" must be an object`;
 		}
+		// Check references BEFORE this step's own bind joins the set: a step cannot read its own
+		// output, and "the binds so far" is exactly what will exist when this step runs (#244).
+		const refErr = stepReferenceError(s as unknown as PipelineStep, i, binds, declared);
+		if (refErr) return refErr;
 		if (s.bind !== undefined) {
 			if (typeof s.bind !== "string" || !s.bind.trim()) return `Step ${i}: "bind" must be a non-empty string`;
 			if (binds.has(s.bind as string)) return `Step ${i}: duplicate bind "${s.bind}"`;
 			binds.add(s.bind as string);
 		}
+		// The implicit bind: `stepBind` defaults to `step{index}`, so `$ref: "step3.foo"` is
+		// legal without an explicit bind and must be a known name too.
+		binds.add(`step${i}`);
 	}
 	if (p.sink !== undefined) {
 		const sink = p.sink as Record<string, unknown>;

@@ -28,13 +28,16 @@ const row = (over: Partial<DeliveryRow> = {}) =>
 	({ id: "d1", next_attempt_at: "2026-08-04T00:00:00.000Z", status: "pending", ...over }) as DeliveryRow;
 
 describe("claimDelivery — the sweep must not execute a delivery twice", () => {
-	it("claims a row nobody else holds", async () => {
+	it("claims a row nobody else holds, and hands back the claim's identity", async () => {
 		const { env, calls } = stubDb(1);
-		await expect(claimDelivery(env, row(), new Date("2026-08-04T00:00:00.000Z"))).resolves.toBe(true);
+		const claim = await claimDelivery(env, row(), new Date("2026-08-04T00:00:00.000Z"));
 		// Compare-and-swap on next_attempt_at, exactly like runDueTriggers does on next_run_at.
 		expect(calls[0].sql).toContain("next_attempt_at IS ?4");
 		expect(calls[0].sql).toContain("status = 'pending'");
 		expect(calls[0].args).toContain("2026-08-04T00:00:00.000Z");
+		// The hold it wrote IS the claim token — the terminal writes present it back (#239),
+		// so an attempt that outlives its hold cannot overwrite a newer outcome.
+		expect(claim).toEqual({ id: "d1", hold: calls[0].args[1] });
 	});
 
 	it("refuses when another invocation already claimed it", async () => {
@@ -43,7 +46,7 @@ describe("claimDelivery — the sweep must not execute a delivery twice", () => 
 		// delivery executed twice — site-builder building and billing twice — and BOTH attempts
 		// then markDelivered, so nothing recorded that it happened.
 		const { env } = stubDb(0);
-		await expect(claimDelivery(env, row(), new Date())).resolves.toBe(false);
+		await expect(claimDelivery(env, row(), new Date())).resolves.toBeNull();
 	});
 
 	it("holds the row forward rather than parking it in a non-recoverable state", async () => {

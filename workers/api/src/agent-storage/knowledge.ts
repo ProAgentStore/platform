@@ -30,12 +30,33 @@ export function withKnowledge<TBase extends AgentStorageBaseCtor & GConstructorW
 			return (await this.doStorage.get<KnowledgeDoc>(`kb:${id}`)) ?? null;
 		}
 
-		/** Delete a knowledge document and its vectors. Returns false if not found. */
+		/**
+		 * Delete a knowledge document and its vectors. Returns null if not found; THROWS if the
+		 * vectors could not be removed.
+		 *
+		 * Order matters, and it used to be the other way round (#242). Deleting the record first
+		 * and swallowing the vector failure meant: the doc vanished from Knowledge → Documents,
+		 * its chunks stayed in Vectorize, and there was nothing left to retry against — the id was
+		 * gone, no sweeper reconciles the two stores, so RAG kept retrieving and the agent kept
+		 * citing a document the user deleted. Permanently, and reported as success.
+		 *
+		 * Deleting a KB doc is what a user does when a document is WRONG or shouldn't be there
+		 * (stale instructions, a mistakenly uploaded client file). "It's deleted but the agent
+		 * still knows it" is the one outcome that must not happen quietly. Vectors first, then the
+		 * record: a failure now leaves the document visible and the delete retryable, and the
+		 * caller is told rather than congratulated.
+		 */
 		async deleteKnowledge(id: string): Promise<KnowledgeDoc | null> {
 			const existing = await this.doStorage.get<KnowledgeDoc>(`kb:${id}`);
 			if (!existing) return null;
+			try {
+				await this.vectorDelete("knowledge", id);
+			} catch (err) {
+				throw new Error(
+					`Couldn't remove this document's indexed content, so it was NOT deleted — it would keep answering searches. Try again. (${err instanceof Error ? err.message : String(err)})`,
+				);
+			}
 			await this.doStorage.delete(`kb:${id}`);
-			await this.vectorDelete("knowledge", id).catch(() => undefined);
 			await this.logEvent("knowledge.removed", undefined, { docId: id, title: existing.title }).catch(() => undefined);
 			return existing;
 		}

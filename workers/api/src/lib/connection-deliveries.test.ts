@@ -8,6 +8,7 @@ import {
 	markDelivered,
 	MAX_ATTEMPTS,
 	parseJsonColumn,
+	planNextAttempt,
 	replayDelivery,
 	dueDeliveries,
 } from "./connection-deliveries.js";
@@ -100,47 +101,70 @@ describe("idempotencyKey", () => {
 	});
 });
 
+describe("planNextAttempt", () => {
+	const NOW = new Date("2026-08-03T10:00:00.000Z");
+
+	it("schedules the next attempt with backoff while attempts remain", () => {
+		expect(planNextAttempt(1, NOW)).toEqual({ outcome: "retrying", nextAttemptAt: new Date(NOW.getTime() + 60_000).toISOString() });
+	});
+
+	it("uses a longer backoff for a later attempt", () => {
+		expect(planNextAttempt(2, NOW)).toEqual({ outcome: "retrying", nextAttemptAt: new Date(NOW.getTime() + 300_000).toISOString() });
+	});
+
+	it("dead-letters once the attempts are spent — visible, never silent", () => {
+		expect(planNextAttempt(MAX_ATTEMPTS, NOW)).toEqual({ outcome: "dead" });
+	});
+});
+
 describe("markAttemptFailed", () => {
 	const NOW = new Date("2026-08-03T10:00:00.000Z");
+	const claim = { id: "d1", hold: "2026-08-03T10:05:00.000Z" };
 
 	it("schedules the next attempt with backoff while attempts remain", async () => {
 		const { env, writes } = buildEnv();
-		expect(await markAttemptFailed(env, "d1", 0, "boom", NOW)).toBe("retrying");
+		expect(await markAttemptFailed(env, claim, 0, "boom", NOW)).toBe("retrying");
 		const w = writes[0];
 		expect(w.sql).toContain("SET status = 'pending'");
-		expect(w.args[1]).toBe(1); // attempts incremented
-		expect(w.args[2]).toBe(new Date(NOW.getTime() + 60_000).toISOString()); // +1m
-	});
-
-	it("uses a longer backoff for a later attempt", async () => {
-		const { env, writes } = buildEnv();
-		await markAttemptFailed(env, "d1", 1, "boom", NOW);
-		expect(writes[0].args[2]).toBe(new Date(NOW.getTime() + 300_000).toISOString()); // +5m
+		// A RELATIVE increment, not the read-back absolute — two overlapping attempts writing the
+		// same stale value is how `attempts` stalled and MAX_ATTEMPTS was never reached.
+		expect(w.sql).toContain("attempts = attempts + 1");
+		expect(w.args[1]).toBe(new Date(NOW.getTime() + 60_000).toISOString()); // +1m
 	});
 
 	it("dead-letters once the attempts are spent — visible, never silent", async () => {
 		const { env, writes } = buildEnv();
-		expect(await markAttemptFailed(env, "d1", MAX_ATTEMPTS - 1, "still down", NOW)).toBe("dead");
+		expect(await markAttemptFailed(env, claim, MAX_ATTEMPTS - 1, "still down", NOW)).toBe("dead");
 		expect(writes[0].sql).toContain("SET status = 'dead'");
-		// The dead branch binds (id, attempts, error, now) — one fewer than the retry branch,
-		// which also carries next_attempt_at.
-		expect(writes[0].args[2]).toBe("still down"); // the reason is kept for the human
+		expect(writes[0].args[1]).toBe("still down"); // the reason is kept for the human
 	});
 
 	it("truncates a huge error rather than storing it whole", async () => {
 		const { env, writes } = buildEnv();
-		await markAttemptFailed(env, "d1", 0, "x".repeat(5000), NOW);
-		expect(String(writes[0].args[3]).length).toBe(2000);
+		await markAttemptFailed(env, claim, 0, "x".repeat(5000), NOW);
+		expect(String(writes[0].args[2]).length).toBe(2000);
+	});
+
+	it("reports 'stale' when the write lands on nothing (the claim has lapsed)", async () => {
+		const { env } = buildEnv([], 0);
+		expect(await markAttemptFailed(env, claim, 0, "boom", NOW)).toBe("stale");
 	});
 });
 
 describe("markDelivered", () => {
+	const claim = { id: "d1", hold: "2026-08-03T10:05:00.000Z" };
+
 	it("clears the retry schedule and the last error", async () => {
 		const { env, writes } = buildEnv();
-		await markDelivered(env, "d1");
+		expect(await markDelivered(env, claim)).toBe(true);
 		expect(writes[0].sql).toContain("status = 'delivered'");
 		expect(writes[0].sql).toContain("next_attempt_at = NULL");
 		expect(writes[0].sql).toContain("last_error = NULL");
+	});
+
+	it("reports false when the claim has lapsed", async () => {
+		const { env } = buildEnv([], 0);
+		expect(await markDelivered(env, claim)).toBe(false);
 	});
 });
 

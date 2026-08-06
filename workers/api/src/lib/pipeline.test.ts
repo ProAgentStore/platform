@@ -12,7 +12,7 @@ vi.mock("./tool-registry.js", () => ({
 	runRegistryTool: (...args: unknown[]) => runRegistryTool(...args),
 }));
 
-import { attachAudit, auditStepEntry, executePipelineStep, resolveInputs, resolveInputValue, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
+import { attachAudit, auditStepEntry, collectReferences, executePipelineStep, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
 import type { Env } from "../types.js";
 
 const env = {} as Env;
@@ -48,6 +48,137 @@ describe("validatePipeline", () => {
 	it("rejects a sink without a collection", () => {
 		const def = { name: "p", steps: [{ tool: "geocode" }], sink: {} };
 		expect(validatePipeline(def)).toMatch(/sink.collection is required/);
+	});
+});
+
+// ── #244 ────────────────────────────────────────────────────────────────────────
+// `readPath` returns undefined the instant a segment is missing, and handlers treat absent as
+// DEFAULT (`asArray(undefined)` → [], `Number(undefined) || 0` → 0). So a one-character typo
+// produced a pipeline where every step succeeded, the run completed, and the data was empty —
+// no failed step, no error row, nothing to notice. Every case below returned null (valid)
+// before the fix and would have run to a silent, wrong completion.
+describe("collectReferences", () => {
+	it("finds references nested anywhere in an input tree", () => {
+		const refs = collectReferences({
+			url: "https://x",
+			body: { circle: { center: { lat: { $param: "item.lat" } } }, ids: [{ $ref: "geo.id" }] },
+		});
+		expect(refs).toEqual([
+			{ kind: "param", name: "item.lat", root: "item" },
+			{ kind: "ref", name: "geo.id", root: "geo" },
+		]);
+	});
+
+	it("mirrors resolveInputValue: $param wins over $ref on an object carrying both", () => {
+		// If this ever diverges, validation would police a reference the runner never resolves.
+		const both = { $param: "city", $ref: "geo.lat" };
+		expect(collectReferences(both)).toEqual([{ kind: "param", name: "city", root: "city" }]);
+		expect(resolveInputValue(both as never, { outputs: { geo: { lat: 1 } }, params: { city: "Sydney" } })).toBe("Sydney");
+	});
+
+	it("ignores $item, which the enrich step substitutes per record, not the resolver", () => {
+		expect(collectReferences({ url: { $item: "website_url" } })).toEqual([]);
+	});
+});
+
+describe("validatePipeline — reference checking", () => {
+	it("rejects a $ref to a bind that does not exist (the one-character typo)", () => {
+		const def = {
+			name: "p",
+			steps: [
+				{ tool: "geocode", bind: "geocode" },
+				{ tool: "places", inputs: { lat: { $ref: "geo.lat" } } },
+			],
+		};
+		expect(validatePipeline(def)).toMatch(/Step 1: \$ref "geo\.lat" reads "geo"/);
+		expect(validatePipeline(def)).toContain("geocode"); // tells the author what IS available
+	});
+
+	it("rejects a FORWARD $ref — steps run in order, so a later bind does not exist yet", () => {
+		const def = {
+			name: "p",
+			steps: [
+				{ tool: "geocode", inputs: { items: { $ref: "later.items" } } },
+				{ tool: "places", bind: "later" },
+			],
+		};
+		expect(validatePipeline(def)).toMatch(/Step 0: \$ref "later\.items"/);
+	});
+
+	it("rejects a step that reads its OWN bind", () => {
+		const def = { name: "p", steps: [{ tool: "geocode", bind: "g", inputs: { x: { $ref: "g.y" } } }] };
+		expect(validatePipeline(def)).toMatch(/Step 0/);
+	});
+
+	it("checks the forEach reference too, not just inputs", () => {
+		const def = { name: "p", steps: [{ tool: "places", forEach: { $ref: "grid.cells" } }] };
+		expect(validatePipeline(def)).toMatch(/\$ref "grid\.cells"/);
+	});
+
+	it("accepts the IMPLICIT bind — stepBind defaults to step{index}", () => {
+		const def = {
+			name: "p",
+			steps: [{ tool: "geocode" }, { tool: "places", inputs: { lat: { $ref: "step0.lat" } } }],
+		};
+		expect(validatePipeline(def)).toBeNull();
+		expect(stepBind(def.steps[0], 0)).toBe("step0");
+	});
+
+	it("accepts a deep path off a known bind — only the ROOT is knowable ahead of time", () => {
+		const def = {
+			name: "p",
+			steps: [{ tool: "geocode", bind: "geo" }, { tool: "places", inputs: { x: { $ref: "geo.a.b.c.0" } } }],
+		};
+		expect(validatePipeline(def)).toBeNull();
+	});
+
+	it("rejects an undeclared $param when the pipeline declares its params", () => {
+		const def = {
+			name: "p",
+			params: { city: { type: "string" } },
+			steps: [{ tool: "geocode", inputs: { address: { $param: "citty" } } }],
+		};
+		expect(validatePipeline(def)).toMatch(/\$param "citty" is not declared/);
+	});
+
+	it("still accepts $param on a def that declares NO params — it isn't asserting a complete set", () => {
+		// `params` is optional and predates this check; a def that declares none is not making a
+		// claim about them, so tightening there would invalidate stored defs rather than find bugs.
+		const def = { name: "p", steps: [{ tool: "geocode", inputs: { address: { $param: "city" } } }] };
+		expect(validatePipeline(def)).toBeNull();
+	});
+
+	it("accepts item / item.* inside a forEach body — scope-provided, not a param", () => {
+		const def = {
+			name: "p",
+			params: { type: { type: "string" } },
+			steps: [
+				{ tool: "geocode", bind: "grid" },
+				{
+					tool: "places",
+					forEach: { $ref: "grid.cells" },
+					inputs: { lat: { $param: "item.lat" }, whole: { $param: "item" }, kind: { $param: "type" } },
+				},
+			],
+		};
+		expect(validatePipeline(def)).toBeNull();
+	});
+
+	it("does NOT excuse item outside a forEach body", () => {
+		const def = {
+			name: "p",
+			params: { city: { type: "string" } },
+			steps: [{ tool: "geocode", inputs: { lat: { $param: "item.lat" } } }],
+		};
+		expect(validatePipeline(def)).toMatch(/\$param "item\.lat" is not declared/);
+	});
+});
+
+describe("stepReferenceError", () => {
+	it("is pure — the same step and known-name sets always give the same answer", () => {
+		const step = { tool: "places", inputs: { x: { $ref: "geo.lat" } } };
+		expect(stepReferenceError(step, 1, new Set(["geo"]), null)).toBeNull();
+		expect(stepReferenceError(step, 1, new Set(), null)).toMatch(/it is the first step/);
 	});
 });
 

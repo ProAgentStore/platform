@@ -929,16 +929,31 @@ export class AgentDO extends DurableObject<Env> {
 
 	private async handleDeleteKnowledge(id: string): Promise<Response> {
 		const decodedId = decodeURIComponent(id);
-		await this.ctx.storage.delete(`kb:${decodedId}`);
 
-		// Remove vectors
+		// Vectors FIRST, then the record (#242). The other order deletes the doc from the console
+		// and, if Vectorize then errors, strands its chunks in the index with nothing left to
+		// retry against — RAG keeps citing a document the user deleted, permanently. Failing here
+		// leaves the document listed, so the user can simply delete it again.
 		const state = await this.getState();
 		if (state) {
 			const engine = this.getStorageEngine(state.agentId);
-			await engine.vectorDelete("knowledge", decodedId);
+			try {
+				await engine.vectorDelete("knowledge", decodedId);
+			} catch (err) {
+				await logError(this.env, {
+					source: "knowledge-vectorize",
+					message: `knowledge doc NOT deleted — its indexed content could not be removed: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
+					context: { agentId: state.agentId, docId: decodedId },
+				}).catch(() => undefined);
+				return json({ error: "Couldn't remove this document's indexed content, so it was not deleted — it would keep answering searches. Try again." }, 503);
+			}
+			await this.ctx.storage.delete(`kb:${decodedId}`);
 			await engine.logEvent("knowledge.removed", undefined, { docId: decodedId });
+			return json({ success: true });
 		}
 
+		// No state (an uninitialised DO) — there is no vector index to reconcile against.
+		await this.ctx.storage.delete(`kb:${decodedId}`);
 		return json({ success: true });
 	}
 

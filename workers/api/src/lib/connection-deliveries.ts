@@ -105,11 +105,12 @@ export interface EnqueueInput {
 }
 
 /**
- * Persist a delivery. Returns its id, or null when an identical one already exists —
- * `INSERT OR IGNORE` on the unique idempotency key is what collapses a duplicate emission,
- * so the caller simply doesn't attempt it.
+ * Persist a delivery. Returns the CLAIM the caller's inline attempt should present when it
+ * writes an outcome, or null when an identical one already exists — `INSERT OR IGNORE` on the
+ * unique idempotency key is what collapses a duplicate emission, so the caller simply doesn't
+ * attempt it.
  */
-export async function enqueueDelivery(env: Env, input: EnqueueInput): Promise<string | null> {
+export async function enqueueDelivery(env: Env, input: EnqueueInput): Promise<DeliveryClaim | null> {
 	const id = crypto.randomUUID();
 	const key = idempotencyKey(input.connectionId, input.traceId, input.payload);
 	const now = new Date().toISOString();
@@ -144,46 +145,98 @@ export async function enqueueDelivery(env: Env, input: EnqueueInput): Promise<st
 			dueAt,
 		)
 		.run();
-	return (res.meta?.changes ?? 0) > 0 ? id : null;
+	// `dueAt` is this row's `next_attempt_at`, so it doubles as the inline attempt's claim —
+	// the same value `claimDelivery` would have written had the cron got there first.
+	return (res.meta?.changes ?? 0) > 0 ? { id, hold: dueAt } : null;
 }
 
-/** Mark a delivery successfully delivered. */
-export async function markDelivered(env: Env, id: string): Promise<void> {
-	await env.DB.prepare(
+/**
+ * A held claim on one delivery — the identity a terminal write must present.
+ *
+ * `hold` is the exact `next_attempt_at` the claimer wrote. Any completed attempt clears or
+ * rewrites that column, so presenting a stale `hold` is precisely "someone else already finished
+ * with this row". No new column, no migration: the CAS value IS the claim token.
+ */
+export interface DeliveryClaim {
+	id: string;
+	hold: string;
+}
+
+/**
+ * What a failed attempt should do next. Pure so the bound is testable without a database.
+ *
+ * `attemptsSpent` is the count INCLUDING the attempt that just failed.
+ */
+export function planNextAttempt(attemptsSpent: number, now: Date): { outcome: "retrying"; nextAttemptAt: string } | { outcome: "dead" } {
+	if (!canRetry(attemptsSpent)) return { outcome: "dead" };
+	return { outcome: "retrying", nextAttemptAt: new Date(now.getTime() + backoffSeconds(attemptsSpent) * 1000).toISOString() };
+}
+
+/**
+ * The guard both terminal writes carry (#239).
+ *
+ * `claimDelivery` stopped two sweeps STARTING the same delivery, but the writes that END an
+ * attempt keyed on `id` alone. A slow attempt that outlived its 5-minute hold could therefore
+ * still corrupt the row after another attempt had finished with it:
+ *
+ *  • a `delivered` row pushed back to `pending` and delivered a THIRD time — site-builder
+ *    building and billing twice, which is exactly what the outbox promises it prevents;
+ *  • a `dead` row overwritten as `delivered`, so a real failure vanished from `?status=dead`
+ *    and from replay;
+ *  • two overlapping attempts both writing a stale absolute `attempts`, so the counter never
+ *    advanced and MAX_ATTEMPTS was never reached — retrying forever, the opposite of the
+ *    bounded at-least-once contract.
+ *
+ * Requiring `status = 'pending'` AND the claimer's own `next_attempt_at` makes a late writer a
+ * no-op instead. Same shape as `saveJob()` matching `startedAt` in the repo-ingest alarm, and
+ * the actionable-ticket runner's atomic status claim.
+ */
+const CLAIM_GUARD = "status = 'pending' AND next_attempt_at IS";
+
+/**
+ * Mark a delivery successfully delivered. Returns false when the claim is stale — another
+ * attempt already finished with this row and nothing was written.
+ */
+export async function markDelivered(env: Env, claim: DeliveryClaim): Promise<boolean> {
+	const res = await env.DB.prepare(
 		`UPDATE agent_connection_deliveries
      SET status = 'delivered', attempts = attempts + 1, next_attempt_at = NULL,
          last_error = NULL, updated_at = ?2
-     WHERE id = ?1`,
+     WHERE id = ?1 AND ${CLAIM_GUARD} ?3`,
 	)
-		.bind(id, new Date().toISOString())
+		.bind(claim.id, new Date().toISOString(), claim.hold)
 		.run();
+	return (res.meta?.changes ?? 0) > 0;
 }
 
 /**
  * Record a failed attempt: schedule the next one, or dead-letter when the attempts are spent.
- * Returns what happened so the caller can log it accurately.
+ * Returns what happened so the caller can log it accurately, or "stale" when the claim no longer
+ * holds — a late writer must not resurrect a row another attempt already settled.
+ *
+ * `attempts` is the count BEFORE this attempt; the write increments RELATIVELY (`attempts + 1`)
+ * rather than storing that read-back absolute, so the counter cannot stall at a stale value.
  */
-export async function markAttemptFailed(env: Env, id: string, attempts: number, error: string, now = new Date()): Promise<"retrying" | "dead"> {
-	const nextAttempts = attempts + 1; // this attempt is now spent
-	if (!canRetry(nextAttempts)) {
-		await env.DB.prepare(
-			`UPDATE agent_connection_deliveries
-       SET status = 'dead', attempts = ?2, next_attempt_at = NULL, last_error = ?3, updated_at = ?4
-       WHERE id = ?1`,
-		)
-			.bind(id, nextAttempts, error.slice(0, 2000), now.toISOString())
-			.run();
-		return "dead";
-	}
-	const next = new Date(now.getTime() + backoffSeconds(nextAttempts) * 1000).toISOString();
-	await env.DB.prepare(
-		`UPDATE agent_connection_deliveries
-     SET status = 'pending', attempts = ?2, next_attempt_at = ?3, last_error = ?4, updated_at = ?5
-     WHERE id = ?1`,
-	)
-		.bind(id, nextAttempts, next, error.slice(0, 2000), now.toISOString())
-		.run();
-	return "retrying";
+export async function markAttemptFailed(env: Env, claim: DeliveryClaim, attempts: number, error: string, now = new Date()): Promise<"retrying" | "dead" | "stale"> {
+	const plan = planNextAttempt(attempts + 1, now); // this attempt is now spent
+	const res =
+		plan.outcome === "dead"
+			? await env.DB.prepare(
+					`UPDATE agent_connection_deliveries
+       SET status = 'dead', attempts = attempts + 1, next_attempt_at = NULL, last_error = ?2, updated_at = ?3
+       WHERE id = ?1 AND ${CLAIM_GUARD} ?4`,
+				)
+					.bind(claim.id, error.slice(0, 2000), now.toISOString(), claim.hold)
+					.run()
+			: await env.DB.prepare(
+					`UPDATE agent_connection_deliveries
+     SET status = 'pending', attempts = attempts + 1, next_attempt_at = ?2, last_error = ?3, updated_at = ?4
+     WHERE id = ?1 AND ${CLAIM_GUARD} ?5`,
+				)
+					.bind(claim.id, plan.nextAttemptAt, error.slice(0, 2000), now.toISOString(), claim.hold)
+					.run();
+	if ((res.meta?.changes ?? 0) === 0) return "stale";
+	return plan.outcome;
 }
 
 /**
@@ -211,8 +264,11 @@ const CLAIM_HOLD_MS = 5 * 60 * 1000;
  *
  * Pushing `next_attempt_at` forward (rather than moving to an `attempting` status) keeps the row
  * recoverable: if the attempt dies without writing an outcome, it simply becomes due again.
+ *
+ * The hold it writes is returned as the attempt's CLAIM, which both terminal writes must present
+ * (#239) — so an attempt that outlives its hold can no longer overwrite a newer outcome.
  */
-export async function claimDelivery(env: Env, row: DeliveryRow, now = new Date()): Promise<boolean> {
+export async function claimDelivery(env: Env, row: DeliveryRow, now = new Date()): Promise<DeliveryClaim | null> {
 	const hold = new Date(now.getTime() + CLAIM_HOLD_MS).toISOString();
 	const res = await env.DB.prepare(
 		`UPDATE agent_connection_deliveries SET next_attempt_at = ?2, updated_at = ?3
@@ -220,7 +276,7 @@ export async function claimDelivery(env: Env, row: DeliveryRow, now = new Date()
 	)
 		.bind(row.id, hold, now.toISOString(), row.next_attempt_at)
 		.run();
-	return (res.meta?.changes ?? 0) > 0;
+	return (res.meta?.changes ?? 0) > 0 ? { id: row.id, hold } : null;
 }
 
 /** Pending deliveries whose next attempt is due (the cron sweep's only read). */

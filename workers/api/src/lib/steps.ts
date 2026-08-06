@@ -15,6 +15,7 @@
 import type { ToolDef, RegistryToolCtx, RegistryToolResult } from "./tool-registry.js";
 import { getPath } from "./connectors/http.js";
 import { safeFetch, SsrfError } from "./ssrf.js";
+import { parseStepNumber, stepNumberError } from "./step-number.js";
 
 // ── shared helpers ───────────────────────────────────────────────────────────
 
@@ -491,7 +492,12 @@ export const STEP_TOOLS: ToolDef[] = [
 			// {…,data:[…]} → array-of-arrays); then the same depth flatten collapses it.
 			const path = typeof input.path === "string" && input.path ? input.path : "";
 			const items = path ? raw.map((el) => getPath(el, path)) : raw;
-			const depth = input.depth === undefined ? 1 : Math.max(0, Math.floor(Number(input.depth) || 0));
+			// An unreadable `depth` used to become 0 — a flatten that silently does nothing, so
+			// the next step gets the array-of-arrays it was written to avoid. Same class as
+			// slice's limit (#243): report it instead of picking the quiet wrong branch.
+			const rawDepth = parseStepNumber(input.depth);
+			if (rawDepth.kind === "invalid") return fail(stepNumberError("flatten", "depth", rawDepth.reason, "an unreadable depth would silently no-op the flatten and pass nested arrays downstream"));
+			const depth = rawDepth.kind === "absent" ? 1 : Math.max(0, Math.floor(rawDepth.value));
 			const out = flattenDeep(items, depth);
 			return ok(JSON.stringify({ items: out, count: out.length }, null, 2));
 		},
@@ -863,8 +869,19 @@ export const STEP_TOOLS: ToolDef[] = [
 		},
 		handler: async (_ctx, input) => {
 			const items = asArray(input.items);
-			const offset = Math.max(0, Math.floor(Number(input.offset) || 0));
-			const limit = input.limit === undefined || input.limit === null ? items.length : Math.max(0, Math.floor(Number(input.limit) || 0));
+			// `Number(x) || 0` used to map "", "abc" and false to 0 — and 0 means KEEP NOTHING,
+			// while an ABSENT limit keeps everything. That asymmetry made a blank `$param` (a
+			// settings/trigger field left empty) empty the list mid-chain with every downstream
+			// step still succeeding: the run completed and reported nothing found. A limit you
+			// asked for and didn't get is worth stopping over, so an unreadable one fails here
+			// rather than silently choosing the most destructive branch available (#243).
+			const rawLimit = parseStepNumber(input.limit);
+			if (rawLimit.kind === "invalid") return fail(stepNumberError("slice", "limit", rawLimit.reason, "an unreadable limit would silently keep ZERO records; leave it unset to keep all"));
+			const rawOffset = parseStepNumber(input.offset);
+			if (rawOffset.kind === "invalid") return fail(stepNumberError("slice", "offset", rawOffset.reason, "leave it unset to start at the first record"));
+			const offset = rawOffset.kind === "absent" ? 0 : Math.max(0, Math.floor(rawOffset.value));
+			// An explicit 0 is still a real request for zero records; only unreadable input fails.
+			const limit = rawLimit.kind === "absent" ? items.length : Math.max(0, Math.floor(rawLimit.value));
 			const out = items.slice(offset, offset + limit);
 			return ok(JSON.stringify({ items: out, count: out.length, dropped: items.length - out.length }, null, 2));
 		},
