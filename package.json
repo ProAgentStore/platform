@@ -16,18 +16,22 @@
 	"pnpm": {
 		"overrides": {
 			"@modelcontextprotocol/sdk": "1.29.0",
-			"hono": "^4.12.25",
+			"hono": "^4.12.34",
 			"undici": "^7.28.0",
 			"ws": "^8.21.0",
 			"fast-uri": "^3.1.4",
 			"postcss": "^8.5.18",
 			"js-yaml": "^4.3.0",
-			"ip-address": "^10.3.1"
+			"ip-address": "^10.3.1",
+			"body-parser": "^2.3.0",
+			"@hono/node-server": "^2.0.5"
 		},
 		"auditConfig": {
+			"//": "Each entry is a REACHABILITY claim with evidence, not a severity opinion. SECURITY.md 'Accepted dependency advisories' carries the dependency path, why the vulnerable code cannot run here, and what would unblock taking the upgrade. Re-check the reasoning whenever the dependency moves.",
 			"ignoreGhsas": [
 				"GHSA-f88m-g3jw-g9cj",
-				"GHSA-qwww-vcr4-c8h2"
+				"GHSA-qwww-vcr4-c8h2",
+				"GHSA-g7r4-m6w7-qqqr"
 			]
 		}
 	},

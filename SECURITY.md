@@ -51,19 +51,30 @@ The coding runner executes CLI engines and browser actions on the user's own mac
 
 ## Accepted dependency advisories
 
-`pnpm audit --audit-level high` is expected to exit clean. Two advisories are suppressed in
-`pnpm.auditConfig.ignoreGhsas` because the vulnerable code is not reachable in this product. Each
-entry is a claim about reachability that must be re-checked when the dependency moves — if the
-reasoning below stops holding, take the upgrade instead.
+`pnpm audit` is expected to exit clean, and as of 2026-08-07 (#298) it reports **no unignored
+advisory at any severity**. Three are suppressed in `pnpm.auditConfig.ignoreGhsas`.
 
-| Advisory | Package | Why it is not reachable here | Unblocker |
-|---|---|---|---|
-| `GHSA-f88m-g3jw-g9cj` | `sharp` (`wrangler > miniflare > sharp`) | Build-time only. `wrangler` is a `devDependency` in **every** manifest that has it (`workers/{api,host,mcp}`, `agents/job-application-assistant`, the three templates); `miniflare` is its local dev simulator and never ships. No deployed Worker contains `sharp`, and nothing in PAGS decodes images. `miniflare` pins `sharp` at an **exact** `0.34.5`, so an override would force an untested native binary into local dev for no production gain. | `wrangler`/`miniflare` releasing with `sharp >= 0.35.0`. |
-| `GHSA-qwww-vcr4-c8h2` | `react-router` (`react-router-dom > react-router`) | The advisory states it "only affects your application if you are using the unstable RSC APIs". `store/console` and `store/admin` are client-rendered SPAs on `createBrowserRouter`; there is no RSC entry point, no server router, and no `@react-router/server` dependency anywhere in the tree. The fix is in `8.3.0`, a major bump across two consoles — real regression risk for an unreachable flaw. | A `7.x` backport, or a deliberate React Router 8 migration of both consoles. |
+Severity is a claim about a *package*, not about this *product*. Every entry below is therefore a
+**reachability** claim with the evidence that supports it, plus the condition under which it stops
+holding — because an ignore list whose entries nobody can re-derive is indistinguishable from an
+ignore list that is wrong. If the reasoning stops holding, take the upgrade instead.
 
-Two advisories from the same sweep **were** fixed rather than accepted, via `pnpm.overrides`:
-`js-yaml` → `^4.3.0` and `ip-address` → `^10.3.1`. Both were patch/minor bumps of transitives that
-nothing imports, so taking them was cheaper than justifying them.
+| Advisory | Package | Sev | Why it is not reachable here | Unblocker |
+|---|---|---|---|---|
+| `GHSA-f88m-g3jw-g9cj` | `sharp` (`wrangler > miniflare > sharp`) | high | Build-time only. `wrangler` is a `devDependency` in **every** manifest that has it (`workers/{api,host,mcp}`, `agents/job-application-assistant`, the three templates); `miniflare` is its local dev simulator and never ships. No deployed Worker contains `sharp`, and nothing in PAGS decodes images. `miniflare` pins `sharp` at an **exact** `0.34.5`, so an override would force an untested native binary into local dev for no production gain. | `wrangler`/`miniflare` releasing with `sharp >= 0.35.0`. |
+| `GHSA-qwww-vcr4-c8h2` | `react-router` (`react-router-dom > react-router`) | high | The advisory states it "only affects your application if you are using the unstable RSC APIs". `store/console` and `store/admin` are client-rendered SPAs on `createBrowserRouter`; there is no RSC entry point, no server router, and no `@react-router/server` dependency anywhere in the tree. The fix is in `8.3.0`, a major bump across two consoles — real regression risk for an unreachable flaw. | A `7.x` backport, or a deliberate React Router 8 migration of both consoles. |
+| `GHSA-g7r4-m6w7-qqqr` | `esbuild` (`vitest > vite`, `tsx`, `wrangler`) | low | The flaw is in esbuild's **dev server** (`--servedir`) and is **Windows-only**: `path.Clean` does not treat `\` as a separator, so a backslash request escapes the served root. Nothing here runs `esbuild --serve` — vite's dev server is vite's own, `tsx` and `wrangler` use esbuild purely as a bundler API, and no build or deploy runs on Windows. Same shape as `sharp` above: `wrangler` pins `esbuild` at an **exact** `0.27.3`, so a global override would force an untested bundler into the tool that produces every deployed Worker, to fix a server that is never started. | `wrangler` shipping with `esbuild >= 0.28.1`. A `vite>esbuild` / `tsx>esbuild` selective override would leave wrangler's copy behind and change nothing about the reported advisory. |
+
+Advisories that **were** fixed rather than accepted, via `pnpm.overrides` — all transitives that
+nothing here imports, where taking the bump was cheaper than justifying it:
+
+| Advisory | Override | Note |
+|---|---|---|
+| `GHSA-8j4g-w8fx-2239` | `hono` → `^4.12.34` | ReDoS in `hono/cors` when `allowHeaders` is unset. Worth recording that PAGS was **already outside** the affected path: `workers/api/src/index.ts` sets `allowHeaders: ["Content-Type", "Authorization"]`, and the advisory says applications with a non-empty `allowHeaders` never reach the quadratic parser. Taken anyway — it is a patch bump, and the next `cors()` call site added without `allowHeaders` would be exposed. |
+| `GHSA-frvp-7c67-39w9` | `@hono/node-server` → `^2.0.5` | Path traversal in `serve-static` on Windows via `%5C`. Reached only via `@modelcontextprotocol/sdk`'s Node HTTP transports; `packages/browser-runner` imports the SDK's **client** and `InMemoryTransport` only, and `workers/mcp` runs on Cloudflare Workers where a Node HTTP adapter cannot execute. Neither serves static files. |
+| `GHSA-v422-hmwv-36x6` | `body-parser` → `^2.3.0` | Size limit silently disabled by an unparseable `limit`. Same unreachable path as above (`@modelcontextprotocol/sdk > express`); nothing here constructs an express app. |
+| `GHSA-52cp-r559-cp3m` | `js-yaml` → `^4.3.0` | Traced to a `.bin/json2ts` codegen CLI that no dist file imports; a `wrangler deploy --dry-run` of `workers/mcp` produced a bundle containing zero `js-yaml`. |
+| `GHSA-mwp4-54f8-5fhr` | `ip-address` → `^10.3.1` | See the note below. |
 
 Note on `GHSA-mwp4-54f8-5fhr` (`ip-address`): the advisory describes an SSRF filter bypass, so it
 is worth stating that PAGS's own guard never had that flaw. `lib/ssrf.ts` does not use
