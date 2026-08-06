@@ -23,8 +23,15 @@ import type { Env } from "../types.js";
  * `users.roles` is the live source (the same one `isAdmin` consults), plus `ADMIN_ALLOWLIST`,
  * so promoting or demoting someone is reflected immediately rather than at token expiry.
  */
-export async function operatorUserIds(env: Env): Promise<Set<string>> {
+export async function operatorUserIds(env: Env, callerUid?: string): Promise<Set<string>> {
 	const ids = new Set<string>();
+	// The CALLER, when this is reached through requireAdmin — which has already proven they are
+	// an admin. `isAdmin` accepts three sources and one of them, the role baked into the session
+	// token, is only observable for the person holding it: it cannot be queried for other users.
+	// So a deployment whose operator has the role only in their token would identify NOBODY,
+	// flag operatorUnknown, and count the operator's own 2782 calls as external — which is what
+	// happened on the first real call to this endpoint.
+	if (callerUid) ids.add(callerUid);
 	const allow = (env.ADMIN_ALLOWLIST || "")
 		.split(",")
 		.map((s) => s.trim().toLowerCase())
@@ -117,8 +124,8 @@ export function splitUsage(
 }
 
 /** The report over a time window, in days. */
-export async function externalUsage(env: Env, days = 30): Promise<ExternalUsageReport> {
-	const operators = await operatorUserIds(env);
+export async function externalUsage(env: Env, days = 30, callerUid?: string): Promise<ExternalUsageReport> {
+	const operators = await operatorUserIds(env, callerUid);
 	const since = new Date(Date.now() - Math.max(1, Math.min(365, days)) * 86_400_000)
 		.toISOString()
 		.replace("T", " ")

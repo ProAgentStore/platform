@@ -134,9 +134,11 @@ adminRoutes.get("/overview", async (c) => {
  * looks external and a caller must report "unknown" rather than a falsely encouraging number.
  */
 adminRoutes.get("/usage/external", async (c) => {
-	await requireAdmin(c);
+	const session = await requireAdmin(c);
 	const days = Number(c.req.query("days")) || 30;
-	return c.json(await externalUsage(c.env, days));
+	// Pass the caller: requireAdmin has just proven they are an operator, and that is the one
+	// admin signal that cannot be discovered by querying (see operatorUserIds).
+	return c.json(await externalUsage(c.env, days, session?.uid));
 });
 
 /** GET /v1/admin/agents?search=&limit=&offset= — all agents (incl. drafts) + owner + instance count. */

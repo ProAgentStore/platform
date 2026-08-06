@@ -69,3 +69,29 @@ describe("splitUsage", () => {
 		expect(r).toMatchObject({ externalUsers: 0, byAgent: [], totals: { calls: 0, costMicros: 0 }, operatorUnknown: false });
 	});
 });
+
+// ── The caller is an operator by construction ────────────────────────────────
+//
+// Found by running this against the live platform: `operatorUnknown` came back true and the
+// operator's own 2782 calls were counted as external. `isAdmin` accepts three signals and one
+// of them — the role baked into the session token — is only observable for the person holding
+// it. It cannot be queried for other users, so a deployment whose operator has the role only in
+// their token identified nobody at all.
+describe("the calling admin counts as an operator", () => {
+	it("does not report the caller's own usage as external", () => {
+		const rows = [row("caller", "coder", 2782, 40_920_000)];
+		// What happened live: caller absent from the operator set.
+		const before = splitUsage(rows, new Set());
+		expect(before).toMatchObject({ externalUsers: 1, operatorUnknown: true });
+		// With requireAdmin's caller included, the same data reads correctly.
+		const after = splitUsage(rows, new Set(["caller"]));
+		expect(after).toMatchObject({ externalUsers: 0, operatorUnknown: false });
+		expect(after.operator.calls).toBe(2782);
+	});
+
+	it("still finds a genuine external user alongside the caller", () => {
+		const r = splitUsage([row("caller", "coder", 900), row("someone-else", "coder", 4)], new Set(["caller"]));
+		expect(r.externalUsers).toBe(1);
+		expect(r.byAgent[0]).toMatchObject({ agentId: "coder", externalUsers: 1, calls: 4 });
+	});
+});
