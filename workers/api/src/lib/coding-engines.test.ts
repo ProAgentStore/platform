@@ -4,6 +4,8 @@ import {
 	ENGINE_WRITE_FLAGS,
 	deriveClientType,
 	engineAuthFor,
+	engineAuthReport,
+	engineAuthWarning,
 	resolveEngineEnv,
 	type CodingEngine,
 } from "./coding-engines.js";
@@ -129,5 +131,79 @@ describe("default engine presets", () => {
 
 	it("defaults gemini to api-key — its individual Google sign-in is deprecated", () => {
 		expect(byId("gemini").auth).toBe("api-key");
+	});
+});
+
+// ── #248: setting vs outcome ────────────────────────────────────────────────
+// The preset says how the engine SHOULD sign in; the runner observes what it actually got. These
+// cover the pairing — and specifically that a wrong outcome is loud instead of silent.
+
+describe("engineAuthWarning — a mismatch between the setting and the outcome", () => {
+	it("says nothing when the outcome matches the setting", () => {
+		expect(engineAuthWarning("subscription", "subscription")).toBeNull();
+		expect(engineAuthWarning("api-key", "api-key")).toBeNull();
+		expect(engineAuthWarning("machine", "machine-login")).toBeNull();
+		expect(engineAuthWarning("auto", "subscription")).toBeNull();
+		expect(engineAuthWarning("auto", "machine-login")).toBeNull();
+	});
+
+	it("an UNKNOWN outcome is not a wrong one — no runner, no warning", () => {
+		// Guessing from the setting is exactly what this feature exists to stop.
+		for (const mode of ["auto", "machine", "subscription", "api-key"] as const) {
+			expect(engineAuthWarning(mode, null)).toBeNull();
+		}
+	});
+
+	it("THE documented silent-billing case: chose subscription, got an API key", () => {
+		const w = engineAuthWarning("subscription", "api-key");
+		expect(w).toMatch(/billing per token/i);
+		expect(w).toMatch(/subscription/i);
+	});
+
+	it("warns whenever an API key appears under a mode that never asked for one", () => {
+		expect(engineAuthWarning("auto", "api-key")).toMatch(/billing per token/i);
+		expect(engineAuthWarning("machine", "api-key")).toMatch(/billing per token/i);
+	});
+
+	it("warns on the QUIET fallbacks — the ones that currently look like success", () => {
+		// Chose subscription, but no setup-token is saved → the machine's own login.
+		expect(engineAuthWarning("subscription", "machine-login")).toMatch(/setup-token/);
+		// Chose an API key, but the vault has none → the machine's own login.
+		expect(engineAuthWarning("api-key", "machine-login")).toMatch(/vault/i);
+	});
+
+	it("warns when an API key was asked for and a subscription token ran instead", () => {
+		expect(engineAuthWarning("api-key", "subscription")).toMatch(/subscription token/i);
+	});
+
+	it("a machine that exports its OWN subscription token under 'machine' is not a mismatch", () => {
+		// "machine" means whatever the machine has — a token it already holds IS that.
+		expect(engineAuthWarning("machine", "subscription")).toBeNull();
+	});
+});
+
+describe("engineAuthReport — the per-session transparency payload", () => {
+	it("states the runtime, so 'is this tmux?' is answerable rather than implied (#247)", () => {
+		expect(engineAuthReport("auto", "subscription").runtime).toBe("child-process");
+	});
+
+	it("carries mode + resolved + warning together", () => {
+		expect(engineAuthReport("subscription", "api-key")).toMatchObject({
+			mode: "subscription",
+			resolved: "api-key",
+			runtime: "child-process",
+		});
+		expect(engineAuthReport("subscription", "api-key").warning).toBeTruthy();
+	});
+
+	it("reports an unobserved session honestly instead of echoing the setting", () => {
+		const r = engineAuthReport("subscription", null);
+		expect(r.resolved).toBeNull();
+		expect(r.warning).toBeNull();
+	});
+
+	it("never carries a credential value — it is an enum, not a channel", () => {
+		const json = JSON.stringify(engineAuthReport("api-key", "api-key"));
+		expect(json).not.toMatch(/sk-ant|sk-o|CLAUDE_CODE_OAUTH_TOKEN/);
 	});
 });

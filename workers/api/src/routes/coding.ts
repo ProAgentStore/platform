@@ -12,11 +12,13 @@ import {
 	deriveClientType,
 	engineAuthFor,
 	ENGINE_AUTHS,
+	engineAuthReport,
 	readEngines,
 	resolveEngine,
 	resolveEngineEnv,
 	type CodingEngine,
 	type EngineAuth,
+	type EngineAuthResolved,
 } from "../lib/coding-engines.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
@@ -707,9 +709,21 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 		}
 	}
 
+	// Which credential this engine actually ran on, and what the engine actually is (#248). The
+	// preset's SETTING is known here; only the runner can know the OUTCOME, because the merge with
+	// the machine's own shell happens there — so pair the two and let `engineAuthReport` say when
+	// they disagree. A runner too old to report `authResolved` yields null, i.e. "unknown", never
+	// a restatement of the setting.
+	const { engines } = await readEngines(c.env, instanceId, uid);
+	const auth = engineAuthReport(
+		engineAuthFor(engines, session.launchCommand),
+		((snap as { authResolved?: unknown }).authResolved ?? null) as EngineAuthResolved | null,
+	);
+
 	return c.json({
 		...(snap as object),
 		runnerConnected: true,
+		auth,
 		...(authPrompt ? { authPrompt: { ...authPrompt, guidance: authPromptGuidance(authPrompt) } } : {}),
 	});
 });
@@ -1494,10 +1508,12 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 	(runner as Record<string, unknown>).reachable = effectivelyReachable;
 	(runner as Record<string, unknown>).health = runnerHealth;
 
-	// 3. D1 sessions + repos
-	const [dbSessions, dbRepos] = await Promise.all([
+	// 3. D1 sessions + repos + the engine presets (needed to name each session's sign-in MODE,
+	//    which is half of the auth report — the runner supplies the other half).
+	const [dbSessions, dbRepos, { engines: diagEngines }] = await Promise.all([
 		listSessions(env, instanceId, uid),
 		listRepos(env, instanceId, uid),
+		readEngines(env, instanceId, uid),
 	]);
 
 	// 4. Cross-reference D1 active sessions vs runner's tracked sessions
@@ -1506,7 +1522,7 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 	// orphanedTmux/tmuxTotal/pagsTmuxTotal figures described something that could never exist
 	// for these sessions. `engineLabel` replaces `tmuxSession`, which only ever looked like a
 	// tmux target a user could attach to.
-	const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; engineLabel: string; takeover: boolean }> } | null;
+	const diagData = runnerDiag as { tracked?: Array<{ sessionId: string; alive: boolean; runState: string; paneLines: number; clientType: string; workDir: string; engineLabel: string; takeover: boolean; authResolved?: EngineAuthResolved }> } | null;
 	if (diagData?.tracked) {
 		for (const t of diagData.tracked) trackedIds.add(t.sessionId);
 	}
@@ -1529,6 +1545,10 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 				id: s.id, repoId: s.repoId, repoName: repo?.name ?? s.repoId,
 				status: "ended" as const, clientType: s.clientType,
 				launchCommand: s.launchCommand ?? null, engineLabel: s.tmuxSession ?? null,
+				// A reconciled orphan has no live process, so the outcome is genuinely unknown —
+				// report the mode with resolved:null rather than omitting the field and making
+				// the shape differ between branches.
+				auth: engineAuthReport(engineAuthFor(diagEngines, s.launchCommand), null),
 				startedAt: s.startedAt, endedAt: new Date().toISOString(), live: null,
 				issue: null, reconciled: true,
 			};
@@ -1546,6 +1566,9 @@ codingRoutes.get("/:instanceId/coding/diagnostics", async (c) => {
 			status: s.status,
 			clientType: s.clientType,
 			launchCommand: s.launchCommand ?? null,
+			// Setting vs outcome, per session (#248) — the same pairing /capture reports, so the
+			// diagnostics list answers "which of my sessions is billing per token?" at a glance.
+			auth: engineAuthReport(engineAuthFor(diagEngines, s.launchCommand), tracked?.authResolved ?? null),
 			// The D1 column is still called tmux_session (renaming it is a table rewrite for a
 			// cosmetic gain); what it holds is an engine label. Surfaced honestly.
 			engineLabel: s.tmuxSession ?? null,

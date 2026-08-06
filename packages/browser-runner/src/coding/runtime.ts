@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
 import type { ClientType } from "./handlers.js";
+import type { EngineAuthResolved } from "./engine-auth.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
 import { ensureRepo, sanitizeSessionName } from "./repo.js";
 
@@ -47,6 +48,13 @@ export interface CodingSnapshot {
 	ready: boolean;
 	runState: "idle" | "thinking" | "responding";
 	alive: boolean;
+	/**
+	 * What credential the engine actually got, and what the engine actually is (#248). Rides on
+	 * the snapshot because this is the ONLY side that can know the first one — the cloud picks a
+	 * mode, the machine's own shell decides the outcome. Enum only, never a key or token.
+	 */
+	authResolved: EngineAuthResolved;
+	engineRuntime: "child-process";
 }
 
 /** Hard cap on a pane returned to the brain/console (matches the worker MAX_PANE_CHARS). */
@@ -153,6 +161,10 @@ export class CodingRuntime {
 			alive,
 			ready: alive ? session.ready : false,
 			runState: alive ? session.runState() : "idle",
+			// Reported even when the process is not alive: "what would this session bill?" is
+			// exactly the question asked about a session that just stopped.
+			authResolved: session.authResolved,
+			engineRuntime: session.engineRuntime,
 		};
 	}
 
@@ -205,6 +217,8 @@ export class CodingRuntime {
 		clientType: string;
 		workDir: string;
 		takeover: boolean;
+		authResolved: EngineAuthResolved;
+		engineRuntime: "child-process";
 	}> {
 		return [...this.sessions.entries()].map(([sessionId, s]) => ({
 			sessionId,
@@ -216,6 +230,8 @@ export class CodingRuntime {
 			clientType: s.config.clientType,
 			workDir: s.config.workDir,
 			takeover: this.takeovers.has(sessionId),
+			authResolved: s.authResolved,
+			engineRuntime: s.engineRuntime,
 		}));
 	}
 

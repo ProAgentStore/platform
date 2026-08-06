@@ -24,6 +24,7 @@ export function mergeEnv(
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { type ClientType, handlerFor } from "./handlers.js";
+import { type EngineAuthResolved, resolveEngineAuth } from "./engine-auth.js";
 
 /**
  * The coding engine — Claude Code driven through its structured **stream-json**
@@ -119,6 +120,26 @@ export class HeadlessSession {
 	 * all 40 BYOK decisions re-spawning a binary that isn't there.
 	 */
 	private spawnFailed = false;
+
+	/**
+	 * What this engine IS, so the question is answerable instead of implied (#248, #247).
+	 *
+	 * Sessions have not used tmux since the move to stream-json, but the surface kept saying
+	 * `tmuxSession`/`pagsTmuxTotal` long enough that a user's reasonable next move
+	 * (`tmux attach -t …`) failed and looked like a broken engine. Stating the runtime beats
+	 * removing the wrong word and leaving nothing in its place.
+	 */
+	readonly engineRuntime = "child-process" as const;
+
+	/**
+	 * The credential this engine actually runs on — computed from the SAME expression `spawn`
+	 * uses, so it reports what happened rather than what was configured (#248). A getter, not a
+	 * cached field, because it must never drift from the env the next turn is spawned with.
+	 * Presence only: no key or token value leaves this class.
+	 */
+	get authResolved(): EngineAuthResolved {
+		return resolveEngineAuth(this.config.clientType, mergeEnv(process.env, this.config.env) as Record<string, string | undefined>);
+	}
 
 	constructor(readonly config: HeadlessSessionConfig) {
 		this.engineLabel = `${config.clientType}:${config.id}`;

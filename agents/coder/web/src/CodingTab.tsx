@@ -14,6 +14,7 @@ import RepoIssues from "./RepoIssues";
 import RepoSettingsModal from "./RepoSettingsModal";
 import EnginesModal from "./EnginesModal";
 import BuildsPanel from "./BuildsPanel";
+import { engineAuthBadge, type EngineAuthReport } from "./engine-auth-view";
 import { ArrowLeft, Copy, Settings, FolderCog, ChevronDown, Eye, Square, SquareTerminal, Plus, FolderGit2, Hammer, CircleDot, Cpu, RotateCw } from "lucide-react";
 
 interface Props {
@@ -253,6 +254,8 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// browser must be on the runner machine — opening the link here would redirect to this
 	// laptop's localhost, where nothing is listening.
 	const [authPrompt, setAuthPrompt] = useState<AuthPrompt | null>(null);
+	/** Which credential the engine actually ran on, straight from /capture (#248). */
+	const [engineAuth, setEngineAuth] = useState<EngineAuthReport | null>(null);
 	const [signinMsg, setSigninMsg] = useState("");
 	const startSignin = useCallback(async () => {
 		if (!openSession) return;
@@ -275,12 +278,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const pollTerminal = useCallback(async () => {
 		if (!openSession) return;
 		try {
-			const d = await api<{ pane?: string; runState?: string; authPrompt?: AuthPrompt; runnerConnected?: boolean }>(
+			const d = await api<{ pane?: string; runState?: string; authPrompt?: AuthPrompt; runnerConnected?: boolean; auth?: EngineAuthReport }>(
 				`/v1/instances/${instanceId}/coding/sessions/${openSession.id}/capture`,
 			);
 			// An engine blocked on sign-in is otherwise indistinguishable from a dead session:
 			// idle state, a pane that stops changing, no error anywhere.
 			setAuthPrompt(d.authPrompt ?? null);
+			// Which credential this engine actually ran on (#248). MUST be set before the
+			// unchanged-pane early return below, or an idle session would never report it.
+			setEngineAuth(d.auth ?? null);
 			// The header badge reads `repoStatuses[repoId]`, and the only other writer
 			// (`pollStatuses`) is DISABLED while a session is open — so the badge added to say
 			// Working/Idle sat on "Idle" for the whole session while the pane visibly scrolled.
@@ -949,6 +955,25 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						onClearChat={clearChat}
 					/>
 				)}
+				{/* Which credential this session actually used, and what the engine actually is
+				    (#248). Shown in BOTH views because the question it answers — "am I burning
+				    API credits or using the subscription I already pay for?" — had no answer
+				    anywhere in the product, and the one documented way it goes wrong is silent. */}
+				{(() => {
+					const badge = engineAuthBadge(engineAuth);
+					if (!badge) return null;
+					const warn = badge.tone === "warn";
+					return (
+						<div className={`mb-2 rounded-lg border px-3 py-2 ${warn ? "border-orange/40 bg-orange/10" : "border-line"}`}>
+							<div className="flex items-center gap-1.5 text-xs font-bold">
+								<Cpu size={12} className={warn ? "text-orange" : "text-muted"} />
+								<span>{badge.label}</span>
+							</div>
+							<p className="text-[0.65rem] text-muted mt-0.5">{badge.detail}</p>
+							{engineAuth?.warning && <p className="text-xs text-orange mt-1">{engineAuth.warning}</p>}
+						</div>
+					);
+				})()}
 				{/* Sign-in relay (#coding-auth). Shown in BOTH views: a blocked engine looks like a
 				    dead session, and the owner is as likely to be on the co-pilot view as the
 				    terminal when they notice nothing is happening. */}

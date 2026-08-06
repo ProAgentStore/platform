@@ -124,6 +124,68 @@ export function engineAuthFor(engines: CodingEngine[], launchCommand: string | n
 }
 
 /**
+ * What the engine process ACTUALLY authenticated with, observed by the runner from the merged
+ * spawn env (see packages/browser-runner/src/coding/engine-auth.ts). `null` when no runner is
+ * connected, or when the runner predates the field — an unknown answer, reported as unknown
+ * rather than guessed from the setting.
+ */
+export type EngineAuthResolved = "subscription" | "api-key" | "machine-login";
+
+/** The transparency report for one session: what was ASKED for, what was GOT, what it runs as. */
+export interface EngineAuthReport {
+	/** The preset's sign-in setting. */
+	mode: EngineAuth;
+	/** What the process actually got, or null when unobservable (no runner / old runner). */
+	resolved: EngineAuthResolved | null;
+	/** The engine is a child process, not a tmux pane (#247) — stated, not implied. */
+	runtime: "child-process";
+	/** Human-readable warning when the outcome contradicts the setting, else null. */
+	warning: string | null;
+}
+
+/**
+ * Warn when what the engine GOT contradicts what the preset ASKED for (#248).
+ *
+ * The money question — "am I burning API credits or using the subscription I already pay for?" —
+ * had no answer in the product, and the one documented failure was silent: an inherited
+ * `ANTHROPIC_API_KEY` beat the injected subscription token, so "subscription" billed per token.
+ * `resolveEngineEnv` now strips the provider key in every mode but "api-key", so that exact case
+ * should no longer be reachable — which is precisely why it is worth asserting rather than
+ * assuming: a runner too old to honour empty-means-remove still reproduces it, and this is the
+ * only place that would say so.
+ *
+ * The genuinely reachable mismatches are the quieter ones: "subscription" with no setup-token
+ * saved, and "api-key" with no vault key — both fall back to the machine's own login, and both
+ * currently look like success.
+ *
+ * Pure: no env, no I/O. `null` resolved never warns — an unknown outcome is not a wrong one.
+ */
+export function engineAuthWarning(mode: EngineAuth, resolved: EngineAuthResolved | null): string | null {
+	if (!resolved) return null;
+	if (resolved === "api-key" && mode !== "api-key") {
+		// The billing surprise, whichever setting was supposed to prevent it.
+		return mode === "subscription"
+			? "This session is billing per token. You chose your Claude subscription, but an API key reached the engine — and the CLI prefers the key over the subscription token."
+			: `This session is billing per token: an API key reached the engine, which "${mode === "auto" ? "Automatic" : "This machine's login"}" was not meant to do.`;
+	}
+	if (mode === "subscription" && resolved === "machine-login") {
+		return "You chose your Claude subscription, but no subscription token is saved, so the engine fell back to this machine's own login. Save one with `claude setup-token`.";
+	}
+	if (mode === "api-key" && resolved === "machine-login") {
+		return "You chose an API key, but none is stored in the vault for this engine, so it fell back to this machine's own login.";
+	}
+	if (mode === "api-key" && resolved === "subscription") {
+		return "You chose an API key, but the engine ran on a subscription token instead.";
+	}
+	return null;
+}
+
+/** Assemble the full per-session auth report from the preset setting + the runner's observation. */
+export function engineAuthReport(mode: EngineAuth, resolved: EngineAuthResolved | null): EngineAuthReport {
+	return { mode, resolved, runtime: "child-process", warning: engineAuthWarning(mode, resolved) };
+}
+
+/**
  * The default engine presets, seeded when an instance has none. Claude is the
  * first-class engine (structured stream-json); the others run as a real CLI the
  * user configures. Users edit these (add flags, keys, models, more engines) and
