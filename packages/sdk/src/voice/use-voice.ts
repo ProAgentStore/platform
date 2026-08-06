@@ -1,12 +1,55 @@
+/**
+ * The voice orchestrator: one mic, one recognizer, one TTS, driven by a set of interlocking
+ * guards. This file is deliberately ONE hook — please read this before splitting it (#138).
+ *
+ * ── Where the logic actually lives ──
+ *
+ * Every DECISION this hook makes is already a pure, unit-tested function somewhere else:
+ *
+ *   machine.ts   may the mic open? is this result echo, a real turn, or a late one to
+ *                recover? what phase are we in?        (canOpenMic/classifyResult/derivePhase)
+ *   convo.ts     is this utterance a command? a stop-word? a restart loop? a wrong language?
+ *   vad.ts       has the user stopped talking?
+ *   audio.ts     mic level; is this transcript noise/hallucination?
+ *   gate.ts      did real speech happen this turn?
+ *   config.ts    settings → an STT/TTS pair
+ *   stt.ts/tts.ts  the recognizer + synthesiser themselves
+ *   cues.ts      chimes + the iOS speech unlock
+ *   voice-audio.ts  saving a turn's recording for replay
+ *
+ * What is LEFT here is the imperative remainder those modules deliberately do not own:
+ * sequencing side effects in the right order, over mutable state that several of them read
+ * at once. That is one responsibility, not five.
+ *
+ * ── Why it is not split into sub-hooks ──
+ *
+ * The obvious seams (useStt / useTts / useVoiceCommands / useTurnTimers) all fail the test
+ * that matters — that an extracted hook OWNS its refs and exposes a narrow surface:
+ *
+ *   - `ttsRef` is touched at ~20 sites across the whole file. "Is the agent speaking" is an
+ *     INPUT to the guard model (see readGuard), so the mic path, the command path, teardown
+ *     and mode-switching all need it. A `useTts` would have to hand `ttsRef` straight back
+ *     out, plus `speakEndedAtRef` (written from six places) and `setSpeaking`.
+ *   - `startAudioMonitor` reads ~24 refs, including the command effects — the gate's
+ *     onInterim is where a "mute" said mid-recording is caught (#228).
+ *   - The timers' callbacks close over `finalize`, which is built inside handleResult.
+ *
+ * So a split would thread twenty-odd refs through parameter bags, which does not remove the
+ * coupling — it hides it, and the sequencing here is exactly what the bugs were made of.
+ * The comments below are load-bearing: several record why an obvious simplification is
+ * wrong. Read them before "cleaning up" the thing they describe.
+ */
 import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
-import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig } from "./config.js";
-import { API, getToken, isConnectivityError, reportClientError } from "../client.js";
+import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig, type VoiceConfig } from "./config.js";
+import { isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
+import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
+import { uploadVoiceAudio } from "./voice-audio.js";
 import { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -25,87 +68,6 @@ const RESTART_DELAY_MS = 350;
 let activeHandsFree: { token: object; stop: () => void } | null = null;
 
 /**
- * The "mic is live again" cue (#152). Unmuting by VOICE has no visual gesture behind it —
- * the user is not looking at the screen, which is the whole point of hands-free — so a
- * confirmation they can HEAR is the only signal that the command landed. Synthesised with
- * WebAudio rather than an asset so it ships with the SDK and needs no network fetch.
- *
- * Deliberately short and quiet: it fires immediately before the mic opens, and anything
- * longer would be captured as the start of the user's own turn.
- */
-function playStartCue(): void {
-	try {
-		const Ctx = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext }).AudioContext
-			?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-		if (!Ctx) return;
-		const ctx = new Ctx();
-		const osc = ctx.createOscillator();
-		const gain = ctx.createGain();
-		osc.frequency.value = 880;
-		gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-		gain.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.01);
-		gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
-		osc.connect(gain).connect(ctx.destination);
-		osc.start();
-		osc.stop(ctx.currentTime + 0.13);
-		osc.onended = () => { try { void ctx.close(); } catch { /* already closed */ } };
-	} catch { /* no audio context (locked tab / unsupported) — the visual pill still updates */ }
-}
-
-/**
- * Unlock browser Text-to-Speech synchronously inside a user gesture. iOS/Safari
- * won't speak an utterance that's queued LATER (e.g. an async agent reply) unless
- * SpeechSynthesis was first invoked during a real tap — this is the "replied in text
- * but not voice" cause. Speaking an empty utterance on the toggle primes it.
- */
-function unlockSpeechSynthesis() {
-	try {
-		if (typeof window !== "undefined" && window.speechSynthesis) {
-			window.speechSynthesis.resume();
-			// A volume-0 space (not an empty string): some engines ignore an empty
-			// utterance, so it never counts as the gesture-initiated first speak that
-			// iOS requires before a LATER async reply is allowed to speak.
-			const u = new SpeechSynthesisUtterance(" ");
-			u.volume = 0;
-			window.speechSynthesis.speak(u);
-		}
-	} catch {}
-}
-
-// Short tones via Web Audio — no external files
-let _audioCtx: AudioContext | null = null;
-function getAudioCtx(): AudioContext {
-	if (!_audioCtx) _audioCtx = new AudioContext();
-	return _audioCtx;
-}
-
-function playTone(freq: number, dur: number, volume = 0.15) {
-	try {
-		const ctx = getAudioCtx();
-		if (ctx.state === "suspended") ctx.resume();
-		const osc = ctx.createOscillator();
-		const gain = ctx.createGain();
-		osc.type = "sine";
-		osc.frequency.value = freq;
-		gain.gain.value = volume;
-		gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
-		osc.connect(gain).connect(ctx.destination);
-		osc.start();
-		osc.stop(ctx.currentTime + dur);
-	} catch {}
-}
-
-function playListeningChime() {
-	playTone(600, 0.08);
-	setTimeout(() => playTone(900, 0.1), 100);
-}
-
-function playThinkingChime() {
-	playTone(500, 0.12);
-	setTimeout(() => playTone(350, 0.15), 120);
-}
-
-/**
  * Voice hook for chat — three modes:
  *
  * Push-to-talk (🎤): live transcript in input → auto-sends on pause.
@@ -116,43 +78,6 @@ function playThinkingChime() {
  *   3. Agent responds → response spoken aloud
  *   4. TTS finishes → chime → mic re-opens → step 1
  */
-/** Save a voice turn's audio to R2 so it can be replayed (double-tap the message).
- *  Fire-and-forget; a failure just means that turn has no replay, not a broken send. */
-async function uploadVoiceAudio(instanceId: string, turnId: string, blob: Blob): Promise<void> {
-	// NOTE: no `keepalive` — it caps the body at 64KB, but a voice recording is far
-	// bigger, so keepalive made the PUT fail outright. Retry a few times so a transient
-	// connection drop (common on mobile) doesn't lose the recording.
-	// Mirror the server's guards so a doomed upload is skipped with a SPECIFIC log line
-	// instead of a bare 400 (the log's "HTTP 400" entries were undiagnosable).
-	if (!blob.size) {
-		reportClientError("voice-audio", "not saved: empty recording blob");
-		return;
-	}
-	if (blob.size > 5 * 1024 * 1024) {
-		reportClientError("voice-audio", `not saved: recording too large (${(blob.size / 1024 / 1024).toFixed(1)}MB > 5MB cap)`);
-		return;
-	}
-	const url = `${API}/v1/instances/${instanceId}/voice-audio/${turnId}`;
-	let lastErr = "";
-	for (let attempt = 0; attempt < 3; attempt++) {
-		try {
-			const res = await fetch(url, {
-				method: "PUT",
-				headers: { Authorization: `Bearer ${getToken() ?? ""}`, "Content-Type": blob.type || "audio/webm" },
-				body: blob,
-			});
-			if (res.ok) return;
-			// Keep the server's reason — "HTTP 400" alone is undiagnosable in the log.
-			const detail = await res.text().catch(() => "");
-			lastErr = `HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`;
-			if (res.status < 500) break; // 4xx won't succeed on retry
-		} catch (e) {
-			lastErr = e instanceof Error ? e.message : String(e);
-		}
-		await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
-	}
-	reportClientError("voice-audio", `save failed after retries: ${lastErr}`);
-}
 
 export type { VoiceMode };
 
@@ -509,24 +434,35 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// The raw audio of the just-transcribed Whisper turn — saved for replay on send.
 	const lastAudioBlobRef = useRef<Blob | null>(null);
 
+	/**
+	 * Copy a resolved config into the refs the live loop reads. The ONE place this mapping
+	 * exists: it is applied both on mount (below) and on every mic start (makeStt re-reads
+	 * settings so a change in Settings → Voice takes effect without a page reload), and the
+	 * two copies had to be kept identical by hand. A setting added to only one of them
+	 * behaved differently depending on whether you had opened the mic yet.
+	 *
+	 * Stable (no deps) — it only writes refs, so it never needs to be rebuilt.
+	 */
+	const applyConfig = useCallback((c: VoiceConfig) => {
+		silenceMsRef.current = c.silenceMs;
+		maxDictationMsRef.current = c.maxDictationMs;
+		sttIsWhisperRef.current = c.sttProvider === "openai";
+		vadSensitivityRef.current = c.sensitivity;
+		commandsEnabledRef.current = c.commandsEnabled;
+		keepAwakeRef.current = c.keepAwake;
+		repeatWordsRef.current = c.repeatWords;
+		muteWordsRef.current = c.muteWords;
+		unmuteWordsRef.current = c.unmuteWords;
+		exitWordsRef.current = c.exitWords;
+		stopWordsRef.current = c.stopWords;
+		stopSpeechKeywordRef.current = c.stopSpeechKeyword;
+		confirmLanguageRef.current = c.confirmLanguage;
+		voiceLangRef.current = c.language;
+	}, []);
+
 	useEffect(() => {
-		getVoiceConfig(instanceId).then((c) => {
-			silenceMsRef.current = c.silenceMs;
-			maxDictationMsRef.current = c.maxDictationMs;
-			sttIsWhisperRef.current = c.sttProvider === "openai";
-			vadSensitivityRef.current = c.sensitivity;
-			commandsEnabledRef.current = c.commandsEnabled;
-			keepAwakeRef.current = c.keepAwake;
-			repeatWordsRef.current = c.repeatWords;
-			muteWordsRef.current = c.muteWords;
-			unmuteWordsRef.current = c.unmuteWords;
-			exitWordsRef.current = c.exitWords;
-			stopWordsRef.current = c.stopWords;
-			stopSpeechKeywordRef.current = c.stopSpeechKeyword;
-			confirmLanguageRef.current = c.confirmLanguage;
-			voiceLangRef.current = c.language;
-		}).catch(() => {});
-	}, [instanceId]);
+		getVoiceConfig(instanceId).then(applyConfig).catch(() => {});
+	}, [instanceId, applyConfig]);
 
 	const ensureTts = useCallback(async () => {
 		if (!ttsRef.current) {
@@ -985,21 +921,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// debounce use. makeStt runs on every mic/conversation start.
 		invalidateVoiceConfig();
 		try {
-			const c = await getVoiceConfig(instanceId);
-			silenceMsRef.current = c.silenceMs;
-			maxDictationMsRef.current = c.maxDictationMs;
-			sttIsWhisperRef.current = c.sttProvider === "openai";
-			vadSensitivityRef.current = c.sensitivity;
-			commandsEnabledRef.current = c.commandsEnabled;
-			keepAwakeRef.current = c.keepAwake;
-			repeatWordsRef.current = c.repeatWords;
-			muteWordsRef.current = c.muteWords;
-			unmuteWordsRef.current = c.unmuteWords;
-			exitWordsRef.current = c.exitWords;
-			stopWordsRef.current = c.stopWords;
-			stopSpeechKeywordRef.current = c.stopSpeechKeyword;
-			confirmLanguageRef.current = c.confirmLanguage;
-			voiceLangRef.current = c.language;
+			applyConfig(await getVoiceConfig(instanceId));
 		} catch {}
 		// Fresh session — re-arm interim keyword detection (covers the case where a command
 		// muted/stopped the mic before its final result ever arrived to reset the latch).
@@ -1071,7 +993,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			},
 		});
 		return stt;
-	}, [instanceId, handleResult, startListening, setPaused]);
+	}, [instanceId, handleResult, startListening, setPaused, applyConfig]);
 
 	const toggleMic = useCallback(async () => {
 		if (micOn) {

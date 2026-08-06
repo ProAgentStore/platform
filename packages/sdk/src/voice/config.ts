@@ -2,7 +2,7 @@ import { api } from "../client.js";
 import { DEFAULT_STT_MODEL, VoiceStt, type SttOptions } from "./stt.js";
 import { DEFAULT_TTS_MAX_CHARS, MAX_TTS_MAX_CHARS, MIN_TTS_MAX_CHARS, VoiceTts } from "./tts.js";
 
-interface VoiceConfig {
+export interface VoiceConfig {
 	sttProvider: string;
 	/** Transcription model for the OpenAI provider (real-time gpt-4o-transcribe by default). */
 	sttModel: string;
