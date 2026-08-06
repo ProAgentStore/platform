@@ -4,6 +4,7 @@ import { lintAgentClaims } from "../lib/agent-claims-lint.js";
 import { HttpError, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
+import { blockPublishReason } from "../lib/test-agent-guard.js";
 
 export const agentRoutes = new Hono<{ Bindings: Env }>();
 
@@ -387,7 +388,7 @@ agentRoutes.put("/:id", async (c) => {
 	const id = c.req.param("id");
 
 	const row = await c.env.DB.prepare(
-		"SELECT owner_id FROM agents WHERE id = ?1",
+		"SELECT owner_id, slug, name, description FROM agents WHERE id = ?1",
 	)
 		.bind(id)
 		.first<AgentRow>();
@@ -397,6 +398,20 @@ agentRoutes.put("/:id", async (c) => {
 	}
 
 	const body = await c.req.json<Record<string, unknown>>();
+
+	// Don't let a smoke-test fixture reach the public catalog by accident (#65). Checked
+	// against the values AFTER this update, so renaming "Smoke Test Agent" → a real product
+	// name and publishing in one call works. Create is unaffected: it always inserts 'draft'.
+	const blocked = blockPublishReason(
+		{
+			slug: row.slug,
+			name: typeof body.name === "string" ? body.name : row.name,
+			description: typeof body.description === "string" ? body.description : row.description,
+		},
+		typeof body.visibility === "string" ? body.visibility : undefined,
+		body.allowTestAgent === true,
+	);
+	if (blocked) throw new HttpError(400, blocked);
 	const allowed = {
 		name: "name",
 		description: "description",
