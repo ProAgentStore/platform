@@ -127,7 +127,11 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 					});
 					const detail = `step ${i} (${s.tool}) failed: ${result.content.slice(0, 200)}`;
 					await step.do("run-close-fail", async () => {
-						await closeRun(env, runId, "failed", { seen, added, skipped, errors }, detail).catch(() => undefined);
+						// NOT best-effort: `closeRun` is the only terminal write to `pipeline_runs`.
+						// Swallowed inside the step, the step reported SUCCESS and the run row stayed
+						// `running` forever while the workflow returned a terminal outcome — the console
+						// showed a run that never ends. Let the durable step retry instead.
+						await closeRun(env, runId, "failed", { seen, added, skipped, errors }, detail);
 						return null;
 					});
 					return { outcome: "failed", steps: i + 1, detail };
@@ -194,7 +198,9 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				// inflating `added` (which means net-new) for the sweeps that re-see everything.
 				const persisted = updated ? `, ${updated} updated` : "";
 				const sinkNote = pipeline.sink ? `, ${added} → ${pipeline.sink.collection}${persisted}` : persisted;
-				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${sinkNote}`).catch(() => undefined);
+				// NOT best-effort — see `run-close-fail`. Reporting `{outcome:"completed"}` from a step
+				// that failed to record the completion is the exact "success without the work" shape.
+				await closeRun(env, runId, "completed", { seen, added, skipped, errors }, `${pipeline.steps.length} step(s)${sinkNote}`);
 				return null;
 			});
 			return { outcome: "completed", steps: pipeline.steps.length, sunk };
@@ -210,7 +216,18 @@ export class PipelineRunWorkflow extends WorkflowEntrypoint<Env, PipelineRunPara
 				throw err;
 			}
 			await logError(env, { source: "pipeline-run", userId, status: 500, message: `pipeline "${pipeline.name}" crashed: ${msg}`, context: { instanceId, runId, pipeline: pipeline.name, stack: err instanceof Error ? String(err.stack || "").slice(0, 1500) : undefined } });
-			await closeRun(env, runId, "failed", { seen, added, skipped, errors: errors + 1 }, msg.slice(0, 200)).catch(() => undefined);
+			// Swallowed deliberately — throwing from the crash handler would replace the real cause
+			// with a bookkeeping error. But a failed close leaves the row `running` forever, so it
+			// gets its own durable entry rather than disappearing behind the crash it followed.
+			await closeRun(env, runId, "failed", { seen, added, skipped, errors: errors + 1 }, msg.slice(0, 200)).catch((e) =>
+				logError(env, {
+					source: "pipeline-run",
+					userId,
+					status: 500,
+					message: `could not close run ${runId} after a crash — the row will stay 'running': ${e instanceof Error ? e.message : String(e)}`,
+					context: { instanceId, runId, pipeline: pipeline.name },
+				}).catch(() => undefined),
+			);
 			return { outcome: "failed", steps: 0, detail: msg };
 		}
 	}

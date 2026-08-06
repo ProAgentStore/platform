@@ -43,7 +43,9 @@ describe("loopDriverFor — the ONE Loop dispatches on what the agent DECLARES (
  * the real blocker instead of blaming the runner (#271). A stub with no relay would make every
  * coding test assert against the offline path by accident.
  */
-function stubEnv(opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean; runnerOnline?: boolean; hasRuntimeRow?: boolean } = {}) {
+function stubEnv(
+	opts: { repos?: unknown[]; session?: unknown; claimTaken?: boolean; runnerOnline?: boolean; hasRuntimeRow?: boolean; failLoopRunInsert?: boolean } = {},
+) {
 	const sql: string[] = [];
 	const created: Array<{ binding: string; params: Record<string, unknown> }> = [];
 	const runnerOnline = opts.runnerOnline ?? true;
@@ -64,6 +66,7 @@ function stubEnv(opts: { repos?: unknown[]; session?: unknown; claimTaken?: bool
 						return {
 							// A claim whose predicate matched nothing = somebody else holds it.
 							async run() {
+								if (opts.failLoopRunInsert && q.includes("INSERT INTO agent_loop_runs")) throw new Error("D1_ERROR: database is locked");
 								if (q.includes("INSERT INTO coding_sessions")) sessionRow = { id: "csess_new", client_type: "claude", status: "active", repo_id: "r1", runner_node: "macbook" };
 								return { meta: { changes: opts.claimTaken && q.includes("driver_id") ? 0 : 1 } };
 							},
@@ -134,6 +137,44 @@ describe("every driver opens an agent_loop_runs row — the fact that makes ONE 
 		expect(created[0].binding).toBe("CODING_SESSION");
 		// Same id, or the Pilot closes a different row than the one the caller is watching.
 		if (out.ok) expect(created[0].params.loopRunId).toBe(out.runId);
+	});
+
+	// ── #291 ──────────────────────────────────────────────────────────────────────
+	it("refuses to start a run it could not record, instead of starting one nobody can stop", async () => {
+		// The bug this closes: the coding driver wrapped `createLoopRun` in `.catch(() => undefined)`
+		// (the chat driver never did — the asymmetry was the tell). The Pilot workflow was created
+		// anyway and the caller got a `runId` with no `agent_loop_runs` row behind it, so
+		// `requestCancel(runId)` and `isCancelRequested` had nothing to act on: an autonomous run
+		// editing the user's repo and spending their tokens that the console could not show and the
+		// user could not stop. Violates this module's stated invariant that EVERY driver opens a row.
+		const { env, created } = stubEnv({
+			repos: [{ id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready" }],
+			session: { id: "s1", client_type: "claude", status: "active" },
+			failLoopRunInsert: true,
+		});
+
+		const out = await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+
+		expect(out.ok).toBe(false);
+		// The real regression: no untrackable Pilot was launched.
+		expect(created).toHaveLength(0);
+	});
+
+	it("gives back the session driver claim it took, so the next attempt is not locked out", async () => {
+		// Failing the start is only correct if it also unwinds. `claimSessionDriver` has already
+		// marked the session as driven; leaving that behind would make every retry 409 with
+		// "already being worked on" against a run that never existed.
+		const { env, sql } = stubEnv({
+			repos: [{ id: "r1", name: "fws/platform", instance_id: "i1", user_id: "u1", clone_status: "ready" }],
+			session: { id: "s1", client_type: "claude", status: "active" },
+			failLoopRunInsert: true,
+		});
+
+		await loopDriverFor(caps("CODING_SESSION")).start({ env, ...base });
+
+		// `driver_id = NULL` is what distinguishes the RELEASE from the claim — both are
+		// `UPDATE coding_sessions … driver_id`, so matching on that alone would pass vacuously.
+		expect(sql.some((q) => q.includes("UPDATE coding_sessions") && q.includes("driver_id = NULL"))).toBe(true);
 	});
 });
 

@@ -21,7 +21,7 @@
 import { createLoopRun } from "./agent-loop-store.js";
 import { sanitizeMaxIterations } from "./agent-loop.js";
 import { delegationTaskRecord } from "./delegation.js";
-import { claimSessionDriver, endSession, listRepos } from "./coding-store.js";
+import { claimSessionDriver, endSession, listRepos, releaseSessionDriver } from "./coding-store.js";
 import { ensureActiveSession } from "./coding-session-open.js";
 import { noSessionMessage } from "./coding-session-lifecycle.js";
 import { classifySubordinateConnectivity } from "./subordinate-connectivity.js";
@@ -166,15 +166,32 @@ const codingDriver: LoopDriver = {
 
 		const runId = crypto.randomUUID();
 		const maxIterations = sanitizeMaxIterations(input.maxIterations);
-		await createLoopRun(env, {
-			runId,
-			userId,
-			instanceId,
-			objective,
-			maxIterations,
-			budgetId: input.budgetId,
-			startedAt: Date.now(),
-		}).catch(() => undefined);
+		// NOT best-effort — this is the invariant at the top of this file: EVERY driver opens an
+		// `agent_loop_runs` row, because that row is what `check_delegation`, `subordinate_status`
+		// and the console's `/loop/:runId` poll read. Swallowed, the Pilot workflow still started
+		// and the caller still got a `runId`, but `requestCancel(runId)`/`isCancelRequested` had
+		// no row to act on — an autonomous run editing the user's repo and spending their tokens
+		// that they could not see and could not stop. `chatDriver` never swallowed it; the
+		// asymmetry was the bug. Fail the START instead, and give back what was claimed.
+		try {
+			await createLoopRun(env, {
+				runId,
+				userId,
+				instanceId,
+				objective,
+				maxIterations,
+				budgetId: input.budgetId,
+				startedAt: Date.now(),
+			});
+		} catch (e) {
+			await releaseSessionDriver(env, instanceId, userId, session.id, driverId).catch(() => undefined);
+			if (opened) await endSession(env, instanceId, userId, session.id, "ended").catch(() => undefined);
+			return {
+				ok: false,
+				status: 500,
+				error: `Could not start the run: ${e instanceof Error ? e.message : String(e)}`,
+			};
+		}
 
 		let boardTaskId: string | undefined;
 		if (input.delegated) {

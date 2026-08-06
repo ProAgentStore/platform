@@ -225,7 +225,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// Recorded at the terminal state, which is when the real count is known.
 					// max(): `outcome.steps` is only the last round's count (see pilotSteps above).
 					await recordIteration(env, event.payload.loopRunId as string, Math.max(pilotSteps, outcome.steps ?? 0)).catch(() => undefined);
-					await finishLoopRun(env, event.payload.loopRunId as string, reason, note, Date.now()).catch(() => undefined);
+					// NOT best-effort. `finishLoopRun` is the only terminal write to `agent_loop_runs`,
+					// so swallowing it left the row `running` forever — `check_delegation` then told
+					// the supervisor the subordinate was still working, which is the "looks delegated
+					// and never moves" failure this file's own comment forbids — while the next line
+					// posted "**Loop complete**" into the chat. Let the durable step retry, and never
+					// announce a completion that was not recorded.
+					await finishLoopRun(env, event.payload.loopRunId as string, reason, note, Date.now());
 					// The result, in the thread the loop was started from. Written HERE rather than by
 					// the console's poll: the browser version only existed if the tab happened to be
 					// open, so a run finished while you were elsewhere was never recorded at all.

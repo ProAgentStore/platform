@@ -19,6 +19,7 @@ import { isCredentialsError, runLoopDecide, type LoopTurn } from "../lib/loop-or
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros } from "../lib/usage.js";
 import { logEvent } from "../lib/events.js";
+import { logError } from "../lib/error-log.js";
 import { escalationNote, escalationTarget } from "../lib/escalation.js";
 import { loadGraph } from "../lib/supervision.js";
 import { notifyUser } from "../routes/push.js";
@@ -198,7 +199,20 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 				await step.do(`settle-outstanding-${iteration}`, async () => {
 					const after = await instanceSpendMicros(this.env, userId, instanceId).catch(() => held.spendBefore);
 					await settle(this.env, userId, budgetId, held.reserved, Math.max(0, after - held.spendBefore));
-				}).catch(() => undefined);
+					// The settle is what returns the reservation to the pool; `outstanding` is cleared
+					// unconditionally below, so nothing retries it afterwards. Swallowing it therefore
+					// caused the exact permanent leak the comment above says this block prevents, and
+					// every sibling drawing on the same tree pool was silently starved of that
+					// headroom. This is a `finally` — it must not throw, or it would replace the real
+					// stop reason — so the failure is recorded durably instead of vanishing.
+				}).catch((e) =>
+					logError(this.env, {
+						source: "loop",
+						userId,
+						message: `budget reservation of ${held.reserved} micros could not be settled and is now leaked from the pool: ${e instanceof Error ? e.message : String(e)}`,
+						context: { instanceId, budgetId, runId, reserved: held.reserved },
+					}).catch(() => undefined),
+				);
 				outstanding = null;
 			}
 		}
@@ -231,7 +245,12 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 					// Told, not triggered: a board card the supervisor can see plus a note in its
 					// thread. Auto-resolution would start spending unprompted and is a bigger
 					// decision than routing an interrupt.
-					await this.env.DB.prepare(
+					// The card IS the escalation. Swallowing this INSERT and returning anyway meant a
+					// run that needed a human ended with NOBODY told — no supervisor card, and the
+					// `notifyUser` fallback below skipped by the early return. Silence is the one
+					// outcome #157 must never produce, so a failed card falls through to waking the
+					// human instead of pretending the ladder was climbed.
+					const escalated = await this.env.DB.prepare(
 						`INSERT INTO instance_runtime_tasks (id, instance_id, user_id, type, status, payload, created_at, updated_at)
 						 VALUES (?1, ?2, ?3, 'escalation', 'needs_human', ?4, datetime('now'), datetime('now'))`,
 					)
@@ -250,17 +269,30 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 							}),
 						)
 						.run()
-						.catch(() => undefined);
-					await logEvent(this.env, {
-						source: "loop",
-						event: "escalated_to_supervisor",
-						message: `${instanceId} → ${target.instanceId} (hop ${target.hops})`,
-						userId,
-						instanceId: target.instanceId,
-						traceId: runId,
-						level: "warn",
-					}).catch(() => undefined);
-					return; // the human is NOT interrupted at this level
+						.then(
+							() => true,
+							async (e: unknown) => {
+								await logError(this.env, {
+									source: "loop",
+									userId,
+									message: `escalation card for ${instanceId} → ${target.instanceId} could not be written; waking the human instead: ${e instanceof Error ? e.message : String(e)}`,
+									context: { instanceId, supervisorId: target.instanceId, runId },
+								}).catch(() => undefined);
+								return false;
+							},
+						);
+					if (escalated) {
+						await logEvent(this.env, {
+							source: "loop",
+							event: "escalated_to_supervisor",
+							message: `${instanceId} → ${target.instanceId} (hop ${target.hops})`,
+							userId,
+							instanceId: target.instanceId,
+							traceId: runId,
+							level: "warn",
+						}).catch(() => undefined);
+						return; // the human is NOT interrupted at this level
+					}
 				}
 			}
 			if (needsHuman(stop.reason)) {
