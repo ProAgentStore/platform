@@ -78,7 +78,7 @@ export default function Usage() {
 		<div>
 			<div className="flex items-center justify-between mb-3">
 				<h1 className="font-display text-xl font-bold">Usage</h1>
-				<select value={range} onChange={(e) => setRange(e.target.value)} className="!w-auto text-sm">{RANGES.map((r) => <option key={r}>{r}</option>)}</select>
+				<select aria-label="Time range" value={range} onChange={(e) => setRange(e.target.value)} className="!w-auto text-sm">{RANGES.map((r) => <option key={r}>{r}</option>)}</select>
 			</div>
 
 			<Panel

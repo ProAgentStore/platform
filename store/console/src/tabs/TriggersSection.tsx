@@ -544,7 +544,9 @@ export default function TriggersSection({
 
 							{trigger.webhookUrl && (
 								<div className="flex gap-2 mt-2">
-									<input readOnly value={trigger.webhookUrl} className="flex-1 min-w-0 text-xs bg-panel border border-line rounded px-2 py-1.5 font-mono" />
+									{/* Read-only, but still a focusable field a screen reader lands on — and the
+									    only thing identifying it is the Copy button beside it. */}
+									<input readOnly aria-label={`Webhook URL for ${trigger.name}`} value={trigger.webhookUrl} className="flex-1 min-w-0 text-xs bg-panel border border-line rounded px-2 py-1.5 font-mono" />
 									<button type="button" onClick={() => copyWebhook(trigger.webhookUrl || "")} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">Copy</button>
 								</div>
 							)}

@@ -473,7 +473,10 @@ export default function RunDetail() {
 						</button>
 						<button type="button" onClick={() => { setPlaying(false); setIdx((i) => Math.max(0, i - 1)); }} disabled={idx <= 0} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Previous"><ChevronLeft size={16} /></button>
 						<button type="button" onClick={() => { setPlaying(false); setIdx((i) => Math.min(shots.length - 1, i + 1)); }} disabled={idx >= shots.length - 1} className="w-8 h-8 flex items-center justify-center rounded-lg border border-line text-muted disabled:opacity-30" aria-label="Next"><ChevronRight size={16} /></button>
-						<input type="range" min={0} max={Math.max(0, shots.length - 1)} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} className="flex-1 min-w-0 accent-accent" />
+						{/* The play/prev/next buttons around it are all named; the scrubber — the only
+						    one you can drag to an arbitrary step — was not, and the "3/12" beside it
+						    is a separate node a screen reader does not attach. */}
+						<input type="range" min={0} max={Math.max(0, shots.length - 1)} value={idx} onChange={(e) => { setPlaying(false); setIdx(Number(e.target.value)); }} className="flex-1 min-w-0 accent-accent" aria-label="Step" aria-valuetext={`Step ${idx + 1} of ${shots.length}`} />
 						<span className="text-xs text-muted-soft font-mono shrink-0">{idx + 1}/{shots.length}</span>
 					</div>
 

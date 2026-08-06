@@ -506,6 +506,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 										) : (
 										<div className="flex gap-2 mb-2 flex-wrap">
 											<select
+												aria-label="Google Drive folder to import from"
 												value={driveGrantId}
 												onChange={(e) => selectDriveGrant(e.target.value)}
 												className="bg-paper border border-line rounded-lg px-3 py-2 text-sm"
@@ -571,6 +572,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 										) : (
 										<div className="flex gap-2 mb-2 flex-wrap">
 											<select
+												aria-label="Zoho WorkDrive folder to import from"
 												value={workdriveGrantId}
 												onChange={(e) => selectWorkdriveGrant(e.target.value)}
 												className="bg-paper border border-line rounded-lg px-3 py-2 text-sm"

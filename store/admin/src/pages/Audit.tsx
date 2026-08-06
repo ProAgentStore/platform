@@ -87,7 +87,7 @@ export default function Audit() {
 					placeholder="Actor user id"
 					className="!w-auto min-w-[15rem] text-sm"
 				/>
-				<select value={action} onChange={(e) => setAction(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Filter by action" value={action} onChange={(e) => setAction(e.target.value)} className="!w-auto text-sm">
 					<option value="">Any action</option>
 					{ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
 				</select>
@@ -98,7 +98,7 @@ export default function Audit() {
 					placeholder="Target id (user / agent / instance)"
 					className="!w-auto min-w-[17rem] text-sm"
 				/>
-				<select value={limit} onChange={(e) => setLimit(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Number of rows" value={limit} onChange={(e) => setLimit(e.target.value)} className="!w-auto text-sm">
 					{LIMITS.map((l) => <option key={l} value={l}>last {l}</option>)}
 				</select>
 				<button type="button" onClick={apply} className="text-sm px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-hover text-white font-semibold">Apply</button>

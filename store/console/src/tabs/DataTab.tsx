@@ -222,8 +222,12 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		return s;
 	};
 
+	// One of these renders per ROW, so a generic "Status" name would announce identically
+	// for every record on the page — and this control WRITES: picking an option moves the
+	// record's pipeline status immediately. The name has to say which record.
 	const StatusSelect = ({ rec }: { rec: Rec }) => (
 		<select
+			aria-label={`Status of ${String(rec.data.name ?? rec.data.title ?? rec.id ?? "record")}`}
 			value={String(rec.data.status ?? "")}
 			onChange={(e) => setStatus(rec, e.target.value)}
 			className="border rounded text-xs px-1 py-0.5"
@@ -255,6 +259,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					{surface === "records" && (
 					<>
 					<select
+						aria-label="Collection"
 						value={selected}
 						onChange={(e) => {
 							setSelected(e.target.value);
@@ -312,6 +317,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 				{surface === "records" && showControls && (
 					<div className="flex flex-wrap items-center gap-2 mt-2 border-t pt-2">
 						<input
+							aria-label="Filter records"
 							value={q}
 							onChange={(e) => setQ(e.target.value)}
 							placeholder="Filter…"
@@ -321,6 +327,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						{Object.keys(facetValues).map((f) => (
 							<select
 								key={f}
+								aria-label={`Filter by ${f}`}
 								value={filters[f] || ""}
 								onChange={(e) => setFilters((p) => ({ ...p, [f]: e.target.value }))}
 								className="border rounded px-1 py-1 text-xs"
@@ -500,7 +507,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					>
 						<div className="flex items-center justify-between mb-3">
 							<h3 className="font-semibold text-base">{String(detail.data.name ?? detail.data.title ?? detail.id ?? "Record")}</h3>
-							<button type="button" onClick={() => setDetail(null)} className="text-muted-soft">
+							<button type="button" aria-label="Close record details" onClick={() => setDetail(null)} className="text-muted-soft">
 								✕
 							</button>
 						</div>

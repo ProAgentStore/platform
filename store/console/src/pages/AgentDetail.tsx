@@ -504,9 +504,11 @@ export default function AgentDetail() {
 							{sFields.map((f, i) => (
 								<div key={f.clientId} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
 									<div className="flex gap-2 flex-wrap">
-										<input value={f.id} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. target_language)" className="flex-1 min-w-32 bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
-										<input value={f.label} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 min-w-32 bg-paper border border-line rounded px-2 py-1 text-sm" />
-										<select value={f.type} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, type: e.target.value } : x))} className="bg-paper border border-line rounded px-2 py-1 text-sm">
+										{/* Names are numbered because this is a repeating row builder: "Field id"
+										    five times over cannot tell you which row you are in. */}
+										<input aria-label={`Field ${i + 1} id`} value={f.id} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. target_language)" className="flex-1 min-w-32 bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
+										<input aria-label={`Field ${i + 1} label`} value={f.label} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 min-w-32 bg-paper border border-line rounded px-2 py-1 text-sm" />
+										<select aria-label={`Field ${i + 1} type`} value={f.type} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, type: e.target.value } : x))} className="bg-paper border border-line rounded px-2 py-1 text-sm">
 											<option value="select">select</option>
 											<option value="text">text</option>
 											<option value="number">number</option>
@@ -514,12 +516,12 @@ export default function AgentDetail() {
 										</select>
 										<button type="button" onClick={() => setSFields(fs => fs.filter((_, j) => j !== i))} className="text-red text-xs px-1.5">Remove</button>
 									</div>
-									<input value={f.description} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} placeholder="Description shown under the label (optional)" className="bg-paper border border-line rounded px-2 py-1 text-sm" />
+									<input aria-label={`Field ${i + 1} description`} value={f.description} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, description: e.target.value } : x))} placeholder="Description shown under the label (optional)" className="bg-paper border border-line rounded px-2 py-1 text-sm" />
 									<div className="flex gap-2 flex-wrap items-start">
 										{f.type === "select" && (
-											<textarea value={f.optionsText} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, optionsText: e.target.value } : x))} placeholder={"zh-CN | Chinese (Mandarin)\nes-ES | Spanish"} className="flex-1 min-w-48 min-h-[64px] bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
+											<textarea aria-label={`Field ${i + 1} options`} value={f.optionsText} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, optionsText: e.target.value } : x))} placeholder={"zh-CN | Chinese (Mandarin)\nes-ES | Spanish"} className="flex-1 min-w-48 min-h-[64px] bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
 										)}
-										<input value={f.defaultValue} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, defaultValue: e.target.value } : x))} placeholder={f.type === "toggle" ? "default: true / false" : "default (optional)"} className="w-44 bg-paper border border-line rounded px-2 py-1 text-sm" />
+										<input aria-label={`Field ${i + 1} default value`} value={f.defaultValue} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, defaultValue: e.target.value } : x))} placeholder={f.type === "toggle" ? "default: true / false" : "default (optional)"} className="w-44 bg-paper border border-line rounded px-2 py-1 text-sm" />
 										{f.type === "select" && (
 											<label className="flex items-center gap-1.5 text-xs text-muted cursor-pointer mt-1">
 												<input type="checkbox" checked={f.voiceLanguage} onChange={e => setSFields(fs => fs.map((x, j) => j === i ? { ...x, voiceLanguage: e.target.checked } : x))} className="w-3.5 h-3.5 accent-accent" />

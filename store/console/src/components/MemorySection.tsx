@@ -78,13 +78,13 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 
 			{showAddMem && (
 				<div className="bg-panel border border-line rounded-xl p-4 mb-3">
-					<input value={newMemKey} onChange={(e) => setNewMemKey(e.target.value)} placeholder="Key (e.g. language)" className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
-					<select value={newMemType} onChange={(e) => setNewMemType(e.target.value)} className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm">
+					<input aria-label="Memory key" value={newMemKey} onChange={(e) => setNewMemKey(e.target.value)} placeholder="Key (e.g. language)" className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
+					<select aria-label="Memory type" value={newMemType} onChange={(e) => setNewMemType(e.target.value)} className="mb-2 w-full bg-paper border border-line rounded-lg px-3 py-2 text-sm">
 						{["identity", "knowledge", "preference", "skill", "context"].map((t) => (
 							<option key={t} value={t}>{t}</option>
 						))}
 					</select>
-					<textarea value={newMemContent} onChange={(e) => setNewMemContent(e.target.value)} placeholder="Content" className="mb-2 w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
+					<textarea aria-label="Memory content" value={newMemContent} onChange={(e) => setNewMemContent(e.target.value)} placeholder="Content" className="mb-2 w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 					<div className="flex gap-2">
 						<button type="button" onClick={addMemory} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
 						<button type="button" onClick={() => setShowAddMem(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
@@ -111,7 +111,9 @@ export default function MemorySection({ instanceId, active }: { instanceId: stri
 							</div>
 							{editMemKey === m.key ? (
 								<div className="mt-2">
-									<textarea value={editMemContent} onChange={(e) => setEditMemContent(e.target.value)} className="w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
+									{/* Names the ROW being edited, not just "content" — several of these can be
+									    open at once, and "Content" three times over says nothing about which. */}
+									<textarea aria-label={`Content of memory ${m.key}`} value={editMemContent} onChange={(e) => setEditMemContent(e.target.value)} className="w-full min-h-[80px] bg-paper border border-line rounded-lg px-3 py-2 text-sm" />
 									<div className="flex gap-2 mt-2">
 										<button type="button" onClick={() => saveMemory(m)} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Save</button>
 										<button type="button" onClick={() => setEditMemKey(null)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>

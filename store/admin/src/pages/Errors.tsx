@@ -65,10 +65,10 @@ export default function Errors() {
 					<button type="button" onClick={() => setView("grouped")} className={`px-3 py-1.5 ${view === "grouped" ? "bg-accent text-white" : "text-muted hover:bg-panel-hover"}`}>Grouped</button>
 					<button type="button" onClick={() => setView("feed")} className={`px-3 py-1.5 ${view === "feed" ? "bg-accent text-white" : "text-muted hover:bg-panel-hover"}`}>Feed</button>
 				</div>
-				<select value={since} onChange={(e) => setSince(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Time range" value={since} onChange={(e) => setSince(e.target.value)} className="!w-auto text-sm">
 					{RANGES.map((r) => <option key={r.l} value={r.v}>{r.l}</option>)}
 				</select>
-				<select value={source} onChange={(e) => setSource(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Filter by source" value={source} onChange={(e) => setSource(e.target.value)} className="!w-auto text-sm">
 					<option value="">All sources</option>
 					{sources.map((s) => <option key={s} value={s}>{s}</option>)}
 				</select>

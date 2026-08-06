@@ -28,7 +28,7 @@ export default function Spending() {
 	}, [range]);
 
 	const rangeCtl = (
-		<select value={range} onChange={(e) => setRange(e.target.value)} className="!w-auto text-sm">
+		<select aria-label="Time range" value={range} onChange={(e) => setRange(e.target.value)} className="!w-auto text-sm">
 			{RANGES.map((r) => <option key={r} value={r}>{r}</option>)}
 		</select>
 	);

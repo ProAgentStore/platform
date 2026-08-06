@@ -72,11 +72,11 @@ export default function Agents() {
 
 			<div className="flex flex-wrap items-center gap-2 mb-4">
 				<input placeholder="Search slug / name / owner…" value={search} onChange={(e) => setSearch(e.target.value)} className="!w-auto min-w-[16rem] text-sm" />
-				<select value={visibility} onChange={(e) => setVisibility(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Filter by visibility" value={visibility} onChange={(e) => setVisibility(e.target.value)} className="!w-auto text-sm">
 					<option value="">Any visibility</option>
 					{VISIBILITIES.map((v) => <option key={v} value={v}>{v}</option>)}
 				</select>
-				<select value={status} onChange={(e) => setStatus(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)} className="!w-auto text-sm">
 					<option value="">Any status</option>
 					{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
 				</select>

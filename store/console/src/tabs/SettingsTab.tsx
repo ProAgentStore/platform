@@ -603,12 +603,15 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		<div className="min-w-0 overflow-x-hidden">
 			{/* Instance name — distinguishes multiple instances of the same agent */}
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-1">Instance name</h3>
+				<h3 className="text-base font-bold mb-1" id="inst-name-label">Instance name</h3>
 				<p className="text-sm text-muted mb-3">
 					Shown on your dashboard and in the header — rename it to tell multiple instances of the same agent apart (e.g. "Legal PDFs" vs "Product Manuals").
 				</p>
 				<div className="flex gap-2 items-center flex-wrap">
+					{/* The heading IS this field's label — associate them rather than repeating the
+					    text, so a screen reader announces the same words a sighted user reads. */}
 					<input
+						aria-labelledby="inst-name-label"
 						value={instName}
 						onChange={(e) => setInstName(e.target.value)}
 						maxLength={60}

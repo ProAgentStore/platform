@@ -285,10 +285,21 @@ function FieldRow({
 		setDragging(null);
 	};
 
+	/**
+	 * The field's label sits in a header row with the state chip and the reset button, so it was
+	 * never associated with the control below it — every slider, text box and number box on this
+	 * tab announced as an unnamed control, and 19 unnamed sliders are indistinguishable. Pairing
+	 * `htmlFor`/`id` also makes the label click-to-focus.
+	 *
+	 * `toggle` is the exception: its input is already wrapped in its own `<label>` whose text is
+	 * the on/off prompt, so pointing this one at it too would name it twice.
+	 */
+	const controlId = `behaviour-${field.id}`;
+
 	return (
 		<div>
 			<div className="flex items-baseline justify-between gap-2">
-				<label className="text-sm font-medium">{field.label}</label>
+				<label className="text-sm font-medium" htmlFor={field.type === "toggle" ? undefined : controlId}>{field.label}</label>
 				<div className="flex items-center gap-2 text-xs">
 					{busy && <span className="text-muted-soft">saving…</span>}
 					{state === "default" && <span className="text-muted-soft">default</span>}
@@ -307,6 +318,7 @@ function FieldRow({
 			{field.type === "scale" && (
 				<div className="mt-2">
 					<input
+						id={controlId}
 						type="range"
 						min={0}
 						max={100}
@@ -368,6 +380,7 @@ function FieldRow({
 			{field.type === "text" && (
 				<input
 					key={inputKey}
+					id={controlId}
 					type="text"
 					className="mt-2 w-full rounded border border-border bg-transparent px-2 py-1 text-sm"
 					maxLength={field.maxLength}
@@ -383,6 +396,7 @@ function FieldRow({
 			{field.type === "number" && (
 				<input
 					key={inputKey}
+					id={controlId}
 					type="number"
 					className="mt-2 w-32 rounded border border-border bg-transparent px-2 py-1 text-sm"
 					min={field.min}
@@ -395,6 +409,7 @@ function FieldRow({
 			{field.type === "list" && (
 				<input
 					key={inputKey}
+					id={controlId}
 					type="text"
 					className="mt-2 w-full rounded border border-border bg-transparent px-2 py-1 text-sm"
 					placeholder="comma separated"

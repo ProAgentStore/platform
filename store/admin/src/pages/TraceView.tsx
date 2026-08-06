@@ -68,18 +68,18 @@ export default function TraceView() {
 			</p>
 
 			<div className="flex flex-wrap items-center gap-2 mb-4">
-				<select value={source} onChange={(e) => setSource(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Filter by source" value={source} onChange={(e) => setSource(e.target.value)} className="!w-auto text-sm">
 					<option value="">All sources</option>
 					{sources.map((s) => <option key={s} value={s}>{s}</option>)}
 				</select>
-				<select value={level} onChange={(e) => setLevel(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Filter by level" value={level} onChange={(e) => setLevel(e.target.value)} className="!w-auto text-sm">
 					<option value="">All levels</option>
 					<option value="debug">debug</option>
 					<option value="info">info</option>
 					<option value="warn">warn</option>
 					<option value="error">error</option>
 				</select>
-				<select value={limit} onChange={(e) => setLimit(e.target.value)} className="!w-auto text-sm">
+				<select aria-label="Number of rows" value={limit} onChange={(e) => setLimit(e.target.value)} className="!w-auto text-sm">
 					{LIMITS.map((l) => <option key={l} value={l}>{l} rows</option>)}
 				</select>
 				<input placeholder="Filter by trace_id…" value={traceId} onChange={(e) => setTraceId(e.target.value)} className="!w-auto flex-1 min-w-[180px] text-sm font-mono" />
