@@ -364,6 +364,61 @@ export function stripStopWord(text: string, stopWords?: string[]): { ended: bool
 	return { ended: false, text };
 }
 
+/** The phrase list actually in force for one command — custom words if the user set any,
+ *  else the built-ins for their language. Exported so callers can strip a spoken command
+ *  out of a message without re-deriving the precedence rules. */
+export function commandPhrases(command: VoiceCommand, words?: VoiceCommandWords, lang?: string): string[] {
+	const l = langKey(lang);
+	const table =
+		command === "repeat" ? REPEAT_BY_LANG : command === "mute" ? MUTE_BY_LANG : command === "unmute" ? UNMUTE_BY_LANG : EXIT_BY_LANG;
+	const custom = words?.[command];
+	return custom?.length ? custom : (table[l] ?? table.en);
+}
+
+/**
+ * Split a spoken turn into "the command at the end" + "what the user actually said".
+ *
+ * A control word spoken at the END of a turn ("run the tests, mute") is a control word AND a
+ * finished message — the same contract stop-words already have. Treating it as command-only
+ * threw the message away: the user dictated a request, asked for silence, and the request
+ * vanished. Treating it as message-only left them talking to a mic that never muted.
+ *
+ * Returns the command (if any) and the message with the command phrase removed. A turn that
+ * IS the command yields an empty message, so nothing is sent.
+ */
+export function splitTrailingCommand(
+	text: string,
+	words?: VoiceCommandWords,
+	lang?: string,
+	state?: { muted?: boolean },
+): { command: VoiceCommand | null; text: string } {
+	// Same candidate set and ordering as matchVoiceCommand, so the two can never disagree
+	// about what a word means.
+	const candidates: VoiceCommand[] = state?.muted ? ["unmute", "exit"] : ["exit", "repeat", "mute"];
+	const norm = normalizeTranscript(text);
+
+	// The turn IS the command → nothing to send.
+	for (const cmd of candidates) {
+		if (commandPhrases(cmd, words, lang).some((p) => normalizeTranscript(p) === norm)) {
+			return { command: cmd, text: "" };
+		}
+	}
+
+	// A command phrase at the END → act on it and keep what came before. Restricted to
+	// MULTI-WORD phrases, deliberately: `phraseMatchesTranscript` already refuses to fire a
+	// single-word command that isn't the whole utterance, precisely so ordinary speech isn't
+	// hijacked, and stripping a trailing bare word would reintroduce that. "don't forget to
+	// mute" must stay a message — silently truncating it AND muting is far worse than making
+	// the user pause before saying a one-word command.
+	for (const cmd of candidates) {
+		const multiWord = commandPhrases(cmd, words, lang).filter((p) => normalizeTranscript(p).includes(" "));
+		if (!multiWord.length) continue;
+		const stripped = stripStopWord(text, multiWord);
+		if (stripped.ended && stripped.text.trim()) return { command: cmd, text: stripped.text };
+	}
+	return { command: null, text };
+}
+
 /**
  * Classify a browser SpeechRecognition / STT error (issue: voice error-log spam).
  * - "soft"           → no-speech / empty: not an error, just recycle the mic.

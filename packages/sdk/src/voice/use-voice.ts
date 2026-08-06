@@ -6,7 +6,7 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
 import { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
 
@@ -283,14 +283,19 @@ export function useVoice(instanceId: string | undefined, opts: {
 								{ muted: mutedRef.current },
 							);
 							if (cmd) {
-								// The command IS the turn — drop the audio so it is never transcribed
-								// and sent as a chat message on top of being acted on.
-								handledUtteranceRef.current = true;
-								flushSync(() => setInterim(""));
+								// Act NOW — the user asked for silence and should get it immediately,
+								// not at end-of-turn. But do NOT latch handledUtterance: the audio
+								// already captured is still transcribed and sent, with the command
+								// word stripped by finalize (splitTrailingCommand). Latching here
+								// discarded the turn, so "run the tests, mute" muted and threw the
+								// request away — the user's words vanished with their own command.
+								//
+								// muteFromCommand stops the recorder with stop(), not stopDiscard(),
+								// so the clip still uploads and comes back through the normal path.
 								if (cmd === "mute") muteFromCommandRef.current();
 								else if (cmd === "unmute") unmuteFromCommandRef.current();
 								else if (cmd === "exit") exitFromCommandRef.current();
-								else if (cmd === "repeat") repeatLastRef.current();
+								else if (cmd === "repeat") { handledUtteranceRef.current = true; flushSync(() => setInterim("")); repeatLastRef.current(); }
 								return;
 							}
 						}
@@ -322,6 +327,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 				analyser.getByteFrequencyData(data);
 				const level = computeRmsLevel(data);
 				const now = Date.now();
+				// Feed the recorder's speech gate EVERY frame, before any mode gate below: the
+				// auto-VAD is off in tap-to-talk by design, so that mode had no speech gate and a
+				// silent recording still reached Whisper (which invents a sentence from its
+				// vocabulary prompt rather than returning nothing).
+				sttRef.current?.noteLevel(level);
 				// Throttle the React state update — 60fps re-renders the whole chat and lags.
 				if (now - lastLevelSetRef.current > LEVEL_THROTTLE_MS) { lastLevelSetRef.current = now; setAudioLevel(level); }
 				// Never let the mic-level VAD end (and transcribe) a turn while the agent is
@@ -815,16 +825,24 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
 				if (maxDictationTimerRef.current) { clearTimeout(maxDictationTimerRef.current); maxDictationTimerRef.current = null; }
 				pendingTextRef.current = "";
+				let body = msg;
 				if (commandsEnabledRef.current) {
-					const cmd = matchVoiceCommand(msg, cmdWords, voiceLangRef.current);
-					if (cmd === "repeat") {
+					// A control word at the END of a turn is BOTH a command and a finished message
+					// ("run the tests, mute"). Acting on it and dropping the turn threw away what
+					// the user dictated — they asked for silence and lost their request with it.
+					// Split instead: apply the command, send what came before.
+					const split = splitTrailingCommand(msg, cmdWords, voiceLangRef.current, { muted: mutedRef.current });
+					body = split.text;
+					if (split.command === "repeat") {
 						flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
 						repeatLastRef.current();
-						return;
+						return; // "repeat" asks to hear the LAST reply — sending a new message first would replace it
 					}
-					if (cmd === "mute") { muteFromCommandRef.current(); return; }
+					if (split.command === "mute") muteFromCommandRef.current();
+					else if (split.command === "unmute") unmuteFromCommandRef.current();
+					else if (split.command === "exit") exitFromCommandRef.current();
 				}
-				const t = stripStopWord(msg, stopWordsRef.current).text.trim();
+				const t = stripStopWord(body, stopWordsRef.current).text.trim();
 				if (!t) { flushSync(() => setInterim("")); return; } // stop-word only / empty — nothing to send
 				flushSync(() => {
 					setInterim("");

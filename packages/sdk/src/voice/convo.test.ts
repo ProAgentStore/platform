@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
+import { commandPhrases, decideRestart, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -343,5 +343,81 @@ describe("shouldScanGateTranscript (#228)", () => {
 	it("does not scan while paused or echoing", () => {
 		expect(shouldScanGateTranscript({ ...base, paused: true })).toBe(false);
 		expect(shouldScanGateTranscript({ ...base, echoing: true })).toBe(false);
+	});
+});
+
+// ── splitTrailingCommand: a control word at the end must not eat the message ──
+//
+// Regression: saying "…, mute" in hands-free acted on the command and DISCARDED the turn, so
+// the user dictated a request, asked for silence, and lost the request. A trailing control
+// word is both a command and a finished message — the same contract stop-words already have.
+describe("splitTrailingCommand", () => {
+	it("keeps what the user said and reports a trailing MULTI-WORD command", () => {
+		const r = splitTrailingCommand("run the tests, mute the mic", undefined, "en-US", { muted: false });
+		expect(r.command).toBe("mute");
+		expect(r.text).toBe("run the tests");
+	});
+
+	// Precision over convenience: phraseMatchesTranscript already refuses a single-word command
+	// that isn't the whole utterance. Stripping a trailing bare word would both truncate the
+	// message and take an action the user didn't ask for — much worse than not firing.
+	it("does NOT treat a trailing single word as a command — that would hijack ordinary speech", () => {
+		const r = splitTrailingCommand("don't forget to mute", undefined, "en-US", { muted: false });
+		expect(r.command).toBeNull();
+		expect(r.text).toBe("don't forget to mute");
+	});
+
+	it("a turn that IS the command sends nothing", () => {
+		const r = splitTrailingCommand("mute", undefined, "en-US", { muted: false });
+		expect(r.command).toBe("mute");
+		expect(r.text).toBe("");
+	});
+
+	it("leaves an ordinary sentence completely alone", () => {
+		const r = splitTrailingCommand("can you mute the alarm for me", undefined, "en-US", { muted: false });
+		expect(r.command).toBeNull();
+		expect(r.text).toBe("can you mute the alarm for me");
+	});
+
+	it("strips a multi-word command phrase, not just the last word", () => {
+		const r = splitTrailingCommand("that's everything, exit voice mode", undefined, "en-US", { muted: false });
+		expect(r.command).toBe("exit");
+		expect(r.text).toBe("that's everything");
+	});
+
+	it("honours the muted state — unmute is only a candidate while muted", () => {
+		expect(splitTrailingCommand("okay start listening", undefined, "en-US", { muted: true }).command).toBe("unmute");
+		expect(splitTrailingCommand("okay start listening", undefined, "en-US", { muted: false }).command).toBeNull();
+		// bare word, whole utterance → still a command, as matchVoiceCommand has always had it
+		expect(splitTrailingCommand("unmute", undefined, "en-US", { muted: true })).toEqual({ command: "unmute", text: "" });
+	});
+
+	it("uses custom words when set, like every other command path", () => {
+		const r = splitTrailingCommand("ship it now, hush please", { mute: ["hush please"] }, "en-US", { muted: false });
+		expect(r.command).toBe("mute");
+		expect(r.text).toBe("ship it now");
+	});
+
+	it("tolerates trailing punctuation around the command", () => {
+		expect(splitTrailingCommand("done for now, exit voice mode.", undefined, "en-US", { muted: false }).text).toBe("done for now");
+	});
+
+	// The bug that started this: a multi-word phrase appearing mid-sentence made
+	// matchVoiceCommand report a command, and the caller then dropped the whole turn.
+	it("does not strip a command phrase that is not at the end", () => {
+		const r = splitTrailingCommand("exit voice mode is the phrase I keep forgetting", undefined, "en-US", { muted: false });
+		expect(r.text).toBe("exit voice mode is the phrase I keep forgetting");
+	});
+});
+
+describe("commandPhrases", () => {
+	it("returns the built-ins for the language, and custom words when set", () => {
+		expect(commandPhrases("mute", undefined, "en-US")).toContain("mute");
+		expect(commandPhrases("mute", undefined, "de-DE")).toContain("stumm");
+		expect(commandPhrases("mute", { mute: ["shush"] }, "en-US")).toEqual(["shush"]);
+	});
+
+	it("falls back to English for a language with no table entry", () => {
+		expect(commandPhrases("unmute", undefined, "sv-SE")).toContain("unmute");
 	});
 });
