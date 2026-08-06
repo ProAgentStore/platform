@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import Page from "../components/Page";
 import { api } from "@proagentstore/sdk/client";
 import { usePolling } from "@proagentstore/sdk/hooks";
-import { BarChart3, RefreshCw } from "lucide-react";
+import { BarChart3, Info, RefreshCw } from "lucide-react";
 
 interface Bucket { key: string; label?: string; inputTokens: number; outputTokens: number; cacheReadTokens?: number; cacheWriteTokens?: number; costMicros: number; calls: number }
 interface Day { date: string; inputTokens: number; outputTokens: number; costMicros: number; calls: number }
@@ -144,9 +144,10 @@ export default function Usage() {
 					<RefreshCw size={13} /> Refresh
 				</button>
 			</div>
-			<p className="text-sm text-muted mb-3">
+			<p className="text-sm text-muted mb-2">
 				Token usage and <b>estimated</b> cost across all your agents. Cost is estimated from list prices on your own key (BYOK) — not a bill. History starts when tracking was enabled.
 			</p>
+			<Scope />
 
 			{/* Range selector */}
 			<div className="flex gap-1 mb-4">
@@ -223,6 +224,45 @@ export default function Usage() {
 				<p className="text-center py-8 text-muted text-sm">Couldn’t load usage.</p>
 			)}
 		</Page>
+	);
+}
+
+/**
+ * What the number on this page covers — and, more usefully, what it leaves out.
+ *
+ * "Estimated, not a bill" was already stated, but not in which DIRECTION it is wrong. The ledger
+ * records calls the platform itself makes; the coding Engine (Claude Code / Codex / Grok) runs as
+ * a child process on the user's own machine and bills their subscription or key directly, so none
+ * of its spend is here. For a Coder user that is the larger half, and the page looked complete
+ * while understating it. Stated while it is true — remove this bullet when engine spend lands in
+ * the ledger (#267).
+ */
+function Scope() {
+	return (
+		<details className="mb-3 group">
+			<summary className="flex items-center gap-1.5 text-xs text-muted-soft cursor-pointer hover:text-muted list-none [&::-webkit-details-marker]:hidden">
+				<Info size={13} />
+				<span className="underline decoration-dotted underline-offset-2">What this includes — and what it doesn’t</span>
+			</summary>
+			<div className="mt-2 bg-panel border border-line rounded-xl p-3 text-sm">
+				<div className="font-semibold text-xs uppercase tracking-wide text-muted-soft">Included</div>
+				<ul className="mt-1 space-y-0.5 text-muted">
+					<li>· Calls the platform makes on your key — chat, voice, translation, and the Pilot, Co-pilot and Overseer decisions behind a coding session.</li>
+				</ul>
+				<div className="font-semibold text-xs uppercase tracking-wide text-muted-soft mt-3">Not included</div>
+				<ul className="mt-1 space-y-0.5 text-muted">
+					<li>
+						· <b className="text-ink">The coding CLI’s own spend.</b> The Engine runs on your machine and bills
+						your Claude Code subscription or API key directly — none of those tokens reach this page. If you
+						use Coder, your real spend is higher than the figure above.
+					</li>
+				</ul>
+				<p className="text-xs text-muted-soft mt-3">
+					Everything here is priced from published list prices at the time of the call, so it is an estimate —
+					never a provider bill. Check your provider’s dashboard for the authoritative number.
+				</p>
+			</div>
+		</details>
 	);
 }
 
