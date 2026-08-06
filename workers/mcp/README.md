@@ -126,7 +126,7 @@ implementation.
 
 ## Tools
 
-**126 tool registrations.** 108 are always registered; 18 are gated to the console
+**130 tool registrations.** 112 are always registered; 18 are gated to the console
 surfaces of the connected user's subscribed agents (`apply`, `repo`, `coding`), so a
 Repo Chat user never sees `apply_to_job`.
 
@@ -158,6 +158,8 @@ exact string the `confirm` argument must carry.
 | `update_agent_board_config` | Replace the creator console board columns | write | yes | |
 | `get_agent_settings_schema` | Read an agent's declared subscriber settings schema | — | | |
 | `set_agent_settings_schema` | Replace it (max 12 fields) | write | yes | |
+| `get_agent_stats_schema` | Read an agent's declared stats cards (the default set subscribers inherit) | — | | |
+| `set_agent_stats_schema` | Replace them (max 12 cards, closed source vocabulary) | write | yes | |
 | `list_agent_repo_files` | List files in an owned agent's GitHub repo | — | | |
 | `read_agent_file` | Read one file from that repo | — | | |
 | `write_agent_file` | Create or overwrite one file | write | yes | `write_agent_file` |
@@ -218,6 +220,8 @@ Agent-scoped (the creator's template), not instance-scoped.
 | `delete_instance_memory` | Delete one memory entry by key | destructive | yes | `delete_instance_memory` |
 | `get_instance_settings` | Read typed settings values + declared schema | — | | |
 | `set_instance_settings` | Patch settings (only sent fields change) | write | yes | |
+| `get_instance_stats` | Resolved stats cards + their current numbers (`null` in a series = nothing ran, not zero) | — | | |
+| `set_instance_stats` | Patch your own stats cards (`card: null` removes/hides; never edits the template) | write | yes | |
 | `get_instance_instructions` | Read Special Instructions | — | | |
 | `set_instance_instructions` | Replace them (max 4000 chars) | write | yes | |
 | `get_translation_config` | Read the translation display config | — | | |

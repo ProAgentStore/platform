@@ -11,6 +11,7 @@ import { stableStringify } from "./lib/stable-json.js";
 import { fenceUntrusted } from "./lib/untrusted-fence.js";
 import { loadImportedMcpTools } from "./lib/mcp-tool-catalog.js";
 import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
+import { resolveStatsCards, statsPromptBlock } from "./lib/stats-schema.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
 import { normalizeToolCalls, parseToolCallsFromText } from "./lib/parse-tool-calls.js";
@@ -294,6 +295,13 @@ export async function runAgentThink(opts: {
 		const settingsBlock = settingsPromptBlock(settingsSchema, settingsValues);
 		if (settingsBlock) systemPrompt += `\n\n${settingsBlock}`;
 	}
+
+	// Stats cards (#312) — DERIVED from the resolved schema, never hardcoded prose, and costing no
+	// extra query: `instanceCfg`/`agentCfg` are already in hand from the join above. An agent that
+	// can answer "how many leads this week" but is never told it has the tool will not use it;
+	// an agent with no cards is told nothing at all, so it cannot claim a dashboard it lacks.
+	const statsBlock = statsPromptBlock(resolveStatsCards(agentCfg.statsSchema, instanceCfg.stats));
+	if (statsBlock) systemPrompt += `\n\n${statsBlock}`;
 
 	// ── What this agent IS (#255) ────────────────────────────────────────────────────────────
 	//

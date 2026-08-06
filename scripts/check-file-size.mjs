@@ -82,7 +82,11 @@ const PINS = {
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.
 	"workers/api/src/lib/steps.ts": 988,
-	"workers/api/src/agent-think.ts": 879,
+	// +8 for the #312 stats prompt block. Deliberately not split: the block is two statements
+	// and its comment, and it must sit inside the existing config read (`instanceCfg`/`agentCfg`
+	// are already in hand) or the prompt costs an extra query per turn. Everything else about
+	// stats lives in `lib/stats-*.ts`.
+	"workers/api/src/agent-think.ts": 887,
 	"workers/api/src/routes/instances-runtime.ts": 849,
 	"workers/api/src/lib/triggers.ts": 838,
 	"packages/browser-runner/src/coding/headless.ts": 819,

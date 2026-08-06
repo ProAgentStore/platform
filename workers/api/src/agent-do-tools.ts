@@ -57,6 +57,16 @@ export const BASE = [
 	// set_behaviour is confined to SELF_WRITABLE_FIELDS — guardrails are not self-writable.
 	"get_behaviour",
 	"set_behaviour",
+	// Read and configure what the agent tracks about itself (#312).
+	//
+	// Base for the same reason the behaviour pair is: ANY agent can be asked "how many did you find
+	// this week" or "start tracking that for me", and an agent with no proper home for the answer
+	// invents one — the path that put `preference:response_style` into memory (#226) and made a
+	// Repo Coder invent a pipeline named "coding". `set_stats_card` writes only the subscriber's own
+	// override, and can only name a source from the closed vocabulary, so it changes the VIEW and
+	// never the scope.
+	"get_stats",
+	"set_stats_card",
 ] as const;
 
 /** Read the vector knowledge base (RAG). Only agents that HAVE an index get these. */

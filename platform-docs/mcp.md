@@ -236,7 +236,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **126 tools**. 108 are always present. The remaining 18 are gated to
+The server registers **130 tools**. 112 are always present. The remaining 18 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 

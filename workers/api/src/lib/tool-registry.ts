@@ -156,6 +156,83 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		},
 	},
 	{
+		name: "get_stats",
+		description:
+			"Read the stats cards configured for this agent AND their current numbers — the same numbers the Stats tab shows. Call this before answering any question about how much/how many ('how many leads did I find this week?'); never estimate and never recompute from a record dump. IMPORTANT: in a daily trend, a day marked \"no run\" means NOTHING RAN that day. It is not zero — never report it as a day with no results.",
+		tier: "base",
+		jsonSchema: {
+			type: "object",
+			properties: { window: { type: "number", description: "Days to cover: 7, 30 or 90. Defaults to 30." } },
+			required: [],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "get_stats needs an owned instance context.", success: false };
+			const { computeStats, describeStats } = await import("./stats-report.js");
+			const { readInstanceStats } = await import("./stats-store.js");
+			const { parseStatsWindow } = await import("./stats-schema.js");
+			const { completedDay } = await import("./stats-rollup.js");
+			const windowDays = parseStatsWindow(input.window);
+			const { cards } = await readInstanceStats(ctx.env, ctx.instanceId, ctx.userId);
+			// Through `computeStats`, the one implementation the route and MCP also use — which is
+			// what structurally guarantees #312's "get_stats returns the same numbers the tab shows".
+			const values = await computeStats({ env: ctx.env, instanceId: ctx.instanceId, userId: ctx.userId }, cards, windowDays);
+			return { content: describeStats(values, windowDays, completedDay(new Date())), success: true };
+		},
+	},
+	{
+		name: "set_stats_card",
+		description:
+			"Add, edit or remove ONE stats card, when the subscriber asks you to track something ('chart my leads per suburb'). Pass `card: null` to remove it. `kind` decides how it reads: 'line' is a daily trend built from a nightly snapshot, so a NEW line card starts empty and shows its first point tomorrow — say so. 'number'/'bar'/'table' are current values and work immediately. You may only pick a `source` from the fixed list; you can never write a query or change whose data is shown.",
+		tier: "base",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				id: { type: "string", description: "Card id — lowercase letters, digits, _ or -." },
+				card: {
+					type: "object",
+					description: "The card: {title, kind, source, params}. Pass null to remove the card instead.",
+					properties: {
+						title: { type: "string" },
+						kind: { type: "string", description: "number | line | bar | table" },
+						source: { type: "string", description: "One of the fixed sources; call get_stats or ask if unsure." },
+						params: { type: "object", description: "Source-specific params, e.g. {collection:'leads', field:'suburb'}." },
+					},
+				},
+			},
+			required: ["id"],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "set_stats_card needs an owned instance context.", success: false };
+			const { patchInstanceStats } = await import("./stats-store.js");
+			const { familyForKind, STATS_SOURCE_IDS } = await import("./stats-schema.js");
+			const id = String(input.id ?? "").trim();
+			if (!id) return { content: "set_stats_card needs a card id.", success: false };
+			// Writes the INSTANCE override only. There is deliberately no tool that reaches
+			// `agents.config.statsSchema`: a subscriber's agent editing the template would change
+			// what every OTHER subscriber gets — the boundary `patchBehaviour` already holds.
+			const { stats, rejected } = await patchInstanceStats(ctx.env, ctx.instanceId, ctx.userId, [
+				{ id, card: input.card === null ? null : input.card },
+			]);
+			if (rejected.length) {
+				// Named refusals, not a swallowed patch. A model told "saved" about a card that does
+				// not exist will go on to report numbers from it.
+				return {
+					content:
+						`NOT saved: ${rejected.map((r) => r.reason).join("; ")}.\n` +
+						`Valid sources are: ${STATS_SOURCE_IDS.join(", ")}.`,
+					success: false,
+				};
+			}
+			const saved = stats.cards.find((c) => c.id === id);
+			if (!saved) return { content: `Removed card "${id}". Its recorded history is kept in case you add it back.`, success: true };
+			const trend =
+				familyForKind(saved.kind) === "trend"
+					? " It is a daily trend built from a nightly snapshot, so it will be empty until tomorrow — there is no backfill."
+					: "";
+			return { content: `Saved card "${saved.title}" (${saved.kind}, ${saved.source}).${trend}`, success: true };
+		},
+	},
+	{
 		name: "run_pipeline",
 		description:
 			"Run a declarative data pipeline that the owner has configured on this agent. Pass the pipeline `name` and any `params` (e.g. {city:\"Sydney\"}). The pipeline runs durably in the background (source → transform → sink); it does not return results inline — tell the user it's started.",

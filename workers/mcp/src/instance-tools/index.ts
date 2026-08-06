@@ -8,6 +8,7 @@ import { registerBaseTools } from "./base.js";
 import { registerConnectorGrantTools } from "./connectors.js";
 import { registerCodingTools } from "./coding.js";
 import { registerRepoTools } from "./repo.js";
+import { registerStatsTools } from "./stats.js";
 import type { InstanceToolsCtx, SafetyResolver, TokenResolver } from "./shared.js";
 
 export function registerInstanceTools(
@@ -26,4 +27,6 @@ export function registerInstanceTools(
 	registerApplyTools(server, ctx);
 	registerRepoTools(server, ctx);
 	registerCodingTools(server, ctx);
+	// Ungated, like base: every instance can have stats cards (#312).
+	registerStatsTools(server, ctx);
 }

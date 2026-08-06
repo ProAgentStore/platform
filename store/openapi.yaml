@@ -148,6 +148,11 @@ tags:
     description: Account-wide voice and translation defaults
   - name: Connectors
     description: Generic OAuth2 connector flow, GitHub App, Google Drive, Zoho WorkDrive, and Gmail
+  - name: Stats
+    description: |
+      Declarative per-agent stats cards and their values. A card names a source from a closed,
+      owner-scoped vocabulary and never carries a query; trend cards are served from a daily
+      rollup where a missing day is a GAP (`null`), never a zero.
   - name: Batch
     description: Bulk agent visibility and deletion
   - name: Agent Builder
@@ -7159,6 +7164,219 @@ paths:
                 properties:
                   range: { type: string }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  # ── Stats ─────────────────────────────────────────────────────────────────
+
+  /v1/stats/sources:
+    get:
+      summary: The stats source vocabulary
+      description: |
+        The CLOSED list of sources a stats card may name, with the card kinds each can fill, its
+        declared params, and — importantly — its `caveat`: what that number does not count. A card
+        names a source and never carries a query, which is what makes an agent-authored card safe.
+        Public: a static description of the product with nothing user-specific in it.
+      operationId: getStatsSources
+      tags: [Stats]
+      security: []
+      responses:
+        "200":
+          description: The source table
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  maxCards: { type: integer }
+                  sources:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, example: collection.group_by }
+                        label: { type: string }
+                        describes: { type: string }
+                        caveat: { type: string, description: What this number does not count. }
+                        kinds: { type: array, items: { type: string, enum: [number, line, bar, table] } }
+                        families: { type: array, items: { type: string, enum: [trend, point_in_time] } }
+                        params: { type: array, items: { type: object, additionalProperties: true } }
+
+  /v1/instances/{instanceId}/stats:
+    get:
+      summary: Stats cards and their current values
+      description: |
+        The resolved card set (creator default merged per card under your override) with each
+        card's value for ONE page-level window. `line` cards are trends read from the daily
+        rollup and carry `points: [{day, value}]` where **`value: null` means nothing ran that
+        day — it is not zero**. Everything else is a live aggregate over the window. A card that
+        failed carries `error` instead of `data`, so "broken" stays distinguishable from "empty".
+        `historyStart` is the first day the rollup has for this instance (there is no backfill);
+        `throughDay` is the last completed UTC day, which is where every trend series ends.
+      operationId: getInstanceStats
+      tags: [Stats]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: window, in: query, description: Anything outside the enum falls back to 30; the response echoes what was used., schema: { type: string, enum: ["7", "30", "90"], default: "30" } }
+      responses:
+        "200":
+          description: Cards with values
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  window: { type: integer }
+                  throughDay: { type: string, format: date }
+                  historyStart: { type: string, format: date, nullable: true }
+                  cards:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                      properties:
+                        id: { type: string }
+                        title: { type: string }
+                        kind: { type: string, enum: [number, line, bar, table] }
+                        source: { type: string }
+                        family: { type: string, enum: [trend, point_in_time] }
+                        caveat: { type: string }
+                        data: { type: object, additionalProperties: true, nullable: true }
+                        error: { type: string, description: Present INSTEAD of data when this one card failed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Replace your stats-card override
+      description: |
+        Whole-object write of the subscriber layer — `{cards, hidden}`. `hidden` lists card ids
+        inherited from the agent template that you do not want to see; a subscriber cannot delete
+        a creator's card, only hide their own copy. Cards that fail validation come back in
+        `rejected` BY NAME rather than being silently dropped.
+      operationId: putInstanceStats
+      tags: [Stats]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cards: { type: array, items: { type: object, additionalProperties: true } }
+                hidden: { type: array, items: { type: string } }
+      responses:
+        "200":
+          description: The resolved card set after the write, plus anything refused
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/stats/schema:
+    get:
+      summary: Stats cards without running any query
+      description: The resolved cards, the creator's default set, and your own override layer — what a config UI edits. No aggregates are executed.
+      operationId: getInstanceStatsSchema
+      tags: [Stats]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: Cards, template default, and override
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/stats/cards:
+    post:
+      summary: Patch individual stats cards
+      description: |
+        Patch semantics over your own override: `ops: [{id, card}]`, where `card: null` removes
+        the card (hiding it, if it was inherited from the agent template). Ops that validate are
+        applied even when others are refused, and the refusals come back in `rejected` with the
+        reason — a half-applied patch reporting success teaches the caller it changed something
+        it did not. This is the same path the agent's own `set_stats_card` tool takes.
+      operationId: patchInstanceStatsCards
+      tags: [Stats]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ops:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string }
+                      card: { type: object, additionalProperties: true, nullable: true }
+      responses:
+        "200":
+          description: The resolved card set after the patch, plus anything refused
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/agents/{id}/stats-schema:
+    get:
+      summary: Read the agent's default stats cards
+      description: The card set every subscriber inherits. Owner (or admin) only. Accepts an id or a slug.
+      operationId: getAgentStatsSchema
+      tags: [Stats]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      responses:
+        "200":
+          description: The declared cards
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cards: { type: array, items: { type: object, additionalProperties: true } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Declare the agent's default stats cards
+      description: |
+        Whole-object write, validated and capped at 12 cards. There is deliberately no path by
+        which an agent's own tools can reach this: a subscriber's agent editing the template
+        would change what every other subscriber gets.
+      operationId: setAgentStatsSchema
+      tags: [Stats]
+      parameters:
+        - $ref: "#/components/parameters/AgentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cards: { type: array, items: { type: object, additionalProperties: true } }
+      responses:
+        "200":
+          description: The stored cards, plus anything refused
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cards: { type: array, items: { type: object, additionalProperties: true } }
+                  rejected: { type: array, items: { type: object, additionalProperties: true } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # ── Errors ────────────────────────────────────────────────────────────────
 

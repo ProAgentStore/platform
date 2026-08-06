@@ -33,6 +33,7 @@ import { githubRoutes } from "./routes/github.js";
 import { relayRoutes } from "./routes/relay.js";
 import { terminalRoutes } from "./routes/terminals.js";
 import { usageRoutes } from "./routes/usage.js";
+import { statsRoutes } from "./routes/stats.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
 import { adminInstanceDetailRoutes } from "./routes/admin-instance-detail.js";
@@ -52,6 +53,7 @@ import { runDueDeliveries } from "./lib/connections.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
 import { runCodingSessionSweep } from "./lib/coding-session-sweeper.js";
+import { runStatsRollup } from "./lib/stats-rollup.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
@@ -158,6 +160,7 @@ app.route("/v1/github", githubRoutes); // GitHub App: /status, /install-url, /in
 app.route("/v1/relay", relayRoutes); // WebSocket relay: /connect, /status
 app.route("/v1/terminals", terminalRoutes); // platform: /v1/terminals/nodes — all the user's CLIs
 app.route("/v1/usage", usageRoutes); // platform: /v1/usage — token/cost transparency across agents
+app.route("/v1", statsRoutes); // per-agent stats cards: /v1/stats/sources, /v1/instances/:id/stats, /v1/agents/:id/stats-schema
 app.route("/v1/batch", batchRoutes);       // /v1/batch/bulk-visibility, /bulk-delete     // /v1/agents/:id/export, /import
 app.route("/v1/keys", keysRoutes); // /v1/keys/providers, /status, /:provider, /proxy/:host/*
 app.route("/v1/email", emailRoutes); // /v1/email/google/start, /callback, /status, DELETE /google
@@ -234,6 +237,11 @@ export default {
 		// a run ending — which #271 correctly stopped — and orphan detection needed a human to open
 		// the diagnostics panel. `runCodingSessionSweep` swallows + logs its own errors.
 		ctx.waitUntil(runCodingSessionSweep(env));
+		// Snapshot yesterday's stats for instances that were active (#313). A sixth independent
+		// failure domain, and the one with the weakest claim on the tick: a missed rollup leaves a
+		// GAP in a chart, which is a visible and honest outcome, where a missed delivery loses work.
+		// `runStatsRollup` swallows + logs its own errors so it can never take the others down.
+		ctx.waitUntil(runStatsRollup(env));
 		// Notify on a finished deploy (#6). A fifth independent failure domain — it reaches an
 		// external API (GitHub), which is the most likely of these to be slow or rate-limited,
 		// and it must not be able to stop the trigger sweep or the pump from draining.
