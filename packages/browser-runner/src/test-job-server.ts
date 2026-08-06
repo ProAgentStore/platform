@@ -44,6 +44,17 @@ export async function startTestJobServer(port = 0): Promise<TestJobServer> {
 		async close() {
 			await new Promise<void>((resolve, reject) => {
 				server.close((error) => (error ? reject(error) : resolve()));
+				// `close()` stops ACCEPTING connections; it does not end the open ones, and
+				// its callback does not fire until the last socket goes away. A Playwright
+				// browser that navigated here keeps its connection alive for reuse, so the
+				// callback waited on a socket only the browser would ever close — an
+				// UNBOUNDED wait, not a slow one.
+				//
+				// That is why this could not be fixed by raising a budget, and two attempts
+				// tried: bc3f2b3 bounded `mcp.stop()`, f3e9c53 raised `hookTimeout`. The hook
+				// still burned its whole budget, red-gated CI, and blocked the API deploy on
+				// main for unrelated commits that happened to land next.
+				server.closeAllConnections();
 			});
 		},
 	};
