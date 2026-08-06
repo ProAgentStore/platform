@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { API, getToken } from "@proagentstore/sdk/client";
 import { renderMd } from "@proagentstore/sdk/ui";
+import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { X, Download } from "lucide-react";
 
 const PREVIEW_MAX_BYTES = 50 * 1024 * 1024;
@@ -131,8 +132,7 @@ export default function FilePreview({ instanceId, file, onClose }: {
 						</div>
 					)}
 					{text !== null && kind === "markdown" && (
-						/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd escapes raw content before adding controlled markup. */
-						<div className="p-4 msg-md text-sm" dangerouslySetInnerHTML={{ __html: renderMd(text) }} />
+						<SafeHtmlView className="p-4 msg-md text-sm" html={renderMd(text)} />
 					)}
 					{text !== null && kind === "text" && (
 						<pre className="p-4 text-xs whitespace-pre-wrap break-words">{text}</pre>

@@ -5,6 +5,13 @@
 // helpers below are framework-agnostic (no React); React lands as an optional
 // peer dependency when the first component moves in. See ../../PLAN-agent-os.md.
 
+import { type SafeHtml, sanitizedHtml } from "./safe-html.js";
+
+// The brand and its mint, re-exported so a consumer of `./ui` can name the type without a second
+// import. `SafeHtmlView` — the only thing allowed to consume it — is on `./ui-react`, because it
+// needs React and this module must not.
+export { EMPTY_HTML, sanitizedHtml, type SafeHtml } from "./safe-html.js";
+
 /** Escape HTML entities */
 export function esc(s: string): string {
 	return String(s || "")
@@ -22,8 +29,14 @@ export function escAttr(s: string): string {
 		.replace(/>/g, "&gt;");
 }
 
-/** Render markdown-ish text to HTML (for assistant messages) */
-export function renderMd(raw: string): string {
+/**
+ * Render markdown-ish text to HTML (for assistant messages).
+ *
+ * Returns {@link SafeHtml}: it escapes the WHOLE input first and only ever adds markup written
+ * here, so the result is cleared for `SafeHtmlView`. That claim is the reason `sanitizedHtml` is
+ * called at the exits below rather than anywhere convenient — see safe-html.ts.
+ */
+export function renderMd(raw: string): SafeHtml {
 	// Escape ALL input up front — this output is injected via dangerouslySetInnerHTML,
 	// and the content is attacker-influenceable (agent/LLM output, application data).
 	// The markdown transforms below only ADD controlled tags; links require http(s)://.
@@ -162,11 +175,11 @@ export function renderMd(raw: string): string {
 	);
 	s = s.replace(/@@YT_EMBED_(\d+)@@/g, (_, i) => ytEmbeds[parseInt(i, 10)]);
 	s = s.replace(/<p>\s*<\/p>/g, "");
-	return s;
+	return sanitizedHtml(s);
 }
 
 /** JSON pretty-print with syntax highlighting */
-function renderJson(obj: unknown): string {
+function renderJson(obj: unknown): SafeHtml {
 	const s = JSON.stringify(obj, null, 2);
 	const highlighted = esc(s)
 		.replace(
@@ -182,18 +195,18 @@ function renderJson(obj: unknown): string {
 			/:\s*(true|false|null)/g,
 			': <span style="color:#c084fc">$1</span>',
 		);
-	return `<pre style="background:#080808;border:1px solid var(--color-line);border-radius:0.5rem;padding:0.75rem;margin:0.5rem 0;overflow-x:auto;font-family:var(--font-mono);font-size:0.8em;line-height:1.6;color:var(--color-muted)">${highlighted}</pre>`;
+	return sanitizedHtml(`<pre style="background:#080808;border:1px solid var(--color-line);border-radius:0.5rem;padding:0.75rem;margin:0.5rem 0;overflow-x:auto;font-family:var(--font-mono);font-size:0.8em;line-height:1.6;color:var(--color-muted)">${highlighted}</pre>`);
 }
 
-/** Lightweight markdown for co-pilot: bold, code, bullets, linebreaks */
-export function mdLite(raw: string): string {
+/** Lightweight markdown for co-pilot: bold, code, bullets, linebreaks. Escapes first, like {@link renderMd}. */
+export function mdLite(raw: string): SafeHtml {
 	let s = esc(raw || "");
 	s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 	s = s.replace(/`([^`\n]+)`/g, "<code>$1</code>");
 	s = s.replace(/^[-*]\s+(.+)$/gm, "<li>$1</li>");
 	s = s.replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>");
 	s = s.replace(/\n/g, "<br>");
-	return s;
+	return sanitizedHtml(s);
 }
 
 /** Relative time label */

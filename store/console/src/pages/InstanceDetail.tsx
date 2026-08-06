@@ -6,6 +6,7 @@ import { identityFor } from "../lib/identity";
 import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk/ui";
 import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
+import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import PlaybackIcon from "../components/PlaybackIcon";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
@@ -1062,8 +1063,7 @@ function InstancePage() {
 													<Wrench size={11} className="shrink-0" />
 													<span>Used {summary}</span>
 												</summary>
-												{/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by every chat surface. */}
-												<div className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+												<SafeHtmlView className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" html={renderMd(m.content)} />
 											</details>
 										);
 								}
@@ -1075,15 +1075,14 @@ function InstancePage() {
 									// built for six words.
 									const long = m.content.length > 90 || m.content.includes("\n");
 									return (
-										<div
+										<SafeHtmlView
 											key={messageKey(m, i)}
 											className={
 												long
 													? "bg-yellow/10 text-yellow self-center rounded-xl px-4 py-2.5 text-xs border border-yellow/15 max-w-[90%] w-full msg-md leading-relaxed"
 													: "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15 max-w-[90%]"
 											}
-											// biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by every chat surface.
-											dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
+											html={renderMd(m.content)}
 										/>
 									);
 								}

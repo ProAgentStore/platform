@@ -18,7 +18,8 @@
 			"@proagentstore/sdk": ["packages/sdk/src/index.ts"],
 			"@proagentstore/sdk/client": ["packages/sdk/src/client.ts"],
 			"@proagentstore/sdk/hooks": ["packages/sdk/src/hooks.ts"],
-			"@proagentstore/sdk/ui": ["packages/sdk/src/ui.ts"]
+			"@proagentstore/sdk/ui": ["packages/sdk/src/ui.ts"],
+			"@proagentstore/sdk/ui-react": ["packages/sdk/src/ui-react.ts"]
 		}
 	},
 	"exclude": ["node_modules", "dist", "workers", "store"]

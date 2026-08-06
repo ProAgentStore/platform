@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { renderTerminal } from "@proagentstore/sdk/ui";
+import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Clipboard, Keyboard, Loader2, Play, Plus, RefreshCw, Terminal, Trash2 } from "lucide-react";
@@ -308,8 +309,7 @@ export default function TmuxTab({ instanceId }: Props) {
 
 				<div className="flex-1 min-h-0 bg-[#080808]">
 					<pre className="h-full overflow-auto chat-scroll p-3 text-[0.74rem] leading-relaxed font-mono whitespace-pre-wrap break-words">
-						{/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderTerminal escapes terminal bytes before colorizing them. */}
-						<code dangerouslySetInnerHTML={{ __html: renderTerminal(pane || (selected ? "" : "Select a terminal target to capture its output.")) }} />
+						<SafeHtmlView as="code" html={renderTerminal(pane || (selected ? "" : "Select a terminal target to capture its output."))} />
 					</pre>
 				</div>
 

@@ -4,6 +4,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { Agent, Message, KnowledgeDoc, MemoryEntry } from "../lib/types";
 import { renderMd } from "@proagentstore/sdk/ui";
+import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { Zap, ArrowLeft } from "lucide-react";
 
 type Tab = "chat" | "knowledge" | "memory" | "tasks" | "settings" | "analytics" | "ops";
@@ -330,8 +331,7 @@ export default function AgentDetail() {
 						{messages.map((m) => (
 							<div key={m.id || `${m.role}:${m.createdAt || ""}:${m.content.slice(0, 80)}`} className={`max-w-[82%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "bg-accent text-white self-end rounded-br-sm" : m.role === "system" ? "bg-yellow/10 text-yellow self-center rounded-full px-4 py-1.5 text-xs border border-yellow/15" : "bg-panel border border-line self-start rounded-bl-sm"}`}>
 								{m.role === "assistant" ? (
-									// biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by chat surfaces.
-									<div className="msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+									<SafeHtmlView className="msg-md" html={renderMd(m.content)} />
 								) : <span className="whitespace-pre-wrap">{m.content}</span>}
 							</div>
 						))}

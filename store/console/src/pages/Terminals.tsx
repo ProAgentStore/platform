@@ -3,6 +3,7 @@ import Page from "../components/Page";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import { renderTerminal, terminalTail } from "@proagentstore/sdk/ui";
+import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { terminalsBusy } from "../lib/pollBusy";
 import { Terminal, RefreshCw, Bot, GitBranch, Circle, Pin } from "lucide-react";
@@ -128,10 +129,10 @@ export default function Terminals() {
 												// Colorized with the SAME renderer the Coder uses (#187) — this pane used to be
 												// a plain uncolorized <pre> purely because the colorizer lived inside one agent's
 												// package. The renderer escapes every byte; see terminal-render.ts.
-												<pre
+												<SafeHtmlView
+													as="pre"
 													className="mt-1.5 text-[0.7rem] leading-snug bg-black/30 rounded-md px-2 py-1.5 overflow-hidden max-h-16 whitespace-pre-wrap break-words font-mono"
-													// biome-ignore lint/security/noDangerouslySetInnerHtml: renderTerminal escapes all input
-													dangerouslySetInnerHTML={{ __html: renderTerminal(terminalTail(s.terminalTail, 400)) }}
+													html={renderTerminal(terminalTail(s.terminalTail, 400))}
 												/>
 											)}
 										</button>

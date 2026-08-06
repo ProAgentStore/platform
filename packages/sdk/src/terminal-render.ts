@@ -13,7 +13,13 @@
  * `<code><img src=x onerror=...>` was injected verbatim into the console origin. Generated blocks
  * are now held aside under a sentinel and re-inserted only AFTER escaping, so nothing on the raw
  * path can reach them.
+ *
+ * That claim is what {@link SafeHtml} names: the result is minted through `sanitizedHtml` here,
+ * and `SafeHtmlView` accepts nothing else — so the escaping above is the only thing a reviewer
+ * has to check, rather than every pane that renders a tail.
  */
+
+import { type SafeHtml, sanitizedHtml } from "./safe-html.js";
 
 const ESC_RE = /[&<>]/g;
 const ESC_MAP: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;" };
@@ -33,7 +39,7 @@ function makeNonce(): string {
 	return g.crypto?.randomUUID?.().replace(/-/g, "") ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
 }
 
-export function renderTerminal(text: string): string {
+export function renderTerminal(text: string): SafeHtml {
 	const blocks: string[] = [];
 	const nonce = makeNonce();
 	const BLOCK = (i: number) => ` TERMBLOCK-${nonce}-${i} `;
@@ -67,7 +73,7 @@ export function renderTerminal(text: string): string {
 		})
 		.join("\n");
 
-	return rendered.replace(BLOCK_RE, (_m, i) => blocks[Number(i)] ?? "");
+	return sanitizedHtml(rendered.replace(BLOCK_RE, (_m, i) => blocks[Number(i)] ?? ""));
 }
 
 /** A short, plain-text tail — for compact previews that must never render HTML. */

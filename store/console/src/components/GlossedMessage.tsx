@@ -6,6 +6,7 @@
  * with an active selection does nothing).
  */
 import { renderMd } from "@proagentstore/sdk/ui";
+import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import type { Message, MessageGloss } from "../lib/types";
 import type { KeyboardEvent } from "react";
 
@@ -76,8 +77,9 @@ export default function GlossedMessage({ message: m, gloss, enabled, wordTap, ta
 			    text); plain markdown renders until pairs arrive or when the gloss is off.
 			    Whole-message playback lives on the bubble's speaker button. */}
 			{!hasGrid && (
-				/* biome-ignore lint/a11y/noStaticElementInteractions: markdown content can contain links, so this cannot be a native button. */
-				<div
+				// `role="button"` on a rendered-markdown block, not a native <button>: the content can
+				// contain links, which cannot be nested inside one.
+				<SafeHtmlView
 					className={`msg-md ${enabled && wordTap ? "cursor-pointer" : ""}`}
 					title={enabled && wordTap ? "Tap a word to hear it" : undefined}
 					role={enabled && wordTap ? "button" : undefined}
@@ -90,8 +92,7 @@ export default function GlossedMessage({ message: m, gloss, enabled, wordTap, ta
 						if (word) onSpeak(word);
 					} : undefined}
 					onKeyDown={enabled && wordTap ? activateSpeak(m.content) : undefined}
-					/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd escapes raw content before adding controlled markup. */
-					dangerouslySetInnerHTML={{ __html: renderMd(m.content) }}
+					html={renderMd(m.content)}
 				/>
 			)}
 			{enabled && gloss && (

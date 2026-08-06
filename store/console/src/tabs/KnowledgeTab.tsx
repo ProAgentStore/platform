@@ -6,6 +6,7 @@ import FilesSection from "../components/FilesSection";
 import MemorySection from "../components/MemorySection";
 import VectorsSection from "../components/VectorsSection";
 import { formatTime, renderMd } from "@proagentstore/sdk/ui";
+import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 
 type KbSubTab = "docs" | "memory" | "files" | "index" | "credentials" | "rules";
 
@@ -433,8 +434,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 								</div>
 							</div>
 							{preview ? (
-								// biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by knowledge previews.
-								<div className="bg-paper border border-line rounded-xl p-4 min-h-[320px] msg-md" dangerouslySetInnerHTML={{ __html: renderMd(editContent || "_Nothing to preview yet._") }} />
+								<SafeHtmlView className="bg-paper border border-line rounded-xl p-4 min-h-[320px] msg-md" html={renderMd(editContent || "_Nothing to preview yet._")} />
 							) : (
 								<textarea
 									value={editContent}
@@ -463,8 +463,7 @@ export default function KnowledgeTab({ instanceId }: Props) {
 								</div>
 							</div>
 							{openDoc.source && <div className="text-xs text-muted-soft mb-2">{openDoc.source}{openDoc.createdAt ? ` · ${formatTime(openDoc.createdAt)}` : ""}</div>}
-							{/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by knowledge documents. */}
-							<div className="bg-paper border border-line rounded-xl p-4 msg-md" dangerouslySetInnerHTML={{ __html: renderMd(openDoc.content || "_This document is empty. Click Edit to add content._") }} />
+							<SafeHtmlView className="bg-paper border border-line rounded-xl p-4 msg-md" html={renderMd(openDoc.content || "_This document is empty. Click Edit to add content._")} />
 						</div>
 					);
 				}
