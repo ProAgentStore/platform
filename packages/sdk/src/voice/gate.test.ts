@@ -106,4 +106,24 @@ describe("speech gate", () => {
 		expect(instances[0].stopped).toBe(1);
 		restore();
 	});
+
+	// #325 — the gate is a SECOND live recognizer beside the Whisper recorder, so a swallowed
+	// stop leaves the mic capturing exactly the way #291 did, and `active = false` hides it:
+	// it only suppresses the restart that a failed stop never triggers.
+	it("aborts the recognizer when stop() throws, so the mic can't stay open", () => {
+		const { instances, restore } = withFakeSR();
+		const gate = createSpeechGate({ onInterim: () => {} })!;
+		gate.start();
+		const sr = instances[0] as FakeSR & { aborted?: boolean };
+		sr.stop = () => {
+			throw new Error("InvalidStateError");
+		};
+		sr.abort = () => {
+			sr.aborted = true;
+		};
+
+		expect(() => gate.stop()).not.toThrow();
+		expect(sr.aborted).toBe(true);
+		restore();
+	});
 });

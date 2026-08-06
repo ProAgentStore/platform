@@ -35,6 +35,9 @@ interface SpeechRecognitionLike {
 	onend: (() => void) | null;
 	start(): void;
 	stop(): void;
+	/** Standard on the real API; optional here because a stub may not have it. `stop()` asks for
+	 *  a final result, `abort()` ends capture immediately — the fallback when `stop()` throws. */
+	abort?(): void;
 }
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
@@ -113,7 +116,21 @@ export class VoiceStt {
 		if (this._rec) {
 			try {
 				this._rec.stop();
-			} catch {}
+			} catch {
+				// The dictation half of the same privacy bug #291 fixed for the Whisper recorder:
+				// a swallowed `stop()` left the recognizer RUNNING, so Web Speech kept streaming
+				// the mic after the user turned voice off — and `listening = false` above means
+				// nothing was left to notice, since the restart guard only reads that flag when
+				// `onend` fires, which a failed stop never reaches. `abort()` ends capture at once
+				// (it forfeits a final result, which a stop that threw was never going to deliver).
+				try {
+					this._rec.abort?.();
+				} catch {
+					// Nothing further to try — but the recognizer is unusable now, so drop it so the
+					// next start() builds a fresh one instead of reusing a wedged mic.
+					this._rec = null;
+				}
+			}
 			// Don't null _rec — keep the reference so start() can reuse it
 			// via _startBrowser's internal restart logic, and so the onend
 			// handler in the closure still points at the right object.

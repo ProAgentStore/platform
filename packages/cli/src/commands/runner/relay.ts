@@ -90,12 +90,33 @@ export async function connectViaRelay(
 
 	// Heartbeat loop — keeps the runtime status "online" in D1.
 	// Uses unref'd timers so the loop doesn't prevent process exit.
+	//
+	// Reported on TRANSITION, not per beat. A silently dropped heartbeat is not a lost metric:
+	// this is the only thing that keeps the console's runner badge online, so once it starts
+	// failing the console says "runner offline — run `pags up`" while this window still says
+	// CONNECTED, with nothing anywhere explaining the contradiction. The documented remedy for
+	// that banner is `pags up --force`, which SUSPENDS coding sessions owned by other machines —
+	// so the silence steered the user toward a destructive action. Once per state change keeps
+	// a 30s loop from becoming a log spammer.
+	let heartbeatFailing = false;
 	const heartbeat = () => {
 		const timer = setTimeout(async () => {
 			// The live set, not the startup array — a heartbeat for a detached instance would
 			// keep it looking online, and a newly attached one would look offline until restart.
+			let failure: string | null = null;
 			for (const id of [...attached.keys()]) {
-				await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, { runnerNode }).catch(() => undefined);
+				try {
+					await requestPags("POST", `/v1/instances/${apiPathSegment(id)}/runtime/heartbeat`, opts, { runnerNode });
+				} catch (e) {
+					failure = e instanceof Error ? e.message : String(e);
+				}
+			}
+			if (failure && !heartbeatFailing) {
+				heartbeatFailing = true;
+				writeError(`Heartbeat failed: ${failure} — the console will show this machine as OFFLINE until it recovers. The relay itself is still connected; don't run \`pags up --force\` elsewhere.`);
+			} else if (!failure && heartbeatFailing) {
+				heartbeatFailing = false;
+				writeLine("Heartbeat recovered — this machine reads as online again.");
 			}
 			heartbeat();
 		}, 30_000);

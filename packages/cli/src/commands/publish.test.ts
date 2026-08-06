@@ -64,4 +64,42 @@ describe("publish command process execution", () => {
 			{ cwd: dir, stdio: "inherit" },
 		);
 	});
+
+	// #325 — the swallow here reported the opposite of what happened. `git push` with nothing
+	// to push EXITS 0, so this branch only ever ran on a real failure (rejected non-fast-forward,
+	// no auth, no network) and its one message — "Push skipped (up to date or no commits)" — was
+	// false every time it fired. The code never left the machine while the CLI said "Published!".
+	it("fails the publish when git push fails, instead of calling it 'skipped'", async () => {
+		execFileSync.mockImplementation((cmd: string, args: string[]) => {
+			if (cmd === "git" && args[0] === "push") throw new Error("failed to push some refs");
+			return "";
+		});
+		const exit = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new Error("__exit__");
+		}) as never);
+
+		const { publishCommand } = await import("./publish.js");
+		publishCommand.exitOverride();
+
+		await expect(publishCommand.parseAsync(["node", "publish", "--dir", dir])).rejects.toThrow("__exit__");
+		expect(exit).toHaveBeenCalledWith(1);
+		const said = writeLine.mock.calls.concat(writeError.mock.calls).map((c) => String(c[0])).join("\n");
+		expect(said).toContain("Push failed");
+		expect(said).not.toContain("Published!");
+		expect(said).not.toContain("Push skipped");
+	});
+
+	it("names agent.json when it is not valid JSON, rather than throwing a bare SyntaxError", async () => {
+		writeFileSync(join(dir, "agent.json"), "{ id: nope, }");
+		const exit = vi.spyOn(process, "exit").mockImplementation((() => {
+			throw new Error("__exit__");
+		}) as never);
+
+		const { publishCommand } = await import("./publish.js");
+		publishCommand.exitOverride();
+
+		await expect(publishCommand.parseAsync(["node", "publish", "--dir", dir])).rejects.toThrow("__exit__");
+		expect(exit).toHaveBeenCalledWith(1);
+		expect(writeError.mock.calls.map((c) => String(c[0])).join("\n")).toContain("agent.json is not valid JSON");
+	});
 });

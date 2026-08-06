@@ -104,6 +104,37 @@ describe("stop() always releases the microphone", () => {
 		expect(t.stopped).toBe(false);
 	});
 
+	// #325 — the dictation half of the same bug. Whisper mode was fixed above; browser mode
+	// runs a SpeechRecognition instead, and its `stop()` was wrapped in a bare `catch {}`.
+	it("aborts the recognizer when SpeechRecognition.stop() throws (browser dictation)", () => {
+		const rec = {
+			aborted: false,
+			stop() {
+				throw new Error("InvalidStateError");
+			},
+			abort() {
+				this.aborted = true;
+			},
+		};
+		const stt = new VoiceStt("browser", {});
+		(stt as unknown as { _rec: unknown })._rec = rec;
+
+		expect(() => stt.stop()).not.toThrow();
+		// Without this the recognizer stayed running: `onend` never fires after a failed stop,
+		// so Web Speech kept streaming the mic after the user turned voice off.
+		expect(rec.aborted).toBe(true);
+	});
+
+	it("does NOT abort a recognizer that stopped cleanly", () => {
+		// abort() forfeits the final result; a clean stop must be allowed to deliver it.
+		const rec = { aborted: false, stop() {}, abort() { this.aborted = true; } };
+		const stt = new VoiceStt("browser", {});
+		(stt as unknown as { _rec: unknown })._rec = rec;
+
+		stt.stop();
+		expect(rec.aborted).toBe(false);
+	});
+
 	it("releases every track even when one of them throws", () => {
 		const bad = track({ throws: true });
 		const good = track();

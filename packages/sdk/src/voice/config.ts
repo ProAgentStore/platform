@@ -1,4 +1,4 @@
-import { api } from "../client.js";
+import { api, reportClientError } from "../client.js";
 import { DEFAULT_STT_MODEL, VoiceStt, type SttOptions } from "./stt.js";
 import { DEFAULT_TTS_MAX_CHARS, MAX_TTS_MAX_CHARS, MIN_TTS_MAX_CHARS, VoiceTts } from "./tts.js";
 
@@ -153,13 +153,26 @@ async function loadVoiceConfig(instanceId?: string): Promise<VoiceConfig> {
 
 async function fetchVoiceConfig(instanceId?: string): Promise<VoiceConfig> {
 	let vs: Record<string, unknown> = {};
+	/**
+	 * Did every read that SHAPES the answer succeed? A load that failed still resolves to a
+	 * complete-looking config, because `resolveVoiceConfig({}, false)` fills in every field —
+	 * which is why the failure has to be carried out of here explicitly. See the caching
+	 * decision at the bottom for what it is used for.
+	 */
+	let complete = true;
 	if (instanceId) {
 		try {
 			const d = await api<{ voiceSettings?: Record<string, unknown> }>(
 				`/v1/instances/${instanceId}/voice-settings`,
 			);
 			vs = d.voiceSettings || {};
-		} catch {}
+		} catch (e) {
+			complete = false;
+			reportClientError("voice-config", "voice-settings load failed — using defaults for this call", {
+				instanceId,
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
 	}
 
 	// Control words used to be read from a SECOND home, the user profile's `voice*` fields —
@@ -178,10 +191,39 @@ async function fetchVoiceConfig(instanceId?: string): Promise<VoiceConfig> {
 		try {
 			const d = await api<{ providers?: Array<{ id: string; hasKey: boolean }> }>("/v1/keys/status");
 			hasOpenAiKey = !!d.providers?.find((p) => p.id === "openai")?.hasKey;
-		} catch {}
+		} catch (e) {
+			// The settings SAY OpenAI, so a failed key check downgrades a user who configured
+			// Whisper/OpenAI TTS to the browser engines. Same class as above: not what they chose.
+			complete = false;
+			reportClientError("voice-config", "key-status check failed — falling back to the browser voice", {
+				instanceId,
+				error: e instanceof Error ? e.message : String(e),
+			});
+		}
 	}
 
-	_cache = resolveVoiceConfig(vs, hasOpenAiKey);
+	const resolved = resolveVoiceConfig(vs, hasOpenAiKey);
+	/**
+	 * A failed load must never BECOME the answer (#325).
+	 *
+	 * `resolveVoiceConfig({}, false)` is not an error value — it is a full, plausible config:
+	 * language `en-US`, `sttProvider: "browser"`, and every control-word list empty. Caching it
+	 * meant one network blip silently reconfigured the voice stack for the rest of the session,
+	 * and in three ways that are wrong rather than merely degraded: STT/TTS switch to English, so
+	 * `confirmLanguage` then rejects the user's real language as a mis-detection and NOTHING they
+	 * say is ever sent; Whisper drops to browser dictation; and the hands-free command words —
+	 * including "mute" and the exit phrase — become an empty list, so saying "mute" no longer
+	 * closes the mic. Worse, `refresh: "background"` revalidates behind a GOOD cache, so a blip
+	 * replaced settings that had loaded correctly seconds earlier.
+	 *
+	 * So: serve defaults for THIS call (voice still works), keep any known-good cache, and cache
+	 * nothing — the next call retries instead of inheriting the blip. The failure itself goes to
+	 * the durable error log above, where `list_errors` can see it; it is not worth throwing at a
+	 * user who is trying to talk.
+	 */
+	if (!complete) return _cache && _cacheInstanceId === (instanceId || null) ? _cache : resolved;
+
+	_cache = resolved;
 	_cacheInstanceId = instanceId || null;
 	return _cache;
 }

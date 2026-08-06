@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // getVoiceConfig does I/O (voice-settings); mock the SDK api client so the control-word
 // resolution is unit-testable without a network.
-vi.mock("../client.js", () => ({ api: vi.fn() }));
+vi.mock("../client.js", () => ({ api: vi.fn(), reportClientError: vi.fn() }));
 import { api } from "../client.js";
 import { getVoiceConfig, invalidateVoiceConfig, resolveVoiceConfig, voiceWantsOpenAi } from "./config.js";
 
@@ -60,6 +60,53 @@ describe("getVoiceConfig — control words come from ONE place (#222)", () => {
 		expect(c.stopSpeechKeyword).toBe("hush");
 		expect(c.unmuteWords).toEqual(["wake up"]);
 		expect(c.exitWords).toEqual(["bye voice"]);
+	});
+});
+
+// ── #325: a failed load must not BECOME the config ──────────────────────────────────
+// `resolveVoiceConfig({}, false)` is a full, plausible config — en-US, browser STT, no
+// control words — so caching it after a failed fetch silently reconfigured the voice stack
+// for the rest of the session. The user's language, their Whisper mode and their "mute"
+// phrase all disappear, which is wrong rather than degraded.
+describe("a failed voice-settings load is never cached", () => {
+	afterEach(() => { invalidateVoiceConfig(); mockApi.mockReset(); });
+
+	const settled = () => new Promise((r) => setTimeout(r, 0));
+
+	it("keeps the known-good cache when a background revalidate fails", async () => {
+		routeApi({ "/voice-settings": { voiceSettings: { provider: "browser", language: "zh-CN", muteWords: ["安静"] } } });
+		expect((await getVoiceConfig("inst-bg")).language).toBe("zh-CN");
+
+		// The blip: `refresh: "background"` revalidates behind a cache that is already correct.
+		mockApi.mockRejectedValue(new Error("Load failed"));
+		expect((await getVoiceConfig("inst-bg", { refresh: "background" })).language).toBe("zh-CN");
+		await settled();
+
+		const after = await getVoiceConfig("inst-bg");
+		expect(after.language).toBe("zh-CN"); // not en-US
+		expect(after.muteWords).toEqual(["安静"]); // saying "mute" still works
+	});
+
+	it("serves defaults for the failed call, then self-heals on the next one", async () => {
+		mockApi.mockRejectedValue(new Error("Load failed"));
+		expect((await getVoiceConfig("inst-cold")).language).toBe("en-US"); // voice still works
+
+		routeApi({ "/voice-settings": { voiceSettings: { provider: "browser", language: "de-DE" } } });
+		expect((await getVoiceConfig("inst-cold")).language).toBe("de-DE"); // the failure wasn't cached
+	});
+
+	it("does not cache a browser downgrade caused by a failed key check", async () => {
+		mockApi.mockImplementation(async (path: string) => {
+			if (path.includes("/voice-settings")) return { voiceSettings: { provider: "openai", sttMode: "openai" } };
+			throw new Error("Load failed"); // /v1/keys/status is the one that blipped
+		});
+		expect((await getVoiceConfig("inst-key")).sttProvider).toBe("browser");
+
+		routeApi({
+			"/voice-settings": { voiceSettings: { provider: "openai", sttMode: "openai" } },
+			"/keys/status": { providers: [{ id: "openai", hasKey: true }] },
+		});
+		expect((await getVoiceConfig("inst-key")).sttProvider).toBe("openai");
 	});
 });
 

@@ -39,6 +39,8 @@ interface SpeechRecognitionLike {
 	onend: (() => void) | null;
 	start(): void;
 	stop(): void;
+	/** Standard on the real API; optional here because a stub may not have it. See `stop()` below. */
+	abort?(): void;
 }
 type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
 
@@ -149,7 +151,15 @@ export function createSpeechGate(opts: SpeechGateOptions): SpeechGate | null {
 		stop() {
 			active = false;
 			if (rec) {
-				try { rec.stop(); } catch { /* already stopped */ }
+				try {
+					rec.stop();
+				} catch {
+					// The gate is a SECOND live recognizer running beside the Whisper recorder, so a
+					// swallowed stop leaves the mic open exactly the way #291 did — and here nothing
+					// downstream would notice, because `active = false` only suppresses the restart
+					// that a failed stop never triggers. `abort()` ends capture immediately.
+					try { rec.abort?.(); } catch { /* nothing left to try */ }
+				}
 			}
 		},
 		heardSpeech() {

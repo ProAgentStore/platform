@@ -249,7 +249,14 @@ export const upCommand = new Command("up")
 							stdio: "inherit",
 							env: process.env,
 						});
-					} catch {}
+					} catch (e) {
+						// Restarting IS what `r` promises. Swallowing the failure and exiting 0 told the
+						// shell — and anything scripting `pags up` — that the runner had been restarted
+						// while nothing was left running and no agent could be reached from the cloud.
+						const status = (e as { status?: number }).status;
+						writeLine(`  Restart failed${typeof status === "number" ? ` (exit ${status})` : ""} — the runner is NOT running. Run 'pags up' again.`);
+						process.exit(typeof status === "number" && status !== 0 ? status : 1);
+					}
 					process.exit(0);
 				}
 				printStatus(state);
