@@ -6,6 +6,7 @@ import { summarizeErrors, type RawError } from "../lib/admin-errors.js";
 import { listAllConsents } from "../lib/connector-consent.js";
 import { registryTools } from "../lib/tool-registry.js";
 import { aggregateAdminUsage, type AdminUsageRow } from "../lib/usage.js";
+import { readPlatformAiSetting } from "../lib/platform-settings.js";
 import { groupTerminalNodes } from "./terminals.js";
 import { relayConnected } from "../lib/runner-client.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
@@ -342,13 +343,17 @@ adminRoutes.get("/usage", async (c) => {
  * actuals). So `platformPaid.metered` is true but `platformPaid.estimated` is also
  * true. Coverage is chat-time embeds/summaries + translation; background ingest
  * embeds aren't metered yet. `platformAiEnabled` reports whether the platform is
- * currently allowed to pay for internal AI.
+ * currently allowed to pay for internal AI — RESOLVED (issue #46), i.e. the operator's
+ * runtime override if one is set, falling back to the deployed env var. Reading the env
+ * var here would report the opposite of reality the moment the kill switch is used,
+ * which is precisely when this page is being looked at.
  */
 adminRoutes.get("/spending", async (c) => {
 	await requireAdmin(c);
 	const range = c.req.query("range") || "30d";
 	const days = range in RANGE_DAYS ? RANGE_DAYS[range] : 30;
 	const s = await loadAdminUsage(c.env, days);
+	const platformAi = await readPlatformAiSetting(c.env);
 	return c.json({
 		range,
 		totals: s.totals,
@@ -356,7 +361,8 @@ adminRoutes.get("/spending", async (c) => {
 		byok: s.split.byok,
 		topSpenders: s.byUser.slice(0, 10),
 		topModels: s.byModel.slice(0, 10),
-		platformAiEnabled: c.env.PLATFORM_AI_ENABLED === "true",
+		platformAiEnabled: platformAi.enabled,
+		platformAi,
 		platformPaid: {
 			...s.split.platformPaid,
 			metered: true,

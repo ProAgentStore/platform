@@ -9,6 +9,7 @@ import type { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { recordPlatformUsage } from "../lib/usage.js";
+import { platformAiBinding } from "../lib/platform-settings.js";
 import { approxTokens } from "../lib/ai-pricing.js";
 import type { Env } from "../types.js";
 import { readInstanceConfig } from "./instances-apply.js";
@@ -263,11 +264,18 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 			}
 		};
 
+		// Resolved ONCE per translation request (#46): the platform-AI kill switch is a
+		// runtime setting, and this handler consults it twice (gloss, then the plain-text
+		// last resort). Reading it once keeps the switch immediate without paying for the
+		// lookup twice, and guarantees both attempts agree about whether the platform is
+		// currently allowed to spend. Off → BYOK below still runs, so translation keeps
+		// working on the user's own key rather than going dark.
+		const platformAi = await platformAiBinding(c.env);
 		let raw = "";
 		let viaPlatform = false;
-		if (c.env.PLATFORM_AI_ENABLED === "true" && c.env.AI) {
+		if (platformAi) {
 			try {
-				const r = (await c.env.AI.run(
+				const r = (await platformAi.run(
 					"@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
 					// Explicit max_tokens: the Workers AI default is small enough to TRUNCATE
 					// a long pairs JSON mid-string → unparseable → gloss silently degraded.
@@ -327,9 +335,9 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 				{ role: "user", content: text },
 			];
 			let plain = "";
-			if (c.env.PLATFORM_AI_ENABLED === "true" && c.env.AI) {
+			if (platformAi) {
 				try {
-					const r = (await c.env.AI.run(
+					const r = (await platformAi.run(
 						"@cf/meta/llama-3.3-70b-instruct-fp8-fast" as Parameters<Ai["run"]>[0],
 						{ messages: plainMsgs, max_tokens: 2048 },
 					)) as { response?: string };

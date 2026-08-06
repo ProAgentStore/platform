@@ -42,6 +42,7 @@ import { adminCodingSessionRoutes } from "./routes/admin-coding-session.js";
 import { adminMcpAuditRoutes } from "./routes/admin-mcp-audit.js";
 import { adminOpsRoutes } from "./routes/admin-ops.js";
 import { adminTriggersRoutes } from "./routes/admin-triggers.js";
+import { adminSettingsRoutes } from "./routes/admin-settings.js";
 import { toolRoutes } from "./routes/tools.js";
 import { connectorRoutes } from "./routes/connectors.js";
 import { cloudflareAccessGate } from "./lib/cf-access.js";
@@ -163,6 +164,7 @@ app.route("/v1/admin", adminCodingSessionRoutes); // /coding-sessions/:sid
 app.route("/v1/admin", adminMcpAuditRoutes); // /mcp-audit
 app.route("/v1/admin", adminOpsRoutes); // /ops
 app.route("/v1/admin", adminTriggersRoutes); // /triggers
+app.route("/v1/admin", adminSettingsRoutes); // /settings/platform-ai — runtime kill switch
 
 app.get("/health", (c) => c.json({ ok: true, service: "proagentstore-api" }));
 

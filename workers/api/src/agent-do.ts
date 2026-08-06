@@ -75,6 +75,7 @@ import {
 } from "./lib/chat-inflight.js";
 import { json } from "./lib/do-json.js";
 import { logError } from "./lib/error-log.js";
+import { platformAiBinding } from "./lib/platform-settings.js";
 import { isTransientInfraError } from "./lib/on-error.js";
 import type { Env } from "./types.js";
 
@@ -103,11 +104,19 @@ export class AgentDO extends DurableObject<Env> {
 	 *  work was killed — which is the only way to tell "still thinking" from "silently lost". */
 	private liveTurns = new Set<string>();
 
-	private getStorageEngine(agentId: string, userId?: string): AgentStorageEngine {
+	/**
+	 * Async because the platform-AI switch is now a RUNTIME setting an operator can flip
+	 * without a deploy (#46), not just an env var. Resolving it here — once per engine,
+	 * i.e. once per unit of work — is what keeps a per-call kill switch cheap: a
+	 * repo-ingest tick that embeds 60 chunks reads the setting once, not 60 times. The
+	 * `await` is deliberately in the type: a synchronous fallback would be a second,
+	 * staler source of truth for the same question.
+	 */
+	private async getStorageEngine(agentId: string, userId?: string): Promise<AgentStorageEngine> {
 		// Platform-paid internal AI (embeddings + summary) is gated behind one master
-		// switch. Off (default) → pass null AI, so embed/summary no-op and the platform
-		// never spends tokens (BYOK-only). LLM chat is BYOK regardless of this flag.
-		const platformAi = this.env.PLATFORM_AI_ENABLED === "true" ? this.env.AI || null : null;
+		// switch. Off → pass null AI, so embed/summary no-op and the platform never spends
+		// tokens (BYOK-only). LLM chat is BYOK regardless of this flag.
+		const platformAi = await platformAiBinding(this.env);
 		// When the acting user is known, meter platform-paid embeds/summaries into the
 		// ai_usage ledger (provider="platform") so operator spend is visible (issue #44).
 		const meter = platformAi && userId
@@ -133,7 +142,7 @@ export class AgentDO extends DurableObject<Env> {
 	): Promise<Response> {
 		const state = await this.getState();
 		if (!state) return json({ error: "Not initialized" }, 404);
-		return fn(this.getStorageEngine(state.agentId), state);
+		return fn(await this.getStorageEngine(state.agentId), state);
 	}
 
 	/** Dependencies the knowledge-base routes need (see agent-do-knowledge.ts). */
@@ -144,7 +153,7 @@ export class AgentDO extends DurableObject<Env> {
 			resolve: async () => {
 				const state = await this.getState();
 				return state
-					? { agentId: state.agentId, engine: this.getStorageEngine(state.agentId) }
+					? { agentId: state.agentId, engine: await this.getStorageEngine(state.agentId) }
 					: null;
 			},
 		};
@@ -424,7 +433,7 @@ export class AgentDO extends DurableObject<Env> {
 		await this.appendMessage(userMsg);
 		this.broadcast({ type: "message", message: userMsg });
 
-		const engine = this.getStorageEngine(state.agentId, userId);
+		const engine = await this.getStorageEngine(state.agentId, userId);
 		await engine.logEvent("chat.message", userId, { messageId: userMsg.id });
 
 		// Run agent loop
@@ -766,7 +775,7 @@ export class AgentDO extends DurableObject<Env> {
 		// the messages themselves are already gone.
 		const state = await this.getState().catch(() => null);
 		if (state?.agentId) {
-			await this.getStorageEngine(state.agentId).clearConversationDerived().catch(() => undefined);
+			await (await this.getStorageEngine(state.agentId)).clearConversationDerived().catch(() => undefined);
 		}
 		return json({ deleted: keys.length, audioKeys });
 	}
@@ -885,7 +894,7 @@ export class AgentDO extends DurableObject<Env> {
 
 		// Auto-create declared collections
 		if (config.collections) {
-			const engine = this.getStorageEngine(config.agentId);
+			const engine = await this.getStorageEngine(config.agentId);
 			for (const [name, schema] of Object.entries(config.collections)) {
 				await engine.collectionCreate(name, schema.fields).catch(() => {});
 			}
@@ -902,7 +911,7 @@ export class AgentDO extends DurableObject<Env> {
 		}>();
 		if (!collections) return json({ error: "collections required" }, 400);
 
-		const engine = this.getStorageEngine(state.agentId);
+		const engine = await this.getStorageEngine(state.agentId);
 		const created: string[] = [];
 		const skipped: string[] = [];
 		for (const [name, schema] of Object.entries(collections)) {
@@ -986,7 +995,7 @@ export class AgentDO extends DurableObject<Env> {
 		if (!repoUrl) return json({ error: "repoUrl required" }, 400);
 		const ref = parseGithubUrl(repoUrl);
 		if (!ref) return json({ error: "Not a recognizable GitHub repository URL" }, 400);
-		const engine = this.getStorageEngine(state.agentId);
+		const engine = await this.getStorageEngine(state.agentId);
 		const { job, error } = await addRepo(this.ctx.storage, engine, { ref, repoUrl, branch, token, now: new Date().toISOString() });
 		if (error || !job) return json({ error: error || "Failed to add repository" }, 400);
 		await this.ctx.storage.setAlarm(Date.now());
@@ -999,7 +1008,7 @@ export class AgentDO extends DurableObject<Env> {
 
 	private async handleClearRepo(request: Request): Promise<Response> {
 		const state = await this.getState();
-		const engine = state ? this.getStorageEngine(state.agentId) : null;
+		const engine = state ? await this.getStorageEngine(state.agentId) : null;
 		const body = await request.json<{ repoUrl?: string; key?: string }>().catch(() => ({}) as { repoUrl?: string; key?: string });
 		let key = body.key;
 		if (!key && body.repoUrl) {
@@ -1018,7 +1027,7 @@ export class AgentDO extends DurableObject<Env> {
 		try {
 			const state = await this.getState();
 			if (!state) return;
-			const engine = this.getStorageEngine(state.agentId);
+			const engine = await this.getStorageEngine(state.agentId);
 			const tick = await repoAlarmTick(this.ctx.storage, engine, this.repoFetchers());
 			// A tick may ask for a real PAUSE. Rescheduling at +50ms after a tick that indexed
 			// nothing turned "retry once on a later tick" into "retry 50ms later", so a transient

@@ -490,7 +490,10 @@ The intended billing/security model is:
 
 - User-facing LLM chat and workflow brains use caller-owned credentials.
 - Platform-paid Workers AI is gated by `PLATFORM_AI_ENABLED` for internal
-  embeddings/summaries.
+  embeddings/summaries — overridable at runtime, without a deploy, via
+  `PUT /v1/admin/settings/platform-ai` (issue #46). The override is stored in
+  `platform_settings`, wins over the env var, and is read uncached so a flip takes
+  effect on the next AI call; the env var stays the backstop if D1 is unreachable.
 - Missing caller-owned AI credentials should fail clearly instead of silently
   billing the platform account.
 
@@ -649,7 +652,9 @@ browser-runner teardown path.
 
 `PLATFORM_AI_ENABLED=true` is acceptable for single-user development but risky
 for broader onboarding. Mitigation: default off before multi-user launch and add
-an operational checklist.
+an operational checklist. Partly addressed (#46) — an operator can now kill
+platform-paid AI at runtime through `PUT /v1/admin/settings/platform-ai` instead
+of waiting on a redeploy, so runaway spend has a same-minute stop.
 
 ## Recommended Refactor Roadmap
 
