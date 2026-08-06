@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { isSubscriptionActive, subFromUserRow } from "../lib/billing.js";
 import { signPayload, signSession, verifyPayload, verifySession } from "../lib/session.js";
 import { isAllowedReturnTo } from "../lib/origins.js";
-import { requireUser } from "../lib/auth.js";
+import { isSuspended, requireUser } from "../lib/auth.js";
 import { bindMemberOrgInstallations } from "../lib/github-app.js";
 import { logError } from "../lib/error-log.js";
 import { mintMcpAuthCode, exchangeMcpAuthCode } from "../lib/mcp-auth-codes.js";
@@ -464,6 +464,10 @@ authRoutes.put("/me", async (c) => {
 		c.env.SESSION_SIGNING_KEY,
 	);
 	if (!session) return c.json({ error: "Invalid or expired token" }, 401);
+	// This route verifies the session by hand rather than through requireUser, so the
+	// suspension gate has to be applied explicitly — without it a suspended account
+	// could still edit its public profile (#273).
+	if (await isSuspended(c, session.uid)) return c.json({ error: "Account suspended" }, 403);
 
 	const body = await c.req.json<{
 		display_name?: string;
@@ -520,7 +524,14 @@ authRoutes.put("/me", async (c) => {
 	return c.json({ success: true });
 });
 
-/** Verify current PAGS session. */
+/**
+ * Verify current PAGS session.
+ *
+ * The 403 below is load-bearing beyond this route: it is the ONLY way another worker
+ * can ask "is this session suspended?" without duplicating the definition, and the MCP
+ * worker's tool gate (#273) reads exactly that status. Changing 403 to anything else
+ * silently re-opens that bypass — `auth-suspension.test.ts` pins it.
+ */
 authRoutes.get("/me", async (c) => {
 	const header = c.req.header("Authorization");
 	if (!header?.startsWith("Bearer "))
@@ -531,6 +542,7 @@ authRoutes.get("/me", async (c) => {
 		c.env.SESSION_SIGNING_KEY,
 	);
 	if (!session) return c.json({ error: "Invalid or expired token" }, 401);
+	if (await isSuspended(c, session.uid)) return c.json({ error: "Account suspended" }, 403);
 
 	const row = await c.env.DB.prepare(
 		"SELECT id, github_login, linked_github_login, github_name, avatar_url, roles, stripe_customer_id, subscription_status, subscription_expires_at, display_name, bio, website, twitter, slack_webhook, board_config FROM users WHERE id = ?1",

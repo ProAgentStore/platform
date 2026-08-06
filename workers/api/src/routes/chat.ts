@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { HttpError, requireUser } from "../lib/auth.js";
+import { HttpError, isSuspended, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
 
@@ -87,6 +87,10 @@ chatRoutes.get("/:id/ws", async (c) => {
 	if (!token) return new Response("Missing token", { status: 401 });
 	const session = await verifySession(token, c.env.SESSION_SIGNING_KEY);
 	if (!session) return new Response("Invalid or expired token", { status: 401 });
+	// Verifying the session by hand skips requireUser's suspension gate, and this is a
+	// SPEND path (every turn runs inference on a stored key) — the one surface a
+	// moderation lever most needs to reach (#273).
+	if (await isSuspended(c, session.uid)) return new Response("Account suspended", { status: 403 });
 
 	const id = c.req.param("id");
 	const agent = await c.env.DB.prepare(

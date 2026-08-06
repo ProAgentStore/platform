@@ -28,6 +28,7 @@ import {
 	requireConfirmation,
 	requirePermission,
 } from "./safety.js";
+import { suspensionBlock } from "./suspension.js";
 
 type Props = {
 	authToken?: string;
@@ -52,6 +53,45 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			env: this.env,
 			subject: provided ? undefined : this.subject,
 			scopes: provided ? null : this.scopes,
+		};
+	}
+
+	/**
+	 * Wrap EVERY tool registered on this server with the operator-suspension gate (#273),
+	 * once, before any registration happens.
+	 *
+	 * It is done at REGISTRATION time rather than inside each handler on purpose. The bug
+	 * this closes was a hole in a per-handler check: the GitHub-backed tools (scaffold,
+	 * repo files, deploy) never call the API, so they never met `requireUser`, and
+	 * `agent_deploy_status` took no token at all. Adding one more line to seven handlers
+	 * would fix those seven and leave the eighth tool — the one nobody has written yet —
+	 * exactly as exposed. Wrapping the registrar means a tool cannot opt out of the gate,
+	 * including the ~93 registered by `registerInstanceTools` / `registerStorageTools` and
+	 * anything added later in any file.
+	 *
+	 * The handler is always the last function argument across every `server.tool(...)`
+	 * overload (name+cb, name+desc+cb, name+desc+schema+cb), so it is found by scanning
+	 * from the end rather than by assuming an arity.
+	 */
+	private installSuspensionGate(): void {
+		const server = this.server as unknown as { tool: (...args: unknown[]) => unknown };
+		const register = server.tool.bind(server);
+		server.tool = (...args: unknown[]) => {
+			let i = args.length - 1;
+			while (i >= 0 && typeof args[i] !== "function") i--;
+			if (i < 0) return register(...args);
+			const name = typeof args[0] === "string" ? args[0] : "this tool";
+			const handler = args[i] as (...handlerArgs: unknown[]) => unknown;
+			args[i] = async (...handlerArgs: unknown[]) => {
+				// A tool may carry its own `token` argument (acting as someone other than the
+				// connection), so gate the identity the handler will actually use, not just
+				// the connection's.
+				const first = handlerArgs[0] as { token?: unknown } | undefined;
+				const provided = typeof first?.token === "string" ? first.token : undefined;
+				const blocked = await suspensionBlock(this.env, this.token(provided), name);
+				return blocked ?? handler(...handlerArgs);
+			};
+			return register(...args);
 		};
 	}
 
@@ -88,6 +128,9 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 		// MCP stream and makes clients hang until they time out. Register once.
 		if (this.toolsRegistered) return;
 		this.toolsRegistered = true;
+
+		// Must precede every registration below — it wraps the registrar itself.
+		this.installSuspensionGate();
 
 		// Which agent-specific tool groups this user gets — scoped to their agents.
 		const groups = await this.userGroups();

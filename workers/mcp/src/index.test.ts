@@ -248,14 +248,17 @@ describe("public catalog tools", () => {
 		expect(JSON.parse(call.body!)).toEqual({ message: "hi", sessionId: undefined });
 	});
 
-	it("platform_guide + sdk_reference return static docs without any network call", async () => {
+	it("platform_guide + sdk_reference return static docs without fetching any content", async () => {
+		// These answer from constants — no API round-trip for the content itself. The only
+		// call they may make is the suspension probe every tool goes through (#273), so the
+		// assertion is "nothing but /v1/auth/me" rather than "no calls at all".
 		const h = await setup();
 		const before = h.fetchStub.calls.length;
 		const guide = await h.tools.get("platform_guide")!.handler({});
 		const sdk = await h.tools.get("sdk_reference")!.handler({});
 		expect(guide.content[0].text).toContain("ProAgentStore Platform Guide");
 		expect(sdk.content[0].text).toContain("@proagentstore/sdk");
-		expect(h.fetchStub.calls.length).toBe(before);
+		expect(h.fetchStub.calls.slice(before).every((c) => c.url.endsWith("/v1/auth/me"))).toBe(true);
 	});
 });
 
@@ -429,5 +432,59 @@ describe("coding_session_message (coding surface)", () => {
 		const res = await h.tools.get("coding_session_message")!.handler({ instance_id: "i1", message: "x" });
 		expect(res.content[0].text).toContain("read-only mode");
 		expect(h.fetchStub.calls.some((c) => c.url.endsWith("/message"))).toBe(false);
+	});
+});
+
+// ── Operator suspension (#273) ───────────────────────────────────────────────
+
+describe("suspension gate", () => {
+	/** Answer /v1/auth/me with 403 — the API's "this account is suspended" verdict. */
+	function suspend(h: Awaited<ReturnType<typeof setup>>) {
+		h.fetchStub.respond((u) => u.endsWith("/v1/auth/me"), { status: 403, body: { error: "Account suspended" } });
+	}
+
+	it("blocks EVERY registered tool, not a hand-picked list", async () => {
+		// Prevents the bug this gate exists for: a check written per handler, which left the
+		// GitHub-backed tools (they never call the API) uncovered and would leave the next
+		// tool added uncovered too. The gate wraps the registrar, so this assertion keeps
+		// holding for tools that do not exist yet.
+		const h = await setup({ groups: ["apply", "coding", "repo"] });
+		suspend(h);
+		expect(h.tools.size).toBe(MCP_TOOL_COUNT);
+		const escaped: string[] = [];
+		for (const [name, tool] of h.tools) {
+			const res = await tool.handler({ instance_id: "i1", agent_id: "a1", message: "x", confirm: name });
+			if (!res.content?.[0]?.text?.includes("account is suspended")) escaped.push(name);
+		}
+		expect(escaped).toEqual([]);
+	});
+
+	it("stops the GitHub-backed tools before they touch GitHub", async () => {
+		// agent_deploy_status is the proof the old coverage was accidental: it takes no
+		// token and calls GitHub with the WORKER's credential, so nothing in its request
+		// path could ever have consulted users.suspended.
+		const h = await setup({ env: { GITHUB_TOKEN: "gh-token" } });
+		suspend(h);
+		const res = await h.tools.get("agent_deploy_status")!.handler({ agent_id: "my-agent" });
+		expect(res.content[0].text).toContain("suspended");
+		expect(h.fetchStub.calls.some((c) => c.url.includes("api.github.com"))).toBe(false);
+	});
+
+	it("does not block an account in good standing", async () => {
+		// Prevents the gate becoming an outage: /v1/auth/me answers 200 by default here and
+		// every tool must behave exactly as it did before.
+		const h = await setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/v1/agents") && m === "GET", { body: { agents: [{ slug: "a" }] } });
+		const res = await h.tools.get("list_agents")!.handler({});
+		expect(res.content[0].text).toContain("a");
+	});
+
+	it("fails open when the API cannot answer", async () => {
+		// Prevents an API blip from taking the whole MCP surface down — the same call the
+		// API's own suspension gate makes when D1 errors.
+		const h = await setup();
+		h.fetchStub.respond((u) => u.endsWith("/v1/auth/me"), { status: 500, body: { error: "boom" } });
+		const res = await h.tools.get("platform_guide")!.handler({});
+		expect(res.content[0].text).toContain("ProAgentStore Platform Guide");
 	});
 });

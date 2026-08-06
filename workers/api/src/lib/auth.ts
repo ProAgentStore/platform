@@ -15,10 +15,15 @@ export class HttpError extends Error {
  * Extract and verify Bearer token. Throws HttpError(401) if missing/invalid.
  * Returns the session payload.
  *
- * Also the single enforcement point for operator SUSPENSION (issue #34): a suspended
- * account is rejected here, so every authenticated route is covered at once and the
- * next route added cannot forget the check. Revoking the token would not work — a
- * session lives 30 days and the user can simply sign in again for a fresh one.
+ * Also the enforcement point for operator SUSPENSION (issue #34): a suspended
+ * account is rejected here, so every route that authenticates THROUGH THIS FUNCTION is
+ * covered at once. Revoking the token would not work — a session lives 30 days and the
+ * user can simply sign in again for a fresh one.
+ *
+ * The qualifier matters (issue #273): a handful of routes verify the session inline
+ * instead of calling this — the WS chat upgrade (`?token=`, which can't send a header)
+ * and `/v1/auth/me`. Those call {@link isSuspended} themselves; anything else added
+ * that verifies a session by hand must do the same.
  */
 export async function requireUser(
 	c: Context<{ Bindings: Env }>,
@@ -45,8 +50,12 @@ export async function requireUser(
  *
  * FAILS OPEN on a DB error. A D1 blip must not 403 the entire platform; the failure
  * mode of a moderation gate briefly not applying is far smaller than a total outage.
+ *
+ * Exported for the routes that authenticate a session WITHOUT `requireUser` (the WS
+ * chat upgrade and `/v1/auth/me`) — and, through `/v1/auth/me`'s 403, it is also the
+ * signal the MCP worker's own gate reads (#273).
  */
-async function isSuspended(c: Context<{ Bindings: Env }>, uid: string): Promise<boolean> {
+export async function isSuspended(c: Context<{ Bindings: Env }>, uid: string): Promise<boolean> {
 	try {
 		if (!c.env?.DB) return false;
 		const row = await c.env.DB.prepare("SELECT suspended FROM users WHERE id = ?1")
