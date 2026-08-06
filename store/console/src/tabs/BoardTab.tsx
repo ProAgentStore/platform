@@ -5,7 +5,7 @@ import type { BoardColumn } from "../lib/types";
 import { formatTime } from "@proagentstore/sdk/ui";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { boardBusy } from "../lib/pollBusy";
-import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown } from "lucide-react";
+import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, MessageCircleQuestion } from "lucide-react";
 
 type BoardView = "kanban" | "list";
 
@@ -39,6 +39,8 @@ interface BoardItem {
 	status: string;
 	attempts: BoardAttempt[];
 	updatedAt: string;
+	/** Turns in this ticket's conversation (#150). Older servers omit it — treat as 0. */
+	threadTurns?: number;
 }
 
 export default function BoardTab({ instanceId, columns, apply }: { instanceId: string; columns?: BoardColumn[]; apply?: boolean }) {
@@ -213,6 +215,10 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 		expanded: expanded === item.jobKey,
 		onToggleAttempts: () => setExpanded(expanded === item.jobKey ? null : item.jobKey),
 		onOpen: (taskId: string) => { if (taskId) navigate(`/instances/${instanceId}/tasks/${taskId}`); },
+		// Same destination as opening the card, with `?ask=1` so the ticket lands scrolled to
+		// its conversation with the box focused. The thread was previously reachable only by
+		// opening a ticket and scrolling, so nothing on the board said it existed (#150).
+		onAsk: (taskId: string) => { if (taskId) navigate(`/instances/${instanceId}/tasks/${taskId}?ask=1`); },
 		onMove: (status: string) => setStatus(item, status),
 		onRetry: apply && item.url && ["failed", "blocked"].includes(item.status) ? () => handleRetry(item) : undefined,
 		onApprove: item.status === "needs_approval" ? () => handleApprove(item) : undefined,
@@ -348,12 +354,38 @@ export default function BoardTab({ instanceId, columns, apply }: { instanceId: s
 	);
 }
 
-function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRetry, onApprove, retrying, onDelete }: {
+/**
+ * The board's affordance for the per-ticket conversation (#150). Two jobs in one control:
+ * it says a card CAN be questioned, and its count says whether it already has been — the
+ * whole discoverability gap, since the thread used to be invisible until you opened a
+ * ticket and scrolled past the screenshots.
+ *
+ * Shown on every openable card, not only ones with turns: a control that appears only after
+ * you have used it cannot be how you find it.
+ */
+function AskButton({ turns, onAsk, className = "" }: { turns: number; onAsk: () => void; className?: string }) {
+	const label = turns ? `Ask about this ticket (${turns} ${turns === 1 ? "turn" : "turns"} so far)` : "Ask about this ticket";
+	return (
+		<button
+			type="button"
+			onClick={(e) => { e.stopPropagation(); onAsk(); }}
+			title={label}
+			aria-label={label}
+			className={`text-[0.7rem] px-2 py-1 rounded border font-bold flex items-center gap-1 ${turns ? "border-accent/50 text-accent hover:bg-accent/10" : "border-line text-muted hover:border-accent hover:text-accent"} ${className}`}
+		>
+			<MessageCircleQuestion size={12} aria-hidden="true" />
+			Ask{turns ? ` ${turns}` : ""}
+		</button>
+	);
+}
+
+function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, retrying, onDelete }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
 	onToggleAttempts: () => void;
 	onOpen: (taskId: string) => void;
+	onAsk: (taskId: string) => void;
 	onMove: (status: string) => void;
 	onRetry?: () => void;
 	onApprove?: () => void;
@@ -396,6 +428,7 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRe
 			</button>
 
 			<div className="flex items-center gap-2 mt-2 pt-2 border-t border-line/60">
+				{openable && <AskButton turns={item.threadTurns ?? 0} onAsk={() => onAsk(item.latestTaskId)} />}
 				{onApprove && (
 					<button
 						type="button"
@@ -461,12 +494,13 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRe
 }
 
 /** A compact one-line row for the List view — same actions as the Kanban card. */
-function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRetry, onApprove, retrying, onDelete }: {
+function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove, onRetry, onApprove, retrying, onDelete }: {
 	item: BoardItem;
 	cols: BoardColumn[];
 	expanded: boolean;
 	onToggleAttempts: () => void;
 	onOpen: (taskId: string) => void;
+	onAsk: (taskId: string) => void;
 	onMove: (status: string) => void;
 	onRetry?: () => void;
 	onApprove?: () => void;
@@ -490,6 +524,7 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onMove, onRet
 				<span className={`shrink-0 px-1.5 py-0.5 rounded text-[0.7rem] font-medium ${statusClass(item.status)}`}>{item.status}</span>
 				{item.userStatus && <span className="shrink-0 text-[0.7rem] text-muted-soft hidden sm:inline" title={`Automation: ${item.runStatus}`}>moved</span>}
 				{item.updatedAt && <span className="shrink-0 text-[0.7rem] text-muted-soft hidden md:inline">{formatTime(item.updatedAt)}</span>}
+				{openable && <AskButton turns={item.threadTurns ?? 0} onAsk={() => onAsk(item.latestTaskId)} className="shrink-0" />}
 				{onApprove && (
 					<button type="button" onClick={onApprove} className="shrink-0 text-[0.7rem] px-2 py-1 rounded border border-green/40 text-green hover:bg-green/10 font-bold" title="Approve this task to run">Approve</button>
 				)}

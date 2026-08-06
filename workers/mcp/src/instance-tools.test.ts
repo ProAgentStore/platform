@@ -611,6 +611,111 @@ describe("instance_board grouping", () => {
 	});
 });
 
+// ── Per-ticket conversation over MCP (#150) ──────────────────────────────────
+//
+// These exist so agent review is symmetric with human review: a supervisor could read a
+// subordinate's board but not question anything on it. The two properties that make the
+// thread trustworthy are what these tests pin — that it is GROUNDED in one ticket's record,
+// and that it cannot ACT.
+
+describe("ticket_thread / ask_ticket (#150 — a ticket a supervisor can question)", () => {
+	it("ticket_thread reads ONE ticket's turns, scoped to that task id", async () => {
+		// Scoping is the point: the same question on two tickets must get two answers, so the
+		// tool must never fall back to the instance-wide event stream.
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/tasks/t1/thread") && m === "GET", {
+			body: { turns: [{ id: "q1", role: "user", text: "why?" }, { id: "a1", role: "agent", text: "because X" }] },
+		});
+		const res = await h.tools.get("ticket_thread")!.handler({ instance_id: "i1", task_id: "t1" });
+		expect(h.fetchStub.calls[0].url).toBe("https://api.test/v1/instances/i1/tasks/t1/thread");
+		expect(h.fetchStub.calls[0].method).toBe("GET");
+		const out = JSON.parse(res.content[0].text);
+		expect(out.turnCount).toBe(2);
+		expect(out.turns[1]).toMatchObject({ role: "agent", text: "because X" });
+	});
+
+	it("both tools carry the grounding rule in the PAYLOAD, not only the description", async () => {
+		// The caller here is a model. A tool description is read once at registration; the note
+		// travels next to the answer it is about to summarise, which is where "not recorded"
+		// gets smoothed into a plausible account of what happened.
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/tasks/t1/thread") && m === "GET", { body: { turns: [] } });
+		h.fetchStub.respond((u, m) => u.endsWith("/tasks/t1/thread") && m === "POST", {
+			body: { answer: { id: "a1", role: "agent", text: "That isn't in this ticket's record." } },
+		});
+		const read = JSON.parse((await h.tools.get("ticket_thread")!.handler({ instance_id: "i1", task_id: "t1" })).content[0].text);
+		const ask = JSON.parse((await h.tools.get("ask_ticket")!.handler({ instance_id: "i1", task_id: "t1", question: "did it merge?" })).content[0].text);
+		for (const note of [read.note, ask.note]) {
+			expect(note).toContain("not recorded");
+			expect(note).toContain("cannot act");
+		}
+		// The answer itself is passed through verbatim — the tool must not soften a refusal.
+		expect(ask.answer.text).toBe("That isn't in this ticket's record.");
+	});
+
+	it("ask_ticket POSTs the question to that ticket's thread and audits it", async () => {
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.endsWith("/tasks/t1/thread") && m === "POST", {
+			body: { question: { id: "q1" }, answer: { id: "a1", role: "agent", text: "because X" } },
+		});
+		await h.tools.get("ask_ticket")!.handler({ instance_id: "i1", task_id: "t1", question: "why?" });
+		const call = h.fetchStub.calls[0];
+		expect(call.url).toBe("https://api.test/v1/instances/i1/tasks/t1/thread");
+		expect(call.method).toBe("POST");
+		expect(JSON.parse(call.body!)).toEqual({ message: "why?" });
+		expect(h.auditEvents()).toMatchObject([{ tool: "ask_ticket", action: "completed" }]);
+	});
+
+	it("ask_ticket takes NO argument that could act on the ticket", () => {
+		// The no-action rule has to be structural, not a promise in prose: a thread that could
+		// run a ticket's declared work would hand the approval gate a free-text bypass. Approving
+		// stays with approve_instance_task / run_instance_task.
+		const h = setup();
+		const schema = h.tools.get("ask_ticket")!.schema;
+		expect(Object.keys(schema).sort()).toEqual(["dry_run", "instance_id", "question", "task_id", "token"]);
+		for (const forbidden of ["action", "approve", "status", "config", "params", "run"]) {
+			expect(schema).not.toHaveProperty(forbidden);
+		}
+		// ticket_thread is a pure read — no dry_run, because it changes nothing to preview.
+		expect(Object.keys(h.tools.get("ticket_thread")!.schema).sort()).toEqual(["instance_id", "task_id", "token"]);
+	});
+
+	it("ask_ticket needs the write scope (it persists a turn and spends the owner's tokens)", async () => {
+		const h = setup({ scopes: ["read"] });
+		const res = await h.tools.get("ask_ticket")!.handler({ instance_id: "i1", task_id: "t1", question: "why?" });
+		expect(res.content[0].text).toContain('requires MCP scope "write"');
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+
+	it("ticket_thread stays readable under a read-only connection", async () => {
+		// Reading the audit trail must survive MCP_READ_ONLY — that mode exists to stop writes,
+		// not to blind a reviewer.
+		const h = setup({ readOnly: true });
+		h.fetchStub.respond((u) => u.endsWith("/thread"), { body: { turns: [{ id: "q1", role: "user", text: "why?" }] } });
+		const out = JSON.parse((await h.tools.get("ticket_thread")!.handler({ instance_id: "i1", task_id: "t1" })).content[0].text);
+		expect(out.turnCount).toBe(1);
+	});
+
+	it("ask_ticket dry-run names the endpoint without asking anything", async () => {
+		const h = setup();
+		const res = await h.tools.get("ask_ticket")!.handler({ instance_id: "i1", task_id: "t1", question: "why?", dry_run: true });
+		expect(res.content[0].text).toContain("/v1/instances/i1/tasks/t1/thread");
+		expect(h.fetchStub.calls).toHaveLength(0);
+	});
+
+	it("neither tool invents a thread when the API errors", async () => {
+		// A fabricated empty thread reads as "nobody asked anything", which is a claim about the
+		// audit trail. Surface the error instead, and do not audit a write that never happened.
+		const h = setup();
+		h.fetchStub.respond((u) => u.endsWith("/thread"), { status: 404, body: { error: "Task not found" } });
+		const read = JSON.parse((await h.tools.get("ticket_thread")!.handler({ instance_id: "i1", task_id: "gone" })).content[0].text);
+		const ask = JSON.parse((await h.tools.get("ask_ticket")!.handler({ instance_id: "i1", task_id: "gone", question: "why?" })).content[0].text);
+		expect(read).toEqual({ error: "Task not found" });
+		expect(ask).toEqual({ error: "Task not found" });
+		expect(h.auditEvents().filter((e) => e.action === "completed")).toHaveLength(0);
+	});
+});
+
 // ── coding_loop: in-memory orchestration state machine ───────────────────────
 
 describe("coding loop state machine", () => {

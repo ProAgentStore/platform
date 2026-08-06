@@ -60,16 +60,16 @@ src/
 └── instance-tools/
     ├── index.ts          builds the ctx, calls the five group registrars
     ├── shared.ts         TokenResolver/SafetyResolver, trigger config, board grouping
-    ├── base.ts           65 tools — the bulk of the instance surface
+    ├── base.ts           67 tools — the bulk of the instance surface
     ├── apply.ts          4 tools, gated to surfaces:["apply"]
     ├── repo.ts           3 tools, gated to surfaces:["repo"]
     ├── coding.ts         system_status (gated to surfaces:["coding"]) + 3 loop tools
     └── connectors.ts     4 tools — connector status and folder grants
 ```
 
-**124 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
-inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 80 across
-`instance-tools/`. 106 are always registered; 18 are surface-gated.
+**126 tool registrations** (`.tool(` in the files above): 31 in `index.ts` — 10 of them
+inside a `groups.has("coding")` block — 13 in `storage-tools.ts`, and 82 across
+`instance-tools/`. 108 are always registered; 18 are surface-gated.
 
 Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 `instance-tools.test.ts`, `oauth-provider.test.ts`, `repo-tools.test.ts`,

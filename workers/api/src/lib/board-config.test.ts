@@ -262,7 +262,7 @@ describe("buildInstanceBoard", () => {
 		{ id: "t3", type: "job.apply_agent", status: "running", input: { url: "https://other.co/careers/pm" }, updatedAt: nowIso },
 	];
 
-	function boardEnv(overlayRows: unknown[] = []) {
+	function boardEnv(overlayRows: unknown[] = [], threadRows: unknown[] = []) {
 		return mockEnv({
 			first: (sql) => sql.includes("JOIN agents")
 				? { slug: "job-application-assistant", category: "productivity", agent_config: "{}", instance_config: "{}" }
@@ -272,6 +272,13 @@ describe("buildInstanceBoard", () => {
 					return { results: tasks.map((t) => ({ payload: JSON.stringify(t) })) };
 				}
 				if (sql.includes("board_items")) return { results: overlayRows };
+				if (sql.includes("instance_runtime_task_events")) {
+					// The count must be filtered to the two conversation types — that table also
+					// holds the runtime's whole event firehose, so an unfiltered count would report
+					// every screenshot and lifecycle transition as a conversation "turn".
+					expect(sql).toContain("'ticket.question', 'ticket.answer'");
+					return { results: threadRows };
+				}
 				return { results: [] };
 			},
 		});
@@ -297,6 +304,38 @@ describe("buildInstanceBoard", () => {
 		const acme = board.items.find((i) => i.url.includes("acme"))!;
 		expect(acme.userStatus).toBe("interview");
 		expect(acme.status).toBe("interview"); // effective = userStatus ?? runStatus
+	});
+
+	// ── Per-ticket conversation count (#150) ─────────────────────────────────
+	//
+	// The board is where a thread becomes discoverable: before this, nothing on a card said
+	// a ticket could be questioned, or that it already carried answers.
+
+	it("counts a card's thread turns against the ticket the card OPENS, not its whole history", async () => {
+		// The acme card represents t2 (newest) and opens t2. Counting t1's turns too would show
+		// "3" and then open a thread with one turn in it — a number that contradicts the screen.
+		const { env } = boardEnv([], [
+			{ task_id: "t1", n: 2 },
+			{ task_id: "t2", n: 1 },
+		]);
+		const board = await buildInstanceBoard(env, "inst-1", "u1");
+		const acme = board.items.find((i) => i.url.includes("acme"))!;
+		expect(acme.latestTaskId).toBe("t2");
+		expect(acme.threadTurns).toBe(1);
+	});
+
+	it("reports 0 for a ticket nobody has asked about, so the count is never undefined", async () => {
+		// The console renders the count directly; `undefined` would print as an empty badge that
+		// reads like a broken control rather than "no questions yet".
+		const { env } = boardEnv();
+		const board = await buildInstanceBoard(env, "inst-1", "u1");
+		expect(board.items.every((i) => i.threadTurns === 0)).toBe(true);
+	});
+
+	it("ignores a turn count for a task that is not on the board", async () => {
+		const { env } = boardEnv([], [{ task_id: "some-other-task", n: 5 }]);
+		const board = await buildInstanceBoard(env, "inst-1", "u1");
+		expect(board.items.every((i) => i.threadTurns === 0)).toBe(true);
 	});
 
 	it("keeps a standalone durable card for a moved job whose runtime tasks are gone", async () => {

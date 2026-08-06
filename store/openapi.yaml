@@ -3748,7 +3748,11 @@ paths:
                     items: { $ref: "#/components/schemas/BoardColumn" }
                   items:
                     type: array
-                    description: Cards, each already assigned to a column.
+                    description: >
+                      Cards, each already assigned to a column. `threadTurns` counts the
+                      per-ticket conversation on the card's `latestTaskId` — the ticket the
+                      card opens — so a board can show that a ticket has been questioned
+                      without reading every thread.
                     items: { type: object, additionalProperties: true }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }

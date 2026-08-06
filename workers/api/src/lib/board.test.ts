@@ -1,5 +1,49 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import { jobKeyForTask, deriveFromUrl } from "./board.js";
+import { jobKeyForTask, deriveFromUrl, TICKET_TURN_TYPES_SQL } from "./board.js";
+import { TICKET_ANSWER_EVENT, TICKET_QUESTION_EVENT } from "./ticket-chat.js";
+
+/**
+ * The board counts each ticket's conversation turns (#150), and that count is the ONE query
+ * here that inlines literals instead of binding them. These pin why.
+ */
+describe("TICKET_TURN_TYPES_SQL — the partial index only works if the predicate matches", () => {
+	const migration = readFileSync(
+		join(import.meta.dirname, "../../migrations/0088_ticket_thread_index.sql"),
+		"utf8",
+	);
+	const boardSrc = readFileSync(join(import.meta.dirname, "board.ts"), "utf8");
+	/** Code only. The comments here DISCUSS the bound form as the thing not to write, so a
+	 *  naive grep over the whole file matches the prose it is warning about. */
+	const boardCode = boardSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+	it("is the two conversation types, quoted — and nothing a quote could escape out of", () => {
+		// These are compile-time constants, never user input. The test is the standing proof of
+		// that, since inlining them into SQL is otherwise exactly what an injection looks like.
+		expect(TICKET_TURN_TYPES_SQL).toBe("'ticket.question', 'ticket.answer'");
+		for (const t of [TICKET_QUESTION_EVENT, TICKET_ANSWER_EVENT]) {
+			expect(t).toMatch(/^[a-z.]+$/);
+		}
+	});
+
+	it("matches migration 0088's index predicate character-for-character", () => {
+		// SQLite uses a partial index only when it can PROVE the query's WHERE implies the
+		// index's, which it does by matching the predicate at prepare time. If the two drift —
+		// a renamed event type, a reordered list, a lost space — the index is silently skipped
+		// and the count becomes a full scan of the runtime event firehose. The query still
+		// returns the right answer, so nothing else would ever catch it.
+		expect(migration).toContain(`WHERE type IN (${TICKET_TURN_TYPES_SQL})`);
+		expect(boardCode).toContain("AND type IN (${TICKET_TURN_TYPES_SQL})");
+	});
+
+	it("does NOT bind the types as parameters", () => {
+		// The bound form (`type IN (?3, ?4)`) is the natural thing to write and the thing that
+		// breaks this: with the values unknown at prepare time, EXPLAIN QUERY PLAN goes from
+		// "SEARCH … USING INDEX idx_runtime_task_events_thread" to "SCAN". Measured, not assumed.
+		expect(boardCode).not.toMatch(/type IN \(\s*\?\d/);
+	});
+});
 
 describe("jobKeyForTask", () => {
 	it("collapses the same job URL across query strings / tracking params", () => {

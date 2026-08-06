@@ -2,6 +2,7 @@ import type { Env } from "../types.js";
 import { mirroredRuntimeTasks, isRecord } from "../routes/instances-runtime.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "./agent-capabilities.js";
 import { patchInstanceConfig, removeInstanceConfigKey } from "./instance-config.js";
+import { TICKET_ANSWER_EVENT, TICKET_QUESTION_EVENT } from "./ticket-chat.js";
 
 /** How the board can be viewed in the console. Persisted per-instance so the choice
  *  follows the user across devices and is settable via UI, MCP, and the agent itself. */
@@ -78,6 +79,16 @@ export interface BoardItemView {
 	url: string;
 	/** The newest run's status. */
 	runStatus: string;
+	/**
+	 * Turns in this ticket's conversation (#150) — the discoverability signal. Until this
+	 * existed the thread was reachable only by opening a ticket, so nothing on the board said
+	 * a card could be questioned, or that it already carried answers.
+	 *
+	 * Counted for `latestTaskId` ONLY, deliberately: that is the ticket the card opens, so the
+	 * badge counts exactly the thread the user is about to see. Summing across every attempt
+	 * would show "3" and then open an empty thread.
+	 */
+	threadTurns: number;
 	/** A human status override (moved into a pipeline column), if any. */
 	userStatus: string | null;
 	/** Effective status = userStatus ?? runStatus — where the card lives. */
@@ -97,6 +108,26 @@ export interface InstanceBoard {
 
 /** How many recent runtime tasks the board reads before grouping into jobs. */
 const BOARD_TASK_LIMIT = 1000;
+
+/**
+ * The two conversation event types, as SQL LITERALS — the one place in this file that does
+ * not bind a value, and deliberately so.
+ *
+ * SQLite only uses a partial index when it can PROVE the query's WHERE implies the index's
+ * WHERE, and it does that by matching the predicate at prepare time. With `type IN (?3, ?4)`
+ * the values are unknown then, so `idx_runtime_task_events_thread` (migration 0088) is
+ * ignored and the count degrades to a full scan of the runtime event firehose — measurably:
+ * `EXPLAIN QUERY PLAN` says SCAN for the bound form and SEARCH … USING INDEX for this one.
+ * The board polls every 2.5s, so that is the difference between a cheap feature and an
+ * expensive one, and it is invisible — the query returns the right answer either way.
+ *
+ * Safe because these are compile-time constants from ticket-chat.ts, never user input;
+ * `board.test.ts` pins that they stay quote-free and that this predicate stays character-for
+ * -character identical to the migration's.
+ */
+export const TICKET_TURN_TYPES_SQL = [TICKET_QUESTION_EVENT, TICKET_ANSWER_EVENT]
+	.map((t) => `'${t}'`)
+	.join(", ");
 
 interface RawTask {
 	id?: string;
@@ -243,14 +274,29 @@ export async function columnsForInstance(env: Env, instanceId: string, userId: s
 
 /** Build the instance's single work board: configured columns + one card per job. */
 export async function buildInstanceBoard(env: Env, instanceId: string, userId: string): Promise<InstanceBoard> {
-	const [tasks, overlayRows, boardCfg] = await Promise.all([
+	const [tasks, overlayRows, boardCfg, threadRows] = await Promise.all([
 		mirroredRuntimeTasks(env, instanceId, userId, BOARD_TASK_LIMIT),
 		env.DB.prepare("SELECT job_key, user_status, title, subtitle, url, updated_at FROM board_items WHERE instance_id = ?1 AND user_id = ?2")
 			.bind(instanceId, userId)
 			.all<{ job_key: string; user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>(),
 		boardConfigForInstance(env, instanceId, userId),
+		// Per-ticket conversation turns (#150), so a card can say it has been questioned. One
+		// grouped read for the whole board rather than a read per card; the partial index from
+		// migration 0088 keeps it off the runtime event firehose.
+		env.DB.prepare(
+			`SELECT task_id, COUNT(*) AS n FROM instance_runtime_task_events
+     WHERE instance_id = ?1 AND user_id = ?2 AND type IN (${TICKET_TURN_TYPES_SQL})
+     GROUP BY task_id`,
+		)
+			.bind(instanceId, userId)
+			.all<{ task_id: string | null; n: number }>(),
 	]);
 	const { columns, view } = boardCfg;
+
+	const threadTurnsByTask = new Map<string, number>();
+	for (const r of threadRows.results ?? []) {
+		if (r.task_id) threadTurnsByTask.set(r.task_id, Number(r.n) || 0);
+	}
 
 	const overlay = new Map<string, { user_status: string | null; title: string; subtitle: string; url: string; updated_at: string }>();
 	for (const r of overlayRows.results ?? []) overlay.set(r.job_key, r);
@@ -272,9 +318,11 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		const label = taskLabel(rep);
 		const runStatus = String(rep.status ?? "");
 		const userStatus = overlay.get(jobKey)?.user_status ?? null;
+		const latestTaskId = String(rep.id ?? "");
 		items.push({
 			jobKey,
-			latestTaskId: String(rep.id ?? ""),
+			latestTaskId,
+			threadTurns: threadTurnsByTask.get(latestTaskId) ?? 0,
 			title: label.title,
 			subtitle: label.subtitle,
 			description: taskDescription(rep),
@@ -296,6 +344,8 @@ export async function buildInstanceBoard(env: Env, instanceId: string, userId: s
 		items.push({
 			jobKey,
 			latestTaskId: "",
+			// A standalone card has no ticket left to open, so it can have no thread to show.
+			threadTurns: 0,
 			title: row.title || jobKey,
 			subtitle: row.subtitle || "",
 			description: "",

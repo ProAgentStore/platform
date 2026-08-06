@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import Page from "../components/Page";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getToken, API } from "@proagentstore/sdk/client";
 import { usePolling, useTieredPolling } from "@proagentstore/sdk/hooks";
 import type { RuntimeTask, RuntimeEvent } from "../lib/types";
@@ -63,11 +63,20 @@ interface TicketTurn { id: string; role: "user" | "agent"; text: string; at: str
  * rather than the instance in general. The thread has no tools — it explains what happened,
  * it never does anything, and approving is still the only thing that runs a ticket's action.
  */
-function TicketThread({ instanceId, taskId }: { instanceId: string; taskId: string }) {
+function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; taskId: string; autoFocus?: boolean }) {
 	const [turns, setTurns] = useState<TicketTurn[]>([]);
 	const [draft, setDraft] = useState("");
 	const [asking, setAsking] = useState(false);
 	const [err, setErr] = useState("");
+	const inputRef = useRef<HTMLInputElement>(null);
+	// Arriving from the board's Ask button (`?ask=1`), the thread is well below the fold —
+	// past the activity log and the screenshot replay — so landing at the top of the page
+	// would look like the button did nothing.
+	useEffect(() => {
+		if (!autoFocus) return;
+		inputRef.current?.scrollIntoView({ block: "center" });
+		inputRef.current?.focus({ preventScroll: true });
+	}, [autoFocus]);
 
 	const load = useCallback(async () => {
 		try { setTurns((await api<{ turns?: TicketTurn[] }>(`/v1/instances/${instanceId}/tasks/${taskId}/thread`)).turns || []); }
@@ -112,6 +121,7 @@ function TicketThread({ instanceId, taskId }: { instanceId: string; taskId: stri
 			{err && <div className="text-xs px-3 py-2 mb-2 rounded-lg bg-red/10 border border-red/30 text-red">{err}</div>}
 			<div className="flex gap-2">
 				<input
+					ref={inputRef}
 					value={draft}
 					onChange={(e) => setDraft(e.target.value)}
 					onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
@@ -277,6 +287,10 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 export default function RunDetail() {
 	const { id: instanceId = "", taskId = "" } = useParams();
 	const navigate = useNavigate();
+	// `?ask=1` — the board's Ask button asked for this ticket's conversation specifically,
+	// not just the ticket. Without it the thread is the feature you only find by scrolling.
+	const [searchParams] = useSearchParams();
+	const askIntent = searchParams.get("ask") === "1";
 	const [task, setTask] = useState<RuntimeTask | null>(null);
 	const [events, setEvents] = useState<RuntimeEvent[]>([]);
 	const [shotUrls, setShotUrls] = useState<Record<number, string>>({});
@@ -464,7 +478,7 @@ export default function RunDetail() {
 			)}
 
 			{/* ── Per-ticket conversation (#150 P2) ─────────────────────────── */}
-			<TicketThread instanceId={instanceId} taskId={taskId} />
+			<TicketThread instanceId={instanceId} taskId={taskId} autoFocus={askIntent} />
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
 			{shots.length > 0 ? (

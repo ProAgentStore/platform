@@ -1424,6 +1424,98 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 		},
 	);
 
+	// ── Per-ticket conversation (#150) ─────────────────────────────────────────
+	//
+	// A supervisor agent could already READ a subordinate's board (instance_board,
+	// subordinate_status) but could not QUESTION anything on it — the thread was
+	// console-only, so agent review was strictly weaker than human review while the
+	// delegation model assumes a supervisor can interrogate what a subordinate did.
+	//
+	// Both tools are thin proxies onto the SAME routes the console calls, which is what
+	// carries the two rules that make the thread trustworthy onto this surface:
+	//
+	//  • GROUNDED — the answer is built server-side from THIS ticket's record (its
+	//    reasoning, its declared action, its activity, including the `act.consequential`
+	//    events a run now records) by a model call with NO tools. An unrecorded detail
+	//    comes back as "that isn't recorded". A confabulated answer would be worse than no
+	//    thread, because it is read as the audit trail — so the constraint is restated in
+	//    the payload, where the CALLING model will see it next to the answer it is about
+	//    to summarise.
+	//  • NO ACTION — neither tool can start, change, approve or run anything. There is no
+	//    code path from the thread route to executeTriggerAction, and neither tool accepts
+	//    an action argument, so the approval gate gains no free-text bypass. Running a
+	//    ticket's declared work stays with approve_instance_task / run_instance_task,
+	//    which are separately scoped and audited.
+
+	/** Restated in every payload: the caller is a model, and it is the one at risk of
+	 *  smoothing "not recorded" into a plausible account of what happened. */
+	const TICKET_GROUNDING_NOTE =
+		"Answered only from this ticket's own record — its reasoning, declared action and logged activity. The agent had no tools and could not re-inspect anything, so \"not recorded\" means the detail was never written down: report that as-is, do not infer what probably happened. This thread cannot act; approving the ticket is still the only thing that runs its declared action.";
+
+	server.tool(
+		"ticket_thread",
+		"Read the question-and-answer thread on ONE board ticket, oldest first (#150). Use it before ask_ticket to see what has already been asked and answered. Get task_id from instance_board (`latestTaskId` on a card). Read-only, and the turns it returns ARE the audit trail — quote them, don't paraphrase them into stronger claims.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			task_id: z.string().describe("The ticket's task id — `latestTaskId` from an instance_board card."),
+		},
+		async ({ token, instance_id, task_id }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/tasks/${task_id}/thread`,
+				sessionToken,
+				{},
+				env,
+			);
+			if (isRec(data) && data.error) return jsonText(data);
+			const turns = isRec(data) && Array.isArray(data.turns) ? data.turns : [];
+			return jsonText({
+				turns,
+				turnCount: turns.length,
+				note: TICKET_GROUNDING_NOTE,
+			});
+		},
+	);
+
+	server.tool(
+		"ask_ticket",
+		"Ask ONE board ticket a question and get the agent's answer (#150) — \"why did you decide that\", \"what did you actually change\", \"what did you skip\", \"what happens if I approve this\". This is how one agent reviews another's work: the answer is built from THAT ticket's record alone, so the same question on two tickets gets two different answers. It EXPLAINS, it never acts — it cannot start work, change the ticket, or approve it; use approve_instance_task or run_instance_task for that. If the answer says something is not recorded, that is the honest answer: report it, do not fill the gap.",
+		{
+			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
+			instance_id: z.string(),
+			task_id: z.string().describe("The ticket's task id — `latestTaskId` from an instance_board card."),
+			question: z.string().describe("What to ask about this ticket (max 4000 chars)."),
+			dry_run: z.boolean().optional(),
+		},
+		async ({ token, instance_id, task_id, question, dry_run }) => {
+			const sessionToken = tokenFor(token);
+			if (!sessionToken) return authRequired();
+			const input = { instance_id, task_id };
+			// `write`, not read: the question is persisted onto the ticket before the model runs
+			// (so a provider failure can't lose it) and the answer spends the owner's tokens.
+			// It is NOT `runtime` — nothing on the ticket is executed.
+			const denied = await requirePermission(safetyFor(token), "write", "ask_ticket", input);
+			if (denied) return denied;
+			if (dry_run) {
+				return dryRun(safetyFor(token), "ask_ticket", "ask a ticket about its own record", input, {
+					endpoint: `/v1/instances/${instance_id}/tasks/${task_id}/thread`,
+					method: "POST",
+				});
+			}
+			const data = await authedCall(
+				`/v1/instances/${instance_id}/tasks/${task_id}/thread`,
+				sessionToken,
+				{ method: "POST", body: JSON.stringify({ message: question }) },
+				env,
+			);
+			if (isRec(data) && data.error) return jsonText(data);
+			await audit(safetyFor(token), { tool: "ask_ticket", action: "completed", input, result: data });
+			return jsonText({ ...(isRec(data) ? data : {}), note: TICKET_GROUNDING_NOTE });
+		},
+	);
+
 	server.tool(
 		"clear_finished_tasks",
 		"Clear all finished (done/failed/cancelled) runtime tasks from a subscribed instance's board.",

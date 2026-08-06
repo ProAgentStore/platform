@@ -208,6 +208,23 @@ agent_trace -> vector_stats -> search_instance_knowledge -> list_errors
 time order, which separates "never retrieved the fact" from "retrieved it and reasoned
 badly" from "the tool call failed".
 
+Review what another agent did, and question it:
+
+```text
+instance_board -> ticket_thread (what was already asked) -> ask_ticket
+```
+
+`ask_ticket` is how one agent reviews another's work. The answer is built from THAT
+ticket's record alone — its reasoning, its declared action, its logged activity — by a
+model call with no tools, so the same question on two tickets gets two answers and an
+unrecorded detail comes back as "that isn't recorded" rather than a plausible
+reconstruction. Report that verbatim; a confabulated answer here is worse than no thread,
+because it is read as the audit trail.
+
+It explains, it never acts. Neither tool can start, change, approve or run anything, so
+the approval gate keeps no free-text bypass — running a ticket's declared work is still
+`approve_instance_task` / `run_instance_task`.
+
 Safely attempt a destructive operation:
 
 ```text
@@ -219,7 +236,7 @@ More recipes, with real argument names, are in
 
 ## Tool Surface
 
-The server registers **124 tools**. 106 are always present. The remaining 18 are gated to
+The server registers **126 tools**. 108 are always present. The remaining 18 are gated to
 the console surfaces of the connected user's own subscribed agents, so the surface is
 per-connection:
 
