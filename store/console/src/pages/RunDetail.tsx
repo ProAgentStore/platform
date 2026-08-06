@@ -53,6 +53,77 @@ function levelClass(type: string): string {
 
 interface Shot { seq: number; action: string; name: string; url: string; at?: string; msg: string }
 
+interface TicketTurn { id: string; role: "user" | "agent"; text: string; at: string }
+
+/**
+ * The per-ticket conversation (#150 P2) — ask THIS ticket why it decided what it did.
+ *
+ * Deliberately not the Assistant tab: a question asked here is answered from this ticket's
+ * own reasoning, declared action and activity, so the answer is about this unit of work
+ * rather than the instance in general. The thread has no tools — it explains what happened,
+ * it never does anything, and approving is still the only thing that runs a ticket's action.
+ */
+function TicketThread({ instanceId, taskId }: { instanceId: string; taskId: string }) {
+	const [turns, setTurns] = useState<TicketTurn[]>([]);
+	const [draft, setDraft] = useState("");
+	const [asking, setAsking] = useState(false);
+	const [err, setErr] = useState("");
+
+	const load = useCallback(async () => {
+		try { setTurns((await api<{ turns?: TicketTurn[] }>(`/v1/instances/${instanceId}/tasks/${taskId}/thread`)).turns || []); }
+		catch { /* keep what's on screen */ }
+	}, [instanceId, taskId]);
+	useEffect(() => { load(); }, [load]);
+
+	const ask = async () => {
+		const q = draft.trim();
+		if (!q || asking) return;
+		setAsking(true); setErr("");
+		// Show the question immediately — the server persists it before the model call, so an
+		// inference failure leaves it on the ticket rather than losing what was typed.
+		setTurns((t) => [...t, { id: `local-${Date.now()}`, role: "user", text: q, at: new Date().toISOString() }]);
+		setDraft("");
+		try {
+			const res = await api<{ answer?: TicketTurn }>(`/v1/instances/${instanceId}/tasks/${taskId}/thread`, { method: "POST", body: JSON.stringify({ message: q }) });
+			if (res.answer) setTurns((t) => [...t, res.answer as TicketTurn]);
+		} catch (e) {
+			setErr(e instanceof Error ? e.message : String(e));
+		} finally {
+			setAsking(false);
+			load();
+		}
+	};
+
+	return (
+		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-5">
+			<h2 className="text-sm font-bold mb-1">Ask about this ticket</h2>
+			<p className="text-xs text-muted-soft mb-3">Answered from this ticket's record only — its reasoning, what it declared it would do, and what it logged. It can't start work from here.</p>
+			{turns.length > 0 && (
+				<div className="flex flex-col gap-2 mb-3">
+					{turns.map((t) => (
+						<div key={t.id} className={`text-sm rounded-lg px-3 py-2 whitespace-pre-line break-words ${t.role === "user" ? "bg-accent-soft text-ink self-end max-w-[85%]" : "bg-paper border border-line text-ink self-start max-w-[95%]"}`}>
+							{linkify(t.text)}
+							<div className="text-[0.65rem] text-muted-soft mt-1">{t.role === "user" ? "You" : "Agent"}{t.at ? ` · ${fmtStamp(t.at)}` : ""}</div>
+						</div>
+					))}
+				</div>
+			)}
+			{asking && <div className="text-xs text-muted mb-2">Thinking…</div>}
+			{err && <div className="text-xs px-3 py-2 mb-2 rounded-lg bg-red/10 border border-red/30 text-red">{err}</div>}
+			<div className="flex gap-2">
+				<input
+					value={draft}
+					onChange={(e) => setDraft(e.target.value)}
+					onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
+					placeholder="Why did you decide this?"
+					className="flex-1 min-w-0 bg-paper border border-line rounded-lg px-3 py-2 text-sm text-ink"
+				/>
+				<button type="button" disabled={asking || !draft.trim()} onClick={ask} className="px-4 py-2 rounded-lg bg-accent text-white font-bold text-sm disabled:opacity-40 shrink-0">Ask</button>
+			</div>
+		</div>
+	);
+}
+
 /**
  * Live remote control of the agent's browser — which runs on a REMOTE machine
  * (the box running `pags up`), so you can't just alt-tab to it. Polls
@@ -389,6 +460,9 @@ export default function RunDetail() {
 			{takeoverOpen && (
 				<TakeoverLive instanceId={instanceId} taskId={taskId} kind={kind} onClose={() => setTakeoverOpen(false)} onResume={() => { setTakeoverOpen(false); resume(); }} />
 			)}
+
+			{/* ── Per-ticket conversation (#150 P2) ─────────────────────────── */}
+			<TicketThread instanceId={instanceId} taskId={taskId} />
 
 			{/* ── Screenshot replay ─────────────────────────────────────────── */}
 			{shots.length > 0 ? (

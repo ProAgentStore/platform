@@ -3905,6 +3905,76 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /v1/instances/{instanceId}/tasks/{taskId}/thread:
+    get:
+      summary: Read a ticket's conversation
+      description: |
+        The scoped question-and-answer thread for ONE ticket, oldest first. Turns are ordinary
+        task events (`ticket.question` / `ticket.answer`) on the same append-only stream the
+        ticket's activity uses, so a thread is deleted with its ticket.
+      operationId: getTicketThread
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The ticket's turns
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  turns:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        role: { type: string, enum: [user, agent] }
+                        text: { type: string }
+                        at: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      summary: Ask a ticket a question
+      description: |
+        Ask the agent about THIS ticket — why it decided what it did, what it recorded, what
+        approving it would run. The answer is grounded in that ticket's own record (its
+        reasoning, declared action and activity) and nothing else, so the same question on two
+        tickets gets two answers. The thread has NO tools: it explains work that already
+        happened and can never start work or change the ticket — approving remains the only way
+        to run a ticket's declared action. The question is persisted before the model call, so
+        an inference failure still leaves it on the ticket.
+      operationId: askTicket
+      tags: [Board]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, maxLength: 4000 }
+      responses:
+        "200":
+          description: The persisted question and the agent's answer
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  question: { type: object, additionalProperties: true }
+                  answer: { type: object, additionalProperties: true }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "402": { description: No BYOK provider key configured for this account. }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/tasks/{taskId}/hint:
     post:
       summary: Send guidance to a paused task

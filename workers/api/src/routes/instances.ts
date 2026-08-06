@@ -12,6 +12,14 @@ import { resumeSessionsForNode, suspendSessionsFromOtherNodes } from "../lib/cod
 import { createNotification } from "./notifications.js";
 import { logEvent, listEvents } from "../lib/events.js";
 import { buildTicketAction, isRunnableStatus, readTicketAction, validateTicketAction } from "../lib/actionable-ticket.js";
+import {
+	MAX_TICKET_ANSWER_CHARS,
+	TICKET_ANSWER_EVENT,
+	TICKET_QUESTION_EVENT,
+	buildTicketChatMessages,
+	normalizeTicketQuestion,
+	ticketThreadFromEvents,
+} from "../lib/ticket-chat.js";
 import { executeTriggerAction } from "../lib/triggers.js";
 import { validatePipeline } from "../lib/pipeline.js";
 import { isCredentialsError, runLoopDecide } from "../lib/loop-orchestrator.js";
@@ -38,6 +46,7 @@ import {
 	isCloudflareAiCredentialsError,
 	isRecord,
 	mirrorRuntimeTask,
+	mirrorRuntimeEvent,
 	mirrorRuntimeEvents,
 	mirrorRuntimeTasks,
 	mirrorSyntheticTaskEvent,
@@ -45,6 +54,7 @@ import {
 	mirroredRuntimeEvents,
 	mirroredRuntimeTask,
 	mirroredRuntimeTasks,
+	mirroredTaskEvents,
 	normalizeRunnerTaskBody,
 	normalizeRunnerNode,
 	requireOwnedInstance,
@@ -1115,6 +1125,90 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/run", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const out = await runActionableTicket(c.env, instanceId, session.uid, taskId);
 	return c.json(out.body, out.status as ContentfulStatusCode);
+});
+
+/**
+ * Read one ticket's conversation (#150 P2). The turns are ordinary task events
+ * (`ticket.question` / `ticket.answer`) on the SAME append-only table the ticket's activity
+ * already uses — no new store, and the thread dies with the ticket.
+ */
+instanceRoutes.get("/:instanceId/tasks/:taskId/thread", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const events = await mirroredTaskEvents(c.env, instanceId, session.uid, taskId);
+	return c.json({ turns: ticketThreadFromEvents(events) });
+});
+
+/**
+ * Ask this ticket a question (#150 P2) — the property that turns a board card from a record
+ * you can read into one you can interrogate: "why did you decide that", "what did you skip",
+ * "what happens if I approve this".
+ *
+ * Scoped ON PURPOSE. The answer is built from THIS ticket's record — its reasoning, its
+ * declared action, its activity — and nothing else, so it cannot drift into the instance's
+ * general chat context, and the same question on two tickets gets two answers. The thread has
+ * no tools: it explains work that already happened, it never does work (approving is still the
+ * only thing that runs a ticket's declared action — see lib/actionable-ticket.ts).
+ */
+instanceRoutes.post("/:instanceId/tasks/:taskId/thread", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("instanceId");
+	const taskId = c.req.param("taskId");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+
+	const body = (await c.req.json().catch(() => ({}))) as { message?: unknown };
+	const parsed = normalizeTicketQuestion(body.message);
+	if ("error" in parsed) return c.json({ error: parsed.error }, 400);
+
+	const task = await mirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
+	if (!task || !isRecord(task)) return c.json({ error: "Task not found" }, 404);
+
+	const events = await mirroredTaskEvents(c.env, instanceId, session.uid, taskId);
+	const askedAt = new Date().toISOString();
+	const questionEvent = {
+		id: `ticketq_${crypto.randomUUID()}`,
+		taskId,
+		type: TICKET_QUESTION_EVENT,
+		message: parsed.question,
+		createdAt: askedAt,
+	};
+	// Persist the question BEFORE the model call: if inference fails (no key, provider down),
+	// the owner's question must still be on the ticket rather than vanishing with the error.
+	await mirrorRuntimeEvent(c.env, instanceId, session.uid, questionEvent);
+
+	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
+	const messages = buildTicketChatMessages({
+		task,
+		events,
+		question: parsed.question,
+		specialInstructions: typeof cfg.specialInstructions === "string" ? cfg.specialInstructions : "",
+	});
+
+	let answer = "";
+	try {
+		const res = (await runUserWorkersAi(c.env, session.uid, "claude-sonnet-4-6", { messages, maxTokens: 700 }, {
+			kind: "chat",
+			instanceId,
+		})) as { response?: string };
+		answer = (res.response || "").slice(0, MAX_TICKET_ANSWER_CHARS);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		const status = isRecord(err) && typeof err.status === "number" ? err.status : 502;
+		return c.json({ error: message, question: questionEvent }, status as ContentfulStatusCode);
+	}
+	if (!answer.trim()) return c.json({ error: "The agent returned an empty answer.", question: questionEvent }, 502);
+
+	const answerEvent = {
+		id: `ticketa_${crypto.randomUUID()}`,
+		taskId,
+		type: TICKET_ANSWER_EVENT,
+		message: answer,
+		createdAt: new Date().toISOString(),
+	};
+	await mirrorRuntimeEvent(c.env, instanceId, session.uid, answerEvent);
+	return c.json({ question: questionEvent, answer: answerEvent });
 });
 
 /**

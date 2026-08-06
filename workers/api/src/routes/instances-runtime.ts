@@ -546,6 +546,31 @@ export async function mirroredRuntimeEvents(
 	return results.map((row) => parsePayload(row.payload));
 }
 
+/**
+ * The event stream of ONE ticket, oldest→newest. The instance-wide reader above is
+ * newest-first over every task, which the ticket thread cannot use: it would have to pull
+ * a large window and filter client-side just to be sure it had this ticket's oldest turns
+ * (which is exactly what the run-detail page does today, capped at 500 and silently lossy
+ * for a long-running ticket). This seeks the `(task_id, created_at)` index instead.
+ */
+export async function mirroredTaskEvents(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	taskIdValue: string,
+	limit = 200,
+): Promise<unknown[]> {
+	const { results } = await env.DB.prepare(
+		`SELECT payload FROM instance_runtime_task_events
+     WHERE instance_id = ?1 AND user_id = ?2 AND task_id = ?3
+     ORDER BY created_at ASC
+     LIMIT ?4`,
+	)
+		.bind(instanceId, userId, taskIdValue, limit)
+		.all<RuntimeTaskEventMirrorRow>();
+	return results.map((row) => parsePayload(row.payload));
+}
+
 export function syntheticEventsFromTasks(tasks: unknown[]): unknown[] {
 	return tasks
 		.filter(isRecord)

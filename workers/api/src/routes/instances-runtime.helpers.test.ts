@@ -236,6 +236,8 @@ function buildApp(opts: {
 	relayConnected?: boolean;
 	noRuntime?: boolean;
 	mirroredTask?: unknown;
+	/** Rows returned for a task-scoped event read (the per-ticket thread, #150 P2). */
+	taskEvents?: unknown[];
 	/** Records PIPELINE_RUN.create calls so ticket-approval tests can assert the dispatch. */
 	pipelineRuns?: Array<Record<string, unknown>>;
 } = {}) {
@@ -269,6 +271,9 @@ function buildApp(opts: {
 						},
 						async all() {
 							if (sql.includes("instance_runtime_nodes")) return { results: opts.nodes ?? [] };
+							if (sql.includes("FROM instance_runtime_task_events")) {
+								return { results: (opts.taskEvents ?? []).map((e) => ({ payload: JSON.stringify(e) })) };
+							}
 							return { results: [] };
 						},
 						async run() { writes.push({ sql, args }); return { meta: { changes: 1 } }; },
@@ -586,6 +591,71 @@ describe("Actionable tickets — the runner-less approval gate", () => {
 		expect(res.status).toBe(502);
 		const mirrors = writes.filter((w) => w.sql.includes("INSERT INTO instance_runtime_tasks"));
 		expect(mirrors.some((w) => w.args.some((a) => typeof a === "string" && a.includes('"status":"failed"')))).toBe(true);
+	});
+});
+
+describe("Per-ticket conversation (#150 P2)", () => {
+	const q = (message: string, at: string) => ({ id: `q-${at}`, type: "ticket.question", message, createdAt: at });
+	const a = (message: string, at: string) => ({ id: `a-${at}`, type: "ticket.answer", message, createdAt: at });
+
+	it("401s without a bearer token", async () => {
+		const { app, env } = buildApp({ owns: [["inst-1", "u1"]] });
+		expect((await get(app, env, "/v1/instances/inst-1/tasks/t1/thread", "")).status).toBe(401);
+	});
+
+	it("404s + writes nothing when the caller doesn't own the instance", async () => {
+		// Tenant isolation: a ticket thread carries the agent's reasoning about the owner's work,
+		// so reading (or appending to) someone else's must not be possible.
+		const { app, env, writes } = buildApp({ owns: [], taskEvents: [q("why?", "2026-08-01T10:00:00Z")] });
+		expect((await get(app, env, "/v1/instances/inst-1/tasks/t1/thread", await tokenFor("u2"))).status).toBe(404);
+		const post404 = await post(app, env, "/v1/instances/inst-1/tasks/t1/thread", { message: "why?" }, await tokenFor("u2"));
+		expect(post404.status).toBe(404);
+		expect(writes.some((w) => w.sql.includes("INSERT INTO instance_runtime_task_events"))).toBe(false);
+	});
+
+	it("returns ONLY the conversation turns, oldest→newest, from the shared event table", async () => {
+		// The thread reuses instance_runtime_task_events (no new table), which also holds the
+		// ticket's lifecycle + screenshot events — those must not surface as chat bubbles.
+		const { app, env } = buildApp({
+			owns: [["inst-1", "u1"]],
+			taskEvents: [
+				{ id: "e0", type: "task.created", message: "Started", createdAt: "2026-08-01T09:00:00Z" },
+				a("because the listing had no website", "2026-08-01T10:01:00Z"),
+				q("why is this a lead?", "2026-08-01T10:00:00Z"),
+			],
+		});
+		const res = await get(app, env, "/v1/instances/inst-1/tasks/t1/thread", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { turns: Array<{ role: string; text: string }> };
+		expect(body.turns.map((t) => t.role)).toEqual(["user", "agent"]);
+		expect(body.turns[0].text).toBe("why is this a lead?");
+	});
+
+	it("400s on a blank question instead of spending a model call", async () => {
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], mirroredTask: { id: "t1", title: "x" } });
+		expect((await post(app, env, "/v1/instances/inst-1/tasks/t1/thread", { message: "  " }, await tokenFor("u1"))).status).toBe(400);
+		expect(writes.some((w) => w.sql.includes("INSERT INTO instance_runtime_task_events"))).toBe(false);
+	});
+
+	it("404s on an unknown ticket before persisting anything", async () => {
+		// A question must attach to a real ticket — otherwise the event table accumulates turns
+		// keyed to a task_id nothing will ever render.
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]] });
+		expect((await post(app, env, "/v1/instances/inst-1/tasks/missing/thread", { message: "why?" }, await tokenFor("u1"))).status).toBe(404);
+		expect(writes.some((w) => w.sql.includes("INSERT INTO instance_runtime_task_events"))).toBe(false);
+	});
+
+	it("persists the question BEFORE the model call, so an inference failure doesn't lose it", async () => {
+		// No stored provider key → runUserWorkersAi throws. The owner's question must already be
+		// on the ticket: losing what they typed to a 402 is the difference between "add a key and
+		// retry" and "retype it and hope".
+		const { app, env, writes } = buildApp({ owns: [["inst-1", "u1"]], mirroredTask: { id: "t1", title: "Palm Tree Kiosk", reasoning: "no website" } });
+		const res = await post(app, env, "/v1/instances/inst-1/tasks/t1/thread", { message: "why is this a lead?" }, await tokenFor("u1"));
+		expect(res.status).toBeGreaterThanOrEqual(400); // BYOK credentials error, not a crash
+		const inserts = writes.filter((w) => w.sql.includes("INSERT INTO instance_runtime_task_events"));
+		expect(inserts.some((w) => w.args.some((x) => typeof x === "string" && x.includes("why is this a lead?")))).toBe(true);
+		// …and no ANSWER was fabricated for a call that never returned one.
+		expect(inserts.some((w) => w.args.includes("ticket.answer"))).toBe(false);
 	});
 });
 
