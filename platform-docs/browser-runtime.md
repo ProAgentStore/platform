@@ -22,7 +22,21 @@ ProAgentStore Workflow
   -> Playwright browser or terminal CLI
 ```
 
-The outbound WebSocket relay is the only transport. The earlier Cloudflare Tunnel / cloudflared modes were removed — there is no tunnel fallback, no `--tunnel` flag, and no public inbound server. The runner mints a short-lived, instance-scoped relay token and opens `wss://…/v1/relay/:instanceId/connect`; the relay DO is keyed per (instance, node) and hibernates when idle.
+The outbound WebSocket relay is the only transport. The earlier Cloudflare Tunnel / cloudflared modes were removed — there is no tunnel fallback, no `--tunnel` flag, and no public inbound server. The runner mints a short-lived, instance-scoped relay token and opens `wss://…/v1/relay/:instanceId/connect`; that endpoint accepts **only** the relay token, never the 30-day account JWT, so a leaked relay URL cannot become account takeover. The relay DO is keyed per (instance, node) and hibernates when idle.
+
+## What `pags up` Serves
+
+One process, every eligible agent. An instance is eligible when its resolved `capabilities.runtime` is non-null (`browser` or `coding`); cloud-only chat, RAG, and connector agents are skipped and never need a runner at all.
+
+Membership is re-evaluated while the runner is up, not fixed at startup. `pags up` passes `--watch-instances` (CLI ≥ 0.4.30), which polls `/v1/instances/my/instances` every 20 seconds and attaches newly eligible instances — registering the runtime and opening a relay socket for each — and detaches ones that stopped being eligible. Subscribing to a coding agent no longer requires restarting the runner. It polls rather than receiving a push because a brand-new instance has no socket for the server to push over.
+
+| Flag | Effect |
+| --- | --- |
+| `--headless` | Run Playwright headless. |
+| `--instance <id>` | Serve exactly one agent, by id or slug. Debug scope: this run does **not** watch for new instances. |
+| `--force` | Take over when this same machine (same hostname/node) already has a runner connected. Also suspends coding sessions still owned by other nodes; the machine's own suspended sessions reactivate on reconnect. |
+
+The only 409 is same-hostname: a second runner on the same node is rejected unless `--force`. Several *different* machines can each run `pags up` for the same instance concurrently, and routing follows whichever relay socket is actually live.
 
 ## Brain vs Hands
 

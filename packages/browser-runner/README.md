@@ -20,7 +20,11 @@ The runtime listens on `127.0.0.1` by default. The CLI normally starts it throug
 pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 ```
 
-`runner connect` starts the browser runtime, registers each supplied instance, opens an outbound relay socket for each one, and keeps the runtime process alive. There is no Cloudflare Tunnel / cloudflared mode in the current CLI.
+`runner connect` starts the browser runtime, registers each supplied instance, opens an outbound relay socket for each one, and keeps the runtime process alive. There is no Cloudflare Tunnel / cloudflared mode in the current CLI — the relay is the only transport, and nothing inbound is exposed.
+
+`runner connect` is the low-level command. **The user-facing command is `pags up`**, which resolves the instance list itself (every active instance with a non-null `capabilities.runtime`) and adds `--watch-instances`, so the runner attaches newly eligible agents on a 20-second poll instead of needing a restart. Do not tell users to run `runner connect` directly.
+
+Relevant `runner connect` options: `--headless`, `--force` (take over from a runner on this same hostname), `--watch-instances` (live membership), `--pags-token`.
 
 ```bash
 pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
