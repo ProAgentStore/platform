@@ -1,7 +1,7 @@
 import { Hono, type Context } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { HttpError, isSuspended, requireUser } from "../lib/auth.js";
-import { verifySession } from "../lib/session.js";
+import { HttpError, isAdmin, isSuspended, requireUser } from "../lib/auth.js";
+import { signChatToken, verifyChatToken } from "../lib/session.js";
 import type { Env } from "../types.js";
 
 export const chatRoutes = new Hono<{ Bindings: Env }>();
@@ -71,6 +71,23 @@ chatRoutes.post("/:id/chat", async (c) => {
 	return c.json(data as Record<string, unknown>, (doRes.ok ? 200 : doRes.status) as ContentfulStatusCode);
 });
 
+/**
+ * POST /v1/agents/:id/ws-token
+ *
+ * Mint the short-lived, agent-scoped token the chat WebSocket handshake takes (#317).
+ * The client calls this with its ACCOUNT session in an Authorization header — where a
+ * 30-day credential belongs — and gets back a token good for one agent's socket for
+ * minutes. This route, not `/ws`, is the authorization decision: `resolveAgent` runs
+ * the ownership-or-admin gate and `requireUser` the suspension gate.
+ */
+chatRoutes.post("/:id/ws-token", async (c) => {
+	const session = await requireUser(c);
+	const agent = await resolveAgent(c);
+	// Bind the RESOLVED id, so a token minted via a slug still names one concrete agent.
+	const { token, exp } = await signChatToken(agent.id, session.uid, c.env.SESSION_SIGNING_KEY);
+	return c.json({ token, expiresAt: new Date(exp * 1000).toISOString() });
+});
+
 /** WebSocket upgrade for real-time chat. */
 chatRoutes.get("/:id/ws", async (c) => {
 	const upgradeHeader = c.req.header("Upgrade");
@@ -78,19 +95,22 @@ chatRoutes.get("/:id/ws", async (c) => {
 		throw new HttpError(426, "Expected WebSocket upgrade");
 	}
 
-	// SECURITY: authenticate the upgrade. WS clients can't reliably send an
-	// Authorization header, so the session token comes as ?token= (same as the
-	// relay). Without this the DO trusted a client-supplied `userId` and would
-	// run inference on ANY user's stored API key. Return plain-HTTP errors — WS
-	// clients don't surface JSON error bodies.
+	// SECURITY: authenticate the upgrade. The browser `WebSocket` constructor takes no
+	// headers, so the credential has to ride in the URL — and a URL leaks (history,
+	// Referer, proxy/CDN logs, error reporters, screenshots). So accept ONLY the
+	// short-lived, agent-scoped token from POST /:id/ws-token; the 30-day account
+	// session JWT is REFUSED here (#317), exactly as on the relay's /connect. A leaked
+	// WS URL is then worth one agent's chat for minutes, not the whole account for a
+	// month. Return plain-HTTP errors — WS clients don't surface JSON error bodies.
 	const token = c.req.query("token");
 	if (!token) return new Response("Missing token", { status: 401 });
-	const session = await verifySession(token, c.env.SESSION_SIGNING_KEY);
-	if (!session) return new Response("Invalid or expired token", { status: 401 });
-	// Verifying the session by hand skips requireUser's suspension gate, and this is a
-	// SPEND path (every turn runs inference on a stored key) — the one surface a
-	// moderation lever most needs to reach (#273).
-	if (await isSuspended(c, session.uid)) return new Response("Account suspended", { status: 403 });
+	const chat = await verifyChatToken(token, c.env.SESSION_SIGNING_KEY);
+	if (!chat) return new Response("Invalid or expired token", { status: 401 });
+	// Verifying by hand skips requireUser's suspension gate, and this is a SPEND path
+	// (every turn runs inference on a stored key) — the one surface a moderation lever
+	// most needs to reach (#273). A chat token minted BEFORE a suspension stays
+	// cryptographically valid until it expires, so the live check has to happen here too.
+	if (await isSuspended(c, chat.uid)) return new Response("Account suspended", { status: 403 });
 
 	const id = c.req.param("id");
 	const agent = await c.env.DB.prepare(
@@ -99,7 +119,15 @@ chatRoutes.get("/:id/ws", async (c) => {
 		.bind(id)
 		.first<{ id: string; owner_id: string }>();
 	if (!agent) throw new HttpError(404, "Agent not found");
-	if (agent.owner_id !== session.uid && !session.roles.includes("admin")) {
+	// The token names its agent; a token for agent A can't open agent B's socket.
+	if (agent.id !== chat.agentId) return new Response("Forbidden", { status: 403 });
+	// Defensive re-check (the token already encodes the mint-time decision): ownership
+	// can change, or admin can be revoked, inside the token's lifetime. `isAdmin` reads
+	// users.roles live — the chat token carries no roles[] to trust.
+	if (
+		agent.owner_id !== chat.uid &&
+		!(await isAdmin(c, { uid: chat.uid, roles: [], iat: 0, exp: chat.exp }))
+	) {
 		return new Response("Forbidden", { status: 403 });
 	}
 
@@ -109,7 +137,9 @@ chatRoutes.get("/:id/ws", async (c) => {
 	// Forward the upgrade with the SERVER-verified uid pinned in the URL; the DO
 	// binds it to the socket and ignores any client-supplied userId.
 	const doUrl = new URL(c.req.url);
-	doUrl.searchParams.set("user_id", session.uid);
+	// The credential has done its job at this boundary — don't carry it further.
+	doUrl.searchParams.delete("token");
+	doUrl.searchParams.set("user_id", chat.uid);
 	// The RESOLVED agent id too (`:id` may be a slug). The DO pins it to the socket and uses it
 	// when a turn arrives on an un-initialised DO — first-party agents seeded by migration have no
 	// initialised template DO, and without this the auto-init fell back to the literal "unknown",

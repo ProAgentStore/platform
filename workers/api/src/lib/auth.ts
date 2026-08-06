@@ -20,10 +20,11 @@ export class HttpError extends Error {
  * covered at once. Revoking the token would not work — a session lives 30 days and the
  * user can simply sign in again for a fresh one.
  *
- * The qualifier matters (issue #273): a handful of routes verify the session inline
- * instead of calling this — the WS chat upgrade (`?token=`, which can't send a header)
- * and `/v1/auth/me`. Those call {@link isSuspended} themselves; anything else added
- * that verifies a session by hand must do the same.
+ * The qualifier matters (issue #273): a handful of routes authenticate inline instead
+ * of calling this — `/v1/auth/me`, and the two WS upgrades, which can't send a header
+ * and so verify a purpose-scoped `?token=` (chat / relay) rather than a session. Those
+ * call {@link isSuspended} themselves; anything else added that authenticates by hand
+ * must do the same.
  */
 export async function requireUser(
 	c: Context<{ Bindings: Env }>,
@@ -51,8 +52,9 @@ export async function requireUser(
  * FAILS OPEN on a DB error. A D1 blip must not 403 the entire platform; the failure
  * mode of a moderation gate briefly not applying is far smaller than a total outage.
  *
- * Exported for the routes that authenticate a session WITHOUT `requireUser` (the WS
- * chat upgrade and `/v1/auth/me`) — and, through `/v1/auth/me`'s 403, it is also the
+ * Exported for the routes that authenticate WITHOUT `requireUser` (the WS chat upgrade,
+ * which verifies a short-lived chat token, and `/v1/auth/me`) — a token minted before a
+ * suspension is still valid, so the live read is the only gate. Through `/v1/auth/me`'s 403 it is also the
  * signal the MCP worker's own gate reads (#273).
  */
 export async function isSuspended(c: Context<{ Bindings: Env }>, uid: string): Promise<boolean> {

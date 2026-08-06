@@ -1297,13 +1297,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /v1/agents/{id}/ws:
-    get:
-      summary: WebSocket chat connection
+  /v1/agents/{id}/ws-token:
+    post:
+      summary: Mint a chat WebSocket token
       description: |
-        Upgrade to a WebSocket connection for real-time chat with the agent's Durable Object.
-        Must send `Upgrade: websocket` header.
-      operationId: agentWebSocket
+        Call this with your ACCOUNT session in the `Authorization` header — where a 30-day
+        credential belongs — and get back the short-lived token that `GET /v1/agents/{id}/ws`
+        accepts. The token is scoped to this one agent and expires in minutes, so a leaked
+        WebSocket URL is worth one agent's chat for minutes rather than the whole account
+        for a month.
+
+        This route, not `/ws`, is where authorization is decided: ownership (or admin) and
+        the account-suspension gate are checked here. Mint a fresh token on every connect
+        and reconnect.
+      operationId: mintAgentChatToken
       tags: [Chat]
       parameters:
         - name: id
@@ -1312,6 +1319,52 @@ paths:
           schema:
             type: string
           description: Agent UUID or slug
+      responses:
+        "200":
+          description: The chat token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  expiresAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/agents/{id}/ws:
+    get:
+      summary: WebSocket chat connection
+      description: |
+        Upgrade to a WebSocket connection for real-time chat with the agent's Durable Object.
+        Must send `Upgrade: websocket` header.
+
+        **Different credential.** This endpoint accepts ONLY the short-lived, agent-scoped
+        token from `POST /v1/agents/{id}/ws-token`, passed as `?token=` — never the account
+        session JWT, which is refused here with a 401. The browser `WebSocket` constructor
+        takes no headers, so something has to ride in the URL, and a URL is the least private
+        part of a request (history, `Referer`, proxy and CDN access logs, error reporters).
+        Same reasoning, and same shape, as the runner's `/v1/relay/{instanceId}/connect`.
+
+        Errors are plain-text HTTP, not JSON, because not every WebSocket client surfaces a
+        JSON body.
+      operationId: agentWebSocket
+      tags: [Chat]
+      security: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent UUID or slug
+        - name: token
+          in: query
+          required: true
+          description: A chat token from `POST /v1/agents/{id}/ws-token`. An account session JWT is rejected here.
+          schema:
+            type: string
         - name: Upgrade
           in: header
           required: true
@@ -1321,6 +1374,12 @@ paths:
       responses:
         "101":
           description: WebSocket upgrade successful
+        "401":
+          description: "Missing, expired, or non-chat token — including an account session JWT (plain text)"
+        "403":
+          description: Token names another agent, ownership changed, or the account is suspended (plain text)
+        "404":
+          description: Agent not found (plain text)
         "426":
           description: WebSocket upgrade required
           content:

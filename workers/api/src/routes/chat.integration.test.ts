@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { HttpError } from "../lib/auth.js";
-import { signSession } from "../lib/session.js";
+import { signChatToken, signRelayToken, signSession, verifyChatToken, verifySession } from "../lib/session.js";
 import { chatRoutes } from "./chat.js";
 import type { Env } from "../types.js";
 
@@ -22,8 +22,15 @@ interface DoCall {
 	body?: unknown;
 }
 
-/** @param agents rows the resolveAgent SELECT can return (by id or slug). */
-function buildApp(agents: Array<{ id: string; slug?: string; name?: string; model?: string; owner_id: string }> = []) {
+/**
+ * @param agents rows the resolveAgent SELECT can return (by id or slug).
+ * @param user   the `users` row every uid resolves to — `{suspended: 1}` exercises the
+ *               moderation gate the WS upgrade applies by hand (#273).
+ */
+function buildApp(
+	agents: Array<{ id: string; slug?: string; name?: string; model?: string; owner_id: string }> = [],
+	user: { suspended?: number; roles?: string } | null = null,
+) {
 	const doCalls: DoCall[] = [];
 	const usageWrites: unknown[][] = [];
 	// DO responses are canned per-path; tests that care override via `doResponse`.
@@ -42,6 +49,7 @@ function buildApp(agents: Array<{ id: string; slug?: string; name?: string; mode
 									const a = agents.find((x) => x.id === key || x.slug === key);
 									return a ?? null;
 								}
+								if (sql.includes("FROM users")) return user;
 								return null;
 							},
 							async all() {
@@ -176,7 +184,43 @@ describe("POST /v1/agents/:id/chat (auth + ownership)", () => {
 	});
 });
 
+describe("POST /v1/agents/:id/ws-token (mint the handshake credential)", () => {
+	it("401s without an account session", async () => {
+		const { app, env } = buildApp([{ id: "a1", owner_id: "u1" }]);
+		expect((await json(app, env, "POST", "/v1/agents/a1/ws-token", undefined)).status).toBe(401);
+	});
+
+	it("403s a non-owner — the mint route is where authorization happens", async () => {
+		const { app, env } = buildApp([{ id: "a1", owner_id: "owner" }]);
+		const res = await json(app, env, "POST", "/v1/agents/a1/ws-token", undefined, await tokenFor("attacker"));
+		expect(res.status).toBe(403);
+	});
+
+	it("404s a missing agent", async () => {
+		const { app, env } = buildApp([]);
+		const res = await json(app, env, "POST", "/v1/agents/ghost/ws-token", undefined, await tokenFor("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	it("mints a chat token that is NOT an account session, scoped to the resolved agent id", async () => {
+		const { app, env } = buildApp([{ id: "a1", slug: "coder", owner_id: "u1" }]);
+		// Minted via the SLUG — the token must still name the concrete id.
+		const res = await json(app, env, "POST", "/v1/agents/coder/ws-token", undefined, await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		const { token, expiresAt } = await res.json() as { token: string; expiresAt: string };
+		const chat = await verifyChatToken(token, SECRET);
+		expect(chat).toMatchObject({ typ: "chat", agentId: "a1", uid: "u1" });
+		// It cannot be turned around and used as an account session anywhere else.
+		expect(await verifySession(token, SECRET)).toBeNull();
+		// Minutes, not the 30-day account session.
+		expect(new Date(expiresAt).getTime() - Date.now()).toBeLessThanOrEqual(10 * 60 * 1000);
+	});
+});
+
 describe("GET /v1/agents/:id/ws (WebSocket auth boundary)", () => {
+	const chatTokenFor = async (agentId: string, uid: string) =>
+		(await signChatToken(agentId, uid, SECRET)).token;
+
 	it("426s without the Upgrade: websocket header", async () => {
 		const { app, env } = buildApp([{ id: "a1", owner_id: "u1" }]);
 		const res = await app.request("/v1/agents/a1/ws", {}, env);
@@ -197,23 +241,71 @@ describe("GET /v1/agents/:id/ws (WebSocket auth boundary)", () => {
 		expect(await res.text()).toContain("Invalid");
 	});
 
-	it("403s when the valid session doesn't own the agent", async () => {
-		const { app, env, doCalls } = buildApp([{ id: "a1", owner_id: "owner" }]);
-		const tok = await tokenFor("attacker");
-		const res = await app.request(`/v1/agents/a1/ws?token=${tok}`, { headers: { Upgrade: "websocket" } }, env);
+	// THE regression guard for #317. This used to be the accepted credential: a 30-day,
+	// every-route account session sitting in a URL (history, Referer, proxy/CDN logs).
+	// The failure mode of this fix is silently continuing to accept it alongside the new
+	// token, which no other test here would notice.
+	it("REFUSES the account session JWT, even the agent owner's", async () => {
+		const { app, env, doCalls } = buildApp([{ id: "a1", owner_id: "u1" }]);
+		const account = await tokenFor("u1");
+		const res = await app.request(`/v1/agents/a1/ws?token=${account}`, { headers: { Upgrade: "websocket" } }, env);
+		expect(res.status).toBe(401);
+		expect(await res.text()).toContain("Invalid");
+		expect(doCalls).toHaveLength(0);
+	});
+
+	it("REFUSES an admin's account session JWT (no role bypasses the token type)", async () => {
+		const { app, env, doCalls } = buildApp([{ id: "a1", owner_id: "someone-else" }]);
+		const account = await tokenFor("root", ["user", "admin"]);
+		const res = await app.request(`/v1/agents/a1/ws?token=${account}`, { headers: { Upgrade: "websocket" } }, env);
+		expect(res.status).toBe(401);
+		expect(doCalls).toHaveLength(0);
+	});
+
+	it("REFUSES a relay token — the other WS door's credential is not this one's", async () => {
+		const { app, env } = buildApp([{ id: "a1", owner_id: "u1" }]);
+		const { token } = await signRelayToken("a1", "u1", SECRET);
+		const res = await app.request(`/v1/agents/a1/ws?token=${token}`, { headers: { Upgrade: "websocket" } }, env);
+		expect(res.status).toBe(401);
+	});
+
+	it("403s a chat token minted for a DIFFERENT agent", async () => {
+		const { app, env, doCalls } = buildApp([{ id: "a1", owner_id: "u1" }, { id: "a2", owner_id: "u1" }]);
+		const res = await app.request(`/v1/agents/a1/ws?token=${await chatTokenFor("a2", "u1")}`, { headers: { Upgrade: "websocket" } }, env);
+		expect(res.status).toBe(403);
+		expect(doCalls).toHaveLength(0);
+	});
+
+	it("403s when ownership changed after the token was minted", async () => {
+		const { app, env, doCalls } = buildApp([{ id: "a1", owner_id: "new-owner" }]);
+		const res = await app.request(`/v1/agents/a1/ws?token=${await chatTokenFor("a1", "old-owner")}`, { headers: { Upgrade: "websocket" } }, env);
 		expect(res.status).toBe(403);
 		expect(await res.text()).toContain("Forbidden");
 		expect(doCalls).toHaveLength(0);
 	});
 
-	it("owner upgrade forwards to the DO with the server-verified uid pinned in the URL", async () => {
+	it("404s a missing agent", async () => {
+		const { app, env } = buildApp([]);
+		const res = await app.request(`/v1/agents/ghost/ws?token=${await chatTokenFor("ghost", "u1")}`, { headers: { Upgrade: "websocket" } }, env);
+		expect(res.status).toBe(404);
+	});
+
+	it("403s a suspended account, even with a still-valid token (#273)", async () => {
+		const { app, env, doCalls } = buildApp([{ id: "a1", owner_id: "u1" }], { suspended: 1 });
+		const res = await app.request(`/v1/agents/a1/ws?token=${await chatTokenFor("a1", "u1")}`, { headers: { Upgrade: "websocket" } }, env);
+		expect(res.status).toBe(403);
+		expect(await res.text()).toContain("suspended");
+		expect(doCalls).toHaveLength(0);
+	});
+
+	it("owner upgrade forwards to the DO with the server-verified uid pinned, and the token stripped", async () => {
 		const { app, env, doCalls, setDoResponse } = buildApp([{ id: "a1", owner_id: "u1" }]);
 		setDoResponse(() => Response.json({ upgraded: true }));
-		const tok = await tokenFor("u1");
-		const res = await app.request(`/v1/agents/a1/ws?token=${tok}`, { headers: { Upgrade: "websocket" } }, env);
+		const res = await app.request(`/v1/agents/a1/ws?token=${await chatTokenFor("a1", "u1")}`, { headers: { Upgrade: "websocket" } }, env);
 		expect(res.status).toBe(200);
 		expect(doCalls).toHaveLength(1);
 		expect(doCalls[0].path).toContain("user_id=u1"); // pinned, not client-supplied
+		expect(doCalls[0].path).not.toContain("token="); // done its job at this boundary
 	});
 });
 

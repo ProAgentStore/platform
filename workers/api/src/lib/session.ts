@@ -81,6 +81,44 @@ export async function verifyRelayToken(token: string, signingKey: string): Promi
 	return p;
 }
 
+/**
+ * A short-lived, agent-scoped token for the CHAT WebSocket handshake — the same
+ * argument as {@link RelayToken}, applied to the other WS door (#317).
+ *
+ * The browser `WebSocket` constructor takes no headers, so something must ride in
+ * the URL; a URL is the least private part of a request (history, `Referer`, proxy
+ * and CDN access logs, error reporters, anything that screenshots a link). What
+ * rides there should therefore be the SMALLEST credential that can do the job: one
+ * agent's chat socket for minutes, rather than the 30-day account session that
+ * opens every route on the account.
+ */
+export interface ChatToken {
+	typ: "chat";
+	/** The RESOLVED agent id (`:id` may be a slug) this socket may be opened for. */
+	agentId: string;
+	uid: string;
+	exp: number;
+}
+
+const CHAT_TTL = 5 * 60; // only needs to survive the handshake; minted per (re)connect
+
+export async function signChatToken(
+	agentId: string,
+	uid: string,
+	signingKey: string,
+): Promise<{ token: string; exp: number }> {
+	const exp = Math.floor(Date.now() / 1000) + CHAT_TTL;
+	const token = await signPayload<ChatToken>({ typ: "chat", agentId, uid, exp }, signingKey);
+	return { token, exp };
+}
+
+export async function verifyChatToken(token: string, signingKey: string): Promise<ChatToken | null> {
+	const p = await verifyPayload<ChatToken>(token, signingKey);
+	if (!p || p.typ !== "chat" || typeof p.exp !== "number" || !p.agentId || !p.uid) return null;
+	if (p.exp < Math.floor(Date.now() / 1000)) return null;
+	return p;
+}
+
 /** Sign an arbitrary JSON payload (e.g. OAuth `state`) with the same HMAC. */
 export async function signPayload<T>(payload: T, signingKey: string): Promise<string> {
 	const data = b64url(
@@ -133,9 +171,9 @@ export async function verifySession(
 		const payload = JSON.parse(
 			new TextDecoder().decode(unb64url(data)),
 		) as SessionPayload & { typ?: unknown };
-		// Type-pin: other tokens are signed with the SAME key and carry uid+exp — a relay
-		// token ({typ:"relay",…}, deliberately placed in a WS URL query → edge logs) and a
-		// connector-OAuth `state` ({uid,exp} → travels via Google + browser history). Without
+		// Type-pin: other tokens are signed with the SAME key and carry uid+exp — the two WS
+		// handshake tokens (relay + chat, both deliberately placed in a WS URL query → edge
+		// logs) and a connector-OAuth `state` ({uid,exp} → via Google + browser history). Without
 		// this check verifySession would accept them as a full account session (takeover via a
 		// leaked URL). A real session ALWAYS has a roles[] and NEVER a `typ`; nothing else does.
 		if (payload.typ !== undefined || !Array.isArray(payload.roles)) return null;

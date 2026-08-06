@@ -71,15 +71,24 @@ const listing = (files: string[]) => files.sort().join("\n");
 // ── 1. Identity resolves through requireUser — nothing verifies a session by hand ────
 //
 // `requireUser` is not just "parse the bearer": it is where operator SUSPENSION (#34/#273)
-// is applied. A route that calls `verifySession` itself gets a valid-looking session for a
+// is applied. A route that authenticates itself gets a valid-looking identity for a
 // suspended account, and the moderation lever silently does not reach it. The WS chat
 // upgrade cannot send an Authorization header and `/v1/auth/me` is what other workers read
-// the 403 from, so those two verify inline BY DESIGN — and both call `isSuspended`
-// themselves. That is the rule: verify by hand, then apply the gate by hand.
+// the 403 from, so those two authenticate inline BY DESIGN — and both call `isSuspended`
+// themselves. That is the rule: authenticate by hand, then apply the gate by hand.
+//
+// `verifyChatToken` counts as authenticating (#317). The chat upgrade stopped taking the
+// account session — it now takes a short-lived, agent-scoped token — and that change would
+// otherwise have dropped `routes/chat.ts` out of this scan entirely, quietly retiring the
+// guard on the exact spend path it was written for. A token minted BEFORE a suspension
+// stays cryptographically valid until it expires, so the live check still has to run.
 describe("suspension reaches every authenticated surface", () => {
-	/** Files that may call `verifySession` without also calling `isSuspended`, and why. */
+	/** The token verifiers that establish WHO the caller is, outside `requireUser`. */
+	const INLINE_VERIFIERS = ["verifySession", "verifyChatToken"];
+
+	/** Files that may call one of those without also calling `isSuspended`, and why. */
 	const NON_AUTHORIZING: Record<string, string> = {
-		"lib/session.ts": "defines verifySession",
+		"lib/session.ts": "defines them",
 		"lib/auth.ts": "IS the choke point — requireUser calls both",
 		// These two read a uid off a token for bookkeeping. Neither decides access, so a
 		// suspended account gains nothing by being recognised: the request it is attached to
@@ -88,7 +97,7 @@ describe("suspension reaches every authenticated surface", () => {
 		"lib/rate-limit.ts": "bucket keying only — a suspended uid just gets its own bucket",
 	};
 
-	const verifiesInline = ALL.filter((f) => findCalls(f.code, "verifySession").length > 0);
+	const verifiesInline = ALL.filter((f) => INLINE_VERIFIERS.some((v) => findCalls(f.code, v).length > 0));
 
 	it("finds the surfaces that verify inline at all", () => {
 		// Non-vacuity. Mutation testing caught the first version of the guard below passing for
@@ -108,7 +117,7 @@ describe("suspension reaches every authenticated surface", () => {
 
 		expect(
 			offenders,
-			`These files verify a session by hand and never call isSuspended(), so a suspended account still passes.\n` +
+			`These files verify a token by hand and never call isSuspended(), so a suspended account still passes.\n` +
 				`Call requireUser(c) instead. If the surface genuinely cannot (a WebSocket upgrade, a cross-worker\n` +
 				`status probe), call isSuspended(c, session.uid) explicitly — see routes/chat.ts and routes/auth.ts.\n` +
 				`Offenders:\n${listing(offenders)}`,
@@ -120,9 +129,9 @@ describe("suspension reaches every authenticated surface", () => {
 		// exemption is stale and must be deleted rather than left as a standing permission.
 		const stale = Object.keys(NON_AUTHORIZING).filter((rel) => {
 			const f = ALL.find((s) => s.rel === rel);
-			return !f || findCalls(f.code, "verifySession").length === 0;
+			return !f || !INLINE_VERIFIERS.some((v) => findCalls(f.code, v).length > 0);
 		});
-		expect(stale, `Stale exemptions in NON_AUTHORIZING — these no longer call verifySession:\n${listing(stale)}`).toEqual([]);
+		expect(stale, `Stale exemptions in NON_AUTHORIZING — these no longer verify a token inline:\n${listing(stale)}`).toEqual([]);
 	});
 });
 

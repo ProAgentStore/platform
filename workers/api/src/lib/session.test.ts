@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { signSession, verifySession, signRelayToken, verifyRelayToken, signPayload } from "./session.js";
+import { signSession, verifySession, signRelayToken, verifyRelayToken, signChatToken, verifyChatToken, signPayload } from "./session.js";
 
 const SECRET = "test-secret-key-for-hmac-signing";
 
@@ -25,6 +25,44 @@ describe("relay token", () => {
 	it("rejects a wrong signing key", async () => {
 		const { token } = await signRelayToken("inst-1", "user-1", SECRET);
 		expect(await verifyRelayToken(token, "other-key")).toBeNull();
+	});
+});
+
+describe("chat token", () => {
+	it("signs + verifies an agent-scoped chat token", async () => {
+		const { token } = await signChatToken("agent-1", "user-1", SECRET);
+		const p = await verifyChatToken(token, SECRET);
+		expect(p?.agentId).toBe("agent-1");
+		expect(p?.uid).toBe("user-1");
+		expect(p?.typ).toBe("chat");
+	});
+
+	// THE point of #317: the thing that used to open this socket must no longer open it.
+	it("rejects a full account session JWT", async () => {
+		const account = await signSession("user-1", SECRET);
+		expect(await verifyChatToken(account, SECRET)).toBeNull();
+	});
+
+	it("rejects a relay token (right shape, wrong door)", async () => {
+		const { token } = await signRelayToken("inst-1", "user-1", SECRET);
+		expect(await verifyChatToken(token, SECRET)).toBeNull();
+	});
+
+	it("rejects an expired chat token", async () => {
+		const expired = await signPayload({ typ: "chat", agentId: "a", uid: "u", exp: 1 }, SECRET);
+		expect(await verifyChatToken(expired, SECRET)).toBeNull();
+	});
+
+	it("rejects a wrong signing key", async () => {
+		const { token } = await signChatToken("agent-1", "user-1", SECRET);
+		expect(await verifyChatToken(token, "other-key")).toBeNull();
+	});
+
+	it("expires in minutes, not the account session's 30 days", async () => {
+		const { exp } = await signChatToken("agent-1", "user-1", SECRET);
+		const ttl = exp - Math.floor(Date.now() / 1000);
+		expect(ttl).toBeGreaterThan(0);
+		expect(ttl).toBeLessThanOrEqual(10 * 60);
 	});
 });
 
@@ -73,6 +111,11 @@ describe("session", () => {
 	// must NOT accept them as a full account session (a leaked relay URL / OAuth state → takeover).
 	it("rejects a relay token (same key, but typ:relay + no roles[])", async () => {
 		const { token } = await signRelayToken("inst-1", "victim", SECRET);
+		expect(await verifySession(token, SECRET)).toBeNull();
+	});
+
+	it("rejects a chat token (same key, lives in a WS URL → edge logs)", async () => {
+		const { token } = await signChatToken("agent-1", "victim", SECRET);
 		expect(await verifySession(token, SECRET)).toBeNull();
 	});
 
