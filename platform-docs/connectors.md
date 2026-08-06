@@ -80,6 +80,32 @@ call would be worse than no test. The request goes out through the same SSRF-gua
 path as any other outbound MCP call — there is no test-only fast path, because a "test this URL"
 button on user-supplied config is exactly the shape of an SSRF primitive.
 
+**Granted remote tools become first-class tools** (#261). A connected server's tools used to reach
+the model only through `mcp_call_tool` — a stringly-typed passthrough the model had to aim by
+remembering a tool name and hand-building an `args` blob, discarding at the boundary the published
+schemas that are the whole reason to speak MCP. Now every tool that a server publishes **and** the
+owner has granted is projected into an ordinary function tool carrying the server's own name,
+description and input schema. `mcp_call_tool` remains, as the escape hatch for anything outside the
+projected set.
+
+The catalog is cached in `mcp_tool_catalog` (migration 0086, keyed `(user_id, normalized endpoint,
+remote tool)`) and **refreshed by the connection test** — the one path that already asks a server
+what it publishes. A refresh *replaces* that endpoint's rows, so a tool the server has removed stops
+being offered instead of lingering as a callable ghost. A grant made before the catalog was ever
+fetched imports nothing until the server is tested once.
+
+The synthetic name an agent sees (`mcp_<endpoint-slug>_<tool>`) is a **label, not an identity**: it
+is derived at projection time, never stored, and never consulted by a gate. Dispatch resolves it
+back to `(endpoint, remote tool)` and runs the ordinary `mcp_call_tool` path — same #262 consent on
+the remote name, same destructive-name test on the name we put on the wire, same per-endpoint
+credential, same trace row. Getting that backwards is the quiet failure this design exists to avoid:
+an invented alias never matches a grant row, and a mangled one stops looking destructive to a test
+that only sees the mangled form. Two servers publishing `create_site` are already distinct, because
+the endpoint is part of both the grant and the label. The server's own description is quoted to the
+model as a *claim about itself*, not restated as an instruction — a tool description is untrusted
+text placed in front of the model every turn, and unlike a resource body there is nowhere in a tool
+definition to put a fence.
+
 **Resources and prompts, not only tools** (#263). An MCP server also publishes *resources* (files,
 records, design metadata) and *prompts* (reusable interaction templates), and an agent that can see
 only the tools has to guess at everything else — which is the failure this connector exists to

@@ -157,6 +157,7 @@ export function connectionStatusFor(failure: McpFailureClass | undefined, ok: bo
 interface RawTool {
 	name?: unknown;
 	description?: unknown;
+	inputSchema?: unknown;
 }
 
 /**
@@ -169,22 +170,28 @@ interface RawTool {
  *
  * Bounded at 500 entries and 300 description characters: the catalog is remote, attacker-shaped
  * data on its way into a JSON response and a rendered list.
+ *
+ * `inputSchema` is carried through (#261) because it is the whole point of speaking MCP: it is
+ * what lets a granted remote tool be projected as a real function tool instead of a stringly-typed
+ * passthrough. Kept only when it is an OBJECT — an array or a scalar is not a schema, and passing
+ * one on would produce malformed calls that read to a user as the agent being confused.
  */
-export function parseToolCatalog(raw: unknown): Array<{ name: string; description?: string }> {
+export function parseToolCatalog(raw: unknown): Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> {
 	let list: unknown = raw;
 	if (list && typeof list === "object" && !Array.isArray(list)) {
 		const r = list as Record<string, unknown>;
 		list = Array.isArray(r.tools) ? r.tools : Array.isArray(r.result) ? r.result : (r.result as Record<string, unknown> | undefined)?.tools;
 	}
 	if (!Array.isArray(list)) return [];
-	const out: Array<{ name: string; description?: string }> = [];
+	const out: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> = [];
 	for (const entry of list.slice(0, 500)) {
 		if (!entry || typeof entry !== "object") continue;
 		const t = entry as RawTool;
 		const name = typeof t.name === "string" ? t.name.trim() : "";
 		if (!name) continue;
 		const description = typeof t.description === "string" && t.description.trim() ? t.description.trim().slice(0, 300) : undefined;
-		out.push({ name, description });
+		const inputSchema = t.inputSchema && typeof t.inputSchema === "object" && !Array.isArray(t.inputSchema) ? (t.inputSchema as Record<string, unknown>) : undefined;
+		out.push({ name, description, inputSchema });
 	}
 	return out;
 }

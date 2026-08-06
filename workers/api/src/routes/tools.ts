@@ -11,6 +11,7 @@ import { connectorClient } from "../lib/connectors/client.js";
 import { probeMcpEndpoint } from "../lib/connectors/mcp.js";
 import { discoverAuthServer } from "../lib/connectors/discovery.js";
 import { connectionStatusFor, parseToolCatalog, summarizeConnection, summarizeTools, type McpConnectionReport } from "../lib/mcp-connection.js";
+import { replaceMcpToolCatalog } from "../lib/mcp-tool-catalog.js";
 import {
 	adoptLegacyMcpCredential,
 	deleteMcpCredential,
@@ -587,7 +588,7 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 		discovery = await discoverAuthServer(endpoint).catch(() => undefined);
 	}
 
-	let discovered: Array<{ name: string; description?: string }> = [];
+	let discovered: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }> = [];
 	if (probe.success) {
 		try {
 			discovered = parseToolCatalog(JSON.parse(probe.content));
@@ -595,6 +596,15 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 			/* a success whose body won't parse is a server bug, not a connection failure — report
 			   the connection as up with an empty catalog rather than inventing a transport error */
 		}
+		// THIS is the refresh action for imported tools (#261). The catalog the agent runtime
+		// projects from is written on the one path that already asks the server what it publishes,
+		// and a refresh REPLACES the endpoint's rows — so a tool the server has removed stops being
+		// offered rather than lingering as a callable ghost.
+		//
+		// Only on SUCCESS: a failed probe taught us nothing about the server, and emptying the
+		// catalog because it was briefly unreachable would silently strip an agent of tools it is
+		// still granted, with the outage long over by the time anyone noticed.
+		await replaceMcpToolCatalog(c.env, session.uid, endpoint, discovered);
 	}
 	const tools = summarizeTools(discovered, grantsForEndpoint, gates);
 

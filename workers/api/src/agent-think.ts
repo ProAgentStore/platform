@@ -9,6 +9,7 @@ import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilit
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
 import { stableStringify } from "./lib/stable-json.js";
 import { fenceUntrusted } from "./lib/untrusted-fence.js";
+import { loadImportedMcpTools } from "./lib/mcp-tool-catalog.js";
 import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
@@ -664,6 +665,24 @@ export async function runAgentThink(opts: {
 	const allowedToolNames = toolNamesFor(capabilities);
 	if (state.permissions?.email === true) allowedToolNames.add("find_confirmation_link");
 	for (const name of disabledTools) allowedToolNames.delete(name);
+
+	// Imported remote MCP tools (#261). A granted tool on a connected server becomes a REAL
+	// function tool — the server's own name, description and input schema — instead of the model
+	// having to remember a tool name and hand-build an `args` blob for the generic passthrough.
+	//
+	// Gated on `mcp_call_tool` being available to this agent, because that is exactly what these
+	// dispatch through: an imported tool is a nicer way to TYPE a call, never a second way to
+	// authorize one. If the creator did not declare the MCP connector, or the owner switched the
+	// tool off, there is nothing to import — the same verdict the connection test reports as
+	// `callToolEnabled`. Reads are skipped entirely for agents without it, so the D1 query is paid
+	// only by agents that can actually use the result.
+	const importedMcp = allowedToolNames.has("mcp_call_tool") && userId ? await loadImportedMcpTools(env, state.agentId, userId) : [];
+	const importedByName = new Map(importedMcp.map((t) => [t.name, t]));
+	for (const t of importedMcp) {
+		tools.push({ type: "function" as const, function: { name: t.name, description: t.description, parameters: t.jsonSchema } });
+		allowedToolNames.add(t.name);
+	}
+
 	const allToolLog: string[] = [];
 	const storageToolNames = storageToolNameSet();
 	const registryToolNames = registryToolNameSet();
@@ -753,6 +772,30 @@ export async function runAgentThink(opts: {
 				const r = userId
 					? await configureBoardForAgent(env, state.agentId, userId, (tc.arguments ?? {}) as Record<string, unknown>)
 					: { content: "Board can only be customized for a signed-in owner.", success: false };
+				toolResult = { name: tc.name, content: r.content, success: r.success };
+			} else if (importedByName.has(tc.name)) {
+				// #261 — resolve the SYNTHETIC label back to (endpoint, remote tool name) and run the
+				// ordinary `mcp_call_tool`. The label is never a permission key: consent (#262) is
+				// checked on the remote name, `isDestructiveToolName` runs on the name we put on the
+				// wire, and the credential resolves on the normalized endpoint (#286). Dispatching on
+				// the label instead would break the grant lookup and the destructive-name test in
+				// silence — the two failure modes that look like nothing at all until they matter.
+				const imported = importedByName.get(tc.name)!;
+				const r = await runRegistryTool(
+					"mcp_call_tool",
+					{
+						env,
+						userId,
+						agentId: state.agentId,
+						instanceId: state.agentId,
+						budgetId: delegation?.budgetId ?? undefined,
+						onBehalfOf: delegation?.onBehalfOf ?? undefined,
+						traceId: delegation?.traceId ?? undefined,
+					},
+					{ url: imported.endpoint, tool: imported.tool, args: (tc.arguments ?? {}) as Record<string, unknown> },
+				);
+				// Reported under the label the model called, not under `mcp_call_tool` — a transcript
+				// where the request and the result name different tools is unreadable.
 				toolResult = { name: tc.name, content: r.content, success: r.success };
 			} else if (registryToolNames.has(tc.name)) {
 					toolResult = await runRegistryTool(
