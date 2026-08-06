@@ -50,11 +50,15 @@ The Job Application Assistant is the reference browser-capable agent. Its Cloudf
 
 ## Coder Agents
 
-Coder agents use the same runtime idea, but the local capability is a terminal-backed CLI session rather than a browser. The default backend remains tmux; the generic terminal connector can also address kitty and iTerm2 targets when those apps expose local control APIs.
+Coder agents use the same runtime idea, but the local capability is a coding CLI rather than a browser.
+
+The runner starts that CLI as a **child process** and speaks to it directly — Claude Code over its structured `stream-json` interface (real turn events, so "is it still thinking?" is a fact rather than a regex guess), and any other engine as a raw spawn with stdout capture. It is **not** a tmux pane, and the terminal view is not a scraped TUI. Re-attaching after a runner restart works because Claude Code persists its session to `~/.claude`, so the runner re-spawns with `--resume <session id>`; tmux is not involved.
 
 ```text
-Workflow brain -> RelayDO -> local runner -> terminal CLI session
+Workflow brain -> RelayDO -> local runner -> coding CLI child process (stream-json)
 ```
+
+tmux *is* still used on this platform, but by a different family: the **terminal connector**, which drives tmux, kitty or iTerm2 targets on the user's machine for terminal-operator agents. Those create real tmux sessions; Coder agents do not.
 
 This allows long-running coding sessions while preserving the account-level control plane and audit model.
 
