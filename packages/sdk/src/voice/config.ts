@@ -58,6 +58,8 @@ function parseWords(v: unknown): string[] {
 
 let _cache: VoiceConfig | null = null;
 let _cacheInstanceId: string | null = null;
+/** De-dupes concurrent loads (a background revalidate racing a cold read) onto one request. */
+let _inflight: { key: string | null; p: Promise<VoiceConfig> } | null = null;
 
 const clamp = (v: unknown, lo: number, hi: number, dflt: number): number =>
 	Math.max(lo, Math.min(hi, typeof v === "number" && Number.isFinite(v) ? v : dflt));
@@ -109,11 +111,43 @@ export function resolveVoiceConfig(vs: Record<string, unknown>, hasOpenAiKey: bo
 	};
 }
 
+/**
+ * The instance's voice config, cached across calls.
+ *
+ * `refresh: "background"` serves the cached value IMMEDIATELY and revalidates behind it. The
+ * hands-free start path used to invalidate the cache and `await` this before touching
+ * `getUserMedia`, so every entry paid a network round trip (two, when an OpenAI provider forces
+ * the `/v1/keys/status` check) with nothing on screen — measurably the dominant await in #284,
+ * and the one worth removing rather than papering over with a spinner.
+ *
+ * The trade is explicit: a settings change now lands on the NEXT mic start rather than this one.
+ * That is the right way round — the user is not on the settings screen at the moment they tap
+ * the mic, and the revalidate fired here has normally landed long before they tap it again.
+ */
 export async function getVoiceConfig(
 	instanceId?: string,
+	opts: { refresh?: "background" } = {},
 ): Promise<VoiceConfig> {
-	if (_cache && _cacheInstanceId === (instanceId || null)) return _cache;
+	if (_cache && _cacheInstanceId === (instanceId || null)) {
+		if (opts.refresh === "background") void loadVoiceConfig(instanceId).catch(() => {});
+		return _cache;
+	}
+	return loadVoiceConfig(instanceId);
+}
 
+async function loadVoiceConfig(instanceId?: string): Promise<VoiceConfig> {
+	const key = instanceId || null;
+	// A background revalidate that overlaps a cold read (or another revalidate) must not fan out
+	// into duplicate requests — the start path can trigger both within the same tap.
+	if (_inflight && _inflight.key === key) return _inflight.p;
+	const p = fetchVoiceConfig(instanceId).finally(() => {
+		if (_inflight?.p === p) _inflight = null;
+	});
+	_inflight = { key, p };
+	return p;
+}
+
+async function fetchVoiceConfig(instanceId?: string): Promise<VoiceConfig> {
 	let vs: Record<string, unknown> = {};
 	if (instanceId) {
 		try {
@@ -150,6 +184,9 @@ export async function getVoiceConfig(
 
 export function invalidateVoiceConfig() {
 	_cache = null;
+	// Drop the in-flight request too: an explicit invalidate means "the settings I know about are
+	// wrong", and joining a load that started before the change would hand back exactly those.
+	_inflight = null;
 }
 
 export async function createTts(

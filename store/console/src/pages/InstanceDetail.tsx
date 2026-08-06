@@ -318,6 +318,20 @@ function InstancePage() {
 		prevCountRef.current = messages.length;
 	}, [messages, loadingMore]);
 
+	// The pending voice bubble grows as words arrive and is the newest thing in the thread — keep
+	// it in view for the same reason as a new message, or the live transcript scrolls off the
+	// bottom and the user is back to not being able to see what they said (#281). Only when
+	// already at the bottom, so it never yanks someone out of scrollback mid-read.
+	const dictationText = voice.dictation?.text ?? "";
+	const dictationStatus = voice.dictation?.status;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: dictationText is a trigger, not an input — the effect must re-run as words arrive so the growing bubble stays in view.
+	useEffect(() => {
+		if (!dictationStatus || !atBottomRef.current) return;
+		requestAnimationFrame(() => {
+			if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+		});
+	}, [dictationText, dictationStatus]);
+
 	// Use ref for maybeSpeakResponse to avoid circular deps
 	const speakRef = useRef(voice.maybeSpeakResponse);
 	speakRef.current = voice.maybeSpeakResponse;
@@ -445,12 +459,20 @@ function InstancePage() {
 		// A turn running server-side counts as working even though THIS tab did not start it —
 		// that is the whole point of #252: the console stops claiming idle over live work.
 		thinking: thinking || remoteWork,
-		transcribing: voice.interim === "Transcribing…",
+		// Read from the hook's state, not by string-matching a sentinel in the composer. The old
+		// `voice.interim === "Transcribing…"` was a third copy of the same literal (SDK + here +
+		// the Coder Co-pilot) and it only held because the words were destroyed to write it (#281).
+		transcribing: voice.transcribing,
 		talking: voice.talking,
 		listening: voice.micOn,
 		speaking: voice.speaking,
 		muted: voice.muted,
+		starting: voice.starting,
 	});
+	// The composer is locked while voice owns the turn: a transient notice is showing, or an
+	// utterance is in flight. A FAILED utterance deliberately does not lock — the user is reading
+	// it and may well want to type the message themselves.
+	const voiceBusy = !!voice.interim || (!!voice.dictation && voice.dictation.status !== "failed");
 	// When the pill appears, its reserved padding is BELOW the current scroll position —
 	// nudge to the bottom so the last message rises clear of the pill immediately.
 	const pillVisible = !!voiceStatus;
@@ -786,9 +808,9 @@ function InstancePage() {
 									value={voice.interim || input}
 									onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
 									// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
-									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voice.interim) { e.preventDefault(); sendMessage(); } }}
+									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendMessage(); } }}
 									placeholder={voice.talking ? "Listening — tap to send" : voice.mode === "ptt" ? "Tap the chat to talk — or type" : voice.mode === "handsfree" ? (voice.micOn ? "Listening…" : "Hands-free — just talk") : isCoding ? "Ask about your repos..." : surfaces.includes("tmux") ? "Ask about tmux sessions..." : "Send a message..."}
-									readOnly={!!voice.interim}
+									readOnly={voiceBusy}
 									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
 								/>
 								{voice.micOn && (
@@ -797,7 +819,7 @@ function InstancePage() {
 									</div>
 								)}
 							</div>
-							<button type="button" onClick={sendMessage} disabled={!!voice.interim} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
+							<button type="button" onClick={sendMessage} disabled={voiceBusy} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
 								<Send size={14} />
 							</button>
 						</div>
@@ -816,11 +838,17 @@ function InstancePage() {
 										type="button"
 										role="radio"
 										aria-checked={voice.mode === m.id}
+										aria-busy={voice.starting && m.id === "handsfree"}
 										title={m.title}
 										onClick={() => voice.setVoiceMode(m.id)}
-										className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : "text-muted hover:bg-panel-hover hover:text-accent"}`}
+										className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-green/15 text-green" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
 									>
-										{m.icon}<span className="hidden sm:inline">{m.label}</span>
+										{/* #284: opening the mic costs a config read + getUserMedia, and until this
+										    spinner nothing on the control changed for that whole window — the press
+										    read as "nothing happened". It clears exactly when listening really
+										    begins, so the spinner and the ready-chime agree. */}
+										{voice.starting && m.id === "handsfree" ? <Loader2 size={15} className="animate-spin" /> : m.icon}
+										<span className="hidden sm:inline">{voice.starting && m.id === "handsfree" ? "Starting…" : m.label}</span>
 									</button>
 								))}
 							</div>
@@ -972,6 +1000,39 @@ function InstancePage() {
 									</div>
 								);
 							})}
+							{/* The utterance in flight (#281). The words used to live in the composer and were
+							    ASSIGNED over with the literal "Transcribing…" at end-of-turn, so for the whole upload
+							    round trip what the user had just said existed nowhere on screen — and in hands-free
+							    that is exactly when they are not looking at the composer. It is a real bubble in the
+							    thread now: it appears as speech starts, KEEPS the words while the clip transcribes,
+							    and survives a failure instead of leaving a gap. The final transcript arrives via
+							    onSend, which appends the real message and clears this. */}
+							{voice.dictation && (
+								<div
+									aria-live="polite"
+									className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text self-end rounded-br-sm border border-dashed ${
+										voice.dictation.status === "failed" ? "bg-red/10 border-red/50 text-red" : "bg-accent/60 border-white/40 text-white"
+									}`}
+								>
+									<div className="text-[0.65rem] opacity-90 mb-0.5 font-bold flex items-center justify-between gap-3">
+										<span className="flex items-center gap-1">
+											You
+											{voice.dictation.status === "dictating" && <><Mic size={11} />Speaking…</>}
+											{voice.dictation.status === "transcribing" && <><Loader2 size={11} className="animate-spin" />Transcribing…</>}
+											{voice.dictation.status === "failed" && <span>Not transcribed</span>}
+										</span>
+										{voice.dictation.status === "failed" && (
+											<button type="button" onClick={voice.clearDictation} className="font-semibold underline opacity-80 hover:opacity-100">Dismiss</button>
+										)}
+									</div>
+									<span className="whitespace-pre-wrap break-words italic">
+										{voice.dictation.text || (voice.dictation.status === "failed" ? "(nothing was captured)" : "…")}
+									</span>
+									{voice.dictation.status === "failed" && voice.dictation.note && (
+										<div className="text-[0.65rem] mt-1 opacity-80 not-italic">{voice.dictation.note}</div>
+									)}
+								</div>
+							)}
 						</div>
 						{/* Jump to latest — shown whenever the user has scrolled up off the bottom.
 						    z-30 so it sits ABOVE the voice pill (never hidden by Listening/Talking),

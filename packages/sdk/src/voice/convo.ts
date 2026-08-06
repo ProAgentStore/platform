@@ -83,14 +83,19 @@ export function resolveVoiceStatus(input: {
 	speaking?: boolean;
 	/** Hands-free mic paused via Mute — the pill must not claim it's listening. */
 	muted?: boolean;
+	/** A voice session is opening the mic (#284) — see derivePhase. */
+	starting?: boolean;
 }): VoiceStatus | null {
-	const { mode, thinking, transcribing, talking, listening, speaking, muted } = input;
+	const { mode, thinking, transcribing, talking, listening, speaking, muted, starting } = input;
 	if (thinking) return { label: "Working on it…", tone: "work", spin: true, tap: false, icon: "spin" };
 	// Agent talking back — surface in EVERY mode (incl. a manual replay in text chat) so
 	// it's obvious the mic is not listening to you right now (the self-transcription worry).
 	// Tappable so the user can cut the reply off (the pill's onClick routes a `speak`-tone tap
 	// to cancelSpeak, not toggleTalk).
 	if (speaking) return { label: "Speaking · tap to stop", tone: "speak", spin: false, tap: true, icon: "speak" };
+	// Above the text-mode return for the same reason derivePhase puts it there: the mode has not
+	// flipped yet while the mic is opening, so a check below this line would never be reached.
+	if (starting) return { label: "Starting…", tone: "work", spin: true, tap: false, icon: "spin" };
 	if (mode === "text") return null;
 	if (transcribing) return { label: "Transcribing…", tone: "work", spin: true, tap: false, icon: "spin" };
 	if (talking) return { label: "Listening — tap to send", tone: "live", spin: false, tap: true, icon: "mic" };
@@ -428,7 +433,7 @@ export function splitTrailingCommand(
  * - "error"          → a genuine failure (Whisper 400/401, etc.) worth reporting.
  */
 export type VoiceErrorKind = "soft" | "mic-unavailable" | "error";
-const MIC_UNAVAILABLE = new Set(["not-allowed", "service-not-allowed", "audio-capture"]);
+const MIC_UNAVAILABLE = new Set(["not-allowed", "service-not-allowed", "audio-capture", "audio-busy"]);
 export function classifyVoiceError(err: string | null | undefined): VoiceErrorKind {
 	if (!err || err === "no-speech") return "soft";
 	if (MIC_UNAVAILABLE.has(err)) return "mic-unavailable";
@@ -436,7 +441,40 @@ export function classifyVoiceError(err: string | null | undefined): VoiceErrorKi
 }
 /** Human hint for a mic-unavailable error code. */
 export function micUnavailableMessage(err: string): string {
-	return err === "audio-capture"
-		? "No microphone found — check your device."
-		: "Microphone blocked — allow mic access in your browser settings.";
+	if (err === "audio-capture") return "No microphone found — check your device.";
+	if (err === "audio-busy") return "Microphone is in use by another app or tab — close it and try again.";
+	return "Microphone blocked — allow mic access in your browser settings.";
+}
+
+/**
+ * Translate a `getUserMedia` failure into the SAME error vocabulary `classifyVoiceError` already
+ * speaks, so ONE classifier covers both ways the mic can refuse to open (#284).
+ *
+ * The two APIs report the same conditions under different names: Web Speech says `"not-allowed"`
+ * / `"audio-capture"`, `getUserMedia` throws a DOMException named `"NotAllowedError"` /
+ * `"NotFoundError"`. `classifyVoiceError` only ever knew the first set, so a denied mic on the
+ * hands-free START path fell through to the generic `"error"` branch — which is why that path
+ * "does not reach" the existing helpers and reverted in silence instead of saying why.
+ *
+ * `NotReadableError` (the device is held by another tab or app) has no Web Speech equivalent at
+ * all, hence the new `audio-busy` code: it is the case a user is least able to guess.
+ */
+export function normalizeMediaError(err: unknown): string {
+	const name = typeof err === "object" && err !== null && "name" in err ? String((err as { name: unknown }).name) : String(err ?? "");
+	switch (name) {
+		case "NotAllowedError":
+		case "PermissionDeniedError":
+		case "SecurityError":
+			return "not-allowed";
+		case "NotFoundError":
+		case "DevicesNotFoundError":
+			return "audio-capture";
+		case "NotReadableError":
+		case "TrackStartError":
+			return "audio-busy";
+		default:
+			// Already a Web Speech code (the STT layer rethrows those verbatim) → pass it through
+			// so the one classifier keeps working; anything else stays a real, reportable error.
+			return name;
+	}
 }

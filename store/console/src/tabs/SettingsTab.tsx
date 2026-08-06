@@ -3,6 +3,7 @@ import PrefOverride from "../components/PrefOverride";
 import VoiceFields from "../components/VoiceFields";
 import TranslationFields from "../components/TranslationFields";
 import { api } from "@proagentstore/sdk/client";
+import { invalidateVoiceConfig } from "@proagentstore/sdk/hooks";
 import type { SettingsField } from "../lib/types";
 import TeamworkSection from "./TeamworkSection";
 import LoopPresetsSection from "./LoopPresetsSection";
@@ -354,6 +355,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		});
 		setVoiceOverride(true);
 		if (d.voiceSettings) setVoiceSettings(d.voiceSettings);
+		// The voice hook serves its config from cache and revalidates behind it, so the mic can
+		// open without a round trip (#284). Drop the cache here — this is the one moment we know
+		// it is wrong — and the new setting applies on the very next mic start.
+		invalidateVoiceConfig();
 	};
 
 	/** "Use my defaults" — DELETE the override and repaint from what the account resolves to. */
@@ -362,6 +367,7 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			.catch(() => null);
 		setVoiceOverride(false);
 		if (d?.voiceSettings) setVoiceSettings(d.voiceSettings);
+		invalidateVoiceConfig(); // same reason as saveVoice: the cached config just became wrong
 	};
 
 	/** A one-line "what am I actually getting" for the radio, so the choice is informed. */

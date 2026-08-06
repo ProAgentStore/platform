@@ -129,12 +129,19 @@ export default function CopilotView({
 	const voiceStatus = resolveVoiceStatus({
 		mode: voice.mode,
 		thinking: summaryBusy,
-		transcribing: voice.interim === "Transcribing…",
+		// From state, not by string-matching a sentinel in the composer — that literal was
+		// duplicated here, in the console, and in the SDK's own phase model, and it only worked
+		// because the user's words were destroyed to write it (#281).
+		transcribing: voice.transcribing,
 		talking: voice.talking,
 		listening: voice.micOn,
 		speaking: voice.speaking,
 		muted: voice.muted,
+		starting: voice.starting,
 	});
+	// Voice owns the composer while a notice is showing or an utterance is in flight; a FAILED
+	// utterance does not lock it (the user is reading it and may want to type it themselves).
+	const voiceBusy = !!voice.interim || (!!voice.dictation && voice.dictation.status !== "failed");
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
 			{/* Input bar — top, always visible. Compact input, big controls. relative z-10 keeps it
@@ -147,9 +154,9 @@ export default function CopilotView({
 						value={voice.interim || chatInput}
 						onChange={(e) => { if (!voice.interim) setChatInput(e.target.value); }}
 						// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
-						onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voice.interim) { e.preventDefault(); sendInstruction(); } }}
+						onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendInstruction(); } }}
 						placeholder="Talk to Co-Pilot"
-						readOnly={!!voice.interim}
+						readOnly={voiceBusy}
 						className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-lg px-2.5 py-1.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent font-semibold" : voice.micOn ? "border-green" : "border-line"}`}
 					/>
 					{voice.micOn && (
@@ -158,7 +165,7 @@ export default function CopilotView({
 						</div>
 					)}
 				</div>
-				<button type="button" onClick={openEdit} disabled={!!voice.interim} aria-label="Edit full message" title="Edit / preview the full message" className="px-3 py-2 border border-line text-muted hover:border-accent hover:text-accent rounded-lg font-bold disabled:opacity-40 shrink-0">
+				<button type="button" onClick={openEdit} disabled={voiceBusy} aria-label="Edit full message" title="Edit / preview the full message" className="px-3 py-2 border border-line text-muted hover:border-accent hover:text-accent rounded-lg font-bold disabled:opacity-40 shrink-0">
 					<Pencil size={17} />
 				</button>
 				{/* Send: clickable in listening mode (only disabled while a reply is generating), with
@@ -186,11 +193,16 @@ export default function CopilotView({
 							key={m.id}
 							type="button"
 							aria-pressed={voice.mode === m.id}
+							aria-busy={voice.starting && m.id === "handsfree"}
 							title={m.title}
 							onClick={() => voice.setVoiceMode(m.id)}
-							className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : "text-muted hover:bg-panel-hover hover:text-accent"}`}
+							className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-green/15 text-green" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
 						>
-							{m.icon}<span className="hidden sm:inline">{m.label}</span>
+							{/* #284: the mic takes a config read + getUserMedia to open, and until this spinner
+							    the control looked untouched for that whole window. It clears when listening
+							    really begins, so it and the ready-chime agree. */}
+							{voice.starting && m.id === "handsfree" ? <Loader2 size={15} className="animate-spin" /> : m.icon}
+							<span className="hidden sm:inline">{voice.starting && m.id === "handsfree" ? "Starting…" : m.label}</span>
 						</button>
 					))}
 				</div>
@@ -360,6 +372,35 @@ export default function CopilotView({
 						</div>
 					);
 				})}
+				{/* The utterance in flight (#281) — the same bubble the Assistant tab shows. The words
+				    used to sit in the composer and be overwritten with "Transcribing…" at end-of-turn, so
+				    they vanished for the whole upload round trip. */}
+				{voice.dictation && (
+					<div
+						aria-live="polite"
+						className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text self-end rounded-br-sm border border-dashed ${
+							voice.dictation.status === "failed" ? "bg-red/10 border-red/50 text-red" : "bg-accent/60 border-white/40 text-white"
+						}`}
+					>
+						<div className="text-[0.65rem] opacity-90 mb-0.5 font-bold flex items-center justify-between gap-3">
+							<span className="flex items-center gap-1">
+								You
+								{voice.dictation.status === "dictating" && <><Mic size={11} />Speaking…</>}
+								{voice.dictation.status === "transcribing" && <><Loader2 size={11} className="animate-spin" />Transcribing…</>}
+								{voice.dictation.status === "failed" && <span>Not transcribed</span>}
+							</span>
+							{voice.dictation.status === "failed" && (
+								<button type="button" onClick={voice.clearDictation} className="font-semibold underline opacity-80 hover:opacity-100">Dismiss</button>
+							)}
+						</div>
+						<span className="whitespace-pre-wrap break-words italic">
+							{voice.dictation.text || (voice.dictation.status === "failed" ? "(nothing was captured)" : "…")}
+						</span>
+						{voice.dictation.status === "failed" && voice.dictation.note && (
+							<div className="text-[0.65rem] mt-1 opacity-80 not-italic">{voice.dictation.note}</div>
+						)}
+					</div>
+				)}
 			</div>
 			{/* Scroll-to-latest — appears only when scrolled up off the newest message. */}
 			{!atBottom && (

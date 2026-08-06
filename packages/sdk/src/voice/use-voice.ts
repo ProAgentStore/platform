@@ -41,13 +41,13 @@
  */
 import { useState, useRef, useCallback, useEffect } from "react";
 import { flushSync } from "react-dom";
-import { createStt, createTts, getVoiceConfig, invalidateVoiceConfig, type VoiceConfig } from "./config.js";
+import { createStt, createTts, getVoiceConfig, type VoiceConfig } from "./config.js";
 import { isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, classifyResult, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
+import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
+import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
 import { VoiceStt } from "./stt.js";
@@ -112,7 +112,41 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// the automatic end-of-turn VAD is suppressed and only their tap-off sends the turn.
 	const [talking, setTalking] = useState(false);
 	const manualTalkRef = useRef(false);
+	// `interim` is now ONLY the composer's transient NOTICE line (mic errors, the wrong-language
+	// nudge). The user's actual words moved to `dictation` below — see the note there (#281).
 	const [interim, setInterim] = useState("");
+	// The utterance in flight, as a real object with a lifecycle instead of a string that had to
+	// be destroyed to change its status (#281). Rendered by the consumer as a pending bubble IN
+	// THE THREAD, so speech is visible from the moment it starts, through transcription, until
+	// the sent message replaces it. The ref mirrors it because the reducer needs the current
+	// value from callbacks that close over a stale render.
+	const [dictation, setDictation] = useState<Dictation | null>(null);
+	const dictationRef = useRef<Dictation | null>(null);
+	/** What the LIVE recognizer had at end-of-turn, kept for the divergence check in emitSend. */
+	const lastHeardRef = useRef("");
+	/** The ONLY way the pending utterance moves — every transition goes through the pure
+	 *  reducer, so "does this event cost the user their words?" is answered in one tested place. */
+	const dictate = useCallback((ev: DictationEvent) => {
+		const next = reduceDictation(dictationRef.current, ev);
+		// Stash what was heard LIVE at end-of-turn. It has to outlive the bubble: the send path
+		// clears the utterance and only then emits, so by the time the final transcript is in
+		// hand there is nothing left to compare it against (#281's capture-loss half).
+		if (ev.type === "endOfTurn" && next) lastHeardRef.current = next.heard;
+		if (next === dictationRef.current) return;
+		dictationRef.current = next;
+		setDictation(next);
+	}, []);
+	/** Clear the composer notice AND end the pending utterance — the pairing that every former
+	 *  `setInterim("")` site meant, now impossible to do by halves. */
+	const clearVoiceText = useCallback(() => {
+		setInterim("");
+		dictate({ type: "clear" });
+	}, [dictate]);
+	// True while a voice session is opening the mic (#284). Set SYNCHRONOUSLY on the tap, before
+	// the config read and getUserMedia, so the control can acknowledge the press on the same
+	// frame instead of looking untouched for the whole startup.
+	const [starting, setStarting] = useState(false);
+	const startingRef = useRef(false);
 	/** 0-1 audio level from mic — drives the waveform visualizer */
 	const [audioLevel, setAudioLevel] = useState(0);
 	const sttRef = useRef<VoiceStt | null>(null);
@@ -243,13 +277,16 @@ export function useVoice(instanceId: string | undefined, opts: {
 								if (cmd === "mute") muteFromCommandRef.current();
 								else if (cmd === "unmute") unmuteFromCommandRef.current();
 								else if (cmd === "exit") exitFromCommandRef.current();
-								else if (cmd === "repeat") { handledUtteranceRef.current = true; flushSync(() => setInterim("")); repeatLastRef.current(); }
+								else if (cmd === "repeat") { handledUtteranceRef.current = true; flushSync(() => clearVoiceText()); repeatLastRef.current(); }
 								return;
 							}
 						}
 						// Ignore the agent's own voice (echo tail), and paused/muted windows.
 						if (mutedRef.current || shouldIgnoreResult(readGuard(), now)) return;
-						setInterim(text);
+						// The gate is the ONLY live view of a Whisper turn (the recorder produces
+						// nothing until upload), so these words are what the thread shows while
+						// the user is still speaking.
+						dictate({ type: "speech", text, at: now });
 					},
 				});
 			}
@@ -303,13 +340,15 @@ export function useVoice(instanceId: string | undefined, opts: {
 						const g = gateRef.current;
 						if (endOfTurnAction(g ? { isAlive: g.isAlive(), heardSpeech: g.heardSpeech() } : null) === "discard") {
 							idleRecycleRef.current = true;
-							setInterim("");
+							clearVoiceText();
 							sttRef.current?.stopDiscard();
 						} else {
 							// Whisper has no streaming results, so nothing shows between your pause
-							// and the transcript landing (~1-2s). Fill that gap so it's clearly
-							// working, not stuck. Cleared when the result/onError arrives.
-							setInterim("Transcribing…");
+							// and the transcript landing (~1-2s). This used to write the literal
+							// "Transcribing…" over the composer — which ERASED the words the user
+							// had just spoken for the whole upload round trip (#281). The status
+							// now moves on the pending bubble and the speech stays put.
+							dictate({ type: "endOfTurn", at: now });
 							sttRef.current?.stop();
 						}
 					} else if (decision === "idle") {
@@ -317,7 +356,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 						// Whisper upload, no buffer growth). Reopens via onEnd; skip the chime.
 						vadStateRef.current = initVad();
 						idleRecycleRef.current = true;
-						setInterim("");
+						clearVoiceText();
 						sttRef.current?.stopDiscard();
 					}
 				}
@@ -325,7 +364,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			};
 			analyserRef.current = { ctx, analyser, source, stream, ownsStream, raf: requestAnimationFrame(tick) };
 		} catch {}
-	}, [stopAudioMonitor, readGuard]);
+	}, [stopAudioMonitor, readGuard, dictate, clearVoiceText]);
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
@@ -341,6 +380,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Send a transcript, attaching a saved-audio turn id when this turn had recorded
 	// audio (Whisper). The upload is fire-and-forget; the message sends immediately.
 	const emitSend = (text: string) => {
+		// Did the final transcript drop most of what the live recognizer heard (#281)? A lost
+		// tail used to be invisible — the partials were overwritten and only the final was ever
+		// recorded, so "it isn't capturing everything I say" could not be told apart from a
+		// mis-hearing. Now the two strings are compared and the discrepancy is reported, which
+		// is what makes the cause (VAD cutting early / Whisper dropping the tail) identifiable
+		// rather than guessed at. Off the durable log unless explicitly enabled — this is a
+		// diagnostic, not a platform failure, and it must not flood the error log.
+		const heard = lastHeardRef.current;
+		lastHeardRef.current = "";
+		if (heard && dictationDiverged(heard, text)) {
+			console.warn("[voice] transcript lost content", { heard, final: text });
+			let debug = false;
+			try { debug = typeof localStorage !== "undefined" && !!localStorage.getItem("pags:voice-debug"); } catch {}
+			if (debug) reportClientError("voice-transcript", "final transcript dropped content heard live", { heard, final: text });
+		}
 		// Universal gate: never submit a noise/hallucination transcript ("you", ".", "\"",
 		// "Thank you." on silence/echo). The user "didn't say anything" — drop it, ditch the
 		// recording, and let the mic recycle instead of sending a phantom turn.
@@ -511,12 +565,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 					} else {
 						const msg = pendingTextRef.current.trim();
 						if (msg) finalizeRef.current(msg);
-						else flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+						else flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
 					}
 				}, maxDictationMsRef.current);
 			}
 		} catch {}
-	}, [startAudioMonitor, stopAudioMonitor, readGuard]);
+	}, [startAudioMonitor, stopAudioMonitor, readGuard, clearVoiceText]);
 
 	// Speak text on demand (e.g. tap a message/translation to hear it), regardless of
 	// whether an auto-speak/hands-free mode is active. maybeSpeakResponse is gated on
@@ -625,8 +679,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		speakEndedAtRef.current = Date.now();
 		stopAudioMonitor();
 		setMicOn(false);
-		setInterim("");
-	}, [stopAudioMonitor]);
+		clearVoiceText();
+	}, [stopAudioMonitor, clearVoiceText]);
 	const muteFromCommandRef = useRef(muteFromCommand);
 	muteFromCommandRef.current = muteFromCommand;
 
@@ -722,7 +776,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			ttsRef.current.cancel(); // cancel current + any queued utterances
 			setSpeaking(false);
 			speakEndedAtRef.current = Date.now();
-			flushSync(() => setInterim(""));
+			flushSync(() => clearVoiceText());
 			return;
 		}
 		// Ignore results the interaction model says we can't act on right now:
@@ -753,7 +807,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
 			lastAudioBlobRef.current = null; // nothing is being sent, so no replay clip to attach
 			const recovered = stripStopWord(`${pending} ${text}`.trim(), stopWordsRef.current).text.trim();
-			flushSync(() => setInterim(""));
+			flushSync(() => clearVoiceText());
 			// The echo tail can still put a word of the agent's own voice in front of a real turn;
 			// the same noise filter emitSend uses keeps a pure-noise "turn" out of the composer.
 			if (recovered && !isNoiseTranscript(recovered)) onRecoveredTextRef.current?.(recovered);
@@ -792,10 +846,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 				if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
 				pendingTextRef.current = "";
 				if (cmd === "repeat") {
-					flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+					flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
 					repeatLastRef.current();
 				} else {
-					flushSync(() => setInterim(""));
+					flushSync(() => clearVoiceText());
 					if (cmd === "mute") muteFromCommandRef.current();
 					else if (cmd === "unmute") unmuteFromCommandRef.current();
 					else exitFromCommandRef.current();
@@ -823,7 +877,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					const split = splitTrailingCommand(msg, cmdWords, voiceLangRef.current, { muted: mutedRef.current });
 					body = split.text;
 					if (split.command === "repeat") {
-						flushSync(() => { setInterim(""); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
+						flushSync(() => { clearVoiceText(); stopAudioMonitor(); if (sttRef.current?.listening) sttRef.current.stop(); setMicOn(false); });
 						repeatLastRef.current();
 						return; // "repeat" asks to hear the LAST reply — sending a new message first would replace it
 					}
@@ -832,9 +886,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 					else if (split.command === "exit") exitFromCommandRef.current();
 				}
 				const t = stripStopWord(body, stopWordsRef.current).text.trim();
-				if (!t) { flushSync(() => setInterim("")); return; } // stop-word only / empty — nothing to send
+				if (!t) { flushSync(() => clearVoiceText()); return; } // stop-word only / empty — nothing to send
 				flushSync(() => {
-					setInterim("");
+					clearVoiceText();
 					stopAudioMonitor();
 					setPaused(true);
 					if (sttRef.current?.listening) sttRef.current.stop();
@@ -852,12 +906,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// Silence/echo hallucination ("you", ".", "\"") — you weren't talking. Don't
 					// send, don't chime; clear the placeholder and let the mic keep listening
 					// (onEnd reopens it). This is the "I'm not talking, don't submit" fix.
-					if (isNoiseTranscript(t)) { flushSync(() => setInterim("")); return; }
+					if (isNoiseTranscript(t)) { flushSync(() => clearVoiceText()); return; }
 					finalize(t);
 				} else if (!isFinal && text.trim()) {
-					// Streaming partial (gpt-4o-transcribe) — show the words landing live in
-					// place of the static "Transcribing…" the VAD set on end-of-turn.
-					flushSync(() => setInterim(text));
+					// Streaming partial (gpt-4o-transcribe) — the words land live in the pending
+					// bubble. The reducer holds the status at `transcribing` through these, since
+					// they are the transcription arriving, not the mic reopening.
+					flushSync(() => dictate({ type: "speech", text, at: Date.now() }));
 				}
 				return;
 			}
@@ -882,7 +937,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					return;
 				}
 			}
-			flushSync(() => setInterim(`${pendingTextRef.current}${isFinal ? "" : ` ${text}`}`.trim()));
+			flushSync(() => dictate({ type: "speech", text: `${pendingTextRef.current}${isFinal ? "" : ` ${text}`}`.trim(), at: Date.now() }));
 			if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 			silenceTimerRef.current = setTimeout(() => {
 				const msg = pendingTextRef.current.trim();
@@ -894,7 +949,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// Push-to-talk: send immediately on the recognizer's final result.
 		if (isFinal) {
 			flushSync(() => {
-				setInterim("");
+				clearVoiceText();
 				stopAudioMonitor();
 				setMicOn(false);
 			});
@@ -911,17 +966,23 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const sent = stripStopWord(text.trim(), stopWordsRef.current).text.trim();
 			if (sent) emitSendRef.current(sent);
 		} else {
-			flushSync(() => setInterim(text));
+			// Push-to-talk partial — same treatment as every other live word: into the thread,
+			// not the composer.
+			flushSync(() => dictate({ type: "speech", text, at: Date.now() }));
 		}
-	}, [stopAudioMonitor, readGuard, setPaused]);
+	}, [stopAudioMonitor, readGuard, setPaused, dictate, clearVoiceText]);
 
 	const makeStt = useCallback(async () => {
-		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page
-		// reload: invalidate the SDK cache, re-read, and refresh the refs the VAD and
-		// debounce use. makeStt runs on every mic/conversation start.
-		invalidateVoiceConfig();
+		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page reload, and
+		// refresh the refs the VAD and debounce use. makeStt runs on every mic/conversation
+		// start, so this used to invalidate + re-fetch on the hot path: a full round trip (two,
+		// when an OpenAI provider forces the /v1/keys/status check) standing between the tap and
+		// getUserMedia, which measurement made the dominant await in #284. Serving the cached
+		// config and revalidating behind it removes that wait outright; the settings change lands
+		// on the next start instead of this one, which is the right way round — nobody is on the
+		// settings screen at the moment they tap the mic.
 		try {
-			applyConfig(await getVoiceConfig(instanceId));
+			applyConfig(await getVoiceConfig(instanceId, { refresh: "background" }));
 		} catch {}
 		// Fresh session — re-arm interim keyword detection (covers the case where a command
 		// muted/stopped the mic before its final result ever arrived to reset the latch).
@@ -939,7 +1000,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 				// onEnd; other modes just go idle). No scary message, no durable-log entry.
 				const kind = classifyVoiceError(err ? String(err) : null);
 				if (kind === "soft") {
-					flushSync(() => setInterim((cur) => (cur === "Transcribing…" ? "" : cur)));
+					// Nothing was said — the turn is genuinely empty, so retiring the bubble
+					// loses nothing. (This used to reach into the composer and match the
+					// "Transcribing…" sentinel by string; the state is explicit now.)
+					flushSync(() => clearVoiceText());
 					setPaused(false);
 					if (!convoOnRef.current) setMicOn(false);
 					return;
@@ -949,6 +1013,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// loop so we don't retry into a dead mic and flood the durable log; show a
 					// clear one-time hint. No reportClientError.
 					const msg = `⚠ ${micUnavailableMessage(String(err))}`;
+					// Real speech may already be on screen — mark the bubble failed rather than
+					// clearing it, so the words (and the saved recording) survive the failure.
+					dictate({ type: "failed", note: micUnavailableMessage(String(err)), at: Date.now() });
 					flushSync(() => setInterim(msg));
 					setPaused(false);
 					setConvoOn(false);
@@ -968,6 +1035,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// otherwise a swallowed failure is indistinguishable from "nothing
 					// happened", which is exactly how Whisper looked broken.
 					const msg = `⚠ ${err}`;
+					// The transcription failed, so the ONLY surviving record of the turn is what
+					// the live gate heard plus the saved recording. Keep the bubble and say it
+					// failed — "a failed transcription leaves the bubble with its partials and
+					// the recording, not an empty gap" (#281).
+					dictate({ type: "failed", note: String(err), at: Date.now() });
 					flushSync(() => setInterim(msg));
 					setPaused(false);
 					// Auto-clear so the error doesn't lock the input (readOnly while interim
@@ -993,14 +1065,14 @@ export function useVoice(instanceId: string | undefined, opts: {
 			},
 		});
 		return stt;
-	}, [instanceId, handleResult, startListening, setPaused, applyConfig]);
+	}, [instanceId, handleResult, startListening, setPaused, applyConfig, clearVoiceText, dictate]);
 
 	const toggleMic = useCallback(async () => {
 		if (micOn) {
 			sttRef.current?.stop();
 			stopAudioMonitor();
 			setMicOn(false);
-			setInterim("");
+			clearVoiceText();
 			return;
 		}
 		try {
@@ -1010,7 +1082,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			startAudioMonitor();
 			setMicOn(true);
 		} catch { setMicOn(false); }
-	}, [micOn, makeStt, startAudioMonitor, stopAudioMonitor, setPaused]);
+	}, [micOn, makeStt, startAudioMonitor, stopAudioMonitor, setPaused, clearVoiceText]);
 
 	const toggleSpeak = useCallback(() => {
 		// Prime TTS on this tap so a later async reply can actually speak (iOS/Safari):
@@ -1060,8 +1132,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 		setConvoOn(false);
 		setTalking(false);
 		setMicOn(false);
-		setInterim("");
-	}, [stopAudioMonitor, releaseWakeLock, setPaused]);
+		clearVoiceText();
+	}, [stopAudioMonitor, releaseWakeLock, setPaused, clearVoiceText]);
 	const stopConvoRef = useRef(stopConvo);
 	stopConvoRef.current = stopConvo;
 
@@ -1078,10 +1150,22 @@ export function useVoice(instanceId: string | undefined, opts: {
 	}, [convoOn]);
 
 	const toggleConvo = useCallback(async () => {
-		if (convoOn) {
+		const action = resolveToggleAction({ starting: startingRef.current, active: convoOn });
+		if (action === "ignore") return; // a start is already opening the device — never twice (#284)
+		if (action === "stop") {
 			stopConvo();
 			return;
 		}
+		// Visible on THIS frame. Everything below flips only after two awaits (the config read
+		// and getUserMedia, which opens a hardware device and may prompt for permission), so
+		// until #284 the control looked untouched for the whole startup and the press read as
+		// "nothing happened". flushSync because the awaits follow immediately — a batched update
+		// would not paint until after the very wait it exists to cover.
+		startingRef.current = true;
+		flushSync(() => setStarting(true));
+		// These three MUST stay here, synchronously inside the user gesture: iOS/Safari only
+		// grants audio output from a gesture, and an AudioContext that is "suspended" OR
+		// "interrupted" (Siri, a call, another app) has to be resumed before it will play.
 		try { getAudioCtx().resume(); } catch {}
 		unlockSpeechSynthesis(); // prime TTS on this tap so replies can speak (iOS/Safari)
 		// Warm the TTS audio context inside the gesture too — the OpenAI-voice path
@@ -1096,8 +1180,27 @@ export function useVoice(instanceId: string | undefined, opts: {
 			setSpeakOn(true);
 			setMicOn(true);
 			void acquireWakeLock(); // keep the screen awake so hands-free doesn't get suspended
+			// The chime confirms READY, not PRESSED — two different events, which is why the
+			// spinner covers the gap before it rather than replacing it.
 			playListeningChime();
-		} catch { setConvoOn(false); }
+		} catch (err) {
+			setConvoOn(false);
+			// This catch used to swallow the error whole. A user whose mic is denied, missing, or
+			// held by another tab tapped, waited, and watched the control quietly go back to off —
+			// indistinguishable from "you didn't press it" (#284). getUserMedia speaks a different
+			// error dialect than Web Speech, so normalize it first and the existing classifier
+			// gives the right hint.
+			const code = normalizeMediaError(err);
+			const msg = classifyVoiceError(code) === "mic-unavailable"
+				? micUnavailableMessage(code)
+				: "Couldn't start voice — please try again.";
+			flushSync(() => setInterim(`⚠ ${msg}`));
+			setTimeout(() => setInterim((cur) => (cur === `⚠ ${msg}` ? "" : cur)), 6000);
+		} finally {
+			// In a `finally` so a thrown start can never strand the spinner on forever.
+			startingRef.current = false;
+			setStarting(false);
+		}
 	}, [convoOn, stopConvo, makeStt, startAudioMonitor, ensureTts, acquireWakeLock, setPaused]);
 
 	/** Stop speaking immediately (tap a message to interrupt). */
@@ -1148,7 +1251,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// Whisper: stop → onstop transcribes → handleResult (convo path) emits the send
 			// and sets pausedForThinking, so the mic won't reopen until the reply returns.
 			vadStateRef.current = initVad();
-			setInterim("Transcribing…");
+			// Same as the VAD end-of-turn above: the status moves, the words stay (#281).
+			dictate({ type: "endOfTurn", at: Date.now() });
 			sttRef.current?.stop();
 			return;
 		}
@@ -1157,11 +1261,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		const msg = pendingTextRef.current.trim();
 		pendingTextRef.current = "";
 		setPaused(true);
-		flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); });
+		flushSync(() => { clearVoiceText(); stopAudioMonitor(); setMicOn(false); });
 		if (sttRef.current?.listening) sttRef.current.stop();
 		if (msg) emitSendRef.current(msg);
 		else setPaused(false);
-	}, [stopAudioMonitor, setPaused]);
+	}, [stopAudioMonitor, setPaused, dictate, clearVoiceText]);
 
 	/** One tap toggles a manual talk turn (start listening ↔ stop + send). */
 	const toggleTalk = useCallback(() => {
@@ -1239,9 +1343,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			sttRef.current?.stop();
 			stopAudioMonitor();
 			setMicOn(false);
-			setInterim("");
+			clearVoiceText();
 		}
-	}, [muted, stopAudioMonitor]);
+	}, [muted, stopAudioMonitor, clearVoiceText]);
 
 	// The three modes are derived from the primitives so there's ONE source of truth:
 	// hands-free ⇒ continuous convo; ptt ⇒ replies aloud but no continuous listen; text
@@ -1250,7 +1354,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// The voice hook's own interaction phase (single model in machine.ts). `thinking`
 	// (the agent generating a reply) is the CONSUMER's concern, so it's false here — the
 	// consumer folds it in via resolveVoiceStatus. Exposed for debugging/telemetry/tests.
-	const phase = derivePhase({ mode, thinking: false, speaking, transcribing: interim === "Transcribing…", micOn, muted });
+	// `transcribing` is now READ FROM STATE. It used to be `interim === "Transcribing…"` — the
+	// phase model string-matching a sentinel in the composer, which is why signalling the status
+	// required destroying the user's words, and why two consumers had to duplicate the same
+	// literal to agree with it (#281).
+	const transcribing = dictation?.status === "transcribing";
+	const phase = derivePhase({ mode, thinking: false, speaking, transcribing, micOn, muted, starting });
 	const setVoiceMode = useCallback(async (next: VoiceMode) => {
 		const cur = resolveVoiceMode(convoOnRef.current, speakOnRef.current);
 		if (next === cur) return;
@@ -1279,7 +1388,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		ttsRef.current?.cancel();
 		stopAudioMonitor();
 		setMicOn(false);
-		setInterim("");
+		clearVoiceText();
 		if (next === "text") {
 			setSpeakOn(false);
 		} else {
@@ -1289,16 +1398,33 @@ export function useVoice(instanceId: string | undefined, opts: {
 			unlockSpeechSynthesis();
 			void ensureTts().then((t) => t.unlock()).catch(() => {});
 		}
-	}, [toggleConvo, ensureTts, stopAudioMonitor, setPaused]);
+	}, [toggleConvo, ensureTts, stopAudioMonitor, setPaused, clearVoiceText]);
 	// Reachable from the control listener, which is declared far above this (see exitFromCommand).
 	setVoiceModeRef.current = setVoiceMode;
 
 	return {
 		/** The active interaction mode + the ONLY setter the UI needs. */
 		mode, setVoiceMode,
-		/** The voice interaction phase (idle/listening/transcribing/speaking/muted). */
+		/** The voice interaction phase (idle/starting/listening/transcribing/speaking/muted). */
 		phase,
-		micOn, speakOn, convoOn, muted, interim,
+		micOn, speakOn, convoOn, muted,
+		/** Transient composer NOTICE only (mic errors, the wrong-language nudge) — the user's
+		 *  words live in `dictation`, not here (#281). */
+		interim,
+		/**
+		 * The utterance in flight: `{ text, status, startedAt, heard, note }`, or null between
+		 * turns. Render it as a PENDING message in the thread — it appears the moment speech
+		 * starts, carries a transcribing status while the clip uploads, and survives a failure
+		 * with its words intact. The final transcript arrives separately via `onSend`, which is
+		 * what replaces it.
+		 */
+		dictation,
+		/** The clip is being transcribed (was a string-compare against a composer sentinel). */
+		transcribing,
+		/** A voice session is opening the mic — bind a spinner to acknowledge the press (#284). */
+		starting,
+		/** Dismiss a failed utterance the user has finished reading. */
+		clearDictation: clearVoiceText,
 		/** 0-1 audio level from mic — use to render waveform */
 		audioLevel,
 		/** True while the agent is talking aloud (TTS) — drives the "Speaking…" status. */

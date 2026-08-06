@@ -19,6 +19,11 @@ export { resolveVoiceStatus, type VoiceStatus } from "./voice/convo.js";
 // TTS engine — so agent UIs (e.g. the repos overview play button) can speak text
 // with the instance's configured voice without instantiating a full useVoice hook.
 export { createTts } from "./voice/config.js";
+// Voice config is cached and revalidated in the background so the hands-free start path never
+// waits on it (#284). Whoever WRITES voice settings must drop that cache, so the change applies
+// on the very next mic start rather than the one after it.
+export { invalidateVoiceConfig } from "./voice/config.js";
+export type { Dictation, DictationStatus, VoicePhase } from "./voice/machine.js";
 export type { VoiceTts } from "./voice/tts.js";
 
 /** Call `fn` every `ms` milliseconds while the component is mounted (and `enabled`). */

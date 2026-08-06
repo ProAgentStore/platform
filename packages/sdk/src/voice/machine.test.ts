@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn } from "./machine.js";
+import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, resolveToggleAction, reduceDictation, dictationDiverged, type Dictation } from "./machine.js";
 
 const NOW = 1_000_000;
 
@@ -136,5 +136,115 @@ describe("derivePhase", () => {
 	it("mic hot → listening; mic off → idle", () => {
 		expect(derivePhase({ ...base, micOn: true })).toBe("listening");
 		expect(derivePhase({ ...base, micOn: false })).toBe("idle");
+	});
+
+	// THE #284 BUG: `starting` happens BEFORE convoOn flips, so the mode is still "text". Checked
+	// after the text-mode return the phase would be unreachable for its whole lifetime — i.e. the
+	// press would still have no visible effect, which is the entire report.
+	it("starting is visible while the mode is still text (the whole point of the state)", () => {
+		expect(derivePhase({ ...base, mode: "text", starting: true })).toBe("starting");
+	});
+	it("starting outranks an idle/listening mic but never the agent's own work", () => {
+		expect(derivePhase({ ...base, starting: true })).toBe("starting");
+		expect(derivePhase({ ...base, starting: true, thinking: true })).toBe("processing");
+		expect(derivePhase({ ...base, starting: true, speaking: true })).toBe("speaking");
+	});
+	it("omitting starting keeps every existing phase byte-for-byte (optional field)", () => {
+		expect(derivePhase({ ...base, micOn: true })).toBe(derivePhase({ ...base, micOn: true, starting: false }));
+	});
+});
+
+describe("resolveToggleAction (#284)", () => {
+	it("a normal tap starts, and a tap while live stops", () => {
+		expect(resolveToggleAction({ starting: false, active: false })).toBe("start");
+		expect(resolveToggleAction({ starting: false, active: true })).toBe("stop");
+	});
+	// THE BUG: opening the mic takes two awaits with no feedback, so an impatient second tap ran
+	// a SECOND getUserMedia — leaking the first stream and racing two recognizers onto one device.
+	it("a second tap while starting is ignored, not a second getUserMedia", () => {
+		expect(resolveToggleAction({ starting: true, active: false })).toBe("ignore");
+	});
+	// Cancelling on the second tap would make an impatient tap indistinguishable from a
+	// deliberate one — the session the user asked for is already on its way.
+	it("ignore wins over stop: an impatient tap must not cancel the session being opened", () => {
+		expect(resolveToggleAction({ starting: true, active: true })).toBe("ignore");
+	});
+});
+
+describe("reduceDictation (#281 — the words must survive the status change)", () => {
+	const AT = 5_000;
+	const live: Dictation = { text: "verify the application is built", status: "dictating", startedAt: AT, heard: "" };
+
+	// THE BUG, exactly: end-of-turn used to assign "Transcribing…" OVER the words, so for the
+	// whole upload round trip the user's speech existed nowhere on screen.
+	it("end-of-turn changes the STATUS and keeps the text", () => {
+		const next = reduceDictation(live, { type: "endOfTurn", at: AT + 100 });
+		expect(next).toMatchObject({ text: "verify the application is built", status: "transcribing" });
+	});
+	it("end-of-turn snapshots what was heard live, for the divergence check", () => {
+		expect(reduceDictation(live, { type: "endOfTurn", at: AT + 100 })?.heard).toBe("verify the application is built");
+	});
+	// iOS has no speech gate, so nothing is heard live — the bubble must still appear and say
+	// what is happening rather than leaving the reported gap.
+	it("end-of-turn with nothing heard live still opens a transcribing bubble", () => {
+		expect(reduceDictation(null, { type: "endOfTurn", at: AT })).toMatchObject({ text: "", status: "transcribing" });
+	});
+	// Recognizers emit empty partials routinely between phrases; treating one as "nothing was
+	// said" is how a live bubble flickers empty.
+	it("an empty partial never blanks a live bubble", () => {
+		expect(reduceDictation(live, { type: "speech", text: "   ", at: AT + 10 })).toBe(live);
+	});
+	// gpt-4o-transcribe streams partials AFTER end-of-turn. Those are the transcription landing,
+	// not new speech — flipping back to "dictating" would claim the mic is hot while it is closed.
+	it("streaming partials after end-of-turn update the text but hold the transcribing status", () => {
+		const t = reduceDictation(live, { type: "endOfTurn", at: AT + 100 });
+		const next = reduceDictation(t, { type: "speech", text: "verify the application is built on the platform", at: AT + 200 });
+		expect(next).toMatchObject({ text: "verify the application is built on the platform", status: "transcribing" });
+	});
+	it("the utterance start time is stable across the turn (usable as a render key)", () => {
+		const a = reduceDictation(null, { type: "speech", text: "hello there", at: AT });
+		const b = reduceDictation(a, { type: "speech", text: "hello there friend", at: AT + 400 });
+		expect(b?.startedAt).toBe(AT);
+	});
+	// "A failed transcription leaves the bubble with its partials and the recording, not an
+	// empty gap" — the ticket's verification, and the reason failure keeps the text.
+	it("failure keeps the words and records why", () => {
+		expect(reduceDictation(live, { type: "failed", note: "Whisper 400", at: AT + 500 }))
+			.toMatchObject({ text: "verify the application is built", status: "failed", note: "Whisper 400" });
+	});
+	it("a failed turn is over — new speech starts a fresh one instead of reviving it", () => {
+		const failed = reduceDictation(live, { type: "failed", note: "boom", at: AT + 1 })!;
+		const next = reduceDictation(failed, { type: "speech", text: "new sentence", at: AT + 900 });
+		expect(next).toMatchObject({ text: "new sentence", status: "dictating", startedAt: AT + 900 });
+		expect(next?.note).toBeUndefined(); // the previous turn's failure must not stick to the new one
+	});
+	// The single invariant this reducer exists to hold: only an explicit clear removes words.
+	it("ONLY clear removes the utterance", () => {
+		expect(reduceDictation(live, { type: "clear" })).toBeNull();
+		for (const ev of [{ type: "endOfTurn" as const, at: AT }, { type: "failed" as const, note: "x", at: AT }]) {
+			expect(reduceDictation(live, ev)?.text).toBe(live.text);
+		}
+	});
+});
+
+describe("dictationDiverged (#281 — a lost tail should be observable, not a vague feeling)", () => {
+	// The reported symptom: the agent answered "I don't have context on what 'this model' refers
+	// to" because the tail of the sentence never made it into the final transcript.
+	it("flags a final that dropped most of what was heard", () => {
+		expect(dictationDiverged("verify the application is built on the platform for the MCP", "for this model")).toBe(true);
+	});
+	// The live gate is browser Web Speech and the final is Whisper — they disagree about wording
+	// constantly. Flagging that would make the signal worthless.
+	it("ordinary engine disagreement about WORDING is not a divergence", () => {
+		expect(dictationDiverged("fix the bugs in the parser today", "fixed the bars in the parser today")).toBe(false);
+	});
+	it("silent below four heard words — too little signal to accuse anything", () => {
+		expect(dictationDiverged("coder lead", "")).toBe(false);
+	});
+	it("an empty final after a real sentence is the worst loss, and is flagged", () => {
+		expect(dictationDiverged("please summarise the deployment status", "")).toBe(true);
+	});
+	it("nothing heard live (iOS, no gate) can never accuse the final", () => {
+		expect(dictationDiverged("", "a perfectly good transcript")).toBe(false);
 	});
 });

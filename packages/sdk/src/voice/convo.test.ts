@@ -226,9 +226,25 @@ describe("resolveVoiceStatus", () => {
 		expect(resolveVoiceStatus({ ...base, mode: "handsfree", speaking: true, transcribing: true, listening: true }))
 			.toMatchObject({ label: "Speaking · tap to stop", tone: "speak" });
 	});
+
+	// THE #284 BUG: the mic opens before convoOn flips, so the mode is still "text". Checked
+	// below the text-mode `return null` this would never render, and the press would stay
+	// unacknowledged for the whole two-await startup — the report itself.
+	it("'Starting…' shows while the mode is still text (the press is acknowledged on tap)", () => {
+		expect(resolveVoiceStatus({ ...base, mode: "text", starting: true }))
+			.toMatchObject({ label: "Starting…", tone: "work", spin: true, tap: false, icon: "spin" });
+	});
+	it("starting never masks the agent's own work", () => {
+		expect(resolveVoiceStatus({ ...base, starting: true, thinking: true })).toMatchObject({ label: "Working on it…" });
+		expect(resolveVoiceStatus({ ...base, starting: true, speaking: true })).toMatchObject({ label: "Speaking · tap to stop" });
+	});
+	it("once listening begins the pill stops claiming it is starting (spinner and chime agree)", () => {
+		expect(resolveVoiceStatus({ ...base, mode: "handsfree", starting: false, listening: true }))
+			.toMatchObject({ label: "Listening…", tone: "live" });
+	});
 });
 
-import { classifyVoiceError, micUnavailableMessage } from "./convo.js";
+import { classifyVoiceError, micUnavailableMessage, normalizeMediaError } from "./convo.js";
 
 describe("classifyVoiceError", () => {
 	it("treats no-speech / empty as soft (recycle, no report)", () => {
@@ -248,6 +264,34 @@ describe("classifyVoiceError", () => {
 	it("gives a device-specific hint", () => {
 		expect(micUnavailableMessage("audio-capture")).toMatch(/microphone found/i);
 		expect(micUnavailableMessage("not-allowed")).toMatch(/blocked/i);
+		// The case a user is least able to guess: another tab or app is holding the device.
+		expect(micUnavailableMessage("audio-busy")).toMatch(/in use by another/i);
+	});
+});
+
+describe("normalizeMediaError (#284 — one classifier for both ways the mic refuses)", () => {
+	// THE BUG: the hands-free start path catches a getUserMedia DOMException, whose name is
+	// "NotAllowedError" — a code classifyVoiceError had never heard of. It fell through to the
+	// generic "error" branch, so a mic denied months ago reverted the control in silence with
+	// no way for the user to learn that permission was the problem.
+	it("maps a denied getUserMedia onto the Web Speech permission code", () => {
+		expect(normalizeMediaError(new DOMException("denied", "NotAllowedError"))).toBe("not-allowed");
+		expect(classifyVoiceError(normalizeMediaError(new DOMException("denied", "NotAllowedError")))).toBe("mic-unavailable");
+	});
+	it("maps a missing device onto the capture code", () => {
+		expect(normalizeMediaError(new DOMException("none", "NotFoundError"))).toBe("audio-capture");
+	});
+	// No Web Speech equivalent exists for "another tab holds the device", which is why the
+	// audio-busy code was added rather than folding it into one of the others.
+	it("a device held by another tab/app becomes audio-busy, not a generic error", () => {
+		expect(normalizeMediaError(new DOMException("busy", "NotReadableError"))).toBe("audio-busy");
+		expect(classifyVoiceError(normalizeMediaError(new DOMException("busy", "NotReadableError")))).toBe("mic-unavailable");
+	});
+	it("passes a Web Speech code straight through, so the one classifier still works", () => {
+		expect(normalizeMediaError("audio-capture")).toBe("audio-capture");
+	});
+	it("an unrecognised failure stays a real, reportable error", () => {
+		expect(classifyVoiceError(normalizeMediaError(new Error("Whisper error 400")))).toBe("error");
 	});
 });
 
