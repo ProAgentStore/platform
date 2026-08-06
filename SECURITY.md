@@ -48,3 +48,25 @@ The coding runner executes CLI engines and browser actions on the user's own mac
 - CI-only deploys (GitHub Actions); npm publishes via OIDC trusted publishing. No laptop deploys.
 - Security-relevant changes ship with unit tests (`lib/ssrf.test.ts`, `packages/sdk/src/ui.test.ts`, `lib/github-app.test.ts`, MCP safety tests).
 - Rendered model/user content is HTML-escaped before display; response headers include `X-Content-Type-Options`, `Referrer-Policy`, HSTS, and a Content-Security-Policy.
+
+## Accepted dependency advisories
+
+`pnpm audit --audit-level high` is expected to exit clean. Two advisories are suppressed in
+`pnpm.auditConfig.ignoreGhsas` because the vulnerable code is not reachable in this product. Each
+entry is a claim about reachability that must be re-checked when the dependency moves — if the
+reasoning below stops holding, take the upgrade instead.
+
+| Advisory | Package | Why it is not reachable here | Unblocker |
+|---|---|---|---|
+| `GHSA-f88m-g3jw-g9cj` | `sharp` (`wrangler > miniflare > sharp`) | Build-time only. `wrangler` is a `devDependency` in **every** manifest that has it (`workers/{api,host,mcp}`, `agents/job-application-assistant`, the three templates); `miniflare` is its local dev simulator and never ships. No deployed Worker contains `sharp`, and nothing in PAGS decodes images. `miniflare` pins `sharp` at an **exact** `0.34.5`, so an override would force an untested native binary into local dev for no production gain. | `wrangler`/`miniflare` releasing with `sharp >= 0.35.0`. |
+| `GHSA-qwww-vcr4-c8h2` | `react-router` (`react-router-dom > react-router`) | The advisory states it "only affects your application if you are using the unstable RSC APIs". `store/console` and `store/admin` are client-rendered SPAs on `createBrowserRouter`; there is no RSC entry point, no server router, and no `@react-router/server` dependency anywhere in the tree. The fix is in `8.3.0`, a major bump across two consoles — real regression risk for an unreachable flaw. | A `7.x` backport, or a deliberate React Router 8 migration of both consoles. |
+
+Two advisories from the same sweep **were** fixed rather than accepted, via `pnpm.overrides`:
+`js-yaml` → `^4.3.0` and `ip-address` → `^10.3.1`. Both were patch/minor bumps of transitives that
+nothing imports, so taking them was cheaper than justifying them.
+
+Note on `GHSA-mwp4-54f8-5fhr` (`ip-address`): the advisory describes an SSRF filter bypass, so it
+is worth stating that PAGS's own guard never had that flaw. `lib/ssrf.ts` does not use
+`ip-address` — it reads `parsed.hostname` from the WHATWG URL parser, which is the parser the
+advisory names as *correct*, and checks the canonical dotted-decimal form. `https://012.0.0.1/`
+therefore canonicalises to `10.0.0.1` and is blocked, which `lib/ssrf.test.ts` asserts directly.

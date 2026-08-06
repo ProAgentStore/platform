@@ -50,6 +50,19 @@ describe("checkPublicHttpsUrl", () => {
 		}
 	});
 
+	it("decodes a leading-zero octet the way the network stack does (GHSA-mwp4-54f8-5fhr)", () => {
+		// That advisory is against `ip-address`, whose `Address4` reads a leading-zero octet as
+		// DECIMAL while `inet_aton`/`getaddrinfo`/the WHATWG URL parser read it as OCTAL — so a
+		// guard built on it calls `012.0.0.1` the public `12.0.0.1` and then `fetch` connects to
+		// the private `10.0.0.1`. PAGS is not exposed to that class because `checkPublicHttpsUrl`
+		// never parses the host itself: it reads `parsed.hostname`, already canonicalised by the
+		// parser the advisory names as correct. This pins that property, since the reachability
+		// argument in SECURITY.md rests on it.
+		expect(checkPublicHttpsUrl("https://012.0.0.1/").ok).toBe(false); // octal → 10.0.0.1 (RFC1918)
+		expect(checkPublicHttpsUrl("https://0177.0.0.1/").ok).toBe(false); // octal → 127.0.0.1 (loopback)
+		expect(checkPublicHttpsUrl("https://0251.0376.0251.0376/").ok).toBe(false); // octal → 169.254.169.254 (metadata)
+	});
+
 	it("still allows a genuinely public IP written in a non-canonical form", () => {
 		// 134744072 and 8.526344 both normalise to the PUBLIC 8.8.8.8 — that IS where the
 		// fetch would connect, so allowing them is correct, not a bypass.
