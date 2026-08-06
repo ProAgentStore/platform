@@ -25,11 +25,14 @@ interface Opts {
 	takenSlugs?: string[];
 	/** Custom surfaces are fail-closed (#186) — opt a test in to the enabled platform. */
 	customSurfaces?: boolean;
+	/** uids the operator has suspended (#34/#273) — drives the `users.suspended` read. */
+	suspended?: string[];
 }
 
 function buildApp(opts: Opts = {}) {
 	const agents = opts.agents ?? [];
 	const taken = new Set(opts.takenSlugs ?? []);
+	const suspendedUids = new Set(opts.suspended ?? []);
 	const writes: Write[] = [];
 	const batches: Write[][] = [];
 	const doCalls: DoCall[] = [];
@@ -61,6 +64,9 @@ function buildApp(opts: Opts = {}) {
 									return a ?? null;
 								}
 								if (sql.includes("FROM user_api_keys")) return null;
+								if (sql.includes("FROM users")) {
+									return { suspended: suspendedUids.has(args[0] as string) ? 1 : 0 };
+								}
 								return null;
 							},
 							async all() {
@@ -185,6 +191,29 @@ describe("GET /v1/agents/:id (detail visibility)", () => {
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as any;
 		expect(body.owner_id).toBe("u1");
+	});
+
+	it("a SUSPENDED owner is not an owner here (#306)", async () => {
+		// Auth is optional on this route (an anonymous caller must still get the published view),
+		// so it cannot use requireUser and verifies the session by hand — which is exactly how it
+		// skipped the suspension gate. A suspended creator kept owner-level visibility of their
+		// unpublished agents and of their own owner_id.
+		const { app, env } = buildApp({
+			agents: [{ id: "a1", slug: "draft", owner_id: "u1", visibility: "draft", name: "D" }],
+			suspended: ["u1"],
+		});
+		const res = await get(app, env, "/v1/agents/draft", await tokenFor("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	it("a suspended caller still gets the PUBLISHED view (the gate removes ownership, not the route)", async () => {
+		const { app, env } = buildApp({
+			agents: [{ id: "a1", slug: "pub", owner_id: "u1", visibility: "published", name: "Pub" }],
+			suspended: ["u1"],
+		});
+		const res = await get(app, env, "/v1/agents/pub", await tokenFor("u1"));
+		expect(res.status).toBe(200);
+		expect(((await res.json()) as { owner_id?: string }).owner_id).toBeUndefined();
 	});
 });
 

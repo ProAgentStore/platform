@@ -4,7 +4,7 @@
  */
 import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { HttpError } from "../lib/auth.js";
+import { HttpError, requireUser } from "../lib/auth.js";
 import type { Env } from "../types.js";
 
 export const publicRoutes = new Hono<{ Bindings: Env }>();
@@ -185,11 +185,11 @@ publicRoutes.post("/agents/:id/try", async (c) => {
 
 /** Google Docs import — fetch a public Google Doc and add to agent KB. */
 publicRoutes.post("/agents/:id/import-gdoc", async (c) => {
-	const auth = c.req.header("Authorization");
-	if (!auth?.startsWith("Bearer ")) throw new HttpError(401, "Auth required");
-	const { verifySession } = await import("../lib/session.js");
-	const session = await verifySession(auth.slice(7), c.env.SESSION_SIGNING_KEY);
-	if (!session) throw new HttpError(401, "Invalid token");
+	// Authenticated, despite living in the "public" router: it writes to the caller's agent KB
+	// and makes the Worker fetch a remote document. It used to verify the session inline, which
+	// meant it never reached requireUser's SUSPENSION gate (#34/#273) — an operator could
+	// suspend an account and it would keep ingesting. Guarded by security-invariants.test.ts.
+	const session = await requireUser(c);
 
 	const { docUrl } = await c.req.json<{ docUrl: string }>();
 	if (!docUrl) throw new HttpError(400, "docUrl required");
@@ -247,13 +247,11 @@ publicRoutes.post("/agents/:id/import-gdoc", async (c) => {
  */
 publicRoutes.post("/webhook/:instanceId/ingest", async (c) => {
 	const instanceId = c.req.param("instanceId");
-	const auth = c.req.header("Authorization");
-	if (!auth?.startsWith("Bearer "))
-		throw new HttpError(401, "Bearer token required");
-
-	const { verifySession } = await import("../lib/session.js");
-	const session = await verifySession(auth.slice(7), c.env.SESSION_SIGNING_KEY);
-	if (!session) throw new HttpError(401, "Invalid token");
+	// Same as import-gdoc above: authenticated, and it was verifying the session by hand, so
+	// suspension never applied. This one is the more consequential of the two — it ingests
+	// third-party content (Zapier/Make/n8n payloads) straight into an instance's vector store,
+	// which is the untrusted-content path (#263).
+	const session = await requireUser(c);
 
 	const instance = await c.env.DB.prepare(
 		"SELECT id FROM agent_instances WHERE id = ?1 AND user_id = ?2 AND status = 'active'",

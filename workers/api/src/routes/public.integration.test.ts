@@ -309,7 +309,9 @@ describe("POST /v1/public/webhook/:instanceId/ingest", () => {
 			method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "t", content: "c" }),
 		});
 		expect(res.status).toBe(401);
-		expect((await res.json() as any).error).toContain("Bearer token required");
+		// The route now authenticates through requireUser, so the wording is the platform's one
+		// message rather than this route's own — same 401, one fewer copy of the auth logic.
+		expect(((await res.json()) as { error: string }).error).toContain("Missing Authorization header");
 	});
 
 	it("401s an invalid token", async () => {
@@ -320,7 +322,24 @@ describe("POST /v1/public/webhook/:instanceId/ingest", () => {
 			body: JSON.stringify({ title: "t", content: "c" }),
 		});
 		expect(res.status).toBe(401);
-		expect((await res.json() as any).error).toContain("Invalid token");
+		expect(((await res.json()) as { error: string }).error).toContain("Invalid or expired token");
+	});
+
+	it("403s a SUSPENDED account (#306)", async () => {
+		// The reason this route moved to requireUser. It used to verify the session inline, which
+		// meant a suspended account kept ingesting third-party content into its instance's vector
+		// store — the one surface a moderation lever most needs to reach.
+		const { wrap } = buildApp({
+			users: [{ github_login: "owner", suspended: 1 }],
+			instances: [{ id: "i1", user_id: "owner", status: "active" }],
+		});
+		const res = await wrap("/v1/public/webhook/i1/ingest", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${await tokenFor("owner")}` },
+			body: JSON.stringify({ title: "t", content: "c" }),
+		});
+		expect(res.status).toBe(403);
+		expect(((await res.json()) as { error: string }).error).toContain("suspended");
 	});
 
 	it("404s when the caller does not own the (active) instance", async () => {

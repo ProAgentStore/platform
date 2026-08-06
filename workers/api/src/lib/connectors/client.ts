@@ -11,6 +11,7 @@ import type { Env } from "../../types.js";
 import { installationTokenForOwner } from "../github-app.js";
 import { readConnectorRefreshToken } from "../connector-oauth.js";
 import { requireConnectorGrant, type ConnectorGrant } from "../connector-grants.js";
+import { safeFetch } from "../ssrf.js";
 import { getConnector } from "./registry.js";
 import type { Connector, ConnectorClient, ConnectorClientCaller, TokenOpts } from "./types.js";
 
@@ -128,11 +129,21 @@ export function connectorClient(env: Env, provider: string, caller: ConnectorCli
 		}
 	}
 
+	/**
+	 * The URL here is the CALLER's — a connector tool composes it, and a tool's inputs are
+	 * data (an instance's config, a pipeline definition, a model's argument). So it goes
+	 * through `safeFetch` like every other caller-named destination in this layer: https-only,
+	 * every redirect hop re-validated, metadata/RFC1918/CGNAT refused, and — the reason it
+	 * matters most here — the `Authorization` header this function just attached is stripped
+	 * when a hop crosses an origin. That header carries the owner's minted token.
+	 *
+	 * `security-invariants.test.ts` (#306) is what keeps this from drifting back.
+	 */
 	async function authedFetch(url: string, init?: RequestInit, opts?: TokenOpts): Promise<Response> {
 		const t = await token(opts);
 		const headers = new Headers(init?.headers);
 		if (t) headers.set("Authorization", `Bearer ${t}`);
-		return fetch(url, { ...init, headers });
+		return safeFetch(url, { ...init, headers });
 	}
 
 	return { connector, token, requireGrant, fetch: authedFetch };

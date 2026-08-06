@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { customSurfacesEnabled, sanitizeCustomSurfaces, sanitizeDeclaredCapabilities, sanitizeSettingsSchema } from "../lib/agent-capabilities.js";
 import { lintAgentClaims } from "../lib/agent-claims-lint.js";
-import { HttpError, requireCreator, requireUser } from "../lib/auth.js";
+import { HttpError, isSuspended, requireCreator, requireUser } from "../lib/auth.js";
 import { verifySession } from "../lib/session.js";
 import type { Env } from "../types.js";
 import { blockPublishReason } from "../lib/test-agent-guard.js";
@@ -261,7 +261,13 @@ agentRoutes.get("/:id", async (c) => {
 		.first<AgentRow>();
 	if (!row) return c.json({ error: "Agent not found" }, 404);
 
-	// Non-published agents require ownership
+	// Non-published agents require ownership.
+	//
+	// Auth is OPTIONAL here — an anonymous caller must still get the published view — so
+	// `requireUser`, which throws, cannot be used. That means the suspension gate is applied by
+	// hand, exactly as the WS chat upgrade does it (#273); without it a suspended creator keeps
+	// owner-level visibility of their unpublished agents and their own owner_id. Guarded by
+	// security-invariants.test.ts (#306).
 	const isOwner = await (async () => {
 		const header = c.req.header("Authorization");
 		if (!header?.startsWith("Bearer ")) return false;
@@ -269,10 +275,9 @@ agentRoutes.get("/:id", async (c) => {
 			header.slice(7),
 			c.env.SESSION_SIGNING_KEY,
 		);
-		return (
-			session &&
-			(row.owner_id === session.uid || session.roles.includes("admin"))
-		);
+		if (!session) return false;
+		if (await isSuspended(c, session.uid)) return false;
+		return row.owner_id === session.uid || session.roles.includes("admin");
 	})();
 
 	if (row.visibility !== "published" && !isOwner) {
