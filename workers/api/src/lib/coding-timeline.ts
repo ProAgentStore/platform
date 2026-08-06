@@ -26,6 +26,12 @@ export interface TimelineEntry {
 	createdAt: string;
 	/** R2 turn id of this turn's saved voice recording (chat_user dictated by voice). */
 	audioKey?: string;
+	/**
+	 * Which session produced this entry. Only populated by the repo-scoped read, where entries
+	 * from several sessions are interleaved and the boundaries are what the UI draws separators
+	 * from — a per-session read already knows the answer and would just repeat it on every row.
+	 */
+	sessionId?: string;
 }
 
 interface Row {
@@ -34,9 +40,10 @@ interface Row {
 	content: string;
 	created_at: string;
 	audio_key?: string | null;
+	session_id?: string | null;
 }
 
-const toEntry = (r: Row): TimelineEntry => ({ seq: r.seq, type: r.type as TimelineType, content: r.content, createdAt: r.created_at, audioKey: r.audio_key ?? undefined });
+const toEntry = (r: Row): TimelineEntry => ({ seq: r.seq, type: r.type as TimelineType, content: r.content, createdAt: r.created_at, audioKey: r.audio_key ?? undefined, sessionId: r.session_id ?? undefined });
 
 /** Append one entry to a session's timeline. */
 export async function appendTimeline(
@@ -93,6 +100,39 @@ export async function clearChat(env: Env, sessionId: string, userId: string, ins
 			await env.STORAGE.delete(`voice-audio/${userId}/${instanceId}/${r.audio_key}`).catch(() => undefined);
 		}
 	}
+}
+
+/**
+ * A REPO's history, across every session that ever ran on it (#257).
+ *
+ * The read that was missing. `loadTimeline` above is per session, and a session is a short-lived
+ * thing the platform ends by itself — the Pilot closes one every time a run finishes, the orphan
+ * reaper closes the rest on each `pags up` restart. So "the terminal" as a user means it (the
+ * output for this repo, in order, forever) had no query, and the console rendered "Start a session"
+ * over a database full of exactly what they were asking for.
+ *
+ * Owner-scoped in the SQL itself rather than at the route: this is reached from a repo id, and a
+ * repo id that is not the caller's must return nothing here even if a route ever forgets to check.
+ *
+ * Newest-first + reverse, matching `loadTimeline`: the cap has to keep the LATEST rows, and
+ * `ORDER BY seq ASC LIMIT n` would keep the oldest — a repo with long history would show its first
+ * session forever and never the run that just finished.
+ */
+export async function loadRepoTimeline(
+	env: Env,
+	args: { instanceId: string; userId: string; repoId: string; limit?: number },
+): Promise<TimelineEntry[]> {
+	const limit = Math.max(1, Math.min(2000, args.limit ?? 500));
+	const { results } = await env.DB.prepare(
+		`SELECT t.seq, t.type, t.content, t.created_at, t.audio_key, t.session_id
+		   FROM coding_timeline t
+		   JOIN coding_sessions s ON s.id = t.session_id
+		  WHERE t.instance_id = ?1 AND t.user_id = ?2 AND s.repo_id = ?3
+		  ORDER BY t.seq DESC LIMIT ?4`,
+	)
+		.bind(args.instanceId, args.userId, args.repoId, limit)
+		.all<Row>();
+	return (results ?? []).map(toEntry).reverse();
 }
 
 /** The most recent stored terminal snapshot (used to dedupe before storing a new one). */

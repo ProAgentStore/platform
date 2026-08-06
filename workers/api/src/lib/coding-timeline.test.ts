@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot } from "./coding-timeline.js";
+import { appendTimeline, loadTimeline, loadChat, lastTerminal, contextForCopilot, loadRepoTimeline } from "./coding-timeline.js";
 import type { Env } from "../types.js";
 
 interface Write { sql: string; args: unknown[] }
@@ -122,5 +122,66 @@ describe("contextForCopilot", () => {
 	it("returns an empty string when the timeline is empty", async () => {
 		const { env } = mockEnv({ rows: [] });
 		expect(await contextForCopilot(env, "s1")).toBe("");
+	});
+});
+
+describe("loadRepoTimeline — history belongs to the REPO, not to a session (#257)", () => {
+	/** Mock D1 that records the READ, not just writes — the query IS the fix here. */
+	function readEnv(rows: unknown[] = []) {
+		const reads: { sql: string; args: unknown[] }[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						reads.push({ sql, args });
+						return {
+							async all() { return { results: rows }; },
+							async first() { return null; },
+							async run() { return { meta: { changes: 0 } }; },
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as Env, reads };
+	}
+
+	it("joins coding_sessions to scope by repo, and scopes to the owner in the SQL itself", async () => {
+		// Owner-scoping lives in the query rather than only at the route because this is reached
+		// from a repo id: a repo that is not the caller's must return nothing even if a future
+		// route forgets to check.
+		const { env, reads } = readEnv();
+		await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1" });
+		expect(reads[0].sql).toContain("JOIN coding_sessions");
+		expect(reads[0].sql).toContain("s.repo_id = ?3");
+		expect(reads[0].sql).toContain("t.instance_id = ?1");
+		expect(reads[0].sql).toContain("t.user_id = ?2");
+		expect(reads[0].args.slice(0, 3)).toEqual(["i1", "u1", "r1"]);
+	});
+
+	it("takes the LATEST rows and returns them oldest-first", async () => {
+		// ORDER BY seq DESC + reverse. Ascending with a LIMIT would keep the OLDEST rows, so a repo
+		// with long history would show its first session forever and never the run that just ended.
+		const { env, reads } = readEnv([
+			{ seq: 9, type: "terminal", content: "newest", created_at: "t9", session_id: "s2" },
+			{ seq: 8, type: "terminal", content: "older", created_at: "t8", session_id: "s1" },
+		]);
+		const out = await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1" });
+		expect(reads[0].sql).toContain("ORDER BY t.seq DESC");
+		expect(out.map((e) => e.content)).toEqual(["older", "newest"]);
+	});
+
+	it("carries sessionId so the UI can draw session boundaries", async () => {
+		const { env } = readEnv([{ seq: 1, type: "terminal", content: "x", created_at: "t", session_id: "s1" }]);
+		const out = await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1" });
+		expect(out[0].sessionId).toBe("s1");
+	});
+
+	it("clamps the limit so a caller cannot ask for the whole table", async () => {
+		const { env, reads } = readEnv();
+		await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1", limit: 999_999 });
+		expect(reads[0].args[3]).toBe(2000);
+		await loadRepoTimeline(env, { instanceId: "i1", userId: "u1", repoId: "r1", limit: 0 });
+		expect(reads[1].args[3]).toBe(1);
 	});
 });

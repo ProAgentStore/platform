@@ -1,0 +1,24 @@
+-- Terminal history is a property of the REPO, not of a session (#257).
+--
+-- The complaint: "why do I always see 'Start a session' in the Terminal tab? I should see history
+-- forever — it should be from the DB, not streamed like tmux." Correct on every point. The history
+-- IS in the database; nothing could read it.
+--
+-- Sessions end constantly, and mostly not because anyone asked:
+--   • the Pilot ends its session when a run finishes (workflows/coding-session.ts) — so FINISHING
+--     WORK is what removes your terminal, and every start_work/Loop run does it
+--   • the orphan reaper ends any `active` session the runner is not tracking, so every `pags up`
+--     restart reaps them
+-- One live instance had 13 sessions, all ended, 0 active, with a healthy runner.
+--
+-- Neither of those is wrong. Ending the session is what releases the driver claim (#206), and
+-- reaping is what stops dead sessions being handed back as live. The bug is that `coding_timeline`
+-- was only ever READABLE per session: `instance_id` sits on every row, but both indexes are
+-- (session_id, …), so nothing could ask for a repo's history across the sessions that produced it.
+-- Each completed run therefore started a fresh session id, a fresh empty timeline, and made the
+-- previous work unreachable through the UI while it sat intact in D1.
+--
+-- This index is the whole of the storage-side fix. `coding_timeline` has no repo column and
+-- deliberately does not gain one: the repo is `coding_sessions.repo_id`, one join away, and
+-- denormalising it would create a second copy of a fact that can then disagree with the first.
+CREATE INDEX IF NOT EXISTS idx_coding_timeline_instance ON coding_timeline(instance_id, seq);

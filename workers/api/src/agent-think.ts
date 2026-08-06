@@ -17,6 +17,9 @@ import { listRepos, listSessions } from "./lib/coding-store.js";
 import { lastTerminal } from "./lib/coding-timeline.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
 import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "./lib/runner-client.js";
+import { executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./lib/agent-self-description.js";
+import { listLoopRuns } from "./lib/agent-loop-store.js";
+import { recentWorkPrompt } from "./lib/work-report.js";
 import {
 	behaviourField,
 	behaviourPrompt,
@@ -89,6 +92,10 @@ export function toolBlurbFor(capabilities: AgentCapabilities): string {
  * this stays an explicit, reviewable set.
  */
 const READ_ONLY_TOOLS = new Set([
+	// Re-checking a run after acting is the agent OBSERVING what it just did — the exact case the
+	// dedup exemption exists for, and the one #256 is about. Deduping it would mean a challenged
+	// agent gets one look per conversation.
+	"check_work",
 	"read_terminal",
 	"list_coding_repos",
 	"get_tasks",
@@ -281,12 +288,52 @@ export async function runAgentThink(opts: {
 	// deterministic home for durable config like a tutor's target language, so it
 	// never depends on the model remembering (or memorizing) it.
 	const settingsSchema = capabilities.settingsSchema ?? [];
+	const settingsValues = resolveSettingsValues(settingsSchema, instanceCfg.settings);
 	if (settingsSchema.length) {
-		const settingsBlock = settingsPromptBlock(
-			settingsSchema,
-			resolveSettingsValues(settingsSchema, instanceCfg.settings),
-		);
+		const settingsBlock = settingsPromptBlock(settingsSchema, settingsValues);
 		if (settingsBlock) systemPrompt += `\n\n${settingsBlock}`;
+	}
+
+	// ── What this agent IS (#255) ────────────────────────────────────────────────────────────
+	//
+	// Derived from the capability registry, not from memory. A Repo Coder's only sense of owning a
+	// repository came from a seeded `goal` memory string, so the fact lived in the one place that
+	// is narrative rather than authoritative — which is how an agent whose declared surfaces are
+	// `["coding"]` told a user to "attach a repository in the Repo tab". It has no Repo tab.
+	// `repos:"single"` was read ONLY by the console; nothing ever told the agent.
+	const selfModel = resolveSelfModel(capabilities);
+	// Fetched ONCE and threaded into both the self-description and the "Attached Repositories"
+	// block below — a second listRepos would be a second answer to the same question on every turn.
+	//
+	// Deliberately NOT narrowed to `surfaces.includes("coding")`. The block below has always keyed
+	// its coding context off "does this instance actually have repos", not off the declaration, and
+	// adding a declaration gate here would silently take that context away from an instance holding
+	// repos without the surface. Same query, same cost, same reach as before.
+	const attachedRepos = userId && state.agentId ? await listRepos(env, state.agentId, userId).catch(() => []) : [];
+	// The typed `repo` setting the subscriber filled in. Named generically because the two
+	// single-repo agents spell it differently (`repo` on coder-repo, `repo_path` on
+	// local-repo-chat) and both mean "the repository this agent owns".
+	const repoSettingField = settingsSchema.find((f) => f.id === "repo" || f.id === "repo_path");
+	const repoSetting = repoSettingField ? String(settingsValues[repoSettingField.id] ?? "") : "";
+	systemPrompt += selfDescriptionPrompt(selfModel, { repoSetting, attached: attachedRepos });
+
+	// What it may CLAIM about work being done (#254). Derived from the resolved tool set, and
+	// emitted here rather than inside the "Attached Repositories" block where its predecessor
+	// lived — an agent's authority over its own engine does not depend on a repo happening to be
+	// attached this turn, and the old placement meant a Coder with no repo yet was told nothing.
+	//
+	// Skipped entirely for an agent with no engine and no executor: telling a language tutor it
+	// cannot run shell commands answers a question nobody asked.
+	if (selfModel.canStartWork || selfModel.canDrive || selfModel.surfaces.includes("coding")) {
+		systemPrompt += `\n${executionAuthorityPrompt(selfModel)}`;
+	}
+
+	// What it has actually DONE (#256). Injected rather than left to a tool call because the
+	// denial happened in ONE turn, in reply to a direct challenge — a model that must first decide
+	// to call a tool before it can defend a true statement will often just apologise instead.
+	if (selfModel.canStartWork && userId && state.agentId) {
+		const recentRuns = await listLoopRuns(env, userId, state.agentId, 3).catch(() => []);
+		systemPrompt += recentWorkPrompt(recentRuns);
 	}
 
 	// Under-message translation is on → the PLATFORM displays translations (and, when
@@ -343,7 +390,7 @@ export async function runAgentThink(opts: {
 	let hasCodingContext = false;
 	if (userId && state.agentId) {
 		try {
-			const repos = await listRepos(env, state.agentId, userId);
+			const repos = attachedRepos;
 			if (repos.length > 0) {
 				hasCodingContext = true;
 				// Resolve the runner honoring this instance's node binding (config.runnerNode),
@@ -406,8 +453,12 @@ export async function runAgentThink(opts: {
 				}
 				systemPrompt +=
 					"\nTrust each terminal line's label literally: 'CURRENT terminal … actively running' is live; 'session IDLE … existing scrollback' means the text on screen may be OLD and does NOT prove anything just happened; 'UNAVAILABLE this turn' means you could not read it — do NOT guess what it says; 'Runner OFFLINE' means nothing is running. Never upgrade a stale, idle, or unavailable terminal into a claim about the current code." +
-					"\nGROUNDING: only state something about the code or the session if a terminal line above actually shows it. Never assert that code 'already exists', 'is already implemented', 'wasn't changed', or 'nothing happened' unless you can see the evidence — a negative claim is a claim too. If you cannot see current state (idle/unavailable/empty/offline), say so plainly and offer to check it in the Coding tab, rather than guessing." +
-					"\nNEVER claim you personally ran commands, found or fixed bugs, or made commits: the coding engine in the Coding tab does that work, not you. From this chat you explain and summarize; you do not drive the engine or run shell commands.";
+					// The "you do not drive the engine or run shell commands" NEVER that used to close
+					// this string is gone (#254) — it contradicted `start_work`. What this agent may
+					// claim about work is stated once, further up, derived from its real executor:
+					// see `executionAuthorityPrompt`. This block keeps only what it is actually
+					// about, which is how far to trust a terminal snapshot.
+					"\nGROUNDING: only state something about the code or the session if a terminal line above actually shows it. Never assert that code 'already exists', 'is already implemented', 'wasn't changed', or 'nothing happened' unless you can see the evidence — a negative claim is a claim too. If you cannot see current state (idle/unavailable/empty/offline), say so plainly, rather than guessing.";
 			}
 		} catch {}
 	}
@@ -461,8 +512,20 @@ export async function runAgentThink(opts: {
 		hasCodingContext,
 		behaviour,
 	});
-	// Repo Chat vs Coder is a distinction only the grounding blocks below care about.
-	const repoChatStyle = state.guardrails?.responseStyle === "technical";
+	// Repo Chat vs Coder is a distinction only the grounding blocks below care about — and it must
+	// be read off the CAPABILITIES, not off `guardrails.responseStyle === "technical"`.
+	//
+	// That string was standing in for "is Repo Chat", and it is not: `coder-repo` and `coder-lead`
+	// both seed `responseStyle:"technical"` (migration 0063), so every Repo Coder was landing in the
+	// Repo Chat branch and being told **"You are READ-ONLY … you have no ability to change code"**
+	// and to send the user to "the Repo tab". That is the single strongest cause of both #254's
+	// denial and #255's invented tab, and neither ticket found it: an agent whose whole purpose is
+	// to drive an engine on one repo was being handed the read-only explainer's self-description.
+	//
+	// It is the same conflation `resolveResponseStyle` was written to fix one level up — what the
+	// agent IS versus what its owner ASKED for. `hasCodeIndex` is the real question: only the
+	// `repo` surface actually has a vector index of code.
+	const repoChatStyle = selfModel.hasCodeIndex;
 
 	// Unconditional until #223: there was no way to ask for the steps. Now the OFF state of
 	// `showWorking` carries this same rule (see the field's `offPrompt`), so leaving it here too
@@ -490,18 +553,42 @@ export async function runAgentThink(opts: {
 				"\n- Ground every claim about how the code works in the retrieved context. If something isn't in your indexed knowledge, say you didn't find it (suggest adding the repo in the Repo tab) rather than guessing." +
 				"\n- You are READ-ONLY: you explain and analyze the repository, you never modify it and you have no ability to change code." +
 				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
-		} else if (codingContext) {
+		// `hasCodingContext` as well as the declaration: this branch has always been reached by
+		// "this instance actually has repos", and an instance holding repos without declaring the
+		// surface must keep the block that describes repos and terminals.
+		} else if (codingContext && (hasCodingContext || selfModel.surfaces.includes("coding"))) {
 			// Coder has NO vector index — its code lives in live tmux sessions, not RAG.
 			// Telling it to reference "the indexed code" made it search an empty knowledge
 			// base and report the code "isn't indexed / hasn't been populated" — a
 			// hallucinated failure seen on a real Coder loop run. Give it an accurate model.
+			//
+			// The two "you do not drive the engine / that work runs in the Coding tab" lines that
+			// used to close this block are gone (#254). They contradicted `start_work`, which every
+			// agent has had since it joined BASE, and told a user to redo by hand work the agent had
+			// already done. What replaces them is `executionAuthorityPrompt`, emitted above and
+			// derived from whether this agent actually has an executor.
 			systemPrompt +=
 				"\n\nSTYLE: You are a precise code explainer helping a developer understand their repositories." +
 				"\n- You do NOT have a searchable code index. Do not fabricate code findings. You read live coding sessions, not a vector code index (that is the Repo Chat agent) — so if the user asks about indexing, just explain that plainly; never invent an indexing status, and never retract a correct summary you already gave as if it were fabricated." +
-				"\n- Base answers on the Attached Repositories and live terminal snapshots above. To read, search, edit, or fix code, the developer works in the Coding tab (a session with the engine; the local runner must be online via `pags up`) — from this chat you explain and summarize, you do not drive the engine." +
-				"\n- BUT you CAN still use your own tools directly from this chat — e.g. file a GitHub issue with github_create_issue, or list/read issues and CI status. That is not 'driving the engine'; if the user asks you to open/track an issue, just call the tool and do it (do NOT shell out to a terminal or tell them to run `gh`)." +
-				"\n- If asked to find or fix something in the code from this chat, say that work runs in the Coding tab and offer to summarize what the current session is doing." +
+				"\n- Base answers on the Attached Repositories and live terminal snapshots above, plus what your own tools return." +
+				"\n- You CAN use your own tools directly from this chat — e.g. file a GitHub issue with github_create_issue, or list/read issues and CI status. If the user asks you to open/track an issue, just call the tool and do it (do NOT shell out to a terminal or tell them to run `gh`)." +
+				(selfModel.canStartWork
+					? "\n- If asked to find, change, build, test or fix something in the code, that is what `start_work` is for: hand it the goal and say you have started it. Do NOT deflect it back to the user, and do NOT tell them to do it in another tab — you have an executor and they are asking you to use it."
+					: "\n- You cannot change code yourself. If asked to, say so plainly and offer to summarize what the current session is doing.") +
 				"\n- Lead with the plain-English answer (it may be read aloud), then add short code snippets or bullet points when they clarify.";
+		} else if (codingContext) {
+			// Technical, but neither a code index nor a coding surface — the Coder Lead (which
+			// delegates and writes no code) and Local Repo Chat (which reads a checkout through its
+			// own tools). Both used to land in the Repo Chat block above, purely because their
+			// seeded `guardrails.responseStyle` is "technical", and were told they were READ-ONLY
+			// explainers of "the indexed code" with a Repo tab. All three claims are false for the
+			// Lead. Say only what is true for any such agent: no index, and the tools are the whole
+			// of what it can do.
+			systemPrompt +=
+				"\n\nSTYLE: You are talking to a developer, so be concrete: cite real file paths, functions and short snippets when they help." +
+				"\n- You do NOT have a searchable code index. Never claim code is or isn't indexed, and never invent an indexing status." +
+				"\n- Everything you can do, you do by calling the tools listed above. If none of them can do what is asked, say so plainly rather than describing work you did not do." +
+				"\n- Ground every claim in what a tool actually returned. Do not retract a report your own tool results support.";
 		} else if (plainSpeech) {
 		// `!technical`, not a bare `else`: an agent with NO coding context whose owner asked for
 		// technical language used to land here and be told "MAXIMUM 2 sentences, never mention

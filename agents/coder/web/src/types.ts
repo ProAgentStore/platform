@@ -40,3 +40,23 @@ export interface CodingEngine {
 	command: string;
 	auth?: EngineAuth;
 }
+
+/**
+ * One row of `coding_timeline` as the console reads it.
+ *
+ * Moved here from CodingTab when the repo-scoped history read (#257) gave a second consumer —
+ * `repo-history.ts`, which groups a repo's stream into per-session sections. A type shared by two
+ * modules that lives inside one of them is how the pure-logic split stops happening.
+ */
+export interface TimelineEntry {
+	role?: string;
+	type?: string;
+	content?: string;
+	text?: string;
+	seq?: number;
+	createdAt?: string;
+	audioKey?: string;
+	/** Set only by the repo-scoped read, where several sessions interleave and the boundaries
+	 *  are what the transcript draws separators from. */
+	sessionId?: string;
+}

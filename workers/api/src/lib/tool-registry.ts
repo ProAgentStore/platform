@@ -11,6 +11,8 @@ import { connectorClient, type ConnectorClient } from "./connectors/client.js";
 import { hasConsent } from "./connector-consent.js";
 import { STEP_TOOLS } from "./steps.js";
 import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
+import { getLoopRun, listLoopRuns } from "./agent-loop-store.js";
+import { describeWorkCheck } from "./work-report.js";
 import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { openBudget } from "./delegation-budget-store.js";
 import { SELF_WRITABLE_FIELDS, behaviourToolSchema, describeBehaviour } from "./agent-behaviour.js";
@@ -137,6 +139,35 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			return started.ok
 				? { content: `Started work on: ${objective} (run ${started.runId}). It reports progress into this conversation.`, success: true }
 				: { content: started.error, success: false };
+		},
+	},
+	{
+		name: "check_work",
+		description:
+			"Look up work YOU started with start_work: its status, how far it got, and how it ended. Call this whenever the user asks whether something actually happened, or challenges a report you gave — answer from this record, never from memory and never by apologising. With no runId it returns your most recent runs.",
+		tier: "base",
+		jsonSchema: {
+			type: "object",
+			properties: {
+				runId: { type: "string", description: "A specific run id (as returned by start_work). Omit for your most recent runs." },
+			},
+			required: [],
+		},
+		handler: async (ctx, input) => {
+			if (!ctx.instanceId || !ctx.userId) return { content: "check_work needs an owned instance context.", success: false };
+			const runId = typeof input.runId === "string" ? input.runId.trim() : "";
+			if (runId) {
+				const run = await getLoopRun(ctx.env, ctx.userId, runId);
+				// Scoped to THIS instance, not just the owner: `getLoopRun` is user-scoped, so
+				// without this an agent could read another of the owner's agents' runs and report
+				// it as its own — a fresh way to describe work it did not do.
+				if (!run || run.instanceId !== ctx.instanceId) {
+					return { content: `No run ${runId} belongs to you. Do not describe it as if it happened.`, success: false };
+				}
+				return { content: describeWorkCheck([run]), success: true };
+			}
+			const runs = await listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 5);
+			return { content: describeWorkCheck(runs), success: true };
 		},
 	},
 	{

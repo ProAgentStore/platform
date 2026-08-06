@@ -53,3 +53,83 @@ describe("start_work — the chat's only way to actually DO something", () => {
 		expect(res).toMatchObject({ success: false });
 	});
 });
+
+describe("check_work — the other half: an agent must be able to OBSERVE what it started (#256)", () => {
+	/** Mock D1 returning `rows` from .all() and `first` from .first(), recording the SQL. */
+	function mockEnv(opts: { rows?: unknown[]; first?: unknown } = {}) {
+		const reads: { sql: string; args: unknown[] }[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						reads.push({ sql, args });
+						return {
+							async all() { return { results: opts.rows ?? [] }; },
+							async first() { return opts.first ?? null; },
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as never, reads };
+	}
+
+	const row = (over: Record<string, unknown> = {}) => ({
+		run_id: "r1",
+		user_id: "u1",
+		instance_id: "i1",
+		objective: "run git pull",
+		status: "completed",
+		stop_reason: "done",
+		detail: "Already up to date.",
+		iteration: 1,
+		max_iterations: 10,
+		cancel_requested: 0,
+		budget_id: null,
+		started_at: Date.now() - 60_000,
+		finished_at: Date.now() - 30_000,
+		last_progress_at: Date.now() - 40_000,
+		...over,
+	});
+
+	it("is granted wherever start_work is — the pair is the point", () => {
+		// An agent that can act but cannot observe its own actions is structurally forced to either
+		// fabricate or deny. Both happened on the same instance within two days.
+		expect(registryToolNameSet().has("check_work")).toBe(true);
+		expect(getRegistryTool("check_work")?.tier).toBe("base");
+		const coder = caps({ surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION", tools: ["repo_git"] });
+		expect(toolNamesFor(coder).has("check_work")).toBe(true);
+		expect(CREATOR_SELECTABLE_TOOLS.has("check_work")).toBe(false);
+	});
+
+	it("with no runId, reports this instance's recent runs", async () => {
+		const { env, reads } = mockEnv({ rows: [row()] });
+		const res = await getRegistryTool("check_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		expect(res?.success).toBe(true);
+		expect(String(res?.content)).toContain("Already up to date.");
+		expect(reads[0].args).toEqual(["u1", "i1", 5]);
+	});
+
+	it("says plainly that nothing ran, so it can contradict its own earlier claim", async () => {
+		const { env } = mockEnv({ rows: [] });
+		const res = await getRegistryTool("check_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
+		// Success, not an error: an error reads as "could not tell", which is the state that
+		// produces a guess.
+		expect(res?.success).toBe(true);
+		expect(String(res?.content)).toMatch(/have not started any work/);
+	});
+
+	it("refuses a run belonging to a DIFFERENT instance of the same owner", async () => {
+		// getLoopRun is user-scoped, so without the instance check an agent could read a sibling
+		// agent's run and report it as its own — a fresh way to describe work it did not do.
+		const { env } = mockEnv({ first: row({ instance_id: "other" }) });
+		const res = await getRegistryTool("check_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, { runId: "r1" });
+		expect(res?.success).toBe(false);
+		expect(String(res?.content)).toMatch(/Do not describe it as if it happened/);
+	});
+
+	it("needs an owned instance context", async () => {
+		const res = await getRegistryTool("check_work")?.handler({ env: {} as never } as never, {});
+		expect(res?.success).toBe(false);
+	});
+});

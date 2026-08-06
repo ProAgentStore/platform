@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
-import type { CodingRepo, CodingSession, CodingEngine, LoopPreset } from "./types";
+import type { CodingRepo, CodingSession, CodingEngine, LoopPreset, TimelineEntry } from "./types";
+import { entryText, groupRepoHistory, sessionLabel } from "./repo-history";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
@@ -49,16 +50,6 @@ function loadLastRepo(instanceId: string): string | null {
 	try { return localStorage.getItem(lastRepoKey(instanceId)); } catch { return null; }
 }
 
-interface TimelineEntry {
-	role?: string;
-	type?: string;
-	content?: string;
-	text?: string;
-	seq?: number;
-	createdAt?: string;
-	audioKey?: string;
-}
-
 /** Returned by /capture when the engine is waiting for a human to sign in. */
 type AuthPrompt = { kind: "oauth-url" | "menu" | "unknown"; url: string | null; evidence: string; guidance: string };
 
@@ -90,6 +81,14 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	// what's on screen is the live pane vs this saved fallback.
 	const [savedTerminal, setSavedTerminal] = useState("");
 	const [terminalLive, setTerminalLive] = useState(false);
+	// The REPO's history, across every session it has ever had (#257).
+	//
+	// "Why do I always see 'Start a session'? I should see history forever — from the DB, not
+	// streamed like tmux." The history was always in D1 (`coding_timeline`, append-only); it was
+	// only ever READABLE per session, and the platform ends sessions by itself — the Pilot closes
+	// one every time a run finishes, so finishing work is what emptied your terminal. This reads it
+	// by repo instead, so a completed run leaves its transcript behind.
+	const [repoHistory, setRepoHistory] = useState<TimelineEntry[] | null>(null);
 	const [termAutoScroll, setTermAutoScroll] = useState(true);
 	const [summaryHistory, setSummaryHistory] = useState<{ role: string; content: string; time?: string; audioKey?: string }[]>([]);
 
@@ -103,6 +102,25 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			.catch(() => {});
 		return () => { live = false; };
 	}, [instanceId]);
+	// Fetch the repo's transcript whenever there is no live session to show. Keyed on
+	// `openSession` on purpose: a finished run is exactly the moment the session goes away, and
+	// exactly the moment the user must not be shown an empty screen with a "Start a session"
+	// button where their work used to be.
+	const historyRepoId = !openSession && repos.length ? repos[0].id : null;
+	useEffect(() => {
+		if (!historyRepoId) {
+			setRepoHistory(null);
+			return;
+		}
+		let live = true;
+		api<{ timeline?: TimelineEntry[] }>(`/v1/instances/${instanceId}/coding/repos/${historyRepoId}/timeline?limit=300`)
+			.then((d) => { if (live) setRepoHistory(d.timeline ?? []); })
+			// An empty array, not null: null means "still loading" and would leave the panel
+			// permanently blank if the request failed.
+			.catch(() => { if (live) setRepoHistory([]); });
+		return () => { live = false; };
+	}, [instanceId, historyRepoId]);
+
 	const setWorkMode = (mode: "direct" | "issues") => {
 		setWorkModeState(mode);
 		api(`/v1/instances/${instanceId}/coding/work-mode`, { method: "PUT", body: JSON.stringify({ workMode: mode }) }).catch(() => {});
@@ -877,28 +895,33 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 							stale={!terminalLive && !!savedTerminal}
 						/>
 					) : (
-						<div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+						<div className="flex-1 min-h-0 flex flex-col">
 							{!solo ? (
-								<p className="text-sm text-muted-soft">No repository set yet — add its path in <b>Settings → Agent settings</b>.</p>
+								<div className="flex-1 flex items-center justify-center p-6 text-center">
+									<p className="text-sm text-muted-soft">No repository set yet — add its path in <b>Settings → Agent settings</b>.</p>
+								</div>
 							) : (
 								<>
-									{/* The runner warning goes BESIDE the action, never instead of it (#241).
-									    Replacing the button made the state unrecoverable: connectivity was
-									    only ever learned from a live session's capture, so with no session
-									    and no way to start one, "your machine isn't connected" could never
-									    be disproved — including while `pags up` was demonstrably running. */}
-									{runnerOnline === false && (
-										<div className="text-sm text-muted">
-											<p>Your machine doesn't look connected.</p>
-											<code className="inline-block mt-1.5 bg-panel border border-line rounded-md px-2 py-1 text-sm">pags up</code>
-										</div>
-									)}
-									{/* No "Open session": a live one is attached automatically above, so the
-									    only reason to be here is that there ISN'T one. */}
-									<p className="text-sm text-muted">No session running.</p>
-									<button type="button" onClick={() => startSession(solo.id)} className="text-sm px-4 py-2 rounded-lg bg-accent text-white font-bold">
-										Start a session
-									</button>
+									{/* Actions and warnings sit in a strip ABOVE the transcript, never in place
+									    of it (#257, same shape as #241). History is what the user came for;
+									    "Start a session" is one more thing they can do, not the whole screen. */}
+									<div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-line">
+										<button type="button" onClick={() => startSession(solo.id)} className="text-sm px-3 py-1.5 rounded-lg bg-accent text-white font-bold">
+											Start a session
+										</button>
+										<span className="text-xs text-muted">No session running.</span>
+										{/* The runner warning goes BESIDE the action, never instead of it (#241).
+										    Replacing the button made the state unrecoverable: connectivity was
+										    only ever learned from a live session's capture, so with no session
+										    and no way to start one, "your machine isn't connected" could never
+										    be disproved — including while `pags up` was demonstrably running. */}
+										{runnerOnline === false && (
+											<span className="text-xs text-muted">
+												Your machine doesn't look connected — run <code className="bg-panel border border-line rounded px-1 py-0.5">pags up</code>.
+											</span>
+										)}
+									</div>
+									<RepoHistory entries={repoHistory} />
 								</>
 							)}
 						</div>
@@ -1093,5 +1116,45 @@ function AgentStatusBadge({ status }: { status: string }) {
 			<span className={`w-2 h-2 rounded-full ${error ? "bg-red" : "bg-green"}`} />
 			<span className="hidden sm:inline">{label}</span>
 		</span>
+	);
+}
+
+/**
+ * A repo's terminal transcript, across every session it has ever had (#257).
+ *
+ * Rendered where "No session running / Start a session" used to be the entire screen. The history
+ * was never lost — `coding_timeline` is append-only and it was all still in D1 — but it was only
+ * readable per session, and the platform ends sessions by itself: the Pilot closes one every time
+ * a run finishes, the orphan reaper closes the rest on each `pags up`. So the act of FINISHING
+ * WORK is what emptied the terminal, and one live instance had 13 ended sessions, 0 active, with a
+ * healthy runner and nothing on screen.
+ */
+function RepoHistory({ entries }: { entries: TimelineEntry[] | null }) {
+	if (entries === null) {
+		return <div className="flex-1 flex items-center justify-center p-6"><p className="text-sm text-muted-soft">Loading history…</p></div>;
+	}
+	const sections = groupRepoHistory(entries);
+	if (!sections.length) {
+		return (
+			<div className="flex-1 flex items-center justify-center p-6 text-center">
+				<p className="text-sm text-muted-soft">Nothing has run on this repo yet. Start a session and its output will be kept here.</p>
+			</div>
+		);
+	}
+	return (
+		<div className="flex-1 min-h-0 overflow-auto bg-black/90 px-3 py-2 font-mono text-xs leading-relaxed">
+			{sections.map((section, i) => (
+				<div key={`${section.sessionId}:${section.entries[0]?.seq ?? i}`}>
+					{/* The separator is the point of the inversion: a session is now a boundary in
+					    the history, not the way you ask for it. */}
+					<div className="sticky top-0 z-10 -mx-3 px-3 py-1 bg-panel/95 border-y border-line text-[11px] text-muted font-sans">
+						{sessionLabel(section, i)}
+					</div>
+					{section.entries.map((e) => (
+						<pre key={e.seq} className="whitespace-pre-wrap break-words text-neutral-200">{entryText(e)}</pre>
+					))}
+				</div>
+			))}
+		</div>
 	);
 }

@@ -20,7 +20,7 @@ import {
 	type EngineAuth,
 	type EngineAuthResolved,
 } from "../lib/coding-engines.js";
-import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadTimeline } from "../lib/coding-timeline.js";
+import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadRepoTimeline, loadTimeline } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import {
 	claimSessionDriver,
@@ -1237,6 +1237,29 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/timeline", async (c) =
 		return c.json({ chat: await loadChat(c.env, session.id), timeline: await loadTimeline(c.env, session.id) });
 	}
 	return c.json({ chat: await loadChat(c.env, session.id) });
+});
+
+/**
+ * A REPO's whole history, across every session it has ever had (#257).
+ *
+ * The session-scoped route above answers "what happened in this session", which is only useful
+ * while a session exists — and the platform ends them by itself constantly (the Pilot closes one
+ * on every finished run; the reaper closes the rest on each `pags up` restart). This answers the
+ * question the user actually asks, which is "what has happened in this repo", and it never 404s
+ * for want of a live session.
+ */
+codingRoutes.get("/:instanceId/coding/repos/:repoId/timeline", async (c) => {
+	const { uid, instanceId } = await requireOwned(c);
+	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
+	if (!repo) throw new HttpError(404, "Repo not found");
+	const limit = Number.parseInt(c.req.query("limit") ?? "", 10);
+	const timeline = await loadRepoTimeline(c.env, {
+		instanceId,
+		userId: uid,
+		repoId: repo.id,
+		limit: Number.isFinite(limit) ? limit : undefined,
+	});
+	return c.json({ timeline });
 });
 
 /** Clear a session's conversation thread (keeps the activity log). */

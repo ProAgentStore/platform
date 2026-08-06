@@ -35,6 +35,17 @@ export const BASE = [
 	// had, invented a pipeline named "coding", failed, and then told the user the engine was
 	// running. It refuses cleanly on an agent with no separate executor.
 	"start_work",
+	// Look at what `start_work` actually did (#256).
+	//
+	// Granted wherever `start_work` is, because the pair is the point: an agent that can act but
+	// cannot observe its own actions is structurally forced to either fabricate or deny, and this
+	// instance did both. After `start_work` really ran `git pull` on the user's machine, a direct
+	// challenge got "I did not pull anything. I have no ability to run shell commands" — it had no
+	// tool that could settle the question, so it deferred to a prompt that said it could not act.
+	//
+	// Base rather than creator-selectable for the same reason `start_work` is: a creator who forgot
+	// to declare it would ship an agent that can only guess about its own work.
+	"check_work",
 	// Read and change how the agent communicates (#224).
 	//
 	// Base rather than creator-selectable because the alternative is what actually happened: asked
