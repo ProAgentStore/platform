@@ -287,6 +287,11 @@ toolRoutes.get("/:id/connections/deliveries", async (c) => {
 		deliveries: rows.map((r) => ({
 			id: r.id,
 			connectionId: r.connection_id,
+			// The outbox is SHARED with triggers (#17), and this listing is account-wide — so
+			// without these two a row is unreadable: you cannot tell a stuck connection from a
+			// stuck trigger, nor which of your agents emitted the event in the first place.
+			source: r.source ?? "connection",
+			sourceInstanceId: r.source_instance_id,
 			eventType: r.event_type,
 			action: r.action,
 			targetInstanceId: r.target_instance_id,

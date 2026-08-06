@@ -879,6 +879,85 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.getByPlaceholder("collection name")).toBeVisible();
 	});
 
+	test("Teamwork makes the pump visible: routing filter, dead letter, replay (#182)", async ({ page }) => {
+		await mockSignedInConsole(page, {
+			instances: [
+				{ id: "inst-1", name: "Lead Finder", slug: "lead-finder", category: "productivity", capabilities: { surfaces: [] } },
+				{ id: "inst-2", name: "Website Builder", slug: "site-builder", category: "productivity", capabilities: { surfaces: [] } },
+			],
+		});
+
+		let replayed: string | null = null;
+		await page.route("**/v1/instances/inst-1/connections**", async (route) => {
+			const url = new URL(route.request().url());
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (url.pathname.includes("/replay")) {
+				replayed = url.pathname;
+				return json({ ok: true, status: "pending" });
+			}
+			if (url.pathname.endsWith("/deliveries")) {
+				return json({
+					deliveries: [
+						{
+							id: "del-dead",
+							connectionId: "conn-1",
+							source: "connection",
+							eventType: "lead.created",
+							action: "run_pipeline",
+							sourceInstanceId: "inst-1",
+							targetInstanceId: "inst-2",
+							status: "dead",
+							attempts: 5,
+							nextAttemptAt: null,
+							lastError: "builder MCP unreachable",
+							traceId: "run-42",
+							createdAt: "2026-07-12T23:30:00.000Z",
+						},
+					],
+				});
+			}
+			return json({
+				connections: [
+					{
+						id: "conn-1",
+						eventType: "lead.created",
+						targetInstanceId: "inst-2",
+						action: "run_pipeline",
+						enabled: true,
+						config: {
+							pipeline: "site-builder",
+							filter: [
+								{ field: "suburb", op: "eq", value: "Sydney" },
+								{ field: "rating", op: "gte", value: 4 },
+							],
+						},
+					},
+					// The silent failure the outbox exists to expose: a filter that has never once
+					// matched looks exactly like a healthy connection in any plain list.
+					{ id: "conn-2", eventType: "lead.enriched", targetInstanceId: "inst-2", action: "create_task", enabled: true, config: { filter: [{ field: "email", op: "exists" }] } },
+				],
+			});
+		});
+
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Teamwork" })).toBeVisible();
+
+		// The wired predicate is on the row, not buried in a config blob.
+		await expect(page.getByText('only when suburb eq "Sydney" and rating gte 4')).toBeVisible();
+		await expect(page.getByText("1 undelivered")).toBeVisible();
+		await expect(page.getByText("nothing has matched this filter yet")).toBeVisible();
+
+		// The account-wide headline says something is stuck before you open anything.
+		await expect(page.getByText("1 event never arrived")).toBeVisible();
+
+		await page.getByRole("button", { name: /Show delivery log/ }).click();
+		await expect(page.getByText("gave up after 5 attempts", { exact: false })).toBeVisible();
+		await expect(page.getByText("builder MCP unreachable")).toBeVisible();
+
+		await page.getByRole("button", { name: "Replay", exact: true }).click();
+		await expect.poll(() => replayed).toContain("/connections/deliveries/del-dead/replay");
+	});
+
 	test("instance chat sends messages and shows responses", async ({
 		page,
 	}) => {
