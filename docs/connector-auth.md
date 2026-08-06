@@ -1,7 +1,20 @@
 # Connector auth for user-named endpoints
 
-> Status: proposal. Supersedes nothing; fills a hole in `connector-manifest.md` (#143) that
-> only became visible when the first connector let a *subscriber* name the remote system.
+> Status: **partly implemented** (2026-08-06). Fills a hole in `connector-manifest.md` (#143)
+> that only became visible when the first connector let a *subscriber* name the remote system.
+>
+> **What shipped:** the DISCOVERY chain (`lib/connectors/discovery.ts` — RFC 9728 → RFC 8414
+> through `safeFetch`) and the whole of the survivability model (`lib/connectors/unattended.ts`,
+> #181). A rejected MCP credential now reports which authorization server fronts the endpoint,
+> whether it would register a client dynamically, and whether it issues refresh tokens at all.
+>
+> **What did NOT ship:** RFC 7591 registration and the PKCE authorize/callback round trip. #180's
+> acceptance ("connect an arbitrary OAuth-protected MCP server with no pasted token") is
+> therefore **not met**. The reason is in this document's own second half and is now verified by
+> the code: against the only live target, discovery returns `interactive-only`, so a completed
+> DCR+PKCE flow buys a credential that dies every 24h and cannot drive an unattended chain — the
+> exact thing #181 warns against wiring. The flow waits on a target that issues refresh tokens
+> (freewebstore-online/platform#114). The vault-bearer path remains the working answer meanwhile.
 
 ## The trigger for this
 
@@ -154,10 +167,11 @@ Reading the tickets against the code turned up drift worth fixing:
 
 ## Tracking
 
-| Work | Ticket |
-|---|---|
-| `dcr-oauth2` — discovery + DCR + PKCE | ProAgentStore/platform#180 |
-| Unattended credential survivability | ProAgentStore/platform#181 |
+| Work | Ticket | State |
+|---|---|---|
+| `dcr-oauth2` — discovery | ProAgentStore/platform#180 | **shipped** (`lib/connectors/discovery.ts`) |
+| `dcr-oauth2` — DCR registration + PKCE flow | ProAgentStore/platform#180 | **deferred** — see the status note at the top |
+| Unattended credential survivability | ProAgentStore/platform#181 | **shipped** (`lib/connectors/unattended.ts`) |
 | Console UI for connections + delivery outbox | ProAgentStore/platform#182 |
 | Unify trigger retries onto the outbox | ProAgentStore/platform#17 (re-scoped) |
 | `refresh_token` grant on the MCP OAuth provider | freewebstore-online/platform#114 |

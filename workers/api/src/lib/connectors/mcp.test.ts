@@ -179,7 +179,10 @@ describe("mcp_call_tool", () => {
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/rejected the credential/);
 		expect(r.content).toMatch(/OAuth/); // points at the real cause for OAuth-only servers
-		expect(calls.map((c) => c.body.method)).toEqual(["initialize"]);
+		// #180: a 401 now also probes the server's published OAuth metadata (GETs, no JSON-RPC
+		// body) to say WHICH auth model it wants. What must not happen is the tool call itself,
+		// so assert on the RPC methods rather than on the raw request count.
+		expect(calls.map((c) => c.body.method).filter(Boolean)).toEqual(["initialize"]);
 	});
 
 	it("reports an unparseable response with the status and a body excerpt", async () => {

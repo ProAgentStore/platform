@@ -20,13 +20,17 @@
 //
 // Auth: `Authorization: Bearer <token>` from the vault (user_api_keys, provider "mcp") via
 // ctx.connectorClient("mcp").token(). Used on the wire only — never in inputs, schema, or
-// result. Servers fronted by OAuth 2.1 + dynamic client registration cannot be reached
-// headlessly this way; those need the generic connector-OAuth flow (#147) pointed at them.
+// result. Servers fronted by OAuth 2.1 + dynamic client registration STILL cannot be reached
+// headlessly this way — that flow is not implemented (#180). What changed is that a rejected
+// credential now says so precisely: `discoverAuthServer` reads the server's own RFC 9728/8414
+// metadata and reports which authorization server fronts it, whether it would register a client
+// dynamically, and whether it issues refresh tokens at all (#181). Diagnosis, not a connection.
 //
 // Every request goes through safeFetch (lib/ssrf.ts) — https-only, redirect-revalidated — so
 // a pipeline-supplied endpoint can't be aimed at cloud metadata or an internal address.
 import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
 import { safeFetch, SsrfError } from "../ssrf.js";
+import { authFailureGuidance, discoverAuthServer, type DiscoveryResult } from "./discovery.js";
 
 /** MCP protocol version we advertise on the handshake. */
 const PROTOCOL_VERSION = "2025-06-18";
@@ -184,7 +188,14 @@ async function mcpCall(
 			params: { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: CLIENT_INFO },
 		});
 		if (init.status === 401 || init.status === 403) {
-			return { content: `MCP server rejected the credential (HTTP ${init.status}). If it requires OAuth, a stored token will not work.`, success: false };
+			// #180: ASK the server what it wants instead of guessing. The old message ("if it
+			// requires OAuth, a stored token will not work") left the user unable to tell a wrong
+			// token from an auth model PAGS cannot speak. The discovery chain (RFC 9728 → RFC
+			// 8414) is published metadata, so one probe answers it — including whether the
+			// server could ever hold a credential unattended (#181). Failure to discover is not
+			// fatal: it degrades to the same generic advice this replaced.
+			const discovery = await discoverAuthServer(endpoint.url).catch(() => ({ protected: false }) as DiscoveryResult);
+			return { content: authFailureGuidance(init.status, discovery), success: false };
 		}
 		if (init.res?.error) {
 			return { content: `MCP initialize failed: ${init.res.error.message ?? "unknown error"}`, success: false };
