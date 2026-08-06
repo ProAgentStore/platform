@@ -5,6 +5,7 @@ import { patchBehaviour, readBehaviour } from "../lib/behaviour-store.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import type { Env } from "../types.js";
+import { removeInstanceConfigKey } from "../lib/instance-config.js";
 
 /**
  * Agent Behaviour routes (#223).
@@ -79,13 +80,9 @@ export function registerBehaviourRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-		delete cfg.behaviour;
-		await c.env.DB.prepare(
-			"UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3",
-		)
-			.bind(JSON.stringify(cfg), instanceId, session.uid)
-			.run();
+		// Remove just this key (#231). set_behaviour is a tool the AGENT calls, so a reset can
+		// race a save the owner is making in another tab; a whole-blob write dropped the loser.
+		await removeInstanceConfigKey(c.env, instanceId, session.uid, "behaviour");
 		// Not `{}` — clearing the subscriber's override falls back to the creator's default, which
 		// may well be non-empty. Reporting {} would show the page as unconfigured while the agent
 		// still had a character.

@@ -98,3 +98,34 @@ describe("isValidConfigKey", () => {
 		}
 	});
 });
+
+// ── The guard (#231): no route may go back to whole-blob config writes ───────
+//
+// The helper only helps if it is the ONLY way in. Sixteen call sites each read the blob,
+// changed one key and wrote it whole; two requests touching different keys lost one of them,
+// silently. A reviewer cannot be expected to catch the seventeenth by eye.
+describe("no whole-blob agent_instances.config writes remain", () => {
+	it("no source file issues `UPDATE agent_instances SET config = ?`", async () => {
+		const { readdirSync, readFileSync, statSync } = await import("node:fs");
+		const { join } = await import("node:path");
+		const root = new URL("../", import.meta.url).pathname; // workers/api/src
+
+		const offenders: string[] = [];
+		const walk = (dir: string) => {
+			for (const entry of readdirSync(dir)) {
+				const p = join(dir, entry);
+				if (statSync(p).isDirectory()) { walk(p); continue; }
+				if (!p.endsWith(".ts") || p.endsWith(".test.ts")) continue;
+				// The helper itself is the sanctioned writer.
+				if (p.endsWith("instance-config.ts")) continue;
+				const src = readFileSync(p, "utf-8");
+				if (/UPDATE\s+agent_instances\s+SET\s+config\s*=\s*\?/i.test(src)) {
+					offenders.push(p.slice(root.length));
+				}
+			}
+		};
+		walk(root);
+
+		expect(offenders, `Use patchInstanceConfig/removeInstanceConfigKey instead — a whole-blob write silently discards a concurrent change to another key (#231). Offenders:\n${offenders.join("\n")}`).toEqual([]);
+	});
+});

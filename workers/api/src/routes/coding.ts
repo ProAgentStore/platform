@@ -49,6 +49,7 @@ import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
+import { patchInstanceConfig } from "../lib/instance-config.js";
 
 /** Parse a stored JSON column, falling back on corrupt/missing data instead of throwing —
  *  a malformed row must never 500 a whole route (esp. the diagnostics page users open to
@@ -495,17 +496,10 @@ codingRoutes.put("/:instanceId/coding/work-mode", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const body = (await c.req.json().catch(() => ({}))) as { workMode?: unknown };
 	const workMode: WorkMode = body.workMode === "issues" ? "issues" : "direct";
-	const row = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, uid).first<{ config: string }>();
-	let cfg: Record<string, unknown> = {};
-	try {
-		cfg = JSON.parse(row?.config || "{}");
-	} catch {
-		/* overwrite a corrupt config */
-	}
-	cfg.workMode = workMode;
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instanceId, uid)
-		.run();
+	// Patch just this key (#231). The read-parse-catch dance is gone with it: a corrupt config
+	// no longer has to be "overwritten", because json_set coerces it in SQL and only this key
+	// is touched — so a malformed blob can't cost the owner their other settings either.
+	await patchInstanceConfig(c.env, instanceId, uid, "workMode", workMode);
 	return c.json({ workMode });
 });
 
@@ -586,18 +580,10 @@ codingRoutes.put("/:instanceId/coding/engines", async (c) => {
 	}
 	if (!engines.length) throw new HttpError(400, "At least one engine with a label and command is required.");
 	const defaultEngineId = engines.some((e) => e.id === body.defaultEngineId) ? String(body.defaultEngineId) : engines[0].id;
-	const row = await c.env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, uid).first<{ config: string }>();
-	let cfg: Record<string, unknown> = {};
-	try {
-		cfg = JSON.parse(row?.config || "{}");
-	} catch {
-		/* overwrite a corrupt config */
-	}
-	cfg.codingEngines = engines;
-	cfg.defaultEngineId = defaultEngineId;
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instanceId, uid)
-		.run();
+	// Two keys, two patches (#231) — still strictly better than one whole-blob write, which
+	// could drop an unrelated key entirely rather than merely interleaving these two.
+	await patchInstanceConfig(c.env, instanceId, uid, "codingEngines", engines);
+	await patchInstanceConfig(c.env, instanceId, uid, "defaultEngineId", defaultEngineId);
 	return c.json({ engines, defaultEngineId });
 });
 
