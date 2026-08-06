@@ -225,6 +225,32 @@ Reading the tickets against the code turned up drift worth fixing:
 | Unify trigger retries onto the outbox | ProAgentStore/platform#17 (re-scoped) |
 | `refresh_token` grant on the MCP OAuth provider | freewebstore-online/platform#114 |
 
+## Manual QA — connect the first-party preset (#287)
+
+Automated tests cover every branch of the flow with the network and the database faked. The one
+step they cannot cover is a human at a consent screen, so that is what this script is for. Run it
+once after a deploy that touches the flow.
+
+1. Console → any MCP-capable instance → **Settings → Permissions & Connections → MCP connections**.
+   A **ProAgentStore** chip appears under "Suggested". If it does not, `MCP_SELF_URL` is unset on
+   that deployment — expected locally, a misconfiguration in production.
+2. Click it. The panel tests the endpoint and should report **Token needed**, with
+   `OAuth-protected by https://mcp.proagentstore.online` underneath. That line is the discovery
+   chain working; **Connect** appears only because the server also advertises DCR + S256.
+3. Click **Connect**. A new tab opens on the authorization server; sign in and approve. The tab
+   says "Connected" and names the endpoint. The panel picks it up within a few seconds and the
+   server row reads **Authorized**.
+4. Press **Test connection** again → **Connected**, with the server's tool catalog listed. Nothing
+   is callable yet: that is per-tool consent (#262) doing its job, not a failure.
+5. Tick **`list_agents`**. The "Run list_agents as a live check" link appears; run it. It should
+   report a count and up to three agent names.
+6. Negative checks worth doing once: revoke `list_agents` and confirm the live check is no longer
+   offered; press **Reauthorize** and confirm it re-runs the flow rather than asking for a token.
+
+What this proves that the unit tests do not: the redirect URI we register matches the one the
+server accepts, the browser-binding cookie survives the round trip in a real browser, and the
+issued token is actually accepted by the MCP server on a real `tools/call`.
+
 ## What is left
 
 1. ~~Add `dcr-oauth2` to the connector auth model~~ — **done** for the outbound MCP connector
