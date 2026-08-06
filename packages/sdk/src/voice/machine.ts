@@ -52,6 +52,51 @@ export function shouldIgnoreResult(s: VoiceGuardState, now: number, echoMs = ECH
 	return isEchoing(s, now, echoMs) || s.paused;
 }
 
+/**
+ * WHEN the audio behind a result was captured, relative to the pause that is currently
+ * swallowing it. `shouldIgnoreResult` alone cannot tell the user's real turn from echo /
+ * an abandoned turn, because `paused` means both "a reply is in flight" and "that reply
+ * started while you were still talking" — same flag, two meanings (#175).
+ */
+export interface CaptureTiming {
+	/** Epoch ms the capture that produced this result STARTED (0 = unknown). */
+	captureStartedAt: number;
+	/** Epoch ms the CURRENT pause began (0 = not paused / unknown). */
+	pausedAt: number;
+}
+
+/**
+ * What to do with an STT result: send it as a turn, hand it back to the user (their words,
+ * but the conversation has moved on), or drop it.
+ */
+export type ResultVerdict = "accept" | "recover" | "ignore";
+
+/**
+ * Was this speech captured BEFORE the current pause began? Then it is the user talking —
+ * an agent reply (or a mode switch) simply landed on top of it. Echo is the opposite shape:
+ * its capture starts DURING the pause, because the agent was already speaking.
+ *
+ * Unknown timings (0) mean "can't prove it came first" → not recoverable, i.e. the guard's
+ * existing behaviour. Under-stamping is therefore always safe.
+ */
+export function isLateTurn(s: CaptureTiming): boolean {
+	return s.captureStartedAt > 0 && s.pausedAt > 0 && s.captureStartedAt < s.pausedAt;
+}
+
+/**
+ * The one verdict for an incoming STT result (#175). `shouldIgnoreResult` used to be the
+ * whole answer, and a turn transcribed while the agent started replying was dropped one line
+ * before it would have been sent — the user's words vanished with nothing logged.
+ *
+ * "recover" is deliberately NOT "accept": the turn is real, but the conversation has moved on,
+ * so it belongs in the composer (visible, editable, sendable by the human) rather than fired
+ * blind into a thread that has changed since they spoke.
+ */
+export function classifyResult(s: VoiceGuardState & CaptureTiming, now: number, echoMs = ECHO_GUARD_MS): ResultVerdict {
+	if (!shouldIgnoreResult(s, now, echoMs)) return "accept";
+	return isLateTurn(s) ? "recover" : "ignore";
+}
+
 /** May the mic (re)open right now? No while a reply is in flight or the user muted. */
 export function canOpenMic(s: Pick<VoiceGuardState, "paused" | "muted">): boolean {
 	return !s.paused && !s.muted;

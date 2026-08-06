@@ -14,6 +14,7 @@ import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
 import type { LoopPreset } from "../lib/loopPresets";
+import { adoptableRun, isChatWorking, shouldAdopt, type InstanceStateLike, type LoopRunLike } from "../lib/workInFlight";
 import DynamicSurface from "../components/DynamicSurface";
 import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
@@ -109,6 +110,10 @@ function InstancePage() {
 	const [loadingMore, setLoadingMore] = useState(false);
 	const [input, setInput] = useState("");
 	const [thinking, setThinking] = useState(false);
+	// Work this tab did NOT start (or started before a remount) — a chat turn still running in
+	// the DO, read from the server every few seconds (#252). `thinking` above is local by
+	// nature: it dies with the component, which is exactly why coming back looked idle.
+	const [remoteWork, setRemoteWork] = useState(false);
 	const chatRef = useRef<HTMLDivElement>(null);
 	const inputRef = useRef<HTMLTextAreaElement>(null);
 	// Smart auto-scroll (#132): auto-scroll to the newest message ONLY while the user is at the
@@ -148,6 +153,8 @@ function InstancePage() {
 	const loopOnRef = useRef(false);
 	/** Which driver the running loop dispatched to — decides who writes the completion notice. */
 	const loopDriverRef = useRef<string | null>(null);
+	/** True when this tab is watching a run it did NOT start (adopted on mount, #252). */
+	const loopAdoptedRef = useRef(false);
 	const loopPausedRef = useRef(false);
 	loopOnRef.current = loopOn;
 	loopPausedRef.current = loopPaused;
@@ -159,6 +166,13 @@ function InstancePage() {
 	const doSendRef = useRef<(text: string, audioKey?: string) => void>(() => {});
 	const voice = useVoice(id, {
 		onSend: (text, meta) => doSendRef.current(text, meta?.audioKey),
+		// #175: a turn spoken while the agent was replying used to be transcribed and then
+		// silently dropped. It lands in the composer instead — the user can see their words
+		// survived and press send, rather than having them fired into a thread that moved on.
+		onRecoveredText: (text) => {
+			setInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+			requestAnimationFrame(() => inputRef.current?.focus());
+		},
 		// Bias transcription toward this agent's vocabulary so domain words aren't
 		// mis-heard (a coding agent should expect "bugs", not "bars").
 		transcribePrompt: buildTranscribePrompt(surfaces, instance?.name ? [instance.name] : []),
@@ -314,13 +328,23 @@ function InstancePage() {
 	messagesRef2.current = messages;
 	const loopRunIdRef = useRef<string | null>(null);
 	loopRunIdRef.current = loopRunId;
+	const remoteWorkRef = useRef(false);
+	remoteWorkRef.current = remoteWork;
+	const thinkingRef = useRef(false);
+	thinkingRef.current = thinking;
 	const loadMessagesRef = useRef(loadMessages);
 	loadMessagesRef.current = loadMessages;
 
-	/** Add a system message to the chat + persist to DO. */
-	const emitSystemChat = useCallback((content: string) => {
+	/**
+	 * Add a system message to the chat + persist to DO.
+	 *
+	 * `persist: false` keeps it local to THIS tab — used for a run this tab merely adopted
+	 * (#252): every tab watching the same run would otherwise write the same completion notice
+	 * into the transcript, once each.
+	 */
+	const emitSystemChat = useCallback((content: string, persist = true) => {
 		setMessages((prev) => [...prev, { role: "system", content }]);
-		if (id) {
+		if (id && persist) {
 			api(`/v1/instances/${id}/system-message`, {
 				method: "POST",
 				body: JSON.stringify({ content }),
@@ -351,9 +375,13 @@ function InstancePage() {
 				// refresh above already brought it in — emitting here would show it twice.
 				if (loopDriverRef.current !== "coding") {
 					const label = run.stopReason === "done" ? "Loop complete" : `Loop stopped (${run.stopReason ?? run.status})`;
-					emitSystemChat(`${label}: ${run.detail || ""}`.trim());
+					// An ADOPTED run (#252) is not ours to narrate into the transcript: the tab that
+					// started it writes that line, and any number of tabs may be watching. Show it
+					// here, locally, so this tab still sees the run end.
+					emitSystemChat(`${label}: ${run.detail || ""}`.trim(), !loopAdoptedRef.current);
 				}
 				loopDriverRef.current = null;
+				loopAdoptedRef.current = false;
 			}
 		} catch {
 			// A transient read failure must not kill the WATCHER — the run itself is durable and
@@ -403,7 +431,9 @@ function InstancePage() {
 	// where auto-scroll parks the newest bubble exactly under it).
 	const voiceStatus = resolveVoiceStatus({
 		mode: voice.mode,
-		thinking,
+		// A turn running server-side counts as working even though THIS tab did not start it —
+		// that is the whole point of #252: the console stops claiming idle over live work.
+		thinking: thinking || remoteWork,
 		transcribing: voice.interim === "Transcribing…",
 		talking: voice.talking,
 		listening: voice.micOn,
@@ -535,6 +565,53 @@ function InstancePage() {
 			// A preset is a shortcut, never a prerequisite: if this fails the textarea still works.
 			.catch(() => setLoopPresets([]));
 	};
+
+	/**
+	 * "Is this agent working?" — asked of the SERVER, not of this tab's memory (#252).
+	 *
+	 * Both halves used to be tab-local: the thinking indicator was React state discarded on
+	 * unmount, and the loop watcher was gated on a run id only the tab that pressed Loop ever
+	 * had. So navigating away and back — or opening a second tab — showed an idle console over
+	 * an agent that was still working, and the work itself was invisible outside Settings.
+	 * Nothing new is needed server-side: `/loop` lists every run, and the DO reports the chat
+	 * turns it is actually running (#251).
+	 */
+	const checkWork = useCallback(async () => {
+		if (!id) return;
+		const [state, loops] = await Promise.all([
+			api<InstanceStateLike>(`/v1/instances/${id}/state`).catch(() => null),
+			// Only ask when we are not already watching one — an active watcher is the answer.
+			loopOnRef.current ? Promise.resolve(null) : api<{ runs: LoopRunLike[] }>(`/v1/instances/${id}/loop`).catch(() => null),
+		]);
+		const working = isChatWorking(state);
+		if (working !== remoteWorkRef.current) {
+			remoteWorkRef.current = working;
+			setRemoteWork(working);
+			// A turn that finished while we were away (or in another tab) left its reply on the
+			// server and nothing on screen. Skip it when the turn is OUR send — doSend already
+			// appends the reply, and a reload here would race it.
+			if (!working && !thinkingRef.current) void loadMessagesRef.current();
+		}
+		const run = adoptableRun(loops?.runs);
+		if (shouldAdopt(loopRunIdRef.current, run)) {
+			loopAdoptedRef.current = true;
+			loopDriverRef.current = null; // unknown for a run we did not start
+			setLoopRunId(run.runId);
+			setLoopIteration(run.iteration ?? 0);
+			if (run.maxIterations) setLoopMax(run.maxIterations);
+			if (run.objective) setLoopObjective(run.objective);
+			setLoopOn(true); // resumes the watcher above — it only ever lacked its starting value
+		}
+	}, [id]);
+
+	useEffect(() => {
+		if (!id || tab !== "chat") return;
+		void checkWork();
+		// Slow on purpose: this is a background "is it still going" question, and the console
+		// already spends its request budget on the runtime + loop polls.
+		const t = setInterval(() => { if (!document.hidden) void checkWork(); }, 10000);
+		return () => clearInterval(t);
+	}, [id, tab, checkWork]);
 
 	const startLoop = async () => {
 		if (!loopObjective.trim() || !id) return;

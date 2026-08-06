@@ -150,6 +150,9 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const sendInstructionRef = useRef<(text: string, audioKey?: string) => void>(() => {});
 	const voice = useVoice(instanceId, {
 		onSend: (text, meta) => sendInstructionRef.current(text, meta?.audioKey),
+		// #175: an instruction spoken while the Co-pilot was talking back was transcribed and
+		// then dropped. Put it in the Co-pilot composer instead so it can be reviewed + sent.
+		onRecoveredText: (text) => setChatInput((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text)),
 	});
 
 	// Auto-associate local checkouts with their GitHub owner/repo (attempted once each per

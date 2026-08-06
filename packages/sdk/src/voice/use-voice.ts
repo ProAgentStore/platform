@@ -5,7 +5,7 @@ import { API, getToken, isConnectivityError, reportClientError } from "../client
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
+import { canOpenMic, classifyResult, derivePhase, endOfTurnAction, isEchoing, shouldIgnoreResult, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
 import { VoiceStt } from "./stt.js";
 import type { VoiceTts } from "./tts.js";
@@ -159,6 +159,14 @@ export type { VoiceMode };
 export function useVoice(instanceId: string | undefined, opts: {
 	/** Send a transcript. `meta.audioKey` is set for voice turns whose audio was saved. */
 	onSend: (text: string, meta?: { audioKey?: string }) => void;
+	/**
+	 * A turn the user really spoke, transcribed too late to send (#175) — the agent replied (or
+	 * the mode changed) while they were still talking. Hand it back instead of dropping it: put
+	 * it in the composer so they can see it survived, edit it, and send it. NOT auto-sent — the
+	 * conversation has moved on since they said it. Without a handler the text is discarded, i.e.
+	 * exactly the old behaviour.
+	 */
+	onRecoveredText?: (text: string) => void;
 	/** Vocabulary-bias prompt for transcription (see voice/prompt.ts) so domain words
 	 *  aren't mis-heard (a developer's "bugs" shouldn't transcribe as "bars"). */
 	transcribePrompt?: string;
@@ -202,6 +210,21 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	// Flag: true while the agent is processing (mic should stay off)
 	const pausedForThinkingRef = useRef(false);
+	// WHEN the current pause began (#175). `paused` alone cannot tell the user's own turn from
+	// echo: a reply that lands mid-dictation pauses the mic, the clip still transcribes, and the
+	// guard then dropped it as if the user had abandoned it. The timestamp is the missing half —
+	// speech captured BEFORE this moment is theirs. Reset to 0 on unpause, and stamped only on
+	// the false→true EDGE, so the boundary is the START of the pause, not its latest re-assert.
+	const pausedAtRef = useRef(0);
+	/** The ONLY way to move the paused flag — so the timestamp can never drift out of sync. */
+	const setPaused = useCallback((v: boolean) => {
+		if (v) {
+			if (!pausedForThinkingRef.current) pausedAtRef.current = Date.now();
+		} else {
+			pausedAtRef.current = 0;
+		}
+		pausedForThinkingRef.current = v;
+	}, []);
 	// When the agent last finished speaking — used to ignore the speaker echo tail.
 	const speakEndedAtRef = useRef(0);
 
@@ -381,6 +404,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 
 	const onSendRef = useRef(opts.onSend);
 	onSendRef.current = opts.onSend;
+	const onRecoveredTextRef = useRef(opts.onRecoveredText);
+	onRecoveredTextRef.current = opts.onRecoveredText;
 	// Ref so a changing prompt (e.g. repos attach later) is picked up on the next mic start.
 	const transcribePromptRef = useRef(opts.transcribePrompt);
 	transcribePromptRef.current = opts.transcribePrompt;
@@ -396,7 +421,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// recording, and let the mic recycle instead of sending a phantom turn.
 		if (isNoiseTranscript(text)) {
 			lastAudioBlobRef.current = null;
-			pausedForThinkingRef.current = false;
+			setPaused(false);
 			return;
 		}
 		// Language lock (#126): a transcript detected as a DIFFERENT language than configured is
@@ -405,7 +430,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// in their language, instead of assuming. Never auto-switches languages.
 		if (confirmLanguageRef.current && transcriptLanguageMismatch(text, voiceLangRef.current)) {
 			lastAudioBlobRef.current = null;
-			pausedForThinkingRef.current = false;
+			setPaused(false);
 			flushSync(() => setInterim("Didn't catch your language — please say that again."));
 			setTimeout(() => setInterim((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
 			return;
@@ -574,7 +599,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// hands-free is LISTENING — without pausing, the recorder captures the TTS voice
 		// (plus its echo tail) and sends the agent's own words back as a phantom turn.
 		if (convoOnRef.current && sttRef.current?.listening) speakResumeRef.current = true;
-		pausedForThinkingRef.current = true;
+		setPaused(true);
 		if (sttRef.current?.listening) sttRef.current.stopDiscard(); // drop the partial capture
 		setMicOn(false);
 		setSpeaking(true);
@@ -590,12 +615,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (speakGenRef.current !== myGen) return; // superseded — the newer tap owns the state
 		setSpeaking(false);
 		speakEndedAtRef.current = Date.now(); // arm the echo-tail guard, like speakAndResume
-		pausedForThinkingRef.current = false;
+		setPaused(false);
 		if (speakResumeRef.current) {
 			speakResumeRef.current = false;
 			await startListening();
 		}
-	}, [ensureTts, startListening]);
+	}, [ensureTts, startListening, setPaused]);
 
 	// Speak response, then re-open mic
 	const speakAndResume = useCallback(async (text: string) => {
@@ -606,7 +631,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// NOTE: we ALWAYS stop here — a previous experiment kept the recognizer alive through
 		// TTS (for the stop-speech keyword) and left the mic effectively never stopping. The
 		// stop-keyword now just fires on the first transcript after playback instead.
-		pausedForThinkingRef.current = true;
+		setPaused(true);
 		if (sttRef.current?.listening) sttRef.current.stop();
 		setMicOn(false);
 		setSpeaking(true);
@@ -618,11 +643,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		speakEndedAtRef.current = Date.now();
 		// Now the agent is done — allow the mic to reopen. Only auto-resume in
 		// conversation mode; push-to-talk waits for the next tap (so it can't self-trigger).
-		pausedForThinkingRef.current = false;
+		setPaused(false);
 		if (convoOnRef.current) {
 			await startListening();
 		}
-	}, [ensureTts, startListening]);
+	}, [ensureTts, startListening, setPaused]);
 
 	const maybeSpeakResponse = useCallback((text: string) => {
 		// Remember the last reply so a spoken "repeat" can re-speak it (even if we didn't
@@ -632,9 +657,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			speakAndResume(text);
 		} else {
 			// Not speaking — allow mic restart for next convo turn
-			pausedForThinkingRef.current = false;
+			setPaused(false);
 		}
-	}, [speakAndResume]);
+	}, [speakAndResume, setPaused]);
 
 	// "repeat" voice command → re-speak the agent's last reply (and, in hands-free,
 	// reopen the mic afterwards, same as a normal turn). Ref-backed so the STT result
@@ -644,10 +669,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (last) {
 			speakAndResume(last);
 		} else {
-			pausedForThinkingRef.current = false;
+			setPaused(false);
 			if (convoOnRef.current) startListening();
 		}
-	}, [speakAndResume, startListening]);
+	}, [speakAndResume, startListening, setPaused]);
 	const repeatLastRef = useRef(repeatLast);
 	repeatLastRef.current = repeatLast;
 
@@ -770,7 +795,34 @@ export function useVoice(instanceId: string | undefined, opts: {
 		//    manual tap-to-talk clears speakEndedAtRef in beginTalk, so it isn't blocked.
 		//  - PAUSED: a late result (e.g. a Whisper transcript that lands after the mode was
 		//    turned off) must not fall through and send a turn the user already abandoned.
-		if (shouldIgnoreResult(readGuard(), Date.now())) return;
+		//
+		// …but "paused" covered a THIRD case it had no business dropping (#175): speech captured
+		// BEFORE the pause began — the user was still talking when the agent's reply arrived. That
+		// audio is theirs, it transcribed fine, and it died here silently. classifyResult splits
+		// that out by capture time: it is RECOVERED into the composer (visible + sendable) rather
+		// than sent blind into a conversation that has since moved on.
+		const verdict = classifyResult(
+			{ ...readGuard(), captureStartedAt: lastListenStartRef.current, pausedAt: pausedAtRef.current },
+			Date.now(),
+		);
+		if (verdict === "ignore") return;
+		if (verdict === "recover") {
+			// Only a FINAL transcript is a turn — a streaming partial would hand back a fragment
+			// and then hand back the same words again when the final lands.
+			if (!isFinal) return;
+			// Browser dictation accumulates across results, so the recovered turn is everything
+			// said this capture, not just the last fragment.
+			const pending = convoOnRef.current && !sttIsWhisperRef.current ? pendingTextRef.current : "";
+			pendingTextRef.current = "";
+			if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
+			lastAudioBlobRef.current = null; // nothing is being sent, so no replay clip to attach
+			const recovered = stripStopWord(`${pending} ${text}`.trim(), stopWordsRef.current).text.trim();
+			flushSync(() => setInterim(""));
+			// The echo tail can still put a word of the agent's own voice in front of a real turn;
+			// the same noise filter emitSend uses keeps a pure-noise "turn" out of the composer.
+			if (recovered && !isNoiseTranscript(recovered)) onRecoveredTextRef.current?.(recovered);
+			return;
+		}
 
 		// A command already fired from an interim this utterance — swallow the trailing final
 		// (and any interims between) so it can't double-fire or send the command as a message.
@@ -848,7 +900,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				flushSync(() => {
 					setInterim("");
 					stopAudioMonitor();
-					pausedForThinkingRef.current = true;
+					setPaused(true);
 					if (sttRef.current?.listening) sttRef.current.stop();
 					setMicOn(false);
 					playThinkingChime();
@@ -925,7 +977,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		} else {
 			flushSync(() => setInterim(text));
 		}
-	}, [stopAudioMonitor, readGuard]);
+	}, [stopAudioMonitor, readGuard, setPaused]);
 
 	const makeStt = useCallback(async () => {
 		// Pick up voice-settings changes (recognition mode / pause) WITHOUT a page
@@ -966,7 +1018,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 				const kind = classifyVoiceError(err ? String(err) : null);
 				if (kind === "soft") {
 					flushSync(() => setInterim((cur) => (cur === "Transcribing…" ? "" : cur)));
-					pausedForThinkingRef.current = false;
+					setPaused(false);
 					if (!convoOnRef.current) setMicOn(false);
 					return;
 				}
@@ -976,7 +1028,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// clear one-time hint. No reportClientError.
 					const msg = `⚠ ${micUnavailableMessage(String(err))}`;
 					flushSync(() => setInterim(msg));
-					pausedForThinkingRef.current = false;
+					setPaused(false);
 					setConvoOn(false);
 					setMicOn(false);
 					setTimeout(() => setInterim((cur) => (cur === msg ? "" : cur)), 6000);
@@ -995,7 +1047,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// happened", which is exactly how Whisper looked broken.
 					const msg = `⚠ ${err}`;
 					flushSync(() => setInterim(msg));
-					pausedForThinkingRef.current = false;
+					setPaused(false);
 					// Auto-clear so the error doesn't lock the input (readOnly while interim
 					// is set). Only clears if it's still showing this same error.
 					setTimeout(() => setInterim((cur) => (cur === msg ? "" : cur)), 4500);
@@ -1019,7 +1071,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			},
 		});
 		return stt;
-	}, [instanceId, handleResult, startListening]);
+	}, [instanceId, handleResult, startListening, setPaused]);
 
 	const toggleMic = useCallback(async () => {
 		if (micOn) {
@@ -1030,13 +1082,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 			return;
 		}
 		try {
-			pausedForThinkingRef.current = false;
+			setPaused(false);
 			sttRef.current = await makeStt();
 			await sttRef.current.start();
 			startAudioMonitor();
 			setMicOn(true);
 		} catch { setMicOn(false); }
-	}, [micOn, makeStt, startAudioMonitor, stopAudioMonitor]);
+	}, [micOn, makeStt, startAudioMonitor, stopAudioMonitor, setPaused]);
 
 	const toggleSpeak = useCallback(() => {
 		// Prime TTS on this tap so a later async reply can actually speak (iOS/Safari):
@@ -1074,7 +1126,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	const stopConvo = useCallback(() => {
 		convoOnRef.current = false;
 		manualTalkRef.current = false;
-		pausedForThinkingRef.current = true;
+		setPaused(true);
 		if (silenceTimerRef.current) { clearTimeout(silenceTimerRef.current); silenceTimerRef.current = null; }
 		if (maxDictationTimerRef.current) { clearTimeout(maxDictationTimerRef.current); maxDictationTimerRef.current = null; }
 		pendingTextRef.current = "";
@@ -1087,7 +1139,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		setTalking(false);
 		setMicOn(false);
 		setInterim("");
-	}, [stopAudioMonitor, releaseWakeLock]);
+	}, [stopAudioMonitor, releaseWakeLock, setPaused]);
 	const stopConvoRef = useRef(stopConvo);
 	stopConvoRef.current = stopConvo;
 
@@ -1114,7 +1166,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// needs a running AudioContext, else the reply is silent (hands-free "no sound").
 		void ensureTts().then((t) => t.unlock()).catch(() => {});
 		try {
-			pausedForThinkingRef.current = false;
+			setPaused(false);
 			sttRef.current = await makeStt();
 			await sttRef.current.start();
 			startAudioMonitor();
@@ -1124,7 +1176,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			void acquireWakeLock(); // keep the screen awake so hands-free doesn't get suspended
 			playListeningChime();
 		} catch { setConvoOn(false); }
-	}, [convoOn, stopConvo, makeStt, startAudioMonitor, ensureTts, acquireWakeLock]);
+	}, [convoOn, stopConvo, makeStt, startAudioMonitor, ensureTts, acquireWakeLock, setPaused]);
 
 	/** Stop speaking immediately (tap a message to interrupt). */
 	const cancelSpeak = useCallback(() => {
@@ -1132,11 +1184,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		speakResumeRef.current = false; // we reopen the mic ourselves below
 		setSpeaking(false);
 		// If in convo mode and not muted, re-open mic so user can talk
-		pausedForThinkingRef.current = false;
+		setPaused(false);
 		if (convoOnRef.current && !mutedRef.current) {
 			startListening();
 		}
-	}, [startListening]);
+	}, [startListening, setPaused]);
 
 	// ── Push-to-talk within hands-free (tap the chat to talk, tap again to send) ──
 	// The automatic VAD guesses when you've stopped — and gets it wrong (it once sent a
@@ -1147,7 +1199,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		setTalking(true);
 		ttsRef.current?.cancel();               // stop the agent mid-sentence
 		setSpeaking(false);
-		pausedForThinkingRef.current = false;
+		setPaused(false);
 		mutedRef.current = false;               // a manual talk implies "listen to me now"
 		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 		pendingTextRef.current = "";
@@ -1163,7 +1215,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			setMicOn(true);
 			setMuted(false);
 		} catch { manualTalkRef.current = false; setTalking(false); }
-	}, [makeStt, startAudioMonitor]);
+	}, [makeStt, startAudioMonitor, setPaused]);
 
 	const endTalk = useCallback(() => {
 		if (!manualTalkRef.current) return;
@@ -1182,12 +1234,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// instead of waiting on the silence debounce.
 		const msg = pendingTextRef.current.trim();
 		pendingTextRef.current = "";
-		pausedForThinkingRef.current = true;
+		setPaused(true);
 		flushSync(() => { setInterim(""); stopAudioMonitor(); setMicOn(false); });
 		if (sttRef.current?.listening) sttRef.current.stop();
 		if (msg) emitSendRef.current(msg);
-		else pausedForThinkingRef.current = false;
-	}, [stopAudioMonitor]);
+		else setPaused(false);
+	}, [stopAudioMonitor, setPaused]);
 
 	/** One tap toggles a manual talk turn (start listening ↔ stop + send). */
 	const toggleTalk = useCallback(() => {
@@ -1240,7 +1292,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// Mark convo off + paused so no onEnd/resume path reopens the mic after we're
 		// gone (would leak a getUserMedia stream + rAF loop on a dead component).
 		convoOnRef.current = false;
-		pausedForThinkingRef.current = true;
+		setPaused(true);
 		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 		sttRef.current?.stop();
 		gateRef.current?.stop();
@@ -1249,7 +1301,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		ttsRef.current?.dispose(); // close the TTS AudioContext, not just cancel — else it leaks
 		stopAudioMonitor();
 		releaseWakeLock();
-	}, [stopAudioMonitor, releaseWakeLock]);
+	}, [stopAudioMonitor, releaseWakeLock, setPaused]);
 
 	const toggleMute = useCallback(() => {
 		if (muted) {
@@ -1291,7 +1343,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		setTalking(false);
 		if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
 		pendingTextRef.current = "";
-		pausedForThinkingRef.current = true;
+		setPaused(true);
 		if (sttRef.current?.listening) sttRef.current.stopDiscard();
 		if (next === "handsfree") {
 			// toggleConvo does the full hands-free setup (mic + VAD + TTS unlock, in-gesture)
@@ -1315,7 +1367,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			unlockSpeechSynthesis();
 			void ensureTts().then((t) => t.unlock()).catch(() => {});
 		}
-	}, [toggleConvo, ensureTts, stopAudioMonitor]);
+	}, [toggleConvo, ensureTts, stopAudioMonitor, setPaused]);
 	// Reachable from the control listener, which is declared far above this (see exitFromCommand).
 	setVoiceModeRef.current = setVoiceMode;
 

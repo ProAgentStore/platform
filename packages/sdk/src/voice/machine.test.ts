@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, endOfTurnAction, derivePhase } from "./machine.js";
+import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn } from "./machine.js";
 
 const NOW = 1_000_000;
 
@@ -28,6 +28,63 @@ describe("shouldIgnoreResult", () => {
 	});
 	it("muted alone does NOT swallow a result (that's handled by not opening the mic)", () => {
 		expect(shouldIgnoreResult({ ...base, muted: true }, NOW)).toBe(false);
+	});
+});
+
+describe("isLateTurn (#175 — capture before the pause is the user's own speech)", () => {
+	it("capture that started BEFORE the pause is the user's turn", () => {
+		expect(isLateTurn({ captureStartedAt: 1000, pausedAt: 2000 })).toBe(true);
+	});
+	it("capture that started DURING the pause is echo / abandoned", () => {
+		expect(isLateTurn({ captureStartedAt: 2000, pausedAt: 1000 })).toBe(false);
+		expect(isLateTurn({ captureStartedAt: 1000, pausedAt: 1000 })).toBe(false);
+	});
+	it("unknown timings are never recoverable (under-stamping stays safe)", () => {
+		expect(isLateTurn({ captureStartedAt: 0, pausedAt: 2000 })).toBe(false);
+		expect(isLateTurn({ captureStartedAt: 1000, pausedAt: 0 })).toBe(false);
+		expect(isLateTurn({ captureStartedAt: 0, pausedAt: 0 })).toBe(false);
+	});
+});
+
+describe("classifyResult (#175)", () => {
+	const base = { ttsSpeaking: false, speakEndedAt: 0, paused: false, muted: false, captureStartedAt: 0, pausedAt: 0 };
+	it("a normal result is accepted (sent as a turn)", () => {
+		expect(classifyResult({ ...base, captureStartedAt: NOW - 3000 }, NOW)).toBe("accept");
+	});
+	it("THE BUG: dictation interrupted by an agent reply is recovered, not dropped", () => {
+		// User starts speaking at T-5s; the agent's reply lands at T-1s → pause + TTS. The clip
+		// still transcribes, and used to hit `paused` and die one line before it would be sent.
+		expect(classifyResult(
+			{ ...base, paused: true, ttsSpeaking: true, captureStartedAt: NOW - 5000, pausedAt: NOW - 1000 },
+			NOW,
+		)).toBe("recover");
+	});
+	it("still recovers once the agent finished speaking (transcript lands in the echo tail)", () => {
+		expect(classifyResult(
+			{ ...base, paused: false, speakEndedAt: NOW - 100, captureStartedAt: NOW - 5000, pausedAt: NOW - 4000 },
+			NOW,
+		)).toBe("recover");
+	});
+	it("the agent NEVER transcribes its own TTS — that capture starts during the pause", () => {
+		expect(classifyResult(
+			{ ...base, ttsSpeaking: true, paused: true, captureStartedAt: NOW - 500, pausedAt: NOW - 2000 },
+			NOW,
+		)).toBe("ignore");
+		expect(classifyResult(
+			{ ...base, speakEndedAt: NOW - 200, captureStartedAt: NOW - 100, pausedAt: NOW - 2000 },
+			NOW,
+		)).toBe("ignore");
+	});
+	it("a turn the user abandoned (capture opened after the pause) is still dropped", () => {
+		expect(classifyResult(
+			{ ...base, paused: true, captureStartedAt: NOW - 1000, pausedAt: NOW - 4000 },
+			NOW,
+		)).toBe("ignore");
+	});
+	it("no timing information at all behaves exactly like the old guard", () => {
+		expect(classifyResult({ ...base, paused: true }, NOW)).toBe("ignore");
+		expect(classifyResult({ ...base, ttsSpeaking: true }, NOW)).toBe("ignore");
+		expect(classifyResult(base, NOW)).toBe("accept");
 	});
 });
 
