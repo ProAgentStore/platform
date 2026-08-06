@@ -26,7 +26,7 @@
 	"scripts": {
 		"build": "pnpm -r build",
 		"docs:build": "zensical build --strict && node scripts/clean-generated-docs.mjs",
-		"typecheck": "pnpm -r typecheck",
+		"typecheck": "pnpm --filter @proagentstore/sdk build && pnpm -r typecheck",
 		"test": "vitest run",
 		"test:unit": "vitest run --project unit",
 		"test:integration": "vitest run --project integration",
