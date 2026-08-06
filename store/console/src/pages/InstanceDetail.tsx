@@ -13,6 +13,7 @@ import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, S
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { SURFACES, visibleSurfaces, surfaceOwnsHeader } from "../lib/surfaces";
 import { useGloss } from "../lib/use-gloss";
+import type { LoopPreset } from "../lib/loopPresets";
 import DynamicSurface from "../components/DynamicSurface";
 import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
@@ -137,6 +138,10 @@ function InstancePage() {
 	// not a loop we are driving — closing this tab no longer kills the objective.
 	const [loopRunId, setLoopRunId] = useState<string | null>(null);
 	const [showLoopForm, setShowLoopForm] = useState(false);
+	// The agent's loop presets (#234). Fetched when the form first opens rather than on mount —
+	// most visits to a chat never press Loop, and this is a request that would be wasted on them.
+	const [loopPresets, setLoopPresets] = useState<LoopPreset[]>([]);
+	const loopPresetsLoaded = useRef(false);
 	// Overflow menu for the less-frequent chat actions (Copy JSON, Clear) — keeps the
 	// controls bar focused on voice, and moves the destructive Clear behind a tap.
 	const [showChatMenu, setShowChatMenu] = useState(false);
@@ -513,6 +518,24 @@ function InstancePage() {
 		return () => clearInterval(t);
 	}, [loopOn, loopRunId, pollLoop]);
 
+	/**
+	 * Open the Loop form, loading this agent's presets the first time (#234).
+	 *
+	 * They are per instance and resolved server-side (subscriber override over creator default over
+	 * the built-ins for the loop's driver), so the chat cannot hardcode them — which is exactly how
+	 * they came to exist in one component and be invisible everywhere else.
+	 */
+	const toggleLoopForm = () => {
+		const opening = !showLoopForm;
+		setShowLoopForm(opening);
+		if (!opening || loopPresetsLoaded.current || !id) return;
+		loopPresetsLoaded.current = true;
+		api<{ presets?: LoopPreset[] }>(`/v1/instances/${id}/loop-presets`)
+			.then((r) => setLoopPresets(r.presets ?? []))
+			// A preset is a shortcut, never a prerequisite: if this fails the textarea still works.
+			.catch(() => setLoopPresets([]));
+	};
+
 	const startLoop = async () => {
 		if (!loopObjective.trim() || !id) return;
 		setShowLoopForm(false);
@@ -717,7 +740,7 @@ function InstancePage() {
 							{loopOn ? (
 								<button type="button" onClick={stopLoop} title={`Loop ${loopIteration}/${loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative"><Square size={13} /><span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span></button>
 							) : (
-								<button type="button" onClick={() => setShowLoopForm(!showLoopForm)} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
+								<button type="button" onClick={toggleLoopForm} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
 							)}
 							<div className="relative">
 								{/* Kebab, NOT a gear: these are conversation ACTIONS (copy/clear) — real
@@ -735,14 +758,31 @@ function InstancePage() {
 								)}
 							</div>
 						</div>
-						{/* Loop form with presets */}
+						{/* Loop form with presets (#234). The presets were wired to the Coder's Co-pilot
+						    view alone, so every other way of starting a loop — including the only one a
+						    `copilot:false` agent has, this one — meant retyping the objective. */}
 						{showLoopForm && !loopOn && (
 							<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
+								{loopPresets.length > 0 && (
+									<div className="flex flex-wrap gap-1.5">
+										{loopPresets.map((p) => (
+											<button
+												key={p.id}
+												type="button"
+												onClick={() => setLoopObjective(p.objective)}
+												title={p.objective}
+												className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${loopObjective === p.objective ? "border-accent bg-accent-soft text-accent font-bold" : "border-line text-muted hover:border-accent hover:text-accent"}`}
+											>
+												{p.label}
+											</button>
+										))}
+									</div>
+								)}
 								<textarea
 									value={loopObjective}
 									onChange={(e) => setLoopObjective(e.target.value)}
 									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startLoop(); } }}
-									placeholder="What should the agent work on?"
+									placeholder={loopPresets.length ? "Or type a custom objective…" : "What should the agent work on?"}
 									className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm resize-none"
 									rows={2}
 									autoFocus

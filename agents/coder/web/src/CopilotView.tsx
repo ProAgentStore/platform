@@ -2,6 +2,7 @@ import { type KeyboardEvent, type RefObject, useState, useEffect, useRef } from 
 import { renderMd, formatDateTime, classifyMessage, toolCallSummary, messageKey as sdkMessageKey } from "@proagentstore/sdk/ui";
 import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
+import type { LoopPreset } from "./types";
 import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
 
 /** Double-tap a message: replay its SAVED voice recording (voice turns), else speak
@@ -30,7 +31,6 @@ async function playMessage(instanceId: string, m: { content: string; audioKey?: 
 type Voice = ReturnType<typeof import("@proagentstore/sdk/hooks").useVoice>;
 type Loop = ReturnType<typeof import("./use-coding-loop").useCodingLoop>;
 type Message = { role: string; content: string; time?: string; audioKey?: string };
-type LoopPreset = { id: string; label: string; objective: string };
 
 /**
  * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile

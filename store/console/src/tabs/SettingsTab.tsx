@@ -5,6 +5,7 @@ import TranslationFields from "../components/TranslationFields";
 import { api } from "@proagentstore/sdk/client";
 import type { SettingsField } from "../lib/types";
 import TeamworkSection from "./TeamworkSection";
+import LoopPresetsSection from "./LoopPresetsSection";
 import LoopRunsSection from "./LoopRunsSection";
 import TriggersSection from "./TriggersSection";
 
@@ -1025,6 +1026,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			{/* Teamwork — supervision + connections (#182). Placed before Triggers: both are about
 			    work arriving from elsewhere, and wiring agents together is the more common one. */}
 			<TeamworkSection instanceId={instanceId} />
+
+			{/* The objectives offered wherever a Loop starts (#234) — next to the runs those loops
+			    produce, so "what it can do" and "what it did" sit together. */}
+			<LoopPresetsSection instanceId={instanceId} />
 
 			{/* Autonomous runs (#158/#182). Renders nothing until there is history, so it does
 			    not add clutter for agents that never run an objective. */}

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
-import type { CodingRepo, CodingSession, CodingEngine } from "./types";
+import type { CodingRepo, CodingSession, CodingEngine, LoopPreset } from "./types";
 import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
@@ -134,13 +134,13 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	 * actually has, so they are the navigation.
 	 */
 	const [soloView, setSoloView] = useState<"terminal" | "issues" | "builds">("terminal");
-	const [loopPresets] = useState([
-		{ id: "bugs", label: "Fix bugs", objective: "Find and fix all bugs. Run tests after each fix. Commit when all pass." },
-		{ id: "quality", label: "Quality check", objective: "Run a full code quality audit: type check, lint, find code smells, dead code, and fix issues found. Commit improvements." },
-		{ id: "security", label: "Security audit", objective: "Audit the codebase for security vulnerabilities: injection, auth gaps, secrets exposure, SSRF, XSS. Fix critical issues and report." },
-		{ id: "refactor", label: "Refactor", objective: "Identify large or complex files. Break them into smaller, well-named modules. Keep all tests passing." },
-		{ id: "tests", label: "Add tests", objective: "Find untested code paths. Write tests for the most critical functions. Aim for meaningful coverage, not 100%." },
-	]);
+	/**
+	 * Loop presets (#234). These were five literals right here, handed to the Co-pilot view alone —
+	 * so an agent with `copilot:false` had no presets at all, and nobody could edit or extend them.
+	 * They now come from the instance (subscriber override < creator default < the built-in five,
+	 * resolved server-side) and are editable in Settings → Loop presets.
+	 */
+	const [loopPresets, setLoopPresets] = useState<LoopPreset[]>([]);
 	const [repoStatuses, setRepoStatuses] = useState<Record<string, string>>({});
 	const threadRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<HTMLPreElement>(null);
@@ -157,15 +157,19 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	const loadCoding = useCallback(async () => {
 		try {
-			const [repoData, sessionData, engineData] = await Promise.all([
+			const [repoData, sessionData, engineData, presetData] = await Promise.all([
 				api<{ repos: CodingRepo[] }>(`/v1/instances/${instanceId}/coding/repos`),
 				api<{ sessions: CodingSession[] }>(`/v1/instances/${instanceId}/coding/sessions`),
 				api<{ engines: CodingEngine[]; defaultEngineId?: string }>(`/v1/instances/${instanceId}/coding/engines`),
+				// A shortcut, never a prerequisite — an older API that doesn't serve these still
+				// leaves a fully working loop form, just without the buttons.
+				api<{ presets: LoopPreset[] }>(`/v1/instances/${instanceId}/loop-presets`).catch(() => ({ presets: [] })),
 			]);
 			const repos = repoData.repos || [];
 			setRepos(repos);
 			setSessions(sessionData.sessions || []);
 			setEngines(engineData.engines || []);
+			setLoopPresets(presetData.presets || []);
 			if (engineData.defaultEngineId) setDefaultEngine(engineData.defaultEngineId);
 
 			// Local repos with no GitHub association → ask the runner to read their `origin`

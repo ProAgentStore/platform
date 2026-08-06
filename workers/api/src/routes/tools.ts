@@ -14,6 +14,7 @@ import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js"
 import { listSupervision, createSupervision, deleteSupervision } from "../lib/supervision.js";
 import { createLoopRun, getLoopRun, listLoopRuns, requestCancel } from "../lib/agent-loop-store.js";
 import { loopDriverFor } from "../lib/loop-drivers.js";
+import { readLoopPresets, writeLoopPresets } from "../lib/loop-presets-store.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { sanitizeMaxIterations } from "../lib/agent-loop.js";
 import { openBudget } from "../lib/delegation-budget-store.js";
@@ -448,6 +449,30 @@ toolRoutes.post("/:id/loop", async (c) => {
 	});
 	if (!started.ok) throw new HttpError(started.status, started.error);
 	return c.json({ runId: started.runId, driver: started.driver, budgetId: budget.id, maxIterations, status: "running" }, 201);
+});
+
+/**
+ * Loop presets (#234) — the named objectives the loop form offers, per instance.
+ *
+ * GET resolves creator-default-under-subscriber-override and says which one you are looking at, so
+ * the editor knows whether "Reset" means anything. PUT stores the subscriber's list; an empty list
+ * clears the override rather than storing an empty one.
+ */
+toolRoutes.get("/:id/loop-presets", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	return c.json(await readLoopPresets(c.env, instanceId, session.uid));
+});
+
+toolRoutes.put("/:id/loop-presets", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { presets?: unknown };
+	const saved = await writeLoopPresets(c.env, instanceId, session.uid, body.presets);
+	if (!saved) throw new HttpError(404, "instance not found");
+	return c.json(saved);
 });
 
 toolRoutes.get("/:id/loop", async (c) => {

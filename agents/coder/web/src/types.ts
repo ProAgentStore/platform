@@ -20,6 +20,18 @@ export interface CodingSession {
 	createdAt?: string;
 }
 
+/**
+ * A one-tap objective in the loop form (#234), served by `/v1/instances/:id/loop-presets`.
+ *
+ * Not a coder-only idea — the Assistant tab renders the same list — but the shapes agree because
+ * both read the one endpoint, which is the point: they used to be five literals in CodingTab.
+ */
+export interface LoopPreset {
+	id: string;
+	label: string;
+	objective: string;
+}
+
 export type EngineAuth = "auto" | "machine" | "subscription" | "api-key";
 
 export interface CodingEngine {
