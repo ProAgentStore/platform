@@ -108,7 +108,7 @@ const PINS = {
 	// supervisor's runs are never on its own instance and the block therefore never fired for one.
 	// Not split — the change is one `Promise.all` inside the existing selfModel section, and the
 	// rendering it feeds already lives in `lib/work-report.ts`.
-	"workers/api/src/agent-think.ts": 894,
+	"workers/api/src/agent-think.ts": 828,
 	"workers/api/src/routes/instances-runtime.ts": 849,
 	"workers/api/src/lib/triggers.ts": 838,
 	"packages/browser-runner/src/coding/headless.ts": 819,

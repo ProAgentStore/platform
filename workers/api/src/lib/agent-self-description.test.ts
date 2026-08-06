@@ -6,45 +6,13 @@ import {
 	selfDescriptionPrompt,
 	tabsFor,
 } from "./agent-self-description.js";
-import { agentCapabilities } from "./agent-capabilities.js";
+import { CODER_LEAD, CODER_REPO, LEGACY_CODER, PLAIN_CHAT, REPO_CHAT } from "./first-party-agents.js";
 
-/** The real Repo Coder, exactly as migrations 0063 + 0065 + 0070 leave it. */
-const CODER_REPO = agentCapabilities({
-	slug: "coder-repo",
-	config: JSON.stringify({
-		capabilities: {
-			surfaces: ["coding"],
-			runtime: "coding",
-			workflow: "CODING_SESSION",
-			surfaceOptions: { coding: { repos: "single", drive: false, copilot: false } },
-			tools: ["repo_tree", "repo_read_file", "repo_git", "repo_remote", "github_list_issues", "github_read_issue", "github_create_issue"],
-		},
-	}),
-});
-
-/** The legacy hardcoded Coder: declares nothing, so it keeps the drive tools. */
-const LEGACY_CODER = agentCapabilities({
-	slug: "coder",
-	config: JSON.stringify({ capabilities: { surfaces: ["coding"], runtime: "coding", workflow: "CODING_SESSION" } }),
-});
-
-/** Repo Chat: the only agent with a genuine vector index of code. */
-const REPO_CHAT = agentCapabilities({
-	slug: "repo-chat",
-	config: JSON.stringify({
-		capabilities: { surfaces: ["repo"], runtime: null, workflow: null, tools: ["search_knowledge", "list_knowledge", "read_knowledge"] },
-	}),
-});
-
-/** Coder Lead: delegates, writes no code, has no surfaces at all. */
-const CODER_LEAD = agentCapabilities({
-	slug: "coder-lead",
-	config: JSON.stringify({
-		capabilities: { surfaces: [], runtime: null, workflow: null, tools: ["list_subordinates", "delegate_goal", "check_delegation"] },
-	}),
-});
-
-const PLAIN_CHAT = agentCapabilities({ slug: "language-buddy", config: null });
+/**
+ * The five agents these assertions are about now live in `lib/first-party-agents.ts` (#315), shared
+ * with the prompt-drift guard. Two copies of "what a Repo Coder is" is the drift this repo keeps
+ * paying for: the copy nobody updates goes on passing.
+ */
 
 describe("resolveSelfModel — what the agent may say it is", () => {
 	it("a Repo Coder has an executor but may not drive the engine from chat", () => {

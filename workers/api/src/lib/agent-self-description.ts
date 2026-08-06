@@ -52,8 +52,29 @@ export interface SelfModel {
 	canDelegate: boolean;
 	/** Does it have a real vector index of code (the `repo` surface / Repo Chat)? */
 	hasCodeIndex: boolean;
+	/**
+	 * Does it have a LOCAL runner at all (`capabilities.runtime !== null`)?
+	 *
+	 * `pags up` is an instruction about a named capability, and a cloud-only agent has no runner to
+	 * start — `up.ts` skips those instances entirely ("None of your agents need a local runner").
+	 * Telling their owner to run it is the same failure as naming a tab that is not there, so the
+	 * prompt asks this rather than assuming every developer-facing agent has one.
+	 */
+	hasRunner: boolean;
 	/** Does it own exactly ONE repository (`surfaceOptions.coding.repos === "single"`)? */
 	singleRepo: boolean;
+	/**
+	 * The resolved tool set, so a prompt can NAME a tool only when the agent has it.
+	 *
+	 * Added by #315's guard on its first run, which found two sentences naming tools their reader
+	 * did not have: `executionAuthorityPrompt` pointed a Coder Lead at `subordinate_status` (the
+	 * Lead declares `list_subordinates`, `delegate_goal`, `check_delegation` — not that one), and
+	 * the coding STYLE block told every coding agent to "file a GitHub issue with
+	 * `github_create_issue`" when only the Repo Coder declares the GitHub connector. Naming an
+	 * absent tool is the over-reporting half of the same failure: the model is told about a schema
+	 * it will never be shown, so it either invents a call or deflects the request.
+	 */
+	tools: ReadonlySet<string>;
 }
 
 /**
@@ -82,7 +103,13 @@ export function tabsFor(capabilities: AgentCapabilities): string[] {
 	if (s.includes("repo")) tabs.push("Repo");
 	if (s.includes("coding")) tabs.push("Coding");
 	if (s.includes("tmux")) tabs.push("Terminal");
-	tabs.push("Activity", "Knowledge", "Behaviour");
+	// Stats is universal, exactly like Behaviour: the console registers it with `show: () => true`
+	// (#312), deliberately NOT gated on "has cards", because the empty state is where a subscriber
+	// finds out the tab exists. It was missing here — the console shipped it in #311 and this table
+	// was not updated — so every agent was being told "your console has exactly these tabs" with
+	// Stats absent, while `get_stats`' own description points at "the Stats tab". That is the #315
+	// class, live and found by the guard this comment ships with, six hours after it appeared.
+	tabs.push("Activity", "Stats", "Knowledge", "Behaviour");
 	if (s.includes("repo") || canUse(KB_TOOLS)) tabs.push("Indexing");
 	if (canUse(COLLECTION_TOOLS)) tabs.push("Data");
 	tabs.push("Settings");
@@ -103,6 +130,8 @@ export function resolveSelfModel(capabilities: AgentCapabilities): SelfModel {
 		canDrive: tools.has("send_to_cli"),
 		canDelegate: tools.has("delegate_goal"),
 		hasCodeIndex: (capabilities.surfaces ?? []).includes("repo"),
+		hasRunner: (capabilities.runtime ?? null) !== null,
+		tools,
 		singleRepo: optionsFor(capabilities, "coding")?.repos === "single",
 	};
 }
@@ -150,8 +179,13 @@ export function executionAuthorityPrompt(model: SelfModel): string {
 				" YOU started, and reporting it as something you did is accurate, not an over-claim.",
 			// The direct cause of #318: the run lives on the SUBORDINATE, so "nothing on my own
 			// instance" is the normal state for a supervisor and says nothing about what it did.
+			//
+			// The detail tools are NAMED only when granted. The first version listed
+			// `subordinate_status` unconditionally and the Coder Lead does not declare it — so the
+			// fix for #318 shipped with the over-reporting half of the same bug in it, which is
+			// exactly how durable this class is without a check.
 			"- Your runs are recorded on the agent that ran them, never on you. `check_work` reports both yours and" +
-				" the ones you delegated; `check_delegation` and `subordinate_status` report theirs in more detail." +
+				` the ones you delegated${detailToolClause(model)}.` +
 				" NEVER conclude from an empty record on your own instance that you delegated nothing.",
 		);
 	}
@@ -172,6 +206,17 @@ export function executionAuthorityPrompt(model: SelfModel): string {
 		"- Never tell the user to redo by hand something a run of yours already did.",
 	);
 	return lines.join("\n");
+}
+
+/**
+ * "; `check_delegation` and `subordinate_status` report theirs in more detail" — but only for the
+ * tools this agent actually has, and nothing at all when it has neither.
+ */
+function detailToolClause(model: SelfModel): string {
+	const names = ["check_delegation", "subordinate_status"].filter((t) => model.tools.has(t)).map((t) => `\`${t}\``);
+	if (!names.length) return "";
+	const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+	return `; ${list} report${names.length > 1 ? "" : "s"} theirs in more detail`;
 }
 
 /** One attached repository, as much of it as the prompt needs. */
