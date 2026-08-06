@@ -172,8 +172,11 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 		return json(res, 200, runner.coding.start(b));
 	}
 	if (req.method === "POST" && path === "/coding/capture") {
-		const b = await readJson<{ sessionId: string }>(req);
-		return json(res, 200, runner.coding.snapshot(b.sessionId));
+		// `drainUsage` opts this caller in to consuming the session's measured engine spend (#267).
+		// Only the cloud paths that write the ledger send it; an older cloud omits it and simply
+		// gets the snapshot it always got.
+		const b = await readJson<{ sessionId: string; drainUsage?: boolean }>(req);
+		return json(res, 200, runner.coding.snapshot(b.sessionId, { drainUsage: b.drainUsage === true }));
 	}
 	if (req.method === "POST" && path === "/coding/act") {
 		const b = await readJson<{ sessionId: string; action: CodingAction }>(req);

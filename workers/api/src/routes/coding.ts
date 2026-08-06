@@ -46,6 +46,8 @@ import { authPromptGuidance, detectAuthPrompt } from "../lib/engine-auth-prompt.
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetReason, type DelegationTarget } from "../lib/delegate-target.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
+import { sanitizeEngineUsage } from "../lib/engine-usage.js";
+import { recordEngineUsage } from "../lib/usage.js";
 import type { CodingActionKind, CodingGoal } from "../lib/coding-loop.js";
 import type { CodingClientType, CodingRepo, CodingSessionRecord } from "../lib/coding-types.js";
 import type { Env } from "../types.js";
@@ -672,8 +674,17 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	if (!session) throw new HttpError(404, "Session not found");
 	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: false });
-	const snap = await callRunner(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
+	// `drainUsage` — this poll is the primary carrier for Engine spend (#267). It runs every 3s
+	// per open session, so it is where the CLI's own per-turn cost report is collected. Only the
+	// paths that actually write the ledger ask to drain; the other capture callers must not
+	// consume records they would then discard.
+	const snap = await callRunner(conn, "/coding/capture", { sessionId, drainUsage: true }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => null);
 	if (!snap) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: true });
+	await recordEngineUsage(
+		c.env,
+		{ userId: uid, sessionId, instanceId },
+		sanitizeEngineUsage((snap as { usage?: unknown }).usage),
+	);
 	// An engine blocked on sign-in looks EXACTLY like a hung session: idle runState, a pane that
 	// stops changing, no error anywhere. Surfacing it here means the console can say "sign in"
 	// instead of the owner watching a dead terminal and concluding the platform is broken.
@@ -706,8 +717,12 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 		((snap as { authResolved?: unknown }).authResolved ?? null) as EngineAuthResolved | null,
 	);
 
+	// `usage` is drained, so it appears on one poll in a hundred and is empty on the rest. Passing
+	// that to the console would look like a field that flickers; it has been ledgered above and
+	// belongs on the Usage page, not in the terminal payload.
+	const { usage: _drained, ...paneSnap } = snap as Record<string, unknown>;
 	return c.json({
-		...(snap as object),
+		...paneSnap,
 		runnerConnected: true,
 		auth,
 		...(authPrompt ? { authPrompt: { ...authPrompt, guidance: authPromptGuidance(authPrompt) } } : {}),
@@ -1403,7 +1418,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 	const sessionId = c.req.param("sessionId");
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	const conn = session ? await getSessionRunnerConn(c.env, instanceId, uid, session) : null;
-	if (conn) await callRunner(conn, "/coding/end", { sessionId }).catch(() => undefined);
+	// Ending returns whatever spend has not been drained yet (#267). The last turn of a session
+	// routinely completes after the final capture poll, so without this the ledger would lose the
+	// closing turn of EVERY session — a bias, not noise.
+	const ended = conn
+		? await callRunner<{ usage?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null)
+		: null;
+	await recordEngineUsage(c.env, { userId: uid, sessionId, instanceId }, sanitizeEngineUsage(ended?.usage));
 	const ok = await endSession(c.env, instanceId, uid, sessionId);
 	return c.json({ ok });
 });

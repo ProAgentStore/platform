@@ -19,7 +19,8 @@ import { delegationTaskRecord } from "../lib/delegation.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
 import { notifyUser } from "../routes/push.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
-import { instanceSpendMicros } from "../lib/usage.js";
+import { instanceSpendMicros, recordEngineUsage } from "../lib/usage.js";
+import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { finishLoopRun, recordIteration } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
 
@@ -256,12 +257,22 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 */
 		const capture = async (): Promise<CodingPaneSnapshot & { sessionId: string }> => {
 			const [snap, row] = await Promise.all([
-				callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS }),
+				// `drainUsage` — an autonomous Pilot run is exactly the case where no console is
+				// open, so this is the only path collecting the Engine's own spend (#267) for the
+				// longest and most expensive sessions the platform has.
+				callRunner<CodingPaneSnapshot & { sessionId: string; usage?: unknown }>(
+					conn,
+					"/coding/capture",
+					{ sessionId, drainUsage: true },
+					{ timeoutMs: READ_TIMEOUT_MS },
+				),
 				env.DB.prepare("SELECT status FROM coding_sessions WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3")
 					.bind(sessionId, instanceId, userId)
 					.first<{ status: string }>()
 					.catch(() => null),
 			]);
+			const { usage, ...pane } = snap;
+			await recordEngineUsage(env, { userId, sessionId, instanceId }, sanitizeEngineUsage(usage));
 			// ONLY a terminal status cancels. `suspended` is not one: `pags up --force` on another
 			// machine suspends sessions owned by other nodes, and `resumeSessionsForNode` only
 			// revives them for a MATCHING runner_node — while `reassignSessionNode` deliberately
@@ -269,7 +280,9 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// sit `suspended`, and treating that as cancellation would end a healthy run at step 0
 			// with no explanation, replacing the relocation this workflow does a few lines above.
 			// A read that FAILED (null) must not cancel either, or a D1 blip aborts a good run.
-			return row && (row.status === "ended" || row.status === "error") ? { ...snap, cancelled: true } : snap;
+			// `pane`, not `snap`: the drained usage has been ledgered and must not be persisted into
+			// the workflow's step state, where a replay would carry it around forever.
+			return row && (row.status === "ended" || row.status === "error") ? { ...pane, cancelled: true } : pane;
 		};
 
 		const deps: CodingDeps = {

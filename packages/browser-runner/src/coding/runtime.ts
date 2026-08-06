@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
+import type { EngineUsageRecord } from "./engine-usage.js";
 import type { ClientType } from "./handlers.js";
 import type { EngineAuthResolved } from "./engine-auth.js";
 import { type GitCmd, InspectError, readGitRemoteOrigin, readRepoFile, repoTree, runRepoGit } from "./inspect.js";
@@ -55,6 +56,13 @@ export interface CodingSnapshot {
 	 */
 	authResolved: EngineAuthResolved;
 	engineRuntime: "child-process";
+	/**
+	 * Measured engine spend since the last drain (#267) — present ONLY when the caller asked to
+	 * drain, so the many read-only capture callers (chat context, sign-in detection, repo status)
+	 * cannot consume records the ledgering caller needs. Absent for a raw engine, which reports
+	 * nothing measurable; absent is the honest answer there, a zero would not be.
+	 */
+	usage?: EngineUsageRecord[];
 }
 
 /** Hard cap on a pane returned to the brain/console (matches the worker MAX_PANE_CHARS). */
@@ -146,8 +154,13 @@ export class CodingRuntime {
 		return this.snapshot(input.sessionId);
 	}
 
-	/** The pane the brain reasons over + the inferred run state. */
-	snapshot(sessionId: string): CodingSnapshot {
+	/**
+	 * The pane the brain reasons over + the inferred run state.
+	 *
+	 * `drainUsage` is opt-in because draining is destructive: nine cloud call sites hit
+	 * `/coding/capture` and only the two that actually write the ledger may consume the records.
+	 */
+	snapshot(sessionId: string, opts: { drainUsage?: boolean } = {}): CodingSnapshot {
 		const session = this.require(sessionId);
 		const alive = session.alive;
 		// ALWAYS return the transcript — it holds the produced output AND the
@@ -165,6 +178,7 @@ export class CodingRuntime {
 			// exactly the question asked about a session that just stopped.
 			authResolved: session.authResolved,
 			engineRuntime: session.engineRuntime,
+			...(opts.drainUsage ? { usage: session.takeUsage() } : {}),
 		};
 	}
 
@@ -188,14 +202,23 @@ export class CodingRuntime {
 	}
 
 	/** Tear down a session. */
-	end(sessionId: string): { ok: true } {
+	/**
+	 * Stop and forget a session.
+	 *
+	 * Returns any un-drained spend (#267) rather than discarding it with the session: the last
+	 * turn of a session very often runs after the final capture poll, and ending is where that
+	 * record would otherwise be lost — silently, and only for the turns at the end of every
+	 * session, which is a bias rather than noise.
+	 */
+	end(sessionId: string): { ok: true; usage: EngineUsageRecord[] } {
 		const session = this.sessions.get(sessionId);
+		const usage = session ? session.takeUsage() : [];
 		if (session) {
 			session.stop();
 			this.sessions.delete(sessionId);
 		}
 		this.takeovers.delete(sessionId);
-		return { ok: true };
+		return { ok: true, usage };
 	}
 
 	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string }> {

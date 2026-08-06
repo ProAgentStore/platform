@@ -3,12 +3,21 @@
 // break or slow an actual chat/apply/coding call.
 
 import { estimateCostMicros, estimatePlatformCostMicros } from "./ai-pricing.js";
+import { engineUsageRowId, type EngineUsageReport } from "./engine-usage.js";
 import type { Env } from "../types.js";
 
 export type UsageKind =
 	| "chat"
 	| "apply"
 	| "coding"
+	/**
+	 * The coding Engine itself (#267) — the CLI child process on the user's machine.
+	 *
+	 * Distinct from "coding", which is the cloud-side Pilot deciding what to instruct it to do.
+	 * Conflating them would hide the split that matters: the Pilot's decisions are cents, the
+	 * Engine's turns are the actual bill.
+	 */
+	| "engine"
 	| "copilot"
 	| "overseer"
 	| "run"
@@ -115,6 +124,53 @@ export async function recordVoiceUsage(
 		)
 			.bind(crypto.randomUUID(), args.userId, args.instanceId ?? null, args.model, cost)
 			.run();
+	} catch {
+		/* observability, never load-bearing */
+	}
+}
+
+/**
+ * Ledger measured spend from a coding Engine (#267).
+ *
+ * Unlike every other recorder, cost is NOT estimated here. Claude Code computes `total_cost_usd`
+ * itself and reports it on each turn's `result` event, so this is the one figure in the ledger
+ * that is a measurement — re-deriving it from `ai-pricing.ts` list prices would replace a real
+ * number with a worse one (and would get it wrong anyway, since the CLI knows about subscription
+ * pricing, service tiers and 1h-cache rates that the price table does not model).
+ * `cost_source = 'reported'` (migration 0080) is how a consumer tells the two apart; NULL, on
+ * every other row, means estimated.
+ *
+ * `INSERT OR IGNORE` on a deterministic id makes the write idempotent, which is what lets more
+ * than one cloud path drain and record the same turn without double-charging. Best-effort like
+ * the other recorders: a failed ledger write must never break a coding session.
+ */
+export async function recordEngineUsage(
+	env: { DB: D1Database },
+	args: { userId: string | undefined; sessionId: string; instanceId?: string | null; agentId?: string | null },
+	records: EngineUsageReport[] | undefined,
+): Promise<void> {
+	try {
+		if (!args.userId || !args.sessionId || !records?.length) return;
+		const stmts = records.map((r) =>
+			env.DB.prepare(
+				`INSERT OR IGNORE INTO ai_usage
+				   (id, user_id, agent_id, instance_id, provider, model, kind, input_tokens, output_tokens,
+				    cache_read_tokens, cache_write_tokens, cost_micros, cost_source, created_at)
+				 VALUES (?1, ?2, ?3, ?4, 'anthropic', ?5, 'engine', ?6, ?7, ?8, ?9, ?10, 'reported', datetime('now'))`,
+			).bind(
+				engineUsageRowId(args.sessionId, r.id),
+				args.userId,
+				args.agentId ?? null,
+				args.instanceId ?? null,
+				r.model,
+				r.inputTokens,
+				r.outputTokens,
+				r.cacheReadTokens,
+				r.cacheWriteTokens,
+				Math.round(r.costUsd * 1_000_000),
+			),
+		);
+		await env.DB.batch(stmts);
 	} catch {
 		/* observability, never load-bearing */
 	}

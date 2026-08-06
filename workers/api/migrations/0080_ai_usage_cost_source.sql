@@ -1,0 +1,14 @@
+-- Distinguish a MEASURED cost from an estimated one (#267).
+--
+-- Every ai_usage row until now carried an estimate: tokens × published list price
+-- (lib/ai-pricing.ts), because BYOK means we never see the provider's bill. The coding Engine
+-- is the exception — Claude Code computes `total_cost_usd` itself and reports it on the event
+-- that ends each turn, so that figure is the real thing rather than our arithmetic.
+--
+-- Mixing the two in one `cost_micros` column with no marker would make the total less
+-- trustworthy, not more: a consumer (the Usage page, payouts in #57, cost governance in #56)
+-- could not tell which part of a sum it was allowed to rely on.
+--
+-- NULL means "estimated", which is the truth for every pre-existing row, so no backfill.
+-- 'reported' means the provider's own CLI computed it.
+ALTER TABLE ai_usage ADD COLUMN cost_source TEXT;

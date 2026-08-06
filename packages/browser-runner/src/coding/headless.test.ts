@@ -20,7 +20,14 @@ rl.on("line", (line) => {
   process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: "git pull" } }] } }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", content: "Already up to date." }] } }) + "\\n");
   process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "Done: " + text }] } }) + "\\n");
-  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "Done: " + text }) + "\\n");
+  // The result event carries the turn's measured spend (#267) — the shape real Claude Code emits.
+  process.stdout.write(JSON.stringify({
+    type: "result", subtype: "success", is_error: false, result: "Done: " + text,
+    uuid: "turn-" + text.replace(/\\W/g, ""),
+    total_cost_usd: 0.25,
+    usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 300, cache_creation_input_tokens: 40 },
+    modelUsage: { "claude-opus-5": { costUSD: 0.25 } },
+  }) + "\\n");
 });
 `;
 
@@ -96,6 +103,28 @@ describe("HeadlessSession (stream-json engine)", () => {
 		expect(s.alive).toBe(false);
 	});
 
+	it("accumulates the engine's own spend per turn, and a drain hands it over exactly once", async () => {
+		// The whole point of #267: the Engine's tokens are spent on the user's machine and passed
+		// through none of the cloud's three ledger choke points, so unless the `result` event is
+		// harvested here the largest cost on the platform is recorded nowhere at all.
+		const s = new HeadlessSession({ id: "usage1", workDir: dir, clientType: "claude", bin, statePath: defaultStatePath(dir) });
+		s.start();
+		await until(() => s.runState() === "idle");
+
+		s.input("first");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: first"));
+		s.input("second");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("Done: second"));
+
+		const drained = s.takeUsage();
+		expect(drained).toHaveLength(2);
+		expect(drained[0]).toMatchObject({ model: "claude-opus-5", inputTokens: 10, outputTokens: 20, cacheReadTokens: 300, cacheWriteTokens: 40, costUsd: 0.25 });
+		// Draining is destructive on purpose: /coding/capture polls every 3s, and re-reporting
+		// would either double-count or force the cloud to diff a growing list on every poll.
+		expect(s.takeUsage()).toEqual([]);
+		s.stop();
+	});
+
 	it("does not crash when the binary is missing — surfaces the error instead", async () => {
 		const s = new HeadlessSession({ id: "sx", workDir: dir, clientType: "claude", bin: join(dir, "no-such-binary-xyz") });
 		// MUST NOT throw / emit an uncaught 'error' that would kill the runner.
@@ -145,6 +174,19 @@ describe("HeadlessSession (raw engine — Codex/Grok/custom)", () => {
 		chmodSync(argvBin, 0o755);
 	});
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	it("reports NO usage — an unmeasurable engine must leave a gap, not a zero", async () => {
+		// Codex/Grok emit no structured result event, so there is nothing to measure. Recording a
+		// zero row would put "Coding engine · $0.00" on the Usage page, which claims the engine was
+		// free — a stronger and more misleading statement than the absence it replaces (#267).
+		// The absence is structural, not a special case: raw mode never parses JSON at all.
+		const s = new HeadlessSession({ id: "rawusage", workDir: dir, clientType: "codex", bin: codexBin });
+		s.start();
+		s.input("hi");
+		await until(() => s.snapshot().includes("done: hi"), 12_000, "raw stdout to include final line");
+		expect(s.takeUsage()).toEqual([]);
+		s.stop();
+	}, 20_000);
 
 	it("captures raw stdout (ANSI-stripped) into the transcript and settles to idle", async () => {
 		const s = new HeadlessSession({ id: "raw1", workDir: dir, clientType: "codex", bin: codexBin });

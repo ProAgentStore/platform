@@ -40,8 +40,12 @@ function tok(n: number): string {
 }
 
 const KIND_LABEL: Record<string, string> = {
-	chat: "Chat", apply: "Job apply", coding: "Coding", copilot: "Co-pilot",
+	chat: "Chat", apply: "Job apply", coding: "Coding (Pilot)", copilot: "Co-pilot",
 	overseer: "Overseer", run: "Direct run", resume: "Résumé parse", translate: "Translation", voice: "Voice",
+	// The coding CLI itself, reporting its own cost (#267). Named apart from "coding" — which is
+	// only the cloud-side Pilot choosing the next instruction — because the two differ by an
+	// order of magnitude and a single "coding" row made the Engine's spend look like all of it.
+	engine: "Coding engine (measured)",
 };
 
 /** A dead-simple, dependency-free SVG bar chart (one bar per day). Value is chosen by `metric`. */
@@ -132,6 +136,8 @@ export default function Usage() {
 		return read + fresh > 0 && read > 0 ? read / (read + fresh) : null;
 	})();
 	const empty = !!data && totals && totals.calls === 0;
+	// Only worth explaining the engine caveat to someone who actually codes with an agent.
+	const hasCodingUsage = !!data?.byKind.some((b) => b.key === "engine" || b.key === "coding" || b.key === "copilot");
 
 	return (
 		<Page width={1040}>
@@ -145,7 +151,7 @@ export default function Usage() {
 				</button>
 			</div>
 			<p className="text-sm text-muted mb-2">
-				Token usage and <b>estimated</b> cost across all your agents. Cost is estimated from list prices on your own key (BYOK) — not a bill. History starts when tracking was enabled.
+				Token usage and cost across all your agents. Most rows are <b>estimated</b> from list prices on your own key (BYOK) — not a bill. Coding-engine rows are the exception: the CLI reports what it actually spent. History starts when tracking was enabled.
 			</p>
 			<Scope />
 
@@ -217,6 +223,17 @@ export default function Usage() {
 						<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 md:col-span-2">
 							<h3 className="text-sm font-bold mb-2">By activity</h3>
 							<Breakdown rows={data.byKind} labelOf={(b) => KIND_LABEL[b.key] || b.key} />
+							{/* Two rows here read as the same thing and differ by an order of magnitude.
+							    Naming them apart in the legend is not enough — the reason has to be at
+							    the point of comparison, or "Coding (Pilot)" looks like the cost of
+							    coding. The fuller caveat lives in <Scope />; this is the one line that
+							    stops the two rows being misread as duplicates. */}
+							{hasCodingUsage && (
+								<p className="text-xs text-muted-soft mt-3 pt-3 border-t border-line">
+									<b>Coding (Pilot)</b> is the cloud deciding what to tell the engine to do. <b>Coding engine</b> is the CLI
+									doing it, priced by the CLI itself. Codex and Grok report nothing, so they appear here at all only via the Pilot.
+								</p>
+							)}
 						</div>
 					</div>
 				</>
@@ -230,12 +247,13 @@ export default function Usage() {
 /**
  * What the number on this page covers — and, more usefully, what it leaves out.
  *
- * "Estimated, not a bill" was already stated, but not in which DIRECTION it is wrong. The ledger
- * records calls the platform itself makes; the coding Engine (Claude Code / Codex / Grok) runs as
- * a child process on the user's own machine and bills their subscription or key directly, so none
- * of its spend is here. For a Coder user that is the larger half, and the page looked complete
- * while understating it. Stated while it is true — remove this bullet when engine spend lands in
- * the ledger (#267).
+ * "Estimated, not a bill" was already stated, but not in which DIRECTION it is wrong. #270 said
+ * the coding Engine's spend was missing entirely; #267 then made Claude Code report it, so that
+ * bullet has been replaced by the figure it was standing in for — which is what its own comment
+ * asked for. The exclusion did not vanish, it SHRANK: engines with no structured output (Codex,
+ * Grok) still cannot be measured, and they now deserve the plain statement, because a page that
+ * says "engine spend is included" without qualifying it is a new version of the same
+ * looks-complete problem.
  */
 function Scope() {
 	return (
@@ -248,18 +266,24 @@ function Scope() {
 				<div className="font-semibold text-xs uppercase tracking-wide text-muted-soft">Included</div>
 				<ul className="mt-1 space-y-0.5 text-muted">
 					<li>· Calls the platform makes on your key — chat, voice, translation, and the Pilot, Co-pilot and Overseer decisions behind a coding session.</li>
+					<li>
+						· <b className="text-ink">The Claude Code engine’s own spend</b>, shown as “Coding engine (measured)”.
+						It runs on your machine, so the CLI reports what each turn cost and that figure is used as-is — the one
+						line here that is a measurement rather than an estimate.
+					</li>
 				</ul>
 				<div className="font-semibold text-xs uppercase tracking-wide text-muted-soft mt-3">Not included</div>
 				<ul className="mt-1 space-y-0.5 text-muted">
 					<li>
-						· <b className="text-ink">The coding CLI’s own spend.</b> The Engine runs on your machine and bills
-						your Claude Code subscription or API key directly — none of those tokens reach this page. If you
-						use Coder, your real spend is higher than the figure above.
+						· <b className="text-ink">Other coding engines.</b> Codex and Grok report no usage, so their spend
+						appears nowhere here — deliberately absent rather than shown as zero. If you run a coding session on
+						one of them, your real spend is higher than the figure above.
 					</li>
 				</ul>
 				<p className="text-xs text-muted-soft mt-3">
-					Everything here is priced from published list prices at the time of the call, so it is an estimate —
-					never a provider bill. Check your provider’s dashboard for the authoritative number.
+					Apart from the measured engine rows, everything here is priced from published list prices at the time of
+					the call, so it is an estimate — never a provider bill. Check your provider’s dashboard for the
+					authoritative number.
 				</p>
 			</div>
 		</details>

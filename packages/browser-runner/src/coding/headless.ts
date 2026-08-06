@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 
 /**
  * Merge the platform's resolved engine env over the machine's, where an EMPTY value means
@@ -81,6 +82,16 @@ interface StreamEvent {
 	message?: { content?: Array<Record<string, unknown>> };
 }
 
+/**
+ * How many un-drained usage records a session holds (#267).
+ *
+ * Records are drained by the cloud on capture, which polls every 3s while a session is watched,
+ * so this only fills when nobody is looking. Dropping the OLDEST past the cap is the right
+ * direction: an unbounded queue on a long-running runner is a leak, and the alternative
+ * (refusing new records) would lose the turns that just happened rather than ancient ones.
+ */
+const MAX_PENDING_USAGE = 200;
+
 export class HeadlessSession {
 	/**
 	 * A human-readable label for this engine process (#247).
@@ -111,6 +122,19 @@ export class HeadlessSession {
 	private turnStartedAt = 0;
 	/** Set by stop() — the only thing that ends a one-shot session (see `alive`). */
 	private stopped = false;
+	/** Measured engine spend not yet handed to the cloud (#267). Drained by {@link takeUsage}. */
+	private pendingUsage: EngineUsageRecord[] = [];
+	/** Turn counter — only used to build a fallback id when the CLI's event has no `uuid`. */
+	private usageSeq = 0;
+	/**
+	 * Per-PROCESS salt for that fallback id.
+	 *
+	 * Without it, a runner restart resets `usageSeq` and the new session's first turn reuses the
+	 * id of a turn from before the restart — which the cloud's conflict-ignoring insert would
+	 * silently drop, undercounting exactly the long-lived sessions this feature exists to measure.
+	 * The queue is in memory and dies with the process, so a salt can never cause a double-count.
+	 */
+	private readonly usageRunId = Math.random().toString(36).slice(2, 10);
 	/**
 	 * The engine binary could not be spawned (ENOENT, not executable).
 	 *
@@ -494,10 +518,19 @@ export class HeadlessSession {
 					if (block.type === "tool_result") this.push(`  ↳ ${toolResult(block.content)}`); // ↳
 				}
 				break;
-			case "result":
+			case "result": {
 				if (ev.is_error) this.push(`[error] ${ev.result ?? ev.subtype ?? "failed"}`);
+				// The same event that ends the turn also reports what the turn COST (#267). It was
+				// parsed and thrown away, which is why Engine spend was absent from the ledger.
+				// An errored turn still burned tokens, so this is recorded regardless of is_error.
+				const usage = parseEngineUsage(ev, `${this.config.id}:${this.usageRunId}:${this.usageSeq++}`);
+				if (usage) {
+					this.pendingUsage.push(usage);
+					if (this.pendingUsage.length > MAX_PENDING_USAGE) this.pendingUsage.shift();
+				}
 				this.run = "idle"; // the turn is OVER — a fact, not a guess
 				break;
+			}
 			default:
 				break;
 		}
@@ -507,6 +540,22 @@ export class HeadlessSession {
 
 	private push(line: string): void {
 		this.transcript.push(line);
+	}
+
+	/**
+	 * Hand over the measured spend since the last drain, and forget it (#267).
+	 *
+	 * Draining rather than re-reporting keeps a 3s capture poll from re-sending the same rows
+	 * forever; the cloud's insert is keyed on {@link EngineUsageRecord.id} and ignores conflicts,
+	 * so the genuine race — two callers draining at once, or a retry — still cannot double-count.
+	 *
+	 * A raw engine returns an empty array here, always: nothing parses its stdout for usage, so
+	 * there is nothing to hand over and the cloud writes no row for it.
+	 */
+	takeUsage(): EngineUsageRecord[] {
+		const out = this.pendingUsage;
+		this.pendingUsage = [];
+		return out;
 	}
 }
 
