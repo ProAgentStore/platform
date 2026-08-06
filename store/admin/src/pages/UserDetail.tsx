@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, fmtUsd } from "../lib/api";
+import { GRANTABLE_ROLES, revokeKeyRequest, roleCheckboxLocked, rolesChanged, rolesPayload, suspendGuard } from "../lib/moderation-policy";
 import { AuditTrail, DangerAction, useSelfId } from "../lib/moderation";
 import { Empty, ErrorBox, Loading, Panel } from "../lib/ui";
 
@@ -24,9 +25,6 @@ interface UserDetailResp {
 	recentErrors: Array<{ id: string; created_at: string; source: string; status: number | null; message: string }>;
 }
 
-/** The roles an operator may assign. `user` is implied by the API and never removable. */
-const GRANTABLE = ["creator", "admin"];
-
 export default function UserDetail() {
 	const { id } = useParams();
 	const selfId = useSelfId();
@@ -44,6 +42,9 @@ export default function UserDetail() {
 	if (!d) return <Loading />;
 	const u = d.user;
 	const isSelf = !!selfId && selfId === u.id;
+	// Self-targeting is refused by the API; the guard says so up front rather than
+	// offering a button whose only possible outcome is an error (lib/moderation-policy.ts).
+	const suspend = suspendGuard(u.id, selfId);
 	const done = () => { load(); setRefresh((n) => n + 1); };
 
 	return (
@@ -90,8 +91,8 @@ export default function UserDetail() {
 							description="Blocks every authenticated request from this account until unsuspended. Reversible; the reason is stored."
 							withReason
 							confirmPhrase={u.github_login}
-							disabled={isSelf}
-							disabledReason={isSelf ? "you cannot suspend your own account" : undefined}
+							disabled={suspend.disabled}
+							disabledReason={suspend.reason}
 							run={async ({ reason }) => {
 								await api(`/v1/admin/users/${encodeURIComponent(u.id)}/suspend`, { method: "POST", body: JSON.stringify({ reason }) });
 								return "Suspended.";
@@ -135,9 +136,12 @@ export default function UserDetail() {
 								label="Revoke"
 								description={`Deletes this user's stored ${k.provider} key. The key is never decrypted or shown; only the provider name is audited. Their agents stop working until they add a new one.`}
 								confirmPhrase={k.provider}
-								run={async () => {
-									await api(`/v1/admin/users/${encodeURIComponent(u.id)}/keys/revoke`, { method: "POST", body: JSON.stringify({ provider: k.provider }) });
-									return `Revoked ${k.provider}.`;
+								run={async ({ confirmed }) => {
+									// The typed echo IS the provider — built by the policy module, which
+									// refuses a blank one rather than sending the field absent.
+									const body = revokeKeyRequest(confirmed ?? "");
+									await api(`/v1/admin/users/${encodeURIComponent(u.id)}/keys/revoke`, { method: "POST", body: JSON.stringify(body) });
+									return `Revoked ${body.provider}.`;
 								}}
 								onDone={done}
 							/>
@@ -170,8 +174,8 @@ export default function UserDetail() {
  */
 function RolesEditor({ user, isSelf, onDone }: { user: UserDetailResp["user"]; isSelf: boolean; onDone: () => void }) {
 	const [sel, setSel] = useState<string[]>(user.roles.filter((r) => r !== "user"));
-	const next = ["user", ...sel];
-	const changed = JSON.stringify([...next].sort()) !== JSON.stringify([...user.roles].sort());
+	const next = rolesPayload(sel);
+	const changed = rolesChanged(next, user.roles);
 
 	return (
 		<div className="border-t border-line/50 pt-3">
@@ -180,8 +184,8 @@ function RolesEditor({ user, isSelf, onDone }: { user: UserDetailResp["user"]; i
 				<label className="text-sm text-muted-soft flex items-center gap-1.5">
 					<input type="checkbox" checked disabled className="!w-auto" /> user <span className="text-xs">(always)</span>
 				</label>
-				{GRANTABLE.map((r) => {
-					const lockSelfAdmin = isSelf && r === "admin" && user.roles.includes("admin");
+				{GRANTABLE_ROLES.map((r) => {
+					const lockSelfAdmin = roleCheckboxLocked(r, isSelf, user.roles);
 					return (
 						<label key={r} className={`text-sm flex items-center gap-1.5 ${lockSelfAdmin ? "text-muted-soft" : ""}`}>
 							<input

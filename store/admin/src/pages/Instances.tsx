@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api } from "../lib/api";
+import { LIST_PAGE, buildListQuery, isFiltered, predicateKey, predicateParams } from "../lib/list-query";
 import { Empty, ErrorBox, LiveDot, Loading, Panel } from "../lib/ui";
 import { Pager } from "./Agents";
 
@@ -20,7 +21,7 @@ interface Instance {
 	runtimeConnected: boolean | null;
 }
 
-const PAGE = 50;
+const PAGE = LIST_PAGE;
 const STATUSES = ["active", "paused", "canceled"];
 const badge = (v: string) => <span className={v === "active" ? "text-green" : v === "canceled" ? "text-muted-soft" : "text-muted"}>{v}</span>;
 
@@ -45,27 +46,18 @@ export default function Instances() {
 
 	useEffect(() => { const t = setTimeout(() => setAgentQ(agent.trim()), 300); return () => clearTimeout(t); }, [agent]);
 	useEffect(() => { const t = setTimeout(() => setOwnerQ(owner.trim()), 300); return () => clearTimeout(t); }, [owner]);
+
+	const filters = useMemo(() => ({ agent: agentQ, owner: ownerQ, status }), [agentQ, ownerQ, status]);
+	// One predicate, three derivations (reset key, address bar, request) — all from the
+	// same field list, so they cannot drift apart (lib/list-query.ts).
+	const key = predicateKey(filters);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: resets the page when the PREDICATE changes; `offset` is what this sets, not what it reads
-	useEffect(() => { setOffset(0); }, [agentQ, ownerQ, status]);
+	useEffect(() => { setOffset(0); }, [key]);
 
 	// Keep the URL in step so a filtered view is linkable/shareable between operators.
-	useEffect(() => {
-		const p = new URLSearchParams();
-		if (agentQ) p.set("agent", agentQ);
-		if (ownerQ) p.set("owner", ownerQ);
-		if (status) p.set("status", status);
-		setParams(p, { replace: true });
-	}, [agentQ, ownerQ, status, setParams]);
+	useEffect(() => { setParams(predicateParams(filters), { replace: true }); }, [filters, setParams]);
 
-	const qs = useMemo(() => {
-		const p = new URLSearchParams();
-		if (agentQ) p.set("agent", agentQ);
-		if (ownerQ) p.set("owner", ownerQ);
-		if (status) p.set("status", status);
-		p.set("limit", String(PAGE));
-		if (offset) p.set("offset", String(offset));
-		return p.toString();
-	}, [agentQ, ownerQ, status, offset]);
+	const qs = useMemo(() => buildListQuery(filters, offset, PAGE), [filters, offset]);
 
 	useEffect(() => {
 		setData(null);
@@ -73,7 +65,7 @@ export default function Instances() {
 		api<{ instances: Instance[]; total: number }>(`/v1/admin/instances?${qs}`).then(setData).catch((e) => setErr(e.message));
 	}, [qs]);
 
-	const filtered = !!(agentQ || ownerQ || status);
+	const filtered = isFiltered(filters);
 
 	return (
 		<div>

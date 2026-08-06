@@ -6,24 +6,32 @@ import { execSync } from "node:child_process";
 const port = Number(process.env.E2E_PORT || 4273);
 const storeRoot = resolve("store");
 const consoleDir = join(storeRoot, "console");
+const adminDir = join(storeRoot, "admin");
 
-// Build the React console if dist doesn't exist yet
-const distDir = join(consoleDir, "dist");
-if (!existsSync(join(distDir, "assets", "bundle.js"))) {
-	console.log("Building console React app for e2e tests...");
-	execSync("npx vite build", { cwd: consoleDir, stdio: "inherit" });
-}
-
-// Generate the same HTML shell that build.js produces (bundle + CSS inlined)
-const consoleBundleJs = readFileSync(join(distDir, "assets", "bundle.js"), "utf-8");
-const consoleBundleCss = readFileSync(join(distDir, "assets", "index.css"), "utf-8");
-const consoleHtml = `<!DOCTYPE html>
+/**
+ * Build a store SPA on demand and return the same single-file HTML shell that build.js
+ * emits in production (bundle + CSS inlined).
+ *
+ * The admin app was added here for #283. It is a cheap passenger — ~70 modules, no SDK
+ * and no coder-web, so its build is a fraction of the console's — which is what made
+ * covering the destructive operator flows affordable in a repo where Playwright is the
+ * heaviest thing running (#253, #274).
+ */
+function buildShell(dir, { title, description, name }) {
+	const distDir = join(dir, "dist");
+	if (!existsSync(join(distDir, "assets", "bundle.js"))) {
+		console.log(`Building ${name} React app for e2e tests...`);
+		execSync("npx vite build", { cwd: dir, stdio: "inherit" });
+	}
+	const bundleJs = readFileSync(join(distDir, "assets", "bundle.js"), "utf-8");
+	const bundleCss = readFileSync(join(distDir, "assets", "index.css"), "utf-8");
+	return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Creator Console — ProAgentStore</title>
-  <meta name="description" content="Manage your server-powered AI agents on ProAgentStore.">
+  <title>${title}</title>
+  <meta name="description" content="${description}">
   <meta name="theme-color" content="#7c3aed">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
@@ -31,13 +39,26 @@ const consoleHtml = `<!DOCTYPE html>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <style>${consoleBundleCss}</style>
+  <style>${bundleCss}</style>
 </head>
 <body>
   <div id="root"></div>
-  <script type="module">${consoleBundleJs}</script>
+  <script type="module">${bundleJs}</script>
 </body>
 </html>`;
+}
+
+const consoleHtml = buildShell(consoleDir, {
+	name: "console",
+	title: "Creator Console — ProAgentStore",
+	description: "Manage your server-powered AI agents on ProAgentStore.",
+});
+
+const adminHtml = buildShell(adminDir, {
+	name: "admin",
+	title: "Operator — ProAgentStore",
+	description: "Operator portal for ProAgentStore.",
+});
 
 const contentTypes = {
 	".css": "text/css; charset=utf-8",
@@ -62,6 +83,10 @@ function resolveStorePath(pathname) {
 	// Console: serve the React SPA shell for all /console/* routes
 	if (cleanPath === "/console" || cleanPath.startsWith("/console/")) {
 		return { type: "console" };
+	}
+	// Admin: same deal — the operator SPA routes client-side under basename="/admin".
+	if (cleanPath === "/admin" || cleanPath.startsWith("/admin/")) {
+		return { type: "admin" };
 	}
 	if (cleanPath === "/docs/browser-runtime") {
 		return { type: "file", path: join(storeRoot, "docs", "browser-runtime", "index.html") };
@@ -96,12 +121,12 @@ createServer((req, res) => {
 		return;
 	}
 
-	if (resolved.type === "console") {
+	if (resolved.type === "console" || resolved.type === "admin") {
 		res.writeHead(200, {
 			"Content-Type": "text/html; charset=utf-8",
 			"Cache-Control": "public, max-age=300",
 		});
-		res.end(consoleHtml);
+		res.end(resolved.type === "admin" ? adminHtml : consoleHtml);
 		return;
 	}
 

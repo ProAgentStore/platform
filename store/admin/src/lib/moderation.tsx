@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useReducer, useState } from "react";
 import { ApiError, api } from "./api";
+import {
+	blockedCount,
+	canConfirm,
+	confirmAction,
+	dangerReducer,
+	failureEvent,
+	initialDangerState,
+	runArgs,
+} from "./danger";
 import { Empty } from "./ui";
 
 /**
@@ -19,13 +28,12 @@ import { Empty } from "./ui";
  *    so nobody force-deletes without having read the count.
  *  - Every action reports what actually happened, and the audit trail sitting next to
  *    it refreshes — an operator sees their action land in the log they are audited by.
+ *
+ * All three of those now live in `danger.ts` as a pure reducer, and this component is a
+ * renderer over it (#282). They were previously local `useState` inside this JSX, which
+ * meant the repo's most destructive guards were the one thing its test suite could not
+ * reach.
  */
-
-/** Pull "N active instance(s)" out of the API's 409 so the count leads the copy. */
-function blockedCount(message: string): number | null {
-	const m = message.match(/(\d+)\s+active instance/i);
-	return m ? Number(m[1]) : null;
-}
 
 export interface DangerActionProps {
 	/** Button label, e.g. "Delete agent". */
@@ -45,8 +53,14 @@ export interface DangerActionProps {
 	disabled?: boolean;
 	/** Why the control is unavailable (e.g. "You cannot suspend your own account"). */
 	disabledReason?: string;
-	/** Perform the action. Resolve with a short success line; reject to show the error. */
-	run: (opts: { reason?: string; force?: boolean }) => Promise<string>;
+	/**
+	 * Perform the action. Resolve with a short success line; reject to show the error.
+	 *
+	 * `confirmed` is what the operator TYPED into the echo box — pass it to the request
+	 * builder rather than substituting the known-good phrase from props, so the server's
+	 * echo check validates the same string the UI gated on.
+	 */
+	run: (opts: { reason?: string; force?: boolean; confirmed?: string }) => Promise<string>;
 	/** Called after a successful run — refresh the page data and the audit trail. */
 	onDone?: () => void;
 }
@@ -64,43 +78,23 @@ export function DangerAction({
 	run,
 	onDone,
 }: DangerActionProps) {
-	const [open, setOpen] = useState(false);
-	const [typed, setTyped] = useState("");
-	const [reason, setReason] = useState("");
-	const [busy, setBusy] = useState(false);
-	const [err, setErr] = useState("");
-	const [ok, setOk] = useState("");
-	// Set only after the API has refused with a 409; holds the message the operator must read.
-	const [blocked, setBlocked] = useState("");
+	const [state, dispatch] = useReducer(dangerReducer, initialDangerState);
+	const { open, typed, reason, busy, blocked, error: err, ok } = state;
 
 	const danger = tone === "danger";
-	const phraseOk = !confirmPhrase || typed === confirmPhrase;
+	// The echo gate and the force decision are BOTH read off the reducer. This component
+	// never computes either — see danger.test.ts.
+	const armed = canConfirm(state, confirmPhrase);
+	const action = confirmAction(state);
 
-	function reset() {
-		setOpen(false);
-		setTyped("");
-		setReason("");
-		setErr("");
-		setBlocked("");
-	}
-
-	async function go(force: boolean) {
-		setBusy(true);
-		setErr("");
+	async function go() {
+		dispatch({ type: "submit" });
 		try {
-			const msg = await run({ reason: reason.trim() || undefined, force: force || undefined });
-			setOk(msg);
-			reset();
+			dispatch({ type: "succeeded", message: await run(runArgs(state)) });
 			onDone?.();
 		} catch (e) {
 			const message = e instanceof Error ? e.message : String(e);
-			// A 409 is information, not a failure: the platform is telling us how many
-			// live subscribers this would strand. Surface the count and make forcing a
-			// separate, deliberate click.
-			if (forceable && e instanceof ApiError && e.status === 409) setBlocked(message);
-			else setErr(message);
-		} finally {
-			setBusy(false);
+			dispatch(failureEvent(e instanceof ApiError ? e.status : null, message, !!forceable));
 		}
 	}
 
@@ -118,7 +112,7 @@ export function DangerAction({
 			<div>
 				<button
 					type="button"
-					onClick={() => { setOk(""); setOpen(true); }}
+					onClick={() => dispatch({ type: "open" })}
 					className={`text-sm px-3 py-1.5 rounded-lg border ${
 						danger ? "border-red/40 text-red hover:bg-red/10" : "border-line text-ink hover:bg-panel-hover"
 					}`}
@@ -140,7 +134,7 @@ export function DangerAction({
 			{withReason ? (
 				<input
 					value={reason}
-					onChange={(e) => setReason(e.target.value)}
+					onChange={(e) => dispatch({ type: "reason", value: e.target.value })}
 					placeholder="Reason (recorded in the audit log)"
 					className="text-sm mb-2"
 				/>
@@ -149,7 +143,13 @@ export function DangerAction({
 			{confirmPhrase ? (
 				<label className="block text-xs text-muted mb-2">
 					Type <span className="font-mono text-ink">{confirmPhrase}</span> to confirm
-					<input value={typed} onChange={(e) => setTyped(e.target.value)} className="text-sm mt-1" autoComplete="off" />
+					<input
+						value={typed}
+						onChange={(e) => dispatch({ type: "typed", value: e.target.value })}
+						className="text-sm mt-1"
+						autoComplete="off"
+						data-testid="danger-echo"
+					/>
 				</label>
 			) : null}
 
@@ -164,26 +164,26 @@ export function DangerAction({
 			{err ? <div className="text-xs text-red mb-2">{err}</div> : null}
 
 			<div className="flex items-center gap-2">
-				{blocked ? (
-					<button
-						type="button"
-						disabled={busy || !phraseOk}
-						onClick={() => go(true)}
-						className="text-sm px-3 py-1.5 rounded-lg bg-red text-white disabled:opacity-40"
-					>
-						{busy ? "Working…" : (forceLabel ?? "Force")}
-					</button>
-				) : (
-					<button
-						type="button"
-						disabled={busy || !phraseOk}
-						onClick={() => go(false)}
-						className={`text-sm px-3 py-1.5 rounded-lg text-white disabled:opacity-40 ${danger ? "bg-red" : "bg-accent hover:bg-accent-hover"}`}
-					>
-						{busy ? "Working…" : "Confirm"}
-					</button>
-				)}
-				<button type="button" onClick={reset} className="text-sm px-3 py-1.5 rounded-lg border border-line hover:bg-panel-hover">
+				{/* One button, two labels. Which one is showing is `confirmAction(state)`,
+				    and whether it sends force is `runArgs(state)` — the component picks
+				    neither, so a first attempt structurally cannot force. */}
+				<button
+					type="button"
+					disabled={!armed}
+					onClick={go}
+					className={
+						action === "force"
+							? "text-sm px-3 py-1.5 rounded-lg bg-red text-white disabled:opacity-40"
+							: `text-sm px-3 py-1.5 rounded-lg text-white disabled:opacity-40 ${danger ? "bg-red" : "bg-accent hover:bg-accent-hover"}`
+					}
+				>
+					{busy ? "Working…" : action === "force" ? (forceLabel ?? "Force") : "Confirm"}
+				</button>
+				<button
+					type="button"
+					onClick={() => dispatch({ type: "cancel" })}
+					className="text-sm px-3 py-1.5 rounded-lg border border-line hover:bg-panel-hover"
+				>
 					Cancel
 				</button>
 			</div>

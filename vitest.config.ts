@@ -120,9 +120,20 @@ export default defineConfig({
 			provider: "v8",
 			reporter: ["text-summary", "json-summary"],
 			reportsDirectory: "coverage",
-			// Measure the unit-testable backend (Workers + packages). The React UIs
-			// (store/**, agents/*/web) are exercised by Playwright e2e, not vitest, so
-			// including them here would report misleading 0% for code that IS tested.
+			// Measure the unit-testable backend (Workers + packages), plus the front-end's
+			// PURE layer.
+			//
+			// This used to say the React UIs "are exercised by Playwright e2e, not vitest"
+			// and exclude `store/**` wholesale. That was only ever half-true, and #282
+			// re-checked it: `e2e/console.spec.ts` is the only spec in the repo, so
+			// `store/console` was e2e-covered and `store/admin` — which owns suspend,
+			// unpublish, delete, cancel, roles and key-revoke — was covered by neither.
+			//
+			// The honest split is by KIND, not by directory. Components stay excluded and
+			// stay e2e's job; the `lib/*.ts` modules the convention pushes decisions into
+			// (#280, #282 option b) are unit-tested and belong in the report — an untested
+			// one showing 0% is a true and actionable signal, which is the whole point of
+			// the convention. `.tsx` under lib/ is still a component and stays out.
 			all: true,
 			include: [
 				"workers/api/src/**/*.ts",
@@ -131,6 +142,7 @@ export default defineConfig({
 				"packages/cli/src/**/*.ts",
 				"packages/sdk/src/**/*.ts",
 				"agents/job-application-assistant/src/**/*.ts",
+				"store/*/src/lib/**/*.ts",
 			],
 			exclude: [
 				"**/*.test.ts",

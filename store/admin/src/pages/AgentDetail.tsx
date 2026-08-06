@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api";
 import { AuditTrail, DangerAction } from "../lib/moderation";
+import { deleteAgentRequest } from "../lib/moderation-policy";
 import { Empty, ErrorBox, Loading, Panel, Stat } from "../lib/ui";
 
 interface Detail {
@@ -71,10 +72,13 @@ export default function AgentDetail() {
 						confirmPhrase={a.slug}
 						forceable
 						forceLabel={`Cancel ${d.subscribers.active || "all"} subscriber(s) & delete`}
-						run={async ({ force }) => {
+						run={async ({ force, confirmed }) => {
+							// Built from what the operator TYPED, not from `a.slug` — so a regressed
+							// UI gate cannot still produce a valid delete that the server's own echo
+							// check would wave through (lib/moderation-policy.ts).
 							const r = await api<{ canceledInstances: number }>(`/v1/admin/agents/${encodeURIComponent(a.id)}`, {
 								method: "DELETE",
-								body: JSON.stringify({ confirm: a.slug, force: force === true }),
+								body: JSON.stringify(deleteAgentRequest(a.slug, confirmed, force)),
 							});
 							return `Deleted (${r.canceledInstances} instance(s) canceled).`;
 						}}
