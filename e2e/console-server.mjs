@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { execSync } from "node:child_process";
@@ -7,6 +7,24 @@ const port = Number(process.env.E2E_PORT || 4273);
 const storeRoot = resolve("store");
 const consoleDir = join(storeRoot, "console");
 const adminDir = join(storeRoot, "admin");
+
+/**
+ * Newest mtime under `dir`, skipping the build output itself. Used to decide whether an
+ * existing bundle still represents the source that produced it.
+ */
+function newestSourceMtime(dir) {
+	let newest = 0;
+	const walk = (d) => {
+		for (const e of readdirSync(d, { withFileTypes: true })) {
+			if (e.name === "dist" || e.name === "node_modules" || e.name.startsWith(".")) continue;
+			const p = join(d, e.name);
+			if (e.isDirectory()) walk(p);
+			else newest = Math.max(newest, statSync(p).mtimeMs);
+		}
+	};
+	walk(dir);
+	return newest;
+}
 
 /**
  * Build a store SPA on demand and return the same single-file HTML shell that build.js
@@ -19,8 +37,15 @@ const adminDir = join(storeRoot, "admin");
  */
 function buildShell(dir, { title, description, name }) {
 	const distDir = join(dir, "dist");
-	if (!existsSync(join(distDir, "assets", "bundle.js"))) {
-		console.log(`Building ${name} React app for e2e tests...`);
+	const bundle = join(distDir, "assets", "bundle.js");
+	// Rebuild when the bundle is MISSING **or STALE**. Build-if-missing alone silently serves
+	// whatever was built last: on 2026-08-07 a full local e2e run passed 64/64 against a bundle
+	// predating the commit under test, while CI — which starts from no dist — failed 3 specs on a
+	// real regression (#309). A cached artifact that makes a broken build look green is the same
+	// trap as the unbuilt SDK dist, and costs more, because here it reports success.
+	const stale = existsSync(bundle) && statSync(bundle).mtimeMs < newestSourceMtime(join(dir, "src"));
+	if (!existsSync(bundle) || stale) {
+		console.log(`Building ${name} React app for e2e tests...${stale ? " (bundle is older than src)" : ""}`);
 		execSync("npx vite build", { cwd: dir, stdio: "inherit" });
 	}
 	const bundleJs = readFileSync(join(distDir, "assets", "bundle.js"), "utf-8");

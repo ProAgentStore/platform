@@ -88,7 +88,15 @@ function InstancePage() {
 	// can DO (knowledge tools → Indexing, collection tools → Data). An agent that declares no tool
 	// allowlist stays permissive. See SurfaceCaps in lib/surfaces.
 	const declaredTools = instance?.capabilities?.tools;
-	const surfaceCaps = useMemo(() => ({ surfaces, tools: declaredTools }), [surfaces, declaredTools]);
+	// Keyed on CONTENT, not identity. `surfaces` above is `… || []`, which mints a fresh array on
+	// every render whenever the capability is absent — so an identity-keyed memo here is never a
+	// memo at all. That churn reaches the injected header: `tabDefs` and the header memo below both
+	// re-derive every render, the instance tab bar is replaced continuously, and a click on a tab
+	// lands on a node that no longer exists — the tabs render but do not switch (#309).
+	//
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the deps ARE these values; joining
+	// them is what makes the comparison by-value. Taking the lint's suggestion is what broke it.
+	const surfaceCaps = useMemo(() => ({ surfaces, tools: declaredTools }), [surfaces.join(","), declaredTools?.join(",")]);
 	// Phase 3: agent-published UIs, loaded dynamically (see DynamicSurface).
 	const customSurfaces = instance?.capabilities?.customSurfaces || [];
 
@@ -818,7 +826,11 @@ function InstancePage() {
 			...visibleSurfaces(surfaceCaps).map((s) => ({ id: s.id as string, label: s.label, icon: s.icon })),
 			...customSurfaces.map((c) => ({ id: c.id, label: c.label, icon: c.icon || "🧩" })),
 		],
-		[surfaceCaps, customSurfaces],
+		// `surfaceCaps` is now stable by content (see above); `customSurfaces` is another
+		// `… || []`, so it is joined for the same reason.
+		// biome-ignore lint/correctness/useExhaustiveDependencies: by-value on purpose — see the
+		// surfaceCaps comment. An identity-keyed list here rebuilds the tab bar every render.
+		[surfaceCaps, customSurfaces.map((c) => c.id).join(",")],
 	);
 
 	// Inject instance controls into the Layout header (single bar)
