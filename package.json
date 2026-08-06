@@ -43,6 +43,7 @@
 		"test:e2e:headed": "playwright test --headed",
 		"test:watch": "vitest",
 		"openapi:coverage": "node scripts/openapi-coverage.mjs",
+		"size:check": "node scripts/check-file-size.mjs",
 		"branches:prune": "node scripts/prune-agent-branches.mjs",
 		"docs:drift": "node scripts/docs-drift.mjs",
 		"lint": "biome check .",

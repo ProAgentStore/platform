@@ -37,6 +37,13 @@ jobs:
         # the whole checkout from itself), a .gitleaks.toml weakened past skipping
         # worktrees into silencing findings, and a .gitignore that stopped hiding them.
         run: node scripts/check-qa-config.mjs
+      - name: File-size ratchet (#302)
+        # #138's refactor removed 126 lines from use-voice.ts and was fully undone
+        # within hours, because nothing defended the ground it took. Pinned files may
+        # not grow past their pin, and a file that SHRINKS must have its pin lowered in
+        # the same commit — otherwise the lines just removed stay available as headroom,
+        # which is numerically what happened. Tests are excluded on purpose.
+        run: node scripts/check-file-size.mjs
       - name: Guard heavy-test isolation (#253)
         # Keeps real-browser / real-socket tests inside the `integration` project, which
         # is where they get a budget sized for real I/O instead of vitest's 5s default.
