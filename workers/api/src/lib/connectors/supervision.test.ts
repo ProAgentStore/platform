@@ -25,6 +25,10 @@ function buildEnv(
 		repos?: Array<Record<string, unknown>>;
 		/** What the fake runner answers for `git status --short --branch`. */
 		gitStatus?: string;
+		/** `agent_events` rows on the generic `act.consequential` name (#294). */
+		acts?: unknown[];
+		/** A single `agent_loop_runs` row for the check_delegation drill-down. */
+		run?: Record<string, unknown> | null;
 	} = {},
 ) {
 	const INSTANCE_COLUMNS = new Set(["id", "user_id", "agent_id", "status", "config", "created_at", "updated_at"]);
@@ -64,10 +68,12 @@ function buildEnv(
 								if (sql.includes("FROM agent_loop_runs")) return { results: opts.runs ?? [] };
 								if (sql.includes("FROM instance_runtimes")) return { results: runtimeRow ? [runtimeRow] : [] };
 								if (sql.includes("FROM coding_repos")) return { results: opts.repos ?? [] };
+								if (sql.includes("FROM agent_events")) return { results: opts.acts ?? [] };
 								return { results: [] };
 							},
 							async first() {
 								if (sql.includes("FROM instance_runtimes") || sql.includes("FROM instance_runtime_nodes")) return runtimeRow;
+								if (sql.includes("FROM agent_loop_runs")) return opts.run ?? null;
 								return null;
 							},
 							async run() { return { meta: { changes: 1 } }; },
@@ -100,6 +106,15 @@ const codingSubordinate = [{
 }];
 
 const ctx = (env: Env) => ({ env, userId: "u1", instanceId: "sup" });
+
+/** One `agent_events` row on the generic act name — a merge to the trunk, the case from #294. */
+const ACT_ROW = {
+	instance_id: "sub",
+	trace_id: "run-1",
+	message: "merged a pull request #42",
+	context: JSON.stringify({ act: "pr.merge", command: "gh pr merge 42 --squash", target: "#42", irreversible: true, ok: true }),
+	ts: 1700,
+};
 
 describe("list_subordinates", () => {
 	it("does not select a column agent_instances lacks", async () => {
@@ -256,6 +271,30 @@ describe("subordinate_status — the observe verb", () => {
 		expect(out.legend).toMatch(/IDLE/);
 	});
 
+	it("surfaces the consequential acts a subordinate took (#294)", async () => {
+		// "Last action" is the objective's own summary. A run that merged its own PRs to `main`
+		// reported "done" and nothing else, which is the whole issue.
+		const out = JSON.parse((await t.handler(ctx(buildEnv({ acts: [ACT_ROW] })) as never, {})).content);
+		expect(out.subordinates[0].acts).toEqual([
+			{ kind: "pr.merge", summary: "merged a pull request #42", command: "gh pr merge 42 --squash", irreversible: true, traceId: "run-1", at: 1700 },
+		]);
+	});
+
+	it("omits `acts` rather than sending an empty array", async () => {
+		// `acts: []` reads as "this agent did nothing consequential". Only a stream-json engine
+		// reports acts at all, so the honest meaning of absence is NOT OBSERVED.
+		const out = JSON.parse((await t.handler(ctx(buildEnv()) as never, {})).content);
+		expect(out.subordinates[0]).not.toHaveProperty("acts");
+	});
+
+	it("tells the model in the legend that a missing `acts` is not an all-clear", async () => {
+		// Without this, a supervisor reads no acts and reassures the human that nothing was
+		// changed — a confident wrong answer, which is worse than the silence it replaced.
+		const out = JSON.parse((await t.handler(ctx(buildEnv()) as never, {})).content);
+		expect(out.legend).toMatch(/irreversible/);
+		expect(out.legend).toMatch(/NOT OBSERVED/);
+	});
+
 	it("REFUSES an instanceId outside the supervision graph rather than reading it", async () => {
 		// Same posture as delegate_goal, which re-checks membership inside delegateToInstance
 		// instead of trusting the tool description to discourage a model from naming another
@@ -308,6 +347,33 @@ describe("check_delegation without a runId — the model reaches for the tool it
 		const out = await t.handler(ctx(buildEnv()) as never, { runId: "nope" });
 		expect(out.success).toBe(false);
 		expect(out.content).toMatch(/No delegated run with id nope/);
+	});
+
+	it("names the acts the run took, not only how it ended (#294)", async () => {
+		// The issue, exactly: run 73ffc073's `detail` said the objective completed while it had
+		// merged its own PRs to `main`. A supervisor drilling into a run must see the merge here.
+		const env = buildEnv({
+			run: { run_id: "r1", user_id: "u1", instance_id: "sub", objective: "fix the build", status: "completed",
+			       stop_reason: "done", detail: "outcome: done", iteration: 7, max_iterations: 10,
+			       cancel_requested: 0, budget_id: null, started_at: 1000, finished_at: 9000, last_progress_at: 8000 },
+			acts: [ACT_ROW],
+		});
+		const out = JSON.parse((await tool("check_delegation").handler(ctx(env) as never, { runId: "r1" })).content);
+		expect(out.acts).toHaveLength(1);
+		expect(out.acts[0]).toMatchObject({ kind: "pr.merge", irreversible: true, command: "gh pr merge 42 --squash" });
+		expect(out.actsLegend).toMatch(/irreversible/);
+	});
+
+	it("omits `acts` entirely for a run that reported none", async () => {
+		// An empty array would read as "this run changed nothing", which no engine can attest to —
+		// a raw Codex/Grok session reports no acts at all. Absence must mean NOT OBSERVED.
+		const env = buildEnv({
+			run: { run_id: "r1", user_id: "u1", instance_id: "sub", objective: "o", status: "completed",
+			       stop_reason: "done", detail: null, iteration: 1, max_iterations: 10, cancel_requested: 0,
+			       budget_id: null, started_at: 1, finished_at: 2, last_progress_at: 1 },
+		});
+		const out = JSON.parse((await tool("check_delegation").handler(ctx(env) as never, { runId: "r1" })).content);
+		expect(out).not.toHaveProperty("acts");
 	});
 
 	it("no longer demands an instanceId just to say what is going on", async () => {

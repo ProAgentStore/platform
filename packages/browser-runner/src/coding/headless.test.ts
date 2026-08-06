@@ -500,6 +500,93 @@ describe("HeadlessSession — a one-shot engine that cannot SPAWN is not alive",
 	}, 15_000);
 });
 
+/**
+ * A stand-in that MERGES A PULL REQUEST — the exact act #294 exists to record.
+ *
+ * `$MERGE_FAILS=1` makes the engine's tool_result come back flagged as an error, which is how the
+ * "attempted but refused" case is exercised without a real branch-protection rule.
+ */
+const FAKE_MERGER = `#!/usr/bin/env node
+const rl = require("node:readline").createInterface({ input: process.stdin });
+process.stdout.write(JSON.stringify({ type: "system", subtype: "init", session_id: "sess-merge" }) + "\\n");
+const failed = process.env.MERGE_FAILS === "1";
+rl.on("line", (line) => {
+  let msg; try { msg = JSON.parse(line); } catch { return; }
+  if (msg.type !== "user") return;
+  process.stdout.write(JSON.stringify({ type: "assistant", message: { content: [
+    { type: "tool_use", id: "toolu_01", name: "Bash", input: { command: "git push -u origin fix && gh pr merge 42 --squash" } },
+  ] } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "user", message: { content: [
+    { type: "tool_result", tool_use_id: "toolu_01", is_error: failed, content: failed ? "protected branch" : "merged" },
+  ] } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok", uuid: "t1" }) + "\\n");
+});
+`;
+
+describe("HeadlessSession — a run that merges to main must leave a record (#294)", () => {
+	let dir: string;
+
+	beforeAll(() => {
+		dir = mkdtempSync(join(tmpdir(), "pags-acts-"));
+	});
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	function merger(id: string, env?: Record<string, string>): HeadlessSession {
+		const bin = join(dir, `fake-merger-${id}.js`);
+		writeFileSync(bin, FAKE_MERGER);
+		chmodSync(bin, 0o755);
+		return new HeadlessSession({ id, workDir: dir, clientType: "claude", bin, env, statePath: defaultStatePath(dir) });
+	}
+
+	it("records the push AND the merge, with the outcome the tool_result reported", async () => {
+		// The whole issue: run 73ffc073 merged its own PRs to `main` unattended and the only record
+		// it left said the objective completed. Without this, that is still true.
+		const s = merger("acts1");
+		s.start();
+		await until(() => s.runState() === "idle");
+		s.input("ship it");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("merged"));
+
+		const acts = s.takeActs();
+		expect(acts.map((a) => a.kind)).toEqual(["push", "pr.merge"]);
+		expect(acts[1]).toMatchObject({ kind: "pr.merge", target: "#42", irreversible: true, ok: true });
+		// Draining is destructive, for the same reason as usage: /coding/capture polls every 3s and
+		// re-reporting would either duplicate the merge or force the cloud to diff a growing list.
+		expect(s.takeActs()).toEqual([]);
+		s.stop();
+	}, 20_000);
+
+	it("marks a REFUSED merge as failed, so the trail never claims a merge that did not happen", async () => {
+		// A `gh pr merge` blocked by branch protection, published as a merge, would put an unattended
+		// merge to `main` in the audit trail that never occurred — as corrosive as missing a real one.
+		const s = merger("acts2", { MERGE_FAILS: "1" });
+		s.start();
+		await until(() => s.runState() === "idle");
+		s.input("ship it");
+		await until(() => s.runState() === "idle" && s.snapshot().includes("protected branch"));
+
+		const acts = s.takeActs();
+		expect(acts).toHaveLength(2);
+		expect(acts.every((a) => a.ok === false)).toBe(true);
+		s.stop();
+	}, 20_000);
+
+	it("records nothing for a raw engine — a gap, never a false all-clear", async () => {
+		// Nothing parses a Codex/Grok session's stdout, so it can report no acts. An empty list must
+		// therefore mean "not observed"; every consumer is written against that, and this is the test
+		// that keeps the runner honest about it.
+		const bin = join(dir, "fake-raw.js");
+		writeFileSync(bin, `#!/usr/bin/env node\nprocess.stdout.write("gh pr merge 42 --squash\\n");\n`);
+		chmodSync(bin, 0o755);
+		const s = new HeadlessSession({ id: "acts3", workDir: dir, clientType: "codex", bin });
+		s.start();
+		s.input("ship it");
+		await until(() => s.snapshot().includes("gh pr merge"), 8000, "the raw engine's output");
+		expect(s.takeActs()).toEqual([]);
+		s.stop();
+	}, 20_000);
+});
+
 describe("parseCommand — apostrophes must not pair ACROSS tokens", () => {
 	it("keeps an EVEN number of apostrophes as literals in their own tokens", () => {
 		// The first fix looked ahead for a closing quote anywhere in the command, so two ordinary

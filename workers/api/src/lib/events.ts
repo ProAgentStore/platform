@@ -30,16 +30,30 @@ export interface EventInput {
 	context?: Record<string, unknown>;
 	/** Override the timestamp (ms epoch). Defaults to now. */
 	ts?: number;
+	/**
+	 * A DETERMINISTIC row id, making the write idempotent (#294).
+	 *
+	 * Omit it and every call gets a fresh uuid, which is right for an event that happens once at
+	 * the moment it is logged. Supply it when the same real-world fact can be reported more than
+	 * once — an act drained from a runner can be written by a console poll and a Pilot capture
+	 * racing each other, and two rows saying "merged a pull request" read as two merges.
+	 */
+	id?: string;
 }
 
 /** Persist a trace event. Best-effort; never throws. */
 export async function logEvent(env: Env, e: EventInput): Promise<void> {
 	try {
+		// `ON CONFLICT(id) DO NOTHING` is a no-op for every caller that lets the id default to a
+		// fresh uuid — a random 128-bit key never collides — and is what makes a supplied `id`
+		// idempotent. Written in this form rather than `INSERT OR IGNORE` deliberately: several
+		// test doubles across the repo recognise a trace write by the literal prefix
+		// `INSERT INTO agent_events`, and the equivalent spelling keeps them matching.
 		await env.DB.prepare(
-			"INSERT INTO agent_events (id, ts, user_id, instance_id, trace_id, source, level, event, message, context) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+			"INSERT INTO agent_events (id, ts, user_id, instance_id, trace_id, source, level, event, message, context) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) ON CONFLICT(id) DO NOTHING",
 		)
 			.bind(
-				crypto.randomUUID(),
+				e.id ? String(e.id).slice(0, 300) : crypto.randomUUID(),
 				typeof e.ts === "number" ? e.ts : Date.now(),
 				e.userId ?? null,
 				e.instanceId ?? null,

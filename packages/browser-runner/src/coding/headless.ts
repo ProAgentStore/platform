@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { classifyCommand, commandFromToolInput, type EngineActRecord } from "./engine-acts.js";
 import { type EngineUsageRecord, parseEngineUsage } from "./engine-usage.js";
 
 /**
@@ -92,6 +93,17 @@ interface StreamEvent {
  */
 const MAX_PENDING_USAGE = 200;
 
+/**
+ * How many un-drained consequential acts a session holds (#294).
+ *
+ * Smaller than the usage cap because acts are rare by construction — an ordinary turn produces
+ * none — so filling this means something has gone very wrong (a loop force-pushing repeatedly),
+ * and in that case the FIRST ones are the ones that explain it. So this cap drops the NEWEST rather
+ * than the oldest, the opposite of the usage queue: a spend record is fungible and the recent ones
+ * matter most, whereas the merge that started an incident is the one you cannot afford to lose.
+ */
+const MAX_PENDING_ACTS = 100;
+
 export class HeadlessSession {
 	/**
 	 * A human-readable label for this engine process (#247).
@@ -124,6 +136,20 @@ export class HeadlessSession {
 	private stopped = false;
 	/** Measured engine spend not yet handed to the cloud (#267). Drained by {@link takeUsage}. */
 	private pendingUsage: EngineUsageRecord[] = [];
+	/**
+	 * Consequential acts observed but not yet handed to the cloud (#294). Drained by
+	 * {@link takeActs}.
+	 */
+	private pendingActs: EngineActRecord[] = [];
+	/**
+	 * Acts whose `tool_result` has not come back yet, keyed by the engine's `tool_use` id.
+	 *
+	 * They are held here rather than published immediately so the record can say whether the
+	 * command SUCCEEDED. A `gh pr merge` that failed on a branch-protection rule, published as a
+	 * merge, would put an unattended merge to `main` in the audit trail that never happened — which
+	 * damages the record exactly as much as missing a real one.
+	 */
+	private awaitingResult = new Map<string, EngineActRecord[]>();
 	/** Turn counter — only used to build a fallback id when the CLI's event has no `uuid`. */
 	private usageSeq = 0;
 	/**
@@ -135,6 +161,18 @@ export class HeadlessSession {
 	 * The queue is in memory and dies with the process, so a salt can never cause a double-count.
 	 */
 	private readonly usageRunId = Math.random().toString(36).slice(2, 10);
+	/** Fallback counter for an act whose `tool_use` block carries no id of its own. */
+	private actSeq = 0;
+	/**
+	 * Per-PROCESS salt for act ids, for the same reason as {@link usageRunId}.
+	 *
+	 * Claude Code's `tool_use` ids are unique within a conversation, not across restarts. Without a
+	 * salt, a resumed session could re-emit an id the cloud has already written, and the
+	 * conflict-ignoring insert would silently drop the SECOND act — a real merge, discarded because
+	 * an older one happened to share an id. The queue is in memory and dies with the process, so a
+	 * salt can never cause a double-write.
+	 */
+	private readonly actsRunId = Math.random().toString(36).slice(2, 10);
 	/**
 	 * The engine binary could not be spawned (ENOENT, not executable).
 	 *
@@ -510,12 +548,16 @@ export class HeadlessSession {
 						this.push(`[${stamp()}] ${block.text.trim()}`); // timestamped agent reply
 					} else if (block.type === "tool_use") {
 						this.push(`⚙ ${String(block.name ?? "tool")} ${shortInput(block.input)}`); // ⚙
+						this.noteAct(block);
 					}
 				}
 				break;
 			case "user": // tool results come back as a synthetic user message
 				for (const block of ev.message?.content ?? []) {
-					if (block.type === "tool_result") this.push(`  ↳ ${toolResult(block.content)}`); // ↳
+					if (block.type === "tool_result") {
+						this.push(`  ↳ ${toolResult(block.content)}`); // ↳
+						this.settleAct(block);
+					}
 				}
 				break;
 			case "result": {
@@ -528,6 +570,11 @@ export class HeadlessSession {
 					this.pendingUsage.push(usage);
 					if (this.pendingUsage.length > MAX_PENDING_USAGE) this.pendingUsage.shift();
 				}
+				// The turn ended, so no further `tool_result` is coming for anything still waiting.
+				// Publish it with an UNKNOWN outcome rather than dropping it: "it ran this and we
+				// never saw whether it worked" is a materially different claim from silence, and
+				// silence is what a supervisor would read as "it did nothing".
+				this.flushAwaitingActs();
 				this.run = "idle"; // the turn is OVER — a fact, not a guess
 				break;
 			}
@@ -540,6 +587,61 @@ export class HeadlessSession {
 
 	private push(line: string): void {
 		this.transcript.push(line);
+	}
+
+	/**
+	 * A `tool_use` block just went past — record it if the command it carries is consequential
+	 * (#294). Nearly every call classifies to nothing and costs one regex sweep.
+	 */
+	private noteAct(block: Record<string, unknown>): void {
+		const command = commandFromToolInput(block.input);
+		if (!command) return;
+		const toolUseId = typeof block.id === "string" && block.id ? block.id : `${this.config.id}:${this.actSeq++}`;
+		const acts = classifyCommand(`${this.actsRunId}:${toolUseId}`, command);
+		if (!acts.length) return;
+		this.awaitingResult.set(toolUseId, acts);
+	}
+
+	/** The matching `tool_result` arrived — stamp the outcome and publish. */
+	private settleAct(block: Record<string, unknown>): void {
+		const id = typeof block.tool_use_id === "string" ? block.tool_use_id : "";
+		const acts = this.awaitingResult.get(id);
+		if (!acts) return;
+		this.awaitingResult.delete(id);
+		const ok = block.is_error !== true;
+		for (const a of acts) this.publishAct({ ...a, ok });
+	}
+
+	/** Publish everything still waiting, with an unknown outcome. */
+	private flushAwaitingActs(): void {
+		for (const acts of this.awaitingResult.values()) {
+			for (const a of acts) this.publishAct(a);
+		}
+		this.awaitingResult.clear();
+	}
+
+	private publishAct(act: EngineActRecord): void {
+		// Drops the NEWEST at the cap — see MAX_PENDING_ACTS for why this queue is the opposite
+		// way round from the usage one.
+		if (this.pendingActs.length >= MAX_PENDING_ACTS) return;
+		this.pendingActs.push(act);
+	}
+
+	/**
+	 * Hand over the consequential acts seen since the last drain, and forget them (#294).
+	 *
+	 * Drained rather than re-reported for the same reason as {@link takeUsage}: a 3s capture poll
+	 * must not re-send the same merge forever. The cloud's insert is keyed on
+	 * {@link EngineActRecord.id}, so the genuine race — the console's poll and the Pilot's own
+	 * capture draining at the same moment — still cannot write the act twice.
+	 *
+	 * A raw engine returns an empty array, always. Nothing parses its stdout, so it has nothing to
+	 * hand over; an empty list here means "not observed", never "nothing happened".
+	 */
+	takeActs(): EngineActRecord[] {
+		const out = this.pendingActs;
+		this.pendingActs = [];
+		return out;
 	}
 
 	/**

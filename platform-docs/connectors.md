@@ -30,7 +30,7 @@ An agent gets a connector's tools only when it declares them in `capabilities.to
 | `tmux` | none (runner relay) | read + write | Legacy compatibility: `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write) |
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
 | `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_git`, `repo_remote` |
-| `supervision` | none (internal) | read + write | `list_subordinates`, `delegate_goal`, `check_delegation` |
+| `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation` |
 | `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 
@@ -89,6 +89,26 @@ retention; key names answer "did it send the field?" without becoming that. Owne
 via `GET /v1/instances/:id/trace?source=mcp`; operators get cross-tenant filtering by user,
 instance, endpoint and remote tool on `/v1/admin/trace`, with `/v1/admin/trace-endpoints` listing
 which endpoints and tools exist at all.
+
+**A delegated run records what it DID, not only how it ended** (#294). A run used to write down
+its objective and its terminal outcome and nothing in between — so a run that merged its own pull
+requests to `main` unattended reported "done", and the supervisor reviewing it had trust rather
+than review. Consequential acts (a pull request opened or **merged**, a push, a push to the trunk,
+a force-push, a branch or file delete, a `reset --hard`, a publish, a deploy) are now recorded as
+`agent_events` rows on the generic `act.consequential` event, `level: "warn"` when irreversible, and
+surfaced on `subordinate_status`, `check_delegation`, the run's own `detail` and its board card.
+
+The signal is the coding Engine's own **stream-json `tool_use` protocol events** — the literal
+command it invoked, plus whether the matching `tool_result` came back an error — not its prose, and
+not a repo-state diff (a pull request is not a git object: `gh pr create` changes nothing locally
+and `gh pr merge` changes only a remote ref nobody has fetched). The record is secret-redacted at
+capture and deduplicated on a deterministic row id, so a console poll and a Pilot capture racing
+each other cannot write the same merge twice. **Only a stream-json engine reports acts**, so an
+absent `acts` field means *not observed* and never "it changed nothing"; the tool legends say so, so
+a supervisor cannot read silence as an all-clear. Read a run's acts with
+`GET /v1/instances/:id/trace?trace_id=<runId>` or MCP `agent_trace`. Requires CLI ≥ **0.4.36**.
+Whether an agent should be *allowed* to merge unattended is a separate, open policy question — this
+only makes it visible.
 
 **The browser connector is experimental** and additionally gated behind the API worker's
 `BROWSER_TOOLS_ENABLED` env flag (fail-closed when unset) — first-party / self-use only until the

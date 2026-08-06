@@ -23,6 +23,8 @@ import { notifyUser } from "../routes/push.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros, recordEngineUsage } from "../lib/usage.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
+import { recordEngineActs, sanitizeEngineActs, summarizeActs } from "../lib/engine-acts.js";
+import { actsInWindow } from "../lib/instance-work.js";
 import { finishLoopRun, recordIteration } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
 
@@ -109,6 +111,15 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		if (event.payload.mode === "watch") return this.runWatch(event, step);
 		const { instanceId, userId, sessionId, repoId, runnerNode, cloneUrl, branch, token, goal } = event.payload;
 		const env = this.env;
+		/**
+		 * When this run began — the lower bound of the window its acts are read back from (#294).
+		 *
+		 * JOURNALLED in a step, not a bare `Date.now()`. Everything outside `step.do` re-runs on
+		 * every workflow replay, so a plain assignment would creep forward each time and the close
+		 * would then read a window that starts AFTER the acts it is meant to report — losing exactly
+		 * the record for the long, resumed runs most likely to have merged something.
+		 */
+		const runStartedAt = (await step.do("run-started-at", async () => Date.now())) as number;
 
 		let conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
 		// Machine-switch reclaim (matches the interactive /message path). A durable /run can be
@@ -183,6 +194,21 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		 * unique within an instance.
 		 */
 		const closeDelegation = async (outcome: CodingResult, suffix = "") => {
+			// What did this run actually DO? (#294)
+			//
+			// The trace holds every act, but a supervisor's default read is `check_delegation` and
+			// the board card — and the issue's acceptance is that a merge be visible there, without
+			// opening the repo. Folded into the SAME strings both surfaces already carry, so nothing
+			// new has to be taught to read it.
+			//
+			// Read by time window rather than by trace id: a console terminal poll can drain a run's
+			// acts before the Pilot does, and stamps the session id when it does — see
+			// `actsInWindow`.
+			const acts = event.payload.loopRunId || event.payload.boardTaskId
+				? await actsInWindow(env, userId, instanceId, runStartedAt, Date.now()).catch(() => [])
+				: [];
+			const actLine = summarizeActs(acts);
+			const note = `outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}${actLine ? ` | ${actLine}` : ""}`;
 			if (event.payload.loopRunId) {
 				await step.do(`delegation-run-done${suffix}`, async () => {
 					const reason =
@@ -199,19 +225,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					// Recorded at the terminal state, which is when the real count is known.
 					// max(): `outcome.steps` is only the last round's count (see pilotSteps above).
 					await recordIteration(env, event.payload.loopRunId as string, Math.max(pilotSteps, outcome.steps ?? 0)).catch(() => undefined);
-					await finishLoopRun(
-						env,
-						event.payload.loopRunId as string,
-						reason,
-						`outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}`,
-						Date.now(),
-					).catch(() => undefined);
+					await finishLoopRun(env, event.payload.loopRunId as string, reason, note, Date.now()).catch(() => undefined);
 					// The result, in the thread the loop was started from. Written HERE rather than by
 					// the console's poll: the browser version only existed if the tab happened to be
 					// open, so a run finished while you were elsewhere was never recorded at all.
 					const ok = reason === "done";
 					await postToChat(
-						`${ok ? "**Loop complete**" : `**Loop stopped** (${reason})`}${outcome.detail ? `\n\n${outcome.detail}` : ""}`,
+						`${ok ? "**Loop complete**" : `**Loop stopped** (${reason})`}${outcome.detail ? `\n\n${outcome.detail}` : ""}${actLine ? `\n\n${actLine}` : ""}`,
 					);
 				});
 			}
@@ -226,7 +246,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						objective: goal.objective,
 						status: ok ? "completed" : "failed",
 						now: new Date().toISOString(),
-						note: `outcome: ${outcome.outcome}${outcome.detail ? ` — ${outcome.detail}` : ""}`,
+						note,
 					});
 					await upsertWorkCard(env, { instanceId, userId, id: event.payload.boardTaskId as string, task });
 					return null;
@@ -276,7 +296,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				// `drainUsage` — an autonomous Pilot run is exactly the case where no console is
 				// open, so this is the only path collecting the Engine's own spend (#267) for the
 				// longest and most expensive sessions the platform has.
-				callRunner<CodingPaneSnapshot & { sessionId: string; usage?: unknown }>(
+				callRunner<CodingPaneSnapshot & { sessionId: string; usage?: unknown; acts?: unknown }>(
 					conn,
 					"/coding/capture",
 					{ sessionId, drainUsage: true },
@@ -287,8 +307,16 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					.first<{ status: string }>()
 					.catch(() => null),
 			]);
-			const { usage, ...pane } = snap;
+			const { usage, acts, ...pane } = snap;
 			await recordEngineUsage(env, { userId, sessionId, instanceId }, sanitizeEngineUsage(usage));
+			// What this run actually DID (#294). Stamped with the loop-run id when there is one, so
+			// `/trace?trace_id=<runId>` reconstructs exactly what a delegation did — the record whose
+			// absence let run 73ffc073 merge its own PRs to `main` and report only "done".
+			await recordEngineActs(
+				env,
+				{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null },
+				sanitizeEngineActs(acts),
+			).catch(() => undefined);
 			// A Pilot capturing is the session being USED (#275). The claim heartbeat already says
 			// so on every action, but a single round can sit in `waitIdle` for minutes with no
 			// action at all — so the invariant "anything driving the engine keeps it alive" is
@@ -302,8 +330,8 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// sit `suspended`, and treating that as cancellation would end a healthy run at step 0
 			// with no explanation, replacing the relocation this workflow does a few lines above.
 			// A read that FAILED (null) must not cancel either, or a D1 blip aborts a good run.
-			// `pane`, not `snap`: the drained usage has been ledgered and must not be persisted into
-			// the workflow's step state, where a replay would carry it around forever.
+			// `pane`, not `snap`: the drained usage AND acts have been persisted and must not be
+			// carried into the workflow's step state, where a replay would drag them around forever.
 			return row && (row.status === "ended" || row.status === "error") ? { ...pane, cancelled: true } : pane;
 		};
 
@@ -536,11 +564,45 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				});
 				return null;
 			});
+			// The CLOSING drain (#294), before anything can tear the session down.
+			//
+			// A coding run routinely ends with the consequential act — it pushes, opens the PR,
+			// merges, and finishes — and since #271 a delegated run usually leaves its session LIVE,
+			// so `/coding/end` is not reached and there is no later drain at all. Without this the
+			// record would miss the merge on precisely the runs that end by merging.
+			//
+			// Unconditional rather than in the `else` branch: for a session that IS ended below, the
+			// subsequent `/coding/end` drain then simply returns nothing, which is free.
+			await step.do("acts-final-drain", async () => {
+				const snap = await callRunner<{ usage?: unknown; acts?: unknown }>(
+					conn,
+					"/coding/capture",
+					{ sessionId, drainUsage: true },
+					{ timeoutMs: READ_TIMEOUT_MS },
+				).catch(() => null);
+				if (!snap) return null;
+				// Usage is drained by the same flag, so it has to be banked here too or this call
+				// would silently discard the closing turn's spend to record its acts (#267).
+				await recordEngineUsage(env, { userId, sessionId, instanceId }, sanitizeEngineUsage(snap.usage)).catch(() => undefined);
+				await recordEngineActs(
+					env,
+					{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null },
+					sanitizeEngineActs(snap.acts),
+				).catch(() => undefined);
+				return null;
+			});
 			await step.do("end", async () => {
 				// A run closes only the session it OPENED (#271). Ending one a human opened made
 				// delegation single-use and took away a thing the user had created.
 				if (shouldEndSessionAfterRun({ openedByRun: event.payload.sessionOpenedByRun === true })) {
-					await callRunner<{ ok?: boolean }>(conn, "/coding/end", { sessionId }).catch(() => undefined);
+					const ended = await callRunner<{ ok?: boolean; acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null);
+					// Whatever the final drain above could not reach — a turn that completed between
+					// the two calls. Cheap, and idempotent on the deterministic row id.
+					await recordEngineActs(
+						env,
+						{ userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null },
+						sanitizeEngineActs(ended?.acts),
+					).catch(() => undefined);
 					// The runner session is now gone — sync the D1 row so it doesn't sit
 					// "active" forever (the row was created active by the /sessions route).
 					const status = result.outcome === "failed" || result.outcome === "max_steps" ? "error" : "ended";

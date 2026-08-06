@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { defaultStatePath, HeadlessSession } from "./headless.js";
+import type { EngineActRecord } from "./engine-acts.js";
 import type { EngineUsageRecord } from "./engine-usage.js";
 import type { ClientType } from "./handlers.js";
 import type { EngineAuthResolved } from "./engine-auth.js";
@@ -63,6 +64,16 @@ export interface CodingSnapshot {
 	 * nothing measurable; absent is the honest answer there, a zero would not be.
 	 */
 	usage?: EngineUsageRecord[];
+	/**
+	 * Consequential acts observed since the last drain (#294) — a PR opened or merged, a push, a
+	 * force-push, a delete, a deploy. Present under the SAME `drainUsage` opt-in as spend: the two
+	 * cloud callers that pass it are exactly the two that persist what a run did, and letting a
+	 * read-only capture drain either one would silently discard records the recorder needed.
+	 *
+	 * Absent for a raw engine — nothing parses its stdout, so an empty list means "not observed",
+	 * never "nothing happened".
+	 */
+	acts?: EngineActRecord[];
 }
 
 /** Hard cap on a pane returned to the brain/console (matches the worker MAX_PANE_CHARS). */
@@ -178,7 +189,7 @@ export class CodingRuntime {
 			// exactly the question asked about a session that just stopped.
 			authResolved: session.authResolved,
 			engineRuntime: session.engineRuntime,
-			...(opts.drainUsage ? { usage: session.takeUsage() } : {}),
+			...(opts.drainUsage ? { usage: session.takeUsage(), acts: session.takeActs() } : {}),
 		};
 	}
 
@@ -210,15 +221,20 @@ export class CodingRuntime {
 	 * record would otherwise be lost — silently, and only for the turns at the end of every
 	 * session, which is a bias rather than noise.
 	 */
-	end(sessionId: string): { ok: true; usage: EngineUsageRecord[] } {
+	end(sessionId: string): { ok: true; usage: EngineUsageRecord[]; acts: EngineActRecord[] } {
 		const session = this.sessions.get(sessionId);
 		const usage = session ? session.takeUsage() : [];
+		// Acts drain here too, and for a sharper version of the same reason (#294): the LAST thing a
+		// coding run does is very often the consequential one — push, open the PR, merge it — and it
+		// happens after the final capture poll. Discarding the tail would systematically lose exactly
+		// the acts this record exists for.
+		const acts = session ? session.takeActs() : [];
 		if (session) {
 			session.stop();
 			this.sessions.delete(sessionId);
 		}
 		this.takeovers.delete(sessionId);
-		return { ok: true, usage };
+		return { ok: true, usage, acts };
 	}
 
 	list(): Array<{ sessionId: string; alive: boolean; engineLabel: string }> {

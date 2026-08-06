@@ -43,6 +43,30 @@ export interface RunItem {
 	lastProgressAt: number | null;
 }
 
+/**
+ * One consequential act a subordinate took (#294) — a PR opened or merged, a push, a force-push, a
+ * delete, a deploy.
+ *
+ * Read from `agent_events` (the unified trace, migration 0038) on the GENERIC event name
+ * `act.consequential`, not on anything coding-shaped. That is what keeps this file's rule intact:
+ * supervision learns that agents record consequential acts, never that a coding Engine exists. Any
+ * subsystem writing the same event appears here with no change.
+ */
+export interface ActItem {
+	instanceId: string;
+	/** The act's own vocabulary, e.g. `pr.merge` — a closed enum validated at write time. */
+	kind: string;
+	/** One sentence naming the act, its subject and whether it was observed to succeed. */
+	summary: string;
+	/** The literal command, secret-redacted at capture. The evidence behind the summary. */
+	command: string;
+	/** Can this be walked back? False is the reason a supervisor is being shown it. */
+	irreversible: boolean;
+	/** The run or session it belongs to, so an act can be tied back to what asked for it. */
+	traceId: string | null;
+	at: number;
+}
+
 /** Per-instance row cap. Clamped so a caller can't turn one tool call into an unbounded read. */
 const clampPer = (n: number | undefined, dflt: number) => Math.max(1, Math.min(25, Math.floor(n ?? dflt)));
 
@@ -180,4 +204,103 @@ export async function recentRunsForInstances(
 		finishedAt: r.finished_at,
 		lastProgressAt: r.last_progress_at ?? null,
 	}));
+}
+
+interface ActRow {
+	instance_id: string;
+	trace_id: string | null;
+	message: string | null;
+	context: string | null;
+	ts: number;
+}
+
+/**
+ * Turn a stored trace row into the supervisor-facing shape.
+ *
+ * Everything a supervisor reads comes out of `context`, which is JSON written by the recorder. A
+ * corrupt or absent one still yields the row with its `message`, because "this agent did something
+ * consequential and the details are unreadable" is a far more useful answer than dropping it — a
+ * silently missing merge is the exact failure this record exists to end.
+ */
+function toActItem(r: ActRow): ActItem {
+	let ctx: Record<string, unknown> = {};
+	try {
+		const p = r.context ? JSON.parse(r.context) : {};
+		if (p && typeof p === "object" && !Array.isArray(p)) ctx = p as Record<string, unknown>;
+	} catch {
+		/* unreadable extras — the message still names the act */
+	}
+	return {
+		instanceId: r.instance_id,
+		kind: typeof ctx.act === "string" ? ctx.act : "unknown",
+		summary: (r.message ?? "").slice(0, 200),
+		command: (typeof ctx.command === "string" ? ctx.command : "").slice(0, 400),
+		irreversible: ctx.irreversible === true,
+		traceId: r.trace_id,
+		at: r.ts,
+	};
+}
+
+/** The columns every act read selects. Kept in one place so the two readers cannot drift. */
+const ACT_COLUMNS = "instance_id, trace_id, message, context, ts";
+/** The generic event name — see {@link ActItem} for why supervision must not key on a domain one. */
+const ACT_EVENT = "act.consequential";
+
+/**
+ * The most recent consequential acts for several instances, newest first per instance.
+ *
+ * Per-instance `UNION ALL` branches for the same reason `recentWorkForInstances` uses them: a flat
+ * `IN (…) ORDER BY ts DESC LIMIT n` returns the globally newest rows, so one busy subordinate
+ * crowds out the rest and a supervisor reads a team of one. Here that would be worse than a
+ * cosmetic gap — the crowded-out row is somebody's unreviewed merge.
+ */
+export async function recentActsForInstances(
+	env: Env,
+	userId: string,
+	instanceIds: readonly string[],
+	perInstance?: number,
+): Promise<ActItem[]> {
+	if (!instanceIds.length) return [];
+	const limit = clampPer(perInstance, 10);
+	const sql = unionAll(
+		(p) =>
+			`SELECT ${ACT_COLUMNS}
+			   FROM agent_events
+			  WHERE instance_id = ?${p} AND user_id = ?1 AND event = '${ACT_EVENT}'
+			  ORDER BY ts DESC LIMIT ${limit}`,
+		instanceIds.length,
+	);
+	const res = await env.DB.prepare(sql)
+		.bind(userId, ...instanceIds)
+		.all<ActRow>();
+	return (res.results ?? []).map(toActItem);
+}
+
+/**
+ * The acts one run took, by TIME WINDOW rather than by trace id.
+ *
+ * A delegated run's acts can be drained by whichever caller captures first — the Pilot's own poll
+ * (which knows the run id) or the console's 3s terminal poll (which does not, and stamps the
+ * session id instead). Keying on `trace_id` would therefore return a run's acts only when nobody
+ * happened to have the terminal open, which is both arbitrary and exactly backwards: an unwatched
+ * run is the one whose record matters most. The window is precise enough — it is the interval
+ * during which this run was the one driving the session.
+ */
+export async function actsInWindow(
+	env: Env,
+	userId: string,
+	instanceId: string,
+	fromMs: number,
+	toMs: number,
+	limit = 25,
+): Promise<ActItem[]> {
+	const res = await env.DB.prepare(
+		`SELECT ${ACT_COLUMNS}
+		   FROM agent_events
+		  WHERE instance_id = ?1 AND user_id = ?2 AND event = '${ACT_EVENT}' AND ts >= ?3 AND ts <= ?4
+		  ORDER BY ts ASC LIMIT ${Math.max(1, Math.min(100, Math.floor(limit)))}`,
+	)
+		.bind(instanceId, userId, fromMs, toMs)
+		.all<ActRow>();
+	return (res.results ?? []).map(toActItem);
 }

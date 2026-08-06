@@ -44,6 +44,7 @@ import { authPromptGuidance, detectAuthPrompt } from "../lib/engine-auth-prompt.
 import { delegationTaskRecord } from "../lib/delegation.js";
 import { isExecutableTarget, parseDelegationTarget, targetId, unsupportedTargetReason, type DelegationTarget } from "../lib/delegate-target.js";
 import { readInstanceRunnerNode } from "../lib/runtime-nodes.js";
+import { recordEngineActs, sanitizeEngineActs } from "../lib/engine-acts.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineUsage } from "../lib/usage.js";
 import { startSessionOnRunner } from "../lib/coding-session-open.js";
@@ -630,6 +631,15 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 		{ userId: uid, sessionId, instanceId },
 		sanitizeEngineUsage((snap as { usage?: unknown }).usage),
 	);
+	// What the Engine actually DID (#294). The same drain carries it, so this poll records a merge
+	// or a force-push whether or not a Pilot is driving — a human-driven session is exactly as
+	// capable of merging to `main`, and leaving it out would make the record depend on who started
+	// the work rather than on what was done.
+	await recordEngineActs(
+		c.env,
+		{ userId: uid, sessionId, instanceId },
+		sanitizeEngineActs((snap as { acts?: unknown }).acts),
+	).catch(() => undefined);
 	// An engine blocked on sign-in looks EXACTLY like a hung session: idle runState, a pane that
 	// stops changing, no error anywhere. Surfacing it here means the console can say "sign in"
 	// instead of the owner watching a dead terminal and concluding the platform is broken.
@@ -665,7 +675,7 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	// `usage` is drained, so it appears on one poll in a hundred and is empty on the rest. Passing
 	// that to the console would look like a field that flickers; it has been ledgered above and
 	// belongs on the Usage page, not in the terminal payload.
-	const { usage: _drained, ...paneSnap } = snap as Record<string, unknown>;
+	const { usage: _drained, acts: _drainedActs, ...paneSnap } = snap as Record<string, unknown>;
 	return c.json({
 		...paneSnap,
 		runnerConnected: true,
@@ -1373,9 +1383,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 	// routinely completes after the final capture poll, so without this the ledger would lose the
 	// closing turn of EVERY session — a bias, not noise.
 	const ended = conn
-		? await callRunner<{ usage?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null)
+		? await callRunner<{ usage?: unknown; acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null)
 		: null;
 	await recordEngineUsage(c.env, { userId: uid, sessionId, instanceId }, sanitizeEngineUsage(ended?.usage));
+	// Same tail problem, sharper consequence (#294): a coding session very often ENDS with the
+	// consequential act — push, open the PR, merge it — so acts drained only on capture would
+	// systematically miss the last and most important one of every session.
+	await recordEngineActs(c.env, { userId: uid, sessionId, instanceId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
 	const ok = await endSession(c.env, instanceId, uid, sessionId);
 	return c.json({ ok });
 });

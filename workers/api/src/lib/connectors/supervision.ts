@@ -21,7 +21,7 @@ import { getLoopRun } from "../agent-loop-store.js";
 import { loadGraph } from "../supervision.js";
 import { subordinatesOf } from "../supervision-graph.js";
 import { agentCapabilities, sanitizeBoardColumns, type BoardColumn } from "../agent-capabilities.js";
-import { recentRunsForInstances, recentWorkForInstances } from "../instance-work.js";
+import { actsInWindow, recentActsForInstances, recentRunsForInstances, recentWorkForInstances, type ActItem } from "../instance-work.js";
 import { summarizeSubordinates } from "../subordinate-observation.js";
 import { runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
 import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
@@ -115,10 +115,13 @@ async function observeSubordinates(
 	const ids = subs.map((s) => s.instanceId);
 	// Two statements for the work picture, regardless of fan-out — see instance-work.ts. The
 	// connectivity read is a third plus one relay probe per subordinate (see MAX_RELAY_PROBES).
-	const [work, runs, facts] = await Promise.all([
+	const [work, runs, facts, acts] = await Promise.all([
 		recentWorkForInstances(ctx.env, userId, ids, limit).catch(() => []),
 		recentRunsForInstances(ctx.env, userId, ids).catch(() => []),
 		runtimeConnectivityMany(ctx.env as never, userId, ids).catch(() => new Map<string, RuntimeFacts>()),
+		// What each subordinate has actually DONE (#294). One more indexed read, on the same
+		// per-instance UNION-ALL shape as work/runs — not a fan-out.
+		recentActsForInstances(ctx.env, userId, ids).catch(() => [] as ActItem[]),
 	]);
 	const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
 	// Connectivity is attached HERE rather than inside `summarizeSubordinates` because it is a
@@ -148,14 +151,29 @@ async function observeSubordinates(
 		userId,
 		ids.filter((id) => connectivityById.get(id)?.canWork && connectivityById.get(id)?.requiresRunner),
 	).catch(() => new Map<string, RepoStateReport>());
+	// Grouped here rather than in `summarizeSubordinates` to keep that function pure over the two
+	// records it was built for; the shape is already per-instance so grouping is a one-liner.
+	const actsById = new Map<string, ActItem[]>();
+	for (const a of acts) {
+		const list = actsById.get(a.instanceId) ?? [];
+		list.push({ ...a });
+		actsById.set(a.instanceId, list);
+	}
 	const withConnectivity = view.subordinates.map((s) => {
 		const repo = repoStates.get(s.instanceId);
+		const theActs = actsById.get(s.instanceId) ?? [];
 		return {
 			...s,
 			connectivity: connectivityById.get(s.instanceId),
 			// Absent when unknown (no repo, no runner, an older runner) — never a fabricated
 			// "clean on main", which a supervisor would act on.
 			...(repo ? { repo } : {}),
+			// Omitted rather than sent as `[]`. An empty array reads as "it did nothing
+			// consequential", and this record cannot support that claim: only a stream-json engine
+			// reports acts, so absence means "not observed".
+			...(theActs.length
+				? { acts: theActs.map(({ instanceId: _i, ...rest }) => rest) }
+				: {}),
 		};
 	});
 	return {
@@ -167,7 +185,10 @@ async function observeSubordinates(
 				// is precisely a model reasoning from an empty board to "no runner" (#259).
 				legend:
 					"`connectivity.canWork` is the ONLY field that says whether an agent can be given work now. Empty `work`/`runs` means IDLE — which is normal and ready, not offline. " +
-					"`repo` is the CURRENT state of the checkout a goal would run in — the branch it is parked on and any uncommitted work a previous run left. It is context, not a gate: a run starts from wherever the repo was left, and nothing resets or discards it. Relay `repo.note` to the human when it is present, and never instruct an agent to clear a working tree you did not put there.",
+					"`repo` is the CURRENT state of the checkout a goal would run in — the branch it is parked on and any uncommitted work a previous run left. It is context, not a gate: a run starts from wherever the repo was left, and nothing resets or discards it. Relay `repo.note` to the human when it is present, and never instruct an agent to clear a working tree you did not put there. " +
+					"`acts` is what an agent actually DID — a pull request opened or merged, a push, a force-push, a delete, a deploy — with the literal command as evidence. Anything with `irreversible: true` changed something that cannot simply be undone, so REPORT IT to the human unprompted: an outcome of 'done' says only that the agent believes it finished, never what it changed on the way. " +
+					"An act with `ok: false` FAILED and one with `ok: null` was not observed to succeed — neither is a completed action and neither may be described as one. " +
+					"ABSENT `acts` means NOT OBSERVED, never 'it did nothing': only some engines report acts at all. Never read a missing `acts` as an all-clear or tell the human the agent changed nothing.",
 				...view,
 				subordinates: withConnectivity,
 			},
@@ -215,7 +236,11 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			"`repo` says what state that agent's checkout is actually in — which branch it is parked on " +
 			"and whether earlier work left uncommitted changes. Read it before handing over a goal and " +
 			"pass `repo.note` on to the human when it is present: a new goal runs on whatever branch is " +
-			"checked out, and nothing resets or discards a working tree.",
+			"checked out, and nothing resets or discards a working tree. " +
+				"`acts` is what each agent actually DID — pull requests opened and MERGED, pushes, force-pushes, " +
+				"deletes, deploys — with the literal command as evidence. Read it whenever you report on a " +
+				"subordinate, and volunteer anything marked `irreversible` without being asked: a finished run " +
+				"says it met its objective, never what it changed to get there.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -278,7 +303,7 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 		connector: "supervision",
 		scope: "read",
 		description:
-			"Check ONE delegated run by id: its status, how many steps it has taken, and why it stopped. With no run id this falls through to the same picture subordinate_status gives — so for \"what is happening across my agents\", prefer subordinate_status directly.",
+			"Check ONE delegated run by id: its status, how many steps it has taken, why it stopped, and `acts` — the consequential things it DID along the way (a pull request opened or MERGED, a push, a force-push, a delete, a deploy). Report anything marked `irreversible` to the human: \"completed\" describes the objective, never what the run changed. With no run id this falls through to the same picture subordinate_status gives — so for \"what is happening across my agents\", prefer subordinate_status directly.",
 		jsonSchema: {
 			type: "object",
 			properties: {
@@ -292,7 +317,35 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			if (runId) {
 				const run = await getLoopRun(ctx.env as never, userId, runId);
 				if (!run) return { content: `No delegated run with id ${runId}.`, success: false };
-				return { content: JSON.stringify(run, null, 2), success: true };
+				// What the run DID, not only how it ended (#294). Read over the run's own window —
+				// see `actsInWindow` for why the trace id is not the key. A finished run reports
+				// `detail: "objective completed"`; that is the whole gap this closes.
+				const acts = await actsInWindow(
+					ctx.env as never,
+					userId,
+					run.instanceId,
+					run.startedAt,
+					run.finishedAt ?? Date.now(),
+				).catch(() => [] as ActItem[]);
+				return {
+					content: JSON.stringify(
+						{
+							...run,
+							// Present only when something was observed — an empty array would read as
+							// "this run changed nothing", which no engine can currently attest to.
+							...(acts.length ? { acts: acts.map(({ instanceId: _i, ...rest }) => rest) } : {}),
+							...(acts.length
+								? {
+										actsLegend:
+											"What this run actually did. `irreversible: true` cannot simply be undone — say so when you report the run. `ok:false` failed and `ok:null` was not observed to succeed; neither is a completed action.",
+									}
+								: {}),
+						},
+						null,
+						2,
+					),
+					success: true,
+				};
 			}
 			// No run id → the caller is asking "what is going on", not "how is run X". Answer with
 			// the SAME view subordinate_status returns rather than a bare list of loop rows.

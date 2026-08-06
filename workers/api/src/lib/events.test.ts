@@ -61,6 +61,27 @@ describe("logEvent", () => {
 		expect((inserts[0].args[9] as string).length).toBe(4000);
 	});
 
+	it("uses a supplied id and an OR IGNORE insert, so a re-report is a no-op (#294)", async () => {
+		// Consequential acts are drained from a runner and can be written by a console poll and a
+		// Pilot capture racing each other. Two rows saying "merged a pull request" read as two
+		// merges, so the id has to be the caller's and the insert has to tolerate the conflict.
+		const { env, inserts } = mockDb();
+		await logEvent(env, { id: "act:s1:toolu_1:0", source: "coding", event: "act.consequential", ts: 1 });
+		expect(inserts[0].args[0]).toBe("act:s1:toolu_1:0");
+		expect(inserts[0].sql).toContain("ON CONFLICT(id) DO NOTHING");
+		// Spelled this way rather than `INSERT OR IGNORE` so the literal `INSERT INTO agent_events`
+		// prefix survives — several test doubles in this repo recognise a trace write by it.
+		expect(inserts[0].sql).toContain("INSERT INTO agent_events");
+	});
+
+	it("still mints a uuid when no id is given", async () => {
+		// Every existing caller logs a fact that happens once, at the moment it is logged; a random
+		// key never collides, so OR IGNORE changes nothing for them.
+		const { env, inserts } = mockDb();
+		await logEvent(env, { source: "chat", event: "chat.in", ts: 1 });
+		expect(inserts[0].args[0]).toMatch(/^[0-9a-f-]{36}$/);
+	});
+
 	it("never throws even if the DB blows up", async () => {
 		const env = { DB: { prepare() { throw new Error("db down"); } } } as unknown as Env;
 		await expect(logEvent(env, { source: "x", event: "y" })).resolves.toBeUndefined();

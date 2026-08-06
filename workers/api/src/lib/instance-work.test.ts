@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { recentRunsForInstances, recentWorkForInstances } from "./instance-work.js";
+import { actsInWindow, recentActsForInstances, recentRunsForInstances, recentWorkForInstances } from "./instance-work.js";
 import type { Env } from "../types.js";
 
 /** D1 stub that COUNTS prepare() calls — the query-cost claim is the thing that silently regresses. */
@@ -132,5 +132,90 @@ describe("recentRunsForInstances — the run shape", () => {
 		const out = await recentRunsForInstances(env, "u1", ["i1"]);
 		expect(out[0].lastProgressAt).toBe(900);
 		expect(out[1].lastProgressAt).toBeNull(); // rows written before the column existed
+	});
+});
+
+const actRow = (over: Record<string, unknown> = {}) => ({
+	instance_id: "i1",
+	trace_id: "run-1",
+	message: "merged a pull request #42",
+	context: JSON.stringify({ act: "pr.merge", command: "gh pr merge 42", irreversible: true, ok: true }),
+	ts: 500,
+	...over,
+});
+
+describe("recentActsForInstances — what each subordinate actually DID (#294)", () => {
+	it("reads the GENERIC event name, so supervision never learns a domain vocabulary", async () => {
+		// This module is deliberately forbidden from knowing a coding Engine exists (the coupling
+		// migration 0063 removed). Keying on `coding.act` would smuggle it back in and any other
+		// subsystem recording an act would then be invisible to a supervisor.
+		const { env, sqls } = stubEnv();
+		await recentActsForInstances(env, "u1", ids(2));
+		expect(sqls[0]).toContain("act.consequential");
+		expect(sqls[0]).not.toMatch(/coding/);
+	});
+
+	it("gives each subordinate its own limit — the crowded-out row is somebody's merge", async () => {
+		// The same reason `recentWorkForInstances` uses UNION ALL, with a sharper consequence: a flat
+		// global LIMIT would drop one agent's unreviewed merge because another agent was busier.
+		const { env, sqls } = stubEnv();
+		await recentActsForInstances(env, "u1", ids(4), 3);
+		expect(sqls).toHaveLength(1);
+		const branches = sqls[0].split("UNION ALL");
+		expect(branches).toHaveLength(4);
+		for (const b of branches) expect(b).toContain("LIMIT 3");
+	});
+
+	it("scopes to the owner as well as the instance", async () => {
+		const { env, sqls, binds } = stubEnv();
+		await recentActsForInstances(env, "u1", ids(2));
+		expect(sqls[0]).toContain("user_id = ?1");
+		expect(binds[0][0]).toBe("u1");
+	});
+
+	it("unpacks the act out of the trace row's context JSON", async () => {
+		const { env } = stubEnv([actRow()]);
+		const [a] = await recentActsForInstances(env, "u1", ["i1"]);
+		expect(a).toMatchObject({ kind: "pr.merge", irreversible: true, command: "gh pr merge 42", traceId: "run-1", at: 500 });
+	});
+
+	it("still yields the act when the context JSON is unreadable", async () => {
+		// A dropped row is a silently missing merge — the exact failure the record exists to end. A
+		// row with an unusable `context` still carries the sentence that names the act.
+		const { env } = stubEnv([actRow({ context: "{not json" })]);
+		const [a] = await recentActsForInstances(env, "u1", ["i1"]);
+		expect(a.summary).toBe("merged a pull request #42");
+		expect(a.kind).toBe("unknown");
+		expect(a.irreversible).toBe(false); // never ASSUMED true from an unreadable row
+	});
+
+	it("issues no query at all for an empty id list", async () => {
+		const { env, sqls } = stubEnv();
+		await expect(recentActsForInstances(env, "u1", [])).resolves.toEqual([]);
+		expect(sqls).toHaveLength(0);
+	});
+});
+
+describe("actsInWindow — one run's acts", () => {
+	it("bounds by TIME, not by trace id", async () => {
+		// A console terminal poll can drain a run's acts before the Pilot does, and stamps the
+		// session id when it does. Keying on trace_id would return a run's acts only when nobody had
+		// the terminal open — arbitrary, and backwards: the unwatched run is the one that matters.
+		const { env, sqls, binds } = stubEnv([actRow()]);
+		await actsInWindow(env, "u1", "i1", 100, 900);
+		expect(sqls[0]).toContain("ts >= ?3 AND ts <= ?4");
+		expect(binds[0]).toEqual(["i1", "u1", 100, 900]);
+	});
+
+	it("returns the window CHRONOLOGICALLY, so the run reads as a sequence", async () => {
+		const { env, sqls } = stubEnv([actRow()]);
+		await actsInWindow(env, "u1", "i1", 0, 1);
+		expect(sqls[0]).toContain("ORDER BY ts ASC");
+	});
+
+	it("clamps the row cap so a long run cannot return an unbounded read", async () => {
+		const { env, sqls } = stubEnv();
+		await actsInWindow(env, "u1", "i1", 0, 1, 100_000);
+		expect(sqls[0]).toContain("LIMIT 100");
 	});
 });
