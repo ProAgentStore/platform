@@ -324,3 +324,57 @@ export function dictationDiverged(heard: string, final: string): boolean {
 	if (h.length < 4) return false;
 	return words(final).length < Math.ceil(h.length * 0.6);
 }
+
+/**
+ * How many words the live recognizer heard that the final transcript does not account for
+ * (#319) — the "count of dropped words" the divergence flag reports.
+ *
+ * A multiset difference, not a diff: the two strings come from different engines, so their
+ * WORD ORDER is not evidence of anything, but a word heard three times and transcribed once
+ * is two words missing. Punctuation and case are normalized away for the same reason.
+ *
+ * This is deliberately a weaker claim than {@link dictationDiverged}: a loss of one word is
+ * worth showing next to the toggle, and nowhere near enough to accuse the pipeline of eating
+ * the user's speech. The flag decides whether to accuse; this decides what number to print.
+ */
+export function dictationLoss(heard: string, final: string): number {
+	const have = new Map<string, number>();
+	for (const w of words(final)) have.set(w, (have.get(w) ?? 0) + 1);
+	let lost = 0;
+	for (const w of words(heard)) {
+		const n = have.get(w) ?? 0;
+		if (n > 0) have.set(w, n - 1);
+		else lost++;
+	}
+	return lost;
+}
+
+/** Cap on a stored dictation. An utterance is one breath; this is far past any of them. */
+export const DICTATION_MAX = 4000;
+
+/**
+ * What to PERSIST beside the transcript for this turn, or `null` for "store nothing" (#319).
+ *
+ * The platform keeps exactly two artefacts of a voice turn today — the final transcript (the
+ * message) and the recording (`audioKey` → R2) — and could therefore never answer "is anything
+ * missing from what I said?", because the live capture was overwritten at end-of-turn. This is
+ * the third artefact, and the rules below exist so it is the LAST one: it is stored only where
+ * it says something the transcript does not.
+ *
+ * `null` in three cases, each of which would otherwise put a dead affordance on a bubble:
+ *
+ *  - **Nothing was heard live.** A typed turn, or Whisper on iOS where there is no browser
+ *    dictation gate at all. There is no second reading, so there is nothing to compare.
+ *  - **The two agree.** Word-for-word after normalization, the dictation is a second copy of
+ *    the sentence already on screen. Storing it would be a duplicate record of one fact.
+ *  - **The turn was `recover`ed** — not enforced here, but by construction: a recovered turn
+ *    goes to the composer rather than the thread ({@link classifyResult}), so it never reaches
+ *    the send path at all. If the human then sends what is in the composer, the transcript IS
+ *    the live capture, and the second rule above would drop it anyway.
+ */
+export function storedDictation(heard: string, final: string): string | null {
+	const h = heard.trim();
+	if (!h) return null;
+	if (words(h).join(" ") === words(final).join(" ")) return null;
+	return h.slice(0, DICTATION_MAX);
+}

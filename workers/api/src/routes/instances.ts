@@ -1389,7 +1389,7 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 instanceRoutes.post("/:instanceId/chat", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
-	const { message, audioKey } = await c.req.json<{ message: string; audioKey?: string }>();
+	const { message, audioKey, dictation } = await c.req.json<{ message: string; audioKey?: string; dictation?: string }>();
 	if (!message) throw new HttpError(400, "message required");
 
 	// Verify ownership
@@ -1414,7 +1414,7 @@ instanceRoutes.post("/:instanceId/chat", async (c) => {
 			body: JSON.stringify({
 				message, channel: "chat", userId: session.uid,
 				agentId: instanceId, agentName: agentMeta?.name || "Agent",
-				audioKey,
+				audioKey, dictation,
 			}),
 		}),
 	);

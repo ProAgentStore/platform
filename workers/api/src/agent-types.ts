@@ -7,8 +7,14 @@ export interface AgentMessage {
 	toolCalls?: ToolCall[];
 	toolResults?: ToolResult[];
 	/** R2 key (a per-turn id) for this message's saved voice audio, if any — the
-	 *  console fetches + replays it on double-tap. Set for voice-dictated turns. */
+	 *  console fetches + replays it from the message's speaker button. Set for voice turns. */
 	audioKey?: string;
+	/** What the LIVE recognizer heard at end-of-turn, when it differs from `content` (#319).
+	 *  Small text, so it is stored inline rather than behind a key like `audioKey` — there is
+	 *  no blob to point at, and a pointer would cost a fetch to read two sentences. Living ON
+	 *  the message is also what gives it the transcript's retention for free: clearing the chat
+	 *  deletes the record, and the dictation with it. Absent for typed turns. */
+	dictation?: string;
 	createdAt: string;
 }
 

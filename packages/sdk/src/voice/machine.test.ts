@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, type Dictation } from "./machine.js";
+import { ECHO_GUARD_MS, isEchoing, shouldIgnoreResult, canOpenMic, classifyResult, endOfTurnAction, derivePhase, isLateTurn, prepareConversationSwitch, resolveToggleAction, reduceDictation, dictationDiverged, dictationLoss, storedDictation, DICTATION_MAX, type Dictation } from "./machine.js";
 
 const NOW = 1_000_000;
 
@@ -290,5 +290,52 @@ describe("prepareConversationSwitch (#277/#279 — one guard for changing who yo
 		const p = prepareConversationSwitch({ mode: "handsfree", ttsSpeaking: false, dictation: null });
 		expect(p.recoverText).toBe("");
 		expect(p.clearDictation).toBe(false);
+	});
+});
+
+describe("dictationLoss (#319 — how many words the final did not account for)", () => {
+	it("counts the words heard live that the transcript never carried", () => {
+		expect(dictationLoss("open the deploy log for the api worker", "open the deploy log")).toBe(4);
+	});
+	it("is zero when the transcript carries everything, whatever the punctuation or case", () => {
+		expect(dictationLoss("open the Deploy log", "Open the deploy log!")).toBe(0);
+	});
+	// The two strings come from different engines, so ordering is not evidence — only absence is.
+	it("does not count re-ordering as loss", () => {
+		expect(dictationLoss("deploy the api worker", "worker api the deploy")).toBe(0);
+	});
+	// A word said twice and transcribed once IS one word missing; a set difference would miss it.
+	it("counts repeats, because a multiset is the honest comparison", () => {
+		expect(dictationLoss("no no no", "no")).toBe(2);
+	});
+	it("is zero when nothing was heard live", () => {
+		expect(dictationLoss("", "a perfectly good transcript")).toBe(0);
+	});
+});
+
+describe("storedDictation (#319 — what is worth keeping beside the transcript)", () => {
+	it("keeps the live capture when it differs from the transcript", () => {
+		expect(storedDictation("open the deploy log for the api worker", "open the deploy log")).toBe(
+			"open the deploy log for the api worker",
+		);
+	});
+	// The whole point of the rule: a bubble only sprouts a toggle where there is a second
+	// reading to show. Nothing heard live = a typed turn, or iOS with no dictation gate.
+	it("stores nothing when nothing was heard live", () => {
+		expect(storedDictation("", "a perfectly good transcript")).toBeNull();
+		expect(storedDictation("   ", "a perfectly good transcript")).toBeNull();
+	});
+	// Storing a second copy of the same sentence would be a duplicate record of one fact, and
+	// a toggle that switches between two identical strings.
+	it("stores nothing when the two engines agree, ignoring case and punctuation", () => {
+		expect(storedDictation("Open the deploy log.", "open the deploy log")).toBeNull();
+	});
+	// Wording disagreement is exactly the case worth keeping — it is invisible otherwise.
+	it("stores a mis-hearing even when no words were lost", () => {
+		expect(storedDictation("fix the bugs in the parser", "fix the bars in the parser")).toBe("fix the bugs in the parser");
+	});
+	it("caps what it stores, so one runaway recognizer cannot bloat a message", () => {
+		const long = "word ".repeat(2000);
+		expect(storedDictation(long, "short")?.length).toBe(DICTATION_MAX);
 	});
 });

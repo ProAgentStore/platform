@@ -60,8 +60,21 @@ language.
 
 ## Recording replay, translation & transliteration
 
-- **Replay** — each voice turn's audio is saved to R2 (`/voice-audio/:turnId`). Double-tap a
-  message to replay the original recording (falls back to TTS); cleared with the chat.
+- **Replay** — each voice turn's audio is saved to R2 (`/voice-audio/:turnId`). The speaker
+  button on a message replays the original recording (falls back to TTS); cleared with the chat.
+  (It is a button, not a tap on the bubble: a double-tap there hijacked double-click-to-select
+  and blocked copying the text.)
+- **What was heard vs what was sent** — a voice turn is read twice, by browser dictation as you
+  speak and then by Whisper on the clip, and the two disagree. When they do, the live capture is
+  stored beside the transcript on the message (`dictation`) and the bubble grows a **Show what
+  was heard** toggle, plus a count of the words the transcript never carried. Stored only where
+  there is something to compare — a typed turn, or one where both readings agree, carries
+  nothing and shows no toggle. It is never sent to the model: it is evidence for the reader,
+  not context. Same retention as the transcript exactly — it lives ON the message, so clearing
+  the chat deletes the dictation, the transcript and the recording together.
+
+  So the three controls on a voice turn read: **speaker** = hear what was said · **toggle** =
+  read what was heard · **the bubble** = read what was sent.
 - **Under-message translation** (Settings → Translation) — each assistant reply gets a
   lazily-fetched translation in 16 target languages, with an optional textbook-style
   interlinear gloss (e.g. hanzi with pinyin under each word). **Tap any word** to hear just it.

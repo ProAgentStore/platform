@@ -101,8 +101,11 @@ export interface Message {
 	role: "user" | "assistant" | "system";
 	content: string;
 	createdAt?: string;
-	/** Per-turn id of this message's saved voice audio (R2); double-tap replays it. */
+	/** Per-turn id of this message's saved voice audio (R2); the speaker button replays it. */
 	audioKey?: string;
+	/** What the live recognizer heard at end-of-turn, when it differs from `content` (#319).
+	 *  Present only on voice turns where there is a second reading worth comparing. */
+	dictation?: string;
 	/** Cached gloss attached server-side (renders in the same paint as the message —
 	 *  only uncached messages translate client-side). */
 	gloss?: MessageGloss;

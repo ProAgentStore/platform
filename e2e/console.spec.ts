@@ -972,6 +972,39 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect(page.locator("button .animate-spin")).toHaveCount(0, { timeout: 10000 });
 	});
 
+	test("a voice turn can be read as the transcript OR as what was heard live (#319)", async ({ page }) => {
+		// The two recognizers — browser dictation live, Whisper on the clip — disagree, and until
+		// the dictation was persisted beside the transcript there was no way to see that they had.
+		// "It isn't capturing everything I say" was a report the platform could not answer.
+		await mockSignedInConsole(page);
+		await page.route("**/v1/instances/inst-1/messages*", (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: "application/json",
+				body: JSON.stringify({
+					messages: [
+						{ id: "m1", role: "user", content: "open the deploy log", createdAt: "2026-08-05T10:00:00.000Z", dictation: "open the deploy log for the api worker" },
+						{ id: "m2", role: "user", content: "a message I typed", createdAt: "2026-08-05T10:01:00.000Z" },
+					],
+				}),
+			}),
+		);
+		await page.goto("/console/instances/inst-1");
+
+		// The transcript is what the bubble reads by default — what was SENT is still the message.
+		await expect(page.getByText("open the deploy log", { exact: true })).toBeVisible();
+		// The count is visible without a tap: the flag is the point, the words are one tap away.
+		await expect(page.getByText("4 words not in the transcript")).toBeVisible();
+
+		// Exactly one toggle: the typed turn does not sprout a dead affordance.
+		const toggle = page.getByRole("button", { name: "Show what was heard" });
+		await expect(toggle).toHaveCount(1);
+		await toggle.click();
+		await expect(page.getByText("open the deploy log for the api worker")).toBeVisible();
+		await page.getByRole("button", { name: "Heard live — show sent" }).click();
+		await expect(page.getByText("open the deploy log", { exact: true })).toBeVisible();
+	});
+
 	test("console deep links restore instance tabs after refresh", async ({ page }) => {
 		await mockSignedInConsole(page);
 

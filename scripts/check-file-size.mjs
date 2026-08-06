@@ -70,8 +70,14 @@ const PINS = {
 	"workers/mcp/src/instance-tools/base.ts": 1871,
 	"workers/api/src/routes/coding.ts": 1769,
 	"workers/api/src/routes/instances.ts": 1696,
-	"packages/sdk/src/voice/use-voice.ts": 1533,
-	"store/console/src/pages/InstanceDetail.tsx": 1243,
+	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
+	// key, so the two readings of a turn can be compared on the message. Raised rather than
+	// split — the whole change is one `storedDictation` call and the two `onSend` sites that
+	// already carried `audioKey`; the decision it makes is pure and lives in machine.ts.
+	"packages/sdk/src/voice/use-voice.ts": 1538,
+	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
+	// The toggle, the divergence count and their prose live in that component, not here.
+	"store/console/src/pages/InstanceDetail.tsx": 1245,
 	"agents/coder/web/src/CodingTab.tsx": 1217,
 	"packages/browser-runner/src/runner.ts": 1208,
 	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
@@ -81,7 +87,10 @@ const PINS = {
 	"workers/api/src/lib/connectors/mcp.ts": 1236,
 	"workers/mcp/src/index.ts": 1151,
 	"store/console/src/tabs/SettingsTab.tsx": 1149,
-	"workers/api/src/agent-do.ts": 1073,
+	// +6 for #319: the voice turn's live capture is accepted and stored on the message beside
+	// `audioKey`. Raised rather than split — it is one field on the record that handleChat
+	// already builds, and putting it anywhere else would give it a second retention rule.
+	"workers/api/src/agent-do.ts": 1079,
 	// +3 for #308: an import plus the two lines saying why three steps unwrap the fence that the
 	// connectors now apply at the source. Raised rather than split — the growth is a comment and
 	// one import, and splitting the step catalog to absorb three lines would be the tail wagging.

@@ -24,6 +24,10 @@ export { createTts } from "./voice/config.js";
 // on the very next mic start rather than the one after it.
 export { invalidateVoiceConfig } from "./voice/config.js";
 export type { Dictation, DictationStatus, VoicePhase } from "./voice/machine.js";
+// The dictation stored beside a transcript (#319) is compared on READ, not on write — the
+// message carries one string, and the loss/divergence over it is derived by the same pure
+// functions the send path used to decide whether it was worth storing at all.
+export { dictationDiverged, dictationLoss, storedDictation } from "./voice/machine.js";
 // The ONE guard for changing which agent you are talking to (#277/#279) — exported so a
 // consumer driving a switch from the UI side (a tap on the conversation indicator) makes the
 // same decision the voice command does.

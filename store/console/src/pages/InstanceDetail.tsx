@@ -20,6 +20,7 @@ import { adoptableRun, isChatWorking, shouldAdopt, type InstanceStateLike, type 
 import DynamicSurface from "../components/DynamicSurface";
 import HostedNode from "../components/HostedNode";
 import GlossedMessage from "../components/GlossedMessage";
+import SpokenMessage from "../components/SpokenMessage";
 
 /**
  * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
@@ -181,9 +182,9 @@ function InstancePage() {
 	const instanceNameRef = useRef("");
 
 	// Voice: both push-to-talk and conversation mode auto-send via this ref
-	const doSendRef = useRef<(text: string, audioKey?: string) => void>(() => {});
+	const doSendRef = useRef<(text: string, meta?: { audioKey?: string; dictation?: string }) => void>(() => {});
 	const voice = useVoice(id, {
-		onSend: (text, meta) => doSendRef.current(text, meta?.audioKey),
+		onSend: (text, meta) => doSendRef.current(text, meta),
 		/**
 		 * "next" (#277) — move to the agent asking for you, without touching the screen.
 		 *
@@ -513,14 +514,15 @@ function InstancePage() {
 		}
 	}, [id, emitSystemChat]);
 
-	const doSend = useCallback(async (msg: string, audioKey?: string) => {
+	const doSend = useCallback(async (msg: string, meta?: { audioKey?: string; dictation?: string }) => {
 		if (!msg.trim() || !id) return;
-		setMessages((prev) => [...prev, { role: "user", content: msg, createdAt: new Date().toISOString(), audioKey }]);
+		const { audioKey, dictation } = meta ?? {};
+		setMessages((prev) => [...prev, { role: "user", content: msg, createdAt: new Date().toISOString(), audioKey, dictation }]);
 		setThinking(true);
 		try {
 			const data = await api<{ message?: Message; toolMessage?: Message }>(
 				`/v1/instances/${id}/chat`,
-				{ method: "POST", body: JSON.stringify({ message: msg, audioKey }) },
+				{ method: "POST", body: JSON.stringify({ message: msg, audioKey, dictation }) },
 			);
 			if (data.toolMessage) {
 				setMessages((prev) => [...prev, data.toolMessage!]);
@@ -1113,7 +1115,7 @@ function InstancePage() {
 												onSpeak={speakTap}
 											/>
 										) : (
-											<span className="whitespace-pre-wrap break-words">{m.content}</span>
+											<SpokenMessage content={m.content} dictation={m.dictation} />
 										)}
 									</div>
 								);

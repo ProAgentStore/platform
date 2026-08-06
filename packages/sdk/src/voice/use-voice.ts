@@ -46,7 +46,7 @@ import { isConnectivityError, reportClientError } from "../client.js";
 import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel, isNoiseTranscript } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
-import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
+import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, storedDictation, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
 import { classifyVoiceError, decideRestart, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch, type VoiceMode } from "./convo.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
 import { uploadVoiceAudio } from "./voice-audio.js";
@@ -82,8 +82,10 @@ let activeHandsFree: { token: object; stop: () => void } | null = null;
 export type { VoiceMode };
 
 export function useVoice(instanceId: string | undefined, opts: {
-	/** Send a transcript. `meta.audioKey` is set for voice turns whose audio was saved. */
-	onSend: (text: string, meta?: { audioKey?: string }) => void;
+	/** Send a transcript. `meta.audioKey` is set for voice turns whose audio was saved;
+	 *  `meta.dictation` is what the live recognizer heard, when that differs from the
+	 *  transcript (#319) — persist it beside the message so the two can be compared. */
+	onSend: (text: string, meta?: { audioKey?: string; dictation?: string }) => void;
 	/**
 	 * A turn the user really spoke, transcribed too late to send (#175) — the agent replied (or
 	 * the mode changed) while they were still talking. Hand it back instead of dropping it: put
@@ -443,6 +445,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 			setTimeout(() => setInterim((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
 			return;
 		}
+		// The live capture, kept BESIDE the transcript on the message rather than only in a
+		// console.warn (#319). Null whenever there is nothing to compare — see storedDictation.
+		const dictation = storedDictation(heard, text) ?? undefined;
 		const blob = lastAudioBlobRef.current;
 		lastAudioBlobRef.current = null;
 		// Only attach a replay audioKey when there's ACTUAL audio bytes. A zero-byte blob
@@ -450,13 +455,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// so send the text alone in that case.
 		if (blob && blob.size > 0 && instanceId) {
 			const turnId = crypto.randomUUID();
-			onSendRef.current(text, { audioKey: turnId });
+			onSendRef.current(text, { audioKey: turnId, dictation });
 			void uploadVoiceAudio(instanceId, turnId, blob);
 		} else {
 			// No saved audio (browser dictation, or no instance) — send the raw text.
 			// NOTE: must be onSendRef, NOT emitSendRef — the latter is THIS function and
 			// would recurse forever (stack overflow) on every dictation send.
-			onSendRef.current(text);
+			onSendRef.current(text, dictation ? { dictation } : undefined);
 		}
 	};
 	const emitSendRef = useRef(emitSend);

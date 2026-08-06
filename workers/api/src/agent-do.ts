@@ -378,6 +378,7 @@ export class AgentDO extends DurableObject<Env> {
 			agentId?: string;
 			agentName?: string;
 			audioKey?: string;
+			dictation?: string;
 			/** Set when a supervisor's durable loop is driving this turn (#183/#184/#185). */
 			budgetId?: string | null;
 			onBehalfOf?: string | null;
@@ -425,9 +426,14 @@ export class AgentDO extends DurableObject<Env> {
 			content: message,
 			channel: channel || "chat",
 			userId,
-			// Voice turns carry a per-turn audio id; the saved recording is replayed on
-			// double-tap. Sanitized (it becomes an R2 key path segment).
+			// Voice turns carry a per-turn audio id; the saved recording is replayed from the
+			// message's speaker button. Sanitized (it becomes an R2 key path segment).
 			...(typeof body.audioKey === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(body.audioKey) ? { audioKey: body.audioKey } : {}),
+			// The live capture for a voice turn (#319), stored ON the message so it shares the
+			// transcript's lifetime exactly — no second retention rule to keep in step, and a
+			// cleared chat cannot leave a dictation behind. Capped like any client-supplied
+			// string; it is NEVER read back into the model's context, only shown to the user.
+			...(typeof body.dictation === "string" && body.dictation.trim() ? { dictation: body.dictation.slice(0, 4000) } : {}),
 			createdAt: new Date().toISOString(),
 		};
 		await this.appendMessage(userMsg);
