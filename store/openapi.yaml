@@ -258,6 +258,37 @@ components:
           type: boolean
           example: true
 
+    McpSurfaceReport:
+      type: object
+      description: |
+        One READ surface of a remote MCP server — its resources or its prompts (#263) — as the
+        connection test found it, together with what THIS agent may do with it.
+
+        Reported apart from `gates` on purpose: these surfaces are read-scoped, so the
+        connector-level write kill switch and the per-(endpoint, tool) grant do not apply to them
+        at all. The only gate is the agent's declared tool allowlist, and printing a write switch
+        beside a resource count would send an owner to flip something that changes nothing here.
+      required: [state, count, more, listEnabled, readEnabled, detail]
+      properties:
+        state:
+          type: string
+          enum: [available, unsupported, unreadable]
+          description: |
+            `unsupported` is the server answering `-32601` — it publishes none, which is a correct
+            answer and not a fault. `unreadable` is "we could not ask" (a rejected credential, a
+            transport failure); it is kept distinct because reporting it as `unsupported` would
+            claim zero resources for a server that may hold thousands, undetectably.
+        count: { type: integer, description: Entries on the FIRST page, as published by the server — before any gate. }
+        more: { type: boolean, description: The server paged, so `count` is a page and not a total. }
+        listEnabled: { type: boolean, description: "Can this agent run the list tool (`mcp_list_resources` / `mcp_list_prompts`)?" }
+        readEnabled: { type: boolean, description: "Can this agent run the read tool (`mcp_read_resource` / `mcp_get_prompt`)?" }
+        detail:
+          type: string
+          description: |
+            One actionable sentence. When a count is present but a gate is shut it names the gate
+            that must be fixed FIRST, so nobody is told to enable the read tool while the list
+            tool still hides the catalog.
+
     User:
       type: object
       properties:
@@ -5900,6 +5931,17 @@ paths:
         Discovery uses `tools/list`, which is read-scoped and needs no consent — you cannot
         approve tools you cannot enumerate.
 
+        On a successful connection it also probes the two READ surfaces (`resources/list` and
+        `prompts/list`) and reports each under `resources` / `prompts`. Those are read-scoped, so
+        neither the write kill switch nor any per-tool grant applies to them — the only gate is
+        whether the agent declares `mcp_list_resources` / `mcp_read_resource` (and the prompt
+        equivalents), which is why they are reported separately from `gates` rather than inside
+        it. The counts come from a probe run on the OWNER's authority, so each surface also says
+        whether the AGENT can reach what was found: a count without that is true about the server
+        and false about what will happen. `-32601` is reported as `unsupported` ("this server has
+        none"), never as a failure. Both fields are absent when the connection itself failed —
+        an unreachable server taught us nothing about what it publishes.
+
         The endpoint is user-supplied config, so this request goes out through the same
         SSRF-guarded, https-only path as any other outbound MCP call (no test-only fast path),
         it is rate-limited strictly, and it writes the same redacted `agent_events` row — a test
@@ -5950,6 +5992,8 @@ paths:
                     properties:
                       callToolEnabled: { type: boolean, description: The agent declares `mcp_call_tool` and the owner has not switched it off. }
                       writeConsent: { type: boolean, description: "Connector-level write consent for `mcp` — the kill switch." }
+                  resources: { $ref: "#/components/schemas/McpSurfaceReport" }
+                  prompts: { $ref: "#/components/schemas/McpSurfaceReport" }
                   tools:
                     type: array
                     items:

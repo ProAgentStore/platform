@@ -44,6 +44,18 @@ export interface McpReportTool {
 	blockedBy?: McpBlocker;
 }
 
+/** Mirrors McpSurfaceState / McpSurfaceReport in workers/api/src/lib/mcp-connection.ts (#263). */
+export type McpSurfaceState = "available" | "unsupported" | "unreadable";
+
+export interface McpSurfaceReport {
+	state: McpSurfaceState;
+	count: number;
+	more: boolean;
+	listEnabled: boolean;
+	readEnabled: boolean;
+	detail: string;
+}
+
 export interface McpReport {
 	endpoint: string;
 	status: McpStatus;
@@ -57,6 +69,8 @@ export interface McpReport {
 	toolCount: number;
 	callableCount: number;
 	gates: { callToolEnabled: boolean; writeConsent: boolean };
+	resources?: McpSurfaceReport;
+	prompts?: McpSurfaceReport;
 	auth?: { protectedResource: boolean; authorizationServer?: string; dynamicRegistration?: boolean; pkceS256?: boolean; unattended?: string };
 }
 
@@ -191,6 +205,26 @@ export function blockerHint(blocker: McpBlocker): string {
 		case "no_grant":
 			return "Not allowed yet — tick it to grant this agent access.";
 	}
+}
+
+/**
+ * The one-line summary for a read surface (#263) — resources or prompts.
+ *
+ * Tone follows REACH, not availability, which is the whole point of #266 restated for a second
+ * surface: a server publishing 40 resources that this agent cannot list is not good news, so it
+ * is amber. A server that simply has none is neutral — there is nothing to fix, and colouring it
+ * as a problem sends people looking for a setting that would not help.
+ *
+ * `count` is shown with a `+` when the server paged, because a bare "200" reads as a total.
+ */
+export function surfaceLine(surface: McpSurfaceReport): { label: string; tone: "muted" | "amber" } {
+	if (surface.state === "unsupported") return { label: "none published", tone: "muted" };
+	if (surface.state === "unreadable") return { label: "couldn’t read", tone: "amber" };
+	if (surface.count === 0) return { label: "none right now", tone: "muted" };
+	const n = `${surface.count}${surface.more ? "+" : ""}`;
+	if (!surface.listEnabled) return { label: `${n} · agent can’t list them`, tone: "amber" };
+	if (!surface.readEnabled) return { label: `${n} · list only`, tone: "amber" };
+	return { label: `${n} · listable and readable`, tone: "muted" };
 }
 
 /**

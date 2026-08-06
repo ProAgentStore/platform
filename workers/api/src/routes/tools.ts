@@ -8,9 +8,9 @@ import { hasConsent, listConsents, revokeConsent, setConsent } from "../lib/conn
 import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint, revokeMcpConsent, setMcpConsent } from "../lib/mcp-consent.js";
 import { getConnector } from "../lib/connectors/registry.js";
 import { connectorClient } from "../lib/connectors/client.js";
-import { probeMcpEndpoint } from "../lib/connectors/mcp.js";
+import { probeMcpEndpoint, probeMcpSurface } from "../lib/connectors/mcp.js";
 import { discoverAuthServer } from "../lib/connectors/discovery.js";
-import { connectionStatusFor, parseToolCatalog, summarizeConnection, summarizeTools, type McpConnectionReport } from "../lib/mcp-connection.js";
+import { connectionStatusFor, parseToolCatalog, summarizeConnection, summarizeSurface, summarizeTools, type McpConnectionReport } from "../lib/mcp-connection.js";
 import { replaceMcpToolCatalog } from "../lib/mcp-tool-catalog.js";
 import {
 	adoptLegacyMcpCredential,
@@ -571,11 +571,10 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 	};
 	const grantsForEndpoint = (await listMcpConsents(c.env, instanceId)).filter((g) => g.endpoint === endpoint);
 
-	const probe = await probeMcpEndpoint(
-		{ env: c.env, userId: session.uid, instanceId, connectorClient: (provider: string) => connectorClient(c.env, provider, { userId: session.uid, instanceId }) },
-		endpoint,
-		useAuth,
-	);
+	// One context for every probe on this route, so the tool probe and the read-surface probes
+	// resolve the same credential, share the era cache, and log under the same identity.
+	const probeCtx = { env: c.env, userId: session.uid, instanceId, connectorClient: (provider: string) => connectorClient(c.env, provider, { userId: session.uid, instanceId }) };
+	const probe = await probeMcpEndpoint(probeCtx, endpoint, useAuth);
 
 	// The connector only asks a server about its auth model when a credential is REJECTED (a 401/403
 	// is the moment that question matters to it). The panel needs the answer one step earlier: the
@@ -608,6 +607,27 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 	}
 	const tools = summarizeTools(discovered, grantsForEndpoint, gates);
 
+	// The read surfaces (#263). Two more read-scoped calls, on the connection we just proved —
+	// so the panel can say what a server offers besides tools, and say it with the same honesty
+	// the tool list gets: a count the agent cannot reach is reported as unreachable, not as
+	// availability.
+	//
+	// Only on SUCCESS, and never on a failed connection: an unreachable server taught us nothing
+	// about what it publishes, and "no resources" for a host that was briefly down is a confident
+	// wrong answer where silence was available. Both are `-32601`-tolerant, so a server with no
+	// resources costs one round trip and reads as "it has none" rather than as a fault.
+	const enabled = (name: string) => policy.find((t) => t.name === name)?.allowed === true;
+	let resources: McpConnectionReport["resources"];
+	let prompts: McpConnectionReport["prompts"];
+	if (probe.success) {
+		const [resProbe, promptProbe] = await Promise.all([
+			probeMcpSurface(probeCtx, endpoint, useAuth, "resources"),
+			probeMcpSurface(probeCtx, endpoint, useAuth, "prompts"),
+		]);
+		resources = summarizeSurface("resources", resProbe, { listEnabled: enabled("mcp_list_resources"), readEnabled: enabled("mcp_read_resource") });
+		prompts = summarizeSurface("prompts", promptProbe, { listEnabled: enabled("mcp_list_prompts"), readEnabled: enabled("mcp_get_prompt") });
+	}
+
 	const base: Omit<McpConnectionReport, "detail"> = {
 		endpoint,
 		status: connectionStatusFor(probe.failure, probe.success),
@@ -620,6 +640,8 @@ toolRoutes.post("/:id/mcp/test", async (c) => {
 		toolCount: tools.length,
 		callableCount: tools.filter((t) => t.callable).length,
 		gates,
+		resources,
+		prompts,
 		// Only the SHAPE of the auth model, never a token, an endpoint's query string, or a
 		// header. `probe.content` is already redacted upstream (redactText) before it reaches
 		// either the transcript or the log.

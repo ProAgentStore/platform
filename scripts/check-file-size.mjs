@@ -74,7 +74,11 @@ const PINS = {
 	"store/console/src/pages/InstanceDetail.tsx": 1243,
 	"agents/coder/web/src/CodingTab.tsx": 1217,
 	"packages/browser-runner/src/runner.ts": 1208,
-	"workers/api/src/lib/connectors/mcp.ts": 1191,
+	// +45 at #263: `probeMcpSurface`, so the connection test can ask about resources and prompts
+	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
+	// with the rest of the transport, and the reasoning it feeds is pure and lives in
+	// mcp-connection.ts, which is where a split would have put it anyway.
+	"workers/api/src/lib/connectors/mcp.ts": 1236,
 	"workers/mcp/src/index.ts": 1151,
 	"store/console/src/tabs/SettingsTab.tsx": 1149,
 	"workers/api/src/agent-do.ts": 1073,
@@ -90,7 +94,8 @@ const PINS = {
 	"workers/api/src/routes/instances-runtime.ts": 849,
 	"workers/api/src/lib/triggers.ts": 838,
 	"packages/browser-runner/src/coding/headless.ts": 819,
-	"workers/api/src/routes/tools.ts": 811,
+	// +22 at #263: the two read-surface probes and their gate lookup on /mcp/test.
+	"workers/api/src/routes/tools.ts": 833,
 };
 
 /**

@@ -9,10 +9,12 @@ import {
 	presetFor,
 	statusBadge,
 	summarizeSmoke,
+	surfaceLine,
 	type McpCredentialState,
 	type McpGrant,
 	type McpPreset,
 	type McpReport,
+	type McpSurfaceReport,
 } from "../lib/mcpConnections";
 
 /**
@@ -538,6 +540,40 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					)}
 					{report.status === "connected" && report.gates.callToolEnabled && !report.gates.writeConsent && (
 						<p className="text-[0.68rem] text-yellow mt-1">MCP write access is off. Granting a tool below turns it on.</p>
+					)}
+
+					{/* Resources and prompts (#263). A server is more than its tools, and the panel used
+					    to imply otherwise: an owner who granted every tool still had no way to learn
+					    that the server publishes 40 documents an agent could read.
+
+					    Held to the same rule as the tool list — the line reports REACH, not just
+					    availability. These surfaces are read-scoped, so there is nothing to tick here
+					    and no write switch to flip; the only gate is whether the agent declares the
+					    read tools, and the sentence says so rather than leaving the user hunting for
+					    an approval that does not exist. */}
+					{report.status === "connected" && (report.resources || report.prompts) && (
+						<div className="mt-2">
+							<div className="text-[0.7rem] font-semibold mb-1">Also on this server</div>
+							{([["Resources", report.resources], ["Prompts", report.prompts]] as const).map(([label, surface]) => {
+								if (!surface) return null;
+								const line = surfaceLine(surface);
+								return (
+									<div key={label} className="flex items-baseline gap-2 text-[0.68rem] mb-0.5">
+										<span className="w-16 shrink-0 text-muted">{label}</span>
+										<span className={line.tone === "amber" ? "text-yellow" : "text-muted-soft"}>{line.label}</span>
+									</div>
+								);
+							})}
+							{/* The full sentence for whichever surface has something to act on — the short
+							    line says what, this says what to do about it. */}
+							{[report.resources, report.prompts]
+								.filter((s): s is McpSurfaceReport => !!s && s.state === "available" && s.count > 0 && (!s.listEnabled || !s.readEnabled))
+								.map((s) => (
+									<p key={s.detail} className="text-[0.66rem] text-yellow leading-snug mt-0.5">
+										{s.detail}
+									</p>
+								))}
+						</div>
 					)}
 
 					{report.tools.length > 0 && (

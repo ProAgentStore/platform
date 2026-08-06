@@ -9,6 +9,7 @@ import {
 	presetFor,
 	statusBadge,
 	summarizeSmoke,
+	surfaceLine,
 	type McpCredential,
 	type McpStatus,
 } from "./mcpConnections";
@@ -169,6 +170,32 @@ describe("summarizeSmoke — what the live check reports", () => {
 
 	it("finds the list inside a wrapper object", () => {
 		expect(summarizeSmoke(envelope({ agents: [{ name: "One" }] })).count).toBe(1);
+	});
+});
+
+describe("surfaceLine — the resources/prompts line (#263)", () => {
+	const s = (over: Partial<Parameters<typeof surfaceLine>[0]> = {}) => ({ state: "available" as const, count: 3, more: false, listEnabled: true, readEnabled: true, detail: "", ...over });
+
+	it("colours by REACH, not by availability", () => {
+		// A server publishing 40 resources this agent cannot list is not good news. Neutral tone
+		// there would read as "all fine" for the precise state that silently does nothing.
+		expect(surfaceLine(s())).toEqual({ label: "3 · listable and readable", tone: "muted" });
+		expect(surfaceLine(s({ listEnabled: false })).tone).toBe("amber");
+		expect(surfaceLine(s({ readEnabled: false }))).toEqual({ label: "3 · list only", tone: "amber" });
+	});
+
+	it("treats 'the server has none' as neutral, not as a problem", () => {
+		// There is nothing to fix, and amber sends people hunting for a setting that wouldn't help.
+		expect(surfaceLine(s({ state: "unsupported", count: 0 }))).toEqual({ label: "none published", tone: "muted" });
+		expect(surfaceLine(s({ count: 0 })).tone).toBe("muted");
+	});
+
+	it("flags a surface we could not read, which is not the same as an empty one", () => {
+		expect(surfaceLine(s({ state: "unreadable", count: 0 }))).toEqual({ label: "couldn’t read", tone: "amber" });
+	});
+
+	it("shows a paged count as a page", () => {
+		expect(surfaceLine(s({ count: 200, more: true })).label).toContain("200+");
 	});
 });
 

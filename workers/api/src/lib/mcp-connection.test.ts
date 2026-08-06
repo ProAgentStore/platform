@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectionStatusFor, explainBlocker, parseToolCatalog, summarizeConnection, summarizeTools, type McpConnectionReport } from "./mcp-connection.js";
+import { connectionStatusFor, explainBlocker, parseToolCatalog, summarizeConnection, summarizeSurface, summarizeTools, type McpConnectionReport } from "./mcp-connection.js";
 import { ALL_TOOLS } from "./mcp-consent.js";
 
 describe("connectionStatusFor", () => {
@@ -142,6 +142,58 @@ describe("summarizeConnection", () => {
 		const detail = summarizeConnection(base({ toolCount: 1, callableCount: 1, era: "legacy", protocolVersion: "2025-06-18" }), "");
 		expect(detail).toContain("2025-06-18");
 		expect(detail).toContain("legacy");
+	});
+});
+
+describe("summarizeSurface — resources and prompts, held to the same honesty as the tool list (#263)", () => {
+	const open = { listEnabled: true, readEnabled: true };
+	const probe = (over: Partial<Parameters<typeof summarizeSurface>[1]> = {}) => ({ state: "available" as const, count: 3, more: false, detail: "", ...over });
+
+	it("says a count is reachable only when the agent can actually reach it", () => {
+		// The #266 rule, restated for a second surface. The probe runs on the OWNER's authority, so
+		// a bare "3 resources" is true about the server and false about what the agent will do —
+		// which is the exact shape of lie this whole surface exists to prevent.
+		expect(summarizeSurface("resources", probe(), open).detail).toMatch(/list and read them/);
+		expect(summarizeSurface("resources", probe(), { listEnabled: false, readEnabled: true }).detail).toMatch(/can't run `mcp_list_resources`/);
+		expect(summarizeSurface("resources", probe(), { listEnabled: true, readEnabled: false }).detail).toMatch(/can't run `mcp_read_resource`/);
+	});
+
+	it("names the gate that must be fixed FIRST when both are shut", () => {
+		// Telling someone to enable the read tool while the list tool still hides the catalog sends
+		// them to make a change that visibly does nothing.
+		const detail = summarizeSurface("prompts", probe(), { listEnabled: false, readEnabled: false }).detail;
+		expect(detail).toContain("mcp_list_prompts");
+		expect(detail).not.toContain("mcp_get_prompt");
+	});
+
+	it("keeps 'the server has none' apart from 'we could not ask'", () => {
+		expect(summarizeSurface("prompts", probe({ state: "unsupported", count: 0 }), open).detail).toBe("This server publishes no prompts.");
+		// The transport's own sentence survives — replacing it with a generic failure throws away
+		// the only actionable half of the diagnosis, exactly as on the headline.
+		const unreadable = summarizeSurface("resources", probe({ state: "unreadable", count: 0, detail: "MCP server rejected the credential (HTTP 401)." }), open);
+		expect(unreadable.detail).toContain("HTTP 401");
+	});
+
+	it("distinguishes a surface that exists but is empty from one that does not exist", () => {
+		// "It has no resources today" and "it does not do resources" are different facts, and an
+		// owner who conflates them goes looking for a permission that was never involved.
+		expect(summarizeSurface("resources", probe({ count: 0 }), open).detail).toMatch(/answers `resources\/list` but currently offers none/);
+	});
+
+	it("marks a paged count as a page, not a total", () => {
+		// A flat "200 resources" for a server holding thousands reads as complete.
+		expect(summarizeSurface("resources", probe({ count: 200, more: true }), open).detail).toContain("200+");
+	});
+
+	it("says reads need no approval, because there is no grant to go and tick", () => {
+		// These surfaces are read-scoped: the write kill switch and the per-tool grant do not apply.
+		// Silence here sends the owner hunting for an approval that does not exist.
+		expect(summarizeSurface("prompts", probe(), open).detail).toMatch(/no per-item approval/);
+	});
+
+	it("carries the gate state through, so the console never re-derives the rule", () => {
+		const r = summarizeSurface("resources", probe({ count: 1 }), { listEnabled: true, readEnabled: false });
+		expect(r).toMatchObject({ state: "available", count: 1, more: false, listEnabled: true, readEnabled: false });
 	});
 });
 

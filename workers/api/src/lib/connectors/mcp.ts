@@ -949,6 +949,51 @@ function readSurfaceOutcome(out: CallOutcome, method: string, emptyAnswer: strin
 	return { content: out.content, success: false };
 }
 
+/** What a read-surface probe concluded. Three states, because "the server has none" and "we
+ *  could not find out" have different remedies and collapsing them is the lie #266 is about. */
+export type McpSurfaceState = "available" | "unsupported" | "unreadable";
+
+export interface McpSurfaceProbe {
+	state: McpSurfaceState;
+	/** Entries on the FIRST page — the server's own answer, before any gate. */
+	count: number;
+	/** The server paged, so `count` is a page and not a total. Reported rather than hidden: a
+	 *  flat "200 resources" for a server with thousands is a number that reads as complete. */
+	more: boolean;
+	/** Transport detail, already redacted. Empty when the probe answered. */
+	detail: string;
+}
+
+/**
+ * Ask a server what it publishes on ONE read surface (#263), for the connection test.
+ *
+ * Same path as everything else — `mcpCall`, therefore `safeFetch`, therefore https-only and
+ * SSRF-guarded, therefore the era cache and the redacted `agent_events` row. The endpoint is
+ * user-supplied config, so the probe deliberately gets no shortcut of its own.
+ *
+ * `-32601` is `unsupported`, NOT a failure: a server that implements no resources is answering
+ * correctly, and reporting that as an error is what makes an owner go debug a working server.
+ * Everything else that fails is `unreadable` and keeps the transport's own sentence, because
+ * "this server has none" and "we could not ask" must never collapse into one answer.
+ */
+export async function probeMcpSurface(ctx: RegistryToolCtx, url: string, useAuth: boolean, surface: "resources" | "prompts"): Promise<McpSurfaceProbe> {
+	const out = await mcpCall(ctx, { url, auth: useAuth ? "vault" : "none" }, `${surface}/list`, {}, {});
+	if (!out.success) {
+		const unsupported = out.rpcCode === ERR_METHOD_NOT_FOUND;
+		return { state: unsupported ? "unsupported" : "unreadable", count: 0, more: false, detail: unsupported ? "" : out.content };
+	}
+	let parsed: unknown = null;
+	try {
+		parsed = JSON.parse(out.content);
+	} catch {
+		/* a success whose body will not parse is a server bug, not a missing surface — reported as
+		   an empty catalog, exactly as the tool catalog treats the same case */
+	}
+	const listed = surface === "resources" ? parseResourceList(parsed) : parsePromptList(parsed);
+	const page = "resources" in listed ? listed.resources : listed.prompts;
+	return { state: "available", count: page.length, more: !!listed.nextCursor, detail: "" };
+}
+
 export const MCP_TOOLS: ToolDef[] = [
 	{
 		name: "mcp_list_tools",

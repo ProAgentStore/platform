@@ -17,6 +17,7 @@ import {
 	MODERN_VERSION,
 	negotiateVersion,
 	parseRpcBody,
+	probeMcpSurface,
 	recallEra,
 	resetEraCache,
 	RESOURCE_MAX_CHARS,
@@ -863,6 +864,46 @@ describe("mcp_list_resources / mcp_list_prompts", () => {
 		const r = await listResources.handler(ctx, { url: "https://example.com/mcp" });
 		expect(r.success).toBe(false);
 		expect(r.content).toMatch(/401|authoriz|authentic|token/i);
+	});
+});
+
+describe("probeMcpSurface — what the connection test may say about resources and prompts (#263)", () => {
+	it("counts what the server published and flags that a page is not a total", async () => {
+		mockRpc({
+			"resources/list": {
+				body: { jsonrpc: "2.0", id: 1, result: { resources: [{ uri: "file:///a" }, { uri: "file:///b" }], nextCursor: "page-2" } },
+			},
+		});
+		const { ctx } = makeCtx();
+		expect(await probeMcpSurface(ctx, "https://example.com/mcp", false, "resources")).toEqual({ state: "available", count: 2, more: true, detail: "" });
+	});
+
+	it("reads -32601 as 'this server has none' rather than as a fault", async () => {
+		// The same distinction the tools make, at the surface an owner actually reads. Reported as
+		// a failure, a server that simply implements no prompts looks broken and someone goes and
+		// debugs a connection that works perfectly.
+		mockRpc({ "prompts/list": { body: { jsonrpc: "2.0", id: 1, error: { code: -32601, message: "Method not found" } } } });
+		const { ctx } = makeCtx();
+		expect(await probeMcpSurface(ctx, "https://example.com/mcp", false, "prompts")).toMatchObject({ state: "unsupported", count: 0, detail: "" });
+	});
+
+	it("keeps 'we could not ask' distinct from 'it has none', with the transport's own sentence", async () => {
+		// A 401 collapsed into `unsupported` would report zero resources for a server holding
+		// thousands the owner simply has not authorized — a silent zero nobody can detect.
+		mockRpc({ "resources/list": { status: 401, body: { error: "unauthorized" } } });
+		const { ctx } = makeCtx();
+		const r = await probeMcpSurface(ctx, "https://example.com/mcp", false, "resources");
+		expect(r.state).toBe("unreadable");
+		expect(r.detail).toMatch(/401|authoriz|authentic|token/i);
+	});
+
+	it("goes out through the ordinary guarded path, so a probe is as auditable as a real call", async () => {
+		// The endpoint is user-supplied config, which makes any probe an SSRF primitive. It gets no
+		// fast path of its own: same mcpCall, same safeFetch, same redacted trace row.
+		mockRpc({ "resources/list": { body: { jsonrpc: "2.0", id: 1, result: { resources: [] } } } });
+		const { ctx, events } = makeCtx();
+		await probeMcpSurface(ctx, "https://example.com/mcp", false, "resources");
+		expect(events.at(-1)).toMatchObject({ source: "mcp", event: "mcp.call", context: { method: "resources/list", endpoint: "https://example.com/mcp" } });
 	});
 });
 

@@ -656,4 +656,84 @@ describe("POST /v1/instances/:id/mcp/test (connection diagnostics)", () => {
 		expect(res.status).toBe(404);
 		expect(calls).toHaveLength(0);
 	});
+
+	/**
+	 * The read surfaces (#263). Before this the probe asked `tools/list` and nothing else, so the
+	 * report had nothing to say about resources or prompts and the Settings panel could not show
+	 * their availability. The rule carried over from #266 is that availability must be reported
+	 * together with REACH: the probe runs on the owner's authority, so a count on its own says
+	 * nothing about what the agent will manage to do.
+	 */
+	describe("resources and prompts", () => {
+		/** Answer per JSON-RPC method, so tools/resources/prompts can differ in one connection test. */
+		function mockByMethod(byMethod: Record<string, unknown>) {
+			const methods: string[] = [];
+			vi.spyOn(globalThis, "fetch").mockImplementation(async (_url: unknown, init?: RequestInit) => {
+				const method = String((JSON.parse(String(init?.body ?? "{}")) as { method?: string }).method ?? "");
+				methods.push(method);
+				const body = byMethod[method] ?? { jsonrpc: "2.0", id: 1, error: { code: -32601, message: "Method not found" } };
+				return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+			});
+			return methods;
+		}
+
+		it("probes both read surfaces and reports what each server actually publishes", async () => {
+			const methods = mockByMethod({
+				"tools/list": CATALOG,
+				"resources/list": { jsonrpc: "2.0", id: 1, result: { resources: [{ uri: "file:///a" }, { uri: "file:///b" }] } },
+				// prompts/list falls through to -32601 — the ordinary answer from a server that has none.
+			});
+			const { app, env } = testApp({ agentConfig: JSON.stringify({ capabilities: { tools: ["mcp_list_tools", "mcp_call_tool", "mcp_list_resources", "mcp_read_resource"] } }) });
+			const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp", auth: "none" }) }, await tok("u1"));
+			const body = (await res.json()) as { resources: { state: string; count: number; detail: string }; prompts: { state: string; detail: string } };
+			expect(methods).toContain("resources/list");
+			expect(methods).toContain("prompts/list");
+			expect(body.resources).toMatchObject({ state: "available", count: 2, listEnabled: true, readEnabled: true });
+			// A server with no prompts is answering correctly, not failing. Reported as a fault, the
+			// owner goes and debugs a connection that works.
+			expect(body.prompts.state).toBe("unsupported");
+			expect(body.prompts.detail).toMatch(/publishes no prompts/);
+		});
+
+		it("does not report resources as reachable when the agent cannot run the read tools", async () => {
+			// THE #266 lie, in its second home: the probe enumerated them on the owner's authority,
+			// but this agent declares neither read tool, so it will see none of it.
+			mockByMethod({ "tools/list": CATALOG, "resources/list": { jsonrpc: "2.0", id: 1, result: { resources: [{ uri: "file:///a" }] } } });
+			const { app, env } = testApp({ agentConfig: MCP_AGENT_CONFIG });
+			const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp", auth: "none" }) }, await tok("u1"));
+			const body = (await res.json()) as { resources: { count: number; listEnabled: boolean; readEnabled: boolean; detail: string } };
+			expect(body.resources).toMatchObject({ count: 1, listEnabled: false, readEnabled: false });
+			expect(body.resources.detail).toMatch(/can't run `mcp_list_resources`/);
+		});
+
+		it("says nothing about either surface when the connection itself failed", async () => {
+			// An unreachable server taught us nothing about what it publishes, and a confident
+			// "no resources" for a host that was briefly down is worse than silence.
+			const methods = mockByMethod({});
+			vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+				methods.push("tools/list");
+				return new Response(JSON.stringify({ error: "nope" }), { status: 401, headers: { "Content-Type": "application/json" } });
+			});
+			const { app, env } = testApp({ agentConfig: MCP_AGENT_CONFIG });
+			const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp", auth: "none" }) }, await tok("u1"));
+			const body = (await res.json()) as { status: string; resources?: unknown; prompts?: unknown };
+			expect(body.status).toBe("auth_required");
+			expect(body.resources).toBeUndefined();
+			expect(body.prompts).toBeUndefined();
+		});
+
+		it("keeps the read surfaces out of the write gates, because no write gate applies to them", async () => {
+			// `gates` describes what blocks `mcp_call_tool`. Resources and prompts are read-scoped:
+			// the connector write switch and the per-tool grant are simply not involved, and listing
+			// them there would send an owner to flip something that changes nothing.
+			mockByMethod({ "tools/list": CATALOG, "resources/list": { jsonrpc: "2.0", id: 1, result: { resources: [{ uri: "file:///a" }] } } });
+			const { app, env } = testApp({ agentConfig: JSON.stringify({ capabilities: { tools: ["mcp_list_tools", "mcp_call_tool", "mcp_list_resources", "mcp_read_resource"] } }) });
+			const res = await req(app, env, "/v1/instances/i1/mcp/test", { method: "POST", body: JSON.stringify({ url: "https://example.com/mcp", auth: "none" }) }, await tok("u1"));
+			const body = (await res.json()) as { gates: unknown; resources: { readEnabled: boolean; detail: string } };
+			expect(body.gates).toEqual({ callToolEnabled: true, writeConsent: false });
+			// No write consent, no grants — and the resources are still fully reachable.
+			expect(body.resources.readEnabled).toBe(true);
+			expect(body.resources.detail).toMatch(/no per-item approval/);
+		});
+	});
 });

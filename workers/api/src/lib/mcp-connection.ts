@@ -27,7 +27,7 @@
 // server relabel `delete_everything` as safe and collect a wildcard grant. `isDestructiveToolName`
 // runs on the name WE would put on the wire, exactly as the enforcement does.
 import { ALL_TOOLS, grantsAllowTool, isDestructiveToolName, type McpConsentRow } from "./mcp-consent.js";
-import type { McpEra, McpFailureClass } from "./connectors/mcp.js";
+import type { McpEra, McpFailureClass, McpSurfaceProbe, McpSurfaceState } from "./connectors/mcp.js";
 
 /**
  * What a connection attempt concluded. Deliberately finer-grained than ok/failed, because each
@@ -77,6 +77,35 @@ export interface McpGateState {
 	writeConsent: boolean;
 }
 
+/**
+ * One read surface — resources or prompts (#263) — as the connection test found it.
+ *
+ * WHY THIS IS NOT FOLDED INTO `gates`. The read surfaces pass a DIFFERENT set of gates from
+ * `mcp_call_tool`, and saying otherwise would be the same lie in a new place. They are
+ * read-scoped, so the connector-level write kill switch and the per-(endpoint, tool) grant do
+ * not apply to them at all — the ONLY gate is the agent's declared tool allowlist. Reporting
+ * `writeConsent` next to a resource count would send an owner to flip a switch that changes
+ * nothing here.
+ *
+ * WHY `listEnabled` MATTERS EVEN THOUGH WE GOT A COUNT. The probe runs server-side, on the
+ * owner's authority, so it enumerates a server the AGENT may be unable to enumerate. A report
+ * that printed "3 resources" without saying the agent cannot run `mcp_list_resources` would be
+ * exactly #266's failure: true about the server, false about what will happen.
+ */
+export interface McpSurfaceReport {
+	state: McpSurfaceState;
+	/** What the server published on the first page — before any gate. */
+	count: number;
+	/** The server paged; `count` is a page, not a total. */
+	more: boolean;
+	/** Can this agent run the LIST tool (`mcp_list_resources` / `mcp_list_prompts`)? */
+	listEnabled: boolean;
+	/** Can this agent run the READ tool (`mcp_read_resource` / `mcp_get_prompt`)? */
+	readEnabled: boolean;
+	/** One actionable sentence, in the same voice as `detail`. */
+	detail: string;
+}
+
 export interface McpConnectionReport {
 	/** Normalized endpoint — the form consent and the trace log key on. */
 	endpoint: string;
@@ -94,6 +123,13 @@ export interface McpConnectionReport {
 	/** How many of them this instance could actually call right now. */
 	callableCount: number;
 	gates: McpGateState;
+	/**
+	 * The read surfaces (#263). Absent when the connection itself failed — a server we could not
+	 * reach taught us nothing about what it publishes, and a confident "no resources" for a host
+	 * that was briefly down is a worse answer than saying nothing.
+	 */
+	resources?: McpSurfaceReport;
+	prompts?: McpSurfaceReport;
 	/**
 	 * What the server's own OAuth metadata says, when it published any (#180/#181).
 	 *
@@ -234,6 +270,42 @@ export function explainBlocker(blocker: McpToolBlocker, tool: string): string {
 		case "no_grant":
 			return `This agent has no grant for "${tool}" on this server.`;
 	}
+}
+
+/** What the two surfaces are called in prose, and which tools gate each. */
+const SURFACE_WORDS = {
+	resources: { one: "resource", many: "resources", list: "mcp_list_resources", read: "mcp_read_resource", verb: "read" },
+	prompts: { one: "prompt", many: "prompts", list: "mcp_list_prompts", read: "mcp_get_prompt", verb: "fetch" },
+} as const;
+
+/**
+ * Turn a read-surface probe into what the OWNER needs to know (#263).
+ *
+ * Held to the same standard as the tool list: the sentence must never report availability that
+ * permission would refuse. Three distinct outcomes, deliberately not merged —
+ *
+ *   unsupported → the server said `-32601`. It has none. Nothing to enable, nothing to fix.
+ *   unreadable  → we could not ask. Keeps the transport's own sentence rather than inventing
+ *                 "none", because a silent zero for a surface that exists is undetectable.
+ *   available   → a count, AND what the agent may do with it. The probe ran on the owner's
+ *                 authority, so a count says nothing about the agent's reach on its own.
+ */
+export function summarizeSurface(kind: "resources" | "prompts", probe: McpSurfaceProbe, gates: { listEnabled: boolean; readEnabled: boolean }): McpSurfaceReport {
+	const w = SURFACE_WORDS[kind];
+	const base = { state: probe.state, count: probe.count, more: probe.more, ...gates };
+	if (probe.state === "unsupported") return { ...base, detail: `This server publishes no ${w.many}.` };
+	if (probe.state === "unreadable") return { ...base, detail: `Could not read this server's ${w.many}: ${probe.detail}` };
+	if (probe.count === 0) return { ...base, detail: `This server answers \`${kind}/list\` but currently offers none.` };
+
+	const n = `${probe.count}${probe.more ? "+" : ""} ${probe.count === 1 && !probe.more ? w.one : w.many}`;
+	// Order matters, exactly as it does for a blocked tool: name the gate that must be fixed
+	// FIRST, so nobody is told to enable the second tool while the first still hides the list.
+	if (!gates.listEnabled) return { ...base, detail: `${n} published, but this agent can't run \`${w.list}\`, so it can't see them. Enable it under Tools.` };
+	if (!gates.readEnabled) return { ...base, detail: `${n} — this agent can list them but can't run \`${w.read}\`, so it can ${w.verb} none. Enable it under Tools.` };
+	// No consent line here on purpose: these are read-scoped, so there is no grant to tick and
+	// no write switch to flip. Saying so is the point — the alternative is an owner hunting for
+	// an approval that does not exist.
+	return { ...base, detail: `${n} — this agent can list and ${w.verb} them. Reads need no per-item approval.` };
 }
 
 /**
