@@ -5,6 +5,7 @@ import type { CodingRepo, CodingSession } from "./types";
 import { Settings, Cpu, Play, Square, Loader2 } from "lucide-react";
 import RepoIssues from "./RepoIssues";
 import { repoIsGitHub, repoTitle } from "./repo-title";
+import { isEngineBusy } from "./engine-busy";
 
 type TimelineEntry = { type?: string; content?: string; text?: string };
 
@@ -97,7 +98,7 @@ export default function ReposList({
 							{!repoIsGitHub(r) && <span className="text-[0.6rem] px-1 py-0.5 bg-line/60 text-muted rounded font-bold shrink-0">local</span>}
 						</div>
 						<div className="text-xs text-muted mt-0.5 flex items-center gap-1.5">
-							{status === "thinking" || status === "working" ? (
+							{isEngineBusy(status) ? (
 								<span className="inline-block w-2.5 h-2.5 border-2 border-line border-t-amber-500 rounded-full animate-spin" />
 							) : (
 								<span className={`w-2 h-2 rounded-full ${active && status !== "offline" ? "bg-green" : "bg-muted"}`} />

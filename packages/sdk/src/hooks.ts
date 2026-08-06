@@ -6,7 +6,12 @@
 // More hooks (useInstance, useRunner, useVoice…) move here from the console as
 // the agent-OS SDK forms. See ../../PLAN-agent-os.md.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { resolvePollMs, resolvePollTier, shouldRefreshOnResume, type PollCadence, type PollTier } from "./poll-cadence.js";
+
+export { resolvePollTier, resolvePollMs, shouldRefreshOnResume } from "./poll-cadence.js";
+export type { PollTier, PollCadence, PollSignals } from "./poll-cadence.js";
 
 export { useVoice, type VoiceMode } from "./voice/use-voice.js";
 export { buildTranscribePrompt } from "./voice/prompt.js";
@@ -26,4 +31,49 @@ export function usePolling(fn: () => void, ms: number, enabled = true): void {
 		const id = setInterval(() => savedFn.current(), ms);
 		return () => clearInterval(id);
 	}, [ms, enabled]);
+}
+
+/** Live `document.hidden`. `false` outside a browser (SSR / tests). */
+export function useDocumentVisibilityHidden(): boolean {
+	const [hidden, setHidden] = useState(() => typeof document !== "undefined" && document.hidden);
+
+	useEffect(() => {
+		if (typeof document === "undefined") return;
+		const onChange = () => setHidden(document.hidden);
+		document.addEventListener("visibilitychange", onChange);
+		// The tab can have flipped between the initial render and this effect.
+		onChange();
+		return () => document.removeEventListener("visibilitychange", onChange);
+	}, []);
+
+	return hidden;
+}
+
+/**
+ * `usePolling` with the three-tier cadence policy from CODER-007 (#83): full
+ * rate while `busy`, a slower rate when visible-and-idle, and nothing at all in
+ * a hidden idle tab — plus one immediate fetch whenever the tier speeds up, so
+ * a suppressed poll is never something the user can observe as staleness.
+ *
+ * Drop-in for `usePolling(fn, ms, enabled)`: pass the old interval as
+ * `activeMs` and behaviour while working is unchanged.
+ */
+export function useTieredPolling(fn: () => void, cadence: PollCadence, busy: boolean, enabled = true): void {
+	const savedFn = useRef(fn);
+	savedFn.current = fn;
+
+	const hidden = useDocumentVisibilityHidden();
+	const signals = { hidden, busy };
+	const tier = resolvePollTier(signals);
+	const ms = resolvePollMs(cadence, signals);
+
+	// Catch-up fetch on a tier speed-up (tab refocused, engine started). Skipped
+	// while disabled — a disabled poll has no value to bring up to date.
+	const prevTier = useRef<PollTier | null>(null);
+	useEffect(() => {
+		if (enabled && shouldRefreshOnResume(prevTier.current, tier)) savedFn.current();
+		prevTier.current = enabled ? tier : null;
+	}, [tier, enabled]);
+
+	usePolling(fn, ms, enabled);
 }

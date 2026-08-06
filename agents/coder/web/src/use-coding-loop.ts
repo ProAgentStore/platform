@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { api } from "@proagentstore/sdk/client";
+import { isEngineBusy } from "./engine-busy";
 
 /** The next issue proposed to work (issues-mode). Body included so we build a real objective. */
 export interface ProposedIssue {
@@ -105,7 +106,7 @@ export function useCodingLoop({ instanceId, sessionId, repoId, workMode = "direc
 			const termSnap = capture.pane || "(empty terminal)";
 			const runState = capture.runState || "idle";
 
-			if (runState === "thinking" || runState === "working") {
+			if (isEngineBusy(runState)) {
 				timerRef.current = setTimeout(() => runStepRef.current?.(), 3000);
 				return;
 			}

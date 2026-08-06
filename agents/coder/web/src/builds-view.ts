@@ -1,5 +1,42 @@
 import { repoTitle } from "./repo-title";
 
+/** One GitHub Actions run, as `/deployments` and `/builds` return it. */
+export interface BuildRun {
+	status?: string; // queued | in_progress | completed
+	conclusion?: string | null; // success | failure | cancelled | timed_out | null
+}
+
+export type BuildState = "success" | "failed" | "running" | "pending" | "unknown";
+
+/** Map a GitHub Actions run (status + conclusion) → a single build state. */
+export function buildState(run: BuildRun | null | undefined): BuildState {
+	if (!run) return "unknown";
+	if (run.status === "in_progress") return "running";
+	if (run.status === "queued") return "pending";
+	if (run.status === "completed") {
+		if (run.conclusion === "success") return "success";
+		if (run.conclusion === "failure" || run.conclusion === "cancelled" || run.conclusion === "timed_out") return "failed";
+	}
+	return "unknown";
+}
+
+/**
+ * Is a build still going to change on its own?
+ *
+ * This is the Builds panel's "busy" signal for the tiered poll cadence. It matters more than the
+ * console-side cost: every tick fans out to the GitHub Actions API on a per-installation rate
+ * limit that the per-minute `runDeployWatch` cron is already spending. A settled history of
+ * finished runs cannot change until someone pushes — which is not something to re-ask every 20s.
+ */
+export function isBuildInFlight(state: BuildState): boolean {
+	return state === "running" || state === "pending";
+}
+
+/** True if any of these runs is still queued or in progress. */
+export function anyBuildInFlight(runs: readonly (BuildRun | null | undefined)[]): boolean {
+	return runs.some((r) => isBuildInFlight(buildState(r)));
+}
+
 /**
  * Which Builds view to show — pure, so the rule is testable without a DOM.
  *

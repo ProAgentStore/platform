@@ -7,7 +7,7 @@ import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk
 import ErrorBoundary from "../components/ErrorBoundary";
 import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import PlaybackIcon from "../components/PlaybackIcon";
-import { usePolling } from "@proagentstore/sdk/hooks";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
@@ -247,7 +247,18 @@ function InstancePage() {
 	}, [id, hasRuntime]);
 
 	useEffect(() => { checkRuntime(); }, [checkRuntime]);
-	usePolling(checkRuntime, 4000);
+	// The header's runner dot (CODER-005). This is the single most expensive poll in the console
+	// per request — `/runtime/status` does two relay `/command` round-trips to the user's laptop
+	// (health + capabilities) plus a `relayConnected` probe, i.e. ~3 Durable Object hits — to
+	// re-read a boolean that changes about twice a day.
+	//
+	// Full 4s rate while the user is actually engaging the runner (a message in flight, a loop
+	// running) or while we believe it is OFFLINE — that being the state a change is imminent
+	// from, and the one the user is actively trying to fix by running `pags up`. Otherwise 20s,
+	// which still keeps a fresh `pags up` visible inside the CLI's own 20s discovery window, and
+	// nothing at all in a background tab (with an immediate catch-up fetch on refocus).
+	const runtimeWatchBusy = thinking || !!loopRunId || runnerOnline === false;
+	useTieredPolling(checkRuntime, { activeMs: 4000, passiveMs: 20000 }, runtimeWatchBusy, hasRuntime);
 
 	// Load last N messages (newest at the bottom)
 	const loadMessages = useCallback(async () => {

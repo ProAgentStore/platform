@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { api } from "@proagentstore/sdk/client";
-import { usePolling } from "@proagentstore/sdk/hooks";
-import { resolveBuildsView } from "./builds-view";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
+import { resolveBuildsView, buildState, anyBuildInFlight, type BuildState } from "./builds-view";
 import { repoTitle } from "./repo-title";
 import { CheckCircle2, XCircle, Loader2, Clock, GitBranch, ExternalLink, HelpCircle, ArrowLeft, ChevronRight } from "lucide-react";
 
@@ -24,20 +24,6 @@ interface Build {
 	githubRepo?: string | null;
 	available: boolean;
 	run: DeploymentRun | null;
-}
-
-type BuildState = "success" | "failed" | "running" | "pending" | "unknown";
-
-/** Map a GitHub Actions run (status + conclusion) → a single build state. */
-function buildState(run: DeploymentRun | null): BuildState {
-	if (!run) return "unknown";
-	if (run.status === "in_progress") return "running";
-	if (run.status === "queued") return "pending";
-	if (run.status === "completed") {
-		if (run.conclusion === "success") return "success";
-		if (run.conclusion === "failure" || run.conclusion === "cancelled" || run.conclusion === "timed_out") return "failed";
-	}
-	return "unknown";
 }
 
 function StatusBadge({ state }: { state: BuildState }) {
@@ -124,7 +110,9 @@ function RepoHistory({ instanceId, repoId, repoName, onBack }: {
 	}, [instanceId, repoId]);
 
 	useEffect(() => { load(); }, [load]);
-	usePolling(load, 20000, true);
+	// Full rate only while a run is actually queued/in-progress — a finished history cannot change
+	// until someone pushes, and every tick spends the installation's GitHub Actions rate limit.
+	useTieredPolling(load, { activeMs: 20000, passiveMs: 120000 }, anyBuildInFlight(runs));
 
 	return (
 		<div className="bg-panel border border-line rounded-xl p-3">
@@ -197,7 +185,7 @@ export default function BuildsPanel({ instanceId }: { instanceId: string }) {
 	useEffect(() => { load(); }, [load]);
 	// Only poll the aggregate while it is the visible view — inside a repo's history that view
 	// polls for itself, and both at once would fan out to GitHub twice for nothing.
-	usePolling(load, 20000, openRepoId === null);
+	useTieredPolling(load, { activeMs: 20000, passiveMs: 120000 }, anyBuildInFlight(builds.map((b) => b.run)), openRepoId === null);
 
 	const view = resolveBuildsView(builds, openRepoId);
 

@@ -3,11 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@proagentstore/sdk/client";
 import type { CodingRepo, CodingSession, CodingEngine, LoopPreset, TimelineEntry } from "./types";
 import { entryText, groupRepoHistory, sessionLabel } from "./repo-history";
-import { usePolling } from "@proagentstore/sdk/hooks";
+import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
 import { repoTitle } from "./repo-title";
 import { resolveRunnerOnline } from "./runner-online";
+import { isEngineBusy, anyEngineBusy } from "./engine-busy";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
@@ -241,9 +242,15 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		}
 	}, [instanceId]);
 	useEffect(() => { void checkRelay(); }, [checkRelay]);
-	// 10s, not the header's 4s: this exists to notice the runner COMING BACK, and it shares the
-	// default 60/min rate-limit bucket with everything else the tab does.
-	usePolling(checkRelay, 10000);
+	// 10s while it matters, not the header's 4s: this exists to notice the runner COMING BACK.
+	//
+	// It is treated as "busy" whenever we believe the runner is OFFLINE, not only when an engine
+	// is running — offline is exactly the state a change is imminent from and worth watching for,
+	// and slowing it down would regress #241 (the unrecoverable offline state). A settled ONLINE
+	// runner is the opposite: a boolean that changes about twice a day, so once a minute while
+	// you are looking at it, and not at all while the tab is in the background.
+	const relayWatchBusy = anyEngineBusy(repoStatuses) || relayOnline === false;
+	useTieredPolling(checkRelay, { activeMs: 10000, passiveMs: 60000 }, relayWatchBusy);
 
 	const pollStatuses = useCallback(async () => {
 		const activeSessions = sessionsRef.current.filter((s) => s.status === "active");
@@ -268,7 +275,10 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		setRepoStatuses(statuses);
 	}, [instanceId]);
 
-	usePolling(pollStatuses, 3000, hasActiveSessions && !openSession);
+	// One `/capture` per active session, per tick — so N idle sessions cost N relay round-trips
+	// to the user's laptop every 3s to re-learn "still idle". Full rate only while an engine is
+	// actually mid-turn.
+	useTieredPolling(pollStatuses, { activeMs: 3000, passiveMs: 12000 }, anyEngineBusy(repoStatuses), hasActiveSessions && !openSession);
 
 	// Terminal polling (1.5s when a session is open)
 	// Engine sign-in relay (#coding-auth): the CLI's OAuth uses a LOOPBACK redirect, so the
@@ -328,7 +338,19 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		} catch {}
 	}, [instanceId, openSession]);
 
-	usePolling(pollTerminal, 1500, !!openSession);
+	// Status of the currently-open session — the terminal poll's busy signal AND the header badge
+	// (CODER-005). A primitive string (not the repoStatuses object) so the header effect re-pushes
+	// only when the status actually changes — depending on the object would re-fire every poll (a
+	// render storm).
+	const openStatus = openSession
+		? repoStatuses[openSession.repoId] || (runnerOnline === false ? "offline" : "idle")
+		: "idle";
+	// The heaviest sustained poll in the app — the whole tmux pane, every 1.5s, over the relay.
+	// "Busy" here is deliberately wider than the engine's own runState: a send that has not been
+	// acknowledged yet (`summaryBusy`) and a running Loop both mean output is imminent, and
+	// waiting out a slow tick before the pane starts moving would read as a hang.
+	const terminalBusy = isEngineBusy(openStatus) || summaryBusy || loop.loopOn;
+	useTieredPolling(pollTerminal, { activeMs: 1500, passiveMs: 6000 }, terminalBusy, !!openSession);
 
 	// Summary polling (4.5s)
 	const pollSummary = useCallback(async () => {
@@ -347,7 +369,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		} catch {}
 	}, [instanceId, openSession]);
 
-	usePolling(pollSummary, 4500, copilot && !!openSession && view === "summary");
+	useTieredPolling(pollSummary, { activeMs: 4500, passiveMs: 20000 }, terminalBusy, copilot && !!openSession && view === "summary");
 
 	// Co-pilot auto-scroll now lives in CopilotView, gated on the user's scroll position (#132)
 	// — a new message no longer yanks the view down while the user is reading history.
@@ -463,7 +485,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			try {
 				const d = await api<{ pane?: string; runState?: string }>(`/v1/instances/${instanceId}/coding/sessions/${sid}/capture`);
 				const state = d.runState || "idle";
-				if (state === "thinking" || state === "working") {
+				if (isEngineBusy(state)) {
 					watcherRef.current = setTimeout(poll, 3000);
 					return;
 				}
@@ -704,7 +726,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 		const active = getActiveSession(r.id);
 		const st = repoStatuses[r.id];
 		if (!active) return runnerOnline === false ? "Runner offline" : "Ready";
-		if (st === "thinking" || st === "working") return "Working...";
+		if (isEngineBusy(st)) return "Working...";
 		if (st === "idle") return "Ready";
 		if (st === "offline") return "Runner offline";
 		return "Active";
@@ -724,12 +746,6 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 
 	// Push session header override to parent when session is open
 	const openRepo = openSession ? repos.find((r) => getActiveSession(r.id)?.id === openSession.id) : null;
-	// Status of the currently-open session, for the header badge (CODER-005). A primitive
-	// string (not the repoStatuses object) so the header effect re-pushes only when the status
-	// actually changes — depending on the object would re-fire every 3s poll (a render storm).
-	const openStatus = openSession
-		? repoStatuses[openSession.repoId] || (runnerOnline === false ? "offline" : "idle")
-		: "idle";
 	// biome-ignore lint/correctness/useExhaustiveDependencies: event handlers intentionally read current component state; the header only needs to refresh when visible header state changes.
 	useEffect(() => {
 		// NOT for the single-repo surface. That view keeps the normal instance header and carries
@@ -768,7 +784,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 									return (
 										<button key={r.id} type="button" onClick={() => switchToRepo(r)} className={`w-full text-left px-3 py-1.5 text-sm hover:bg-panel-hover flex items-center justify-between gap-2 ${current ? "text-accent font-bold" : ""}`}>
 											<span className="truncate">{repoTitle(r)}</span>
-											{current ? <span className="text-accent text-xs shrink-0">●</span> : (st === "thinking" || st === "working") ? <span className="text-amber-500 text-[0.6rem] shrink-0">working</span> : null}
+											{current ? <span className="text-accent text-xs shrink-0">●</span> : (isEngineBusy(st)) ? <span className="text-amber-500 text-[0.6rem] shrink-0">working</span> : null}
 										</button>
 									);
 								})}
@@ -1099,7 +1115,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
  * always shown (with a tooltip); the text label appears from `sm` up so it fits the 48px header.
  */
 function AgentStatusBadge({ status }: { status: string }) {
-	const working = status === "thinking" || status === "working";
+	const working = isEngineBusy(status);
 	const error = status === "offline";
 	const label = working ? "Working" : error ? "Error" : "Idle";
 	const base = "inline-flex items-center gap-1 text-[0.6rem] font-bold px-1.5 py-0.5 rounded shrink-0";

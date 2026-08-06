@@ -1,5 +1,50 @@
 import { describe, expect, it } from "vitest";
-import { resolveBuildsView, type BuildsRepo } from "./builds-view";
+import { resolveBuildsView, buildState, isBuildInFlight, anyBuildInFlight, type BuildsRepo } from "./builds-view";
+
+describe("buildState", () => {
+	it("maps the GitHub Actions status/conclusion pair", () => {
+		expect(buildState({ status: "in_progress" })).toBe("running");
+		expect(buildState({ status: "queued" })).toBe("pending");
+		expect(buildState({ status: "completed", conclusion: "success" })).toBe("success");
+		expect(buildState({ status: "completed", conclusion: "failure" })).toBe("failed");
+		expect(buildState({ status: "completed", conclusion: "cancelled" })).toBe("failed");
+		expect(buildState({ status: "completed", conclusion: "timed_out" })).toBe("failed");
+	});
+
+	it("is unknown for a missing run or an unrecognised conclusion", () => {
+		expect(buildState(null)).toBe("unknown");
+		expect(buildState(undefined)).toBe("unknown");
+		expect(buildState({})).toBe("unknown");
+		expect(buildState({ status: "completed", conclusion: "neutral" })).toBe("unknown");
+		expect(buildState({ status: "completed", conclusion: null })).toBe("unknown");
+	});
+});
+
+describe("isBuildInFlight", () => {
+	it("is in flight only while queued or in progress", () => {
+		expect(isBuildInFlight("running")).toBe(true);
+		expect(isBuildInFlight("pending")).toBe(true);
+		expect(isBuildInFlight("success")).toBe(false);
+		expect(isBuildInFlight("failed")).toBe(false);
+		// A repo with no runs, or with GitHub unavailable, must not pin the panel at full rate.
+		expect(isBuildInFlight("unknown")).toBe(false);
+	});
+});
+
+describe("anyBuildInFlight", () => {
+	it("is true when any run is still going", () => {
+		expect(anyBuildInFlight([{ status: "completed", conclusion: "success" }, { status: "queued" }])).toBe(true);
+	});
+
+	it("is false for a settled history — it cannot change until someone pushes", () => {
+		expect(anyBuildInFlight([{ status: "completed", conclusion: "success" }, { status: "completed", conclusion: "failure" }])).toBe(false);
+	});
+
+	it("is false for an empty list or a list of missing runs", () => {
+		expect(anyBuildInFlight([])).toBe(false);
+		expect(anyBuildInFlight([null, undefined])).toBe(false);
+	});
+});
 
 const repo = (id: string, over: Partial<BuildsRepo> = {}): BuildsRepo =>
 	({ repoId: id, repoName: `owner/${id}`, available: true, ...over });
