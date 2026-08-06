@@ -186,7 +186,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),
-			endpoint_url: z.string().describe("HTTPS tunnel URL for the browser runtime, or localhost URL for development."),
+			endpoint_url: z.string().describe("Runtime endpoint URL. Use localhost for a local runner you started yourself."),
 			runner_token: z.string().optional().describe("Bearer token configured on the browser runtime."),
 			placement: z.enum(["local", "managed"]).optional(),
 			capabilities: z.array(z.string()).optional(),
@@ -299,7 +299,7 @@ export function registerBaseTools(server: McpServer, ctx: InstanceToolsCtx): voi
 
 	server.tool(
 		"run_instance_task",
-		"Create a task on the registered local or managed browser runtime for a private instance. The PAGS brain stays in control; FAGS executes browser capabilities.",
+		"Create a task on the registered local or managed browser runtime for a private instance. The PAGS brain stays in control; the local ProAgentStore runner executes browser capabilities through the relay.",
 		{
 			token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),
 			instance_id: z.string(),

@@ -39,7 +39,7 @@ See active, waiting, completed, and failed runtime tasks in a native kanban boar
 
 **Manage coding sessions**
 
-Connect coding repositories, start a cloud coding session, send instructions, and watch terminal output or activity timeline from a focused mobile interface.
+Connect coding repositories, start a local-runner coding session, send instructions, and watch terminal output or activity timeline from a focused mobile interface.
 
 **Customize agent behavior**
 

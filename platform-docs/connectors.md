@@ -9,7 +9,8 @@ ProAgentStore has two connector layers, for two different jobs.
    connector.)
 2. **Registry connectors** (the tool framework, issues #84–#90): a declared registry of
    integrations an agent drives as **tools** — GitHub, HTTP/REST, Web Search, Meta, Terminal,
-   legacy tmux, and the experimental browser. See [Registry connectors](#registry-connectors)
+   legacy tmux, local repo inspection, supervision, outbound MCP, Google Sheets, and the
+   experimental browser. See [Registry connectors](#registry-connectors)
    below.
 
 ## Registry connectors
@@ -28,10 +29,14 @@ An agent gets a connector's tools only when it declares them in `capabilities.to
 | `terminal` | none (runner relay) | read + write | `terminal_list_targets`, `terminal_capture`, `terminal_run_command` (write), `terminal_send_keys` (write) |
 | `tmux` | none (runner relay) | read + write | Legacy compatibility: `tmux_list_sessions`, `tmux_capture_pane`, `tmux_run_command` (write) |
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
+| `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_git`, `repo_remote` |
+| `supervision` | none (internal) | read + write | `list_subordinates`, `delegate_goal`, `check_delegation` |
+| `mcp` | vault bearer token | read + write | `mcp_list_tools`, `mcp_call_tool` against user-configured MCP servers |
+| `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 
 **Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:
 a GitHub-App installation token, an OAuth refresh→access exchange, a key from the user's BYOK
-vault (`user_api_keys`), or none for local relay connectors (terminal/tmux/browser reach the
+vault (`user_api_keys`), or none for local relay connectors (terminal/tmux/browser/repo-local reach the
 user's machine over the WebSocket relay — machine ownership is already enforced by the relay-token
 handshake). The generic Terminal connector targets `tmux:<session>`, `kitty:<window-id>`, or
 `iterm2:<window>:<tab>:<session>`.
@@ -52,7 +57,7 @@ browser trust model lands. It bridges the runner's real-Chrome hands (`/browser/
 
 A connector no longer needs bespoke code. Most are now defined as a **manifest** —
 `{ id, label, auth, baseUrl, tools[] }` — compiled by `compileConnector` into the same
-`Connector`/`ToolDef` shape above (github, meta, and web-search are all manifests today). A tool
+`Connector`/`ToolDef` shape above (github, meta, web-search, and google_sheets are all manifests today). A tool
 is either **request-as-data** (`method`/`path`/`query`/`body` with `{{param}}` interpolation +
 `responseMap` extraction, run through the shared SSRF-guarded executor) or a named **handler**
 for the rare custom case. Manifest `auth` is one of `none` · `api-key` (vault key) · `platform-token`

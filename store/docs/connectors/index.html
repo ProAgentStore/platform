@@ -23,7 +23,7 @@
 
 
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="zensical-0.0.44">
+      <meta name="generator" content="zensical-0.0.46">
 
 
 
@@ -34,7 +34,7 @@
 
 
 
-      <link rel="stylesheet" href="../assets/stylesheets/modern/main.fba56155.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/modern/main.19d3147f.min.css">
 
 
 
@@ -270,6 +270,23 @@
       </span>
     </span>
   </a>
+
+    <nav class="md-nav" aria-label="Registry connectors">
+      <ul class="md-nav__list">
+
+          <li class="md-nav__item">
+  <a href="#declarative-connector-manifests" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Declarative connector manifests
+      </span>
+    </span>
+  </a>
+
+</li>
+
+      </ul>
+    </nav>
 
 </li>
 
@@ -589,6 +606,23 @@
     </span>
   </a>
 
+    <nav class="md-nav" aria-label="Registry connectors">
+      <ul class="md-nav__list">
+
+          <li class="md-nav__item">
+  <a href="#declarative-connector-manifests" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Declarative connector manifests
+      </span>
+    </span>
+  </a>
+
+</li>
+
+      </ul>
+    </nav>
+
 </li>
 
         <li class="md-nav__item">
@@ -692,8 +726,10 @@
    integration used by the apply flow to read verification emails; it is not a knowledge-ingest
    connector.)</li>
 <li><strong>Registry connectors</strong> (the tool framework, issues #84–#90): a declared registry of
-   integrations an agent drives as <strong>tools</strong> — GitHub, HTTP/REST, Web Search, Meta, tmux, and
-   the experimental browser. See <a href="#registry-connectors">Registry connectors</a> below.</li>
+   integrations an agent drives as <strong>tools</strong> — GitHub, HTTP/REST, Web Search, Meta, Terminal,
+   legacy tmux, local repo inspection, supervision, outbound MCP, Google Sheets, and the
+   experimental browser. See <a href="#registry-connectors">Registry connectors</a>
+   below.</li>
 </ol>
 <h2 id="registry-connectors">Registry connectors<a class="headerlink" href="#registry-connectors" title="Permanent link">&para;</a></h2>
 <p>A registry connector is declared ONCE in <code>workers/api/src/lib/connectors/registry.ts</code> as
@@ -735,10 +771,16 @@ An agent gets a connector's tools only when it declares them in <code>capabiliti
 <td><code>whatsapp_send_message</code>, <code>instagram_send_dm</code></td>
 </tr>
 <tr>
+<td><code>terminal</code></td>
+<td>none (runner relay)</td>
+<td>read + write</td>
+<td><code>terminal_list_targets</code>, <code>terminal_capture</code>, <code>terminal_run_command</code> (write), <code>terminal_send_keys</code> (write)</td>
+</tr>
+<tr>
 <td><code>tmux</code></td>
 <td>none (runner relay)</td>
 <td>read + write</td>
-<td><code>tmux_list_sessions</code>, <code>tmux_capture_pane</code>, <code>tmux_run_command</code> (write)</td>
+<td>Legacy compatibility: <code>tmux_list_sessions</code>, <code>tmux_capture_pane</code>, <code>tmux_run_command</code> (write)</td>
 </tr>
 <tr>
 <td><code>browser</code></td>
@@ -746,13 +788,38 @@ An agent gets a connector's tools only when it declares them in <code>capabiliti
 <td>read + write</td>
 <td><code>browser_snapshot</code>, <code>browser_navigate</code> (write), <code>browser_act</code> (write) — experimental</td>
 </tr>
+<tr>
+<td><code>repo-local</code></td>
+<td>none (runner relay)</td>
+<td>read</td>
+<td><code>repo_tree</code>, <code>repo_read_file</code>, <code>repo_git</code>, <code>repo_remote</code></td>
+</tr>
+<tr>
+<td><code>supervision</code></td>
+<td>none (internal)</td>
+<td>read + write</td>
+<td><code>list_subordinates</code>, <code>delegate_goal</code>, <code>check_delegation</code></td>
+</tr>
+<tr>
+<td><code>mcp</code></td>
+<td>vault bearer token</td>
+<td>read + write</td>
+<td><code>mcp_list_tools</code>, <code>mcp_call_tool</code> against user-configured MCP servers</td>
+</tr>
+<tr>
+<td><code>google_sheets</code></td>
+<td>OAuth2</td>
+<td>read + write</td>
+<td><code>sheets_read</code>, <code>sheets_append</code></td>
+</tr>
 </tbody>
 </table>
 <p><strong>Auth</strong> is minted through one path — <code>connectorClient(env, provider, {userId, instanceId})</code>:
 a GitHub-App installation token, an OAuth refresh→access exchange, a key from the user's BYOK
-vault (<code>user_api_keys</code>), or none for local relay connectors (tmux/browser reach the user's
-machine over the WebSocket relay — machine ownership is already enforced by the relay-token
-handshake).</p>
+vault (<code>user_api_keys</code>), or none for local relay connectors (terminal/tmux/browser/repo-local reach the
+user's machine over the WebSocket relay — machine ownership is already enforced by the relay-token
+handshake). The generic Terminal connector targets <code>tmux:&lt;session&gt;</code>, <code>kitty:&lt;window-id&gt;</code>, or
+<code>iterm2:&lt;window&gt;:&lt;tab&gt;:&lt;session&gt;</code>.</p>
 <p><strong>Write-consent gating (#90).</strong> Every <code>scope:"write"</code> connector tool is refused unless the
 instance has explicit write-consent for that connector (<code>instance_connector_consent</code>, migration
 0051). <code>runRegistryTool</code> checks consent <em>before</em> dispatch, fail-closed; read-only connectors
@@ -763,25 +830,44 @@ can only write where the instance owner has granted that connector's write scope
 <code>BROWSER_TOOLS_ENABLED</code> env flag (fail-closed when unset) — first-party / self-use only until the
 browser trust model lands. It bridges the runner's real-Chrome hands (<code>/browser/snapshot</code> +
 <code>/browser/act</code>) into the registry so a config/data agent can drive a browser without bespoke code.</p>
+<h3 id="declarative-connector-manifests">Declarative connector manifests<a class="headerlink" href="#declarative-connector-manifests" title="Permanent link">&para;</a></h3>
+<p>A connector no longer needs bespoke code. Most are now defined as a <strong>manifest</strong> —
+<code>{ id, label, auth, baseUrl, tools[] }</code> — compiled by <code>compileConnector</code> into the same
+<code>Connector</code>/<code>ToolDef</code> shape above (github, meta, web-search, and google_sheets are all manifests today). A tool
+is either <strong>request-as-data</strong> (<code>method</code>/<code>path</code>/<code>query</code>/<code>body</code> with <code>{{param}}</code> interpolation +
+<code>responseMap</code> extraction, run through the shared SSRF-guarded executor) or a named <strong>handler</strong>
+for the rare custom case. Manifest <code>auth</code> is one of <code>none</code> · <code>api-key</code> (vault key) · <code>platform-token</code>
+(a Worker env token) · <code>app</code> (GitHub-App) · <code>oauth2</code>.</p>
+<p><strong>Generic OAuth2</strong> (<code>oauth2</code> connectors) uses one flow for every provider, driven by the manifest's
+<code>authUrl</code>/<code>tokenUrl</code>/<code>scopes</code> + the env-var names for the client credentials:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>GET    /v1/connectors/:id/oauth/start     → returns the provider authorize URL (signed state)
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>GET    /v1/connectors/:id/oauth/callback  → exchanges the code, stores the refresh token (encrypted)
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>GET    /v1/connectors/:id/oauth/status    → connected? configured?
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>DELETE /v1/connectors/:id/oauth           → disconnect
+</span></code></pre></div>
+<p>So adding an OAuth SaaS (Slack, Sheets, Notion) is a manifest + an OAuth app whose redirect points
+at <code>/v1/connectors/&lt;id&gt;/oauth/callback</code> — no new route code. Client credentials live in Worker
+secrets (named by the manifest, resolved server-side); refresh tokens are envelope-encrypted under
+<code>KEY_ENCRYPTION_KEY</code>, exactly like the ingest connectors.</p>
 <h2 id="recommended-permission-model-ingest-connectors">Recommended Permission Model (ingest connectors)<a class="headerlink" href="#recommended-permission-model-ingest-connectors" title="Permanent link">&para;</a></h2>
 <p>Connect providers to the account, not to individual agents.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>User account
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  -&gt; provider connection
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>  -&gt; folder/shared-drive grants
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>  -&gt; agent access
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>User account
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  -&gt; provider connection
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  -&gt; folder/shared-drive grants
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  -&gt; agent access
 </span></code></pre></div>
 <p>This avoids repeated OAuth flows, keeps revocation simple, and lets the user reuse one provider connection across many agents without giving every agent blanket access.</p>
 <h2 id="google-docs-through-google-drive">Google Docs Through Google Drive<a class="headerlink" href="#google-docs-through-google-drive" title="Permanent link">&para;</a></h2>
 <p>Google Docs files are Drive files with Google Docs MIME types. To let an agent work with Google Docs, connect Google Drive and grant the agent access to the relevant folders or shared drives.</p>
 <p>Production OAuth callback:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>https://api.proagentstore.online/v1/drive/google/callback
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>https://api.proagentstore.online/v1/drive/google/callback
 </span></code></pre></div>
 <p>Worker configuration:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>GOOGLE_CLIENT_ID=&lt;google-oauth-client-id&gt;
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>GOOGLE_CLIENT_SECRET=&lt;worker secret&gt;
+<div class="language-text highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>GOOGLE_CLIENT_ID=&lt;google-oauth-client-id&gt;
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>GOOGLE_CLIENT_SECRET=&lt;worker secret&gt;
 </span></code></pre></div>
 <p>Cloudflare secret:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>wrangler<span class="w"> </span>secret<span class="w"> </span>put<span class="w"> </span>GOOGLE_CLIENT_SECRET
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>wrangler<span class="w"> </span>secret<span class="w"> </span>put<span class="w"> </span>GOOGLE_CLIENT_SECRET
 </span></code></pre></div>
 <h2 id="client-flow">Client Flow<a class="headerlink" href="#client-flow" title="Permanent link">&para;</a></h2>
 <ol>
@@ -891,10 +977,10 @@ browser trust model lands. It bridges the runner's real-Chrome hands (<code>/bro
 
 
 
-      <script id="__config" type="application/json">{"annotate":null,"base":"..","features":[],"search":"../assets/javascripts/workers/search.e2d2d235.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+      <script id="__config" type="application/json">{"annotate":null,"base":"..","features":[],"search":"../assets/javascripts/workers/search.b6b7e04f.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
 
 
-      <script src="../assets/javascripts/bundle.6e5f0216.min.js"></script>
+      <script src="../assets/javascripts/bundle.ee611ef6.min.js"></script>
 
 
   </body>

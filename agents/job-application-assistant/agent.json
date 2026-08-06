@@ -9,8 +9,8 @@
 	"serverConfig": {
 		"runtime": {
 			"kind": "pags-browser-runtime",
-			"taskTypes": ["job.apply_basic", "job.apply_authenticated"],
-			"approvalRequiredFor": ["job.apply_basic", "job.apply_authenticated"],
+			"taskTypes": ["job.apply_agent"],
+			"approvalRequiredFor": [],
 			"fileUploads": true,
 			"brainPlacement": "pags-control-plane",
 			"runtimePlane": "pags"

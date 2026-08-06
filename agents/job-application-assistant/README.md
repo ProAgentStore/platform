@@ -1,35 +1,31 @@
 # Job Application Assistant
 
-A rentable ProAgentStore agent that helps a user turn a job URL into an application packet and, for basic resume-upload forms, submit through the user's approved FAGS browser runtime.
+A rentable ProAgentStore agent that helps a user turn a job URL into an application packet and, when allowed, submit through the user's local ProAgentStore browser runtime.
 
-The marketplace/runtime path is FAGS-browser-runtime-first:
+The marketplace/runtime path is LLM-driven and browser-runtime-backed:
 
 ```text
-subscribe_agent -> register_instance_runtime -> run_instance_task(type: job.apply_basic) -> approve_instance_task -> instance_task_events
+subscribe_agent -> upload_resume -> apply_to_job -> instance_board / instance_task_events
 ```
 
-The task runs on the user's FAGS runtime, not in the platform account. The user provides the resume file path and candidate details, and submission is approval-gated by the FAGS runtime.
+The workflow brain runs in the ProAgentStore control plane and drives the user's local browser runtime through `/browser/snapshot` and `/browser/act`. Candidate details come from the user's Profile and the instance's stored resume. By default `apply_to_job` does a safe fill-only run and stops before the final submit click; `submit: true` requires destructive MCP scope.
 
 ## Rent And Use Through MCP
 
-After subscribing to the published agent, connect or register the FAGS runtime and create an approved job application task:
+After subscribing to the published agent, start the local runner and launch the apply workflow:
 
 ```bash
-pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
-pags runner run "$PAGS_INSTANCE_ID" \
-  --type job.apply_basic \
-  --input '{"url":"https://example.com/jobs/senior-engineer","resumePath":"/path/to/resume.pdf","candidate":{"fullName":"Test Candidate","email":"candidate@example.com","phone":"+1 555 0100","location":"Remote"},"coverNote":"I am interested in this role."}' \
-  --pags-token "$PAGS_TOKEN"
-pags runner approve-task "$PAGS_INSTANCE_ID" "$TASK_ID" --pags-token "$PAGS_TOKEN"
+pags up
 ```
 
-The same flow is available through MCP tools:
+Then use the MCP tools:
 
 ```text
 subscribe_agent
-register_instance_runtime
-run_instance_task with type=job.apply_basic
-approve_instance_task
+upload_resume
+apply_to_job with submit=false   # safe fill-only test run
+apply_to_job with submit=true    # real submission; destructive scope required
+instance_board
 instance_task_events
 ```
 
@@ -87,7 +83,7 @@ Submission is blocked when the page needs login, captcha, file upload, password 
 
 ## Safety model
 
-This agent does not silently send resume/contact data. The rentable FAGS runtime path creates `job.apply_basic` tasks in `needs_approval` state and submits only after the user approves the task. The direct Worker API prepares the packet first, reports blockers, and requires the exact `submit <application-id>` confirmation before any external POST/GET submission attempt.
+This agent does not silently send resume/contact data. The MCP path defaults to fill-only (`submit=false`) and requires destructive scope for real submission. The direct Worker API prepares the packet first, reports blockers, and requires the exact `submit <application-id>` confirmation before any external POST/GET submission attempt.
 
 ## Development
 

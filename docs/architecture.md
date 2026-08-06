@@ -4,7 +4,7 @@ This document is the current architecture map and assessment for the ProAgentSto
 platform repo. It is intended to be the first place to look before changing core
 runtime, storage, MCP, console, connector, or agent infrastructure.
 
-Status: current as of 2026-08-02.
+Status: current as of 2026-08-06.
 
 ## Executive Summary
 
@@ -49,7 +49,7 @@ platform/
 |   +-- cli/                 pags CLI: init, publish, login, mcp, runner
 |   +-- browser-runner/      Local Playwright/terminal runtime served by `pags up`
 |   +-- compliance/          Policy/check tooling
-+-- agents/                  First-party catalog agents
++-- agents/                  Tier-0 first-party agent sources
 +-- templates/               Agent scaffolds for worker, cron, api templates
 +-- docs/                    Architecture, runtime, MCP, and strategy docs
 +-- assets/                  Store-facing assets
@@ -159,7 +159,7 @@ The API worker is a Hono app. It mounts route modules for:
 - Instance storage: documents, files, collections, search, activity, summaries
 - Runtime: `/v1/relay`, runtime registration/status/task mirrors
 - Coding: `/v1/instances/:id/coding/...`
-- Connectors: `/v1/github` (GitHub App), `/v1/drive` (Google Drive), `/v1/workdrive` (Zoho WorkDrive), `/v1/email` (Gmail, apply-flow reads); registry connectors (github, http, meta, web-search, terminal, tmux, browser) are dispatched through the tool loop, not per-connector routes
+- Connectors: `/v1/github` (GitHub App), `/v1/drive` (Google Drive), `/v1/workdrive` (Zoho WorkDrive), `/v1/email` (Gmail, apply-flow reads), `/v1/connectors/:id/oauth/*` (generic OAuth2); registry connectors (github, http, meta, web-search, terminal, tmux, browser, repo-local, supervision, mcp, google_sheets) are dispatched through the tool loop, not per-connector routes
 - Keys: BYOK key vault and key proxy
 - Billing, notifications, push, dashboard, errors
 
@@ -441,6 +441,10 @@ Registered connectors (`CONNECTORS`):
 | `terminal` | none (runner relay) | read+write | drive tmux, kitty, or iTerm2 targets on the user's machine |
 | `tmux` | none (runner relay) | read+write | legacy compatibility wrapper for tmux sessions |
 | `browser` | none (runner relay) | read+write | experimental (`BROWSER_TOOLS_ENABLED`); `browser_navigate`/`browser_snapshot`/`browser_act` |
+| `repo-local` | none (runner relay) | read | read-only tree/file/git inspection of the local checkout |
+| `supervision` | none (internal) | read+write | delegate goals through configured supervision links |
+| `mcp` | token (vault key) | read+write | call user-configured outbound MCP servers |
+| `google_sheets` | oauth | read+write | read and append rows through generic OAuth2 connector flow |
 
 Auth is minted through the single `connectorClient(env, provider, {userId, instanceId})`
 path (`connectors/client.ts`): app-installation token, OAuth refresh→access, a vault key,

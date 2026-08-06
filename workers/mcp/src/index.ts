@@ -839,7 +839,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"coding_session_message",
-			"Send a message/command to the coding CLI running in the terminal. This types into the tmux pane — like typing at the keyboard.",
+			"Send a message/command to the coding CLI running on the selected runner node. For persistent terminal-backed sessions this types into the terminal; for one-shot engines it sends the next turn.",
 			{
 				instance_id: z.string().describe("Instance ID"),
 				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
@@ -869,7 +869,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"coding_session_restart",
-			"Restart the coding CLI (kills and relaunches the tmux pane). Use when the CLI is stuck or erroring.",
+			"Restart the coding CLI session on the selected runner node. Use when the CLI is stuck or erroring.",
 			{
 				instance_id: z.string().describe("Instance ID"),
 				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
@@ -947,7 +947,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"coding_session_end",
-			"End a coding session completely. Stops the CLI and closes the tmux pane.",
+			"End a coding session completely. Stops the CLI process/session on the runner.",
 			{
 				instance_id: z.string().describe("Instance ID"),
 				session_id: z.string().optional().describe("Session ID. If omitted, uses the first active session."),
@@ -1016,7 +1016,7 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 
 		this.server.tool(
 			"coding_diagnostics",
-			"Full diagnostics for a coding instance: runner connectivity, tmux sessions, repos, issues. Use to debug why sessions are offline or stuck.",
+			"Full diagnostics for a coding instance: runner connectivity, terminal sessions, repos, issues. Use to debug why sessions are offline or stuck.",
 			{
 				instance_id: z.string().describe("Instance ID"),
 				token: z.string().optional().describe("PAGS session token. Omit when connected with browser sign-in."),

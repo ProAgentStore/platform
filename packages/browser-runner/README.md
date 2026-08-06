@@ -14,13 +14,13 @@ This package is private in the monorepo. Users install `@proagentstore/cli`; the
 pnpm --filter @proagentstore/browser-runner dev -- --port 49171
 ```
 
-The runtime listens on `127.0.0.1` by default. Use `--token` and `--instance-id` when exposing it through Cloudflare Tunnel. PAGS includes `Authorization: Bearer <token>` and `X-PAGS-Instance-Id` on proxied task calls.
+The runtime listens on `127.0.0.1` by default. The CLI normally starts it through `pags up` / `pags runner connect`, registers it with PAGS, and exposes it only through the outbound WebSocket relay. PAGS includes `Authorization: Bearer <token>` and `X-PAGS-Instance-Id` on proxied task calls.
 
 ```bash
 pags runner connect "$PAGS_INSTANCE_ID" --pags-token "$PAGS_TOKEN" --headless
 ```
 
-`runner connect` currently starts the browser runtime, opens a Cloudflare quick tunnel, registers the tunnel with PAGS, and keeps both processes alive. This is the shipped bootstrap path. The target cheapest best-practice local mode is outbound polling from FAGS to PAGS, with tunnel mode kept as fallback/debug. Manual mode is still useful for named tunnels:
+`runner connect` starts the browser runtime, registers each supplied instance, opens an outbound relay socket for each one, and keeps the runtime process alive. There is no Cloudflare Tunnel / cloudflared mode in the current CLI.
 
 ```bash
 pags runner start --port 49171 --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
@@ -32,11 +32,11 @@ Local CLI calls to an instance-bound runtime need the same instance id:
 pags runner status --token "$PAGS_RUNNER_TOKEN" --instance-id "$PAGS_INSTANCE_ID"
 ```
 
-Register the browser runtime with PAGS after exposing it through a stable tunnel:
+Register the browser runtime manually when you are running it yourself:
 
 ```bash
 pags runner register "$PAGS_INSTANCE_ID" \
-  --endpoint-url "$PAGS_RUNNER_ENDPOINT" \
+  --endpoint-url "http://127.0.0.1:49171" \
   --runner-token "$PAGS_RUNNER_TOKEN" \
   --pags-token "$PAGS_TOKEN" \
   --probe
@@ -77,9 +77,11 @@ POST /tasks/:id/cancel
 GET  /events
 ```
 
-Task types in this first version:
+Task types exposed by the current runner include:
 
 - `echo`: smoke-test task.
 - `browser.open`: opens a URL in a persistent Playwright profile.
+- `job.apply_agent`: workflow-driven job-application task.
+- `coding.session`: coding runtime session.
 
 The runner is intentionally generic. Job-application behavior should be implemented as an adapter on top of this protocol rather than inside the core runner.

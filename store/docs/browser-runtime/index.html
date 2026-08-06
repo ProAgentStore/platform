@@ -23,7 +23,7 @@
 
 
       <link rel="icon" href="../assets/images/favicon.png">
-      <meta name="generator" content="zensical-0.0.44">
+      <meta name="generator" content="zensical-0.0.46">
 
 
 
@@ -34,7 +34,7 @@
 
 
 
-      <link rel="stylesheet" href="../assets/stylesheets/modern/main.fba56155.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/modern/main.19d3147f.min.css">
 
 
 
@@ -642,7 +642,7 @@
 <h1 id="proagentstore-browser-runtime">ProAgentStore Browser Runtime<a class="headerlink" href="#proagentstore-browser-runtime" title="Permanent link">&para;</a></h1>
 <p>Runtime-backed agents use <code>pags up</code>, which runs local browser and CLI capabilities from <code>packages/browser-runner</code>.</p>
 <p>The current PAGS runtime pattern is:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Workflow brain -&gt; callRunner() -&gt; RelayDO -&gt; WebSocket -&gt; local runner -&gt; browser/tmux
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Workflow brain -&gt; callRunner() -&gt; RelayDO -&gt; WebSocket -&gt; local runner -&gt; browser/terminal
 </span></code></pre></div>
 <p>The cloud-hosted workflow is the brain. The local runner is the hands. This keeps account state, audit, and orchestration in ProAgentStore while browser sessions, local files, and CLI sessions stay on the user's machine.</p>
 <h2 id="connectivity-modes">Connectivity Modes<a class="headerlink" href="#connectivity-modes" title="Permanent link">&para;</a></h2>
@@ -651,7 +651,7 @@
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  -&gt; RelayDO
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  -&gt; outbound WebSocket
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  -&gt; local browser runner
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  -&gt; Playwright browser or tmux CLI
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  -&gt; Playwright browser or terminal CLI
 </span></code></pre></div>
 <p>The outbound WebSocket relay is the only transport. The earlier Cloudflare Tunnel / cloudflared modes were removed — there is no tunnel fallback, no <code>--tunnel</code> flag, and no public inbound server. The runner mints a short-lived, instance-scoped relay token and opens <code>wss://…/v1/relay/:instanceId/connect</code>; the relay DO is keyed per (instance, node) and hibernates when idle.</p>
 <h2 id="brain-vs-hands">Brain vs Hands<a class="headerlink" href="#brain-vs-hands" title="Permanent link">&para;</a></h2>
@@ -678,7 +678,7 @@
 <tr>
 <td>Hands</td>
 <td>Local <code>pags up</code> runner</td>
-<td>Drives Playwright browser actions or tmux CLI sessions</td>
+<td>Drives Playwright browser actions or terminal CLI sessions</td>
 </tr>
 <tr>
 <td>Browser/session</td>
@@ -699,8 +699,8 @@
 </ul>
 <p>The Job Application Assistant is the reference browser-capable agent. Its Cloudflare Workflow brain drives a local Playwright browser through snapshot/action steps and can pause for user approval.</p>
 <h2 id="coder-agents">Coder Agents<a class="headerlink" href="#coder-agents" title="Permanent link">&para;</a></h2>
-<p>Coder agents use the same runtime idea, but the local capability is a tmux-backed CLI session rather than a browser.</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Workflow brain -&gt; RelayDO -&gt; local runner -&gt; tmux CLI session
+<p>Coder agents use the same runtime idea, but the local capability is a terminal-backed CLI session rather than a browser. The default backend remains tmux; the generic terminal connector can also address kitty and iTerm2 targets when those apps expose local control APIs.</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Workflow brain -&gt; RelayDO -&gt; local runner -&gt; terminal CLI session
 </span></code></pre></div>
 <p>This allows long-running coding sessions while preserving the account-level control plane and audit model.</p>
 <p>Coder also supports multiple connected machines for the same private instance. Each session is pinned to the runner node that owns it, so different repos can run on different machines concurrently. See <a href="../coder-multi-machine/">Coder Multi-Machine Runtime</a>.</p>
@@ -769,10 +769,10 @@
 
 
 
-      <script id="__config" type="application/json">{"annotate":null,"base":"..","features":[],"search":"../assets/javascripts/workers/search.e2d2d235.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
+      <script id="__config" type="application/json">{"annotate":null,"base":"..","features":[],"search":"../assets/javascripts/workers/search.b6b7e04f.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":null}</script>
 
 
-      <script src="../assets/javascripts/bundle.6e5f0216.min.js"></script>
+      <script src="../assets/javascripts/bundle.ee611ef6.min.js"></script>
 
 
   </body>

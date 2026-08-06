@@ -1,6 +1,6 @@
 # Coder agent — local vs cloud placement (design)
 
-> **Status:** design only — NOT implemented as of 2026-08-02. The shipped Coder is
+> **Status:** design only — NOT implemented as of 2026-08-06. The shipped Coder is
 > **local-runner-only**: `CodingSessionWorkflow` resolves a local runner via the relay
 > (`getRunnerConn`) and has no cloud/`managed` code path; the `instance_runtimes.placement`
 > column exists but nothing routes on it, and there is no Cloudflare Sandbox integration in
@@ -18,7 +18,7 @@ Goal: let a coding session run **on the user's machine** (today) OR **in the clo
   Sandbox** (server-side). Nothing to SSH into; the coding CLI runs as a process.
 - **Blind / autonomous-only: no.** You still **see + drive it through the console**
   — the same **Summary co-pilot + Terminal** view; the worker routes `/capture` and
-  `/act` to the sandbox instead of a local tunnel. You can read output, send
+  `/capture` and action routes to the sandbox instead of the local relay. You can read output, send
   messages, and **take over**. Headless only means "no window on *your* machine."
 
 ## Local vs cloud — the three real differences (surface in the UI)
@@ -39,13 +39,13 @@ produces a PR**, not local file edits.
 - Console session view **unchanged** — already polls `/capture` + drives `/act`;
   agnostic to where the runtime lives.
 - Add a **placement choice at session start**: *Run on → My machine | Cloud.*
-- `placement: 'local'` → today's path (tunnel to `pags up`).
+- `placement: 'local'` -> today's path (`pags up` over the outbound relay).
 - `placement: 'managed'` → new **cloud coding runtime**: `CodingSessionWorkflow`
   drives a **CF Sandbox** (clone repo → launch the CLI with the BYOK key → expose
   snapshot/act) instead of the local runner. Same `coding_timeline` persistence.
 - The runtime resolution (`lib/runner-client.ts` / `getRunnerConn`) gains a managed
   branch: for `placement='managed'`, talk to the platform-held Sandbox instead of
-  the user's tunnel.
+  the user's local relay connection.
 
 ## Open questions / spike first
 

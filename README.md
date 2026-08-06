@@ -15,14 +15,14 @@ Marketplace for server-powered AI agents. Creators build agent templates, client
 platform/
 ├── packages/sdk/     Internal TypeScript SDK for agents
 ├── packages/cli/     @proagentstore/cli — init, check, publish, MCP proxy, local runtime
-├── packages/browser-runner/ ProAgentStore Playwright + tmux runtime bundled into the CLI
+├── packages/browser-runner/ ProAgentStore Playwright + terminal/coding runtime bundled into the CLI
 ├── workers/api/      Hono API worker (auth, agents, instances, coding, apply, keys, analytics)
 ├── workers/host/     Marketing site + console + widget
 ├── workers/mcp/      MCP server for Codex, Claude Code, Cursor, and VS Code
 ├── store/            Source HTML for all pages
 ├── skills/           Open Agent Skills source files
 ├── plugins/          Codex and Claude plugin wrappers
-├── agents/           13 catalog agents (10 flagship + job-application-assistant, coder, repo-chat)
+├── agents/           Tier-0 first-party agent sources kept in this repo
 └── templates/        Agent scaffolding (worker, cron, api)
 ```
 
@@ -115,13 +115,13 @@ The current system map, runtime boundaries, data ownership rules, risk assessmen
 
 ### Browser runtime (`pags up`)
 
-Browser- and coding-capable agents use PAGS as the control-plane brain and a local **ProAgentStore browser runtime** (`runtimePlane: "pags"`, Playwright + tmux, bundled into the CLI) as the hands. One public package, one command — no monorepo, no tunnel binary in the default path.
+Browser- and coding-capable agents use PAGS as the control-plane brain and a local **ProAgentStore browser runtime** (`runtimePlane: "pags"`, Playwright + terminal/coding capabilities, bundled into the CLI) as the hands. One public package, one command — no monorepo and no tunnel binary.
 
 ```text
 PAGS control plane / MCP / Workflows
   -> task, auth, approval, audit, the LLM brain
 ProAgentStore browser runtime (pags up)
-  -> Playwright, local files, real browser profile, tmux CLIs
+  -> Playwright, local files, real browser profile, terminal/coding engines
 Real browser / real repo
   -> job boards, uploads, receipts, coding sessions
 ```
@@ -129,17 +129,17 @@ Real browser / real repo
 ```bash
 npm i -g @proagentstore/cli
 pags login
-pags up            # one multiplexed runner for ALL your instances on this machine
+pags up            # one runner for active runtime-capable instances discovered at startup
 ```
 
-`pags up` is the canonical runner: **one process serves every active instance on that machine**. It defaults to a **WebSocket relay** (the runner connects outbound to a per-instance or node-scoped `RelayDO` — no cloudflared, no public server, no inbound tunnel). Cloud → `callRunner()` → `RelayDO` → WebSocket → runner. Cloudflared tunnels remain only as a legacy `--tunnel quick|named` option.
+`pags up` is the canonical runner: **one process serves every active runtime-capable instance discovered when it starts**. It uses a **WebSocket relay** (the runner connects outbound to a per-instance or node-scoped `RelayDO` — no cloudflared, no public server, no inbound tunnel). Cloud -> `callRunner()` -> `RelayDO` -> WebSocket -> runner. There is no `--tunnel` flag or tunnel fallback in the current CLI.
 
 - Coder can run multiple machines against the same instance at once. Each coding session is pinned to the runner node that owns it; different repos can run on different machines concurrently.
 - `pags up --force` — replace the current relay socket when debugging stale local connections
 - `pags up --instance <id>` — pin to one agent (debug)
 - `pags up --headless` — headless mode
 
-The job-application agent runs on this runtime via the LLM-driven apply pipeline below (not a fixed `job.apply_basic` task): `POST /v1/instances/:id/apply { url, resumePath }` starts `JobApplyWorkflow`, which drives the runtime's `/browser/snapshot` + `/browser/act` endpoints. The **Coder** agent runs its chosen CLI (Claude Code / Codex / Grok) in a tmux pane on the session's assigned runner node.
+The job-application agent runs on this runtime via the LLM-driven apply pipeline below, not a legacy fixed runtime task: `POST /v1/instances/:id/apply { url, resumePath }` starts `JobApplyWorkflow`, which drives the runtime's `/browser/snapshot` + `/browser/act` endpoints. The **Coder** agent runs its chosen engine (Claude Code, Codex, Gemini CLI, Grok, or a local command) on the session's assigned runner node; Claude uses a persistent structured session, while other engines run one-shot turns.
 
 ### Job application agent (LLM-driven apply)
 
@@ -175,7 +175,7 @@ Public discovery pages:
 
 ## Catalog agents
 
-13 first-party agents ship in the catalog: 10 flagship + three headliners (job-application-assistant, Coder, Repo Chat).
+This repo keeps only Tier-0 first-party agent sources in `agents/`: Job Application Assistant, Coder, and Repo Chat. Other catalog agents live outside the platform monorepo.
 
 | Agent | Type | Description |
 |---|---|---|
@@ -190,7 +190,7 @@ Public discovery pages:
 | invoice-parser | Tool | POST text → structured JSON extraction |
 | email-drafter | Agent | Brand-voice KB → AI email drafts |
 | **job-application-assistant** | Agent | LLM-driven apply: Brain (`JobApplyWorkflow`) drives the local browser runtime to fill + submit real applications |
-| **Coder** (`coder`) | Agent | Multi-CLI coding agent — runs Claude Code / Codex / Grok in tmux via `pags up`; supports multiple connected machines per instance; Engine · Pilot · Co-pilot · Loop · Overseer · Chat |
+| **Coder** (`coder`) | Agent | Multi-engine coding agent — runs Claude Code, Codex, Gemini CLI, Grok, or a local command via `pags up`; supports multiple connected machines per instance; Engine · Pilot · Co-pilot · Loop · Overseer · Chat |
 | **Repo Chat** (`repo-chat`) | Agent | Read-only chat with any GitHub repo(s) — server-side ingest + RAG, no local runner. First agent built "the creator way": declares its tools as data (`capabilities.tools`) rather than relying on the hardcoded `repo`-surface default |
 
 ### Other capabilities

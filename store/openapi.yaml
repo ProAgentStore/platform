@@ -246,10 +246,10 @@ components:
           type: string
         type:
           type: string
-          example: setup.browser_runtime
+          example: browser.open
         status:
           type: string
-          enum: [queued, running, needs_user_input, needs_approval, blocked, completed, failed, cancelled]
+          enum: [queued, running, needs_human, needs_approval, blocked, completed, failed, cancelled]
         input:
           type: object
           additionalProperties: true
@@ -2186,8 +2186,8 @@ paths:
       summary: Create ProAgentStore runtime task
       description: |
         Create a browser/file task on the registered ProAgentStore runtime. PAGS forces
-        human approval for sensitive task types such as `browser.open` and
-        `setup.browser_runtime`.
+        human approval for sensitive task types such as `browser.open`. Workflow-driven
+        tasks such as `job.apply_agent` are driven by their durable workflow brain.
       operationId: createInstanceRuntimeTask
       tags: [Instances]
       parameters:
@@ -2207,7 +2207,7 @@ paths:
               properties:
                 type:
                   type: string
-                  example: setup.browser_runtime
+                  example: browser.open
                 input:
                   type: object
                   additionalProperties: true

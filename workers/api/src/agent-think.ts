@@ -160,6 +160,16 @@ export async function runAgentThink(opts: {
 			.first<{ config: string | null; agent_config: string | null }>();
 		if (row?.config) instanceCfg = JSON.parse(row.config) as Record<string, unknown>;
 		if (row?.agent_config) agentCfg = JSON.parse(row.agent_config) as Record<string, unknown>;
+		if (!row) {
+			// A TEMPLATE preview DO is keyed by the AGENT id, so the join above finds nothing and
+			// the creator previewing their own agent saw none of the behaviour they declared on it
+			// — the preview answered in a different voice from the published agent. Same fallback
+			// resolveAgentCapabilities already makes for exactly this case.
+			const agent = await env.DB.prepare("SELECT config FROM agents WHERE id = ?1")
+				.bind(state.agentId)
+				.first<{ config: string | null }>();
+			if (agent?.config) agentCfg = JSON.parse(agent.config) as Record<string, unknown>;
+		}
 	} catch { /* skip silently */ }
 
 	// Behaviour (#223) — the subscriber's declared character, replacing three hardcoded

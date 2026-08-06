@@ -2,8 +2,9 @@
 
 > **Status:** **COMPLETE (2026-08)** — epic #143 fully landed. The executor
 > (`executeHttpRequest`, #144), `compileConnector` + `sanitizeConnectorManifest` (#145), the
-> per-tool `handler` escape hatch + the conversions of **web-search, github, and meta** to
-> manifests (#146), and the **generic OAuth2 handler** (`/v1/connectors/:id/oauth/*`, #147) are
+> per-tool `handler` escape hatch + the conversions of **web-search, github, meta, and
+> google_sheets** to manifests (#146/#147), and the **generic OAuth2 handler**
+> (`/v1/connectors/:id/oauth/*`) are
 > all shipped and behavior-identical (174 connector tests green, api suite 1353). A connector is
 > now data: an api-key/bearer SaaS is a manifest object; an OAuth SaaS is a manifest + an OAuth
 > app registration — no bespoke route/tool code, no deploy per integration. This was the
@@ -86,7 +87,7 @@ A connector manifest is JSON (built-in ones committed as data; later, creator-su
 | `api-key` | user's BYOK vault (`user_api_keys`), injected into header/query per the tool | http, web-search |
 | `oauth2` | refresh→access exchange; refresh token envelope-encrypted; `secretRef` server-side | Slack, Google Sheets, Notion, Linear |
 | `app` | installation token (GitHub-App style) | github |
-| `none` | reached over the runner relay (machine-owned) | terminal, tmux, browser |
+| `none` | reached over the runner relay or internal platform authority | terminal, tmux, browser, repo-local, supervision |
 
 The one new capability is a **generic OAuth2 handler** driven by `auth` config — today Drive/Gmail/
 GitHub each hand-roll their flow. Consolidating them into one manifest-driven `authorize` +
@@ -122,8 +123,8 @@ manifest.json ──► compileConnector(manifest) ──► { Connector, ToolDe
    allowlists, consent rows keyed by connector id) are untouched.
 3. **Convert `github` and `meta` to manifests** (keeping their one custom branch as a `handler`).
    Their existing dedicated tests (now 100%) become the behavior contract the manifest must satisfy.
-4. **Generic OAuth2 handler** — fold Drive/Gmail/GitHub OAuth into one manifest-driven flow; add
-   Slack/Sheets/Notion as *manifests only*.
+4. **Generic OAuth2 handler** — landed for manifest OAuth2 connectors; Google Sheets is the
+   first shipped OAuth2 manifest. Drive/Gmail still use their ingest-specific routes.
 5. **Creator-supplied manifests** (the third-party unlock) — a reviewed manifest is a new
    integration with no deploy. Gated exactly like agent review (#53) + the safety scanner (#54):
    SSRF/host allowlist, scope sanity, secret-access, cost heuristics.
@@ -148,8 +149,8 @@ manifest.json ──► compileConnector(manifest) ──► { Connector, ToolDe
 - Not a general workflow engine — that's the *next* frontier ("retire the `workflow` closed enum →
   declarative behavior via composed steps/triggers"; see strategy doc). Manifests describe *what an
   agent can touch*, pipelines describe *what it does over time*.
-- Phase 1: built-in manifests only (github/meta/http converted, Slack/Sheets added). Phase 2:
-  generic OAuth2 handler. Phase 3: creator-supplied manifests behind curated review (folds into
+- Phase 1: built-in manifests only (github/meta/web-search/google_sheets converted). Phase 2:
+  more OAuth2 SaaS manifests. Phase 3: creator-supplied manifests behind curated review (folds into
   #51/#53/#54 in the third-party plan).
 
 ## Why this first

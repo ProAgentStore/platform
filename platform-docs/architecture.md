@@ -19,7 +19,7 @@ platform/
     cli/                 pags CLI: init, publish, login, mcp, runner
     browser-runner/      Local Playwright/terminal runtime served by `pags up`
     compliance/          Policy/check tooling
-  agents/                First-party catalog agents
+  agents/                Tier-0 first-party agent sources
   templates/             Agent scaffolds
   docs/                  Internal architecture and planning docs
 ```
@@ -89,7 +89,7 @@ Current runtime-backed surfaces:
 Zensical is the standard generator for public platform docs.
 
 ```text
-platform-docs/*.md -> python3 -m zensical build --strict -> store/docs/**
+platform-docs/*.md -> zensical build --strict -> store/docs/**
 ```
 
 The Host Worker build inlines the generated `store/docs` tree so `/docs/`, `/docs/search.json`, `/docs/assets/...`, and generated article pages are served from the same Worker as the main site.

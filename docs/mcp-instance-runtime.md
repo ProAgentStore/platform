@@ -107,10 +107,11 @@ That response means the instance runtime path is working and correctly refusing 
 
 ## MCP Tool Groups
 
-The server now registers ~100 tools (about 101 registrations across `index.ts`,
-`instance-tools.ts`, and `storage-tools.ts`). The `/health` liveness marker reports a
-static `tools` count (currently 41) — it is a heartbeat, not an authoritative inventory;
-grep `workers/mcp/src/*.ts` for the full, current surface. The families below are a
+The server currently has 120 `server.tool(...)` registrations across `workers/mcp/src`.
+Some are capability-gated and appear only for users with matching agent surfaces. The
+`/health` liveness marker reports a static `tools` count (`41`) — it is a heartbeat,
+not an authoritative inventory. Grep `workers/mcp/src/**/*.ts` for the full source
+surface. The families below are a
 representative slice, not the complete list.
 
 Creator tools:
@@ -177,7 +178,7 @@ Status: active
 
 Verified live:
 
-- MCP exposed its tool set (26 at the time of this 2026-06-11 record; ~100 today — see MCP Tool Groups above).
+- MCP exposed its tool set (26 at the time of this 2026-06-11 record; 120 registrations in source today — see MCP Tool Groups above).
 - Required instance tools were present.
 - `subscribe_agent` returned the existing active instance.
 - `add_instance_knowledge` saved a document to that private instance.

@@ -45,7 +45,7 @@ a diff.
 
 - **Partially obsoletes** our earlier "CF can't host a shell → Coder must be local"
   assumption. A **cloud Coder placement** is theoretically possible per the Sandbox SDK —
-  but it is **NOT implemented** (as of 2026-08-02 the shipped Coder is local-runner-only;
+  but it is **NOT implemented** (as of 2026-08-06 the shipped Coder is local-runner-only;
   no Sandbox integration exists in `workers/api/src`). Forward-looking only.
 - Tutorial shows **discrete task runs** (clone → task → diff/PR). Docs **do not**
   specify CPU/timeout/**persistence**/cost for long-lived interactive sessions →

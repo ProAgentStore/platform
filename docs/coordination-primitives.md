@@ -10,7 +10,7 @@
 A coordinator brain hands work to an executor. Today the Coder's cross-repo brain, the **Overseer**
 (`routes/coding.ts` `/overseer` → `drive_claude`), fires **one instruction** at a repo's Engine and
 returns. Likewise `send_to_cli(repo_name, message)` (`lib/storage-tools.ts`) is a single message to a
-tmux session. Both are **fire-and-forget one-shots** with:
+coding engine session. Both are **fire-and-forget one-shots** with:
 
 - no follow-through — the Engine may get stuck / need input / half-finish, and the coordinator never
   knows;
