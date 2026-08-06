@@ -147,6 +147,41 @@ export function pickNextIssue<T extends { number: number }>(issues: T[], exclude
 	return [...issues].sort((a, b) => a.number - b.number).find((i) => !exclude.has(i.number)) ?? null;
 }
 
+/**
+ * `owner/repo` out of a GitHub clone URL — https or ssh, with or without `.git`, with or
+ * without a trailing slash. Returns null for anything that isn't a GitHub URL.
+ *
+ * Exported and shared because this regex was written out twice (#304): once when adding a
+ * repo from a bare clone URL, once when reading a local checkout's `origin` remote. Both
+ * answer the same question, and the second site's comment already said "same shape as the
+ * clone-URL path" — so a fix to one (a new host form, a stricter owner charset) would
+ * silently have left the other behind.
+ */
+export function parseGithubRepo(url: string | null | undefined): string | null {
+	if (!url) return null;
+	return url.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i)?.[1] ?? null;
+}
+
+/**
+ * The owner half of an `owner/repo` — what `installationTokenForOwner` is keyed by. Empty
+ * string when there is no repo reference at all, which every caller already treats as "no
+ * installation to look up".
+ *
+ * Exported and shared because the same index-into-a-split appeared five times (#304) in two
+ * spellings: three guarded by `includes("/")`, two by a truthiness ternary.
+ *
+ * DELIBERATELY NOT stricter than what it replaced. A reference with no slash at all
+ * (`"platform"`, which the add-repo route accepts because `body.githubRepo` is taken on
+ * trust) comes back as `"platform"` — a nonsense owner, exactly as before. Rejecting it here
+ * would be a real behaviour change smuggled into a de-duplication: the two ternary callers
+ * would stop attempting a token lookup they attempt today. Validating `body.githubRepo` at
+ * the edge is the right fix and is a separate decision.
+ */
+export function ownerOf(githubRepo: string | null | undefined): string {
+	if (!githubRepo) return "";
+	return githubRepo.split("/")[0];
+}
+
 async function nextOpenIssue(env: Env, userId: string, githubRepo: string, opts: { labels?: string; exclude: Set<number> }): Promise<IssueDetail | null> {
 	const issues = await listIssues(env, userId, githubRepo, { state: "open", labels: opts.labels });
 	const next = pickNextIssue(issues, opts.exclude);
@@ -181,8 +216,7 @@ codingRoutes.post("/:instanceId/coding/repos", async (c) => {
 	// A clone URL alone is enough: derive owner/repo (for private-repo token
 	// resolution) and a display name from it. Accept name OR github repo OR URL.
 	if (!githubRepo && cloneUrl) {
-		const m = cloneUrl.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i);
-		if (m) githubRepo = m[1];
+		githubRepo = parseGithubRepo(cloneUrl) ?? undefined;
 	}
 	// Default to the full "owner/repo" — a bare repo name ("platform") is too
 	// generic to tell projects apart. The user can rename it afterwards.
@@ -223,9 +257,8 @@ codingRoutes.post("/:instanceId/coding/repos/:repoId/detect-github", async (c) =
 	} catch {
 		return c.json({ githubRepo: null, reason: "could not read remote" });
 	}
-	// Parse owner/repo from an https or ssh GitHub remote (same shape as the clone-URL path).
-	const m = remote?.match(/github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i);
-	const githubRepo = m ? m[1] : null;
+	// Parse owner/repo from an https or ssh GitHub remote — the same parser the clone-URL path uses.
+	const githubRepo = parseGithubRepo(remote);
 	if (githubRepo) {
 		await c.env.DB.prepare("UPDATE coding_repos SET github_repo = ?1, updated_at = datetime('now') WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4")
 			.bind(githubRepo, repo.id, instanceId, uid)
@@ -298,12 +331,12 @@ codingRoutes.put("/:instanceId/coding/repos/:repoId/instructions", async (c) => 
 /**
  * Latest GitHub Actions run for an `owner/repo`, for a verified installation. Returns
  * `{ available:false }` (never throws) for a non-GitHub repo, a missing/failed installation
- * token, or a GitHub error — so the aggregate below can degrade per-repo. Shared by /builds.
+ * token, or a GitHub error — so the aggregate below can degrade per-repo. Shared by /builds
+ * and by /deployment, which used to repeat this body verbatim (#304).
  */
 async function latestRunFor(env: Env, uid: string, full: string | undefined): Promise<{ available: boolean; run: BuildRun | null }> {
 	if (!full?.includes("/") || !githubAppConfigured(env)) return { available: false, run: null };
-	const owner = full.split("/")[0];
-	const token = await installationTokenForOwner(env, uid, owner).catch(() => null);
+	const token = await installationTokenForOwner(env, uid, ownerOf(full)).catch(() => null);
 	if (!token) return { available: false, run: null };
 	const res = await fetchWorkflowRuns(full, token, { perPage: 1 });
 	if ("status" in res) return { available: false, run: null };
@@ -320,14 +353,11 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployment", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const repo = await getRepo(c.env, instanceId, uid, c.req.param("repoId"));
 	if (!repo) throw new HttpError(404, "Repo not found");
-	const full = repo.githubRepo;
-	if (!full?.includes("/") || !githubAppConfigured(c.env)) return c.json({ available: false });
-	const owner = full.split("/")[0];
-	const token = await installationTokenForOwner(c.env, uid, owner).catch(() => null);
-	if (!token) return c.json({ available: false });
-	const res = await fetchWorkflowRuns(full, token, { perPage: 1 });
-	if ("status" in res) return c.json({ available: false });
-	return c.json({ available: true, run: res.runs[0] ? mapWorkflowRun(res.runs[0]) : null });
+	const latest = await latestRunFor(c.env, uid, repo.githubRepo);
+	// The unavailable body stays `{available:false}` with NO `run` key, which is what this route
+	// has always put on the wire — `latestRunFor` carries `run:null` alongside it for its other
+	// caller. De-duplicating the lookup must not change the response shape (#304).
+	return c.json(latest.available ? latest : { available: false });
 });
 
 /**
@@ -348,7 +378,7 @@ codingRoutes.get("/:instanceId/coding/repos/:repoId/deployments", async (c) => {
 	if (!repo) throw new HttpError(404, "Repo not found");
 	const full = repo.githubRepo;
 	if (!full?.includes("/")) return c.json({ available: false });
-	const owner = full.split("/")[0];
+	const owner = ownerOf(full);
 	// Prefer the GitHub App installation token; if the App isn't configured/installed, fall back
 	// to an UNAUTHENTICATED request — public repos' Actions runs are readable without auth
 	// (~60/hr shared IP; private repos will 404 → available:false). This makes builds show for
@@ -1014,7 +1044,7 @@ async function delegateToTarget(
 	const instanceInstructions = await readSpecialInstructions(c.env, instanceId, uid);
 	const combined = [instanceInstructions, repo.instructions].filter(Boolean).join("\n\n");
 	const goal: CodingGoal = { objective, repo: repo.name, clientType: session.clientType, specialInstructions: combined || undefined };
-	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
+	const owner = ownerOf(repo.githubRepo);
 	const token = owner ? await installationTokenForOwner(c.env, uid, owner).catch(() => null) : null;
 	await c.env.CODING_SESSION.create({
 		params: {
@@ -1365,7 +1395,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/run", async (c) => {
 		specialInstructions: combined || undefined,
 		dryRun: body.dryRun === true,
 	};
-	const owner = repo.githubRepo ? repo.githubRepo.split("/")[0] : "";
+	const owner = ownerOf(repo.githubRepo);
 	const token = owner ? await installationTokenForOwner(c.env, uid, owner) : null;
 	const wf = await c.env.CODING_SESSION.create({
 		params: {
