@@ -7,6 +7,7 @@ import { registryToolNameSet, registryTools, runRegistryTool } from "./lib/tool-
 import { configureBoardForAgent } from "./lib/board.js";
 import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilities.js";
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
+import { stableStringify } from "./lib/stable-json.js";
 import { resolveSettingsValues, settingsPromptBlock } from "./lib/instance-settings.js";
 import { executeStorageTool } from "./lib/storage-tools.js";
 import { executeTool, type ToolCallRequest, type ToolCallResult } from "./lib/tools.js";
@@ -637,7 +638,12 @@ export async function runAgentThink(opts: {
 				toolResults.push(`[${tc.name}]: This tool isn't available to this agent — do not call it; answer directly or use an available tool.`);
 				continue;
 			}
-			const signature = `${tc.name}:${JSON.stringify(tc.arguments ?? {})}`;
+			// stableStringify, not JSON.stringify: the raw form is KEY-ORDER dependent, so the same
+			// logical call emitted with its fields in a different order hashed differently and
+			// slipped straight past the dedup. That is how `write_memory` ran four times against
+			// one key in a single turn (#226) — nothing was deduplicating identical intent, only
+			// identical byte-order. The pump's delivery idempotency key already learned this.
+			const signature = `${tc.name}:${stableStringify(tc.arguments ?? {})}`;
 			// The dedup exists to stop DUPLICATE SIDE EFFECTS (three identical job tasks), so it
 			// applies only to calls that have one. Applied to pure reads it produced the opposite
 			// of its purpose: round 1 `read_terminal` (idle), `send_to_cli "run the tests"`; round

@@ -16,6 +16,7 @@
  * so they are unit-testable; the D1 access is thin around them.
  */
 import type { Env } from "../types.js";
+import { stableStringify } from "./stable-json.js";
 
 /** How many times a delivery is attempted before it becomes a dead letter. */
 export const MAX_ATTEMPTS = 5;
@@ -34,17 +35,6 @@ export function backoffSeconds(attempt: number): number {
 /** Whether a delivery with `attemptsSpent` attempts behind it may be tried again. */
 export function canRetry(attemptsSpent: number): boolean {
 	return attemptsSpent < MAX_ATTEMPTS;
-}
-
-/** Deterministic JSON: keys sorted at every level, so an identical payload hashes identically
- *  regardless of the order its fields happened to be built in. */
-function stableStringify(value: unknown): string {
-	if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-	if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-	const entries = Object.entries(value as Record<string, unknown>)
-		.filter(([, v]) => v !== undefined)
-		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-	return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`).join(",")}}`;
 }
 
 /** FNV-1a, 32-bit, hex. Enough to key an outbox row; not a security hash. */

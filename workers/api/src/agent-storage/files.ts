@@ -120,6 +120,17 @@ export function withFiles<TBase extends AgentStorageBaseCtor & GConstructorWith<
 			const head = await this.r2.head(opts.r2Key);
 			if (!head) return null; // multipart not completed / wrong key
 
+			// Never let a registration REPLACE a different file's metadata (#217). The write
+			// below is an unconditional put on `file:{id}`, so registering an id that already
+			// belongs to another R2 object silently repoints that file's entry — the previous
+			// object is then orphaned in R2 with nothing referencing it, and delete/download for
+			// the original id start operating on someone else's bytes.
+			//
+			// Re-registering the SAME (id, key) is allowed: that is a retried or resumed
+			// completion of the same upload, which must stay idempotent.
+			const prior = await this.doStorage.get<FileMeta>(`file:${opts.id}`);
+			if (prior && prior.r2Key !== opts.r2Key) return null;
+
 			// Bounded extraction read: PDFs/text under the cap get read fully (Workers
 			// memory comfortably handles this); bigger objects skip extraction.
 			const MAX_EXTRACT_BYTES = 32 * 1024 * 1024;

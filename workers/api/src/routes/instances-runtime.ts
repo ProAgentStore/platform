@@ -683,6 +683,27 @@ export async function requireRuntime(
  * the JobApplyWorkflow drives via getBoundRunnerConn. This keeps both sides on the SAME node,
  * which is what lets a human actually solve a captcha the workflow paused on. 503 if none live.
  */
+/**
+ * The runtime row for the runner that is ACTUALLY connected, or null.
+ *
+ * The non-throwing half of the pair, mirroring getRuntime/requireRuntime. Reads and
+ * best-effort writes need "the live node if there is one, otherwise serve the mirror" — with
+ * only the throwing variant they reached for `getRuntime`, which returns the DEFAULT row.
+ * That row is not cleared on disconnect, so on a multi-machine account it can name a machine
+ * that went away while the task actually runs on another node's relay (#218).
+ */
+export async function getLiveRuntime(
+	env: Env,
+	instanceId: string,
+	userId: string,
+): Promise<RuntimeRow | null> {
+	const conn = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
+	if (!conn) return null;
+	return conn.runnerNode
+		? await getRuntimeNode(env, instanceId, userId, conn.runnerNode)
+		: await getRuntime(env, instanceId, userId);
+}
+
 export async function requireLiveRuntime(
 	env: Env,
 	instanceId: string,

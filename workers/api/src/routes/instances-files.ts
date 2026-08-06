@@ -28,6 +28,33 @@ const keyFor = (instanceId: string, fileId: string, name: string) =>
 	`agents/${instanceId}/files/${fileId}/${name}`;
 const keyPrefixFor = (instanceId: string) => `agents/${instanceId}/files/`;
 
+/**
+ * Recover the (fileId, name) that `keyFor` put INTO a key (#217).
+ *
+ * The create route generates both server-side and embeds them in the R2 key, but complete then
+ * read `fileId` and `name` back out of the request BODY, independent of the key — validating
+ * only that the key sat under this instance's prefix. So a client could finish a legitimate
+ * upload and register the resulting object under any id and name it liked, including an id
+ * already in use: the DO writes `file:{id}` unconditionally, so that overwrites another file's
+ * metadata and leaves its R2 object orphaned.
+ *
+ * The key is the server's own statement of what this upload is. Derive from it and the whole
+ * class goes away — there is nothing left for the client to disagree with.
+ */
+export function parseFileKey(instanceId: string, key: string): { fileId: string; name: string } | null {
+	const prefix = keyPrefixFor(instanceId);
+	if (!key.startsWith(prefix)) return null;
+	const rest = key.slice(prefix.length);
+	const slash = rest.indexOf("/");
+	if (slash <= 0) return null;
+	const fileId = rest.slice(0, slash);
+	const name = rest.slice(slash + 1);
+	// A traversal or a nested path never came from keyFor: the name segment is sanitised at
+	// create time and cannot contain a slash.
+	if (!fileId || !name || name.includes("/") || fileId.includes("..")) return null;
+	return { fileId, name };
+}
+
 export function registerFileUploadRoutes(router: Hono<{ Bindings: Env }>): void {
 	/** Start a resumable upload. Returns the session the client persists for resume. */
 	router.post("/:instanceId/files/multipart/create", async (c) => {
@@ -100,10 +127,18 @@ export function registerFileUploadRoutes(router: Hono<{ Bindings: Env }>): void 
 			parts?: unknown;
 		};
 		const key = typeof body.key === "string" ? body.key : "";
-		const fileId = typeof body.fileId === "string" ? body.fileId : "";
-		const name = sanitizeName(typeof body.name === "string" ? body.name : "");
 		if (!key.startsWith(keyPrefixFor(instanceId))) throw new HttpError(403, "Key does not belong to this instance");
-		if (!fileId || !name) throw new HttpError(400, "fileId and name required");
+		// Derive identity from the KEY, never from the body (#217). The body's fileId/name are
+		// still accepted so existing clients keep working, but only as an assertion to check —
+		// they cannot decide what gets registered.
+		const derived = parseFileKey(instanceId, key);
+		if (!derived) throw new HttpError(400, "Malformed upload key");
+		const { fileId, name } = derived;
+		const claimedId = typeof body.fileId === "string" ? body.fileId : "";
+		const claimedName = typeof body.name === "string" ? sanitizeName(body.name) : "";
+		if ((claimedId && claimedId !== fileId) || (claimedName && claimedName !== name)) {
+			throw new HttpError(400, "fileId/name do not match the upload key");
+		}
 		const parts = (Array.isArray(body.parts) ? body.parts : [])
 			.flatMap((p) => {
 				if (!p || typeof p !== "object") return [];

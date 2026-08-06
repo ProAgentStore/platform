@@ -50,6 +50,7 @@ import {
 	requireOwnedInstance,
 	requireRuntime,
 	requireLiveRuntime,
+	getLiveRuntime,
 	runtimeJson,
 	runtimeNodeResponse,
 	runtimeResponse,
@@ -1105,7 +1106,10 @@ instanceRoutes.get("/:instanceId/tasks/:taskId", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const taskId = c.req.param("taskId");
 	try {
-		const runtime = await requireRuntime(c.env, instanceId, session.uid);
+		// The LIVE node, not the default row (#218): on a multi-machine account the default can
+		// name a machine that has gone away, so the read hits a dead relay and the user is shown
+		// stale task detail. No live runner throws, and the catch below serves the mirror.
+		const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 		const res = await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(taskId)}`);
 		const payload = await runtimeJson(res);
 		if (res.ok) {
@@ -1186,7 +1190,10 @@ instanceRoutes.delete("/:instanceId/tasks/:taskId", async (c) => {
 	const instanceId = c.req.param("instanceId");
 	const taskId = c.req.param("taskId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const runtime = await getRuntime(c.env, instanceId, session.uid);
+	// Best-effort stop on the LIVE node (#218). getRuntime returned the default row, which is
+	// not cleared on disconnect — so the cancel could be posted at a machine that is gone while
+	// the task kept running on the one that is actually connected, and the board hid it anyway.
+	const runtime = await getLiveRuntime(c.env, instanceId, session.uid);
 	if (runtime?.endpoint_url) {
 		await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" }).catch(() => undefined);
 	}
@@ -1198,7 +1205,9 @@ instanceRoutes.post("/:instanceId/tasks/:taskId/cancel", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	// Mutating: reach the live node or report offline, rather than dispatching at a stale row
+	// and reporting success for a cancel that never happened (#218).
+	const runtime = await requireLiveRuntime(c.env, instanceId, session.uid);
 	const res = await callRuntime(
 		c.env,
 		runtime,
@@ -1220,7 +1229,8 @@ instanceRoutes.get("/:instanceId/task-events", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const rawLimit = Number(c.req.query("limit") || "100");
 	const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, Math.trunc(rawLimit))) : 100;
-	const runtime = await getRuntime(c.env, instanceId, session.uid);
+	// Live node or the mirror — never the stale default row (#218).
+	const runtime = await getLiveRuntime(c.env, instanceId, session.uid);
 	if (!runtime) {
 		const events = await mirroredRuntimeEvents(c.env, instanceId, session.uid, limit);
 		const tasks = events.length ? [] : await mirroredRuntimeTasks(c.env, instanceId, session.uid, limit);
