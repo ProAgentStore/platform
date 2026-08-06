@@ -117,6 +117,10 @@ export const upCommand = new Command("up")
 		const args = [cliPath, "runner", "connect", ...instances.map((i) => i.id)];
 		if (opts.headless) args.push("--headless");
 		if (opts.force) args.push("--force");
+		// Watch for newly eligible agents so subscribing to one attaches it without a restart
+		// (#229). NOT for a scoped run: `--instance X` means exactly that agent, and quietly
+		// fanning back out to the whole account is the bug the restart path already guards.
+		if (!opts.instance) args.push("--watch-instances");
 
 		const child = spawn(process.execPath, args, {
 			stdio: ["ignore", "pipe", "pipe"],

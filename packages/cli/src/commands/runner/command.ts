@@ -63,7 +63,8 @@ export function createRunnerCommand(): Command {
 		.option("--pags-token <token>", "PAGS session token. Defaults to PAGS_TOKEN")
 		.option("--runner-version <version>", "Runner version")
 		.option("--force", "Take over from another connected machine")
-		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { force?: boolean }) => {
+		.option("--watch-instances", "Attach newly eligible agents while running, without a restart")
+		.action(async (instanceIds: string[], opts: RunnerConnectOptions & { force?: boolean; watchInstances?: boolean }) => {
 			const runnerToken = clean(opts.token) || clean(process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`;
 			const host = clean(opts.host) || "127.0.0.1";
 			const port = clean(opts.port) || String(await findFreePort(49171));
@@ -96,7 +97,7 @@ export function createRunnerCommand(): Command {
 			try {
 				await waitForLocalRunner({ url: localUrl, token: runnerToken, instanceId: primary });
 				writeLine(`Local browser runtime healthy at ${localUrl}`);
-				await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean(opts.force));
+				await connectViaRelay(instanceIds, localUrl, runnerToken, opts, Boolean(opts.force), Boolean(opts.watchInstances));
 				await new Promise<void>((resolvePromise) => { runner.on("exit", () => resolvePromise()); });
 			} catch (error) {
 				shutdown();
