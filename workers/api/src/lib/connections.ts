@@ -27,6 +27,19 @@ import {
 	MAX_ATTEMPTS,
 	type DeliveryClaim,
 } from "./connection-deliveries.js";
+import { classifyDeliveryFailure, connectorsUsedByPipeline, pipelineWiringWarnings, reconnectMessage } from "./connectors/unattended.js";
+import { getConnector } from "./connectors/registry.js";
+import { getRegistryTool } from "./tool-registry.js";
+import { loadPipeline } from "./pipeline.js";
+import { HttpError } from "./auth.js";
+
+/** The HTTP status an error carries, when it carries one — `HttpError` is what every connector
+ *  auth path throws, and its status is a far better signal than matching its message. */
+function statusOf(err: unknown): number | undefined {
+	if (err instanceof HttpError) return err.status;
+	const s = (err as { status?: unknown } | null)?.status;
+	return typeof s === "number" ? s : undefined;
+}
 
 /** Actions a connection may deliver. `sync_connector` is deliberately excluded — a connection
  *  carries data between agents, it does not run an external connector sync. */
@@ -149,7 +162,7 @@ export async function createConnection(
 	env: Env,
 	userId: string,
 	input: CreateConnectionInput,
-): Promise<{ ok: true; connection: ConnectionView } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; connection: ConnectionView; warnings: string[] } | { ok: false; status: number; error: string }> {
 	const eventType = (input.eventType || "").trim();
 	if (!eventType) return { ok: false, status: 400, error: "eventType is required" };
 	if (!CONNECTION_ACTIONS.includes(input.action)) return { ok: false, status: 400, error: `action must be one of ${CONNECTION_ACTIONS.join(", ")}` };
@@ -167,7 +180,44 @@ export async function createConnection(
 		.bind(id, userId, input.sourceInstanceId, eventType, input.targetInstanceId, input.action, JSON.stringify(input.config ?? {}))
 		.run();
 	const row = await env.DB.prepare("SELECT * FROM agent_connections WHERE id = ?1").bind(id).first<ConnectionRow>();
-	return { ok: true, connection: toView(row as ConnectionRow) };
+	return {
+		ok: true,
+		connection: toView(row as ConnectionRow),
+		warnings: await unattendedWarningsFor(env, userId, input.targetInstanceId, input.action, input.config),
+	};
+}
+
+/**
+ * Warnings about wiring a connector that cannot survive unattended into this edge (#181).
+ *
+ * Warnings, not errors — the same call `validateConnectionFilter` makes about a filter, and for
+ * the same reason: a chain that looks healthy but cannot run is worse than one that says so. A
+ * connection fires with nobody present, so an `interactive-only` credential anywhere on the
+ * target's path means the chain works until the token lapses and then stops.
+ *
+ * Reach is honest about its limit: only `run_pipeline` names something whose connectors can be
+ * resolved statically. The other actions (`insert_record`, `create_task`, `add_knowledge`) touch
+ * only platform storage and have no external credential to lose.
+ */
+async function unattendedWarningsFor(
+	env: Env,
+	userId: string,
+	targetInstanceId: string,
+	action: TriggerAction,
+	config: Record<string, unknown> | undefined,
+): Promise<string[]> {
+	if (action !== "run_pipeline") return [];
+	const name = typeof config?.pipeline === "string" ? config.pipeline.trim() : "";
+	if (!name) return [];
+	try {
+		const def = await loadPipeline(env, targetInstanceId, userId, name);
+		if (!def) return [];
+		const used = connectorsUsedByPipeline(def.steps, (tool) => getRegistryTool(tool)?.connector);
+		return pipelineWiringWarnings(used, getConnector, "connection");
+	} catch {
+		// A warning is advisory; failing to compute one must never fail the create.
+		return [];
+	}
 }
 
 /** Delete one of the caller's connections. Returns whether a row was removed. */
@@ -358,15 +408,23 @@ export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"d
 		return "delivered";
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		const outcome = await markAttemptFailed(env, input.claim, input.attempts, message);
+		// #181: an expired/rejected credential is not a transient outage. Retrying it is
+		// guaranteed to fail, so it dead-letters at once with a message naming the fix, instead
+		// of burning five attempts over ~4.25 hours and then reporting a transport error.
+		const failure = classifyDeliveryFailure(message, statusOf(err));
+		const outcome = await markAttemptFailed(env, input.claim, input.attempts, message, new Date(), failure);
 		const kind = input.source === "trigger" ? "trigger" : "connection";
+		const deadMessage =
+			failure === "auth"
+				? reconnectMessage("This connection's connector", message)
+				: `gave up after ${MAX_ATTEMPTS} attempts: ${message}`;
 		await logEvent(env, {
 			// Label by the producing edge so a human reading the trace can tell a stuck trigger
 			// from a stuck connection; they are the same mechanism but not the same problem.
 			source: kind,
 			event: outcome === "dead" ? `${kind}.delivery_dead` : `${kind}.delivery_retry`,
 			level: "error",
-			message: outcome === "dead" ? `gave up after ${MAX_ATTEMPTS} attempts: ${message}` : message,
+			message: outcome === "dead" ? deadMessage : message,
 			userId: input.userId,
 			instanceId: input.sourceInstanceId,
 			traceId: input.traceId ?? undefined,
@@ -377,6 +435,8 @@ export async function attemptDelivery(env: Env, input: AttemptInput): Promise<"d
 				action: input.action,
 				targetInstanceId: input.targetInstanceId,
 				attempts: input.attempts + 1,
+				// So a dead-letter list can separate "reconnect something" from "a dependency was down".
+				failure,
 			},
 		});
 		return outcome;

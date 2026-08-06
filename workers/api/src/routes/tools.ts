@@ -264,7 +264,10 @@ toolRoutes.post("/:id/connections", async (c) => {
 		config: body.config,
 	});
 	if (!res.ok) throw new HttpError(res.status as 400, res.error);
-	return c.json(res.connection, 201);
+	// `warnings` (#181) rides on the 201 rather than blocking it: a credential that cannot survive
+	// unattended makes the connection fragile, not invalid, and the owner is entitled to wire it
+	// anyway. What they are not entitled to is finding out from a dead letter days later.
+	return c.json({ ...res.connection, warnings: res.warnings }, 201);
 });
 
 /**

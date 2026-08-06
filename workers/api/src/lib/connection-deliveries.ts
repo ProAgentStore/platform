@@ -17,6 +17,7 @@
  */
 import type { Env } from "../types.js";
 import { stableStringify } from "./stable-json.js";
+import type { DeliveryFailureKind } from "./connectors/unattended.js";
 
 /** How many times a delivery is attempted before it becomes a dead letter. */
 export const MAX_ATTEMPTS = 5;
@@ -166,8 +167,19 @@ export interface DeliveryClaim {
  * What a failed attempt should do next. Pure so the bound is testable without a database.
  *
  * `attemptsSpent` is the count INCLUDING the attempt that just failed.
+ *
+ * `kind` (#181) is why the retry budget exists at all. Backoff waits out someone else's outage,
+ * which is a good bet for a transient failure and a certainty of failure for an auth one: no
+ * amount of waiting makes an expired grant valid, so an `auth` failure dead-letters on the FIRST
+ * attempt. The user learns "reconnect X" in a minute instead of after five doomed attempts
+ * spread over ~4.25 hours, and the outbox stops presenting a doomed row as one worth replaying.
  */
-export function planNextAttempt(attemptsSpent: number, now: Date): { outcome: "retrying"; nextAttemptAt: string } | { outcome: "dead" } {
+export function planNextAttempt(
+	attemptsSpent: number,
+	now: Date,
+	kind: DeliveryFailureKind = "transient",
+): { outcome: "retrying"; nextAttemptAt: string } | { outcome: "dead" } {
+	if (kind === "auth") return { outcome: "dead" };
 	if (!canRetry(attemptsSpent)) return { outcome: "dead" };
 	return { outcome: "retrying", nextAttemptAt: new Date(now.getTime() + backoffSeconds(attemptsSpent) * 1000).toISOString() };
 }
@@ -217,8 +229,15 @@ export async function markDelivered(env: Env, claim: DeliveryClaim): Promise<boo
  * `attempts` is the count BEFORE this attempt; the write increments RELATIVELY (`attempts + 1`)
  * rather than storing that read-back absolute, so the counter cannot stall at a stale value.
  */
-export async function markAttemptFailed(env: Env, claim: DeliveryClaim, attempts: number, error: string, now = new Date()): Promise<"retrying" | "dead" | "stale"> {
-	const plan = planNextAttempt(attempts + 1, now); // this attempt is now spent
+export async function markAttemptFailed(
+	env: Env,
+	claim: DeliveryClaim,
+	attempts: number,
+	error: string,
+	now = new Date(),
+	kind: DeliveryFailureKind = "transient",
+): Promise<"retrying" | "dead" | "stale"> {
+	const plan = planNextAttempt(attempts + 1, now, kind); // this attempt is now spent
 	const res =
 		plan.outcome === "dead"
 			? await env.DB.prepare(

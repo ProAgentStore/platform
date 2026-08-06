@@ -15,6 +15,7 @@ import { GOOGLE_SHEETS_CONNECTOR } from "./google-sheets.js";
 import { TERMINAL_TOOLS } from "./terminal.js";
 import { TMUX_TOOLS } from "./tmux.js";
 import { WEB_SEARCH_CONNECTOR } from "./web-search.js";
+import type { UnattendedClass } from "./unattended.js";
 
 export interface Connector {
 	/** Stable id, also the `connector` stamped on its tools and the grants/consent key. */
@@ -38,6 +39,13 @@ export interface Connector {
 	grantModel: "user" | "instance-resource";
 	/** For auth:"token" connectors backed by a platform env var (e.g. Meta). */
 	tokenEnv?: EnvTokenKey;
+	/**
+	 * Whether this connector's credential survives with no human present (#181). Omitted =
+	 * derived from `auth` by `unattendedClassOf` (oauth → "refresh", everything else → "yes"),
+	 * which is the honest default: the auth type already determines survivability, so deriving
+	 * stops the two drifting apart. Declare it only to say something the auth type does not.
+	 */
+	unattended?: UnattendedClass;
 	/** For auth:"oauth" connectors: the OAuth2 config (from the manifest) that drives the
 	 *  generic authorize/callback/refresh flow. `clientIdEnv`/`secretEnv` name the Worker env
 	 *  vars holding the client credentials (resolved server-side, never in the manifest). */
@@ -144,6 +152,11 @@ export const CONNECTORS: Connector[] = [
 		// Deliberately generic: the SERVER is a tool input, so no sibling store or third
 		// party is a dependency of this Worker — a configured endpoint is user data.
 		auth: "token",
+		// unattended is DERIVED as "yes", which is right for the credential this connector
+		// actually holds: a vault bearer the user pasted does not expire on us. The fragile case
+		// is a property of the ENDPOINT, not of the connector — a server that turns out to be
+		// OAuth-protected with no refresh grant is interactive-only — and that can only be known
+		// by asking the server, which `discoverAuthServer` does at call time (#180/#181).
 		scopes: { read: true, write: true },
 		grantModel: "user",
 		tools: MCP_TOOLS,
