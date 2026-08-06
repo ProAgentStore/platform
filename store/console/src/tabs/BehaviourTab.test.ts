@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { bandFor, isSet } from "./BehaviourTab";
+import { bandFor, fieldState, isSet, sameValue } from "./BehaviourTab";
 import { SURFACES, visibleSurfaces } from "../lib/surfaces";
 
 const FIELD = {
@@ -44,6 +44,43 @@ describe("isSet — configured vs sitting at the default", () => {
 		expect(isSet({ emoji: false }, "emoji")).toBe(true);
 		expect(isSet({ technicality: 0 }, "technicality")).toBe(true);
 		expect(isSet({}, "emoji")).toBe(false);
+	});
+});
+
+describe("fieldState — whose value is this? (#232)", () => {
+	// GET returns the RESOLVED behaviour, so "present" says nothing about who set it. Reading
+	// presence as "the subscriber configured it" put a reset link on every creator default:
+	// clicking it cleared an override that was never there and the row came back unchanged.
+	const template = { technicality: 80, forbidden: ["emoji", "slang"] };
+
+	it("calls a field nobody set a platform default", () => {
+		expect(fieldState({}, template, "warmth")).toBe("default");
+		expect(fieldState({ technicality: 80 }, template, "warmth")).toBe("default");
+	});
+
+	it("calls a resolved value that equals the creator's an agent default — no reset offered", () => {
+		expect(fieldState({ technicality: 80 }, template, "technicality")).toBe("template");
+		expect(fieldState({ forbidden: ["emoji", "slang"] }, template, "forbidden")).toBe("template");
+	});
+
+	it("calls a differing value an override — reset clears back to the agent default", () => {
+		expect(fieldState({ technicality: 10 }, template, "technicality")).toBe("override");
+		expect(fieldState({ forbidden: ["emoji"] }, template, "forbidden")).toBe("override");
+		// Nothing from the creator at all: any set value is the subscriber's.
+		expect(fieldState({ emoji: false }, {}, "emoji")).toBe("override");
+	});
+
+	it("treats an explicit falsy override as set, like isSet does", () => {
+		expect(fieldState({ emoji: false }, { emoji: true }, "emoji")).toBe("override");
+		expect(fieldState({ emoji: false }, { emoji: false }, "emoji")).toBe("template");
+		expect(fieldState({ technicality: 0 }, {}, "technicality")).toBe("override");
+	});
+
+	it("compares list values by contents, not identity", () => {
+		expect(sameValue(["a", "b"], ["a", "b"])).toBe(true);
+		expect(sameValue(["a", "b"], ["b", "a"])).toBe(false);
+		expect(sameValue(["a"], "a")).toBe(false);
+		expect(sameValue(undefined, undefined)).toBe(true);
 	});
 });
 
@@ -92,7 +129,7 @@ describe("saving is one request, not one per field", () => {
 	});
 
 	it("resets a group in a single call", () => {
-		expect(CODE).toContain("Object.fromEntries(groupFields.filter((f) => isSet(behaviour, f.id)).map((f) => [f.id, null]))");
+		expect(CODE).toContain("Object.fromEntries(overrides.map((f) => [f.id, null]))");
 	});
 
 	it("tracks several in-flight ids rather than one", () => {

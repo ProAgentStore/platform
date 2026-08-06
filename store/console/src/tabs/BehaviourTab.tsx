@@ -70,9 +70,50 @@ export function isSet(behaviour: Record<string, Value>, id: string): boolean {
 	return Object.prototype.hasOwnProperty.call(behaviour, id);
 }
 
+/**
+ * Where a field's value came from (#232).
+ *
+ * `GET` returns the RESOLVED behaviour — the creator's `agents.config.behaviour` merged under the
+ * subscriber's override — so "present in the response" is NOT the same as "the subscriber set it".
+ * Treating the two as one is what rendered a "reset" link on a creator-supplied default: clicking
+ * it cleared an override that was never there, the resolved value came straight back, and the row
+ * did not change. A control that visibly does nothing.
+ *
+ * - `default`  — nobody set it; the platform's own heuristics apply.
+ * - `template` — the CREATOR shipped it. The subscriber has nothing to reset, so no reset link.
+ * - `override` — the subscriber changed it. Reset clears back to the creator's default (which may
+ *                be a value, not nothing), and the label changes with it.
+ */
+export type FieldState = "default" | "template" | "override";
+
+/** Ordered deep-equality over the four behaviour value shapes (number/string/boolean/string[]). */
+export function sameValue(a: Value | undefined, b: Value | undefined): boolean {
+	if (Array.isArray(a) || Array.isArray(b)) {
+		if (!Array.isArray(a) || !Array.isArray(b)) return false;
+		return a.length === b.length && a.every((x, i) => x === b[i]);
+	}
+	return a === b;
+}
+
+export function fieldState(
+	behaviour: Record<string, Value>,
+	templateDefault: Record<string, Value>,
+	id: string,
+): FieldState {
+	if (!isSet(behaviour, id)) return "default";
+	// Resolved value identical to what the creator shipped ⇒ the subscriber has changed nothing,
+	// whether or not an override row exists. Offering "reset" for a value that would come back
+	// unchanged is the inert control this distinction removes.
+	if (isSet(templateDefault, id) && sameValue(behaviour[id], templateDefault[id])) return "template";
+	return "override";
+}
+
 export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 	const [fields, setFields] = useState<Field[]>([]);
 	const [behaviour, setBehaviour] = useState<Record<string, Value>>({});
+	// What the CREATOR shipped, kept beside the resolved values so a row can say which of the two
+	// it is showing. Without it every creator default looked like a subscriber override (#232).
+	const [templateDefault, setTemplateDefault] = useState<Record<string, Value>>({});
 	const [loaded, setLoaded] = useState(false);
 	const [saving, setSaving] = useState<string[]>([]);
 	const [error, setError] = useState("");
@@ -83,11 +124,14 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 			try {
 				const [schema, current] = await Promise.all([
 					api<{ fields: Field[] }>("/v1/instances/behaviour-schema"),
-					api<{ behaviour: Record<string, Value> }>(`/v1/instances/${instanceId}/behaviour`),
+					api<{ behaviour: Record<string, Value>; templateDefault?: Record<string, Value> }>(
+						`/v1/instances/${instanceId}/behaviour`,
+					),
 				]);
 				if (!live) return;
 				setFields(schema.fields || []);
 				setBehaviour(current.behaviour || {});
+				setTemplateDefault(current.templateDefault || {});
 			} catch (e) {
 				if (live) setError(e instanceof Error ? e.message : "Could not load behaviour");
 			} finally {
@@ -114,11 +158,15 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 			setSaving(ids);
 			setError("");
 			try {
-				const res = await api<{ behaviour: Record<string, Value>; rejected?: string[] }>(
+				const res = await api<{ behaviour: Record<string, Value>; templateDefault?: Record<string, Value>; rejected?: string[] }>(
 					`/v1/instances/${instanceId}/behaviour`,
 					{ method: "PUT", body: JSON.stringify({ behaviour: patch }) },
 				);
 				setBehaviour(res.behaviour || {});
+				// The response replaces the resolved state, so it must carry the creator's default
+				// with it — otherwise the first save after load would compare new values against a
+				// stale template and re-label every row.
+				if (res.templateDefault) setTemplateDefault(res.templateDefault);
 				if (res.rejected?.length) setError(`Not saved: ${res.rejected.join(", ")}`);
 			} catch (e) {
 				setError(e instanceof Error ? e.message : "Could not save");
@@ -135,7 +183,12 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 		return m;
 	}, [fields]);
 
-	const configuredCount = Object.keys(behaviour).length;
+	// Only the SUBSCRIBER's own changes count as "configured". A creator default is part of the
+	// agent, not something the user did, and counting it made the page claim settings the user
+	// could not find anywhere they had touched.
+	const stateOf = useCallback((id: string) => fieldState(behaviour, templateDefault, id), [behaviour, templateDefault]);
+	const overrideCount = fields.filter((f) => stateOf(f.id) === "override").length;
+	const templateCount = fields.filter((f) => stateOf(f.id) === "template").length;
 
 	if (!loaded) return <div className="text-sm text-muted">Loading…</div>;
 
@@ -147,9 +200,11 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 					How this agent communicates with you. You can also just tell it in chat — "be less technical", "stop using
 					emoji" — and it will change these itself.
 				</p>
-				{configuredCount === 0 && (
+				{overrideCount === 0 && (
 					<p className="text-xs text-muted-soft mt-2">
-						Nothing set — the agent is using the platform defaults. Anything you leave alone stays that way.
+						{templateCount > 0
+							? "You haven't changed anything — this agent ships with its own defaults, marked below. Anything you leave alone stays that way."
+							: "Nothing set — the agent is using the platform defaults. Anything you leave alone stays that way."}
 					</p>
 				)}
 			</div>
@@ -159,7 +214,9 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 			{GROUPS.map((g) => {
 				const groupFields = byGroup.get(g.id) ?? [];
 				if (!groupFields.length) return null;
-				const anySet = groupFields.some((f) => isSet(behaviour, f.id));
+				// "Reset group" clears OVERRIDES only — a group whose values all come from the creator
+				// has nothing to reset, and offering it there was the same inert control one level up.
+				const overrides = groupFields.filter((f) => stateOf(f.id) === "override");
 				return (
 					<section key={g.id} className="border border-border rounded-lg p-4">
 						<div className="flex items-start justify-between gap-3 mb-3">
@@ -167,13 +224,11 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 								<h3 className="font-semibold">{g.label}</h3>
 								<p className="text-xs text-muted-soft">{g.blurb}</p>
 							</div>
-							{anySet && (
+							{overrides.length > 0 && (
 								<button
 									type="button"
 									className="text-xs underline text-muted whitespace-nowrap"
-									onClick={() =>
-										void save(Object.fromEntries(groupFields.filter((f) => isSet(behaviour, f.id)).map((f) => [f.id, null])))
-									}
+									onClick={() => void save(Object.fromEntries(overrides.map((f) => [f.id, null])))}
 								>
 									Reset group
 								</button>
@@ -185,7 +240,7 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 									key={f.id}
 									field={f}
 									value={behaviour[f.id]}
-									set={isSet(behaviour, f.id)}
+									state={stateOf(f.id)}
 									busy={saving.includes(f.id)}
 									onChange={(v) => void save({ [f.id]: v })}
 								/>
@@ -201,13 +256,13 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 function FieldRow({
 	field,
 	value,
-	set,
+	state,
 	busy,
 	onChange,
 }: {
 	field: Field;
 	value: Value | undefined;
-	set: boolean;
+	state: FieldState;
 	busy: boolean;
 	onChange: (v: Value | null) => void;
 }) {
@@ -236,8 +291,11 @@ function FieldRow({
 				<label className="text-sm font-medium">{field.label}</label>
 				<div className="flex items-center gap-2 text-xs">
 					{busy && <span className="text-muted-soft">saving…</span>}
-					{!set && <span className="text-muted-soft">default</span>}
-					{set && (
+					{state === "default" && <span className="text-muted-soft">default</span>}
+					{/* The creator set it, not you. There is no override to clear, so no control that
+					    would appear to do something and then not. */}
+					{state === "template" && <span className="text-muted-soft" title="Set by the agent's creator">agent default</span>}
+					{state === "override" && (
 						<button type="button" className="underline text-muted" onClick={() => onChange(null)}>
 							reset
 						</button>

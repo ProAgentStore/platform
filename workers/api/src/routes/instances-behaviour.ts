@@ -60,9 +60,18 @@ export function registerBehaviourRoutes(router: Hono<{ Bindings: Env }>): void {
 		// Returns the RESOLVED behaviour, matching GET — the console replaces its state with this,
 		// and an override-only reply made every creator-supplied default vanish from the page.
 		const { behaviour: next, rejected } = await patchBehaviour(c.env, instanceId, session.uid, patch);
+		const agentCfg = await readAgentConfig(c.env, instanceId);
 		// Rejections are reported, never swallowed — a half-applied patch that reports success is
 		// how a caller ends up believing it set something it did not.
-		return c.json({ behaviour: next, rejected, described: describeBehaviour(next) });
+		return c.json({
+			behaviour: next,
+			// Same shape as GET (#232). The console replaces its whole state from this response, so
+			// omitting the creator's default left it comparing new values against a stale one — and
+			// a field the CREATOR set would go back to offering a "reset" that clears nothing.
+			templateDefault: sanitizeBehaviour(agentCfg.behaviour).behaviour,
+			rejected,
+			described: describeBehaviour(next),
+		});
 	});
 
 	/** Clear everything — back to the platform's own heuristics. */
@@ -80,7 +89,11 @@ export function registerBehaviourRoutes(router: Hono<{ Bindings: Env }>): void {
 		// Not `{}` — clearing the subscriber's override falls back to the creator's default, which
 		// may well be non-empty. Reporting {} would show the page as unconfigured while the agent
 		// still had a character.
-		return c.json({ ok: true, behaviour: await readBehaviour(c.env, instanceId, session.uid) });
+		return c.json({
+			ok: true,
+			behaviour: await readBehaviour(c.env, instanceId, session.uid),
+			templateDefault: sanitizeBehaviour((await readAgentConfig(c.env, instanceId)).behaviour).behaviour,
+		});
 	});
 }
 
