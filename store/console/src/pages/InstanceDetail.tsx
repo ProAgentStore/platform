@@ -46,7 +46,37 @@ function CopyButton({ text }: { text: string }) {
 // A built-in SurfaceId or a custom (agent-published) surface id.
 type Tab = string;
 
+/**
+ * One mounted page per instance (#240).
+ *
+ * `/instances/:id/*` is a single route, so ANY navigation that only changes the id keeps the same
+ * mounted component — React reuses it and every `useState` in it (and in every tab below it)
+ * survives. Each tab's `useEffect([instanceId])` refetches, but nothing guards the window in
+ * between and nothing cancels the previous instance's in-flight request, so agent A's documents,
+ * board cards and — the part that matters — POPULATED FORM FIELDS would stay on screen under
+ * agent B's name. A save then builds its URL from the current `instanceId` and writes A's values
+ * to B, with nothing in the flow able to notice.
+ *
+ * Today every route INTO this page comes from a different route (the instances list, a
+ * notification, Terminals), which remounts it — so the leak is latent rather than reachable. It
+ * becomes reachable the moment anything navigates instance→instance: an agent switcher in the
+ * header, a "next agent" link, a deep link followed from within the page.
+ *
+ * Keying on the id makes the identity of the page the identity of the agent: a switch unmounts
+ * everything and mounts it fresh. That is deliberately done HERE rather than on each surface, so
+ * a new tab inherits the guarantee instead of having to remember it — and because the leak was
+ * never only in the tabs: the loop banner, the draft chat input, the voice session and the
+ * message list all belong to one agent too.
+ *
+ * A late response for the previous instance now lands on an unmounted tree (a no-op in React 18+)
+ * rather than overwriting the successor's state, which also closes the out-of-order-fetch race.
+ */
 export default function InstanceDetail() {
+	const { id } = useParams<{ id: string }>();
+	return <InstancePage key={id || "none"} />;
+}
+
+function InstancePage() {
 	const { id, "*": splat } = useParams<{ id: string; "*": string }>();
 	const navigate = useNavigate();
 	const [instance, setInstance] = useState<Instance | null>(null);
@@ -143,6 +173,7 @@ export default function InstanceDetail() {
 
 	useEffect(() => {
 		if (!id) return;
+		let live = true;
 		setInstance(null);
 		setMessages([]);
 		setChildHeader(null);
@@ -150,13 +181,17 @@ export default function InstanceDetail() {
 			try {
 				const data = await api<{ instances: Instance[] }>("/v1/instances/my/instances");
 				const inst = (data.instances || []).find((i) => i.id === id || i.slug === id);
-				if (inst) {
+				// Belt and braces with the remount above: a response that outlives its effect must
+				// never write. The capabilities this sets decide which tabs render, so landing one
+				// from a previous agent is exactly the wrong-agent-on-screen bug (#240).
+				if (inst && live) {
 					setInstance(inst);
 				}
 			} catch (e) {
 				console.error(e);
 			}
 		})();
+		return () => { live = false; };
 	}, [id]); // eslint-disable-line react-hooks/exhaustive-deps
 
 	// Under-message translation + transliteration (the learning display) — see lib/use-gloss.
