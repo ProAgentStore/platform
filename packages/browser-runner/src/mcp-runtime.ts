@@ -52,6 +52,22 @@ function removeProfileDir(dir: string): void {
 	if (!existsSync(dir)) ownedProfileDirs.delete(dir);
 }
 
+/** Await a promise, giving up (never throwing) after `ms`. */
+async function withTimeout(p: Promise<unknown> | undefined, ms: number): Promise<void> {
+	if (!p) return;
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		await Promise.race([
+			p.catch(() => undefined),
+			new Promise<void>((resolve) => {
+				timer = setTimeout(resolve, ms);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 function rememberProfileDir(dir: string): void {
 	ownedProfileDirs.add(dir);
 	if (exitHookInstalled) return;
@@ -149,8 +165,13 @@ export class McpRuntime {
 	}
 
 	async stop(): Promise<void> {
-		await this.client?.close().catch(() => undefined);
-		await this.server?.close().catch(() => undefined);
+		// Bounded. Closing a persistent context flushes the whole profile to disk and
+		// on a cold/slow machine that measurably exceeds 10s — and a browser wedged
+		// mid-close would otherwise block teardown with no upper limit at all, which
+		// is the state that ends in someone sending the SIGKILL that orphans it (#274).
+		// Returning early is safe: the `exit` hook and reaper.ts's sweep both still run.
+		await withTimeout(this.client?.close(), 20_000);
+		await withTimeout(this.server?.close(), 20_000);
 		this.client = undefined;
 		this.server = undefined;
 		// Remove the profile only if we made it — a caller-supplied dir belongs to

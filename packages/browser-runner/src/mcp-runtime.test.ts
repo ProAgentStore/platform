@@ -13,10 +13,16 @@ describe("McpRuntime (standard @playwright/mcp)", () => {
 		await mcp.start({ isolated: true, headless: true });
 	}, 60_000);
 
+	// An explicit budget, because HOOKS DO NOT INHERIT `testTimeout`. The integration
+	// project sets 120s for tests, but vitest applies its own 10s default to
+	// beforeAll/afterAll — so this teardown, which shuts a real browser down and
+	// flushes its profile, was running on a budget meant for pure functions. It fit
+	// on a quiet laptop and blew the 10s on CI. `beforeAll` above already had one;
+	// this side was simply never given one.
 	afterAll(async () => {
 		await mcp.stop();
 		await server.close();
-	});
+	}, 60_000);
 
 	it("advertises the standard browser_* tools", async () => {
 		const names = (await mcp.listTools()).map((t) => t.name);
