@@ -11,7 +11,7 @@ Creators publish agent templates. Users subscribe to private agent instances. Ea
 - [Triggers](triggers.md): configure webhooks and cron schedules for private agent instances.
 - [MCP](mcp.md): connect Codex, Claude Code, Cursor, and other MCP clients to the official ProAgentStore MCP server.
 - [Browser Runtime](browser-runtime.md): run local browser and CLI capabilities with `pags up` — one process, outbound WebSocket relay only, serving every agent that declares a local runtime.
-- [Coder Multi-Machine Runtime](coder-multi-machine.md): connect multiple local machines to the same Coder instance and route sessions by runner node.
+- [Coder Multi-Machine Runtime](coder-multi-machine.md): connect several machines to one instance, bind an agent to one of them with the **Runs on** picker, and understand why an agent reads offline.
 - [Architecture](architecture.md): understand the control plane, state plane, runtime plane, and main Cloudflare services.
 - [Skill Publishing](skill-publishing.md): publish ProAgentStore skills for Codex and Claude users.
 

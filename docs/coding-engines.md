@@ -28,6 +28,30 @@ The one exception is Claude's structural flags (`-p`, `--input-format`, `--outpu
 `--verbose`, `--resume`): those carry the wire protocol, so a preset cannot override them.
 `buildClaudeArgs` strips them and their values; every other token you write is kept.
 
+## The shipped defaults
+
+`DEFAULT_ENGINES` (`workers/api/src/lib/coding-engines.ts`) — what an instance that has saved
+nothing gets:
+
+| id | Label | Command | `auth` |
+|---|---|---|---|
+| `claude` | Claude Code | `claude --dangerously-skip-permissions` | unset → `auto` |
+| `codex` | Codex | `codex exec --sandbox danger-full-access` | unset → `auto` |
+| `gemini` | Gemini CLI | `gemini --approval-mode yolo --skip-trust --prompt` | `api-key` |
+| `grok` | Grok | `grok --permission-mode bypassPermissions -p` | unset → `auto` |
+| `local` | Local model (Ollama) | `ollama run llama3` | `machine` |
+
+Two rules every default satisfies: **non-interactive** (a bare `codex`/`gemini`/`grok` launches a
+TUI that dies instantly with "stdin is not a terminal" — headless mode has no PTY, which is what
+tmux used to provide) and **allowed to write** (below). `grok` takes `-p`/`--single`, *not*
+`--prompt`, which it has no such flag for — the old preset died on an unknown flag before reaching
+the model. The `local` preset is a starting point rather than a recommendation: anything
+prompt-in/text-out works by editing the command, and it costs nothing per token.
+
+`deriveClientType` maps the command's real binary — skipping `FOO=bar` prefixes and wrappers like
+`npx`/`env` — to `claude` (structured stream-json) or one of `gemini`/`grok`/`codex` (raw spawn).
+An unrecognised binary maps to `codex`, so it runs RAW rather than being mis-driven as Claude.
+
 ## Every engine must carry its write-permission flag
 
 Each of these CLIs defaults to **read-only or ask-first** when run non-interactively — and headless
