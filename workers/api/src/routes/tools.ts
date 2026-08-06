@@ -5,6 +5,7 @@ import { getRegistryTool, registryTools, runRegistryTool, type JsonSchema } from
 import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
+import { ALL_TOOLS, isDestructiveToolName, listMcpConsents, normalizeMcpEndpoint, revokeMcpConsent, setMcpConsent } from "../lib/mcp-consent.js";
 import { getConnector } from "../lib/connectors/registry.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { pipelineDefForKey, validatePipeline, type PipelineDef } from "../lib/pipeline.js";
@@ -363,6 +364,49 @@ toolRoutes.put("/:id/connectors/:connector/consent", async (c) => {
 		await revokeConsent(c.env, instanceId, connector, "write");
 	}
 	return c.json({ ok: true, connector, scope: "write", enabled: !!body.enabled });
+});
+
+/**
+ * Outbound-MCP grants (#262, migration 0078). Separate from the connector consent above
+ * because the connector-level row cannot name a server: the endpoint is user config, so one
+ * `mcp`/write grant used to reach every MCP server the instance could name. These rows name it.
+ *
+ * GET  /v1/instances/:id/mcp/consent            → the grants on this instance
+ * PUT  /v1/instances/:id/mcp/consent { url, tool, enabled }
+ */
+toolRoutes.get("/:id/mcp/consent", async (c) => {
+	const session = await requireUser(c);
+	await requireOwnedInstance(c.env, c.req.param("id"), session.uid);
+	const grants = await listMcpConsents(c.env, c.req.param("id"));
+	// `destructive` is advisory for the UI — the same name test the enforcement uses, returned
+	// so the console can explain WHY a wildcard grant doesn't cover a particular tool instead of
+	// re-deriving the rule client-side and drifting from it.
+	return c.json({ grants: grants.map((g) => ({ ...g, destructive: g.tool !== ALL_TOOLS && isDestructiveToolName(g.tool) })) });
+});
+
+toolRoutes.put("/:id/mcp/consent", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const body = (await c.req.json().catch(() => ({}))) as { url?: string; tool?: string; enabled?: boolean };
+
+	const endpoint = normalizeMcpEndpoint(String(body.url ?? ""));
+	if (!endpoint) throw new HttpError(400, "`url` must be an https MCP endpoint, e.g. https://example.com/mcp.");
+	const tool = String(body.tool ?? "").trim();
+	if (!tool) throw new HttpError(400, '`tool` is required — a remote tool name, or "*" for every non-destructive tool on that server.');
+	if (tool.length > 128) throw new HttpError(400, "`tool` is too long to be a tool name.");
+
+	if (body.enabled) {
+		await setMcpConsent(c.env, instanceId, session.uid, endpoint, tool);
+		// Granting reach to a specific server IS a decision to let this agent write via MCP, so
+		// the outer connector gate is satisfied in the same explicit action rather than left as a
+		// second checkbox the user has to discover after the first one silently does nothing.
+		// The implication runs one way only: granting the connector still names no server.
+		await setConsent(c.env, instanceId, session.uid, "mcp", "write");
+	} else {
+		await revokeMcpConsent(c.env, instanceId, endpoint, tool);
+	}
+	return c.json({ ok: true, endpoint, tool, enabled: !!body.enabled });
 });
 
 /**
