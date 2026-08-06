@@ -4,6 +4,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Manual trigger: on 2026-08-07 GitHub stopped dispatching `push` for this repo and
+  # two commits sat unverified and undeployed with no way to run CI. deploy-api.yml had
+  # this and was the only thing recoverable.
+  workflow_dispatch:
 
 permissions:
   contents: read

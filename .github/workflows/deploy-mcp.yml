@@ -5,6 +5,8 @@ on:
     paths:
       - 'workers/mcp/**'
       - '.github/workflows/deploy-mcp.yml'
+  # Manual trigger — see ci.yml. A stuck push event must not mean an unshippable repo.
+  workflow_dispatch:
 
 concurrency:
   group: deploy-mcp

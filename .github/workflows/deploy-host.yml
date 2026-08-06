@@ -14,6 +14,8 @@ on:
       - 'packages/sdk/**'
       - 'agents/coder/web/**'
       - '.github/workflows/deploy-host.yml'
+  # Manual trigger — see ci.yml. A stuck push event must not mean an unshippable repo.
+  workflow_dispatch:
 
 concurrency:
   group: deploy-host
