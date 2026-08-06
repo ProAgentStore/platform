@@ -684,6 +684,57 @@ export function strayBehaviourKey(key: string): boolean {
 	return BEHAVIOURAL_KEY_HINTS.some((h) => k.includes(h));
 }
 
+/** Just enough of a memory entry to decide what the self-heal may say about it. */
+export interface StrayCandidate {
+	key: string;
+	/** Absent on legacy entries, which are agent-written by definition. */
+	source?: string;
+}
+
+/**
+ * The self-heal block for memory entries that hold communication preferences (#226), split by
+ * WHO wrote them (#230). Returns "" when there is nothing to migrate.
+ *
+ * The first version listed every stray under one instruction ending "…and then delete_memory the
+ * old key". Two lines above it the same prompt promises that entries marked (user-set) are never
+ * overwritten or deleted unless the user asks — and the stray list was the more specific, later
+ * instruction, naming exact keys and an exact tool. A model follows that one. The Memory tab is
+ * editable and tags manual entries `source:"user"`, so a hand-typed `preference:tone` was being
+ * pointed at delete_memory by the platform's own prompt.
+ *
+ * `executeTool` does refuse the delete at runtime (lib/tools.ts guards write_memory and
+ * delete_memory on `source:"user"`), so the entry survives; what the contradiction actually costs
+ * is a prompt that instructs a tool call it has already decided to reject — a wasted round, a
+ * failure the model has to explain, and a stated invariant undermined in the one place a model
+ * reads most literally. The guard is the backstop, not the rule; the rule belongs here.
+ *
+ * A user-set stray is still WORTH migrating — the preference belongs in behaviour, and the copy is
+ * what makes the agent honour it — so it is listed for the move and withheld only from the delete.
+ */
+export function behaviourStrayPrompt(memory: readonly StrayCandidate[]): string {
+	const strays = memory.filter((m) => strayBehaviourKey(m.key));
+	if (!strays.length) return "";
+	const userSet = strays.filter((m) => m.source === "user").map((m) => m.key);
+	const agentSet = strays.filter((m) => m.source !== "user").map((m) => m.key);
+
+	let out = "";
+	if (agentSet.length) {
+		out +=
+			`\nThese entries hold COMMUNICATION preferences, which no longer belong in memory: ${agentSet.join(", ")}.` +
+			" When the user next asks about how you communicate, move each one with set_behaviour" +
+			" and then delete_memory the old key. Do not act on them as if they were facts about the subject.\n";
+	}
+	if (userSet.length) {
+		out +=
+			`\nThese entries also hold COMMUNICATION preferences, but the USER wrote them: ${userSet.join(", ")}.` +
+			" Copy each into behaviour with set_behaviour so you actually honour it, then LEAVE THE MEMORY ENTRY" +
+			" ALONE — never delete_memory a user-set key. You may tell them it is now stored as behaviour and" +
+			" offer to remove the old entry; only delete it if they say yes. Do not act on them as if they were" +
+			" facts about the subject.\n";
+	}
+	return out;
+}
+
 export interface ResponseStyle {
 	/**
 	 * Does this agent have a code-grounding context (a vector index, or live coding sessions)?

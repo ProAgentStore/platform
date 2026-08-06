@@ -20,10 +20,10 @@ import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from 
 import {
 	behaviourField,
 	behaviourPrompt,
+	behaviourStrayPrompt,
 	fieldPrompt,
 	resolveBehaviour,
 	resolveResponseStyle,
-	strayBehaviourKey,
 } from "./lib/agent-behaviour.js";
 import type { Env } from "./types.js";
 
@@ -243,15 +243,9 @@ export async function runAgentThink(opts: {
 		}
 		// Self-heal the entries written before there was anywhere else to put them (#226). These
 		// exist on live agents and can't be reached by a D1 migration — memory lives in the DO — so
-		// the agent moves its own, once, the next time it is asked about them.
-		const strays = memory.filter((m) => strayBehaviourKey(m.key));
-		if (strays.length) {
-			systemPrompt +=
-				`\nThese entries hold COMMUNICATION preferences, which no longer belong in memory: ${strays
-					.map((m) => m.key)
-					.join(", ")}. When the user next asks about how you communicate, move each one with set_behaviour` +
-				" and then delete_memory the old key. Do not act on them as if they were facts about the subject.\n";
-		}
+		// the agent moves its own, once, the next time it is asked about them. A user-set stray is
+		// migrated but never marked for deletion (#230) — see behaviourStrayPrompt.
+		systemPrompt += behaviourStrayPrompt(memory);
 	}
 
 	// Emitted unconditionally, NOT inside the memory block above — an agent with no memory yet is

@@ -4,6 +4,7 @@ import {
 	applyBehaviourPatch,
 	SELF_WRITABLE_FIELDS,
 	behaviourPrompt,
+	behaviourStrayPrompt,
 	behaviourStyleReminder,
 	describeBehaviour,
 	fieldPrompt,
@@ -297,6 +298,62 @@ describe("strayBehaviourKey — memory entries that belong in behaviour now (#22
 
 	it("requires the preference prefix, so a knowledge entry about tone is untouched", () => {
 		expect(strayBehaviourKey("context:tone")).toBe(false);
+	});
+});
+
+describe("behaviourStrayPrompt — the self-heal may never point delete_memory at a user entry (#230)", () => {
+	it("says nothing at all when there is no stray", () => {
+		expect(behaviourStrayPrompt([{ key: "identity:name" }, { key: "preference:deploy_target" }])).toBe("");
+	});
+
+	it("still tells the agent to move AND delete its own stray — the migration has to keep working", () => {
+		const prompt = behaviourStrayPrompt([{ key: "preference:response_style", source: "agent" }]);
+		expect(prompt).toContain("preference:response_style");
+		expect(prompt).toContain("set_behaviour");
+		expect(prompt).toContain("delete_memory the old key");
+	});
+
+	it("treats a legacy entry with no source as agent-written", () => {
+		// `source` is absent on everything written before the field existed. Withholding the
+		// migration from those would strand exactly the entries #226 exists to clean up.
+		expect(behaviourStrayPrompt([{ key: "preference:tone" }])).toContain("delete_memory the old key");
+	});
+
+	it("lists a user-set stray for MIGRATION but never for deletion", () => {
+		const prompt = behaviourStrayPrompt([{ key: "preference:tone", source: "user" }]);
+		expect(prompt).toContain("preference:tone");
+		expect(prompt).toContain("set_behaviour");
+		// The whole bug: the more specific, later instruction named the exact key and the exact
+		// tool, so the model followed it over the general "never delete a (user-set) entry" rule.
+		expect(prompt).not.toContain("delete_memory the old key");
+		expect(prompt).toContain("never delete_memory a user-set key");
+	});
+
+	it("keeps the two lists separate when both kinds are present", () => {
+		const prompt = behaviourStrayPrompt([
+			{ key: "preference:response_style", source: "agent" },
+			{ key: "preference:tone", source: "user" },
+			{ key: "preference:coffee_supplier", source: "user" },
+		]);
+		const deleteSentence = prompt.split("\n").find((l) => l.includes("delete_memory the old key")) ?? "";
+		expect(deleteSentence).toContain("preference:response_style");
+		expect(deleteSentence).not.toContain("preference:tone");
+		// A genuine subject-matter preference is not a stray at all, in either list.
+		expect(prompt).not.toContain("coffee_supplier");
+	});
+
+	it("never names a user-set key anywhere near a delete instruction, whatever the mix", () => {
+		// Property-ish guard: for every line that mentions deleting, no user-set key appears on it.
+		const prompt = behaviourStrayPrompt([
+			{ key: "preference:verbosity", source: "user" },
+			{ key: "preference:persona", source: "agent" },
+			{ key: "pref:formality", source: "user" },
+		]);
+		for (const line of prompt.split("\n")) {
+			if (!line.includes("delete_memory the old key")) continue;
+			expect(line).not.toContain("preference:verbosity");
+			expect(line).not.toContain("pref:formality");
+		}
 	});
 });
 
