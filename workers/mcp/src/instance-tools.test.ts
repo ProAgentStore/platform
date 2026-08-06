@@ -709,3 +709,74 @@ describe("call_instance_tool proxy", () => {
 		expect(h.fetchStub.calls).toHaveLength(0);
 	});
 });
+
+// ── Drive / WorkDrive connector grants (#15) ─────────────────────────────────
+//
+// A `sync_connector` trigger needs a `grantId`, and that id was only obtainable from the
+// console or a hand-rolled REST call — so an MCP-first operator could create the trigger but
+// never find the value it requires.
+describe("connector grant tools", () => {
+	it("registers all four, surface-independently", () => {
+		const { tools } = setup({ groups: [] });
+		for (const n of ["connector_status", "list_instance_connector_grants", "grant_instance_connector_folder", "delete_instance_connector_grant"]) {
+			expect(tools.has(n)).toBe(true);
+		}
+	});
+
+	it("routes each provider at its own API base", async () => {
+		const h = setup();
+		h.fetchStub.respond((u) => u.includes("/v1/drive/status"), { body: { connected: true, configured: true } });
+		h.fetchStub.respond((u) => u.includes("/v1/workdrive/status"), { body: { connected: false, configured: true } });
+
+		await h.tools.get("connector_status")!.handler({ provider: "google_drive" });
+		expect(h.fetchStub.calls.at(-1)!.url).toContain("/v1/drive/status");
+		await h.tools.get("connector_status")!.handler({ provider: "zoho_workdrive" });
+		expect(h.fetchStub.calls.at(-1)!.url).toContain("/v1/workdrive/status");
+	});
+
+	it("surfaces the grant id, which is the whole reason these tools exist", async () => {
+		const h = setup();
+		h.fetchStub.respond((u) => u.includes("/instances/i1/grants"), {
+			body: { grants: [{ id: "grant_abc", resourceName: "Invoices", resourceType: "folder" }] },
+		});
+		const res = await h.tools.get("list_instance_connector_grants")!.handler({ instance_id: "i1", provider: "google_drive" });
+		expect(res.content[0].text).toContain("grant_abc");
+	});
+
+	it("refuses a grant with neither url nor resource_id, without calling the API", async () => {
+		const h = setup();
+		const before = h.fetchStub.calls.length;
+		const res = await h.tools.get("grant_instance_connector_folder")!.handler({ instance_id: "i1", provider: "google_drive" });
+		expect(res.content[0].text).toMatch(/url.*resource_id/i);
+		expect(h.fetchStub.calls.length).toBe(before);
+	});
+
+	// Granting widens what an agent can read, so a read-only MCP session must not do it.
+	it("blocks granting in read-only mode", async () => {
+		const h = setup({ readOnly: true });
+		const res = await h.tools.get("grant_instance_connector_folder")!.handler({ instance_id: "i1", provider: "google_drive", url: "https://drive.google.com/x" });
+		expect(res.content[0].text.toLowerCase()).toContain("read-only");
+	});
+
+	it("revoking requires the exact confirm string", async () => {
+		const h = setup();
+		h.fetchStub.respond((u, m) => u.includes("/grants/grant_abc") && m === "DELETE", { body: { success: true } });
+
+		const unconfirmed = await h.tools.get("delete_instance_connector_grant")!.handler({ instance_id: "i1", provider: "google_drive", grant_id: "grant_abc" });
+		expect(unconfirmed.content[0].text.toLowerCase()).toContain("confirm");
+
+		const wrong = await h.tools.get("delete_instance_connector_grant")!.handler({ instance_id: "i1", provider: "google_drive", grant_id: "grant_abc", confirm: "yes" });
+		expect(wrong.content[0].text.toLowerCase()).toContain("confirm");
+
+		const ok = await h.tools.get("delete_instance_connector_grant")!.handler({ instance_id: "i1", provider: "google_drive", grant_id: "grant_abc", confirm: "delete_instance_connector_grant" });
+		expect(ok.content[0].text).toContain("revoked");
+	});
+
+	it("dry-run describes the call without making it", async () => {
+		const h = setup();
+		const before = h.fetchStub.calls.length;
+		const res = await h.tools.get("grant_instance_connector_folder")!.handler({ instance_id: "i1", provider: "google_drive", url: "https://drive.google.com/x", dry_run: true });
+		expect(res.content[0].text.toLowerCase()).toContain("dry");
+		expect(h.fetchStub.calls.length).toBe(before);
+	});
+});

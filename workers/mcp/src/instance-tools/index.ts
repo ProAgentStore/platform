@@ -5,6 +5,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { McpEnv } from "../http.js";
 import { registerApplyTools } from "./apply.js";
 import { registerBaseTools } from "./base.js";
+import { registerConnectorGrantTools } from "./connectors.js";
 import { registerCodingTools } from "./coding.js";
 import { registerRepoTools } from "./repo.js";
 import type { InstanceToolsCtx, SafetyResolver, TokenResolver } from "./shared.js";
@@ -21,6 +22,7 @@ export function registerInstanceTools(
 ): void {
 	const ctx: InstanceToolsCtx = { env, tokenFor, safetyFor, groups };
 	registerBaseTools(server, ctx);
+	registerConnectorGrantTools(server, ctx);
 	registerApplyTools(server, ctx);
 	registerRepoTools(server, ctx);
 	registerCodingTools(server, ctx);
