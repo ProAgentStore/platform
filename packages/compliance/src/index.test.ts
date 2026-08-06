@@ -1,12 +1,30 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { runChecks } from "./index.js";
 
+/**
+ * Every temp dir this file makes, removed after each test (#274).
+ *
+ * These were mkdtemp'd and never deleted — not "deleted by a cleanup that got
+ * skipped", but no cleanup at all. 30 tests × every `vitest run` had left 7,050
+ * directories on the owner's machine. Registering them means the removal is
+ * impossible to forget when a test is added.
+ */
+const created: string[] = [];
+
 function tmpDir() {
-	return fs.mkdtempSync(path.join(os.tmpdir(), "pags-compliance-"));
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pags-compliance-"));
+	created.push(dir);
+	return dir;
 }
+
+afterEach(() => {
+	while (created.length > 0) {
+		fs.rmSync(created.pop() as string, { recursive: true, force: true });
+	}
+});
 
 function writeFiles(dir: string, files: Record<string, string>) {
 	for (const [filePath, content] of Object.entries(files)) {

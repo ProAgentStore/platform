@@ -201,12 +201,25 @@ export class LocalRunner {
 		return task;
 	}
 
+	/**
+	 * Tear everything down, and never let one failure strand the rest (#274).
+	 *
+	 * `browserContext.close()` rejects routinely — the browser crashed, or was
+	 * already killed. It used to reject straight out of here, which skipped the
+	 * state reset AND rejected the caller's shutdown, so the process stayed up
+	 * holding a live browser until someone `kill -9`ed it. That kill is exactly
+	 * what orphans the browser, so an unswallowed error here MADE the leak.
+	 */
 	async close(): Promise<void> {
-		this.coding.closeAll();
+		try {
+			this.coding.closeAll();
+		} catch {
+			// a stuck coding session must not block the browser teardown below
+		}
 		await this.mcp?.stop().catch(() => undefined);
 		this.mcp = null;
 		this.cdpEndpoint = null;
-		await this.browserContext?.close();
+		await this.browserContext?.close().catch(() => undefined);
 		this.browserContext = null;
 		this.launchedProfileDir = null;
 	}

@@ -2,6 +2,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { startRunnerServer } from "./server.js";
+import { reapOnStartup } from "./reaper.js";
 import type { RunnerConfig } from "./types.js";
 import { randomUUID } from "node:crypto";
 
@@ -82,6 +83,13 @@ if (!config.token && !LOOPBACK.has(config.host)) {
 	process.exit(1);
 }
 
+// Recover a machine that has already leaked (#274). A browser whose launcher was
+// SIGKILLed is reparented to init and runs forever — 41 of them took the owner's
+// machine to load 253. Nothing in-process can clean those up, so we do it here,
+// before we start competing for the same CPU. Narrow by construction: see the
+// SAFETY block in reaper.ts for why the user's real Chrome can never match.
+reapOnStartup((line) => process.stderr.write(`${line}\n`));
+
 const started = await startRunnerServer(config);
 process.stdout.write(`ProAgentStore browser runtime listening at ${started.url}\n`);
 process.stdout.write(`Data dir: ${config.dataDir}\n`);
@@ -89,13 +97,46 @@ process.stdout.write("Control plane: PAGS; runtime plane: PAGS; brain placement:
 if (config.token) process.stdout.write("Auth: bearer token required\n");
 if (config.instanceId) process.stdout.write(`Instance binding: ${config.instanceId}\n`);
 
+/**
+ * Exit once, and ALWAYS exit (#274).
+ *
+ * Three holes lived here, and each one ended with a user reaching for `kill -9`,
+ * which is precisely the signal that orphans the browser:
+ *
+ *  - `started.close()` rejects if the browser is already gone. `void shutdown()`
+ *    then produced an unhandled rejection, the handler above logged it, and the
+ *    process stayed up forever holding the port and the browser.
+ *  - A hung `browserContext.close()` (a wedged renderer) blocked exit with no
+ *    upper bound, looking identical to a freeze.
+ *  - Two signals, or a signal racing the parent-death watchdog, ran the teardown
+ *    twice concurrently.
+ *
+ * So: idempotent, failure-tolerant, and time-boxed. `process.exit` also runs
+ * Playwright's own synchronous exit handler, which kills any browser it launched
+ * in this process — that is what makes a clean exit leave nothing behind.
+ */
+let exiting = false;
 const shutdown = async () => {
-	await started.close();
+	if (exiting) return;
+	exiting = true;
+	const forced = setTimeout(() => {
+		process.stderr.write("[runner] shutdown timed out after 10s; exiting anyway\n");
+		process.exit(0);
+	}, 10_000);
+	forced.unref();
+	try {
+		await started.close();
+	} catch (err) {
+		process.stderr.write(`[runner] shutdown error (exiting anyway): ${err instanceof Error ? err.message : String(err)}\n`);
+	}
 	process.exit(0);
 };
 
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
+// SIGHUP was missing: closing the terminal that ran `pags up` killed the runner
+// without ever running teardown, leaving the browser behind.
+process.on("SIGHUP", () => void shutdown());
 
 // Self-exit if our parent (the `runner connect` CLI) dies — otherwise we'd orphan
 // and keep holding the port, making the NEXT `pags up` fail with EADDRINUSE / a 401
