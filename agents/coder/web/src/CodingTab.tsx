@@ -6,6 +6,7 @@ import { usePolling } from "@proagentstore/sdk/hooks";
 import { useVoice } from "@proagentstore/sdk/hooks";
 import { useCodingLoop } from "./use-coding-loop";
 import { repoTitle } from "./repo-title";
+import { resolveRunnerOnline } from "./runner-online";
 import CopilotView from "./CopilotView";
 import TerminalView from "./TerminalView";
 import ReposList from "./ReposList";
@@ -66,7 +67,16 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	const [sessions, setSessions] = useState<CodingSession[]>([]);
 	const [engines, setEngines] = useState<CodingEngine[]>([]);
 	const [defaultEngine, setDefaultEngine] = useState("claude");
-	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
+	/**
+	 * Runner connectivity — see ./runner-online.
+	 *
+	 * Two separate signals rather than one flag, because the flag was writable only from a live
+	 * session's capture: once the runner dropped and the session ended, `false` could never be
+	 * cleared (#241). `relayOnline` is polled independently of any session, so the tab recovers
+	 * on its own, and it is the SAME source the header dot reads — the two can no longer disagree.
+	 */
+	const [relayOnline, setRelayOnline] = useState<boolean | null>(null);
+	const [captureOnline, setCaptureOnline] = useState<boolean | null>(null);
 
 	// Session view state
 	const [openSession, setOpenSession] = useState<CodingSession | null>(null);
@@ -189,6 +199,26 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 	sessionsRef.current = sessions;
 	const hasActiveSessions = sessions.some((s) => s.status === "active");
 
+	// The one answer the whole tab reads. A capture's verdict is dropped as soon as the sessions
+	// that produced it are gone, so an offline state always clears itself once the runner is back.
+	const runnerOnline = resolveRunnerOnline({ relay: relayOnline, capture: captureOnline, hasActiveSessions });
+
+	// Authoritative relay check, on a timer that does NOT require a session to exist — the missing
+	// piece that made the offline state unrecoverable (#241). Same route the header dot and the
+	// Settings tab use, so the header and this body cannot report different things.
+	const checkRelay = useCallback(async () => {
+		try {
+			const d = await api<{ relay?: { connected?: boolean } }>(`/v1/instances/${instanceId}/runtime/status`);
+			setRelayOnline(d.relay?.connected === true);
+		} catch {
+			setRelayOnline(false);
+		}
+	}, [instanceId]);
+	useEffect(() => { void checkRelay(); }, [checkRelay]);
+	// 10s, not the header's 4s: this exists to notice the runner COMING BACK, and it shares the
+	// default 60/min rate-limit bucket with everything else the tab does.
+	usePolling(checkRelay, 10000);
+
 	const pollStatuses = useCallback(async () => {
 		const activeSessions = sessionsRef.current.filter((s) => s.status === "active");
 		if (!activeSessions.length) return;
@@ -204,7 +234,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			const r = results[i];
 			if (r.status === "fulfilled") {
 				statuses[r.value.repoId] = r.value.state;
-				if (r.value.connected !== undefined) setRunnerOnline(r.value.connected);
+				if (r.value.connected !== undefined) setCaptureOnline(r.value.connected);
 			} else {
 				statuses[activeSessions[i].repoId] = "offline";
 			}
@@ -253,7 +283,7 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 			// This response already carries runState; write it. Must be BEFORE the
 			// unchanged-text early return below, or a stable pane re-freezes the badge.
 			setRepoStatuses((s) => (s[openSession.repoId] === (d.runState || "idle") ? s : { ...s, [openSession.repoId]: d.runState || "idle" }));
-			if (typeof d.runnerConnected === "boolean") setRunnerOnline(d.runnerConnected);
+			if (typeof d.runnerConnected === "boolean") setCaptureOnline(d.runnerConnected);
 			const live = (d.pane || "").trim() ? (d.pane as string) : "";
 			// No live tmux (ended session / detached runner) → fall back to the last saved
 			// snapshot from the DB instead of blanking the terminal.
@@ -837,13 +867,19 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						<div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
 							{!solo ? (
 								<p className="text-sm text-muted-soft">No repository set yet — add its path in <b>Settings → Agent settings</b>.</p>
-							) : runnerOnline === false ? (
-								<>
-									<p className="text-sm text-muted">Your machine isn't connected.</p>
-									<code className="bg-panel border border-line rounded-md px-2 py-1 text-sm">pags up</code>
-								</>
 							) : (
 								<>
+									{/* The runner warning goes BESIDE the action, never instead of it (#241).
+									    Replacing the button made the state unrecoverable: connectivity was
+									    only ever learned from a live session's capture, so with no session
+									    and no way to start one, "your machine isn't connected" could never
+									    be disproved — including while `pags up` was demonstrably running. */}
+									{runnerOnline === false && (
+										<div className="text-sm text-muted">
+											<p>Your machine doesn't look connected.</p>
+											<code className="inline-block mt-1.5 bg-panel border border-line rounded-md px-2 py-1 text-sm">pags up</code>
+										</div>
+									)}
 									{/* No "Open session": a live one is attached automatically above, so the
 									    only reason to be here is that there ISN'T one. */}
 									<p className="text-sm text-muted">No session running.</p>
