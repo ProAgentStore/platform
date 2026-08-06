@@ -7,6 +7,8 @@ interface AdminUser {
 	id: string; github_login: string; github_name: string; roles: string[];
 	subscription_status: string | null; created_at: string;
 	agents_owned: number; active_instances: number; key_providers: string[]; spend30dMicros: number;
+	/** Moderation state — visible in the list so a blocked account is obvious without a click. */
+	suspended: boolean; suspended_reason: string | null;
 }
 
 export default function Users() {
@@ -35,7 +37,10 @@ export default function Users() {
 							<tbody>
 								{data.users.map((u) => (
 									<tr key={u.id} className="border-b border-line/50 hover:bg-panel-hover">
-										<td className="py-1.5"><Link to={`/users/${encodeURIComponent(u.id)}`} className="text-accent hover:underline">{u.github_login}</Link></td>
+										<td className="py-1.5">
+											<Link to={`/users/${encodeURIComponent(u.id)}`} className="text-accent hover:underline">{u.github_login}</Link>
+											{u.suspended ? <span className="text-red text-xs ml-1.5" title={u.suspended_reason || "Suspended"}>suspended</span> : null}
+										</td>
 										<td>{u.roles.filter((r) => r !== "user").join(", ") || "—"}</td>
 										<td className="text-right">{u.agents_owned}</td>
 										<td className="text-right">{u.active_instances}</td>

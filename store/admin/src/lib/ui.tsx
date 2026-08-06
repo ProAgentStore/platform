@@ -35,6 +35,33 @@ export function Empty({ label }: { label: string }) {
 	return <div className="text-muted-soft text-sm py-6">{label}</div>;
 }
 
+/**
+ * Live runtime status, honestly.
+ *
+ * `connected` comes from the RelayDO (which holds the actual socket), NOT from
+ * `instance_runtime_nodes.status` — that column is never cleared on an unclean
+ * disconnect and reads "online" for machines that have been off for days.
+ *
+ * `null` means UNKNOWN (the list caps its live-check fan-out and reports null past
+ * the budget) and must never be drawn as offline: an operator acting on "that runner
+ * is down" when it was merely unchecked is exactly the failure this replaces.
+ */
+export function LiveDot({ connected, noRunner }: { connected: boolean | null; noRunner?: boolean }) {
+	if (noRunner) return <span className="text-muted-soft text-xs" title="No runner has ever registered for this instance">— no runner</span>;
+	if (connected === null) {
+		return (
+			<span className="text-muted-soft text-xs" title="Not checked — the live-check budget for this page was spent. This is not 'offline'.">
+				<span className="text-yellow">◌</span> unknown
+			</span>
+		);
+	}
+	return connected ? (
+		<span className="text-xs text-green" title="A runner WebSocket is connected right now (RelayDO)">● live</span>
+	) : (
+		<span className="text-xs text-muted" title="No runner socket connected right now (RelayDO)">○ offline</span>
+	);
+}
+
 /** A horizontal two-segment bar: platform-paid vs BYOK share. */
 export function SplitBar({ platform, byok }: { platform: number; byok: number }) {
 	const total = platform + byok || 1;
