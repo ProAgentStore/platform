@@ -54,7 +54,7 @@
 // dynamically, and whether it issues refresh tokens at all (#181). Diagnosis, not a connection.
 //
 // Consent: `mcp_call_tool` is gated per (instance, endpoint, tool) — see lib/mcp-consent.ts
-// and migration 0078 — on top of the connector-level write consent, because one `mcp` write
+// and migration 0079 — on top of the connector-level write consent, because one `mcp` write
 // grant used to reach every server the instance could name (#262).
 //
 // Every request goes through safeFetch (lib/ssrf.ts) — https-only, redirect-revalidated — so

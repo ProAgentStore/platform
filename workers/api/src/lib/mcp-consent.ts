@@ -21,7 +21,7 @@
 // intends to do, and a server that lies is not a hypothetical when the endpoint is user
 // config. Hints may inform the UI; enforcement here reads only the owner's own grants.
 //
-// All queries parameterized. Fail-closed on any error. See migration 0078.
+// All queries parameterized. Fail-closed on any error. See migration 0079.
 import type { Env } from "../types.js";
 
 /** Wildcard grant: every tool on that endpoint except the destructive-looking ones. */
