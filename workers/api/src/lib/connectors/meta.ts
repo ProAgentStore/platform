@@ -11,9 +11,9 @@
 // - WhatsApp: outside a 24h customer-service window you can only send a PRE-APPROVED
 //   template, not free text. `text` works only inside an open window.
 // - Instagram: business/creator account linked to a FB Page; messaging windows apply; no cold-DM.
-import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
-import type { Connector } from "./registry.js";
+import type { Connector } from "./types.js";
 
 const GRAPH = "https://graph.facebook.com/v20.0";
 

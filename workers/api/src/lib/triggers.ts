@@ -34,72 +34,11 @@ import { startBrowserTask } from "../routes/instances-browse.js";
 import { notifyUser } from "../routes/push.js";
 import type { Env } from "../types.js";
 
-export type TriggerType = "webhook" | "cron";
-export type TriggerAction = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse";
-export type TriggerEventType = TriggerType | "manual";
-
-export interface TriggerRow {
-	id: string;
-	user_id: string;
-	agent_id: string;
-	instance_id: string;
-	name: string;
-	type: TriggerType;
-	action: TriggerAction;
-	enabled: number;
-	secret_token: string | null;
-	schedule: string | null;
-	config: string;
-	last_run_at: string | null;
-	next_run_at: string | null;
-	failure_count: number;
-	last_error: string | null;
-	created_at: string;
-	updated_at: string;
-}
-
-export interface TriggerConfig {
-	title?: string;
-	description?: string;
-	source?: string;
-	sourceUrl?: string;
-	provider?: ConnectorProvider;
-	grantId?: string;
-	folderId?: string;
-	limit?: number;
-	query?: string;
-	/** sync_connector (#20): walk subfolders of the granted root, not just its top level.
-	 *  Absent/false keeps the exact pre-#20 behaviour, so existing triggers are unchanged. */
-	recursive?: boolean;
-	/** sync_connector (#20): how deep to walk when `recursive`. Clamped to SYNC_MAX_DEPTH. */
-	maxDepth?: number;
-	/** sync_connector (#20): keep a NEW document per change instead of updating in place. Opt-in,
-	 *  because unexplained duplicates were the bug — an explicit version history is a choice. */
-	versioned?: boolean;
-	/** run_pipeline: the name of the declarative pipeline (from instance config) to run. */
-	pipeline?: string;
-	/** insert_record: the target collection for a webhook → collection ingest. */
-	collection?: string;
-	/** run_browse: the start URL for the scheduled browser task (#172), + optional dry-run. */
-	url?: string;
-	dryRun?: boolean;
-	/** cron: randomise the fire time by ± this many minutes so runs don't land exactly on
-	 *  the dot (an automation fingerprint). 0/absent = fire on schedule. */
-	jitterMinutes?: number;
-	/** cron (#18): the IANA zone the schedule's wall clock is read in. Absent = UTC, which is
-	 *  what every trigger predating this did, so absence must keep meaning exactly that. */
-	timezone?: string;
-	/** #16: map inbound payload paths onto the action's fields, e.g. { title: "lead.name" }.
-	 *  Absent = the existing conventions (title/description/content/text). */
-	mapping?: Record<string, string>;
-	/** Set by the connection pump: the run that emitted the event, so the run this action
-	 *  starts can be joined to it in the trace. Not user-configured. */
-	traceId?: string;
-	/** run_pipeline: static run params belonging to the WIRING rather than the event (e.g.
-	 *  which endpoint / which template). Merged UNDER the event payload, so a field present
-	 *  on the inbound record always wins. */
-	params?: Record<string, unknown>;
-}
+/** The trigger vocabulary moved to `./trigger-types.js` — a leaf, so a module that only
+ *  NAMES an action doesn't inherit this file's executor graph (#293). Re-exported here
+ *  because this is still where triggers are validated, stored and run. */
+import type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType } from "./trigger-types.js";
+export type { TriggerAction, TriggerConfig, TriggerEventType, TriggerRow, TriggerType };
 
 const ACTIONS = new Set<TriggerAction>(["create_task", "add_knowledge", "log_event", "sync_connector", "run_pipeline", "insert_record", "run_browse"]);
 const TYPES = new Set<TriggerType>(["webhook", "cron"]);

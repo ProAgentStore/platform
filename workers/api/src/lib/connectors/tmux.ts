@@ -9,7 +9,7 @@
 // them unless the instance has "tmux" write-consent (instance_connector_consent, 0051).
 // This is the terminal surface any permitted agent can use to drive shells, git, and
 // even other CLIs (Claude/Codex) running in the user's own tmux sessions.
-import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 
 /** Resolve the live runner for this instance, or a helpful error string. */

@@ -19,7 +19,7 @@
 
 import { SYNC_MAX_DEPTH } from "./connector-sync.js";
 import { isValidTimeZone } from "./cron-time.js";
-import type { TriggerAction, TriggerType } from "./triggers.js";
+import type { TriggerAction, TriggerType } from "./trigger-types.js";
 
 /** Every key `parseConfig` will keep. A key absent here is dropped before dispatch sees it. */
 export const TRIGGER_CONFIG_KEYS = [

@@ -24,7 +24,7 @@
  * This module is PURE (no env, no I/O) so the parsing/validation is unit-testable; the
  * routes own the dispatch.
  */
-import type { TriggerAction, TriggerConfig } from "./triggers.js";
+import type { TriggerAction, TriggerConfig } from "./trigger-types.js";
 
 /** Actions a ticket may carry. Mirrors CONNECTION_ACTIONS: data-moving work only — never
  *  `sync_connector` (an external sync isn't a unit of approvable agent work) and never

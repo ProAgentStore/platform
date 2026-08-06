@@ -69,7 +69,7 @@
 //
 // Every request goes through safeFetch (lib/ssrf.ts) — https-only, redirect-revalidated — so
 // a pipeline-supplied endpoint can't be aimed at cloud metadata or an internal address.
-import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "./types.js";
 import type { Env } from "../../types.js";
 import { safeFetch, SsrfError } from "../ssrf.js";
 import { authFailureGuidance, discoverAuthServer, type DiscoveryResult } from "./discovery.js";

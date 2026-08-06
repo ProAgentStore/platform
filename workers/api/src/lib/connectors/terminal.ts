@@ -1,6 +1,6 @@
 // Generic local terminal connector. The cloud side owns auth/consent/tool policy; the local
 // runner owns backend-specific adapters (tmux, kitty remote control, iTerm2 AppleScript).
-import type { RegistryToolCtx, ToolDef } from "../tool-registry.js";
+import type { RegistryToolCtx, ToolDef } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 
 type Backend = "tmux" | "kitty" | "iterm2";

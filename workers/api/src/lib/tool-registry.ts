@@ -7,7 +7,8 @@ import type { Env } from "../types.js";
 import { consentInstanceOf, describeAuthority, isDelegated } from "./execution-authority.js";
 import { logEvent } from "./events.js";
 import { connectorTools, getConnector } from "./connectors/registry.js";
-import { connectorClient, type ConnectorClient } from "./connectors/client.js";
+import { connectorClient } from "./connectors/client.js";
+import type { JsonSchema, RegistryTool, RegistryToolCtx, RegistryToolResult, ToolDef } from "./connectors/types.js";
 import { hasConsent } from "./connector-consent.js";
 import { STEP_TOOLS } from "./steps.js";
 import { DEFAULT_LOOP_DRIVER, loopDriverFor } from "./loop-drivers.js";
@@ -18,82 +19,15 @@ import { openBudget } from "./delegation-budget-store.js";
 import { SELF_WRITABLE_FIELDS, behaviourToolSchema, describeBehaviour } from "./agent-behaviour.js";
 import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
 
-export interface RegistryToolCtx {
-	env: Env;
-	userId?: string;
-	agentId?: string;
-	instanceId?: string;
-	/**
-	 * The run this tool call belongs to (a pipeline run id). Carried so a step that emits an
-	 * agent-to-agent event can stamp the emitting run onto the delivery — choreography is
-	 * otherwise undebuggable, because nothing links the source run to the run it set off.
-	 */
-	traceId?: string;
-	/**
-	 * Audit ONLY: the instance that asked for this work, when a supervisor delegated it (#185).
-	 * Never consulted for permission — consent and token-minting resolve against `instanceId`,
-	 * the EXECUTOR. If this were ever read as an authority, supervision would become a consent
-	 * bypass: wire a low-trust agent under a high-trust one and it inherits reach by
-	 * configuration alone. See lib/execution-authority.ts.
-	 */
-	onBehalfOf?: string;
-	/**
-	 * The delegation budget this work draws against (#184), when a supervisor's run is driving.
-	 * `delegate_goal` forwards it so a subordinate SHARES the tree's pool instead of opening a
-	 * fresh one — without it the bound is per-edge, which is the fanout blowup it exists to stop.
-	 */
-	budgetId?: string;
-	/**
-	 * The connector client factory (issue #86) — handlers call
-	 * `ctx.connectorClient(provider)` to mint the provider's token and enforce
-	 * grant/scope, instead of importing token-minting fns directly. Injected by
-	 * runRegistryTool; optional so tests can construct a ctx without it.
-	 */
-	connectorClient?: (provider: string) => ConnectorClient;
-}
-
-export interface RegistryToolResult {
-	content: string;
-	success: boolean;
-}
-
-/** A draft-07 JSON Schema for a tool's input — an object schema with typed properties.
- *  A property carries `type`/`description` plus whatever else draft-07 allows (`enum`,
- *  `items`, `default`, …); the schema is passed to the model verbatim, so constraining
- *  properties to two keys only meant a tool couldn't express a closed value set. */
-export interface JsonSchema {
-	type: "object";
-	properties: Record<string, { type: string; description?: string; [k: string]: unknown }>;
-	required?: string[];
-	[k: string]: unknown;
-}
-
 /**
- * The ONE tool definition shape (issue #85). A tool is declared once with its JSON
- * Schema and handler; the same def surfaces to the agent runtime (via
- * `registryToolDefs` → buildAgentToolDefinitions), the generic tool-call API
- * (routes/tools), and — later — MCP. `jsonSchema` is the source of truth for the tool's
- * inputs; the runtime passes it through verbatim (no more rebuilding from an ad-hoc map).
+ * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports
+ * that reach back here (#293). It moved because every connector module needs the SHAPE
+ * of a tool and none of them needs this file's execution runtime; while the two shared a
+ * module, thirteen connectors imported the dispatcher that imports them.
+ *
+ * Re-exported so `import type { ToolDef } from "./tool-registry.js"` keeps working.
  */
-export interface ToolDef {
-	name: string;
-	description: string;
-	/** Draft-07 object schema for the tool's input. Passed to the LLM + validated on the API. */
-	jsonSchema: JsonSchema;
-	/** base = always granted · standard = creator-selectable · runtime = needs a local runner · connector = external system. */
-	tier: "base" | "standard" | "runtime" | "connector";
-	/** Which connector provides it (e.g. "github"). Present for connector-tier tools. */
-	connector?: string;
-	/** read = safe; write = mutates the external system (gated by consent, #90). */
-	scope?: "read" | "write";
-	handler: (ctx: RegistryToolCtx, input: Record<string, unknown>) => Promise<RegistryToolResult>;
-}
-
-/**
- * @deprecated Use {@link ToolDef}. Kept as an alias so existing connector modules that
- * annotate their arrays as `RegistryTool[]` keep compiling during the migration.
- */
-export type RegistryTool = ToolDef;
+export type { JsonSchema, RegistryTool, RegistryToolCtx, RegistryToolResult, ToolDef };
 
 /**
  * First-party registry tools that are NOT provided by a connector (base/standard/runtime

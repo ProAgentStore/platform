@@ -24,19 +24,14 @@
  * Everything here is pure — no env, no fetch, no D1 — so the bounds and the classification are
  * testable directly.
  */
-import type { Connector } from "./registry.js";
+import type { Connector, DeliveryFailureKind, UnattendedClass } from "./types.js";
 
-/**
- * How well a connector's credential survives with no human present.
- *
- *  yes              — nothing expires from the user's side. A stored machine token, a
- *                     GitHub-App installation token minted per call, or no credential at all.
- *  refresh          — a durable refresh token mints access tokens unattended. Survives, as long
- *                     as the grant itself is not revoked.
- *  interactive-only — the credential can only be obtained with a human at a browser, and it
- *                     expires. Wiring this into anything automatic schedules a future outage.
- */
-export type UnattendedClass = "yes" | "refresh" | "interactive-only";
+/** `UnattendedClass`/`DeliveryFailureKind` are declared with the rest of the contract in
+ *  `./types.js` (#293) — `Connector.unattended` names this type, so leaving it here meant
+ *  the catalog and the classifier each had to import the other. Re-exported: the LOGIC
+ *  that reads and combines the classes is still this module's, and callers keep importing
+ *  the type from where the functions live. */
+export type { DeliveryFailureKind, UnattendedClass };
 
 /** Rank for "which is worse" comparisons — higher is more fragile. */
 const SEVERITY: Record<UnattendedClass, number> = { yes: 0, refresh: 1, "interactive-only": 2 };
@@ -80,16 +75,6 @@ export function unattendedFromGrantTypes(grantTypes: readonly string[]): Unatten
 }
 
 // ── failure classification ───────────────────────────────────────────────────
-
-/**
- * Why a delivery attempt failed, to the only resolution the outbox cares about.
- *
- *  auth      — the credential is rejected. Retrying is pointless: no amount of backoff makes an
- *              expired grant valid, and a replay of the same row will fail identically. Needs a
- *              human to reconnect.
- *  transient — anything else. The dependency may recover; that is what backoff is for.
- */
-export type DeliveryFailureKind = "auth" | "transient";
 
 /**
  * Auth-failure signatures, matched against a failure message.

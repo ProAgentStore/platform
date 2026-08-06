@@ -6,8 +6,8 @@
 // which carries the SSRF guard, `{{param}}` interpolation, responseMap extraction, and pagination.
 //
 // Design + rationale: docs/connector-manifest.md.
-import type { Connector, EnvTokenKey } from "./registry.js";
-import type { ToolDef, JsonSchema } from "../tool-registry.js";
+import type { Connector, EnvTokenKey } from "./types.js";
+import type { ToolDef, JsonSchema } from "./types.js";
 import { executeHttpRequest } from "./http.js";
 
 // ── Manifest shape ───────────────────────────────────────────────────────────

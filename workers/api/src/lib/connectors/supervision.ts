@@ -26,7 +26,7 @@ import { summarizeSubordinates } from "../subordinate-observation.js";
 import { runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
 import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
 import { repoStateForInstances, type RepoStateReport } from "../repo-state.js";
-import type { ToolDef } from "../tool-registry.js";
+import type { ToolDef } from "./types.js";
 
 /** Names of the instances a supervisor may drive, with their display names for the model. */
 interface SubordinateRow {

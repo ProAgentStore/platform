@@ -9,9 +9,9 @@
 // appears in the tool inputs, schema, or returned result. The CSE id (`cx`) is NOT a secret and
 // is a plain tool input (or the WEB_SEARCH_CX env default). Every request goes through safeFetch
 // (lib/ssrf.ts) — https-only, SSRF-guarded — the same guard the #95 http connector uses.
-import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
-import type { Connector } from "./registry.js";
+import type { Connector } from "./types.js";
 import { safeFetch, SsrfError } from "../ssrf.js";
 
 const CSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1";

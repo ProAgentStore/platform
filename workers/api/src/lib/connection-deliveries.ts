@@ -17,7 +17,7 @@
  */
 import type { Env } from "../types.js";
 import { stableStringify } from "./stable-json.js";
-import type { DeliveryFailureKind } from "./connectors/unattended.js";
+import type { DeliveryFailureKind } from "./connectors/types.js";
 
 /** How many times a delivery is attempted before it becomes a dead letter. */
 export const MAX_ATTEMPTS = 5;

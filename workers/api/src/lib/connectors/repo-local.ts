@@ -17,7 +17,7 @@
 // (/coding/tree|read-file|git|git-remote) are the same read-only, traversal-guarded,
 // byte-capped ones the Co-pilot uses — see packages/browser-runner/src/coding/inspect.ts,
 // where resolveInside() and gitArgv() carry the safety.
-import type { RegistryToolCtx, ToolDef } from "../tool-registry.js";
+import type { RegistryToolCtx, ToolDef } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 
 /**

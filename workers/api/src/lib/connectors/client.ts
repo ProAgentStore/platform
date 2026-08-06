@@ -11,30 +11,13 @@ import type { Env } from "../../types.js";
 import { installationTokenForOwner } from "../github-app.js";
 import { readConnectorRefreshToken } from "../connector-oauth.js";
 import { requireConnectorGrant, type ConnectorGrant } from "../connector-grants.js";
-import { getConnector, type Connector } from "./registry.js";
+import { getConnector } from "./registry.js";
+import type { Connector, ConnectorClient, ConnectorClientCaller, TokenOpts } from "./types.js";
 
-export interface ConnectorClientCaller {
-	userId?: string;
-	instanceId?: string;
-}
-
-export interface TokenOpts {
-	/** For app-auth connectors (github): the resource whose owner the token is minted for (e.g. "owner/name" or "owner"). For instance-resource grants: the granted resourceId. */
-	resourceId?: string;
-	/** The scope the caller intends. A "write" against a read-only connector is rejected. */
-	scope?: "read" | "write";
-}
-
-export interface ConnectorClient {
-	/** The resolved connector definition. */
-	readonly connector: Connector;
-	/** Mint/read the access token for this connector. Returns "" for auth:"none". */
-	token(opts?: TokenOpts): Promise<string>;
-	/** Fail-closed grant check (instance-resource connectors only). Throws HttpError(403) if not granted. */
-	requireGrant(resourceId: string): Promise<ConnectorGrant>;
-	/** A Bearer-authorized fetch — the access token is minted and attached for you. */
-	fetch(url: string, init?: RequestInit, opts?: TokenOpts): Promise<Response>;
-}
+/** The client's SHAPE lives in the contract leaf (#293) — `RegistryToolCtx.connectorClient`
+ *  names it, so declaring it here made the tool contract depend on the auth implementation.
+ *  Re-exported: `connectorClient` below is still the one place a token is minted. */
+export type { ConnectorClient, ConnectorClientCaller, TokenOpts };
 
 interface OauthClientCreds {
 	clientId?: string;

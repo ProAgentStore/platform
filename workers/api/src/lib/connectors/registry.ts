@@ -3,7 +3,7 @@
 // REGISTRY, the connectorClient auth dispatch, the catalog groups) derives from it.
 // Adding a connector = add an entry here; no bespoke routes.
 import type { Env } from "../../types.js";
-import type { ToolDef } from "../tool-registry.js";
+import type { Connector, EnvTokenKey, ToolDef } from "./types.js";
 import { BROWSER_TOOLS } from "./browser.js";
 import { GITHUB_CONNECTOR } from "./github.js";
 import { HTTP_TOOLS } from "./http.js";
@@ -15,53 +15,15 @@ import { GOOGLE_SHEETS_CONNECTOR } from "./google-sheets.js";
 import { TERMINAL_TOOLS } from "./terminal.js";
 import { TMUX_TOOLS } from "./tmux.js";
 import { WEB_SEARCH_CONNECTOR } from "./web-search.js";
-import type { UnattendedClass } from "./unattended.js";
 
-export interface Connector {
-	/** Stable id, also the `connector` stamped on its tools and the grants/consent key. */
-	id: string;
-	/** Human label for errors/UI. */
-	label: string;
-	/**
-	 * How connectorClient obtains a token:
-	 *  app   — GitHub-App installation token (installationTokenForOwner)
-	 *  oauth — refresh-token → access-token mint (Drive-style)
-	 *  token — a stored/opaque token (platform env `tokenEnv`, else user_api_keys)
-	 *  none  — no cloud auth (e.g. tmux, reached over the runner relay)
-	 */
-	auth: "oauth" | "token" | "app" | "none";
-	/** What the connector can do. A read-only connector rejects write-scoped token requests. */
-	scopes: { read: boolean; write: boolean };
-	/**
-	 *  user             — auth is the user's (installation/oauth/env); no per-resource grant.
-	 *  instance-resource — each tool call must target a resource granted to the instance.
-	 */
-	grantModel: "user" | "instance-resource";
-	/** For auth:"token" connectors backed by a platform env var (e.g. Meta). */
-	tokenEnv?: EnvTokenKey;
-	/**
-	 * Whether this connector's credential survives with no human present (#181). Omitted =
-	 * derived from `auth` by `unattendedClassOf` (oauth → "refresh", everything else → "yes"),
-	 * which is the honest default: the auth type already determines survivability, so deriving
-	 * stops the two drifting apart. Declare it only to say something the auth type does not.
-	 */
-	unattended?: UnattendedClass;
-	/** For auth:"oauth" connectors: the OAuth2 config (from the manifest) that drives the
-	 *  generic authorize/callback/refresh flow. `clientIdEnv`/`secretEnv` name the Worker env
-	 *  vars holding the client credentials (resolved server-side, never in the manifest). */
-	oauth?: {
-		authUrl: string;
-		tokenUrl: string;
-		scopes?: string[];
-		clientIdEnv?: string;
-		secretEnv?: string;
-	};
-	/** The tools this connector provides. Their `connector`/`tier`/`scope` are stamped from here. */
-	tools: ToolDef[];
-}
-
-/** Env keys usable as a platform token source (all `string | undefined`). */
-export type EnvTokenKey = "META_ACCESS_TOKEN";
+/**
+ * `Connector`/`EnvTokenKey` moved to `./types.js` — the contract leaf (#293). This file
+ * stays the CATALOG: one entry per connector, everything (tool registry, connectorClient
+ * auth dispatch, capability gating, consent, all three surfaces) still derives from it.
+ * Splitting the shape out is what lets a connector module state the shape it implements
+ * without importing the list it appears in.
+ */
+export type { Connector, EnvTokenKey };
 
 // Assert a key of Env exists (compile-time guard for tokenEnv values).
 type _AssertEnvKey = EnvTokenKey extends keyof Env ? true : never;

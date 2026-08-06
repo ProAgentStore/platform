@@ -3,9 +3,9 @@
 // "app" (GitHub-App installation token, so access is naturally scoped to the repos the owner's
 // installation covers). Each tool keeps its custom logic (repo validation, per_page clamp, issue
 // delegation, create-issue POST) via the manifest `handler` escape hatch.
-import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
-import type { Connector } from "./registry.js";
+import type { Connector } from "./types.js";
 import { githubAppConfigured } from "../github-app.js";
 import { listIssues, readIssue } from "../github-issues.js";
 import { fetchWorkflowRuns, mapWorkflowRun } from "../github-actions.js";

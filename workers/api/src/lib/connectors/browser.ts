@@ -16,7 +16,7 @@
 // no captcha/stuck/needs_input handoff — that machinery lives on the durable workflow (#71).
 // A snapshot that detects a challenge says so and stops rather than pretending to solve it. Long,
 // handoff-heavy tasks belong on the workflow; this is for bounded, interactive ones.
-import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { callRunner, getBoundRunnerConn, READ_TIMEOUT_MS, type RunnerConn } from "../runner-client.js";
 import type { Env } from "../../types.js";
 

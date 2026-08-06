@@ -9,9 +9,9 @@
 // Both tools go through the shared executeHttpRequest engine (SSRF guard + bearer auth minted from
 // the stored refresh token). They use the `handler` escape hatch only to URL-encode the A1 range
 // and to pass the row array as a structured body — the connector SHAPE (auth/tools/schema) is data.
-import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { compileConnector, type ConnectorManifest } from "./manifest.js";
-import type { Connector } from "./registry.js";
+import type { Connector } from "./types.js";
 import { executeHttpRequest } from "./http.js";
 
 const SHEETS_BASE = "https://sheets.googleapis.com/v4/spreadsheets";

@@ -12,7 +12,12 @@
 // Steps 1-4 are PURE (no I/O) — trivially unit-testable and safe to run anywhere.
 // Steps 5-6 do outbound HTTP; both go through the #95 machinery (safeFetch / the "http"
 // connector) so SSRF + credential handling are NOT re-implemented here.
-import type { ToolDef, RegistryToolCtx, RegistryToolResult } from "./tool-registry.js";
+// The tool CONTRACT (a leaf), not the tool registry. This module is on both sides of that
+// registry — it declares STEP_TOOLS, which tool-registry.ts imports, and several steps call
+// `runRegistryTool`. That mutual need is real, so the calls below use a deferred
+// `await import("./tool-registry.js")`: by the time one runs, both modules are initialised.
+// Import it statically and the two initialise against each other. See lib/import-graph.ts.
+import type { RegistryToolCtx, RegistryToolResult, ToolDef } from "./connectors/types.js";
 import { getPath } from "./connectors/http.js";
 import { safeFetch, SsrfError } from "./ssrf.js";
 import { parseStepNumber, stepNumberError } from "./step-number.js";

@@ -11,7 +11,7 @@
 //
 // Every outbound call goes through `safeFetch` (SSRF guard, https-only, redirect-revalidated),
 // so a templated/attacker-influenced url can't reach cloud-metadata / loopback / RFC1918.
-import type { ToolDef, RegistryToolCtx } from "../tool-registry.js";
+import type { ToolDef, RegistryToolCtx } from "./types.js";
 import { safeFetch, SsrfError } from "../ssrf.js";
 
 // ── {{param}} interpolation ────────────────────────────────────────────────
