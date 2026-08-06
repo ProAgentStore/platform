@@ -279,8 +279,8 @@ export async function getSession(env: Env, instanceId: string, userId: string, s
 export async function createSession(env: Env, instanceId: string, userId: string, input: NewSessionInput): Promise<CodingSessionRecord> {
 	const id = `csess_${crypto.randomUUID()}`;
 	await env.DB.prepare(
-		`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status, tmux_session, launch_command, issue_number, issue_title, runner_node)
-		 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10)`,
+		`INSERT INTO coding_sessions (id, instance_id, repo_id, user_id, client_type, status, tmux_session, launch_command, issue_number, issue_title, runner_node, last_activity_at)
+		 VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?7, ?8, ?9, ?10, ?11)`,
 	)
 		.bind(
 			id,
@@ -293,6 +293,9 @@ export async function createSession(env: Env, instanceId: string, userId: string
 			input.issueNumber ?? null,
 			input.issueTitle ?? null,
 			input.runnerNode ?? null,
+			// Stamped at creation, not left NULL: the idle sweep compares against this column, and a
+			// session that is brand new is the one thing it must never reap.
+			Date.now(),
 		)
 		.run();
 	const session = await getSession(env, instanceId, userId, id);
@@ -440,6 +443,108 @@ export async function reconcileOrphanedSessions(
 }
 
 /**
+ * How often a session's activity stamp is allowed to be rewritten (#275).
+ *
+ * `/capture` polls every 3 seconds per open session and the Pilot polls every 2 seconds inside
+ * `waitIdle`, so an unconditional write would be tens of thousands of rows a day per session to
+ * record a fact the sweeper reads at a SIX-HOUR resolution. The predicate lives in the UPDATE, so
+ * a throttled call is a statement that writes zero rows rather than a read followed by a write.
+ */
+export const ACTIVITY_TOUCH_MS = 60_000;
+
+/**
+ * "Somebody is engaged with this session." The signal the idle reaper measures against.
+ *
+ * Deliberately separate from `touchSessionDriver`: that one is scoped to the holder of the
+ * single-flight claim and answers "is the WORKFLOW alive". This one answers "is anyone — a human
+ * watching the terminal, a Co-pilot summarising, a Pilot driving — still using this engine", which
+ * is the only question that licenses killing a child process on someone's laptop.
+ *
+ * Only touches `active` sessions: resurrecting the stamp on an ended one would be a lie, and
+ * nothing reads it there.
+ */
+export async function touchSessionActivity(
+	env: Env,
+	instanceId: string,
+	userId: string,
+	sessionId: string,
+	now: number = Date.now(),
+): Promise<void> {
+	await env.DB.prepare(
+		`UPDATE coding_sessions SET last_activity_at = ?4
+		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND status = 'active'
+		    AND (last_activity_at IS NULL OR last_activity_at < ?5)`,
+	)
+		.bind(sessionId, instanceId, userId, now, now - ACTIVITY_TOUCH_MS)
+		.run()
+		.catch(() => undefined);
+}
+
+/** One `active` session row, as the cross-tenant sweeper needs it (owner included). */
+export interface IdleSessionRow {
+	id: string;
+	instanceId: string;
+	userId: string;
+	repoId: string;
+	runnerNode: string | null;
+}
+
+/**
+ * Active sessions nobody has touched since `cutoff`, across all owners — the sweeper's input.
+ *
+ * `driver_at` is in the predicate as well as `last_activity_at`, and against the SAME cutoff: the
+ * claim has to be as stale as the session before either is reaped. That is far stricter than
+ * `STALE_DRIVER_MS` needs (15 minutes vs six hours) and deliberately so — reaping a session out
+ * from under a live run is the one outcome strictly worse than the leak, so the cheap over-caution
+ * is bought at the price of a few extra idle hours in a case that should not arise at all.
+ * `COALESCE(..., updated_at)` covers a row whose column predates the backfill (a session created by
+ * an in-flight isolate mid-deploy).
+ */
+export async function listIdleSessions(env: Env, cutoff: number, limit: number): Promise<IdleSessionRow[]> {
+	const { results } = await env.DB.prepare(
+		`SELECT id, instance_id, user_id, repo_id, runner_node FROM coding_sessions
+		  WHERE status = 'active'
+		    AND COALESCE(last_activity_at, CAST(strftime('%s', updated_at) AS INTEGER) * 1000) < ?1
+		    AND (driver_at IS NULL OR driver_at < ?2)
+		  ORDER BY COALESCE(last_activity_at, 0) ASC
+		  LIMIT ?3`,
+	)
+		.bind(cutoff, cutoff, limit)
+		.all<{ id: string; instance_id: string; user_id: string; repo_id: string; runner_node: string | null }>();
+	return (results ?? []).map((r) => ({
+		id: r.id,
+		instanceId: r.instance_id,
+		userId: r.user_id,
+		repoId: r.repo_id,
+		runnerNode: r.runner_node,
+	}));
+}
+
+/**
+ * Instances holding an `active` session that has been quiet for a while — the orphan reconcile's
+ * input.
+ *
+ * Quiet-gated on purpose. Reconciling asks the RUNNER what it is tracking, which is a relay round
+ * trip per instance per cron tick; a session being captured every 3 seconds is self-evidently not
+ * orphaned, so the common case (somebody actually working) costs nothing.
+ */
+export async function listInstancesWithQuietSessions(
+	env: Env,
+	quietBefore: number,
+	limit: number,
+): Promise<Array<{ instanceId: string; userId: string }>> {
+	const { results } = await env.DB.prepare(
+		`SELECT DISTINCT instance_id, user_id FROM coding_sessions
+		  WHERE status = 'active'
+		    AND COALESCE(last_activity_at, CAST(strftime('%s', updated_at) AS INTEGER) * 1000) < ?1
+		  LIMIT ?2`,
+	)
+		.bind(quietBefore, limit)
+		.all<{ instance_id: string; user_id: string }>();
+	return (results ?? []).map((r) => ({ instanceId: r.instance_id, userId: r.user_id }));
+}
+
+/**
  * How long a claim survives without a heartbeat before another driver may take it.
  *
  * A claim with no expiry was a permanent lockout. Release happens in `endSession`, and the
@@ -466,7 +571,9 @@ export async function touchSessionDriver(
 	driverId: string,
 ): Promise<void> {
 	await env.DB.prepare(
-		"UPDATE coding_sessions SET driver_at = ?5 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND driver_id = ?4",
+		// `last_activity_at` rides along (#275): a Pilot heartbeating its claim IS the session being
+		// used, and writing both here means the idle sweep needs no special knowledge of workflows.
+		"UPDATE coding_sessions SET driver_at = ?5, last_activity_at = ?5 WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3 AND driver_id = ?4",
 	)
 		.bind(sessionId, instanceId, userId, driverId, Date.now())
 		.run()
@@ -492,7 +599,7 @@ export async function claimSessionDriver(
 ): Promise<boolean> {
 	const res = await env.DB.prepare(
 		`UPDATE coding_sessions
-		    SET driver_id = ?5, driver_at = ?4, updated_at = datetime('now')
+		    SET driver_id = ?5, driver_at = ?4, last_activity_at = ?4, updated_at = datetime('now')
 		  WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3
 		    AND status = 'active'
 		    AND (driver_id IS NULL OR driver_id = ?5 OR driver_at IS NULL OR driver_at < ?6)`,

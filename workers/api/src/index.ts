@@ -50,6 +50,7 @@ import { runDueTriggers } from "./lib/triggers.js";
 import { runDueDeliveries } from "./lib/connections.js";
 import { runDeployWatch } from "./lib/deploy-watch.js";
 import { runStaleRunSweep } from "./lib/run-sweeper.js";
+import { runCodingSessionSweep } from "./lib/coding-session-sweeper.js";
 import type { Env } from "./types.js";
 
 // Re-export Durable Object class for wrangler
@@ -221,7 +222,13 @@ export default {
 		// row stuck at `running` forever tells every supervisor its subordinate is still working.
 		// `runStaleRunSweep` swallows + logs its own errors.
 		ctx.waitUntil(runStaleRunSweep(env));
-		// Notify on a finished deploy (#6). A fourth independent failure domain — it reaches an
+		// Reap idle coding sessions and reconcile orphans (#275). The counterpart of the sweep
+		// above: that one closes a run ROW whose driver died, this one closes an ENGINE PROCESS on
+		// the user's machine that nothing is using. Reaping used to happen only as a side effect of
+		// a run ending — which #271 correctly stopped — and orphan detection needed a human to open
+		// the diagnostics panel. `runCodingSessionSweep` swallows + logs its own errors.
+		ctx.waitUntil(runCodingSessionSweep(env));
+		// Notify on a finished deploy (#6). A fifth independent failure domain — it reaches an
 		// external API (GitHub), which is the most likely of these to be slow or rate-limited,
 		// and it must not be able to stop the trigger sweep or the pump from draining.
 		ctx.waitUntil(

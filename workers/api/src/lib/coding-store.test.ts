@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { suspendSessionsFromOtherNodes, resumeSessionsForNode, reassignSessionNode, reconcileOrphanedSessions } from "./coding-store.js";
+import {
+	ACTIVITY_TOUCH_MS,
+	listIdleSessions,
+	reassignSessionNode,
+	reconcileOrphanedSessions,
+	resumeSessionsForNode,
+	suspendSessionsFromOtherNodes,
+	touchSessionActivity,
+} from "./coding-store.js";
 import type { CodingSessionStatus } from "./coding-types.js";
 import type { Env } from "../types.js";
 
@@ -150,5 +158,62 @@ describe("reconcileOrphanedSessions (#139)", () => {
 		const reaped = await reconcileOrphanedSessions(env, "inst-1", "user-1", ["a", "b"]);
 		expect(reaped).toEqual([]);
 		expect(updates).toHaveLength(0);
+	});
+});
+
+describe("session activity + idle listing (#275)", () => {
+	/** Records SELECTs too — `mockEnv` only captures writes, and these two are read queries. */
+	function readEnv(): { env: Env; reads: Write[] } {
+		const reads: Write[] = [];
+		const DB = {
+			prepare(sql: string) {
+				return {
+					bind(...args: unknown[]) {
+						return {
+							async all() { reads.push({ sql, args }); return { results: [] }; },
+							async first() { return null; },
+							async run() { return { meta: { changes: 0 } }; },
+						};
+					},
+				};
+			},
+		};
+		return { env: { DB } as unknown as Env, reads };
+	}
+
+	it("touchSessionActivity throttles itself in the WHERE clause, not with a read", async () => {
+		// `/capture` polls every 3 seconds per open session and the Pilot every 2. A read-then-write
+		// would double the statements and race; the predicate makes 19 calls out of 20 a statement
+		// that writes zero rows.
+		const { env, writes } = mockEnv();
+		const now = 1_800_000_000_000;
+		await touchSessionActivity(env, "inst-1", "user-1", "csess-1", now);
+		expect(writes).toHaveLength(1);
+		expect(writes[0].sql).toContain("last_activity_at IS NULL OR last_activity_at < ?5");
+		expect(writes[0].args).toEqual(["csess-1", "inst-1", "user-1", now, now - ACTIVITY_TOUCH_MS]);
+	});
+
+	it("touchSessionActivity only stamps an ACTIVE session", async () => {
+		// Refreshing the stamp on an ended session would be a lie, and nothing reads it there.
+		const { env, writes } = mockEnv();
+		await touchSessionActivity(env, "inst-1", "user-1", "csess-1");
+		expect(writes[0].sql).toContain("status = 'active'");
+	});
+
+	it("listIdleSessions refuses to hand the sweeper a session whose driver claim is still fresh", async () => {
+		// Reaping a session out from under a live Pilot is the one outcome strictly worse than the
+		// leak: the run loses its engine mid-step with no explanation anywhere.
+		const { env, reads } = readEnv();
+		await listIdleSessions(env, 123, 50);
+		expect(reads[0].sql).toContain("driver_at IS NULL OR driver_at < ?2");
+		expect(reads[0].args).toEqual([123, 123, 50]);
+	});
+
+	it("listIdleSessions falls back to updated_at for a row written before the backfill", async () => {
+		// A session created by an in-flight isolate mid-deploy has a NULL stamp. Comparing NULL
+		// against the cutoff is never true, so without the COALESCE that row would be immortal.
+		const { env, reads } = readEnv();
+		await listIdleSessions(env, 1, 1);
+		expect(reads[0].sql).toContain("COALESCE(last_activity_at, CAST(strftime('%s', updated_at) AS INTEGER) * 1000)");
 	});
 });

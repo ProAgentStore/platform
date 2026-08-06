@@ -25,6 +25,7 @@ import { recentRunsForInstances, recentWorkForInstances } from "../instance-work
 import { summarizeSubordinates } from "../subordinate-observation.js";
 import { runtimeConnectivityMany, type RuntimeFacts } from "../instance-connectivity.js";
 import { classifySubordinateConnectivity } from "../subordinate-connectivity.js";
+import { repoStateForInstances, type RepoStateReport } from "../repo-state.js";
 import type { ToolDef } from "../tool-registry.js";
 
 /** Names of the instances a supervisor may drive, with their display names for the model. */
@@ -122,19 +123,39 @@ async function observeSubordinates(
 	const view = summarizeSubordinates({ now: Date.now(), subordinates: subs, work, runs });
 	// Connectivity is attached HERE rather than inside `summarizeSubordinates` because it is a
 	// live probe, and that function is pure by design (it is the testable-without-a-DB half).
+	const connectivityById = new Map(
+		view.subordinates.map((s) => {
+			const src = subs.find((x) => x.instanceId === s.instanceId);
+			const f = facts.get(s.instanceId);
+			return [
+				s.instanceId,
+				classifySubordinateConnectivity({
+					requiresRunner: src?.requiresRunner ?? false,
+					hasRuntimeRow: f?.hasRuntimeRow ?? false,
+					relayConnected: f?.relayConnected ?? false,
+					node: f?.node,
+					runnerVersion: f?.runnerVersion,
+					lastSeenAt: f?.lastSeenAt,
+				}),
+			] as const;
+		}),
+	);
+	// Repo state (#276) — branch + working tree for the repo a delegated goal would run in.
+	// Probed only where a runner is actually reachable: the read goes over the same relay, so
+	// asking an unreachable subordinate buys a guaranteed timeout for a guaranteed null.
+	const repoStates = await repoStateForInstances(
+		ctx.env as never,
+		userId,
+		ids.filter((id) => connectivityById.get(id)?.canWork && connectivityById.get(id)?.requiresRunner),
+	).catch(() => new Map<string, RepoStateReport>());
 	const withConnectivity = view.subordinates.map((s) => {
-		const src = subs.find((x) => x.instanceId === s.instanceId);
-		const f = facts.get(s.instanceId);
+		const repo = repoStates.get(s.instanceId);
 		return {
 			...s,
-			connectivity: classifySubordinateConnectivity({
-				requiresRunner: src?.requiresRunner ?? false,
-				hasRuntimeRow: f?.hasRuntimeRow ?? false,
-				relayConnected: f?.relayConnected ?? false,
-				node: f?.node,
-				runnerVersion: f?.runnerVersion,
-				lastSeenAt: f?.lastSeenAt,
-			}),
+			connectivity: connectivityById.get(s.instanceId),
+			// Absent when unknown (no repo, no runner, an older runner) — never a fabricated
+			// "clean on main", which a supervisor would act on.
+			...(repo ? { repo } : {}),
 		};
 	});
 	return {
@@ -144,7 +165,9 @@ async function observeSubordinates(
 				// Stated in the payload, not only in the tool description, because the description
 				// is far away by the time the model reads this JSON — and the failure it prevents
 				// is precisely a model reasoning from an empty board to "no runner" (#259).
-				legend: "`connectivity.canWork` is the ONLY field that says whether an agent can be given work now. Empty `work`/`runs` means IDLE — which is normal and ready, not offline.",
+				legend:
+					"`connectivity.canWork` is the ONLY field that says whether an agent can be given work now. Empty `work`/`runs` means IDLE — which is normal and ready, not offline. " +
+					"`repo` is the CURRENT state of the checkout a goal would run in — the branch it is parked on and any uncommitted work a previous run left. It is context, not a gate: a run starts from wherever the repo was left, and nothing resets or discards it. Relay `repo.note` to the human when it is present, and never instruct an agent to clear a working tree you did not put there.",
 				...view,
 				subordinates: withConnectivity,
 			},
@@ -188,7 +211,11 @@ export const SUPERVISION_TOOLS: ToolDef[] = [
 			"`connectivity` is a SEPARATE question from busyness: `connectivity.canWork` says whether " +
 			"an agent is reachable and can be given work now. An agent with no work in flight is IDLE " +
 			"— that is the normal ready state, NOT a reason to refuse. Never infer reachability from " +
-			"empty work, empty runs, or finished sessions; `connectivity` is the only field that says it.",
+			"empty work, empty runs, or finished sessions; `connectivity` is the only field that says it. " +
+			"`repo` says what state that agent's checkout is actually in — which branch it is parked on " +
+			"and whether earlier work left uncommitted changes. Read it before handing over a goal and " +
+			"pass `repo.note` on to the human when it is present: a new goal runs on whatever branch is " +
+			"checked out, and nothing resets or discards a working tree.",
 		jsonSchema: {
 			type: "object",
 			properties: {

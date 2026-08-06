@@ -23,7 +23,10 @@ describe("resolveInside (traversal guard)", () => {
 
 describe("gitArgv (whitelist)", () => {
 	it("maps each command to a fixed argv", () => {
-		expect(gitArgv("status")).toEqual(["status", "--short"]);
+		// `--branch` is load-bearing, not cosmetic: the cloud parses the `## <branch>` header to
+		// report which branch a subordinate is parked on (#276). Dropping it would silently turn
+		// every branch report into "unknown" with nothing failing.
+		expect(gitArgv("status")).toEqual(["status", "--short", "--branch"]);
 		expect(gitArgv("diff")).toEqual(["diff"]);
 		expect(gitArgv("diff-stat")).toEqual(["diff", "--stat"]);
 		expect(gitArgv("ls-files")).toEqual(["ls-files"]);

@@ -33,6 +33,7 @@ import {
 	listRepos,
 	listSessions,
 	reconcileOrphanedSessions,
+	touchSessionActivity,
 	updateRepo,
 } from "../lib/coding-store.js";
 import { getRuntime, getRuntimeForNode, normalizeRunnerNode, mirrorRuntimeTask } from "./instances-runtime.js";
@@ -601,6 +602,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/start", async (c) => 
 	if (session.status !== "active") return c.json({ ok: false, error: "session has ended" }, 409);
 	const repo = await getRepo(c.env, instanceId, uid, session.repoId);
 	if (!repo) throw new HttpError(404, "Repo not found");
+	await touchSessionActivity(c.env, instanceId, uid, session.id);
 	const runnerConnected = (await startSessionOnRunner(c.env, instanceId, uid, session, repo)) != null;
 	return c.json({ ok: runnerConnected, runnerConnected });
 });
@@ -611,6 +613,10 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/capture", async (c) =>
 	const sessionId = c.req.param("sessionId");
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) throw new HttpError(404, "Session not found");
+	// Somebody is watching this session (#275). The 3s poll is the strongest "a human has this
+	// open" signal the platform has, and it is what keeps the idle reaper away from a session
+	// anyone is actually looking at. Throttled to one write a minute inside the store.
+	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) return c.json({ pane: "", runState: "idle", alive: false, ready: false, runnerConnected: false });
 	// `drainUsage` — this poll is the primary carrier for Engine spend (#267). It runs every 3s
@@ -802,6 +808,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/explain", async (c) =
 	// the timeline helpers are scoped by sessionId alone.
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) throw new HttpError(404, "Session not found");
+	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	const body = (await c.req.json().catch(() => ({}))) as { question?: string; finished?: boolean; persist?: boolean };
 	const question = typeof body.question === "string" ? body.question.trim() : "";
 	const finished = body.finished === true;
@@ -876,6 +883,7 @@ async function driveClaude(
 ): Promise<{ delegated: boolean; reply: string }> {
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) return { delegated: false, reply: "Coding session not found." };
+	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	const conn0 = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn0) return { delegated: false, reply: "No coding runner connected — start it with: pags up" };
 	let conn: RunnerConn = conn0;
@@ -994,6 +1002,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/agent", async (c) => 
 	// Verify the session belongs to this instance/user before touching its timeline.
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) throw new HttpError(404, "Session not found");
+	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	const body = (await c.req.json().catch(() => ({}))) as { message?: string; audioKey?: string };
 	const raw = String(body.message ?? "").trim();
 	if (!raw) return c.json({ error: "message is required" }, 400);
@@ -1171,6 +1180,7 @@ codingRoutes.get("/:instanceId/coding/sessions/:sessionId/timeline", async (c) =
 	const { uid, instanceId } = await requireOwned(c);
 	const session = await getSession(c.env, instanceId, uid, c.req.param("sessionId"));
 	if (!session) throw new HttpError(404, "Session not found");
+	await touchSessionActivity(c.env, instanceId, uid, session.id);
 	// ?full=1 → include the full typed timeline (chat + terminal snapshots + brain
 	// decisions + commands + outcomes) so the whole session can be copied as JSON.
 	if (c.req.query("full") === "1") {
@@ -1222,6 +1232,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 			: { kind: "message", text: String(body.text ?? "") };
 	const session = await getSession(c.env, instanceId, uid, sessionId);
 	if (!session) throw new HttpError(404, "Session not found");
+	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	// `chat:true` = sent from the Agent chat (relay my words to Claude on my behalf),
 	// so persist it as a chat turn (survives reload) — not just the raw command log.
 	const fromChat = body.chat === true;
@@ -1345,6 +1356,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/resume", async (c) =>
 	if (!session) throw new HttpError(404, "Session not found");
 	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) throw new HttpError(409, "No coding runner connected");
+	await touchSessionActivity(c.env, instanceId, uid, sessionId);
 	await callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/resolve`, {
 		value: typeof body.value === "string" ? body.value : undefined,
 	}).catch(() => undefined);
@@ -1382,6 +1394,7 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 	if (!repo) throw new HttpError(404, "Repo not found");
 	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) return c.json({ ok: false, runnerConnected: false });
+	await touchSessionActivity(c.env, instanceId, uid, session.id);
 	await callRunner(conn, "/coding/end", { sessionId: session.id }).catch(() => undefined);
 	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
 	if (!started) {

@@ -45,7 +45,11 @@ export function gitArgv(cmd: GitCmd, opts: { relPath?: string; n?: number } = {}
 	const clampN = Math.max(1, Math.min(200, Math.floor(opts.n ?? 20)));
 	switch (cmd) {
 		case "status":
-			return ["status", "--short"];
+			// `--branch` adds ONE header line (`## main...origin/main [ahead 1]`). Without it a
+			// caller can learn a tree is dirty but never which branch it is dirty on, which is how
+			// a delegated run pushed a PR branch and left the checkout parked there unnoticed
+			// (#276). Additive: every existing consumer keeps the same file lines it always got.
+			return ["status", "--short", "--branch"];
 		case "diff":
 			return opts.relPath ? ["diff", "--", opts.relPath] : ["diff"];
 		case "diff-stat":

@@ -10,9 +10,10 @@ import {
 	type CodingResult,
 } from "../lib/coding-loop.js";
 import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
-import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionDriver } from "../lib/coding-store.js";
+import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
 import { shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
-import { setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
+import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
+import { closeWorkCards, setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
@@ -288,6 +289,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			]);
 			const { usage, ...pane } = snap;
 			await recordEngineUsage(env, { userId, sessionId, instanceId }, sanitizeEngineUsage(usage));
+			// A Pilot capturing is the session being USED (#275). The claim heartbeat already says
+			// so on every action, but a single round can sit in `waitIdle` for minutes with no
+			// action at all — so the invariant "anything driving the engine keeps it alive" is
+			// stated here too rather than inferred from the loop's step budget. Throttled in the
+			// store, so a 2-second poll writes a row once a minute.
+			await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
 			// ONLY a terminal status cancels. `suspended` is not one: `pags up --force` on another
 			// machine suspends sessions owned by other nodes, and `resumeSessionsForNode` only
 			// revives them for a MATCHING runner_node — while `reassignSessionNode` deliberately
@@ -417,8 +424,38 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					env: engineEnv,
 				});
 			});
+			// What state did the last run leave this checkout in? (#276)
+			//
+			// Delegated runs park repos wherever they stopped — one live Lead had a subordinate
+			// sitting on `fix/36-assistant-bubble-order` after a run opened a PR, and another
+			// holding an uncommitted fix a run had been told to leave behind. The next goal then
+			// runs on that branch, over that diff, and nothing said so.
+			//
+			// The Pilot is TOLD, not corrected. An automatic `checkout main` / `reset --hard` would
+			// destroy work that git cannot distinguish from litter, which is worse and irreversible;
+			// being on an unexpected branch is visible and cheap to fix. So the run gets the fact
+			// and an explicit instruction not to discard anything, and the human gets a board card
+			// at the end (below) — nothing here changes the tree.
+			const repoState = (await step.do("repo-state-start", async () => {
+				const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+				if (!repo) return null;
+				return (await readRepoWorkingState(conn, { repo, sessionId })) ?? null;
+			})) as RepoWorkingState | null;
+			// `branch` is the repo's CONFIGURED branch, carried on the payload by whoever started
+			// the run — so the comparison is against what this repo is supposed to be on, not
+			// against a hardcoded "main".
+			const stateNote = repoState ? describeRepoState(repoState, { configuredBranch: branch ?? null }) : null;
+			if (stateNote) {
+				goal.specialInstructions = [
+					goal.specialInstructions,
+					`REPOSITORY STATE (read before you start): ${stateNote} You did not create this state. Do NOT revert, stash, reset or discard anything you did not write yourself. If your objective needs a clean tree or a different branch, say so and stop rather than clearing it.`,
+				]
+					.filter(Boolean)
+					.join("\n\n");
+			}
 			await step.do("tl-start", async () => {
 				await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: `AI run started — objective: ${goal.objective}` });
+				if (stateNote) await appendTimeline(env, { sessionId, instanceId, userId, type: "brain", content: stateNote });
 				return null;
 			});
 
@@ -462,6 +499,43 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// syncs the session + notifies, instead of letting the run vanish.
 			result = { outcome: "failed", detail: `run error: ${e instanceof Error ? e.message : String(e)}`, steps: result.steps, transcript: result.transcript };
 		} finally {
+			// Uncommitted work is a PENDING HUMAN DECISION, so it goes on the board (#276).
+			//
+			// Before this, a run told "leave the change in the working tree" left it there and
+			// nothing recorded it; every later `git status` rediscovered the same diff as a novelty,
+			// 50 hours on. A stable card id per repo makes this idempotent — one card that updates,
+			// and closes itself the moment a later run finds the tree clean, rather than a pile.
+			//
+			// Read BEFORE the session is closed below, so the runner can resolve the workdir from
+			// the live session (the only way to see a managed clone dir).
+			await step.do("repo-state-end", async () => {
+				const repo = await getRepo(env, instanceId, userId, repoId).catch(() => null);
+				if (!repo) return null;
+				const state = await readRepoWorkingState(conn, { repo, sessionId }).catch(() => null);
+				if (!state) return null; // Unknown ≠ clean: leave whatever card exists alone.
+				const cardId = `repo-dirty-${repoId}`;
+				if (!state.dirty) {
+					await closeWorkCards(env, instanceId, userId, [cardId], "completed");
+					return null;
+				}
+				const now = new Date().toISOString();
+				await upsertWorkCard(env, {
+					instanceId,
+					userId,
+					id: cardId,
+					task: {
+						id: cardId,
+						type: "coding.uncommitted",
+						status: "needs_human",
+						title: `Uncommitted work in ${goal.repo}`.slice(0, 200),
+						subtitle: state.branch ? `on ${state.branch}` : undefined,
+						description: (describeRepoState(state, { configuredBranch: branch ?? null }) ?? "").slice(0, 300),
+						createdAt: now,
+						updatedAt: now,
+					},
+				});
+				return null;
+			});
 			await step.do("end", async () => {
 				// A run closes only the session it OPENED (#271). Ending one a human opened made
 				// delegation single-use and took away a thing the user had created.

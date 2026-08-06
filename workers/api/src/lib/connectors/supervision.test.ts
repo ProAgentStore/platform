@@ -21,6 +21,10 @@ function buildEnv(
 		runs?: unknown[];
 		/** A registered runner for the subordinate, and whether its relay socket is live. */
 		runtime?: { node?: string; version?: string; lastSeenAt?: string; connected: boolean };
+		/** `coding_repos` rows for the subordinate (#276) — the repo a delegated goal would use. */
+		repos?: Array<Record<string, unknown>>;
+		/** What the fake runner answers for `git status --short --branch`. */
+		gitStatus?: string;
 	} = {},
 ) {
 	const INSTANCE_COLUMNS = new Set(["id", "user_id", "agent_id", "status", "config", "created_at", "updated_at"]);
@@ -59,6 +63,7 @@ function buildEnv(
 								if (sql.includes("FROM instance_runtime_tasks")) return { results: opts.work ?? [] };
 								if (sql.includes("FROM agent_loop_runs")) return { results: opts.runs ?? [] };
 								if (sql.includes("FROM instance_runtimes")) return { results: runtimeRow ? [runtimeRow] : [] };
+								if (sql.includes("FROM coding_repos")) return { results: opts.repos ?? [] };
 								return { results: [] };
 							},
 							async first() {
@@ -74,7 +79,13 @@ function buildEnv(
 		RELAY: {
 			idFromName: (n: string) => n,
 			get: () => ({
-				async fetch() { return new Response(JSON.stringify({ connected: opts.runtime?.connected === true })); },
+				async fetch(req: Request) {
+					if (req.url.endsWith("/status")) return new Response(JSON.stringify({ connected: opts.runtime?.connected === true }));
+					// `/command` — the relay's runner RPC. Only `/coding/git` matters here.
+					const sent = (await req.json().catch(() => ({}))) as { path?: string };
+					if (sent.path === "/coding/git") return new Response(JSON.stringify({ output: opts.gitStatus ?? "" }));
+					return new Response(JSON.stringify({ connected: opts.runtime?.connected === true }));
+				},
 			}),
 		},
 	} as unknown as Env;
@@ -198,6 +209,43 @@ describe("subordinate_status — the observe verb", () => {
 		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
 		expect(out.subordinates[0].connectivity).toMatchObject({ canWork: false, state: "runner-offline", remedy: "pags up" });
 		expect(out.subordinates[0].connectivity.message).toContain("studio");
+	});
+
+	it("reports the branch and working tree of the repo a goal would run in (#276)", async () => {
+		// The live failure: FWS was parked on `fix/36-assistant-bubble-order` after a run pushed a
+		// PR, and FAS held a real uncommitted fix from ~50 hours earlier. `subordinate_status`
+		// reported "Last action" and nothing about either, so a supervisor delegating "fix the
+		// failing tests" would have had the work done on a merged feature branch unnoticed.
+		const env = buildEnv({
+			instances: codingSubordinate,
+			runtime: { connected: true, node: "macbook" },
+			repos: [{ id: "repo_1", instance_id: "sub", user_id: "u1", name: "fws/platform", branch: "", workdir: "/dev/fws", clone_status: "ready", default_client: "claude", created_at: "", updated_at: "" }],
+			gitStatus: "## fix/36-assistant-bubble-order...origin/fix/36\n M src/a.ts\n",
+		});
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].repo).toMatchObject({ name: "fws/platform", branch: "fix/36-assistant-bubble-order", dirty: true, changedFiles: 1 });
+		expect(out.subordinates[0].repo.note).toContain("NOT be discarded");
+	});
+
+	it("omits `repo` entirely rather than guessing when nothing can answer", async () => {
+		// Absent reads as "unknown", which is true. A fabricated clean-on-main is a fact the
+		// supervisor would act on — and the whole class of bug here is acting on a stale picture.
+		const env = buildEnv({ instances: codingSubordinate, runtime: { connected: true } });
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].repo).toBeUndefined();
+	});
+
+	it("does not probe the repo of a subordinate whose runner is unreachable", async () => {
+		// The read goes over the same relay connectivity just said is down, so probing buys a
+		// guaranteed timeout for a guaranteed null — on every status call the Lead makes.
+		const env = buildEnv({
+			instances: codingSubordinate,
+			runtime: { connected: false, node: "studio" },
+			repos: [{ id: "repo_1", instance_id: "sub", user_id: "u1", name: "fws/platform", branch: "", workdir: "/dev/fws", clone_status: "ready", default_client: "claude", created_at: "", updated_at: "" }],
+			gitStatus: "## main\n",
+		});
+		const out = JSON.parse((await t.handler(ctx(env) as never, {})).content);
+		expect(out.subordinates[0].repo).toBeUndefined();
 	});
 
 	it("carries a legend saying idle is not offline", async () => {
