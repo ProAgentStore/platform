@@ -21,6 +21,7 @@ import {
 } from "../lib/coding-engines.js";
 import { appendTimeline, clearChat, contextForCopilot, lastTerminal, loadChat, loadRepoTimeline, loadTimeline } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
+import { logError } from "../lib/error-log.js";
 import {
 	claimSessionDriver,
 	createRepo,
@@ -236,15 +237,41 @@ codingRoutes.post("/:instanceId/coding/repos/:repoId/detect-github", async (c) =
 codingRoutes.delete("/:instanceId/coding/repos/:repoId", async (c) => {
 	const { uid, instanceId } = await requireOwned(c);
 	const repoId = c.req.param("repoId");
-	// End any active sessions on the runner before deleting from DB
+	// End any active sessions on the runner before deleting from DB. Deleting the repo removes the
+	// last handle to those sessions, so a stop that quietly failed left a CLI process writing to a
+	// checkout that no API could reach any more — no repo id, no session id, only `ps`. The delete
+	// still proceeds (the user asked for it, and blocking on a flaky runner traps them with a repo
+	// they cannot remove), but a failure is recorded and reported instead of vanishing.
 	const sessions = await listSessions(c.env, instanceId, uid);
+	const orphaned: string[] = [];
 	for (const s of sessions.filter((s) => s.repoId === repoId && s.status === "active")) {
 		const conn = await getSessionRunnerConn(c.env, instanceId, uid, s);
-		if (conn) await callRunner(conn, "/coding/end", { sessionId: s.id }).catch(() => undefined);
+		if (!conn) continue; // machine is offline — there is no process left to stop
+		const err = await callRunner(conn, "/coding/end", { sessionId: s.id }).then(
+			() => null,
+			(e: unknown) => (e instanceof Error ? e.message : String(e)),
+		);
+		if (err) {
+			orphaned.push(s.id);
+			await logError(c.env, {
+				source: "coding",
+				userId: uid,
+				message: `Engine for session ${s.id} did not stop while deleting its repo: ${err}`,
+				context: { instanceId, sessionId: s.id, repoId },
+			});
+		}
 	}
 	const ok = await deleteRepo(c.env, instanceId, uid, repoId);
 	if (!ok) throw new HttpError(404, "Repo not found");
-	return c.json({ ok: true });
+	return c.json(
+		orphaned.length
+			? {
+					ok: true,
+					enginesStopped: false,
+					warning: `The repo was removed, but ${orphaned.length} engine process(es) did not confirm they stopped and may still be running on your machine.`,
+				}
+			: { ok: true },
+	);
 });
 
 /** Get/set per-repo instructions (injected into the co-pilot + Overseer prompts). */
@@ -1382,16 +1409,43 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/end", async (c) => {
 	// Ending returns whatever spend has not been drained yet (#267). The last turn of a session
 	// routinely completes after the final capture poll, so without this the ledger would lose the
 	// closing turn of EVERY session — a bias, not noise.
+	// Stopping the engine is the POINT of ending a session; closing only the D1 row tidies the
+	// database and leaves the child process running (`coding-session-sweeper` says exactly this).
+	// The failure used to be swallowed into `null`, so the row flipped to `ended`, the route
+	// answered `{ok:true}`, and an orphaned CLI kept editing the repo with its session id no
+	// longer in `coding_sessions` — nothing could find it again. The row still has to close (a
+	// session the user ended must stop claiming to be active), so: close it, but say so honestly
+	// and durably rather than reporting a clean stop that did not happen.
+	let stopError: string | null = null;
 	const ended = conn
-		? await callRunner<{ usage?: unknown; acts?: unknown }>(conn, "/coding/end", { sessionId }).catch(() => null)
+		? await callRunner<{ usage?: unknown; acts?: unknown }>(conn, "/coding/end", { sessionId }).catch((e) => {
+				stopError = e instanceof Error ? e.message : String(e);
+				return null;
+			})
 		: null;
+	if (stopError) {
+		await logError(c.env, {
+			source: "coding",
+			userId: uid,
+			message: `Failed to stop the engine while ending session ${sessionId}: ${stopError}`,
+			context: { instanceId, sessionId, runnerNode: session?.runnerNode ?? null },
+		});
+	}
 	await recordEngineUsage(c.env, { userId: uid, sessionId, instanceId }, sanitizeEngineUsage(ended?.usage));
 	// Same tail problem, sharper consequence (#294): a coding session very often ENDS with the
 	// consequential act — push, open the PR, merge it — so acts drained only on capture would
 	// systematically miss the last and most important one of every session.
 	await recordEngineActs(c.env, { userId: uid, sessionId, instanceId }, sanitizeEngineActs(ended?.acts)).catch(() => undefined);
 	const ok = await endSession(c.env, instanceId, uid, sessionId);
-	return c.json({ ok });
+	return c.json(
+		stopError
+			? {
+					ok,
+					engineStopped: false,
+					warning: `The session is closed, but the engine on ${session?.runnerNode || "your machine"} did not confirm it stopped — it may still be running. Check Diagnostics → Sessions, or \`ps\`, if the repo keeps changing.`,
+				}
+			: { ok },
+	);
 });
 
 /**
@@ -1409,7 +1463,31 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/restart", async (c) =
 	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) return c.json({ ok: false, runnerConnected: false });
 	await touchSessionActivity(c.env, instanceId, uid, session.id);
-	await callRunner(conn, "/coding/end", { sessionId: session.id }).catch(() => undefined);
+	// Restart is kill-then-relaunch under the SAME session id. Swallowing the kill meant a failed
+	// stop still fell through to the relaunch, putting TWO engine processes on one working tree —
+	// the exact race `coding/headless.ts` guards against, and the one restart exists to escape.
+	// A wedged engine is recoverable; two engines writing the same checkout corrupts the work. So
+	// a failed stop aborts the restart instead of doubling the problem.
+	const stopFailed = await callRunner(conn, "/coding/end", { sessionId: session.id }).then(
+		() => null,
+		(e: unknown) => (e instanceof Error ? e.message : String(e)),
+	);
+	if (stopFailed) {
+		await logError(c.env, {
+			source: "coding",
+			userId: uid,
+			message: `Refused to restart session ${session.id}: the running engine did not stop (${stopFailed})`,
+			context: { instanceId, sessionId: session.id, repoId: repo.id },
+		});
+		return c.json(
+			{
+				ok: false,
+				runnerConnected: true,
+				error: "Could not stop the running engine, so it was not relaunched — restarting anyway would leave two engines editing this repo at once. Try again, or end the session from Diagnostics → Sessions.",
+			},
+			409,
+		);
+	}
 	const started = await startSessionOnRunner(c.env, instanceId, uid, session, repo);
 	if (!started) {
 		// Re-read the repo to get the clone error

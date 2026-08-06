@@ -11,6 +11,7 @@ import { runShotKey } from "../lib/run-shots.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
 import { deriveFromUrl } from "../lib/board.js";
+import { logError } from "../lib/error-log.js";
 import { callRuntime, requireOwnedInstance, requireLiveRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
 import { patchInstanceConfig } from "../lib/instance-config.js";
 
@@ -115,8 +116,22 @@ export async function startJobApply(env: Env, instanceId: string, userId: string
 
 	// Any exit path after the claim drops the placeholder: on success the REAL runner task
 	// (created below) holds the single-flight slot; on failure this frees it immediately.
+	// A swallowed DELETE leaves the placeholder `queued`, and every later apply then 409s with
+	// "already in progress" until the 4h stale cutoff — the agent wedged by the very row that
+	// exists to keep it from wedging. Nothing else can free it, so at minimum the wedge has to be
+	// findable: it is the answer to "why does my agent say an application is in progress?".
 	const dropClaim = () =>
-		env.DB.prepare("DELETE FROM instance_runtime_tasks WHERE id = ?1").bind(claimId).run().catch(() => undefined);
+		env.DB.prepare("DELETE FROM instance_runtime_tasks WHERE id = ?1")
+			.bind(claimId)
+			.run()
+			.catch((e) =>
+				logError(env, {
+					source: "job-apply",
+					userId,
+					message: `could not drop the single-flight claim ${claimId}; this agent will refuse new applications until the stale cutoff: ${e instanceof Error ? e.message : String(e)}`,
+					context: { instanceId, claimId },
+				}).catch(() => undefined),
+			);
 	try {
 		const cand = input.candidate ?? {};
 		const rawProfile = await getProfile(env, userId);

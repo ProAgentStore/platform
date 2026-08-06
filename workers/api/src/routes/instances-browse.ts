@@ -4,6 +4,7 @@ import { requirePro } from "../lib/billing.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { resolveSettingsValues, settingsPromptBlock } from "../lib/instance-settings.js";
 import { deriveFromUrl } from "../lib/board.js";
+import { logError } from "../lib/error-log.js";
 import type { BrowserTaskJob } from "../lib/browser-task-loop.js";
 import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
@@ -86,7 +87,22 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 	if ((claim.meta.changes ?? 0) === 0) {
 		throw new BrowseError("A run is already in progress on this agent — finish or cancel it before starting another.", 409);
 	}
-	const dropClaim = () => env.DB.prepare("DELETE FROM instance_runtime_tasks WHERE id = ?1").bind(claimId).run().catch(() => undefined);
+	// A swallowed DELETE leaves the placeholder `queued`, and every later start then 409s with
+	// "already in progress" until the 4h stale cutoff — the agent wedged by the very row that
+	// exists to keep it from wedging. Nothing else can free it, so at minimum the wedge has to be
+	// findable: it is the answer to "why does my agent say a run is in progress when it isn't?".
+	const dropClaim = () =>
+		env.DB.prepare("DELETE FROM instance_runtime_tasks WHERE id = ?1")
+			.bind(claimId)
+			.run()
+			.catch((e) =>
+				logError(env, {
+					source: "browse",
+					userId,
+					message: `could not drop the single-flight claim ${claimId}; this agent will refuse new runs until the stale cutoff: ${e instanceof Error ? e.message : String(e)}`,
+					context: { instanceId, claimId },
+				}).catch(() => undefined),
+			);
 
 	try {
 		const job: BrowserTaskJob = {

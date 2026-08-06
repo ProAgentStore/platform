@@ -892,12 +892,36 @@ export class AgentDO extends DurableObject<Env> {
 			return json({ error: "agentId and name required" }, 400);
 		await this.init(config);
 
-		// Auto-create declared collections
+		// Auto-create declared collections.
+		//
+		// The blanket `catch {}` here was covering ONE benign case — `collectionCreate` throws
+		// "already exists", which is just a re-init — and hiding every other one with it: an
+		// invalid name, or hitting MAX_COLLECTIONS. Those returned `{success:true}` for an agent
+		// whose declared schema had silently been dropped, so `insert_record`/`query_records` then
+		// 404'd at runtime with nothing anywhere explaining why. Idempotency stays; real failures
+		// are reported to the caller and recorded.
+		const collectionErrors: Record<string, string> = {};
 		if (config.collections) {
 			const engine = await this.getStorageEngine(config.agentId);
 			for (const [name, schema] of Object.entries(config.collections)) {
-				await engine.collectionCreate(name, schema.fields).catch(() => {});
+				try {
+					await engine.collectionCreate(name, schema.fields);
+				} catch (e) {
+					const msg = e instanceof Error ? e.message : String(e);
+					if (/already exists/i.test(msg)) continue; // re-init: the collection is already there
+					collectionErrors[name] = msg;
+				}
 			}
+		}
+		if (Object.keys(collectionErrors).length) {
+			await logError(this.env, {
+				source: "agent-init",
+				message: `agent ${config.agentId} initialized without ${Object.keys(collectionErrors).length} declared collection(s): ${Object.entries(collectionErrors)
+					.map(([n, m]) => `${n}: ${m}`)
+					.join("; ")}`,
+				context: { agentId: config.agentId, collections: Object.keys(collectionErrors) },
+			}).catch(() => undefined);
+			return json({ success: true, collectionErrors }, 201);
 		}
 
 		return json({ success: true }, 201);
