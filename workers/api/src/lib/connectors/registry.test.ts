@@ -50,7 +50,16 @@ describe("connector registry", () => {
 		expect(mcp?.tokenEnv).toBeUndefined(); // no platform env → connectorClient reads the vault token
 		expect(mcp?.scopes).toEqual({ read: true, write: true });
 		expect(mcp?.grantModel).toBe("user");
-		expect(mcp?.tools.map((t) => t.name)).toEqual(["mcp_list_tools", "mcp_call_tool"]);
+		// Six, not two (#263): the read side — resources and prompts — is part of this connector, and
+	// a server whose context an agent can only guess at is the failure the connector exists to fix.
+	expect(mcp?.tools.map((t) => t.name)).toEqual([
+		"mcp_list_tools",
+		"mcp_call_tool",
+		"mcp_list_resources",
+		"mcp_read_resource",
+		"mcp_list_prompts",
+		"mcp_get_prompt",
+	]);
 	});
 
 	it("mcp_call_tool is write-scoped (a remote tool call can mutate) while discovery is read", () => {

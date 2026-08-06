@@ -31,7 +31,7 @@ An agent gets a connector's tools only when it declares them in `capabilities.to
 | `browser` | none (runner relay) | read + write | `browser_snapshot`, `browser_navigate` (write), `browser_act` (write) — experimental |
 | `repo-local` | none (runner relay) | read | `repo_tree`, `repo_read_file`, `repo_git`, `repo_remote` |
 | `supervision` | none (internal) | read + write | `list_subordinates`, `subordinate_status`, `delegate_goal` (write), `check_delegation` |
-| `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool` against user-configured MCP servers |
+| `mcp` | bearer token **per endpoint** | read + write | `mcp_list_tools`, `mcp_call_tool`, `mcp_list_resources`, `mcp_read_resource`, `mcp_list_prompts`, `mcp_get_prompt` against user-configured MCP servers |
 | `google_sheets` | OAuth2 | read + write | `sheets_read`, `sheets_append` |
 
 **Auth** is minted through one path — `connectorClient(env, provider, {userId, instanceId})`:
@@ -79,6 +79,42 @@ per-tool grant) blocks each one: a test that reported "connected" while consent 
 call would be worse than no test. The request goes out through the same SSRF-guarded, https-only
 path as any other outbound MCP call — there is no test-only fast path, because a "test this URL"
 button on user-supplied config is exactly the shape of an SSRF primitive.
+
+**Resources and prompts, not only tools** (#263). An MCP server also publishes *resources* (files,
+records, design metadata) and *prompts* (reusable interaction templates), and an agent that can see
+only the tools has to guess at everything else — which is the failure this connector exists to
+remove. `mcp_list_resources` / `mcp_read_resource` / `mcp_list_prompts` / `mcp_get_prompt` ride the
+same endpoint, credential, era-negotiation and tracing path as the tool calls. Three properties are
+deliberate rather than incidental:
+
+- **Read-scoped, so no write consent and no per-tool grant.** They match `tools/list`, which is what
+  makes per-tool consent approachable at all — you cannot approve tools you cannot enumerate. What
+  bounds them is the endpoint's own credential, the agent's declared `capabilities.tools`, and the
+  owner's per-tool off-switch. #262's key names a *tool*, and a resource is a URI; if read consent
+  is wanted later the honest shape is a `kind` column, not a URI stuffed into the tool column.
+- **Fenced as data, not instructions.** `resources/read` and `prompts/get` put remote text straight
+  onto the model's instruction path — the same hazard RAG has — so both wrap their payload in the
+  shared `<untrusted_reference_material>` fence (`lib/untrusted-fence.ts`), *in the connector*, so
+  it holds identically in chat, in a pipeline step, over `POST /v1/instances/:id/tools/:name`, and
+  over MCP. A fence applied at one surface leaves three unfenced.
+- **Capped and truncated visibly.** A resource can be a whole file; a silent cut produces a model
+  reasoning confidently about the half it received, so a truncated read says which half it got.
+
+A server that implements none of this answers `-32601`, which reads as *"this server publishes no
+resources"* rather than as a connection failure — a model told the connection failed retries and
+then blames the server.
+
+**A server cannot ask this client a question** (#264). Across every protocol revision this client
+speaks, the mechanism for a server needing more input mid-call is **elicitation** — a server→client
+request. It is impossible here by construction, three times over: we advertise
+`clientCapabilities: {}`, a modern-era call is one stateless POST with no server→client channel at
+all, and answering on the legacy transport would mean POSTing a response while the server holds the
+original stream open — which the client cannot do, since it reads that stream to completion before
+returning. So elicitation is **not implemented**, and is not faked. What the client does instead is
+*recognise* the ask and fail with a sentence that says the call did not complete and nothing was
+submitted, instead of reporting an unanswerable question as an unparseable response and sending the
+user to debug a transport that worked. Supporting it for real means declaring the capability and
+adding a resumable channel — a transport change, tracked on #264.
 
 **Every outbound MCP call is traced** (#265) as one redacted `agent_events` row (`source: "mcp"`):
 endpoint, method, remote tool, era + negotiated version, HTTP status, duration and a failure class,
