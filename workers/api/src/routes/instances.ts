@@ -80,6 +80,7 @@ export {
 	validateRuntimeEndpointUrl,
 } from "./instances-runtime.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
+import { diagnoseAttachment } from "../lib/runtime-attachment.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -743,7 +744,14 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const runtime = await requireRuntime(c.env, instanceId, session.uid);
+	// Resolve the LIVE, pin-aware node first (#238). `requireRuntime` reads the single default
+	// row, which the newest `pags up` overwrites and which is never cleared on disconnect — so
+	// on a multi-machine account this route reported a machine that had gone away, and then
+	// asked relayConnected about THAT node. The dot the user sees was derived from a row that
+	// had no relationship to what is actually connected. Fall back to the default row only to
+	// describe a registration that exists but is not live.
+	const liveRuntime = await getLiveRuntime(c.env, instanceId, session.uid);
+	const runtime = liveRuntime ?? (await requireRuntime(c.env, instanceId, session.uid));
 
 	// A runner heartbeats every 30s (updateRuntimeStatus → "online"). If it was seen
 	// in the last ~90s it's live, so a transient live-probe failure (the tunnel URL
@@ -765,11 +773,21 @@ instanceRoutes.get("/:instanceId/runtime/status", async (c) => {
 		const effective = online || recentlySeen ? "online" : "offline";
 		await updateRuntimeStatus(c.env, instanceId, session.uid, effective);
 		const relayIsConnected = await relayConnected(c.env, instanceId, runtime.runner_node);
+		// Say WHY when it isn't attached (#237). The console previously had only a boolean, so a
+		// machine that is demonstrably alive with one agent detached rendered as an unexplained
+		// amber dot — the CLI knew the reason and the remedy and printed both to a terminal
+		// nobody was watching.
+		const attachment = diagnoseAttachment({
+			hasRuntimeRow: true,
+			relayConnected: relayIsConnected,
+			lastSeenAt: runtime.last_seen_at,
+		});
 		return c.json({
 			runtime: runtimeResponse({ ...runtime, status: effective, last_seen_at: new Date().toISOString() }),
 			health,
 			capabilities,
-			relay: { connected: relayIsConnected, runnerNode: runtime.runner_node || null },
+			relay: { connected: relayIsConnected, runnerNode: runtime.runner_node || null, live: Boolean(liveRuntime) },
+			attachment,
 		});
 	} catch (error) {
 		// Probe threw (network blip). A recently-seen runner stays online — don't clobber it.

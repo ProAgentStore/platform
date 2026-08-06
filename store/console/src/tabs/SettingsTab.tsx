@@ -143,6 +143,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	// (top-level) keys made the panel read "Offline" permanently. `connected` on the pinned
 	// node's detail is the same RelayDO truth, used as a fallback when the probe hasn't loaded.
 	const relayInfo = (runtimeInfo as { relay?: { connected?: boolean; runnerNode?: string | null } } | null)?.relay;
+	// Why it isn't attached, computed server-side (#237). The panel used to show only an amber
+	// "agent not attached", which is a symptom with no cause and no remedy — the CLI knew both
+	// and printed them to a terminal nobody was watching.
+	const attachment = (runtimeInfo as { attachment?: { state?: string; message?: string; remedy?: string | null } } | null)?.attachment;
 	const agentOnline = relayInfo?.connected === true || pinnedDetail?.connected === true;
 	const agentNode = relayInfo?.runnerNode || runnerNode || "";
 	// The machines to render as "Runs on" tiles: all your `pags up` nodes, plus the pinned
@@ -697,6 +701,16 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 							{/* Agent's own socket down while the machine is up for OTHER agents. */}
 							{!agentOnline && pinnedNodeOnline && <span className="text-amber-500"> · machine online, agent not attached</span>}
 							{agentNode && <> · Node: {agentNode}</>}
+							{/* The cause + the one command that fixes it. `pags up` is the WRONG advice when
+							    the machine is already running, which is exactly the confusing case. */}
+							{!agentOnline && attachment?.message && (
+								<div className="mt-1 text-[0.8rem] text-muted-soft">
+									{attachment.message}
+									{attachment.remedy && (
+										<> Run <code className="px-1 py-0.5 rounded bg-paper border border-line font-mono text-[0.75rem]">{attachment.remedy}</code>.</>
+									)}
+								</div>
+							)}
 						</>
 					) : (
 						"Checking runner status..."
