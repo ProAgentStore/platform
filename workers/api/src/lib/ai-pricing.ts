@@ -12,9 +12,12 @@ export interface ModelPrice {
 }
 
 // Keyed by a normalized model id (see normalizeModel). Prices in USD / 1M tokens,
-// list price as published by the provider. Cache reads bill at the input rate here
-// (we already fold cache_read/creation into `input` in user-ai.ts), which slightly
-// over-estimates cached calls — acceptable for a BYOK estimate.
+// list price as published by the provider.
+//
+// Cache tokens are NOT priced here — `estimateCostMicros` applies CACHE_READ_MULTIPLIER /
+// CACHE_WRITE_MULTIPLIER to `inputPerM` below, and `user-ai.ts` keeps the three Anthropic
+// counters separate rather than summing them. (This comment previously claimed the opposite;
+// it outlived the fix and was read as current, which is worse than no comment at all.)
 export const PRICES: Record<string, ModelPrice> = {
 	// Anthropic (claude-sonnet-4-6 is the default the Anthropic path always uses)
 	"claude-sonnet-4-6": { inputPerM: 3, outputPerM: 15 },
