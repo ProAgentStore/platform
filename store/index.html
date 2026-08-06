@@ -167,21 +167,17 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
         onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--line)'">
     </div>
 
-    <!-- Agent-type tabs -->
-    <div class="toolbar" style="border-bottom:1px solid var(--line);padding-bottom:0.75rem">
+    <!-- Agent-type tabs. Rendered from the live catalog by renderFilters() — a hardcoded
+         row drifts the moment a category is added or an agent is drafted, and a filter
+         button matching nothing tells a visitor the store is empty. -->
+    <div class="toolbar" id="type-filters" style="border-bottom:1px solid var(--line);padding-bottom:0.75rem">
       <button type="button" class="filter-btn type-btn active" data-type="all" onclick="filterType('all')">All</button>
-      <button type="button" class="filter-btn type-btn" data-type="agent" onclick="filterType('agent')">Agents</button>
-      <button type="button" class="filter-btn type-btn" data-type="worker" onclick="filterType('worker')">Workers</button>
-      <button type="button" class="filter-btn type-btn" data-type="tool" onclick="filterType('tool')">Tools</button>
     </div>
     <!-- Category filters -->
     <div class="toolbar">
-      <button type="button" class="filter-btn cat-btn active" data-cat="all" onclick="filterCategory('all')">All</button>
-      <button type="button" class="filter-btn cat-btn" data-cat="chat" onclick="filterCategory('chat')">Chat</button>
-      <button type="button" class="filter-btn cat-btn" data-cat="code" onclick="filterCategory('code')">Code</button>
-      <button type="button" class="filter-btn cat-btn" data-cat="data" onclick="filterCategory('data')">Data</button>
-      <button type="button" class="filter-btn cat-btn" data-cat="creative" onclick="filterCategory('creative')">Creative</button>
-      <button type="button" class="filter-btn cat-btn" data-cat="productivity" onclick="filterCategory('productivity')">Productivity</button>
+      <span id="cat-filters" style="display:contents">
+        <button type="button" class="filter-btn cat-btn active" data-cat="all" onclick="filterCategory('all')">All</button>
+      </span>
       <span id="agent-count" class="agent-count"></span>
       <select id="sort-select" onchange="sortAgents(this.value)" style="margin-left:auto;background:var(--panel);border:1px solid var(--line);border-radius:0.4rem;padding:0.3rem 0.6rem;color:var(--muted);font-size:0.78rem;font-family:var(--font-body)">
         <option value="newest">Newest</option>
@@ -192,10 +188,17 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
 
     <div id="agents-grid" class="agents-grid"></div>
 
+    <!-- Two different empty states. Showing "no agents published yet" while 14 are
+         published — because a filter matched none — is the store calling itself empty. -->
     <div id="empty-state" class="empty-state" style="display:none">
       <h2>Be the first to publish</h2>
       <p>No agents published yet. Create one in the console — add your knowledge base, set guardrails, and publish it to the store.</p>
       <a href="/console/" class="cta">Open Console</a>
+    </div>
+    <div id="no-match-state" class="empty-state" style="display:none">
+      <h2>Nothing matches that</h2>
+      <p id="no-match-detail">No agents match your current filters.</p>
+      <a href="#" class="cta" onclick="clearFilters();return false">Show all agents</a>
     </div>
   </main>
 
@@ -254,6 +257,7 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
         const res = await fetch(`${API}/v1/agents?sort=${currentSort}`);
         const data = await res.json();
         allAgents = data.agents || [];
+        renderFilters();
         renderAgents();
       } catch (e) {
         console.error('Failed to load agents:', e);
@@ -276,6 +280,51 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
 	      renderAgents();
 	    }
 
+    /** "developer-tools" -> "Developer Tools". The catalog stores slugs; humans read labels. */
+    function labelFor(slug) {
+      return String(slug).split(/[-_]/).map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+    }
+
+    /**
+     * Build both filter rows from what is actually published.
+     *
+     * The rows used to be hardcoded, and the catalog drifted away from them in both
+     * directions at once: `chat`, `data` and `creative` matched nothing (and the
+     * `worker`/`tool` type tabs matched nothing either), while `developer-tools`,
+     * `sales`, `general`, `social` and `education` — 8 of 14 agents — had no button at
+     * all and were unreachable. Deriving the buttons makes both failures impossible.
+     */
+    function renderFilters() {
+      const counts = (key, dflt) => {
+        const m = new Map();
+        for (const a of allAgents) {
+          const v = (a[key] || dflt || '').trim();
+          if (v) m.set(v, (m.get(v) || 0) + 1);
+        }
+        return [...m.entries()].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
+      };
+
+      const types = counts('store_type', 'agent');
+      const typeRow = document.getElementById('type-filters');
+      // A lone type is not a choice — hide the whole row rather than show "All | Agents".
+      typeRow.style.display = types.length > 1 ? '' : 'none';
+      typeRow.innerHTML = '<button type="button" class="filter-btn type-btn active" data-type="all" onclick="filterType(\'all\')">All</button>' +
+        types.map(([t, n]) => `<button type="button" class="filter-btn type-btn" data-type="${esc(t)}" onclick="filterType('${esc(t)}')">${esc(labelFor(t))} <span style="opacity:.6">${n}</span></button>`).join('');
+
+      const cats = counts('category');
+      document.getElementById('cat-filters').innerHTML =
+        '<button type="button" class="filter-btn cat-btn active" data-cat="all" onclick="filterCategory(\'all\')">All</button>' +
+        cats.map(([c, n]) => `<button type="button" class="filter-btn cat-btn" data-cat="${esc(c)}" onclick="filterCategory('${esc(c)}')">${esc(labelFor(c))} <span style="opacity:.6">${n}</span></button>`).join('');
+    }
+
+    function clearFilters() {
+      searchQuery = '';
+      const box = document.getElementById('search-input');
+      if (box) box.value = '';
+      filterType('all');
+      filterCategory('all');
+    }
+
     function renderAgents() {
       let filtered = allAgents;
       if (searchQuery) filtered = filtered.filter(a =>
@@ -293,11 +342,26 @@ header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;borde
       grid.innerHTML = '';
       count.textContent = `${filtered.length} agent${filtered.length !== 1 ? 's' : ''}`;
 
+      const noMatch = document.getElementById('no-match-state');
       if (filtered.length === 0) {
-        empty.style.display = '';
+        // Nothing published at all is a genuinely empty store. Nothing matching a filter
+        // is not — saying "be the first to publish" over a 14-agent catalog is the store
+        // telling a first visitor it is empty.
+        const storeIsEmpty = allAgents.length === 0;
+        empty.style.display = storeIsEmpty ? '' : 'none';
+        noMatch.style.display = storeIsEmpty ? 'none' : '';
+        if (!storeIsEmpty) {
+          const bits = [];
+          if (searchQuery) bits.push(`“${searchQuery}”`);
+          if (currentCategory !== 'all') bits.push(labelFor(currentCategory));
+          if (currentType !== 'all') bits.push(labelFor(currentType));
+          document.getElementById('no-match-detail').textContent =
+            `No agents match ${bits.join(' + ') || 'your current filters'}. The store has ${allAgents.length} published agent${allAgents.length !== 1 ? 's' : ''}.`;
+        }
         return;
       }
       empty.style.display = 'none';
+      noMatch.style.display = 'none';
 
       for (const a of filtered) {
         const card = document.createElement('a');
