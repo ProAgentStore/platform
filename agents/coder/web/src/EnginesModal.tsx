@@ -76,18 +76,20 @@ export default function EnginesModal({ instanceId, engines: initial, defaultEngi
 						return (
 							<div key={e.id} className="bg-paper border border-line rounded-lg p-2.5">
 								<div className="flex gap-1.5 items-center flex-wrap">
-									<input
-										value={e.label}
-										onChange={(ev) => update(i, { label: ev.target.value })}
-										placeholder="Label"
-										className="bg-panel border border-line rounded-lg px-2 py-1.5 text-sm font-semibold w-36"
-									/>
-									<input
-										value={e.command}
-										onChange={(ev) => update(i, { command: ev.target.value })}
-										placeholder="Launch command"
-										className="bg-panel border border-line rounded-lg px-2 py-1.5 text-xs font-mono flex-1 min-w-40"
-									/>
+										<input
+											value={e.label}
+											onChange={(ev) => update(i, { label: ev.target.value })}
+											aria-label="Engine label"
+											placeholder="Label"
+											className="bg-panel border border-line rounded-lg px-2 py-1.5 text-sm font-semibold w-36"
+										/>
+										<input
+											value={e.command}
+											onChange={(ev) => update(i, { command: ev.target.value })}
+											aria-label="Engine launch command"
+											placeholder="Launch command"
+											className="bg-panel border border-line rounded-lg px-2 py-1.5 text-xs font-mono flex-1 min-w-40"
+										/>
 									<button
 										type="button"
 										onClick={() => setEngines((prev) => prev.filter((_, j) => j !== i))}

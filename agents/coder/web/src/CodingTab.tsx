@@ -769,16 +769,30 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 						<ChevronDown size={14} className="shrink-0 text-muted" />
 					</button>
 					)}
-					{repoMenuOpen && (
-						<>
-							<button type="button" aria-label="Close menu" onClick={() => setRepoMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
-							<div className="absolute top-full left-0 mt-1 z-50 min-w-52 max-h-72 overflow-auto bg-panel border border-line rounded-lg shadow-lg py-1">
-								<button type="button" onClick={() => { setRepoMenuOpen(false); closeTerminal(); }} className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"><ArrowLeft size={12} /> All repos</button>
-								{/* Reach the Builds status view from inside a session (otherwise it's only on the
-								    landing view, which the auto-open-session flow skips past). */}
-								<button type="button" onClick={() => { setRepoMenuOpen(false); setLandingView("builds"); closeTerminal(); }} className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"><Hammer size={12} /> Build status</button>
-								<div className="border-t border-line my-1" />
-								{reposRef.current.map((r) => {
+						{repoMenuOpen && (
+							<>
+								<button type="button" aria-label="Close menu" onClick={() => setRepoMenuOpen(false)} className="fixed inset-0 z-40 cursor-default">
+									<span className="sr-only">Close menu</span>
+								</button>
+								<div className="absolute top-full left-0 mt-1 z-50 min-w-52 max-h-72 overflow-auto bg-panel border border-line rounded-lg shadow-lg py-1">
+									<button
+										type="button"
+										onClick={() => { setRepoMenuOpen(false); closeTerminal(); }}
+										className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"
+									>
+										<ArrowLeft size={12} /> All repos
+									</button>
+									{/* Reach the Builds status view from inside a session (otherwise it's only on the
+									    landing view, which the auto-open-session flow skips past). */}
+									<button
+										type="button"
+										onClick={() => { setRepoMenuOpen(false); setLandingView("builds"); closeTerminal(); }}
+										className="w-full text-left px-3 py-1.5 text-xs font-bold text-muted hover:bg-panel-hover flex items-center gap-1.5"
+									>
+										<Hammer size={12} /> Build status
+									</button>
+									<div className="border-t border-line my-1" />
+									{reposRef.current.map((r) => {
 									const st = repoStatuses[r.id];
 									const current = r.id === openSession.repoId;
 									return (
@@ -788,13 +802,19 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 										</button>
 									);
 								})}
-								<div className="border-t border-line my-1" />
-								{/* One-tap path to the add-repo form from inside a session (esp. mobile,
-								    where the repos-list "+ Add" was hard to reach). */}
-								<button type="button" onClick={() => { setRepoMenuOpen(false); closeTerminal(); setShowAddRepo(true); }} className="w-full text-left px-3 py-1.5 text-sm text-accent font-semibold hover:bg-panel-hover flex items-center gap-1.5"><Plus size={13} /> Add a repo</button>
-							</div>
-						</>
-					)}
+									<div className="border-t border-line my-1" />
+									{/* One-tap path to the add-repo form from inside a session (esp. mobile,
+									    where the repos-list "+ Add" was hard to reach). */}
+									<button
+										type="button"
+										onClick={() => { setRepoMenuOpen(false); closeTerminal(); setShowAddRepo(true); }}
+										className="w-full text-left px-3 py-1.5 text-sm text-accent font-semibold hover:bg-panel-hover flex items-center gap-1.5"
+									>
+										<Plus size={13} /> Add a repo
+									</button>
+								</div>
+							</>
+						)}
 				</div>
 				<AgentStatusBadge status={openStatus} />
 				{/* Icon-only on mobile (saves space); icon + label from sm up. */}
@@ -812,17 +832,37 @@ export default function CodingTab({ instanceId, initialSessionId, onHeaderOverri
 					<div className="relative">
 						<button type="button" onClick={() => setSessionMenuOpen((v) => !v)} title="Session settings" aria-label="Session settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent sm:hidden"><Settings size={13} /></button>
 						<button type="button" onClick={() => setSettingsRepoId(openRepo?.id || openSession.repoId)} title="Repo settings" aria-label="Repo settings" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><FolderCog size={13} /><span>Repo</span></button>
-						{sessionMenuOpen && (
-							<>
-								<button type="button" aria-label="Close session menu" onClick={() => setSessionMenuOpen(false)} className="fixed inset-0 z-40 cursor-default sm:hidden" />
-								<div className="absolute right-0 top-full mt-1 z-50 min-w-44 bg-panel border border-line rounded-lg shadow-lg py-1 sm:hidden">
-									<button type="button" onClick={() => { setSessionMenuOpen(false); navigate(`/instances/${instanceId}/settings`); }} className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"><Settings size={14} /> Agent settings</button>
-									<button type="button" onClick={() => { setSessionMenuOpen(false); setSettingsRepoId(openRepo?.id || openSession.repoId); }} className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"><FolderCog size={14} /> Repo settings</button>
-									<div className="border-t border-line my-1" />
-									<button type="button" onClick={() => { setSessionMenuOpen(false); endSession(); }} className="w-full text-left px-3 py-2 text-sm text-red hover:bg-red/10 flex items-center gap-2"><Square size={14} /> Stop session</button>
-								</div>
-							</>
-						)}
+							{sessionMenuOpen && (
+								<>
+									<button type="button" aria-label="Close session menu" onClick={() => setSessionMenuOpen(false)} className="fixed inset-0 z-40 cursor-default sm:hidden">
+										<span className="sr-only">Close session menu</span>
+									</button>
+									<div className="absolute right-0 top-full mt-1 z-50 min-w-44 bg-panel border border-line rounded-lg shadow-lg py-1 sm:hidden">
+										<button
+											type="button"
+											onClick={() => { setSessionMenuOpen(false); navigate(`/instances/${instanceId}/settings`); }}
+											className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"
+										>
+											<Settings size={14} /> Agent settings
+										</button>
+										<button
+											type="button"
+											onClick={() => { setSessionMenuOpen(false); setSettingsRepoId(openRepo?.id || openSession.repoId); }}
+											className="w-full text-left px-3 py-2 text-sm text-muted hover:bg-panel-hover flex items-center gap-2"
+										>
+											<FolderCog size={14} /> Repo settings
+										</button>
+										<div className="border-t border-line my-1" />
+										<button
+											type="button"
+											onClick={() => { setSessionMenuOpen(false); endSession(); }}
+											className="w-full text-left px-3 py-2 text-sm text-red hover:bg-red/10 flex items-center gap-2"
+										>
+											<Square size={14} /> Stop session
+										</button>
+									</div>
+								</>
+							)}
 					</div>
 					<button type="button" onClick={copySummaryJson} title="Copy conversation as JSON" className="text-xs px-1.5 py-1 rounded-lg border border-line text-muted font-semibold hover:border-accent hover:text-accent hidden sm:flex items-center gap-1"><Copy size={12} /><span>Copy</span></button>
 					<button type="button" onClick={freshStart} title="Fresh start" className="text-xs px-1.5 py-1 rounded-md border border-line text-muted hover:border-accent hover:text-accent hidden sm:block">Fresh</button>

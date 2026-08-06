@@ -88,7 +88,7 @@ function InstancePage() {
 	// can DO (knowledge tools → Indexing, collection tools → Data). An agent that declares no tool
 	// allowlist stays permissive. See SurfaceCaps in lib/surfaces.
 	const declaredTools = instance?.capabilities?.tools;
-	const surfaceCaps = { surfaces, tools: declaredTools };
+	const surfaceCaps = useMemo(() => ({ surfaces, tools: declaredTools }), [surfaces, declaredTools]);
 	// Phase 3: agent-published UIs, loaded dynamically (see DynamicSurface).
 	const customSurfaces = instance?.capabilities?.customSurfaces || [];
 
@@ -103,9 +103,9 @@ function InstancePage() {
 	]);
 	const tab: Tab = allowedSurfaces.has(urlTab) ? urlTab : "chat";
 	const urlSessionId = splatParts[1] || undefined; // e.g. coding/csess_xxx
-	const setTab = (t: Tab) => {
+	const setTab = useCallback((t: Tab) => {
 		navigate(`/instances/${id}/${t}`, { replace: true });
-	};
+	}, [id, navigate]);
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [hasMore, setHasMore] = useState(false);
 	const [loadingMore, setLoadingMore] = useState(false);
@@ -219,6 +219,7 @@ function InstancePage() {
 
 	// Auto-grow the chat input so the FULL live transcript (or a long typed message) is readable
 	// as it grows, instead of truncating to one line (#164). Caps at ~40vh, then scrolls.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: resize only when the visible draft text changes.
 	useEffect(() => {
 		const el = inputRef.current;
 		if (!el) return;
@@ -817,10 +818,7 @@ function InstancePage() {
 			...visibleSurfaces(surfaceCaps).map((s) => ({ id: s.id as string, label: s.label, icon: s.icon })),
 			...customSurfaces.map((c) => ({ id: c.id, label: c.label, icon: c.icon || "🧩" })),
 		],
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		// Joined strings, not the arrays: each poll returns fresh array identities, and depending on
-		// those would re-derive the tab list every few seconds.
-		[surfaces.join(","), declaredTools?.join(","), customSurfaces.map((c) => c.id).join(",")],
+		[surfaceCaps, customSurfaces],
 	);
 
 	// Inject instance controls into the Layout header (single bar)
@@ -869,7 +867,7 @@ function InstancePage() {
 				))}
 			</div>
 		</div>
-	), [instance, hasRuntime, runnerOnline, runnerNode, tab, tabDefs, navigate]);
+		), [instance, hasRuntime, runnerOnline, runnerNode, tab, tabDefs, navigate, setTab]);
 
 	// A surface that DECLARES `ownsHeader` may replace the page header while it is active — a
 	// full-screen terminal needs it for repo + engine status + session actions.
@@ -891,14 +889,15 @@ function InstancePage() {
 						{/* Input bar — top */}
 						<div className="flex gap-1 sm:gap-1.5 px-2 pt-2 pb-1 shrink-0 items-end">
 							<div className="flex-1 min-w-0 relative">
-								<textarea
-									ref={inputRef}
-									rows={1}
-									value={voice.interim || input}
-									onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
+									<textarea
+										ref={inputRef}
+										rows={1}
+										value={voice.interim || input}
+										onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
 									// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
-									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendMessage(); } }}
-									placeholder={voice.talking ? "Listening — tap to send" : voice.mode === "ptt" ? "Tap the chat to talk — or type" : voice.mode === "handsfree" ? (voice.micOn ? "Listening…" : "Hands-free — just talk") : isCoding ? "Ask about your repos..." : surfaces.includes("tmux") ? "Ask about tmux sessions..." : "Send a message..."}
+										onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendMessage(); } }}
+										aria-label="Agent message"
+											placeholder={voice.talking ? "Listening — tap to send" : voice.mode === "ptt" ? "Use the voice control to talk — or type" : voice.mode === "handsfree" ? (voice.micOn ? "Listening…" : "Hands-free — just talk") : isCoding ? "Ask about your repos..." : surfaces.includes("tmux") ? "Ask about tmux sessions..." : "Send a message..."}
 									readOnly={voiceBusy}
 									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
 								/>
@@ -922,23 +921,27 @@ function InstancePage() {
 									{ id: "ptt", label: "Tap to talk", icon: <Mic size={15} />, title: "Tap to talk: tap the chat to record, tap again to send. Replies are read aloud.", on: "border-accent bg-accent text-white" },
 									{ id: "handsfree", label: "Hands-free", icon: <Headphones size={15} />, title: "Hands-free: fully automatic — it listens, detects when you stop, replies aloud, and listens again.", on: "border-green bg-green text-white" },
 								] as const).map((m) => (
-									<button
+									<label
 										key={m.id}
-										type="button"
-										role="radio"
-										aria-checked={voice.mode === m.id}
 										aria-busy={voice.starting && m.id === "handsfree"}
 										title={m.title}
-										onClick={() => voice.setVoiceMode(m.id)}
-										className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-green/15 text-green" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
+										className={`flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-green/15 text-green" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
 									>
+										<input
+											type="radio"
+											name="interaction-mode"
+											value={m.id}
+											checked={voice.mode === m.id}
+											onChange={() => voice.setVoiceMode(m.id)}
+											className="sr-only"
+										/>
 										{/* #284: opening the mic costs a config read + getUserMedia, and until this
 										    spinner nothing on the control changed for that whole window — the press
 										    read as "nothing happened". It clears exactly when listening really
 										    begins, so the spinner and the ready-chime agree. */}
 										{voice.starting && m.id === "handsfree" ? <Loader2 size={15} className="animate-spin" /> : m.icon}
 										<span className="hidden sm:inline">{voice.starting && m.id === "handsfree" ? "Starting…" : m.label}</span>
-									</button>
+									</label>
 								))}
 							</div>
 							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
@@ -951,13 +954,35 @@ function InstancePage() {
 								{/* Kebab, NOT a gear: these are conversation ACTIONS (copy/clear) — real
 							    settings live on the Settings tab. A gear here read as a second
 							    settings surface and confused people. */}
-							<button type="button" onClick={() => setShowChatMenu((v) => !v)} title="Chat options" aria-label="Chat options" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}><MoreVertical size={13} /></button>
+								<button
+									type="button"
+									onClick={() => setShowChatMenu((v) => !v)}
+									title="Chat options"
+									aria-label="Chat options"
+									className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}
+								>
+									<MoreVertical size={13} />
+								</button>
 								{showChatMenu && (
 									<>
-										<div className="fixed inset-0 z-10" onClick={() => setShowChatMenu(false)} />
+										<button type="button" aria-label="Close chat options" className="fixed inset-0 z-10 cursor-default" onClick={() => setShowChatMenu(false)}>
+											<span className="sr-only">Close chat options</span>
+										</button>
 										<div className="absolute right-0 top-full mt-1 z-20 bg-panel border border-line rounded-xl shadow-lg py-1 min-w-[10rem]">
-											<button type="button" onClick={() => { setShowChatMenu(false); copyChat(); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted hover:bg-panel-hover hover:text-accent transition-colors"><Copy size={13} /> Copy JSON</button>
-											<button type="button" onClick={() => { setShowChatMenu(false); clearChat(); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"><Trash2 size={13} /> Clear messages</button>
+											<button
+												type="button"
+												onClick={() => { setShowChatMenu(false); copyChat(); }}
+												className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted hover:bg-panel-hover hover:text-accent transition-colors"
+											>
+												<Copy size={13} /> Copy JSON
+											</button>
+											<button
+												type="button"
+												onClick={() => { setShowChatMenu(false); clearChat(); }}
+												className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"
+											>
+												<Trash2 size={13} /> Clear messages
+											</button>
 										</div>
 									</>
 								)}
@@ -983,14 +1008,14 @@ function InstancePage() {
 										))}
 									</div>
 								)}
-								<textarea
-									value={loopObjective}
-									onChange={(e) => setLoopObjective(e.target.value)}
-									onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startLoop(); } }}
-									placeholder={loopPresets.length ? "Or type a custom objective…" : "What should the agent work on?"}
+									<textarea
+										value={loopObjective}
+										onChange={(e) => setLoopObjective(e.target.value)}
+										onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startLoop(); } }}
+										aria-label="Loop objective"
+										placeholder={loopPresets.length ? "Or type a custom objective…" : "What should the agent work on?"}
 									className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm resize-none"
 									rows={2}
-									autoFocus
 								/>
 								<div className="flex items-center gap-2 justify-between">
 									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
@@ -1001,17 +1026,12 @@ function InstancePage() {
 								</div>
 							</div>
 						)}
-						{/* Messages. In Tap-to-talk, a tap here (not on a button) starts/stops a
-						    recording turn. In Hands-free, a tap interrupts the agent so you can talk. */}
-						<div
-							ref={chatRef}
-							onClick={(e) => {
-								if ((e.target as HTMLElement).closest("button, a, summary, input, textarea")) return;
-								if (voice.mode === "ptt") voice.toggleTalk();
-								else if (voice.mode === "handsfree") voice.cancelSpeak();
-							}}
-							onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}
-							className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : voice.mode === "ptt" ? "cursor-pointer" : ""}`}
+							{/* Messages. Voice control lives in the explicit status pill below so this
+							    scroll region stays selectable and accessible. */}
+							<div
+								ref={chatRef}
+								onScroll={(e) => { const el = e.currentTarget; setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 40); }}
+								className={`flex-1 overflow-y-auto flex flex-col gap-3 px-2 py-2 chat-scroll transition-shadow ${voiceStatus ? "pb-16" : ""} ${voice.talking ? "ring-2 ring-inset ring-green" : ""}`}
 						>
 							{hasMore && (
 								<button type="button" onClick={loadMore} disabled={loadingMore} className="self-center text-xs px-3 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold transition-colors mb-2">
@@ -1024,15 +1044,16 @@ function InstancePage() {
 								// heuristic is three chances to drift, invisibly.
 								if (classifyMessage(m) === "tool") {
 									const summary = toolCallSummary(m.content);
-									return (
-										<details key={messageKey(m, i)} className="self-start max-w-[90%]">
-											<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
-												<Wrench size={11} className="shrink-0" />
-												<span>Used {summary}</span>
-											</summary>
-											<div className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
-										</details>
-									);
+										return (
+											<details key={messageKey(m, i)} className="self-start max-w-[90%]">
+												<summary className="flex items-center gap-1.5 text-[0.7rem] text-muted cursor-pointer select-none py-0.5 px-2">
+													<Wrench size={11} className="shrink-0" />
+													<span>Used {summary}</span>
+												</summary>
+												{/* biome-ignore lint/security/noDangerouslySetInnerHtml: renderMd is the shared sanitized markdown renderer used by every chat surface. */}
+												<div className="mt-1 bg-panel/50 border border-line rounded-lg p-2 text-[0.7rem] text-muted leading-relaxed msg-md" dangerouslySetInnerHTML={{ __html: renderMd(m.content) }} />
+											</details>
+										);
 								}
 								// Regular system messages (loop status, etc.) — deliberately NOT collapsed.
 								if (classifyMessage(m) === "system") {
@@ -1058,12 +1079,9 @@ function InstancePage() {
 								return (
 									<div
 										key={messageKey(m, i)}
-										// Keep a bubble tap from bubbling to the chat-container tap handler — in
-										// Tap-to-talk that would churn the mic (and fire a phantom empty turn); in
-										// Hands-free it would reopen the mic into the replay audio. NOTE: no
-										// onDoubleClick here — it hijacked double-click-to-select-a-word and blocked
-										// copying the text. Replay lives on the always-visible speaker button below.
-										onClick={(e) => e.stopPropagation()}
+										data-chat-bubble
+										// NOTE: no onDoubleClick here — it hijacked double-click-to-select-a-word and
+										// blocked copying the text. Replay lives on the always-visible speaker button.
 										className={`group relative max-w-[90%] px-3 py-2 rounded-xl text-sm leading-relaxed cursor-auto select-text ${
 											m.role === "user" ? "bg-accent text-white self-end rounded-br-sm"
 												: "bg-panel border border-line self-start rounded-bl-sm"

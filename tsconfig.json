@@ -12,7 +12,14 @@
 		"sourceMap": true,
 		"isolatedModules": true,
 		"resolveJsonModule": true,
-		"forceConsistentCasingInFileNames": true
+		"forceConsistentCasingInFileNames": true,
+		"baseUrl": ".",
+		"paths": {
+			"@proagentstore/sdk": ["packages/sdk/src/index.ts"],
+			"@proagentstore/sdk/client": ["packages/sdk/src/client.ts"],
+			"@proagentstore/sdk/hooks": ["packages/sdk/src/hooks.ts"],
+			"@proagentstore/sdk/ui": ["packages/sdk/src/ui.ts"]
+		}
 	},
 	"exclude": ["node_modules", "dist", "workers", "store"]
 }

@@ -315,12 +315,13 @@ export default function TmuxTab({ instanceId }: Props) {
 
 				<div className="border-t border-line p-2 space-y-2 bg-panel/40">
 					<div className="flex gap-2">
-						<input
-							value={command}
-							onChange={(e) => setCommand(e.target.value)}
-							onKeyDown={(e) => { if (e.key === "Enter") runCommand(); }}
-							placeholder="Command"
-								disabled={!selected || !canRunCommand}
+							<input
+								value={command}
+								onChange={(e) => setCommand(e.target.value)}
+								onKeyDown={(e) => { if (e.key === "Enter") runCommand(); }}
+								aria-label="Command"
+								placeholder="Command"
+									disabled={!selected || !canRunCommand}
 							className="font-mono"
 						/>
 							<button type="button" onClick={runCommand} disabled={!selected || !command.trim() || !canRunCommand} title="Run command" aria-label="Run command" className="px-3 rounded-lg bg-accent text-white disabled:opacity-40">
@@ -328,21 +329,21 @@ export default function TmuxTab({ instanceId }: Props) {
 						</button>
 					</div>
 					<div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_11rem_auto] gap-2">
-							<input value={sendText} onChange={(e) => setSendText(e.target.value)} placeholder="Text to send" disabled={!selected || !canSendKeys} className="font-mono" />
-							<input value={sendKeys} onChange={(e) => setSendKeys(e.target.value)} placeholder="Keys, e.g. Enter" disabled={!selected || !canSendKeys} className="font-mono" />
+								<input value={sendText} onChange={(e) => setSendText(e.target.value)} aria-label="Text to send" placeholder="Text to send" disabled={!selected || !canSendKeys} className="font-mono" />
+								<input value={sendKeys} onChange={(e) => setSendKeys(e.target.value)} aria-label="Keys to send" placeholder="Keys, e.g. Enter" disabled={!selected || !canSendKeys} className="font-mono" />
 							<button type="button" onClick={sendKeysToPane} disabled={!selected || (!sendText && !sendKeys.trim()) || !canSendKeys} title="Send keys" aria-label="Send keys" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 							<Keyboard size={15} />
 						</button>
 					</div>
 					<div className="grid grid-cols-1 sm:grid-cols-[8rem_11rem_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
-							<select value={newBackend} onChange={(e) => setNewBackend(e.target.value as "tmux" | "kitty" | "iterm2")} disabled={!canCreateTarget}>
+								<select value={newBackend} onChange={(e) => setNewBackend(e.target.value as "tmux" | "kitty" | "iterm2")} aria-label="Terminal backend" disabled={!canCreateTarget}>
 							<option value="tmux">tmux</option>
 							<option value="kitty">kitty</option>
 							<option value="iterm2">iTerm2</option>
 						</select>
-							<input value={newSession} onChange={(e) => setNewSession(e.target.value)} placeholder="Name" disabled={!canCreateTarget} className="font-mono" />
-							<input value={newWorkDir} onChange={(e) => setNewWorkDir(e.target.value)} placeholder="Working directory" disabled={!canCreateTarget} className="font-mono" />
-							<input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} placeholder="Startup command" disabled={!canCreateTarget} className="font-mono" />
+								<input value={newSession} onChange={(e) => setNewSession(e.target.value)} aria-label="Target name" placeholder="Name" disabled={!canCreateTarget} className="font-mono" />
+								<input value={newWorkDir} onChange={(e) => setNewWorkDir(e.target.value)} aria-label="Working directory" placeholder="Working directory" disabled={!canCreateTarget} className="font-mono" />
+								<input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} aria-label="Startup command" placeholder="Startup command" disabled={!canCreateTarget} className="font-mono" />
 							<button type="button" onClick={createSession} disabled={!newSession.trim() || !canCreateTarget} title="Create target" aria-label="Create target" className="px-3 py-2 rounded-lg border border-line text-muted hover:text-accent hover:border-accent disabled:opacity-40">
 							<Plus size={15} />
 						</button>

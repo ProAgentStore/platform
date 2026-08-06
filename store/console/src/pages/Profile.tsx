@@ -148,7 +148,7 @@ export default function Profile() {
 			<div className="bg-panel border border-line rounded-xl p-3 sm:p-6">
 				{/* Header */}
 				<div className="flex items-center gap-5 mb-6 min-w-0">
-					<img src={user.avatar} alt="" className="w-[72px] h-[72px] rounded-full border-[3px] border-line" />
+					<img src={user.avatar} alt="" width={72} height={72} className="w-[72px] h-[72px] rounded-full border-[3px] border-line" />
 					<div className="min-w-0 flex-1">
 						<div className="font-display text-xl font-bold [overflow-wrap:anywhere]">{user.display_name || user.login}</div>
 						<div className="text-sm text-muted [overflow-wrap:anywhere]">@{user.login}</div>

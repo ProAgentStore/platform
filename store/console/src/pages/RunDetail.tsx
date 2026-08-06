@@ -249,10 +249,12 @@ function TakeoverLive({ instanceId, taskId, kind, onResume, onClose }: { instanc
 				{frame ? (
 					// biome-ignore lint/a11y/useKeyWithClickEvents: remote browser clicks require pointer coordinates from the rendered screenshot.
 					<img
-						ref={imgRef}
-						src={frame.frame}
-						onClick={onClick}
-						onMouseMove={onMove}
+							ref={imgRef}
+							src={frame.frame}
+							width={1280}
+							height={720}
+							onClick={onClick}
+							onMouseMove={onMove}
 						draggable={false}
 						alt="Live agent browser"
 						className="max-w-full max-h-full object-contain cursor-crosshair select-none"
@@ -353,7 +355,7 @@ export default function RunDetail() {
 			.sort((a, b) => a.seq - b.seq),
 	[events]);
 
-	// Fetch each shot blob with auth (an <img src> can't send a Bearer header) → object URL.
+	// Fetch each shot blob with auth; browser image elements cannot send a Bearer header.
 	useEffect(() => {
 		let cancelled = false;
 		(async () => {
@@ -481,9 +483,9 @@ export default function RunDetail() {
 					</div>
 
 					<div className="rounded-lg overflow-hidden border border-line bg-paper flex items-center justify-center min-h-[240px]">
-						{cur && shotUrls[cur.seq] ? (
-							<img src={shotUrls[cur.seq]} alt={`Step ${cur.seq}`} className="w-full max-h-[520px] object-contain" />
-						) : (
+							{cur && shotUrls[cur.seq] ? (
+								<img src={shotUrls[cur.seq]} alt={`Step ${cur.seq}`} width={1280} height={720} className="w-full max-h-[520px] object-contain" />
+							) : (
 							<span className="text-sm text-muted-soft py-16">Loading screenshot…</span>
 						)}
 					</div>

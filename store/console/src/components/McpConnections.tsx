@@ -434,13 +434,14 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 
 			{/* Add / test an endpoint. */}
 			<div className="flex flex-wrap gap-1.5 items-center">
-				<input
-					type="url"
-					value={url}
-					onChange={(e) => setUrl(e.target.value)}
-					placeholder="https://example.com/mcp"
-					className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-surface border border-line rounded"
-				/>
+					<input
+						type="url"
+						value={url}
+						onChange={(e) => setUrl(e.target.value)}
+						aria-label="MCP endpoint URL"
+						placeholder="https://example.com/mcp"
+						className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-surface border border-line rounded"
+					/>
 				<button
 					type="button"
 					disabled={!url.trim() || testing}

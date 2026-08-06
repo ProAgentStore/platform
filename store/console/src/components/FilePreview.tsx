@@ -97,17 +97,23 @@ export default function FilePreview({ instanceId, file, onClose }: {
 		}
 	};
 
-	return (
-		<div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-6">
-			<button type="button" aria-label="Close preview" className="absolute inset-0 cursor-default" onClick={onClose} />
-			<div className="relative bg-panel border border-line rounded-xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
-				<div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-line shrink-0">
-					<div className="text-sm font-semibold truncate">{file.name}</div>
-					<div className="flex items-center gap-1.5 shrink-0">
-						<button type="button" onClick={download} title="Download" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold flex items-center gap-1.5"><Download size={13} /> Download</button>
-						<button type="button" onClick={onClose} title="Close" className="text-xs px-2 py-1.5 rounded-lg border border-line text-muted hover:text-accent"><X size={14} /></button>
+		return (
+			<div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-6">
+				<button type="button" aria-label="Close preview" className="absolute inset-0 cursor-default" onClick={onClose}>
+					<span className="sr-only">Close preview</span>
+				</button>
+				<div className="relative bg-panel border border-line rounded-xl w-full max-w-4xl h-[85vh] flex flex-col overflow-hidden">
+					<div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-line shrink-0">
+						<div className="text-sm font-semibold truncate">{file.name}</div>
+						<div className="flex items-center gap-1.5 shrink-0">
+							<button type="button" onClick={download} title="Download" className="text-xs px-2.5 py-1.5 rounded-lg border border-line text-muted hover:border-accent hover:text-accent font-semibold flex items-center gap-1.5">
+								<Download size={13} /> Download
+							</button>
+							<button type="button" onClick={onClose} title="Close" className="text-xs px-2 py-1.5 rounded-lg border border-line text-muted hover:text-accent">
+								<X size={14} />
+							</button>
+						</div>
 					</div>
-				</div>
 				<div className="flex-1 min-h-0 overflow-auto bg-paper">
 					{loading && <p className="text-center py-10 text-muted text-sm">Loading preview…</p>}
 					{error && <p className="text-center py-10 text-red text-sm">{error}</p>}
@@ -121,7 +127,7 @@ export default function FilePreview({ instanceId, file, onClose }: {
 					)}
 					{blobUrl && kind === "image" && (
 						<div className="flex items-center justify-center h-full p-4">
-							<img src={blobUrl} alt={file.name} className="max-w-full max-h-full object-contain" />
+								<img src={blobUrl} alt={file.name} width={960} height={640} className="max-w-full max-h-full object-contain" />
 						</div>
 					)}
 					{text !== null && kind === "markdown" && (

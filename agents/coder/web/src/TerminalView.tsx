@@ -25,13 +25,14 @@ export default function TerminalView({
 				</div>
 			)}
 			<div className="flex gap-1 px-2 py-2 shrink-0 items-center border-b border-line">
-				<input
-					value={termInput}
-					onChange={(e) => setTermInput(e.target.value)}
-					onKeyDown={(e) => { if (e.key === "Enter") sendTerminalMessage(); }}
-					placeholder="Send a message to the Engine..."
-					className="flex-1 min-w-0 bg-panel border border-line rounded-xl px-3 py-2.5 text-sm"
-				/>
+					<input
+						value={termInput}
+						onChange={(e) => setTermInput(e.target.value)}
+						onKeyDown={(e) => { if (e.key === "Enter") sendTerminalMessage(); }}
+						aria-label="Terminal message"
+						placeholder="Send a message to the Engine..."
+						className="flex-1 min-w-0 bg-panel border border-line rounded-xl px-3 py-2.5 text-sm"
+					/>
 				<button type="button" onClick={sendTerminalMessage} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm">
 					<Send size={14} />
 				</button>

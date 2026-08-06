@@ -110,6 +110,7 @@ export default function CopilotView({
 	// Auto-grow the input so the FULL live transcript (or a long typed message) is readable as
 	// it grows, instead of truncating to one line (#164). Caps at ~40vh, then scrolls.
 	const inputRef = useRef<HTMLTextAreaElement>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: resize only when the visible draft text changes.
 	useEffect(() => {
 		const el = inputRef.current;
 		if (!el) return;
@@ -155,6 +156,7 @@ export default function CopilotView({
 						onChange={(e) => { if (!voice.interim) setChatInput(e.target.value); }}
 						// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
 						onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendInstruction(); } }}
+						aria-label="Co-pilot message"
 						placeholder="Talk to Co-Pilot"
 						readOnly={voiceBusy}
 						className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-lg px-2.5 py-1.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent font-semibold" : voice.micOn ? "border-green" : "border-line"}`}
@@ -235,17 +237,33 @@ export default function CopilotView({
 						<Repeat size={13} />
 					</button>
 				)}
-				{/* Clear chat is tucked into a Settings menu (was a bare trash icon). */}
-				<div className="relative">
-					<button type="button" onClick={() => setShowChatMenu((v) => !v)} title="Chat options" aria-label="Chat options" className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}><Settings size={13} /></button>
-					{showChatMenu && (
-						<>
-							<button type="button" className="fixed inset-0 z-10 cursor-default" aria-label="Close chat options" onClick={closeChatMenu} />
-							<div className="absolute right-0 top-full mt-1 z-20 bg-panel border border-line rounded-xl shadow-lg py-1 min-w-[10rem]">
-								<button type="button" onClick={() => { setShowChatMenu(false); onClearChat(); }} className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"><Trash2 size={13} /> Clear messages</button>
-							</div>
-						</>
-					)}
+					{/* Clear chat is tucked into a Settings menu (was a bare trash icon). */}
+					<div className="relative">
+						<button
+							type="button"
+							onClick={() => setShowChatMenu((v) => !v)}
+							title="Chat options"
+							aria-label="Chat options"
+							className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}
+						>
+							<Settings size={13} />
+						</button>
+						{showChatMenu && (
+							<>
+								<button type="button" className="fixed inset-0 z-10 cursor-default" aria-label="Close chat options" onClick={closeChatMenu}>
+									<span className="sr-only">Close chat options</span>
+								</button>
+								<div className="absolute right-0 top-full mt-1 z-20 bg-panel border border-line rounded-xl shadow-lg py-1 min-w-[10rem]">
+									<button
+										type="button"
+										onClick={() => { setShowChatMenu(false); onClearChat(); }}
+										className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"
+									>
+										<Trash2 size={13} /> Clear messages
+									</button>
+								</div>
+							</>
+						)}
 				</div>
 			</div>
 			{/* Loop form — DIRECT mode: presets + a custom objective. */}
@@ -257,11 +275,12 @@ export default function CopilotView({
 						))}
 					</div>
 					<textarea
-						value={loop.loopObjective}
-						onChange={(e) => loop.setLoopObjective(e.target.value)}
-						onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); loop.start(); } }}
-						placeholder="Or type a custom objective..."
-						className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm resize-none"
+							value={loop.loopObjective}
+							onChange={(e) => loop.setLoopObjective(e.target.value)}
+							onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); loop.start(); } }}
+							aria-label="Loop objective"
+							placeholder="Or type a custom objective..."
+							className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm resize-none"
 						rows={2}
 					/>
 					<div className="flex items-center gap-2 justify-between">
@@ -437,24 +456,31 @@ export default function CopilotView({
 			{/* Full-text edit/preview modal — a large textarea to review + edit the whole message
 			    before sending. Apply writes it back to the input; Cancel (or backdrop) discards. */}
 			{editOpen && (
-				<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setEditOpen(false)}>
-					{/* biome-ignore lint/a11y/noStaticElementInteractions: backdrop click closes; inner stop-propagation keeps clicks inside. */}
-					<div className="w-full max-w-3xl h-[80vh] flex flex-col bg-panel border border-line rounded-xl shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+				<div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+					<button type="button" aria-label="Close editor" className="absolute inset-0 bg-black/60 cursor-default" onClick={() => setEditOpen(false)}>
+						<span className="sr-only">Close editor</span>
+					</button>
+					<div role="dialog" aria-modal="true" aria-label="Edit message" className="relative w-full max-w-3xl h-[80vh] flex flex-col bg-panel border border-line rounded-xl shadow-2xl overflow-hidden">
 						<div className="flex items-center justify-between px-4 py-3 border-b border-line shrink-0">
 							<span className="font-bold text-sm">Edit message</span>
-							<button type="button" onClick={() => setEditOpen(false)} aria-label="Close" className="text-muted hover:text-accent"><X size={18} /></button>
+							<button type="button" onClick={() => setEditOpen(false)} aria-label="Close" className="text-muted hover:text-accent">
+								<X size={18} />
+							</button>
 						</div>
-						{/* biome-ignore lint/a11y/noAutofocus: opening the editor should focus the textarea. */}
 						<textarea
-							autoFocus
 							value={editDraft}
 							onChange={(e) => setEditDraft(e.target.value)}
+							aria-label="Edit message text"
 							placeholder="Review and edit your full message…"
 							className="flex-1 w-full resize-none bg-paper text-sm px-4 py-3 outline-none leading-relaxed"
 						/>
 						<div className="flex items-center justify-end gap-2 px-4 py-3 border-t border-line shrink-0">
-							<button type="button" onClick={() => setEditOpen(false)} className="px-4 py-2 rounded-lg border border-line text-muted font-semibold text-sm hover:border-accent hover:text-accent active:scale-95 transition-transform">Cancel</button>
-							<button type="button" onClick={applyEdit} className="px-4 py-2 rounded-lg bg-accent text-white font-bold text-sm active:scale-95 transition-transform">Apply</button>
+							<button type="button" onClick={() => setEditOpen(false)} className="px-4 py-2 rounded-lg border border-line text-muted font-semibold text-sm hover:border-accent hover:text-accent active:scale-95 transition-transform">
+								Cancel
+							</button>
+							<button type="button" onClick={applyEdit} className="px-4 py-2 rounded-lg bg-accent text-white font-bold text-sm active:scale-95 transition-transform">
+								Apply
+							</button>
 						</div>
 					</div>
 				</div>

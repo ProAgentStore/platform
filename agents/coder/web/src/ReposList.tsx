@@ -73,7 +73,11 @@ export default function ReposList({
 		if (!text) { setAudio(null); return; } // no assistant message yet — nothing to play
 		setAudio({ id: repo.id, phase: "playing" });
 		try {
-			const tts = ttsRef.current ?? (ttsRef.current = await createTts(instanceId));
+			let tts = ttsRef.current;
+			if (!tts) {
+				tts = await createTts(instanceId);
+				ttsRef.current = tts;
+			}
 			if (playGenRef.current !== myGen) return;
 			await tts.unlock(); // iOS: prime inside the click gesture
 			await tts.speak(text); // resolves when playback ends
@@ -168,12 +172,13 @@ export default function ReposList({
 				{showAddRepo && !singleRepo && (
 					<div className="mt-3">
 						<div className="flex gap-1.5 flex-wrap">
-							<input
-								value={addRepoInput}
-								onChange={(e) => setAddRepoInput(e.target.value)}
-								onKeyDown={(e) => { if (e.key === "Enter") addRepo(); }}
-								placeholder="~/dev/my-repo or owner/repo or clone URL"
-								className="flex-1 min-w-[180px] bg-panel border border-line rounded-xl px-3 py-2 text-sm"
+								<input
+									value={addRepoInput}
+									onChange={(e) => setAddRepoInput(e.target.value)}
+									onKeyDown={(e) => { if (e.key === "Enter") addRepo(); }}
+									aria-label="Repository path or URL"
+									placeholder="~/dev/my-repo or owner/repo or clone URL"
+									className="flex-1 min-w-[180px] bg-panel border border-line rounded-xl px-3 py-2 text-sm"
 							/>
 							<button type="button" onClick={addRepo} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold">Add</button>
 						</div>

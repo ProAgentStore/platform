@@ -148,9 +148,9 @@ export default function Layout() {
 								</span>
 							)}
 						</NavLink>
-						<NavLink to="/profile" className="flex items-center text-muted no-underline hover:text-ink">
-							<img src={user.avatar} alt="" className={`rounded-full border-2 border-line ${navHidden ? "w-[22px] h-[22px]" : "w-[26px] h-[26px]"}`} />
-						</NavLink>
+							<NavLink to="/profile" className="flex items-center text-muted no-underline hover:text-ink">
+								<img src={user.avatar} alt="" width={navHidden ? 22 : 26} height={navHidden ? 22 : 26} className={`rounded-full border-2 border-line ${navHidden ? "w-[22px] h-[22px]" : "w-[26px] h-[26px]"}`} />
+							</NavLink>
 					</span>
 				)}
 
