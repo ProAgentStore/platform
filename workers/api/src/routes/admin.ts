@@ -10,6 +10,7 @@ import { groupTerminalNodes } from "./terminals.js";
 import { relayConnected } from "../lib/runner-client.js";
 import { lastTerminal } from "../lib/coding-timeline.js";
 import type { Env } from "../types.js";
+import { externalUsage } from "../lib/external-usage.js";
 
 /** UTC "YYYY-MM-DD" for `daysAgo` days before today (0 = today). */
 function dayUtc(daysAgo: number): string {
@@ -118,6 +119,24 @@ adminRoutes.get("/connectors", async (c) => {
 adminRoutes.get("/overview", async (c) => {
 	await requireAdmin(c);
 	return c.json(await getOverviewStats(c.env));
+});
+
+/**
+ * GET /v1/admin/usage/external?days=30 — usage by people who are NOT the operator (#68).
+ *
+ * The focus bet is written in terms of "0 external users" and "10 external users on ONE agent",
+ * and the catalog audits, the browser epics and the third-party programme are all prioritised
+ * against it — but nothing could measure it. `/v1/usage` is per-account: it answers "what did I
+ * spend", never "is anyone else here". So the number the roadmap turns on was an assumption,
+ * and it stayed one long enough to go badly stale.
+ *
+ * `operatorUnknown` matters as much as the counts: if no operator can be identified, every row
+ * looks external and a caller must report "unknown" rather than a falsely encouraging number.
+ */
+adminRoutes.get("/usage/external", async (c) => {
+	await requireAdmin(c);
+	const days = Number(c.req.query("days")) || 30;
+	return c.json(await externalUsage(c.env, days));
 });
 
 /** GET /v1/admin/agents?search=&limit=&offset= — all agents (incl. drafts) + owner + instance count. */
