@@ -681,6 +681,61 @@ test.describe("ProAgentStore Console smoke", () => {
 		expect(mock.builderExecutes).toHaveLength(1);
 	});
 
+	/**
+	 * The instance tab bar actually switches tabs (#309).
+	 *
+	 * This was broken on main for hours and shipped to production: the tabs RENDERED, so the UI
+	 * looked correct in a screenshot, but clicking one did nothing — the only way to reach a tab
+	 * was a full page load. Three specs caught it, and all three named something else ("apply
+	 * tab", "coding terminal"), so the failure read as three unrelated feature regressions
+	 * rather than "navigation is dead". This one names the invariant.
+	 *
+	 * It walks EVERY tab the instance shows rather than a sampled one, because the cause was a
+	 * render loop above the router — the whole bar dies at once, so any single tab is as good a
+	 * probe as any other, and the cheap thing is to assert the property everywhere.
+	 */
+	test("every instance tab actually switches when clicked", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1");
+
+		// The bar is injected into the Layout header once the instance loads, so wait for a tab
+		// that always exists before enumerating — otherwise the list is empty and the walk below
+		// passes without clicking anything.
+		await expect(page.getByRole("button", { name: "Assistant", exact: true })).toBeVisible();
+		const labels = (await page.getByRole("banner").getByRole("button").allInnerTexts())
+			.map((t) => t.trim())
+			.filter(Boolean);
+		// Guard the guard: if the bar stops rendering, an empty list would make this vacuously pass.
+		expect(labels).toContain("Assistant");
+		expect(labels.length).toBeGreaterThan(2);
+
+		for (const label of labels) {
+			await page.getByRole("button", { name: label, exact: true }).click();
+			// The active tab is the one carrying the accent style. Polled, not read on the next
+			// tick: switching re-renders through the router, not synchronously in the handler.
+			await expect
+				.poll(async () => (await page.locator("button.bg-accent-soft").allInnerTexts()).map((t) => t.trim()))
+				.toContain(label);
+		}
+	});
+
+	/**
+	 * Deep-linking a tab and clicking to it must land in the same place. During #309 they diverged:
+	 * a full load of /instances/:id/apply worked perfectly while the click did nothing, which is
+	 * exactly why the bug survived manual checking — anyone who reloaded saw a working console.
+	 */
+	test("a tab reached by deep link matches the tab reached by clicking", async ({ page }) => {
+		await mockSignedInConsole(page);
+
+		await page.goto("/console/instances/inst-1/apply");
+		await expect(page.getByText(/2 jobs/)).toBeVisible();
+
+		await page.goto("/console/instances/inst-1");
+		await page.getByRole("button", { name: "Apply", exact: true }).click();
+		await expect(page.getByText(/2 jobs/)).toBeVisible();
+		expect(page.url()).toContain("/instances/inst-1/apply");
+	});
+
 	test("signed-in user can open an instance and see the apply tab", async ({
 		page,
 	}) => {
