@@ -427,7 +427,9 @@ function ItemCard({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMov
 				</div>
 			</button>
 
-			<div className="flex items-center gap-2 mt-2 pt-2 border-t border-line/60">
+			{/* Wraps: Ask is a fourth control on this row, and a kanban column is narrow enough
+			    that Approve + Retry + the column select already filled it. */}
+			<div className="flex flex-wrap items-center gap-2 mt-2 pt-2 border-t border-line/60">
 				{openable && <AskButton turns={item.threadTurns ?? 0} onAsk={() => onAsk(item.latestTaskId)} />}
 				{onApprove && (
 					<button
