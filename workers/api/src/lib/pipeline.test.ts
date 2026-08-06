@@ -12,7 +12,7 @@ vi.mock("./tool-registry.js", () => ({
 	runRegistryTool: (...args: unknown[]) => runRegistryTool(...args),
 }));
 
-import { attachAudit, auditStepEntry, collectReferences, executePipelineStep, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
+import { attachAudit, auditStepEntry, collectReferences, executePipelineStep, pipelineDefForKey, resolveInputs, resolveInputValue, stepReferenceError, validatePipeline, stepBind, type PipelineDef, type StepResult } from "./pipeline.js";
 import type { Env } from "../types.js";
 
 const env = {} as Env;
@@ -331,5 +331,32 @@ describe("attachAudit", () => {
 		const existing = [{ step: "prior", detail: "kept", at: "t" }];
 		const out = attachAudit([{ name: "A", audit: existing }], trail, "leads");
 		expect(out[0].audit).toBe(existing); // untouched
+	});
+});
+
+// #173 — a run must have ONE name. Lookup is by config key; the workflow logs `def.name`. When
+// those differ the same run appears under two spellings and the run named in a crash message
+// cannot be found in the runs table (`lead_finder` vs `lead-finder`, seen in production).
+describe("pipelineDefForKey — the config key is the pipeline's one name", () => {
+	it("rewrites a def whose name disagrees with the key it is filed under", () => {
+		const def = { name: "lead-finder", steps: [] };
+		expect(pipelineDefForKey("lead_finder", def).name).toBe("lead_finder");
+	});
+
+	it("leaves everything else on the def untouched", () => {
+		const def = { name: "sweep", steps: [{ tool: "geocode" }], sink: { collection: "leads" }, params: { city: {} } };
+		const out = pipelineDefForKey("lead_finder", def);
+		expect(out).toMatchObject({ steps: def.steps, sink: def.sink, params: def.params });
+	});
+
+	it("does not copy when the name already matches — same object, no churn", () => {
+		const def = { name: "lead_finder", steps: [] };
+		expect(pipelineDefForKey("lead_finder", def)).toBe(def);
+	});
+
+	it("does not mutate the caller's def", () => {
+		const def = { name: "lead-finder", steps: [] };
+		pipelineDefForKey("lead_finder", def);
+		expect(def.name).toBe("lead-finder");
 	});
 });

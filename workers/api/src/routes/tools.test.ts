@@ -256,8 +256,14 @@ describe("PUT /v1/instances/:id/pipelines/:name (attach a pipeline — the missi
 		const res = await req(app, env, "/v1/instances/i1/pipelines/lead_finder", { method: "PUT", body: JSON.stringify(DEF) }, await tok("u1"));
 		expect(res.status).toBe(200);
 		expect(await res.json()).toMatchObject({ ok: true, name: "lead_finder" });
-		// the def landed under config.pipelines.lead_finder — where loadPipeline reads it
-		expect(JSON.parse(written).pipelines.lead_finder.name).toBe("sweep");
+		// The def landed under config.pipelines.lead_finder — where loadPipeline reads it — and its
+		// own `name` was normalised to that key (#173). It said "sweep" on the way in: leaving it
+		// meant the runs table recorded `lead_finder` while every workflow log line said "sweep",
+		// so one run appeared under two names and neither could find the other.
+		// `written` is now just the `pipelines` subtree: the route patches that ONE config key
+		// via json_set instead of rewriting the whole blob, so a concurrent write to an unrelated
+		// key is no longer silently discarded (#231).
+		expect(JSON.parse(written).lead_finder.name).toBe("lead_finder");
 	});
 });
 

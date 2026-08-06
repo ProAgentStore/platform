@@ -7,7 +7,7 @@ import { patchInstanceConfig } from "../lib/instance-config.js";
 import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
 import { getConnector } from "../lib/connectors/registry.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
-import { validatePipeline, type PipelineDef } from "../lib/pipeline.js";
+import { pipelineDefForKey, validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import { listRuns } from "../lib/pipeline-runs.js";
 import { listConnections, createConnection, deleteConnection } from "../lib/connections.js";
 import { listDeliveries, replayDelivery } from "../lib/connection-deliveries.js";
@@ -203,13 +203,14 @@ toolRoutes.put("/:id/pipelines/:name", async (c) => {
 		cfg = {};
 	}
 	const pipelines = (cfg.pipelines && typeof cfg.pipelines === "object" ? cfg.pipelines : {}) as Record<string, unknown>;
-	pipelines[name] = def;
-	cfg.pipelines = pipelines;
-	const serialized = JSON.stringify(cfg);
+	// File it under the key AND make the def agree with the key, so a run has one name across the
+	// runs table, the board and every workflow log line (#173).
+	pipelines[name] = pipelineDefForKey(name, def as { name: string });
+	const serialized = JSON.stringify(pipelines);
 	if (serialized.length > 256_000) throw new HttpError(413, "Instance config too large");
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(serialized, instanceId, session.uid)
-		.run();
+	// Patch ONLY `config.pipelines` (#231). Rewriting the whole blob discarded any concurrent
+	// write to an unrelated key — settings, coding engines, board — silently, with no conflict.
+	await patchInstanceConfig(c.env, instanceId, session.uid, "pipelines", pipelines);
 	return c.json({ ok: true, name });
 });
 

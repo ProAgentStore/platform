@@ -407,6 +407,25 @@ export async function executePipelineStep(
  * editable via the instance-settings UI/MCP that already round-trips `config`). Returns the
  * def, or null if the instance/pipeline isn't found or the stored def is invalid.
  */
+/**
+ * Make a stored pipeline answer to exactly ONE name: the config key it is filed under (#173).
+ *
+ * Lookup has always been `config.pipelines[key]` — nothing resolves by `def.name`, and the prompt's
+ * "Available Pipelines" block is built from the keys — so the def's own `name` field was free to
+ * say something else, and did. The lead-finder instance was filed under `lead_finder` while its
+ * def said `lead-finder`, which split the audit trail in two: `pipeline_runs.pipeline` (and the
+ * board, and the console) recorded the KEY, while every log line the workflow writes —
+ * `pipeline.start`, the per-step errors, `pipeline "<name>" crashed` — used `def.name`. One run
+ * appeared under two spellings, so the run named in a crash message could not be found in the
+ * runs table, and a reader reasonably concluded there were two pipelines and a name-mismatch bug.
+ *
+ * Normalising at ATTACH time fixes it at the source rather than patching each log site, and keeps
+ * the key authoritative — which it already was for every decision that matters.
+ */
+export function pipelineDefForKey<T extends { name: string }>(key: string, def: T): T {
+	return def.name === key ? def : { ...def, name: key };
+}
+
 export async function loadPipeline(env: Env, instanceId: string, userId: string, name: string): Promise<PipelineDef | null> {
 	const row = await env.DB.prepare("SELECT config FROM agent_instances WHERE id = ?1 AND user_id = ?2").bind(instanceId, userId).first<{ config: string }>();
 	if (!row) return null;
