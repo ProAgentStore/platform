@@ -50,5 +50,9 @@ jobs:
         run: cd agents/coder/web && npx tsc --noEmit
       - name: Typecheck Console
         run: cd store/console && npx tsc --noEmit
+      # The admin app is only built inside deploy-host.yml, so before this a type error
+      # there passed CI, landed on main, and failed at DEPLOY instead of at PR time.
+      - name: Typecheck Admin
+        run: cd store/admin && npx tsc --noEmit
       - name: Build Console
         run: cd store/console && npx vite build
