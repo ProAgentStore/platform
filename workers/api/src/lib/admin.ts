@@ -1,5 +1,6 @@
 import type { Env, SessionPayload } from "../types.js";
 import { agentCapabilities } from "./agent-capabilities.js";
+import { relayConnected } from "./runner-client.js";
 import { registryTools } from "./tool-registry.js";
 
 // toolName → { connector, scope } for connector-provided registry tools (built once).
@@ -34,6 +35,10 @@ export interface AdminUserRow {
 	active_instances: number;
 	key_providers: string[];
 	spend30dMicros: number;
+	/** Moderation state (#34) — surfaced in the list so an operator can see who is blocked. */
+	suspended: boolean;
+	suspended_at: string | null;
+	suspended_reason: string | null;
 }
 
 interface RawUserRow {
@@ -49,6 +54,9 @@ interface RawUserRow {
 	active_instances: number;
 	key_providers: string | null;
 	spend_30d_micros: number;
+	suspended: number | null;
+	suspended_at: string | null;
+	suspended_reason: string | null;
 }
 
 function parseRoles(raw: string | null | undefined): string[] {
@@ -75,11 +83,14 @@ function shapeUser(r: RawUserRow): AdminUserRow {
 		active_instances: r.active_instances || 0,
 		key_providers: r.key_providers ? r.key_providers.split(",").filter(Boolean) : [],
 		spend30dMicros: r.spend_30d_micros || 0,
+		suspended: !!r.suspended,
+		suspended_at: r.suspended_at ?? null,
+		suspended_reason: r.suspended_reason ?? null,
 	};
 }
 
 const USER_SELECT = `SELECT u.id, u.github_login, u.github_name, u.avatar_url, u.roles, u.subscription_status,
-	        u.created_at, u.updated_at,
+	        u.created_at, u.updated_at, u.suspended, u.suspended_at, u.suspended_reason,
 	        (SELECT COUNT(*) FROM agents a WHERE a.owner_id = u.id) AS agents_owned,
 	        (SELECT COUNT(*) FROM agent_instances i WHERE i.user_id = u.id AND i.status = 'active') AS active_instances,
 	        (SELECT GROUP_CONCAT(k.provider) FROM user_api_keys k WHERE k.user_id = u.id) AS key_providers,
@@ -134,44 +145,92 @@ export interface AdminAgentRow {
 	visibility: string;
 	status: string;
 	created_at: string;
+	updated_at: string;
+	owner_id: string;
 	owner_login: string | null;
 	instances: number;
 	/** Distinct connectors this agent uses (derived from its declared capability tools). */
 	connectors: string[];
+	/**
+	 * Capability SUMMARY (surfaces/runtime/workflow) — deliberately not the full `tools`
+	 * array, which on a 200-row page would dominate the payload. The complete tool list
+	 * is on the detail endpoint.
+	 */
+	capabilities: { surfaces: string[]; runtime: string | null; workflow: string | null };
 }
 
+export interface AdminAgentFilters {
+	search?: string;
+	/** 'draft' | 'published' | 'unlisted' */
+	visibility?: string;
+	/** 'inactive' | 'active' | 'error' */
+	status?: string;
+	/** Owner by user id OR github_login — an operator has the login, rarely the uid. */
+	owner?: string;
+	limit?: number;
+	offset?: number;
+}
+
+/**
+ * Build the shared WHERE for the agents list. Returned as a fragment + binds so the
+ * list and the COUNT run the SAME predicate — when they drifted, pagination lied
+ * (page 2 of a filtered list showed a total from the unfiltered one).
+ */
+function agentWhere(opts: AdminAgentFilters): { where: string; binds: unknown[] } {
+	const clauses: string[] = [];
+	const binds: unknown[] = [];
+	const search = opts.search?.trim();
+	if (search) {
+		const like = `%${search}%`;
+		clauses.push("(a.slug LIKE ? OR a.name LIKE ? OR u.github_login LIKE ?)");
+		binds.push(like, like, like);
+	}
+	if (opts.visibility) {
+		clauses.push("a.visibility = ?");
+		binds.push(opts.visibility);
+	}
+	if (opts.status) {
+		clauses.push("a.status = ?");
+		binds.push(opts.status);
+	}
+	if (opts.owner) {
+		clauses.push("(a.owner_id = ? OR u.github_login = ?)");
+		binds.push(opts.owner, opts.owner);
+	}
+	return { where: clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "", binds };
+}
+
+/**
+ * All agents across all tenants, INCLUDING drafts and unlisted — the public
+ * /v1/agents deliberately shows only published ones, so an operator had no way to
+ * see a broken draft a creator was complaining about.
+ */
 export async function listAgents(
 	env: Env,
-	opts: { search?: string; limit?: number; offset?: number } = {},
+	opts: AdminAgentFilters = {},
 ): Promise<{ agents: AdminAgentRow[]; total: number }> {
 	const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
 	const offset = Math.max(opts.offset ?? 0, 0);
-	const search = opts.search?.trim();
-	let sql = `SELECT a.id, a.slug, a.name, a.category, a.model, a.visibility, a.status, a.created_at, a.config,
+	const { where, binds: whereBinds } = agentWhere(opts);
+	const from = " FROM agents a LEFT JOIN users u ON u.id = a.owner_id";
+	const sql = `SELECT a.id, a.slug, a.name, a.category, a.model, a.visibility, a.status,
+	        a.created_at, a.updated_at, a.owner_id, a.config,
 	        u.github_login AS owner_login,
 	        (SELECT COUNT(*) FROM agent_instances i WHERE i.agent_id = a.id AND i.status = 'active') AS instances
-	 FROM agents a LEFT JOIN users u ON u.id = a.owner_id`;
-	let countSql = "SELECT COUNT(*) AS n FROM agents a";
-	const binds: unknown[] = [];
-	const cbinds: unknown[] = [];
-	if (search) {
-		const like = `%${search}%`;
-		const cond = " WHERE a.slug LIKE ? OR a.name LIKE ? OR u.github_login LIKE ?";
-		sql += cond;
-		countSql = "SELECT COUNT(*) AS n FROM agents a LEFT JOIN users u ON u.id = a.owner_id" + cond;
-		binds.push(like, like, like);
-		cbinds.push(like, like, like);
-	}
-	sql += " ORDER BY a.created_at DESC LIMIT ? OFFSET ?";
-	binds.push(limit, offset);
+	${from}${where} ORDER BY a.created_at DESC LIMIT ? OFFSET ?`;
+	const countSql = `SELECT COUNT(*) AS n${from}${where}`;
 	const [rows, count] = await Promise.all([
-		env.DB.prepare(sql).bind(...binds).all<AdminAgentRow & { config: string | null }>(),
-		env.DB.prepare(countSql).bind(...cbinds).first<{ n: number }>(),
+		env.DB.prepare(sql).bind(...whereBinds, limit, offset).all<AdminAgentRow & { config: string | null }>(),
+		env.DB.prepare(countSql).bind(...whereBinds).first<{ n: number }>(),
 	]);
 	const agents = (rows.results ?? []).map((r) => {
 		const caps = agentCapabilities({ slug: r.slug, category: r.category, config: r.config });
 		const { config: _drop, ...rest } = r;
-		return { ...rest, connectors: connectorsForTools(caps.tools) };
+		return {
+			...rest,
+			connectors: connectorsForTools(caps.tools),
+			capabilities: { surfaces: caps.surfaces ?? [], runtime: caps.runtime ?? null, workflow: caps.workflow ?? null },
+		};
 	});
 	return { agents, total: count?.n ?? 0 };
 }
@@ -182,12 +241,17 @@ export interface AdminAgentDetail {
 	/** The agent's connector tools, grouped by connector, with each tool's scope. */
 	connectorTools: Array<{ connector: string; tools: Array<{ name: string; scope: string }> }>;
 	instances: Array<{ id: string; owner_login: string | null; status: string; created_at: string; consents: Array<{ connector: string; scope: string }> }>;
+	/** Subscriber counts: every instance ever created vs the ones still active. */
+	subscribers: { total: number; active: number };
+	/** Newest agent_events across ALL of this agent's instances — "is it actually being used, and does it work". */
+	recentActivity: Array<{ id: string; ts: number; instance_id: string | null; source: string; level: string; event: string; message: string | null }>;
 }
 
 /** Full admin detail for one agent (by id or slug), incl. its connectors + instances' consents. */
 export async function getAgentDetail(env: Env, idOrSlug: string): Promise<AdminAgentDetail | null> {
 	const raw = await env.DB.prepare(
-		`SELECT a.id, a.slug, a.name, a.category, a.model, a.visibility, a.status, a.created_at, a.config,
+		`SELECT a.id, a.slug, a.name, a.category, a.model, a.visibility, a.status,
+		        a.created_at, a.updated_at, a.owner_id, a.config,
 		        u.github_login AS owner_login,
 		        (SELECT COUNT(*) FROM agent_instances i WHERE i.agent_id = a.id AND i.status = 'active') AS instances
 		 FROM agents a LEFT JOIN users u ON u.id = a.owner_id WHERE a.id = ?1 OR a.slug = ?1`,
@@ -225,12 +289,26 @@ export async function getAgentDetail(env: Env, idOrSlug: string): Promise<AdminA
 		consentsByInstance.set(r.instance_id, arr);
 	}
 
+	// Recent activity across EVERY instance of this agent — the operator question is
+	// "is this agent working for anyone", which no per-tenant trace can answer.
+	const activity = (await env.DB.prepare(
+		`SELECT e.id, e.ts, e.instance_id, e.source, e.level, e.event, e.message
+		 FROM agent_events e JOIN agent_instances i ON i.id = e.instance_id
+		 WHERE i.agent_id = ?1 ORDER BY e.ts DESC LIMIT 25`,
+	).bind(raw.id).all<AdminAgentDetail["recentActivity"][number]>().catch(() => ({ results: [] }))).results ?? [];
+
 	const { config: _c, ...agentRow } = raw;
 	return {
-		agent: { ...agentRow, connectors: connectorsForTools(tools) },
+		agent: {
+			...agentRow,
+			connectors: connectorsForTools(tools),
+			capabilities: { surfaces: caps.surfaces ?? [], runtime: caps.runtime ?? null, workflow: caps.workflow ?? null },
+		},
 		capabilities: { surfaces: caps.surfaces ?? [], runtime: caps.runtime ?? null, workflow: caps.workflow ?? null, tools },
 		connectorTools,
 		instances: instRows.map((i) => ({ ...i, consents: consentsByInstance.get(i.id) ?? [] })),
+		subscribers: { total: instRows.length, active: instRows.filter((i) => i.status === "active").length },
+		recentActivity: activity,
 	};
 }
 
@@ -238,28 +316,112 @@ export interface AdminInstanceRow {
 	id: string;
 	agent_id: string;
 	agent_name: string | null;
+	agent_slug: string | null;
+	user_id: string;
 	owner_login: string | null;
+	/** The subscriber's own name for this instance (config.displayName), if they renamed it. */
+	display_name: string | null;
 	status: string;
 	created_at: string;
+	updated_at: string;
+	/** Machines that have ever registered a runner for this instance. */
+	runtime_nodes: number;
+	last_seen_at: string | null;
+	/**
+	 * Is a runner WebSocket connected RIGHT NOW (RelayDO, authoritative)?
+	 * `null` = not checked, either because the instance has no registered runner or
+	 * because the per-request live-check budget was exhausted. Never infer "offline"
+	 * from `null` — the DB `status` column is not cleared on disconnect, which is the
+	 * exact lie this field exists to replace.
+	 */
+	runtimeConnected: boolean | null;
 }
+
+export interface AdminInstanceFilters {
+	/** Agent id or slug. */
+	agent?: string;
+	/** Owner by user id OR github_login. */
+	owner?: string;
+	/** 'active' | 'paused' | 'canceled' */
+	status?: string;
+	limit?: number;
+	offset?: number;
+	/** Skip the RelayDO live checks (they cost one DO round-trip per candidate row). */
+	skipLive?: boolean;
+}
+
+/**
+ * A live check is one RelayDO round-trip. A 200-row page of runner-backed instances
+ * would fan out 200 of them, so the budget is capped and the overflow reports `null`
+ * ("unknown") rather than a fabricated `false`. Mirrors the cap in /v1/admin/terminals.
+ */
+const LIVE_CHECK_BUDGET = 50;
 
 export async function listInstances(
 	env: Env,
-	opts: { limit?: number; offset?: number } = {},
+	opts: AdminInstanceFilters = {},
 ): Promise<{ instances: AdminInstanceRow[]; total: number }> {
 	const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
 	const offset = Math.max(opts.offset ?? 0, 0);
+
+	const clauses: string[] = [];
+	const binds: unknown[] = [];
+	if (opts.agent) {
+		clauses.push("(i.agent_id = ? OR a.slug = ?)");
+		binds.push(opts.agent, opts.agent);
+	}
+	if (opts.owner) {
+		clauses.push("(i.user_id = ? OR u.github_login = ?)");
+		binds.push(opts.owner, opts.owner);
+	}
+	if (opts.status) {
+		clauses.push("i.status = ?");
+		binds.push(opts.status);
+	}
+	const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+	const from = ` FROM agent_instances i
+			 LEFT JOIN agents a ON a.id = i.agent_id
+			 LEFT JOIN users u ON u.id = i.user_id`;
+
 	const [rows, count] = await Promise.all([
 		env.DB.prepare(
-			`SELECT i.id, i.agent_id, a.name AS agent_name, u.github_login AS owner_login, i.status, i.created_at
-			 FROM agent_instances i
-			 LEFT JOIN agents a ON a.id = i.agent_id
-			 LEFT JOIN users u ON u.id = i.user_id
-			 ORDER BY i.created_at DESC LIMIT ? OFFSET ?`,
-		).bind(limit, offset).all<AdminInstanceRow>(),
-		env.DB.prepare("SELECT COUNT(*) AS n FROM agent_instances").first<{ n: number }>(),
+			`SELECT i.id, i.agent_id, a.name AS agent_name, a.slug AS agent_slug, i.user_id,
+			        u.github_login AS owner_login, i.status, i.created_at, i.updated_at,
+			        json_extract(i.config, '$.displayName') AS display_name,
+			        (SELECT COUNT(*) FROM instance_runtime_nodes n WHERE n.instance_id = i.id) AS runtime_nodes,
+			        (SELECT MAX(n.last_seen_at) FROM instance_runtime_nodes n WHERE n.instance_id = i.id) AS last_seen_at
+			 ${from}${where} ORDER BY i.created_at DESC LIMIT ? OFFSET ?`,
+		).bind(...binds, limit, offset).all<Omit<AdminInstanceRow, "runtimeConnected">>(),
+		env.DB.prepare(`SELECT COUNT(*) AS n${from}${where}`).bind(...binds).first<{ n: number }>(),
 	]);
-	return { instances: rows.results ?? [], total: count?.n ?? 0 };
+
+	const instances: AdminInstanceRow[] = (rows.results ?? []).map((r) => ({ ...r, runtimeConnected: null }));
+	if (!opts.skipLive) {
+		let budget = LIVE_CHECK_BUDGET;
+		await Promise.all(
+			instances.map(async (inst) => {
+				if (!inst.runtime_nodes || budget-- <= 0) return; // no runner ever registered, or budget spent → stays null
+				inst.runtimeConnected = await anyRunnerConnected(env, inst.id).catch(() => false);
+			}),
+		);
+	}
+	return { instances, total: count?.n ?? 0 };
+}
+
+/**
+ * Is ANY of this instance's registered machines connected right now? Asks the RelayDO
+ * (which holds the socket) per node, not `instance_runtime_nodes.status` — that column
+ * is never cleared on an unclean disconnect, so it reads "online" for machines that
+ * have been off for days.
+ */
+export async function anyRunnerConnected(env: Env, instanceId: string): Promise<boolean> {
+	const { results } = await env.DB.prepare(
+		"SELECT DISTINCT runner_node FROM instance_runtime_nodes WHERE instance_id = ?1",
+	).bind(instanceId).all<{ runner_node: string | null }>();
+	const nodes = (results ?? []).map((r) => r.runner_node).filter((n): n is string => !!n);
+	if (!nodes.length) return relayConnected(env, instanceId, null);
+	const checks = await Promise.all(nodes.map((n) => relayConnected(env, instanceId, n).catch(() => false)));
+	return checks.some(Boolean);
 }
 
 // ── Overview stats (one round-trip for the dashboard header) ────────────────

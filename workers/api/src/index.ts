@@ -36,6 +36,7 @@ import { usageRoutes } from "./routes/usage.js";
 import { triggerRoutes } from "./routes/triggers.js";
 import { adminRoutes } from "./routes/admin.js";
 import { adminInstanceDetailRoutes } from "./routes/admin-instance-detail.js";
+import { adminModerationRoutes } from "./routes/admin-moderation.js";
 import { adminTraceRoutes } from "./routes/admin-trace.js";
 import { adminCodingSessionRoutes } from "./routes/admin-coding-session.js";
 import { adminMcpAuditRoutes } from "./routes/admin-mcp-audit.js";
@@ -156,6 +157,7 @@ app.route("/v1/public", publicRoutes); // /v1/public/agents/:id, /agents/:id/try
 app.route("/v1/billing", billingRoutes);
 app.route("/v1/admin", adminRoutes); // operator portal: /me, /audit (+ users, agents, usage, moderation)
 app.route("/v1/admin", adminInstanceDetailRoutes); // /instances/:id/detail
+app.route("/v1/admin", adminModerationRoutes); // moderation: suspend/roles/keys, unpublish/delete, instance cancel
 app.route("/v1/admin", adminTraceRoutes); // /trace/:instanceId
 app.route("/v1/admin", adminCodingSessionRoutes); // /coding-sessions/:sid
 app.route("/v1/admin", adminMcpAuditRoutes); // /mcp-audit

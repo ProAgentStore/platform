@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { HttpError, requireAdmin } from "../lib/auth.js";
+import { relayConnected } from "../lib/runner-client.js";
 import type { Env } from "../types.js";
 
 /**
@@ -120,6 +121,18 @@ adminInstanceDetailRoutes.get("/instances/:id/detail", async (c) => {
 		}>(),
 	]);
 
+	// LIVE runtime status. `instance_runtime_nodes.status` is never cleared on an
+	// unclean disconnect, so it reads "online" for machines that have been off for
+	// days — an operator debugging "why is nothing running" was being told the runner
+	// was fine. The RelayDO holds the actual socket, so ask it (issue #31 AC).
+	const nodeRows = nodes.results ?? [];
+	const runtimeNodes = await Promise.all(
+		nodeRows.map(async (n) => ({
+			...n,
+			connected: await relayConnected(c.env, id, n.runner_node).catch(() => false),
+		})),
+	);
+
 	return c.json({
 		instance: {
 			id: instance.id,
@@ -133,7 +146,9 @@ adminInstanceDetailRoutes.get("/instances/:id/detail", async (c) => {
 			agent_slug: instance.agent_slug,
 			owner_login: instance.owner_login,
 		},
-		runtimeNodes: nodes.results ?? [],
+		/** True when at least one registered machine has a live relay socket right now. */
+		runtimeConnected: runtimeNodes.some((n) => n.connected),
+		runtimeNodes,
 		boardItems: board.results ?? [],
 		consents: consents.results ?? [],
 		recentErrors: errors.results ?? [],

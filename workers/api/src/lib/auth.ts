@@ -14,6 +14,11 @@ export class HttpError extends Error {
 /**
  * Extract and verify Bearer token. Throws HttpError(401) if missing/invalid.
  * Returns the session payload.
+ *
+ * Also the single enforcement point for operator SUSPENSION (issue #34): a suspended
+ * account is rejected here, so every authenticated route is covered at once and the
+ * next route added cannot forget the check. Revoking the token would not work — a
+ * session lives 30 days and the user can simply sign in again for a fresh one.
  */
 export async function requireUser(
 	c: Context<{ Bindings: Env }>,
@@ -27,7 +32,30 @@ export async function requireUser(
 	if (!session) {
 		throw new HttpError(401, "Invalid or expired token");
 	}
+	if (await isSuspended(c, session.uid)) {
+		throw new HttpError(403, "Account suspended");
+	}
 	return session;
+}
+
+/**
+ * Live suspension lookup — one indexed PK read. Deliberately NOT cached: an operator
+ * suspending an account that is actively doing damage needs it to stop now, not after
+ * a TTL, and this is the whole point of the lever.
+ *
+ * FAILS OPEN on a DB error. A D1 blip must not 403 the entire platform; the failure
+ * mode of a moderation gate briefly not applying is far smaller than a total outage.
+ */
+async function isSuspended(c: Context<{ Bindings: Env }>, uid: string): Promise<boolean> {
+	try {
+		if (!c.env?.DB) return false;
+		const row = await c.env.DB.prepare("SELECT suspended FROM users WHERE id = ?1")
+			.bind(uid)
+			.first<{ suspended: number | null }>();
+		return !!row?.suspended;
+	} catch {
+		return false;
+	}
 }
 
 /**

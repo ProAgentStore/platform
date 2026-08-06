@@ -141,11 +141,19 @@ adminRoutes.get("/usage/external", async (c) => {
 	return c.json(await externalUsage(c.env, days, session?.uid));
 });
 
-/** GET /v1/admin/agents?search=&limit=&offset= — all agents (incl. drafts) + owner + instance count. */
+/**
+ * GET /v1/admin/agents?search=&visibility=&status=&owner=&limit=&offset= — ALL agents
+ * across all tenants including drafts and unlisted ones (issue #31). The public
+ * /v1/agents shows only published agents, so a creator's broken draft was invisible to
+ * the operator who had to debug it. `owner` accepts a user id or a github_login.
+ */
 adminRoutes.get("/agents", async (c) => {
 	await requireAdmin(c);
 	return c.json(await listAgents(c.env, {
 		search: c.req.query("search") || undefined,
+		visibility: c.req.query("visibility") || undefined,
+		status: c.req.query("status") || undefined,
+		owner: c.req.query("owner") || undefined,
 		limit: Number(c.req.query("limit")) || undefined,
 		offset: Number(c.req.query("offset")) || undefined,
 	}));
@@ -159,12 +167,21 @@ adminRoutes.get("/agents/:id", async (c) => {
 	return c.json(detail);
 });
 
-/** GET /v1/admin/instances?limit=&offset= — all subscriptions across tenants. */
+/**
+ * GET /v1/admin/instances?agent=&owner=&status=&limit=&offset=&live=0 — all
+ * subscriptions across tenants (issue #31). `agent` takes an id or slug, `owner` a
+ * user id or github_login. `runtimeConnected` is a LIVE RelayDO check (capped; see
+ * listInstances) — pass `live=0` to skip it when only the DB rows are wanted.
+ */
 adminRoutes.get("/instances", async (c) => {
 	await requireAdmin(c);
 	return c.json(await listInstances(c.env, {
+		agent: c.req.query("agent") || undefined,
+		owner: c.req.query("owner") || undefined,
+		status: c.req.query("status") || undefined,
 		limit: Number(c.req.query("limit")) || undefined,
 		offset: Number(c.req.query("offset")) || undefined,
+		skipLive: c.req.query("live") === "0",
 	}));
 });
 

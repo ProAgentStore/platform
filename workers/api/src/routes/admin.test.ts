@@ -41,6 +41,9 @@ function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allow
 		if (sql.includes("FROM error_log")) return { results: opts.errorRows ?? [] };
 		return { results: [] }; // agents/instances/keys/errors sub-queries in getUserDetail
 	};
+	// Every prepared statement + its binds, so a test can assert that a request's query
+	// params actually reached the SQL rather than being silently dropped by the handler.
+	const queries: Array<{ sql: string; binds: unknown[] }> = [];
 	const env = {
 		SESSION_SIGNING_KEY: TEST_SECRET,
 		ADMIN_ALLOWLIST: opts.allowlist,
@@ -50,7 +53,8 @@ function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allow
 				const first = async () => firstFor(sql);
 				const all = async () => allFor(sql);
 				return {
-					bind() {
+					bind(...binds: unknown[]) {
+						queries.push({ sql, binds });
 						return { first, all, run: async () => ({}) };
 					},
 					first,
@@ -59,7 +63,7 @@ function testApp(opts: { dbRoles?: string | null; dbLogin?: string | null; allow
 			},
 		},
 	};
-	return { app, env };
+	return { app, env, queries };
 }
 
 async function token(uid: string, roles: string[]) {
@@ -213,6 +217,22 @@ describe("new operator views (#31/#33)", () => {
 		expect(b.agent.slug).toBe("coder");
 		expect(b.agent.connectors).toContain("github");
 		expect(b.connectorTools[0].connector).toBe("github");
+	});
+
+	it("GET /v1/admin/agents passes visibility/status/owner filters through to the query", async () => {
+		// A handler that reads only `search` still returns 200 with plausible-looking data,
+		// so the filter silently doing nothing is invisible without asserting the binds.
+		const { app, env, queries } = testApp();
+		await req(app, env, "/v1/admin/agents?visibility=draft&status=error&owner=alice&limit=10&offset=20", await token("u1", ["admin"]));
+		const list = queries.find((q) => q.sql.includes("ORDER BY a.created_at"));
+		expect(list?.binds).toEqual(["draft", "error", "alice", "alice", 10, 20]);
+	});
+
+	it("GET /v1/admin/instances passes agent/owner/status filters through to the query", async () => {
+		const { app, env, queries } = testApp();
+		await req(app, env, "/v1/admin/instances?agent=coder&owner=alice&status=canceled&live=0", await token("u1", ["admin"]));
+		const list = queries.find((q) => q.sql.includes("ORDER BY i.created_at"));
+		expect(list?.binds.slice(0, 5)).toEqual(["coder", "coder", "alice", "alice", "canceled"]);
 	});
 
 	it("GET /v1/admin/instances → 403 non-admin, list for admin", async () => {
