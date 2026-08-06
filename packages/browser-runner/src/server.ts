@@ -399,12 +399,33 @@ async function route(runner: LocalRunner, req: IncomingMessage, res: ServerRespo
 	return json(res, 404, { error: "Not found" });
 }
 
+/**
+ * Authorize a request to the local runner (#245).
+ *
+ * This surface drives a coding CLI that `pags up` launches with
+ * `--dangerously-skip-permissions` / `--sandbox danger-full-access`, so "who may POST here" is
+ * the whole security boundary. Two things were the wrong way round:
+ *
+ * 1. **No token used to mean ALLOW.** `pags up` always generates one, so that path was safe —
+ *    but `pags-browser-runner` run directly (its own --help documents this) passes
+ *    `token: undefined`, and served the entire surface unauthenticated. Now it fails CLOSED;
+ *    the standalone entrypoint generates a token instead of starting open.
+ *
+ * 2. **A browser could reach it.** Binding to loopback is not isolation: a page the user is
+ *    visiting cannot READ a cross-origin response, but it can still SEND the POST, and the
+ *    server sets no CORS headers and did no Origin check. The token already made that
+ *    unguessable — but nothing legitimate that calls this runner is a browser (the cloud
+ *    dispatches over the relay; the CLI calls it directly), and neither sends `Origin`. So the
+ *    presence of that header is by itself proof the caller is a web page, and is refused before
+ *    the token is even considered. Also closes DNS-rebinding, which loopback does not.
+ */
 function authorize(req: IncomingMessage, config: RunnerConfig): boolean {
+	if (req.headers.origin) return false;
 	const token = config.token;
 	if (config.instanceId && req.headers["x-pags-instance-id"] !== config.instanceId) {
 		return false;
 	}
-	if (!token) return true;
+	if (!token) return false;
 	const auth = req.headers.authorization || "";
 	const headerToken = req.headers["x-pags-runner-token"];
 	return auth === `Bearer ${token}` || headerToken === token;

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { startRunnerServer } from "./server.js";
 import type { RunnerConfig } from "./types.js";
+import { randomUUID } from "node:crypto";
 
 // Resilience: a stray error in any runtime must NOT take the whole runner down —
 // that drops the tunnel and forces the user to restart `pags up` (and lose their
@@ -34,7 +35,11 @@ function configFromArgs(): RunnerConfig {
 		host: arg("--host", process.env.PAGS_RUNNER_HOST || "127.0.0.1") || "127.0.0.1",
 		port: Number(arg("--port", process.env.PAGS_RUNNER_PORT || "49171")),
 		dataDir,
-		token: arg("--token", process.env.PAGS_RUNNER_TOKEN),
+		// Never start unauthenticated (#245). This surface drives a coding CLI with permissions
+		// skipped, and `authorize` now fails closed — so a missing token would make the runner
+		// answer nothing rather than answer everyone. Generate one and print it, mirroring what
+		// `pags runner connect` has always done.
+		token: arg("--token", process.env.PAGS_RUNNER_TOKEN) || `pags_runner_${randomUUID()}`,
 		instanceId: arg("--instance-id", process.env.PAGS_INSTANCE_ID),
 		headless: flag("--headless") || process.env.PAGS_RUNNER_HEADLESS === "1",
 	};
