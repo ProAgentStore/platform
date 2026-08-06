@@ -82,7 +82,7 @@ export default function TraceView() {
 				<select aria-label="Number of rows" value={limit} onChange={(e) => setLimit(e.target.value)} className="!w-auto text-sm">
 					{LIMITS.map((l) => <option key={l} value={l}>{l} rows</option>)}
 				</select>
-				<input placeholder="Filter by trace_id…" value={traceId} onChange={(e) => setTraceId(e.target.value)} className="!w-auto flex-1 min-w-[180px] text-sm font-mono" />
+				<input aria-label="Filter events by trace id" placeholder="Filter by trace_id…" value={traceId} onChange={(e) => setTraceId(e.target.value)} className="!w-auto flex-1 min-w-[180px] text-sm font-mono" />
 			</div>
 
 			{err ? <ErrorBox message={err} /> : !events ? <Loading /> : !events.length ? (

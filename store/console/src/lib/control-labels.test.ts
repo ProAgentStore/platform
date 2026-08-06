@@ -39,25 +39,25 @@ function tsxFiles(dir: string, out: string[] = []): string[] {
  * fixed wholesale, so the remainder is a ratchet rather than a list that goes stale.
  *
  * Lower this when you fix some. Never raise it.
- */
-const PLACEHOLDER_ONLY_BUDGET = { console: 26, admin: 11 };
-
-/**
- * The one file this sweep does not cover, and why.
  *
- * `TmuxTab.tsx`'s backend `<select>` (which CREATES terminal targets) is genuinely unlabeled,
- * but the file had uncommitted work in a concurrent session when #292 was fixed, and losing
- * someone's edits costs more than an unnamed control. Delete this entry and add the
- * `aria-label` in the same commit as the next change to that file.
+ * #301 moved it 26 → 16 for the console and 11 → 0 for the admin. The admin reached zero because
+ * every one of its eleven was the same thing — a list-page filter box ("Search message…", "Owner
+ * (login or id)") — and a filter is exactly where the placeholder-as-name failure bites: the name
+ * disappears at the moment you have typed a query and are trying to work out which of four
+ * identical boxes you are in. `admin: 0` is therefore asserted as EMPTY below rather than as a
+ * budget, with the offender list in the message; there is no reason for the next one to be added.
+ *
+ * The sixteen left in the console are a genuine backlog, not noise. The ones fixed here were
+ * picked because they carry consequences: the agent's needs_input answer box (someone types a
+ * legal name into it), the ticket-question box, and the four repeated custom-surface fields where
+ * the placeholder never distinguished one ROW from another anyway.
  */
-const DEFERRED = new Set(["tabs/TmuxTab.tsx"]);
+const PLACEHOLDER_ONLY_BUDGET = { console: 16 };
 
 const format = (root: string, findings: { file: string; line: number; excerpt: string }[]) => findings.map((f) => `  ${relative(root, f.file)}:${f.line}  ${f.excerpt}`).join("\n");
 
 function sweep(root: string, pick: typeof findUnlabeledControls) {
-	return tsxFiles(root)
-		.filter((file) => !DEFERRED.has(relative(root, file)))
-		.flatMap((file) => pick(readFileSync(file, "utf8")).map((c) => ({ file, line: c.line, excerpt: c.excerpt })));
+	return tsxFiles(root).flatMap((file) => pick(readFileSync(file, "utf8")).map((c) => ({ file, line: c.line, excerpt: c.excerpt })));
 }
 
 describe("every form control in the console has an accessible name", () => {
@@ -71,9 +71,16 @@ describe("every form control in the console has an accessible name", () => {
 		expect(found, `unlabeled controls:\n${format(ADMIN_SRC, found)}`).toEqual([]);
 	});
 
-	it("placeholder-only controls do not increase", () => {
-		expect(sweep(CONSOLE_SRC, findPlaceholderOnlyControls).length).toBeLessThanOrEqual(PLACEHOLDER_ONLY_BUDGET.console);
-		expect(sweep(ADMIN_SRC, findPlaceholderOnlyControls).length).toBeLessThanOrEqual(PLACEHOLDER_ONLY_BUDGET.admin);
+	it("placeholder-only controls in the console do not increase", () => {
+		const found = sweep(CONSOLE_SRC, findPlaceholderOnlyControls);
+		expect(found.length, `budget is ${PLACEHOLDER_ONLY_BUDGET.console}; found ${found.length}:\n${format(CONSOLE_SRC, found)}\n\nGive the new control an aria-label (or aria-labelledby pointing at text already on screen). Do NOT raise the budget.`).toBeLessThanOrEqual(PLACEHOLDER_ONLY_BUDGET.console);
+	});
+
+	it("store/admin has no placeholder-only control at all", () => {
+		// A budget of zero is just an assertion, so state it as one — the offender list is far
+		// more useful than "expected 1 to be <= 0", and there is no backlog left to excuse.
+		const found = sweep(ADMIN_SRC, findPlaceholderOnlyControls);
+		expect(found, `placeholder-only controls:\n${format(ADMIN_SRC, found)}`).toEqual([]);
 	});
 });
 

@@ -84,6 +84,7 @@ export default function Audit() {
 					value={actor}
 					onChange={(e) => setActor(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && apply()}
+					aria-label="Filter audit entries by actor user id"
 					placeholder="Actor user id"
 					className="!w-auto min-w-[15rem] text-sm"
 				/>

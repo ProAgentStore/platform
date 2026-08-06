@@ -338,7 +338,7 @@ export default function AgentDetail() {
 						{thinking && <div className="text-muted text-sm flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-accent animate-pulse" />Thinking...</div>}
 					</div>
 					<div className="flex gap-1.5 pt-3 border-t border-line shrink-0">
-						<input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") sendMessage(); }} placeholder="Send a message..." className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-sm" />
+						<input aria-label="Message this agent" value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => { if (e.key === "Enter") sendMessage(); }} placeholder="Send a message..." className="flex-1 bg-panel border border-line rounded-xl px-4 py-2.5 text-sm" />
 						<button type="button" onClick={sendMessage} className="px-4 py-2.5 bg-accent text-white rounded-xl font-bold text-sm hover:bg-accent-hover">Send</button>
 					</div>
 				</div>
@@ -479,13 +479,18 @@ export default function AgentDetail() {
 						<div className="flex flex-col gap-3">
 							{surfaces.map((s, i) => (
 								<div key={s.clientId} className="border border-line rounded-lg p-2.5 flex flex-col gap-1.5">
+									{/* Names carry the ROW, not just the field. Four identical placeholder-named
+									    boxes repeated per surface announce as four "id"s and four "Label"s with
+									    nothing to tell the rows apart, and the placeholders vanish the moment
+									    you type — which is precisely when you need to know which row you are in.
+									    The icon box's placeholder is an emoji, so it never named anything. */}
 									<div className="flex gap-2">
-										<input value={s.id} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. notes)" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
-										<input value={s.label} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
-										<input value={s.icon || ""} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, icon: e.target.value } : x))} placeholder="🧩" className="w-12 bg-paper border border-line rounded px-2 py-1 text-sm text-center" />
+										<input aria-label={`Surface ${i + 1} — id`} value={s.id} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, id: e.target.value } : x))} placeholder="id (e.g. notes)" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
+										<input aria-label={`Surface ${i + 1} — label`} value={s.label} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} placeholder="Label" className="flex-1 bg-paper border border-line rounded px-2 py-1 text-sm" />
+										<input aria-label={`Surface ${i + 1} — icon`} value={s.icon || ""} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, icon: e.target.value } : x))} placeholder="🧩" className="w-12 bg-paper border border-line rounded px-2 py-1 text-sm text-center" />
 										<button type="button" onClick={() => setSurfaces(cs => cs.filter((_, j) => j !== i))} className="text-red text-xs px-1.5">Remove</button>
 									</div>
-									<input value={s.bundleUrl} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, bundleUrl: e.target.value } : x))} placeholder="https://…/surface.js" className="bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
+									<input aria-label={`Surface ${i + 1} — bundle URL`} value={s.bundleUrl} onChange={e => setSurfaces(cs => cs.map((x, j) => j === i ? { ...x, bundleUrl: e.target.value } : x))} placeholder="https://…/surface.js" className="bg-paper border border-line rounded px-2 py-1 text-sm font-mono" />
 								</div>
 							))}
 							{surfaces.length === 0 && <div className="text-xs text-muted-soft">No custom surfaces yet — add one to ship your own UI.</div>}

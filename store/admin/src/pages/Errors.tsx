@@ -72,7 +72,7 @@ export default function Errors() {
 					<option value="">All sources</option>
 					{sources.map((s) => <option key={s} value={s}>{s}</option>)}
 				</select>
-				<input placeholder="Search message…" value={q} onChange={(e) => setQ(e.target.value)} className="!w-auto flex-1 min-w-[160px] text-sm" />
+				<input aria-label="Search error messages" placeholder="Search message…" value={q} onChange={(e) => setQ(e.target.value)} className="!w-auto flex-1 min-w-[160px] text-sm" />
 			</div>
 
 			{err ? <ErrorBox message={err} /> : view === "grouped" ? (

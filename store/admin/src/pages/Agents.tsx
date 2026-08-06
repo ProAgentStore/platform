@@ -71,7 +71,7 @@ export default function Agents() {
 			<p className="text-sm text-muted mb-4">Every agent across all tenants — drafts and unlisted included.</p>
 
 			<div className="flex flex-wrap items-center gap-2 mb-4">
-				<input placeholder="Search slug / name / owner…" value={search} onChange={(e) => setSearch(e.target.value)} className="!w-auto min-w-[16rem] text-sm" />
+				<input aria-label="Search agents by slug, name or owner" placeholder="Search slug / name / owner…" value={search} onChange={(e) => setSearch(e.target.value)} className="!w-auto min-w-[16rem] text-sm" />
 				<select aria-label="Filter by visibility" value={visibility} onChange={(e) => setVisibility(e.target.value)} className="!w-auto text-sm">
 					<option value="">Any visibility</option>
 					{VISIBILITIES.map((v) => <option key={v} value={v}>{v}</option>)}
@@ -80,7 +80,7 @@ export default function Agents() {
 					<option value="">Any status</option>
 					{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
 				</select>
-				<input placeholder="Owner (login or id)" value={owner} onChange={(e) => setOwner(e.target.value)} className="!w-auto min-w-[13rem] text-sm" />
+				<input aria-label="Filter agents by owner" placeholder="Owner (login or id)" value={owner} onChange={(e) => setOwner(e.target.value)} className="!w-auto min-w-[13rem] text-sm" />
 				{filtered ? (
 					<button
 						type="button"

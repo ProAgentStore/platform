@@ -26,7 +26,7 @@ export default function Users() {
 	return (
 		<div>
 			<h1 className="font-display text-xl font-bold mb-3">Users</h1>
-			<div className="mb-4"><input placeholder="Search login / name / id…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
+			<div className="mb-4"><input aria-label="Search users by login, name or id" placeholder="Search login / name / id…" value={search} onChange={(e) => setSearch(e.target.value)} /></div>
 			{err ? <ErrorBox message={err} /> : !data ? <Loading /> : (
 				<Panel title={`Users (${data.total})`}>
 					{!data.users.length ? <Empty label="No users match." /> : (

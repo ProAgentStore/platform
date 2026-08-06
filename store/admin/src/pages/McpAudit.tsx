@@ -63,6 +63,7 @@ export default function McpAudit() {
 					value={tool}
 					onChange={(e) => setTool(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && load()}
+					aria-label="Filter MCP calls by tool"
 					placeholder="Filter by tool"
 					className="bg-surface border border-line rounded px-2 py-1 text-sm"
 				/>
@@ -70,6 +71,7 @@ export default function McpAudit() {
 					value={user}
 					onChange={(e) => setUser(e.target.value)}
 					onKeyDown={(e) => e.key === "Enter" && load()}
+					aria-label="Filter MCP calls by user id"
 					placeholder="Filter by user id"
 					className="bg-surface border border-line rounded px-2 py-1 text-sm"
 				/>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, useId, type ReactNode } from "react";
 import Page from "../components/Page";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api, getToken, API } from "@proagentstore/sdk/client";
@@ -69,6 +69,7 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 	const [asking, setAsking] = useState(false);
 	const [err, setErr] = useState("");
 	const inputRef = useRef<HTMLInputElement>(null);
+	const askLabelId = useId();
 	// Arriving from the board's Ask button (`?ask=1`), the thread is well below the fold —
 	// past the activity log and the screenshot replay — so landing at the top of the page
 	// would look like the button did nothing.
@@ -105,7 +106,7 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 
 	return (
 		<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-5">
-			<h2 className="text-sm font-bold mb-1">Ask about this ticket</h2>
+			<h2 id={askLabelId} className="text-sm font-bold mb-1">Ask about this ticket</h2>
 			<p className="text-xs text-muted-soft mb-3">Answered from this ticket's record only — its reasoning, what it declared it would do, and what it logged. It can't start work from here.</p>
 			{turns.length > 0 && (
 				<div className="flex flex-col gap-2 mb-3">
@@ -125,6 +126,10 @@ function TicketThread({ instanceId, taskId, autoFocus }: { instanceId: string; t
 					value={draft}
 					onChange={(e) => setDraft(e.target.value)}
 					onKeyDown={(e) => { if (e.key === "Enter") ask(); }}
+					// Named by the heading that is already on screen, rather than by the placeholder —
+					// which is an EXAMPLE question ("Why did you decide this?"), not the field's name,
+					// and disappears as soon as you type your own.
+					aria-labelledby={askLabelId}
 					placeholder="Why did you decide this?"
 					className="flex-1 min-w-0 bg-paper border border-line rounded-lg px-3 py-2 text-sm text-ink"
 				/>
@@ -298,6 +303,7 @@ export default function RunDetail() {
 	const [playing, setPlaying] = useState(false);
 	const [inputVal, setInputVal] = useState("");
 	const [takeoverOpen, setTakeoverOpen] = useState(false);
+	const fieldLabelId = useId();
 	// Which attempt of the job this run is (JSW-style: each retry is a separate,
 	// numbered run with its own activity log). Resolved from the board's grouping.
 	const [attempt, setAttempt] = useState<{ num: number; total: number } | null>(null);
@@ -444,7 +450,7 @@ export default function RunDetail() {
 				<div className="bg-amber-500/10 border border-amber-500/40 rounded-xl p-4 sm:p-5 mb-5">
 					<div className="text-lg font-bold text-ink">✏️ The agent needs one answer to continue</div>
 					<div className="text-sm text-muted mt-0.5 mb-3">It won’t guess personal or legal details — answer once and it keeps going.</div>
-					<div className="text-base font-semibold text-ink">{field}</div>
+					<div id={fieldLabelId} className="text-base font-semibold text-ink">{field}</div>
 					{options.length > 0 && (
 						<div className="mt-3">
 							<div className="text-xs font-bold uppercase tracking-wide text-muted-soft mb-2">Tap your answer</div>
@@ -457,7 +463,11 @@ export default function RunDetail() {
 						</div>
 					)}
 					<div className="flex gap-2 mt-2">
-						<input value={inputVal} onChange={(e) => setInputVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") sendValue(inputVal); }} placeholder={field} className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink" />
+						{/* The agent's question is already rendered above; point at it instead of
+						    duplicating it into a placeholder that vanishes mid-answer. This is the
+						    field where someone types a legal name or a salary because the agent
+						    refused to guess — losing the question while typing is the worst case. */}
+						<input aria-labelledby={fieldLabelId} value={inputVal} onChange={(e) => setInputVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") sendValue(inputVal); }} placeholder={field} className="flex-1 min-w-0 bg-panel border border-line rounded-lg px-3 py-2.5 text-base text-ink" />
 						<button type="button" disabled={!inputVal.trim()} onClick={() => sendValue(inputVal)} className="px-5 py-2.5 rounded-lg bg-accent text-white font-bold text-base disabled:opacity-40 shrink-0">Send</button>
 					</div>
 				</div>

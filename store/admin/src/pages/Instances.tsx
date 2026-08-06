@@ -75,8 +75,8 @@ export default function Instances() {
 			</p>
 
 			<div className="flex flex-wrap items-center gap-2 mb-4">
-				<input placeholder="Agent (slug or id)" value={agent} onChange={(e) => setAgent(e.target.value)} className="!w-auto min-w-[14rem] text-sm" />
-				<input placeholder="Owner (login or id)" value={owner} onChange={(e) => setOwner(e.target.value)} className="!w-auto min-w-[14rem] text-sm" />
+				<input aria-label="Filter instances by agent" placeholder="Agent (slug or id)" value={agent} onChange={(e) => setAgent(e.target.value)} className="!w-auto min-w-[14rem] text-sm" />
+				<input aria-label="Filter instances by owner" placeholder="Owner (login or id)" value={owner} onChange={(e) => setOwner(e.target.value)} className="!w-auto min-w-[14rem] text-sm" />
 				<select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)} className="!w-auto text-sm">
 					<option value="">Any status</option>
 					{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}

@@ -135,6 +135,7 @@ export function DangerAction({
 				<input
 					value={reason}
 					onChange={(e) => dispatch({ type: "reason", value: e.target.value })}
+					aria-label="Reason (recorded in the audit log)"
 					placeholder="Reason (recorded in the audit log)"
 					className="text-sm mb-2"
 				/>
