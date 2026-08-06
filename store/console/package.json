@@ -7,7 +7,7 @@
 		"dev": "vite",
 		"build": "tsc -b && vite build",
 		"preview": "vite preview",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "pnpm --filter @proagentstore/sdk build && tsc --noEmit"
 	},
 	"dependencies": {
 		"@proagentstore/coder-web": "workspace:*",

@@ -11,7 +11,7 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsc --noEmit"
+		"typecheck": "pnpm --filter @proagentstore/sdk build && tsc --noEmit"
 	},
 	"peerDependencies": {
 		"lucide-react": ">=1",
