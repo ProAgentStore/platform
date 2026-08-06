@@ -1,3 +1,4 @@
 {
+	"_note": "Intentionally empty — NOT the agent catalog. The authoritative catalog is the `agents` table in D1, read via GET /v1/agents. This file is the input to store/build-details.js, a static detail-page generator that nothing invokes (no package.json script, no CI workflow); detail pages are served dynamically at /agents/:slug/ from GET /v1/public/agents/:id. Kept as a stub so the dead generator does not crash. See the 'Catalog agents' section of the root README before adding anything here.",
 	"agents": []
 }

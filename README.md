@@ -129,10 +129,14 @@ Real browser / real repo
 ```bash
 npm i -g @proagentstore/cli
 pags login
-pags up            # one runner for active runtime-capable instances discovered at startup
+pags up            # one runner for every active runtime-capable instance
 ```
 
-`pags up` is the canonical runner: **one process serves every active runtime-capable instance discovered when it starts**. It uses a **WebSocket relay** (the runner connects outbound to a per-instance or node-scoped `RelayDO` — no cloudflared, no public server, no inbound tunnel). Cloud -> `callRunner()` -> `RelayDO` -> WebSocket -> runner. There is no `--tunnel` flag or tunnel fallback in the current CLI.
+`pags up` is the canonical runner: **one process serves every active instance whose `capabilities.runtime` is non-null**. Cloud-only chat/RAG/connector agents (`runtime: null`) are skipped — they never need a local runner.
+
+Membership is **live**, not a startup snapshot. `pags up` passes `--watch-instances` (CLI ≥ 0.4.30), so the runner re-reads `/v1/instances/my/instances` every 20s and attaches newly eligible agents — and detaches ones that stopped being eligible — without a restart. Subscribing to a coding agent while the runner is up just works. (Polling, not push: a brand-new instance has no socket to push over; #83 tracks the push path.) A scoped `pags up --instance <id>` deliberately does *not* watch — it means that one agent and nothing else.
+
+Transport is a **WebSocket relay**: the runner connects outbound to a per-(instance, node) `RelayDO` — no cloudflared, no public server, no inbound port. Cloud -> `callRunner()` -> `RelayDO` -> WebSocket -> runner. There is no `--tunnel` flag or tunnel fallback in the current CLI. The runner mints a short-lived, instance-scoped relay token for the handshake; the 30-day account JWT is never put in the WebSocket URL.
 
 - Coder can run multiple machines against the same instance at once. Each coding session is pinned to the runner node that owns it; different repos can run on different machines concurrently.
 - `pags up --force` — replace the current relay socket when debugging stale local connections
@@ -175,23 +179,94 @@ Public discovery pages:
 
 ## Catalog agents
 
-This repo keeps only Tier-0 first-party agent sources in `agents/`: Job Application Assistant, Coder, and Repo Chat. Other catalog agents live outside the platform monorepo.
+### Where the catalog actually lives
 
-| Agent | Type | Description |
+**The authoritative catalog is the `agents` table in D1**, read through `GET /v1/agents`. Nothing
+in this repo is a mirror of it. A file in this repo is either a *source* for one catalog row or
+it is not part of the catalog at all — those are different things, and conflating them is what
+this section exists to prevent.
+
+| Source | What it is | Authority |
 |---|---|---|
-| site-monitor | Worker | Hourly URL change detection + webhook alerts |
-| lead-qualifier | Agent | AI lead scoring from webhook submissions |
-| content-pipeline | Worker | Daily AI content generation to R2 |
-| competitor-intel | Worker | Daily competitor tracking + AI briefings |
-| support-escalator | Agent | Ticket triage + auto-response + daily summary |
-| data-analyst | Agent | CSV upload → natural-language SQL queries |
-| meeting-notes | Agent | Transcript → summary + action items + daily digest |
-| seo-auditor | Worker | Daily page crawl → AI scores 0-100 + regressions |
-| invoice-parser | Tool | POST text → structured JSON extraction |
-| email-drafter | Agent | Brand-voice KB → AI email drafts |
-| **job-application-assistant** | Agent | LLM-driven apply: Brain (`JobApplyWorkflow`) drives the local browser runtime to fill + submit real applications |
-| **Coder** (`coder`) | Agent | Multi-engine coding agent — runs Claude Code, Codex, Gemini CLI, Grok, or a local command via `pags up`; supports multiple connected machines per instance; Engine · Pilot · Co-pilot · Loop · Overseer · Chat |
-| **Repo Chat** (`repo-chat`) | Agent | Read-only chat with any GitHub repo(s) — server-side ingest + RAG, no local runner. First agent built "the creator way": declares its tools as data (`capabilities.tools`) rather than relying on the hardcoded `repo`-surface default |
+| `agents` table in D1 | Every published agent, its capabilities, settings schema and pipelines. | **Authoritative.** Read `GET /v1/agents`, or the MCP `list_agents` tool. |
+| `workers/api/migrations/*seed*.sql` | How a first-party agent gets *into* that table on a fresh database. Idempotent `INSERT OR IGNORE`. | Authoritative for the agents it seeds. Editing a seed does not change an already-seeded row — that needs a follow-up `UPDATE` migration. |
+| `agents/<slug>/agent.json` | The manifest for a **Tier-0** agent whose code the platform itself builds or imports. | Source only. It does **not** create a catalog row. |
+| `store/registry.json` | Dead. See below. | None. |
+
+An agent can therefore be in the catalog with no file in this repo, and have a folder here with
+no separate catalog row of its own. Both are normal.
+
+### Tier-0 agents — the only ones with source in this repo
+
+`agents/` holds exactly three, enforced in CI by `scripts/check-agents-allowlist.mjs`:
+
+| Folder | Why it is Tier-0 |
+|---|---|
+| `agents/coder` | `agents/coder/web` is a pnpm workspace member imported by the console. |
+| `agents/job-application-assistant` | Manifest for the apply agent. (Its `src/` Worker is legacy and undeployed — see that folder's README.) |
+| `agents/repo-chat` | Reference source for the Repo Chat agent. |
+
+Everything else is a standalone org repo under [ProAgentStore](https://github.com/ProAgentStore),
+cloned locally to `~/dev/stores/pags/agents/<slug>/`. Adding a fourth folder here fails CI on
+purpose (epic #50) — the monorepo previously accumulated ten stale vendored copies that were
+never built or deployed.
+
+### What ships today
+
+13 agents are published. Grouped by where each one comes from:
+
+**Seeded by a migration** — reproducible on a fresh database:
+
+| Slug | Name | Seed | Source in repo |
+|---|---|---|---|
+| `coder` | Coder | `0021` | `agents/coder` |
+| `repo-chat` | Repo Chat | `0032` | `agents/repo-chat` |
+| `site-builder` | Small Business Website Builder | `0057` | none — fully declarative (`lib/pipelines/*.json`) |
+| `coder-repo` | Repo Coder | `0063` | none — declarative capabilities |
+| `coder-lead` | Coder Lead | `0063` | none — declarative capabilities |
+| `local-repo-chat` | Local Repo Chat | `0066` | none — declarative capabilities |
+| `tmux-operator` | tmux Operator | `0072` | none — declarative capabilities |
+
+**Created through the API/console by the operator** — they exist only as D1 rows, so a fresh
+database will not have them. Treat this as known drift, not a design:
+
+| Slug | Name | Notes |
+|---|---|---|
+| `job-application-assistant` | Job Application Assistant | Manifest in `agents/`, but no seed migration. Migration `0022` only *updates* its capabilities if the row already exists. |
+| `language-buddy` | Language Buddy | Migration `0041` sets its `settingsSchema` if present; it does not create it. |
+| `doc-chat` | Doc Chat | |
+| `small-business-website-lead-finder` | Small Business Website Lead Finder | Standalone org repo, cloned to `pags/agents/`. |
+| `lead-outreach-tj6qrr` | Lead Outreach Assistant | The middle link of the lead chain. |
+| `facebook-friend-confirmer` | Facebook Friends | Browser-runtime agent. |
+
+The three-agent lead chain is `small-business-website-lead-finder` → `lead-outreach-tj6qrr` →
+`site-builder`, wired with `agent_connections` rather than code.
+
+Publishing is gated: `PUT /v1/agents/:id` and `POST /v1/batch/bulk-visibility` both refuse to
+publish a smoke-test fixture (#65, #64), which is what stopped the catalog from re-accumulating
+the 16 fixtures and scaffold seeds an audit removed.
+
+### `store/registry.json` is intentionally empty
+
+It is the input to `store/build-details.js`, a static agent-detail-page generator. Neither is
+wired to anything: `build-details.js` has no `package.json` script and no CI workflow calls it.
+Agent detail pages are served dynamically at `/agents/:slug/` from `GET /v1/public/agents/:id`.
+The file is kept as an empty stub so the dead generator does not crash if someone runs it. It is
+**not** a public discovery artifact — for that, use `GET /v1/agents`, `store/llms.txt`, or
+`store/skills.json`.
+
+### Agents removed from this list
+
+Earlier revisions of this README listed ten agents — `site-monitor`, `lead-qualifier`,
+`content-pipeline`, `competitor-intel`, `support-escalator`, `data-analyst`, `meeting-notes`,
+`seo-auditor`, `invoice-parser`, `email-drafter`. They were vendored seed copies under `agents/`,
+removed in platform `main` commit `f9980a8`. None of them has a seed migration or a published
+catalog row today. Do not re-add them here.
+
+One of them survives as a lookup key, not as an agent: the seed migrations resolve the operator
+account with `SELECT owner_id FROM agents WHERE slug = 'data-analyst' AND owner_id LIKE 'google:%'`.
+That is a way to find the operator's user id on the production database, and it falls back to
+`'system'`. It does not mean `data-analyst` is a catalog agent.
 
 ### Other capabilities
 
