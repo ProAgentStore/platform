@@ -1,5 +1,7 @@
 import { HttpError } from "./auth.js";
 import { requireConnectorGrant, type ConnectorProvider } from "./connector-grants.js";
+import { cronFields, isValidTimeZone, nextCronInstant } from "./cron-time.js";
+import { applyMapping } from "./trigger-config.js";
 import { readConnectorRefreshToken } from "./connector-oauth.js";
 import {
 	driveFileDescendsFrom,
@@ -67,6 +69,12 @@ export interface TriggerConfig {
 	/** cron: randomise the fire time by ± this many minutes so runs don't land exactly on
 	 *  the dot (an automation fingerprint). 0/absent = fire on schedule. */
 	jitterMinutes?: number;
+	/** cron (#18): the IANA zone the schedule's wall clock is read in. Absent = UTC, which is
+	 *  what every trigger predating this did, so absence must keep meaning exactly that. */
+	timezone?: string;
+	/** #16: map inbound payload paths onto the action's fields, e.g. { title: "lead.name" }.
+	 *  Absent = the existing conventions (title/description/content/text). */
+	mapping?: Record<string, string>;
 	/** Set by the connection pump: the run that emitted the event, so the run this action
 	 *  starts can be joined to it in the trace. Not user-configured. */
 	traceId?: string;
@@ -139,31 +147,45 @@ function validRange(part: string, min: number, max: number): boolean {
 	return Number.isInteger(n) && n >= min && n <= max;
 }
 
-export function nextRunAt(schedule: string, from = new Date()): string {
+/**
+ * When this schedule next fires, as an ISO instant.
+ *
+ * `timeZone` (#18) decides which clock the WALL-CLOCK schedules are read against — `@daily`,
+ * `@weekly` and 5-field cron. Absent or unknown → UTC, i.e. exactly the behaviour of every
+ * trigger that existed before timezones did. Interval schedules (`@hourly`, `every N minutes`)
+ * are durations, not clock times, so a zone cannot change them and is not applied.
+ */
+export function nextRunAt(schedule: string, from = new Date(), timeZone?: string): string {
 	const normalized = normalizeSchedule(schedule);
 	const base = new Date(from.getTime());
 	base.setUTCSeconds(0, 0);
 	if (normalized === "@hourly") return addMinutes(base, 60).toISOString();
-	if (normalized === "@daily") return nextDaily(base, 0).toISOString();
-	if (normalized === "@weekly") return nextWeekly(base, 0, 0).toISOString();
 	const every = normalized.match(/^every\s+(\d+)\s+minutes$/);
 	if (every) return addMinutes(base, Number(every[1])).toISOString();
 
-	const [minute, hour, day, month, weekday] = normalized.split(" ");
-	let cursor = addMinutes(base, 1);
-	for (let i = 0; i < 366 * 24 * 60; i++) {
-		if (
-			matchesCron(minute, cursor.getUTCMinutes()) &&
-			matchesCron(hour, cursor.getUTCHours()) &&
-			matchesCron(day, cursor.getUTCDate()) &&
-			matchesCron(month, cursor.getUTCMonth() + 1) &&
-			matchesCron(weekday, cursor.getUTCDay())
-		) {
-			return cursor.toISOString();
-		}
-		cursor = addMinutes(cursor, 1);
+	// The aliases ARE cron expressions; expanding them here means there is one wall-clock
+	// evaluator rather than a cron path and an alias path that can disagree about a timezone.
+	const expression = normalized === "@daily" ? "0 0 * * *" : normalized === "@weekly" ? "0 0 * * 0" : normalized;
+	const zone = isValidTimeZone(timeZone) ? timeZone : "UTC";
+	const instant = nextCronInstant(cronFields(expression), base, zone);
+	if (instant === null) throw new HttpError(400, "schedule has no run in the next year");
+	return new Date(instant).toISOString();
+}
+
+/**
+ * The next `count` fire times, for an honest console preview (#18). Computed by the SAME
+ * function the scheduler uses, on the server, so a preview cannot drift from behaviour — the
+ * one thing worse than no next-run preview is a next-run preview that lies.
+ */
+export function previewRuns(schedule: string, timeZone?: string, count = 3, from = new Date()): string[] {
+	const runs: string[] = [];
+	let cursor = from;
+	for (let i = 0; i < Math.max(1, Math.min(count, 10)); i++) {
+		const next = nextRunAt(schedule, cursor, timeZone);
+		runs.push(next);
+		cursor = new Date(Date.parse(next));
 	}
-	throw new HttpError(400, "schedule has no run in the next year");
+	return runs;
 }
 
 function addMinutes(date: Date, minutes: number): Date {
@@ -179,22 +201,6 @@ export function applyJitter(iso: string, jitterMinutes?: number): string {
 	const offsetMs = (Math.random() * 2 - 1) * j * 60_000;
 	const floor = Date.now() + 60_000;
 	return new Date(Math.max(Date.parse(iso) + offsetMs, floor)).toISOString();
-}
-
-function nextDaily(base: Date, hour: number): Date {
-	const next = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate(), hour, 0, 0, 0));
-	if (next <= base) next.setUTCDate(next.getUTCDate() + 1);
-	return next;
-}
-
-function nextWeekly(base: Date, weekday: number, hour: number): Date {
-	const next = nextDaily(base, hour);
-	while (next.getUTCDay() !== weekday) next.setUTCDate(next.getUTCDate() + 1);
-	return next;
-}
-
-function matchesCron(part: string, value: number): boolean {
-	return part === "*" || Number(part) === value || (part === "7" && value === 0);
 }
 
 export function publicWebhookUrl(origin: string, token: string): string {
@@ -230,6 +236,12 @@ export function parseConfig(value: string | null | undefined): TriggerConfig {
 			url: typeof parsed.url === "string" ? parsed.url.slice(0, 2000) : undefined,
 			dryRun: parsed.dryRun === true ? true : undefined,
 			jitterMinutes: typeof parsed.jitterMinutes === "number" ? Math.max(0, Math.min(Math.trunc(parsed.jitterMinutes), 720)) : undefined,
+			// #18: an unknown zone must NOT quietly become UTC on a schedule the user believes is
+			// local — the write path rejects it, and anything that got in before is dropped here
+			// so the row reads the same way the scheduler treats it.
+			timezone: isValidTimeZone(parsed.timezone) ? parsed.timezone : undefined,
+			// #16: { targetField: "payload.path" }. Values are sanitised at dispatch by applyMapping.
+			mapping: parsed.mapping && typeof parsed.mapping === "object" && !Array.isArray(parsed.mapping) ? (parsed.mapping as Record<string, string>) : undefined,
 			// parseConfig is a whitelist, so a field absent here is silently dropped. Both of
 			// these must survive it or run_pipeline behaves differently depending on whether the
 			// event arrived via a stored trigger (parsed here) or the connection pump (which
@@ -287,10 +299,15 @@ export async function executeTriggerAction(
 ): Promise<unknown> {
 	const stub = env.AGENT.get(env.AGENT.idFromName(target.instance_id));
 	let resultPayload: unknown = payload;
+	// #16: an explicit payload mapping wins over the fixed conventions below, because it is the
+	// only thing the user actually stated. A mapped path that this payload doesn't have resolves
+	// to nothing and falls through to the conventions, so adding a mapping can never make a
+	// previously-working trigger produce less than it did.
+	const mapped = applyMapping(payload, config.mapping, target.action);
 	if (target.action === "create_task") {
 		const body = payloadRecord(payload);
-		const title = stringValue(body.title) || config.title || `${target.name} trigger`;
-		const description = stringValue(body.description) || stringValue(body.content) || config.description || stringifyPayload(payload);
+		const title = mapped.title || stringValue(body.title) || config.title || `${target.name} trigger`;
+		const description = mapped.description || stringValue(body.description) || stringValue(body.content) || config.description || stringifyPayload(payload);
 		const res = await stub.fetch(new Request("https://agent/tasks", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -299,9 +316,9 @@ export async function executeTriggerAction(
 		if (!res.ok) throw new Error(`task dispatch failed (${res.status})`);
 	} else if (target.action === "add_knowledge") {
 		const body = payloadRecord(payload);
-		const content = stringValue(body.content) || stringValue(body.text) || stringifyPayload(payload);
+		const content = mapped.content || stringValue(body.content) || stringValue(body.text) || stringifyPayload(payload);
 		if (!content.trim()) throw new Error("knowledge trigger payload has no content");
-		const title = stringValue(body.title) || config.title || `${target.name} ${new Date().toISOString()}`;
+		const title = mapped.title || stringValue(body.title) || config.title || `${target.name} ${new Date().toISOString()}`;
 		const res = await stub.fetch(new Request("https://agent/knowledge", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -309,10 +326,15 @@ export async function executeTriggerAction(
 				title,
 				content: content.slice(0, 100_000),
 				source: config.source || sourceType,
-				sourceUrl: stringValue(body.sourceUrl) || config.sourceUrl,
+				sourceUrl: mapped.sourceUrl || stringValue(body.sourceUrl) || config.sourceUrl,
 			}),
 		}));
 		if (!res.ok) throw new Error(`knowledge dispatch failed (${res.status})`);
+	} else if (target.action === "log_event") {
+		// log_event has no side effect beyond the event row itself — its whole value is the
+		// recorded line. A mapping lets that line say something about the payload ("order 4471
+		// shipped") instead of the generic "log_event dispatched" (#16).
+		if (mapped.message) resultPayload = { ...payloadRecord(payload), message: mapped.message };
 	} else if (target.action === "sync_connector") {
 		resultPayload = await syncConnectorTrigger(env, target as TriggerRow, config);
 	} else if (target.action === "run_pipeline") {
@@ -472,7 +494,8 @@ export async function runDueTriggers(env: Env, now = new Date(), limit = 25): Pr
 		// a repeating admin-log entry to say so.
 		let next: string | null;
 		try {
-			next = trigger.schedule ? applyJitter(nextRunAt(trigger.schedule, now), parseConfig(trigger.config).jitterMinutes) : null;
+			const cfg = parseConfig(trigger.config);
+			next = trigger.schedule ? applyJitter(nextRunAt(trigger.schedule, now, cfg.timezone), cfg.jitterMinutes) : null;
 		} catch (e) {
 			// Disable the row and record why. It cannot be repaired here (the schedule is invalid
 			// under the current grammar), and leaving it enabled means re-hitting it every minute.
@@ -531,6 +554,7 @@ function successMessage(action: TriggerAction, payload: unknown): string {
 	if (action === "run_pipeline") return `started pipeline "${stringValue(result.pipeline) || "?"}" (run ${stringValue(result.runId).slice(0, 8)})`;
 	if (action === "insert_record") return `inserted a record into "${stringValue(result.collection) || "?"}"`;
 	if (action === "run_browse") return result.skipped ? `browser run skipped — ${stringValue(result.reason) || "runner offline / busy"}` : `started browser run (task ${stringValue(result.taskId).slice(0, 8)})`;
+	if (action === "log_event" && stringValue(result.message)) return stringValue(result.message).slice(0, 300);
 	return `${action} dispatched`;
 }
 

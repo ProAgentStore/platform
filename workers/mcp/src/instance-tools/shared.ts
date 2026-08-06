@@ -30,6 +30,8 @@ export const triggerConfigSchema = z.object({
 	url: z.string().optional().describe("run_browse: the start URL for the scheduled browser task."),
 	dry_run: z.boolean().optional().describe("run_browse: walk the flow but block the committing clicks."),
 	jitter_minutes: z.number().int().min(0).max(720).optional().describe("cron: randomise the fire time by ± this many minutes (avoid firing exactly on the dot)."),
+	timezone: z.string().optional().describe("cron: IANA zone the schedule's wall clock is read in, e.g. Australia/Melbourne. Omit for UTC."),
+	mapping: z.record(z.string()).optional().describe("Map payload paths onto the action's fields, e.g. {\"title\":\"lead.name\"}. create_task: title, description. add_knowledge: title, content, source_url. log_event: message."),
 }).optional();
 
 export interface InstanceSummary {
@@ -78,6 +80,15 @@ export function normalizeTriggerConfig(
 	if (config.url !== undefined) out.url = config.url;
 	if (config.dry_run !== undefined) out.dryRun = config.dry_run;
 	if (config.jitter_minutes !== undefined) out.jitterMinutes = config.jitter_minutes;
+	if (config.timezone !== undefined) out.timezone = config.timezone;
+	// Mapping keys are the API's camelCase field names; `source_url` is accepted as an alias so
+	// the whole tool surface stays snake_case, and anything else passes through to the API's
+	// validator, which names the mappable fields of the action in its error.
+	if (config.mapping !== undefined) {
+		out.mapping = Object.fromEntries(
+			Object.entries(config.mapping).map(([field, path]) => [field === "source_url" ? "sourceUrl" : field, path]),
+		);
+	}
 	return out;
 }
 

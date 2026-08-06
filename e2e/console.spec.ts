@@ -256,7 +256,59 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 				],
 			});
 		}
-		if (path === "/v1/triggers" && method === "POST") return json({ trigger: { id: "trigger-2" } }, 201);
+		// #18: the next-run preview is computed by the SERVER (there is deliberately no client-side
+		// scheduler), so the console cannot render one without this call. #16: the same response
+		// carries the config problems that would otherwise be silently swallowed.
+		if (path === "/v1/triggers/preview" && method === "POST") {
+			const body = route.request().postDataJSON() as { type?: string; action?: string; schedule?: string; config?: Record<string, unknown> };
+			const issues: string[] = [];
+			if (body.type === "cron" && body.action === "run_pipeline" && !body.config?.pipeline) {
+				issues.push("A scheduled pipeline run needs the pipeline name.");
+			}
+			return json({
+				schedule: body.schedule ?? null,
+				timezone: (body.config?.timezone as string) ?? null,
+				jitterMinutes: (body.config?.jitterMinutes as number) ?? null,
+				runs: body.type === "cron" ? ["2026-07-13T22:00:00.000Z", "2026-07-14T22:00:00.000Z"] : [],
+				issues,
+				error: null,
+			});
+		}
+		if (path === "/v1/triggers" && method === "POST") {
+			// Mirror the API's validator (#16): a CRON run_pipeline without a pipeline name can
+			// only ever fail at 3am, so it is refused at the save instead.
+			const body = route.request().postDataJSON() as { type?: string; action?: string; config?: Record<string, unknown> };
+			if (body.type === "cron" && body.action === "run_pipeline" && !body.config?.pipeline) {
+				return json({ error: "A scheduled pipeline run needs the pipeline name." }, 400);
+			}
+			return json({ trigger: { id: "trigger-2" } }, 201);
+		}
+		if (path === "/v1/triggers/trigger-1/events" && method === "GET") {
+			return json({
+				events: [
+					{
+						id: "ev-fail",
+						trigger_id: "trigger-1",
+						type: "cron",
+						status: "failed",
+						message: null,
+						payload: { schedule: "@daily" },
+						error: "task dispatch failed (500)",
+						created_at: "2026-07-12T00:00:00.000Z",
+					},
+					{
+						id: "ev-ok",
+						trigger_id: "trigger-1",
+						type: "manual",
+						status: "succeeded",
+						message: "create_task dispatched",
+						payload: { title: "Yesterday's digest" },
+						error: null,
+						created_at: "2026-07-11T00:00:00.000Z",
+					},
+				],
+			});
+		}
 		if (path === "/v1/triggers/trigger-sync/events" && method === "GET") {
 			return json({
 				events: [
@@ -861,14 +913,21 @@ test.describe("ProAgentStore Console smoke", () => {
 			.filter({ has: page.getByRole("heading", { name: "Triggers" }) })
 			.last();
 		const action = triggersCard.locator("select").filter({ has: page.locator('option[value="run_pipeline"]') });
-		const addBtn = triggersCard.getByRole("button", { name: "Add", exact: true });
+		const typeSelect = triggersCard.locator("select").filter({ has: page.locator('option[value="webhook"]') });
+		const addBtn = triggersCard.getByRole("button", { name: "Add trigger", exact: true });
 
-		// run_pipeline → a pipeline-name input appears; an empty submit is validated (no broken trigger).
+		// run_pipeline → a pipeline-name input appears.
 		await action.selectOption("run_pipeline");
 		const pipelineInput = page.getByPlaceholder("a pipeline configured on this agent");
 		await expect(pipelineInput).toBeVisible();
+
+		// A SCHEDULED pipeline run with no pipeline name can only ever fail, so the API refuses it
+		// and the console shows that refusal verbatim rather than flattening it to "Failed" (#16).
+		// (A webhook one is allowed — its payload may legitimately carry the pipeline name.)
+		await typeSelect.selectOption("cron");
 		await addBtn.click();
-		await expect(page.getByText(/name of the pipeline to run/i)).toBeVisible();
+		await expect(page.getByText(/needs the pipeline name/i).first()).toBeVisible();
+
 		// With the name filled, the create succeeds.
 		await pipelineInput.fill("lead-sweep");
 		await addBtn.click();
@@ -877,6 +936,72 @@ test.describe("ProAgentStore Console smoke", () => {
 		// insert_record → a target-collection input appears.
 		await action.selectOption("insert_record");
 		await expect(page.getByPlaceholder("collection name")).toBeVisible();
+	});
+
+	test("schedule editor previews the next runs in local time AND UTC (#18)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Triggers" })).toBeVisible();
+
+		const triggersCard = page
+			.locator("div")
+			.filter({ has: page.getByRole("heading", { name: "Triggers" }) })
+			.last();
+		const typeSelect = triggersCard.locator("select").filter({ has: page.locator('option[value="webhook"]') });
+		await typeSelect.selectOption("cron");
+
+		// Presets, not cron: "Daily at…" is the default mode, so a time field and a timezone
+		// picker are both present without anyone typing an expression.
+		await expect(triggersCard.locator('input[type="time"]')).toBeVisible();
+		await expect(triggersCard.locator("select").filter({ has: page.locator('option[value="UTC"]') })).toBeVisible();
+
+		// The preview comes from the server, and shows both clocks — a timezone mistake is only
+		// ever visible when you can see the two side by side.
+		const previewBlock = page.getByText(/^Next runs/).locator("xpath=..");
+		await expect(previewBlock).toBeVisible();
+		await expect(previewBlock.getByText(/UTC/).first()).toBeVisible();
+	});
+
+	test("payload mapping is offered for the actions that have mappable fields (#16)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/settings");
+		const triggersCard = page
+			.locator("div")
+			.filter({ has: page.getByRole("heading", { name: "Triggers" }) })
+			.last();
+
+		await expect(triggersCard.getByRole("button", { name: /Payload mapping/ })).toBeVisible();
+		await triggersCard.getByRole("button", { name: /Payload mapping/ }).click();
+		await expect(page.getByPlaceholder("lead.name")).toBeVisible();
+
+		// An action with nothing mappable does not offer the control at all.
+		const action = triggersCard.locator("select").filter({ has: page.locator('option[value="run_pipeline"]') });
+		await action.selectOption("run_pipeline");
+		await expect(triggersCard.getByRole("button", { name: /Payload mapping/ })).toHaveCount(0);
+	});
+
+	test("trigger run history shows what ran, what failed and the sync counts (#19)", async ({ page }) => {
+		await mockSignedInConsole(page);
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByText("Daily digest")).toBeVisible();
+
+		const digest = page.locator("div.bg-paper").filter({ hasText: "Daily digest" }).first();
+		await digest.getByRole("button", { name: "History" }).click();
+
+		// The failure that the definitions list could only ever summarise as "last error".
+		await expect(page.getByText("task dispatch failed (500)").first()).toBeVisible();
+		await expect(digest.getByText("Failed", { exact: true })).toBeVisible();
+		await expect(digest.getByText("create_task dispatched")).toBeVisible();
+
+		// Payloads stay collapsed until asked for — a webhook body is attacker-influenced.
+		await expect(page.getByText("Yesterday's digest")).toHaveCount(0);
+		await digest.getByRole("button", { name: "payload" }).last().click();
+		await expect(page.getByText(/Yesterday's digest/)).toBeVisible();
+
+		// A connector sync reports its numbers, not just "succeeded".
+		const sync = page.locator("div.bg-paper").filter({ hasText: "Drive sync" }).first();
+		await sync.getByRole("button", { name: "History" }).click();
+		await expect(page.getByText(/1 imported · 2 skipped · 3 scanned/)).toBeVisible();
 	});
 
 	test("Teamwork makes the pump visible: routing filter, dead letter, replay (#182)", async ({ page }) => {

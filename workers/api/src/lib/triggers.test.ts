@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { HttpError } from "./auth.js";
 import { encryptKey } from "./crypto.js";
-import { applyJitter, dispatchTrigger, nextRunAt, normalizeSchedule, publicWebhookUrl, type TriggerRow } from "./triggers.js";
+import { applyJitter, dispatchTrigger, nextRunAt, normalizeSchedule, previewRuns, publicWebhookUrl, type TriggerRow } from "./triggers.js";
 import { startPipelineRun } from "./pipeline-run-start.js";
 import { startBrowserTask } from "../routes/instances-browse.js";
 import type { Env } from "../types.js";
@@ -142,6 +142,50 @@ describe("trigger schedules", () => {
 		const base = new Date("2026-07-12T02:03:22.000Z");
 		expect(nextRunAt("5 * * * *", base)).toBe("2026-07-12T02:05:00.000Z");
 		expect(nextRunAt("0 8 * * *", base)).toBe("2026-07-12T08:00:00.000Z");
+	});
+
+	it("keeps UTC meaning for every schedule that has no timezone (#18 back-compat)", () => {
+		// Timezones are opt-in. A trigger created before they existed must fire at exactly the
+		// same instant it always did, so absence of config.timezone has to mean UTC forever.
+		const base = new Date("2026-07-12T02:03:22.000Z");
+		expect(nextRunAt("@weekly", base)).toBe("2026-07-19T00:00:00.000Z");
+		expect(nextRunAt("0 8 * * *", base, undefined)).toBe("2026-07-12T08:00:00.000Z");
+		expect(nextRunAt("0 8 * * *", base, "Not/AZone")).toBe("2026-07-12T08:00:00.000Z");
+	});
+
+	it("reads a wall-clock schedule in the trigger's timezone (#18)", () => {
+		const base = new Date("2026-07-12T02:03:22.000Z"); // 12:03 in Melbourne (+10)
+		// 08:00 Melbourne is 22:00Z the previous day, so the next one is the 13th.
+		expect(nextRunAt("0 8 * * *", base, "Australia/Melbourne")).toBe("2026-07-12T22:00:00.000Z");
+	});
+
+	it("leaves INTERVAL schedules alone — a duration has no wall clock to be in", () => {
+		const base = new Date("2026-07-12T02:03:22.000Z");
+		expect(nextRunAt("every 15 minutes", base, "Australia/Melbourne")).toBe("2026-07-12T02:18:00.000Z");
+		expect(nextRunAt("@hourly", base, "Australia/Melbourne")).toBe("2026-07-12T03:03:00.000Z");
+	});
+
+	it("previewRuns walks forward using the SAME calculation the sweep uses", () => {
+		// The preview is computed here rather than in the browser precisely so it cannot drift
+		// from what actually happens.
+		const runs = previewRuns("0 8 * * *", "Australia/Melbourne", 3, new Date("2026-07-12T02:03:22.000Z"));
+		expect(runs).toEqual([
+			"2026-07-12T22:00:00.000Z",
+			"2026-07-13T22:00:00.000Z",
+			"2026-07-14T22:00:00.000Z",
+		]);
+	});
+
+	it("previewRuns holds the local hour across a DST boundary", () => {
+		const runs = previewRuns("0 8 * * *", "Australia/Melbourne", 3, new Date("2026-10-02T20:00:00.000Z"));
+		// 08:00 on the 3rd is +10; the clocks go forward on the 4th, so 08:00 on the 4th and 5th
+		// is +11. Three consecutive runs, one of them an hour closer to its predecessor than the
+		// other — which is exactly right, and is what a fixed UTC cron gets wrong.
+		expect(runs).toEqual([
+			"2026-10-02T22:00:00.000Z",
+			"2026-10-03T21:00:00.000Z",
+			"2026-10-04T21:00:00.000Z",
+		]);
 	});
 
 	it("formats public webhook URLs without duplicate slashes", () => {
@@ -295,6 +339,73 @@ describe("trigger actions: run_pipeline + insert_record (#92)", () => {
 	it("insert_record without a collection refuses", async () => {
 		const { env } = baseEnv();
 		await expect(dispatchTrigger(env, recordTrigger({}), "webhook", { name: "x" })).rejects.toThrow(/requires config\.collection/);
+	});
+});
+
+describe("trigger payload mapping (#16)", () => {
+	function baseEnv() {
+		const agentRequests: Request[] = [];
+		const DB = {
+			prepare() {
+				const stmt = { bind: () => stmt, first: async () => null, all: async () => ({ results: [] }), run: async () => ({}) };
+				return stmt;
+			},
+		};
+		const AGENT = {
+			idFromName: (name: string) => ({ name }),
+			get: () => ({ fetch: async (req: Request) => { agentRequests.push(req); return Response.json({ id: "x" }, { status: 201 }); } }),
+		};
+		return { env: { DB, AGENT } as unknown as Env, agentRequests };
+	}
+
+	const taskTrigger = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "create_task", type: "webhook" });
+	const kbTrigger = (config: Record<string, unknown>): TriggerRow => ({ ...trigger(config), action: "add_knowledge", type: "webhook" });
+
+	it("maps a nested payload onto the task fields", async () => {
+		const { env, agentRequests } = baseEnv();
+		await dispatchTrigger(
+			env,
+			taskTrigger({ mapping: { title: "lead.name", description: "lead.note" } }),
+			"webhook",
+			{ lead: { name: "Acme Pty Ltd", note: "wants a quote" } },
+		);
+		const body = await agentRequests[0].clone().json() as { title: string; description: string };
+		expect(body).toEqual({ title: "Acme Pty Ltd", description: "wants a quote" });
+	});
+
+	it("falls back to the existing conventions when the mapped path is absent", async () => {
+		// Back-compat is the load-bearing property: adding a mapping must never make a trigger
+		// produce LESS than it did before.
+		const { env, agentRequests } = baseEnv();
+		await dispatchTrigger(env, taskTrigger({ mapping: { title: "lead.name" } }), "webhook", { title: "Flat title" });
+		const body = await agentRequests[0].clone().json() as { title: string };
+		expect(body.title).toBe("Flat title");
+	});
+
+	it("leaves an unmapped trigger behaving exactly as before", async () => {
+		const { env, agentRequests } = baseEnv();
+		await dispatchTrigger(env, taskTrigger({}), "webhook", { title: "Flat title", content: "body" });
+		const body = await agentRequests[0].clone().json() as { title: string; description: string };
+		expect(body).toEqual({ title: "Flat title", description: "body" });
+	});
+
+	it("maps knowledge content and source URL", async () => {
+		const { env, agentRequests } = baseEnv();
+		await dispatchTrigger(
+			env,
+			kbTrigger({ mapping: { title: "doc.name", content: "doc.body", sourceUrl: "doc.link" } }),
+			"webhook",
+			{ doc: { name: "Policy", body: "the text", link: "https://x.test/p" } },
+		);
+		const body = await agentRequests[0].clone().json() as { title: string; content: string; sourceUrl: string };
+		expect(body).toMatchObject({ title: "Policy", content: "the text", sourceUrl: "https://x.test/p" });
+	});
+
+	it("mapping wins over the flat convention when both are present", async () => {
+		const { env, agentRequests } = baseEnv();
+		await dispatchTrigger(env, taskTrigger({ mapping: { title: "lead.name" } }), "webhook", { title: "generic", lead: { name: "Acme" } });
+		const body = await agentRequests[0].clone().json() as { title: string };
+		expect(body.title).toBe("Acme");
 	});
 });
 

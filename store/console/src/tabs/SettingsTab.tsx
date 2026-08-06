@@ -6,6 +6,7 @@ import { api } from "@proagentstore/sdk/client";
 import type { SettingsField } from "../lib/types";
 import TeamworkSection from "./TeamworkSection";
 import LoopRunsSection from "./LoopRunsSection";
+import TriggersSection from "./TriggersSection";
 
 /** Shape of the runner-node endpoint (per-instance `connected` + machine-level `nodeOnline`). */
 type RunnerNodeResp = { runnerNode: string | null; nodes: string[]; nodesDetail?: Array<{ node: string; connected: boolean; nodeOnline?: boolean }> };
@@ -58,24 +59,6 @@ interface ConnectorGrant {
 	resourceName: string;
 	resourceType: string;
 	resourceUrl?: string | null;
-}
-
-type TriggerActionType = "create_task" | "add_knowledge" | "log_event" | "sync_connector" | "run_pipeline" | "insert_record" | "run_browse";
-type ConnectorProviderType = "google_drive" | "zoho_workdrive";
-
-interface InstanceTrigger {
-	id: string;
-	name: string;
-	type: "webhook" | "cron";
-	action: TriggerActionType;
-	enabled: boolean;
-	schedule?: string | null;
-	config?: { provider?: ConnectorProviderType; grantId?: string };
-	webhookUrl?: string;
-	lastRunAt?: string | null;
-	nextRunAt?: string | null;
-	failureCount?: number;
-	lastError?: string | null;
 }
 
 export default function SettingsTab({ instanceId, isApply, settingsSchema, onUnsubscribe }: Props) {
@@ -200,23 +183,8 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [workdriveMsg, setWorkdriveMsg] = useState("");
 	const [workdriveGrantRef, setWorkdriveGrantRef] = useState("");
 	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
-	const [triggers, setTriggers] = useState<InstanceTrigger[]>([]);
-	const [triggerMsg, setTriggerMsg] = useState("");
-	const [triggerName, setTriggerName] = useState("");
-	const [triggerType, setTriggerType] = useState<"webhook" | "cron">("webhook");
-	const [triggerAction, setTriggerAction] = useState<TriggerActionType>("create_task");
-	const [browseTriggerUrl, setBrowseTriggerUrl] = useState("");
-	const [triggerJitter, setTriggerJitter] = useState("");
-	const [triggerSchedule, setTriggerSchedule] = useState("@daily");
-	const [triggerConnectorProvider, setTriggerConnectorProvider] = useState<ConnectorProviderType>("google_drive");
-	const [triggerConnectorGrantId, setTriggerConnectorGrantId] = useState("");
-	// run_pipeline / insert_record config inputs (#134): the pipeline name to run, or the
-	// target collection to insert into — required for those actions or the trigger is broken.
-	const [triggerPipeline, setTriggerPipeline] = useState("");
-	const [triggerCollection, setTriggerCollection] = useState("");
-	const triggerConnectorGrants = triggerConnectorProvider === "google_drive" ? driveGrants : workdriveGrants;
+	// Triggers moved to <TriggersSection/> (#16/#18/#19) — it owns its own state and loading.
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: initial settings hydration calls the trigger loader once for this instance; trigger CRUD refreshes itself.
 	useEffect(() => {
 		(async () => {
 			try {
@@ -314,7 +282,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
 				setEmailPermission(st.permissions?.email === true);
 			} catch {}
-			loadTriggers();
 		})();
 	}, [instanceId]);
 
@@ -563,101 +530,6 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			setEmailPermission(!on); // revert on failure
 			setEmailMsg(e instanceof Error ? e.message : "Failed");
 		}
-	};
-
-	const loadTriggers = async () => {
-		try {
-			const d = await api<{ triggers?: InstanceTrigger[] }>(`/v1/triggers?instanceId=${encodeURIComponent(instanceId)}`);
-			setTriggers(d.triggers || []);
-		} catch (e) {
-			setTriggerMsg(e instanceof Error ? e.message : "Failed to load triggers");
-		}
-	};
-
-	const createTrigger = async () => {
-		try {
-			const syncGrantId = triggerConnectorGrantId || triggerConnectorGrants[0]?.id || "";
-			if (triggerAction === "sync_connector" && !syncGrantId) {
-				setTriggerMsg(`Grant a ${triggerConnectorProvider === "google_drive" ? "Google Drive" : "Zoho WorkDrive"} folder before creating a sync trigger.`);
-				return;
-			}
-			const pipeline = triggerPipeline.trim();
-			const collection = triggerCollection.trim();
-			if (triggerAction === "run_pipeline" && !pipeline) {
-				setTriggerMsg("Enter the name of the pipeline to run.");
-				return;
-			}
-			if (triggerAction === "insert_record" && !collection) {
-				setTriggerMsg("Enter the target collection for the record.");
-				return;
-			}
-			const browseUrl = browseTriggerUrl.trim();
-			if (triggerAction === "run_browse" && !/^https?:\/\//.test(browseUrl)) {
-				setTriggerMsg("Enter the start URL for the browser task (http/https).");
-				return;
-			}
-			const name = triggerName.trim() || (
-				triggerAction === "sync_connector"
-					? `${triggerConnectorProvider === "google_drive" ? "Google Drive" : "WorkDrive"} sync`
-					: triggerAction === "run_pipeline" ? `Run ${pipeline}`
-					: triggerAction === "insert_record" ? `Insert into ${collection}`
-					: triggerAction === "run_browse" ? "Scheduled browser run"
-					: triggerType === "webhook" ? "Inbound webhook" : "Scheduled run"
-			);
-			const actionConfig =
-				triggerAction === "sync_connector" ? { provider: triggerConnectorProvider, grantId: syncGrantId }
-					: triggerAction === "run_pipeline" ? { pipeline }
-						: triggerAction === "insert_record" ? { collection }
-							: triggerAction === "run_browse" ? { url: browseUrl }
-								: undefined;
-			// Jitter is cron-only and applies to any action — merge it onto the action config.
-			const jitterMin = triggerType === "cron" && triggerJitter.trim() ? Math.max(0, Math.min(Math.trunc(Number(triggerJitter) || 0), 720)) : 0;
-			const config = jitterMin ? { ...(actionConfig || {}), jitterMinutes: jitterMin } : actionConfig;
-			await api("/v1/triggers", {
-				method: "POST",
-				body: JSON.stringify({
-					instanceId,
-					name,
-					type: triggerType,
-					action: triggerAction,
-					schedule: triggerType === "cron" ? triggerSchedule : undefined,
-					config,
-				}),
-			});
-			setTriggerName("");
-			setTriggerPipeline("");
-			setTriggerCollection("");
-			setTriggerMsg("Trigger created.");
-			await loadTriggers();
-		} catch (e) {
-			setTriggerMsg(e instanceof Error ? e.message : "Failed");
-		}
-	};
-
-	const runTrigger = async (id: string) => {
-		try {
-			await api(`/v1/triggers/${id}/run`, { method: "POST", body: JSON.stringify({ manual: true }) });
-			setTriggerMsg("Trigger run queued.");
-			await loadTriggers();
-		} catch (e) {
-			setTriggerMsg(e instanceof Error ? e.message : "Failed");
-		}
-	};
-
-	const deleteTrigger = async (trigger: InstanceTrigger) => {
-		if (!confirm(`Delete trigger "${trigger.name}"?`)) return;
-		try {
-			await api(`/v1/triggers/${trigger.id}`, { method: "DELETE" });
-			setTriggerMsg("Trigger deleted.");
-			await loadTriggers();
-		} catch (e) {
-			setTriggerMsg(e instanceof Error ? e.message : "Failed");
-		}
-	};
-
-	const copyWebhook = async (url: string) => {
-		await navigator.clipboard?.writeText(url).catch(() => undefined);
-		setTriggerMsg("Webhook URL copied.");
 	};
 
 	const clearFinished = async () => {
@@ -1144,137 +1016,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			    not add clutter for agents that never run an objective. */}
 			<LoopRunsSection instanceId={instanceId} />
 
-			{/* Triggers */}
-			<div className="bg-panel border border-line rounded-xl p-3 sm:p-4 mb-3 sm:mb-4">
-				<h3 className="text-base font-bold mb-1">Triggers</h3>
-				<p className="text-sm text-muted mb-3">
-					Start work from an inbound webhook or a schedule. Triggers run inside this private instance.
-				</p>
-				<div className="grid grid-cols-1 md:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_auto] gap-2 items-end mb-4">
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-semibold">Name</span>
-						<input value={triggerName} onChange={(e) => setTriggerName(e.target.value)} placeholder="Daily digest" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-semibold">Type</span>
-						<select value={triggerType} onChange={(e) => setTriggerType(e.target.value as "webhook" | "cron")} className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full">
-							<option value="webhook">Webhook</option>
-							<option value="cron">Cron</option>
-						</select>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-semibold">Action</span>
-						<select value={triggerAction} onChange={(e) => setTriggerAction(e.target.value as TriggerActionType)} className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full">
-							<option value="create_task">Create task</option>
-							<option value="add_knowledge">Add knowledge</option>
-							<option value="sync_connector">Sync folder</option>
-							<option value="run_pipeline">Run pipeline</option>
-							<option value="insert_record">Insert record</option>
-							<option value="run_browse">Run browser task</option>
-							<option value="log_event">Log event</option>
-						</select>
-					</label>
-					<label className="flex flex-col gap-1">
-						<span className="text-xs font-semibold">Schedule</span>
-						<input disabled={triggerType !== "cron"} value={triggerSchedule} onChange={(e) => setTriggerSchedule(e.target.value)} placeholder="@daily" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full disabled:opacity-50" />
-					</label>
-					<label className="flex flex-col gap-1">
-							<span className="text-xs font-semibold">Jitter ± min</span>
-							<input disabled={triggerType !== "cron"} value={triggerJitter} onChange={(e) => setTriggerJitter(e.target.value)} placeholder="0 (on the dot)" title="Randomise the fire time by ± this many minutes so it doesn't run exactly on schedule." className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full disabled:opacity-50" />
-						</label>
-						<button type="button" onClick={createTrigger} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold">Add</button>
-				</div>
-				{triggerAction === "sync_connector" && (
-					<div className="grid grid-cols-1 md:grid-cols-2 gap-2 items-end mb-4">
-						<label className="flex flex-col gap-1">
-							<span className="text-xs font-semibold">Connector</span>
-							<select
-								value={triggerConnectorProvider}
-								onChange={(e) => {
-									setTriggerConnectorProvider(e.target.value as ConnectorProviderType);
-									setTriggerConnectorGrantId("");
-								}}
-								className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full"
-							>
-								<option value="google_drive">Google Drive</option>
-								<option value="zoho_workdrive">Zoho WorkDrive</option>
-							</select>
-						</label>
-						<label className="flex flex-col gap-1">
-							<span className="text-xs font-semibold">Folder grant</span>
-							<select
-								value={triggerConnectorGrantId || triggerConnectorGrants[0]?.id || ""}
-								onChange={(e) => setTriggerConnectorGrantId(e.target.value)}
-								className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full"
-							>
-								{triggerConnectorGrants.length === 0 ? (
-									<option value="">No granted folders</option>
-								) : triggerConnectorGrants.map((grant) => (
-									<option key={grant.id} value={grant.id}>{grant.resourceName}</option>
-								))}
-							</select>
-						</label>
-					</div>
-				)}
-				{triggerAction === "run_pipeline" && (
-					<div className="grid grid-cols-1 gap-2 items-end mb-4">
-						<label className="flex flex-col gap-1">
-							<span className="text-xs font-semibold">Pipeline name</span>
-							<input value={triggerPipeline} onChange={(e) => setTriggerPipeline(e.target.value)} placeholder="a pipeline configured on this agent" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
-							<span className="text-[0.7rem] text-muted">The trigger runs this declarative pipeline (from the agent's <code>config.pipelines</code>) on fire.</span>
-						</label>
-					</div>
-				)}
-				{triggerAction === "insert_record" && (
-					<div className="grid grid-cols-1 gap-2 items-end mb-4">
-						<label className="flex flex-col gap-1">
-							<span className="text-xs font-semibold">Target collection</span>
-							<input value={triggerCollection} onChange={(e) => setTriggerCollection(e.target.value)} placeholder="collection name" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
-							<span className="text-[0.7rem] text-muted">Webhook/cron payload is inserted as a record into this collection (an explicit <code>record</code> field wins).</span>
-						</label>
-					</div>
-				)}
-				{triggerAction === "run_browse" && (
-					<div className="grid grid-cols-1 gap-2 items-end mb-4">
-						<label className="flex flex-col gap-1">
-							<span className="text-xs font-semibold">Start URL</span>
-							<input value={browseTriggerUrl} onChange={(e) => setBrowseTriggerUrl(e.target.value)} placeholder="https://www.facebook.com/friends/requests" className="text-sm bg-paper border border-line rounded-lg px-3 py-2 w-full" />
-							<span className="text-[0.7rem] text-muted">On schedule, drives the browser (via <code>pags up</code>) toward this agent's objective from this URL. Runner must be online at run time, or the run is skipped.</span>
-						</label>
-					</div>
-				)}
-				<div className="flex flex-col gap-2">
-					{triggers.length === 0 ? (
-						<p className="text-xs text-muted">No triggers configured yet.</p>
-					) : triggers.map((trigger) => (
-						<div key={trigger.id} className="bg-paper border border-line rounded-lg p-3">
-							<div className="flex items-start justify-between gap-3">
-								<div className="min-w-0">
-									<div className="text-sm font-bold">{trigger.name}</div>
-									<div className="text-xs text-muted mt-0.5">
-										{trigger.type} · {trigger.action.replace("_", " ")}
-										{trigger.schedule ? ` · ${trigger.schedule}` : ""}
-										{trigger.action === "sync_connector" && trigger.config?.provider ? ` · ${trigger.config.provider === "google_drive" ? "Google Drive" : "WorkDrive"}` : ""}
-										{trigger.nextRunAt ? ` · next ${new Date(trigger.nextRunAt).toLocaleString()}` : ""}
-									</div>
-									{trigger.lastError && <div className="text-xs text-red mt-1">{trigger.lastError}</div>}
-								</div>
-								<div className="flex gap-2 shrink-0 flex-wrap justify-end">
-									<button type="button" onClick={() => runTrigger(trigger.id)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">Run now</button>
-									<button type="button" onClick={() => deleteTrigger(trigger)} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-red hover:border-red font-semibold">Delete</button>
-								</div>
-							</div>
-							{trigger.webhookUrl && (
-								<div className="flex gap-2 mt-2">
-									<input readOnly value={trigger.webhookUrl} className="flex-1 min-w-0 text-xs bg-panel border border-line rounded px-2 py-1.5 font-mono" />
-									<button type="button" onClick={() => copyWebhook(trigger.webhookUrl || "")} className="text-xs px-2.5 py-1 rounded-md border border-line text-muted hover:text-accent hover:border-accent font-semibold">Copy</button>
-								</div>
-							)}
-						</div>
-					))}
-				</div>
-				{triggerMsg && <div className="text-xs text-muted mt-2">{triggerMsg}</div>}
-			</div>
+			{/* Triggers — inbound webhooks + schedules (#16/#18/#19). Self-contained: it owns
+			    its own state, its schedule/preview logic and its run history. Grants are passed
+			    down because this page edits them live and a sync trigger needs the current list. */}
+			<TriggersSection instanceId={instanceId} driveGrants={driveGrants} workdriveGrants={workdriveGrants} />
 
 			{/* Voice — an OVERRIDE of your account defaults (#211). The controls themselves live in
 			    components/VoiceFields, shared verbatim with the Preferences page, so the two can

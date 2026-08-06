@@ -9,6 +9,8 @@ import {
 	makeTriggerSecret,
 	nextRunAt,
 	normalizeSchedule,
+	parseConfig,
+	previewRuns,
 	publicWebhookUrl,
 	recordTriggerEvent,
 	safeJson,
@@ -17,6 +19,7 @@ import {
 	type TriggerRow,
 	type TriggerType,
 } from "../lib/triggers.js";
+import { validateTriggerConfig } from "../lib/trigger-config.js";
 import type { Env } from "../types.js";
 
 export const triggerRoutes = new Hono<{ Bindings: Env }>();
@@ -62,7 +65,11 @@ function presentTrigger(trigger: TriggerRow, origin: string) {
 		action: trigger.action,
 		enabled: trigger.enabled === 1,
 		schedule: trigger.schedule,
-		config: parseConfig(trigger.config),
+		// The WHITELIST parse, not a raw JSON.parse (#16). This route used to echo the stored
+		// JSON verbatim, so the console could display a field that dispatch would drop — the
+		// config you were shown and the config that ran were different objects. They are now
+		// the same one, which also means anything the console renders is guaranteed honoured.
+		config: parseConfig(trigger.config) as Record<string, unknown>,
 		lastRunAt: trigger.last_run_at,
 		nextRunAt: trigger.next_run_at,
 		failureCount: trigger.failure_count,
@@ -73,13 +80,60 @@ function presentTrigger(trigger: TriggerRow, origin: string) {
 	};
 }
 
-function parseConfig(value: string): Record<string, unknown> {
-	try {
-		return JSON.parse(value) as Record<string, unknown>;
-	} catch {
-		return {};
-	}
+/**
+ * Reject a config that would be partly ignored, naming exactly which field and why (#16).
+ *
+ * This is the whole point of the ticket: `parseConfig` is a whitelist and the store path did no
+ * validation, so a misspelled — or correctly-spelled-but-wrong-action — field was accepted,
+ * persisted, shown back to the user, and then dropped at dispatch. Failing the save is the only
+ * place the user is still looking at the thing they got wrong.
+ */
+function assertValidConfig(action: TriggerAction, type: TriggerType, config: unknown): void {
+	const problems = validateTriggerConfig(action, type, config);
+	if (problems.length) throw new HttpError(400, problems.join(" "));
 }
+
+/**
+ * POST /v1/triggers/preview — "if I saved this, what would happen?" (#16 + #18)
+ *
+ * Answers two questions the console cannot answer for itself without lying:
+ *
+ *  • `runs` — the next few fire times, computed by the SAME `nextRunAt` the sweep calls, in the
+ *    same process. A preview reimplemented in the browser would be a second scheduler, and the
+ *    day the two disagree the UI confidently shows a time nothing will happen at. This one
+ *    cannot drift, because there is nothing to drift from.
+ *  • `issues` — every part of the config that would be stored and then ignored, in the same
+ *    words the save path would use.
+ *
+ * Deliberately non-throwing on a bad schedule/config: a live preview should show ALL the
+ * problems as you type, not fail on the first one. The save path still returns 400.
+ */
+triggerRoutes.post("/preview", async (c) => {
+	await requireUser(c);
+	const body = await c.req.json<{ type?: string; action?: string; schedule?: string; config?: Record<string, unknown>; count?: number }>().catch(() => ({}) as Record<string, never>);
+	const type: TriggerType = body.type === "cron" ? "cron" : "webhook";
+	let action: TriggerAction = "create_task";
+	try {
+		action = assertTriggerAction(body.action || "create_task");
+	} catch {
+		// An unknown action is the caller's bug, not something to 500 over — validate what we can.
+	}
+	const issues = validateTriggerConfig(action, type, body.config);
+	const timezone = typeof body.config?.timezone === "string" ? body.config.timezone : undefined;
+	const jitterMinutes = typeof body.config?.jitterMinutes === "number" ? body.config.jitterMinutes : undefined;
+	let schedule: string | null = null;
+	let runs: string[] = [];
+	let error: string | null = null;
+	if (type === "cron") {
+		try {
+			schedule = normalizeSchedule(body.schedule);
+			runs = previewRuns(schedule, timezone, Math.max(1, Math.min(Number(body.count) || 3, 5)));
+		} catch (e) {
+			error = e instanceof Error ? e.message : "invalid schedule";
+		}
+	}
+	return c.json({ schedule, timezone: timezone ?? null, jitterMinutes: jitterMinutes ?? null, runs, issues, error });
+});
 
 triggerRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
@@ -114,8 +168,10 @@ triggerRoutes.post("/", async (c) => {
 	const type = assertTriggerType(body.type);
 	const action = assertTriggerAction(body.action || "create_task");
 	const name = sanitizeTriggerName(body.name);
+	assertValidConfig(action, type, body.config);
 	const schedule = type === "cron" ? normalizeSchedule(body.schedule) : null;
-	const next = schedule ? applyJitter(nextRunAt(schedule), typeof body.config?.jitterMinutes === "number" ? body.config.jitterMinutes : undefined) : null;
+	const timezone = typeof body.config?.timezone === "string" ? body.config.timezone : undefined;
+	const next = schedule ? applyJitter(nextRunAt(schedule, new Date(), timezone), typeof body.config?.jitterMinutes === "number" ? body.config.jitterMinutes : undefined) : null;
 	const secret = type === "webhook" ? makeTriggerSecret() : null;
 	const id = crypto.randomUUID();
 	await c.env.DB.prepare(
@@ -155,13 +211,22 @@ triggerRoutes.put("/:id", async (c) => {
 	}>();
 	const name = body.name === undefined ? trigger.name : sanitizeTriggerName(body.name);
 	const action: TriggerAction = body.action === undefined ? trigger.action : assertTriggerAction(body.action);
+	// Validate against the config that will END UP stored under the action that will end up set —
+	// an update that only changes `action` can strand config that was valid for the old one.
+	const stored = parseConfig(trigger.config) as Record<string, unknown>;
+	const effectiveConfig = body.config === undefined ? stored : body.config;
+	assertValidConfig(action, trigger.type, effectiveConfig);
 	let schedule = trigger.schedule;
 	let next = trigger.next_run_at;
-	if (trigger.type === "cron" && body.schedule !== undefined) {
-		schedule = normalizeSchedule(body.schedule);
-		const cfgJitter = parseConfig(trigger.config).jitterMinutes;
-		const jm = body.config && typeof body.config.jitterMinutes === "number" ? body.config.jitterMinutes : (typeof cfgJitter === "number" ? cfgJitter : undefined);
-		next = applyJitter(nextRunAt(schedule), jm);
+	const timezone = typeof effectiveConfig.timezone === "string" ? effectiveConfig.timezone : undefined;
+	const zoneChanged = body.config !== undefined && timezone !== (typeof stored.timezone === "string" ? stored.timezone : undefined);
+	if (trigger.type === "cron" && (body.schedule !== undefined || zoneChanged)) {
+		schedule = body.schedule === undefined ? trigger.schedule : normalizeSchedule(body.schedule);
+		const jm = typeof effectiveConfig.jitterMinutes === "number" ? effectiveConfig.jitterMinutes : undefined;
+		// Changing the ZONE changes when the same expression fires, so the stored next_run_at is
+		// stale the moment it changes. Not recomputing here would leave the trigger firing on the
+		// old zone until its next run — and the console would show a next-run time that is wrong.
+		next = schedule ? applyJitter(nextRunAt(schedule, new Date(), timezone), jm) : next;
 	}
 	const secret = trigger.type === "webhook" && body.rotateSecret === true ? makeTriggerSecret() : trigger.secret_token;
 	await c.env.DB.prepare(
