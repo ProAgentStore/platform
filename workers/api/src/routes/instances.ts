@@ -81,6 +81,7 @@ export {
 } from "./instances-runtime.js";
 import { parseBoundRunnerNode } from "../lib/runtime-nodes.js";
 import { diagnoseAttachment } from "../lib/runtime-attachment.js";
+import { patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 
 export const instanceRoutes = new Hono<{ Bindings: Env }>();
 
@@ -471,10 +472,10 @@ instanceRoutes.put("/:instanceId/runner-node", async (c) => {
 		.first<{ config: string | null }>();
 	let cfg: Record<string, unknown> = {};
 	try { cfg = JSON.parse(row?.config || "{}") as Record<string, unknown>; } catch { cfg = {}; }
-	if (node) cfg.runnerNode = node; else delete cfg.runnerNode;
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instanceId, session.uid)
-		.run();
+	// Patch just this key (#231) — pinning a runner must not clobber a Settings or behaviour
+	// change saved from another tab between the read and the write.
+	if (node) await patchInstanceConfig(c.env, instanceId, session.uid, "runnerNode", node);
+	else await removeInstanceConfigKey(c.env, instanceId, session.uid, "runnerNode");
 	return c.json({ runnerNode: node || null });
 });
 
@@ -609,12 +610,11 @@ instanceRoutes.put("/:instanceId/voice-settings", async (c) => {
 		.first<{ preferences: string | null }>();
 	const account = parseAccountPreferences(row?.preferences);
 	const settings = sanitizeVoiceSettings(body, account.voice);
-	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-	cfg.voiceSettings = settings;
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instanceId, session.uid)
-		.run();
-	const { effective } = await effectiveVoice(c.env, instanceId, session.uid, cfg);
+	await patchInstanceConfig(c.env, instanceId, session.uid, "voiceSettings", settings);
+	// Resolve against the config AS WRITTEN, not the copy read beforehand. The patch now goes
+	// straight to SQL without mutating a local blob, so resolving off the pre-write read would
+	// echo the OLD override back — the panel would show your previous speed after saving a new one.
+	const { effective } = await effectiveVoice(c.env, instanceId, session.uid, { voiceSettings: settings });
 	return c.json({ voiceSettings: effective, hasOverride: true });
 });
 
@@ -623,12 +623,10 @@ instanceRoutes.delete("/:instanceId/voice-settings", async (c) => {
 	const session = await requireUser(c);
 	const instanceId = c.req.param("instanceId");
 	await requireOwnedInstance(c.env, instanceId, session.uid);
-	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-	delete cfg.voiceSettings;
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instanceId, session.uid)
-		.run();
-	const { effective } = await effectiveVoice(c.env, instanceId, session.uid, cfg);
+	await removeInstanceConfigKey(c.env, instanceId, session.uid, "voiceSettings");
+	// Resolve against an EMPTY override — that is the state just written, and "use my defaults"
+	// must report the account default, not the override it has just deleted.
+	const { effective } = await effectiveVoice(c.env, instanceId, session.uid, {});
 	return c.json({ voiceSettings: effective, hasOverride: false });
 });
 
@@ -640,11 +638,8 @@ instanceRoutes.put("/:instanceId/name", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as { name?: unknown };
 	const name = typeof body.name === "string" ? body.name.trim().slice(0, 60) : "";
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-	if (name) cfg.displayName = name;
-	else delete cfg.displayName;
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instanceId, session.uid)
-		.run();
+	if (name) await patchInstanceConfig(c.env, instanceId, session.uid, "displayName", name);
+	else await removeInstanceConfigKey(c.env, instanceId, session.uid, "displayName");
 	return c.json({ name: name || null });
 });
 
@@ -682,15 +677,15 @@ instanceRoutes.put("/:instanceId/settings", async (c) => {
 	const body = (await c.req.json().catch(() => ({}))) as { settings?: unknown };
 	const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
 	const result = applySettingsPatch(schema, cfg.settings, body.settings);
-	cfg.settings = result.settings;
 	// A field declared `voiceLanguage: true` is NOT copied into voiceSettings any more (#211).
 	// Writing it here made a stored duplicate of a declared value: change the setting and the old
 	// language lingered until something re-saved, and — now that presence of `voiceSettings` marks
 	// an agent as "customised" — merely picking a language would have silently flipped the agent
 	// off your account defaults. `resolveVoice` applies it live from the declared setting instead.
-	await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-		.bind(JSON.stringify(cfg), instanceId, session.uid)
-		.run();
+	//
+	// Patching just `$.settings` (#231) also means a settings save can no longer clobber
+	// `voiceSettings` itself, which sits in the same blob and is written by a different route.
+	await patchInstanceConfig(c.env, instanceId, session.uid, "settings", result.settings);
 
 	// A `repo` setting on a coding agent should MEAN something. Before this it was prompt
 	// context only: you told the agent which repo it owned, and it still had no repo attached,
@@ -698,9 +693,13 @@ instanceRoutes.put("/:instanceId/settings", async (c) => {
 	// same path a second time on the Coding tab. Attach it here, once, when it is first named.
 	// Idempotent by workdir, and never touches an instance that already has repos — the Coding
 	// tab stays the place to manage several.
-	await attachSettingRepo(c.env, instanceId, session.uid, cfg.settings).catch(() => undefined);
+	// `result.settings`, not `cfg.settings`: the local blob is no longer mutated before the
+	// write (the patch goes straight to SQL), so reading it back here would serve the values
+	// from BEFORE the save — a settings page that shows your old choice, and a repo that never
+	// attaches on the turn you first name it.
+	await attachSettingRepo(c.env, instanceId, session.uid, result.settings).catch(() => undefined);
 
-	return c.json({ settings: resolveSettingsValues(schema, cfg.settings) });
+	return c.json({ settings: resolveSettingsValues(schema, result.settings) });
 });
 
 /**

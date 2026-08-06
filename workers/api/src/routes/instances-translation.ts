@@ -14,6 +14,7 @@ import type { Env } from "../types.js";
 import { readInstanceConfig } from "./instances-apply.js";
 import { requireOwnedInstance } from "./instances-runtime.js";
 import { parseAccountPreferences, resolveTranslation, sanitizeTranslationSettings, type TranslationSettings } from "../lib/preferences.js";
+import { patchInstanceConfig, removeInstanceConfigKey } from "../lib/instance-config.js";
 
 /** Languages the under-message translation can target. SINGLE source of truth —
  *  `tag` (BCP-47) is what the console's spoken-translation voice uses, so the
@@ -162,11 +163,9 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 		const merged = sanitizeTranslationSettings(body, account);
 		const lang = languageByName(merged.target) ?? TRANSLATION_LANGUAGES[0];
 		const translation = { ...merged, target: lang.name };
-		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-		cfg.translation = translation;
-		await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-			.bind(JSON.stringify(cfg), instanceId, session.uid)
-			.run();
+		// Patch just this key (#231): a whole-blob write here would discard a Settings or
+		// behaviour change saved from another tab between the read and the write.
+		await patchInstanceConfig(c.env, instanceId, session.uid, "translation", translation);
 		return c.json({ translation: { ...translation, targetTag: lang.tag }, hasOverride: true });
 	});
 
@@ -175,11 +174,8 @@ export function registerTranslationRoutes(router: Hono<{ Bindings: Env }>): void
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
+		await removeInstanceConfigKey(c.env, instanceId, session.uid, "translation");
 		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-		delete cfg.translation;
-		await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-			.bind(JSON.stringify(cfg), instanceId, session.uid)
-			.run();
 		return c.json({ translation: translationConfigOf(cfg, await accountTranslationOf(c.env, session.uid)), hasOverride: false });
 	});
 

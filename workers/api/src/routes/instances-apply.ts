@@ -12,6 +12,7 @@ import type { Env } from "../types.js";
 import { createBrowserRuntimeTask } from "./browser-workflows.js";
 import { deriveFromUrl } from "../lib/board.js";
 import { callRuntime, requireOwnedInstance, requireLiveRuntime, runtimeJson, runtimeStatus } from "./instances-runtime.js";
+import { patchInstanceConfig } from "../lib/instance-config.js";
 
 /** An apply failure with an HTTP-ish status so callers can map it. */
 export class ApplyError extends Error {
@@ -338,11 +339,9 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
 		const body = (await c.req.json().catch(() => ({}))) as { instructions?: unknown };
-		const cfg = await readInstanceConfig(c.env, instanceId, session.uid);
-		cfg.specialInstructions = String(body.instructions ?? "").slice(0, 4000);
-		await c.env.DB.prepare("UPDATE agent_instances SET config = ?1, updated_at = datetime('now') WHERE id = ?2 AND user_id = ?3")
-			.bind(JSON.stringify(cfg), instanceId, session.uid)
-			.run();
+		// Patch just this key (#231). Rules & Tips is edited in the console while other
+		// settings are open; a whole-blob write would silently drop whichever landed first.
+		await patchInstanceConfig(c.env, instanceId, session.uid, "specialInstructions", String(body.instructions ?? "").slice(0, 4000));
 		return c.json({ ok: true });
 	});
 

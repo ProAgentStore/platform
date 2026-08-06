@@ -161,12 +161,14 @@ describe("PUT /v1/instances/:id/translation (integration)", () => {
 		const body = (await res.json()) as { translation: { enabled: boolean; target: string; targetTag: string; fontSize: string } };
 		expect(body.translation.targetTag).toBe("fr-FR");
 		expect(body.translation.fontSize).toBe("large");
-		const upd = writes.find((w) => w.sql.includes("UPDATE agent_instances SET config"));
+		// A targeted json_set on $.translation, not a whole-blob rewrite (#231) — a whole-blob
+		// write here would drop a settings or behaviour change saved from another tab.
+		const upd = writes.find((w) => w.sql.includes("json_set(") && w.sql.includes("'$.translation'"));
 		expect(upd).toBeTruthy();
-		// The stored config JSON carries the normalized translation block.
-		const stored = JSON.parse(upd!.args[0] as string) as { translation: { target: string; enabled: boolean } };
-		expect(stored.translation.target).toBe("French");
-		expect(stored.translation.enabled).toBe(true);
+		expect(writes.some((w) => /SET config = \?1/.test(w.sql))).toBe(false);
+		const stored = JSON.parse(upd!.args[0] as string) as { target: string; enabled: boolean };
+		expect(stored.target).toBe("French");
+		expect(stored.enabled).toBe(true);
 	});
 
 	it("falls back to English for an unknown target name", async () => {
