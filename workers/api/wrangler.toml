@@ -126,7 +126,9 @@ new_classes = ["AgentDO"]
 tag = "v2"
 new_classes = ["RelayDO"]
 
-# Secrets (set via wrangler secret put + Doppler):
+# Secrets (set via `wrangler secret put` — NOT Doppler; that project no longer exists.
+# Names are inventoried in ~/dev/ops/inventory.yaml; values enter secrets.enc.yaml (SOPS)
+# on rotation. CI deploys with the GitHub repo secrets.):
 # GITHUB_CLIENT_SECRET
 # GITHUB_TOKEN
 # SESSION_SIGNING_KEY

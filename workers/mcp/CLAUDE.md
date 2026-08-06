@@ -144,7 +144,7 @@ Tests sit beside their modules: `index.test.ts`, `index-auth.test.ts`,
 | secret | `SESSION_SIGNING_KEY` | Must match the API worker's |
 | secret | `GITHUB_TOKEN` | Org PAT for repo scaffold/read/write tools |
 
-Secrets live in Doppler project `pags`, config `prd`. Never commit a value.
+Secrets are **not** in Doppler (no such project). Names live in `~/dev/ops/inventory.yaml`; values are SOPS-encrypted in `~/dev/ops/secrets.enc.yaml` once rotated; Worker runtime secrets go in via `wrangler secret put`. Never commit a value.
 
 ## Commands
 

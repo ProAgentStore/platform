@@ -16,7 +16,7 @@ There are three authentication planes, deliberately kept distinct:
 
 ## Secrets & cryptography
 
-- All infra secrets live in **Doppler** (`pags/prd`) and are pushed to Worker secrets; secrets set with `wrangler secret put` are mirrored back to Doppler.
+- Infra secrets are **not** in Doppler — that project no longer exists. Worker runtime secrets are set with `wrangler secret put` and cannot be read back; their names are inventoried in `~/dev/ops/inventory.yaml`, and values enter `secrets.enc.yaml` (SOPS, age-encrypted) on rotation. CI deploys using the GitHub repo secrets `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`.
 - Every stored credential — user API keys, site-login credentials, the Gmail refresh token, cached GitHub installation tokens — is **envelope-encrypted** (`lib/crypto.ts`): a random-IV AES-256-GCM data key, itself wrapped with AES-KW under the master `KEY_ENCRYPTION_KEY`. Decryption verifies integrity (GCM tag + AES-KW).
 - Secrets are never returned to the browser except the owner's **own** provider key via the rate-limited `/v1/keys/:provider/reveal` (for browser-direct realtime use); the Gmail refresh token is explicitly excluded from that path. List endpoints return booleans (`hasPassword`, …), never values.
 
