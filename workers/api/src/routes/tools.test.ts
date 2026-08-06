@@ -480,3 +480,39 @@ describe("PUT /v1/instances/:id/tools/:name — the owner's off-switch", () => {
 		expect(((await res.json()) as any).error).toContain("switched off");
 	});
 });
+
+// ── #216: consent rows must describe something that can actually happen ──────
+describe("PUT /v1/instances/:id/connectors/:connector/consent", () => {
+	it("grants write consent for a write-capable connector", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/connectors/github/consent", { method: "PUT", body: JSON.stringify({ enabled: true }) }, await tok("u1"));
+		expect(res.status).toBe(200);
+	});
+
+	it("404s an unknown connector instead of storing a row for it", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/connectors/not-a-connector/consent", { method: "PUT", body: JSON.stringify({ enabled: true }) }, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	// repo-local declares scopes.write:false, so runRegistryTool would refuse its writes anyway.
+	// The problem was the record: consent that reads as granted but can never permit anything is
+	// the raw material for a later bypass, because the next reader has to re-derive that
+	// "granted" here does not mean granted.
+	it("refuses write consent for a read-only connector", async () => {
+		const { app, env } = testApp();
+		const res = await req(app, env, "/v1/instances/i1/connectors/repo-local/consent", { method: "PUT", body: JSON.stringify({ enabled: true }) }, await tok("u1"));
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as any).error).toMatch(/read-only/i);
+	});
+
+	// Revocation stays unvalidated on purpose: rows written before this check existed, or whose
+	// connector has since gone read-only, must remain removable.
+	it("allows revoking consent for a read-only or unknown connector", async () => {
+		const { app, env } = testApp();
+		for (const conn of ["repo-local", "not-a-connector"]) {
+			const res = await req(app, env, `/v1/instances/i1/connectors/${conn}/consent`, { method: "PUT", body: JSON.stringify({ enabled: false }) }, await tok("u1"));
+			expect(res.status).toBe(200);
+		}
+	});
+});

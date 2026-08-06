@@ -6,7 +6,9 @@ import type { Env } from "../types.js";
 const KEK = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 /** Minimal in-memory D1 that understands the queries credentials.ts issues. */
-function mockEnv(): Env {
+/** `null` = this deployment has no encryption key (#220). Not `undefined`: a default
+ *  parameter treats an explicitly-passed undefined as absent and would hand back the key. */
+function mockEnv(kek: string | null = KEK): Env {
 	const rows: Record<string, unknown>[] = [];
 	const cols = ["id", "instance_id", "user_id", "domain", "login_url", "username", "secrets_ciphertext", "secrets_dek", "secrets_iv", "comments", "recovery_history"];
 	const prepare = (sql: string) => ({
@@ -43,7 +45,7 @@ function mockEnv(): Env {
 			},
 		}),
 	});
-	return { DB: { prepare }, KEY_ENCRYPTION_KEY: KEK } as unknown as Env;
+	return { DB: { prepare }, KEY_ENCRYPTION_KEY: kek ?? undefined } as unknown as Env;
 }
 
 describe("credDomain", () => {
@@ -99,5 +101,47 @@ describe("credentials vault", () => {
 		const id = await createCredential(env, "inst-1", "u1", { domain: "x.com", password: "p" });
 		expect(await deleteCredential(env, "inst-1", "u1", id)).toBe(true);
 		expect(await listCredentials(env, "inst-1", "u1")).toHaveLength(0);
+	});
+});
+
+// ── #220: a secret write must never silently succeed without encryption ──────
+//
+// encryptSecretsFor returned null both for "this credential has no secrets" and for "there is
+// no KEY_ENCRYPTION_KEY", and callers wrote `enc?.c ?? null` either way. So a misconfigured
+// deployment accepted an ATS password with a 200 and stored nothing — and on UPDATE wrote NULL
+// over ciphertext that was already there, destroying a working credential.
+describe("credential vault fails closed without a key (#220)", () => {
+	it("refuses to create a credential carrying secrets", async () => {
+		const env = mockEnv(null);
+		await expect(
+			createCredential(env, "i1", "u1", { domain: "acme.com", password: "hunter2" }),
+		).rejects.toThrow(/encryption key/i);
+	});
+
+	it("still allows a metadata-only credential — nothing secret is at risk", async () => {
+		const env = mockEnv(null);
+		const id = await createCredential(env, "i1", "u1", { domain: "acme.com", username: "me@acme.com" });
+		expect(id).toBeTruthy();
+		const list = await listCredentials(env, "i1", "u1");
+		expect(list.map((c) => c.username)).toContain("me@acme.com");
+	});
+
+	it("refuses to update a credential that HAS stored secrets, leaving the ciphertext intact", async () => {
+		// Store it properly first, with a working key.
+		const good = mockEnv();
+		const id = await createCredential(good, "i1", "u1", { domain: "acme.com", password: "hunter2" });
+		const before = await revealCredential(good, "i1", "u1", id);
+		expect(before?.password).toBe("hunter2");
+
+		// Now the key disappears (rotation gone wrong, missing secret binding, …).
+		const broken = { ...(good as unknown as Record<string, unknown>), KEY_ENCRYPTION_KEY: undefined } as unknown as Env;
+		await expect(
+			updateCredential(broken, "i1", "u1", id, { domain: "acme.com", username: "renamed" }),
+		).rejects.toThrow(/encryption key/i);
+
+		// The stored secret survived: refusing beats writing NULL over recoverable ciphertext,
+		// because the key can come back and the password cannot.
+		const after = await revealCredential(good, "i1", "u1", id);
+		expect(after?.password).toBe("hunter2");
 	});
 });

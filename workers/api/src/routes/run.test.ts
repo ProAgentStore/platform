@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { canRunAgent } from "./run.js";
 
 describe("run route validation", () => {
 	it("default model fallback", () => {
@@ -21,25 +22,35 @@ describe("run route validation", () => {
 	});
 });
 
-describe("agent visibility check", () => {
-	it("allows published agents", () => {
-		const visibility = "published";
-		const status = "inactive";
-		const allowed = visibility === "published" || status === "active";
-		expect(allowed).toBe(true);
+describe("canRunAgent (#219)", () => {
+	const pub = { visibility: "published", status: "active" };
+
+	it("lets anyone run a published, active agent", () => {
+		expect(canRunAgent({ ...pub, privileged: false })).toBe(true);
 	});
 
-	it("allows active agents regardless of visibility", () => {
-		const visibility = "draft";
-		const status = "active";
-		const allowed = visibility === "published" || status === "active";
-		expect(allowed).toBe(true);
+	// The bug: `visibility !== "published" && status !== "active"` rejects only an agent failing
+	// BOTH, so a draft that is active — every agent under construction — was runnable by any
+	// signed-in user who guessed the slug.
+	it("blocks a non-owner from running an ACTIVE DRAFT", () => {
+		expect(canRunAgent({ visibility: "draft", status: "active", privileged: false })).toBe(false);
 	});
 
-	it("blocks draft inactive agents", () => {
-		const visibility = "draft";
-		const status = "inactive";
-		const allowed = visibility === "published" || status === "active";
-		expect(allowed).toBe(false);
+	it("blocks a non-owner from running a PUBLISHED INACTIVE agent", () => {
+		expect(canRunAgent({ visibility: "published", status: "inactive", privileged: false })).toBe(false);
+	});
+
+	it("blocks unlisted/private regardless of status", () => {
+		for (const visibility of ["draft", "unlisted", "private"]) {
+			for (const status of ["active", "inactive"]) {
+				expect(canRunAgent({ visibility, status, privileged: false })).toBe(false);
+			}
+		}
+	});
+
+	// The creator workflow this endpoint exists for: run your own agent while building it.
+	it("lets the owner or an admin run anything, in any state", () => {
+		expect(canRunAgent({ visibility: "draft", status: "inactive", privileged: true })).toBe(true);
+		expect(canRunAgent({ visibility: "private", status: "active", privileged: true })).toBe(true);
 	});
 });

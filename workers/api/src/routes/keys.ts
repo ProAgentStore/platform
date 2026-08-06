@@ -136,7 +136,11 @@ const PROVIDERS: Provider[] = [
 	},
 ];
 
-const PROVIDER_BY_ID = new Map(PROVIDERS.map((p) => [p.id, p]));
+/** Exported so tests assert against the REAL list. keys.test.ts otherwise mirrors PROVIDERS
+ *  by hand, and that copy had already drifted — it is missing http/mcp/cloudflare/claude-code,
+ *  the very providers #215 is about. A mirrored constant cannot catch a mistake in the thing
+ *  it mirrors. */
+export const PROVIDER_BY_ID = new Map(PROVIDERS.map((p) => [p.id, p]));
 const HOST_TO_PROVIDER = new Map(
 	PROVIDERS.filter((p) => p.host).map((p) => [p.host as string, p.id]),
 );
@@ -284,11 +288,52 @@ keysRoutes.post("/:provider/verify", async (c) => {
 	}
 });
 
+/**
+ * The ONLY request headers forwarded upstream by the key proxy (#214).
+ *
+ * `content-type` is load-bearing beyond the obvious: the STT path posts a FormData body, so the
+ * multipart boundary lives in this header — drop it and Whisper uploads break. The rest are
+ * provider API-version/routing headers that carry no credential.
+ *
+ * Notably absent, and deliberately: `cookie` (the browser SDK sends `credentials: "include"` for
+ * the OAuth bind cookies, so the platform's own session cookies were going to OpenAI and
+ * Anthropic), `authorization` (injected below from the vault instead), `proxy-authorization`,
+ * and every `x-*` a caller might invent.
+ */
+export const PROXY_FORWARD_HEADERS = [
+	"content-type",
+	"accept",
+	"anthropic-version",
+	"anthropic-beta",
+	"openai-beta",
+	"openai-organization",
+	"openai-project",
+] as const;
+
+/**
+ * Providers whose key a BROWSER genuinely needs in the clear (#215).
+ *
+ * Everything else is reachable through the key proxy, which injects the credential
+ * server-side — the SDK already does exactly that for Whisper rather than revealing the key
+ * ("an exfiltration target", voice/config.ts). The endpoint was written for OpenAI Realtime,
+ * which opens a WebSocket direct from the page and cannot be proxied that way; the guard was
+ * only `PROVIDER_BY_ID.has()`, so it also handed out `http`, `mcp`, `cloudflare` and
+ * `claude-code` — long-lived connector and Workers-AI credentials with no browser-side use at
+ * all. Any XSS, bad extension or compromised console dependency could drain them.
+ *
+ * Additions here need a real browser-direct transport that the proxy cannot serve. Prefer a
+ * scoped, ephemeral token over widening this list.
+ */
+export const BROWSER_REVEALABLE_PROVIDERS = new Set(["openai"]);
+
 /** Reveal a decrypted key (for browser-direct connections like OpenAI Realtime WS). */
 keysRoutes.get("/:provider/reveal", async (c) => {
 	const session = await requireUser(c);
 	const providerId = c.req.param("provider");
 	if (!PROVIDER_BY_ID.has(providerId)) throw new HttpError(400, `Unknown provider: ${providerId}`);
+	if (!BROWSER_REVEALABLE_PROVIDERS.has(providerId)) {
+		throw new HttpError(403, `The ${providerId} key is server-side only and cannot be revealed to the browser. Use the key proxy (/v1/keys/proxy/…), which injects it for you.`);
+	}
 	if (!c.env.KEY_ENCRYPTION_KEY) throw new HttpError(500, "Key encryption not configured");
 	const row = await c.env.DB.prepare(
 		"SELECT key_ciphertext, dek_wrapped, iv FROM user_api_keys WHERE user_id = ?1 AND provider = ?2",
@@ -392,18 +437,26 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 		.bind(session.uid, providerId)
 		.run();
 
-	// Build upstream request
+	// Build upstream request from an ALLOWLIST, not from the caller's headers (#214).
+	//
+	// This used to copy the whole incoming request and delete a handful of Cloudflare
+	// forwarding headers. Everything else rode along to api.openai.com / api.anthropic.com —
+	// including `Cookie`, which the browser SDK deliberately sends (`credentials: "include"`,
+	// needed for the OAuth bind cookies), plus `Authorization`, `Proxy-Authorization` and any
+	// `X-*` a caller cared to invent. A route whose entire job is handling BYOK secrets was
+	// forwarding the platform's own session credentials to third parties.
+	//
+	// A denylist can only ever remove the headers someone thought of. Start empty and add back
+	// what a provider API actually needs.
 	const upstreamUrl = `https://${host}${upstreamPath}${url.search}`;
-	const headers = new Headers(c.req.raw.headers);
-	headers.delete("host");
-	headers.delete("cf-connecting-ip");
-	headers.delete("cf-ray");
-	headers.delete("x-forwarded-for");
-	headers.delete("x-real-ip");
-	headers.delete("cf-ipcountry");
-	headers.delete("cf-visitor");
+	const headers = new Headers();
+	for (const name of PROXY_FORWARD_HEADERS) {
+		const v = c.req.header(name);
+		if (v) headers.set(name, v);
+	}
 
-	// Inject key based on provider
+	// Inject key based on provider. Set AFTER the allowlist copy so a caller-supplied
+	// authorization header can never survive into the upstream request.
 	if (providerId === "anthropic") {
 		headers.set("x-api-key", apiKey);
 		headers.delete("authorization");
@@ -421,11 +474,29 @@ keysRoutes.all("/proxy/:host{.+}", async (c) => {
 		c.req.method !== "GET" && c.req.method !== "HEAD"
 			? await c.req.arrayBuffer()
 			: undefined;
+	// `redirect: "manual"` (#214). The default follows redirects and re-sends every header —
+	// including the injected key — to wherever the response points, which may be a different
+	// origin entirely. lib/ssrf.ts already strips credentials across an origin change for the
+	// same reason. No provider API in this proxy's allowlist redirects in normal operation, so
+	// surfacing it as an error is both safe and more informative than silently following.
 	const upstream = await fetch(upstreamUrl, {
 		method: c.req.method,
 		headers,
 		body: reqBody,
+		redirect: "manual",
 	});
+	if (upstream.status >= 300 && upstream.status < 400) {
+		const location = upstream.headers.get("location") || "(none)";
+		console.error(`[keys-proxy] ${providerId} ${host}${upstreamPath} → ${upstream.status} redirect to ${location}; refusing to follow`);
+		await logError(c.env, {
+			source: "keys-proxy",
+			userId: session.uid,
+			status: 502,
+			message: `Upstream redirected to ${location}; refused (would re-send the provider key)`,
+			context: { provider: providerId, host, path: upstreamPath, method: c.req.method },
+		}).catch(() => undefined);
+		throw new HttpError(502, "The provider redirected the request. Refused, rather than forward your key to another origin.");
+	}
 
 	// Forward response with CORS
 	const respHeaders = new Headers(upstream.headers);

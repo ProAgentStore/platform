@@ -1,4 +1,5 @@
 import { decryptKey, encryptKey } from "./crypto.js";
+import { HttpError } from "./auth.js";
 import type { Env } from "../types.js";
 
 export interface CredentialSecrets {
@@ -169,6 +170,16 @@ export async function updateCredential(env: Env, instanceId: string, userId: str
 	// back to the derived password, and told the brain to use a login that no longer works —
 	// burning the run to a stuck handoff. Clearing a secret needs an explicit act, not a blank box.
 	const kept = (next: string | undefined, prev: string | undefined) => (next?.trim() ? next : prev);
+	// Refuse to rewrite the secret columns at all when we cannot READ what is already there
+	// (#220). decryptSecrets returns {} both for "no secrets stored" and for "could not
+	// decrypt", so on a KEK problem the merge below would see no existing secrets, produce
+	// nothing to encrypt, and write NULL over intact ciphertext — losing the credential to fix
+	// a metadata edit. Storing ciphertext we cannot decrypt is a strictly better state than
+	// deleting it: the key can come back.
+	const hasStoredSecrets = !!(existing.secrets_ciphertext && existing.secrets_dek && existing.secrets_iv);
+	if (hasStoredSecrets && !env.KEY_ENCRYPTION_KEY) {
+		throw new HttpError(503, "Credential storage is unavailable: this deployment has no encryption key configured. Nothing was changed.");
+	}
 	const current = await decryptSecrets(env, existing);
 	const merged: CredentialInput = {
 		domain: input.domain || existing.domain,
@@ -203,12 +214,28 @@ export async function deleteCredential(env: Env, instanceId: string, userId: str
 	return (res.meta?.changes ?? 0) > 0;
 }
 
+/**
+ * Encrypt whatever secrets this input carries, or null when it carries none.
+ *
+ * The two "nothing to write" cases used to collapse into one null (#220): "this credential is
+ * metadata only" and "encryption is unavailable". Callers wrote `enc?.c ?? null` either way, so
+ * a missing KEY_ENCRYPTION_KEY meant a user could save an ATS password, get a 200, and have the
+ * secret silently not stored — and on UPDATE it wrote NULL over ciphertext that was already
+ * there, destroying a working credential because of a deployment misconfiguration.
+ *
+ * Now only the first case returns null. The second throws, so a secret write fails closed and
+ * loudly, matching how runtime token storage already behaves. 503 rather than 500: the request
+ * was valid, the environment is not, and it may well succeed after the operator sets the key.
+ */
 async function encryptSecretsFor(env: Env, input: CredentialInput): Promise<{ c: Uint8Array; d: Uint8Array; i: Uint8Array } | null> {
 	const secrets: CredentialSecrets = {};
 	if (input.password) secrets.password = input.password;
 	if (input.pin) secrets.pin = input.pin;
 	if (input.recoveryCodes) secrets.recoveryCodes = input.recoveryCodes;
-	if (Object.keys(secrets).length === 0 || !env.KEY_ENCRYPTION_KEY) return null;
+	if (Object.keys(secrets).length === 0) return null; // metadata-only credential — legitimate
+	if (!env.KEY_ENCRYPTION_KEY) {
+		throw new HttpError(503, "Credential storage is unavailable: this deployment has no encryption key configured. Your secret was NOT saved.");
+	}
 	const { ciphertext, dekWrapped, iv } = await encryptKey(JSON.stringify(secrets), env.KEY_ENCRYPTION_KEY);
 	return { c: ciphertext, d: dekWrapped, i: iv };
 }

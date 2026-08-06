@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowedCorsOrigin, splitProxyHostPath } from "./keys.js";
+import { allowedCorsOrigin, BROWSER_REVEALABLE_PROVIDERS, PROVIDER_BY_ID as REAL_PROVIDER_BY_ID, PROXY_FORWARD_HEADERS, splitProxyHostPath } from "./keys.js";
 
 // Mirror the PROVIDERS list from the source so tests validate the real shape.
 interface Provider {
@@ -398,5 +398,52 @@ describe("key reveal endpoint validation", () => {
 			expect(path).toContain(p.id);
 			expect(path).toMatch(/\/reveal$/);
 		}
+	});
+});
+
+// ── #215: raw reveal is for browser-direct transports only ───────────────────
+describe("BROWSER_REVEALABLE_PROVIDERS", () => {
+	// The guard used to be only PROVIDER_BY_ID.has(), so every stored credential was
+	// retrievable in cleartext by browser JS — including connector and Workers-AI keys with no
+	// browser-side use at all. One XSS or bad extension drains them.
+	it("refuses the server-side credentials named in the issue", () => {
+		for (const id of ["http", "mcp", "cloudflare", "claude-code"]) {
+			// REAL_PROVIDER_BY_ID, not this file's hand-mirrored copy — that copy predates these
+			// four providers, which is exactly why the mirror can't guard this.
+			expect(REAL_PROVIDER_BY_ID.has(id)).toBe(true); // still a real provider…
+			expect(BROWSER_REVEALABLE_PROVIDERS.has(id)).toBe(false); // …just not revealable
+		}
+	});
+
+	it("allows only openai, the one browser-direct transport (Realtime WS)", () => {
+		expect([...BROWSER_REVEALABLE_PROVIDERS]).toEqual(["openai"]);
+	});
+
+	// Guard against the list quietly growing back: everything proxyable must stay off it.
+	it("is a strict subset of the provider list", () => {
+		for (const id of BROWSER_REVEALABLE_PROVIDERS) expect(REAL_PROVIDER_BY_ID.has(id)).toBe(true);
+	});
+});
+
+// ── #214: the proxy builds upstream headers from an allowlist ────────────────
+describe("PROXY_FORWARD_HEADERS", () => {
+	const forwarded = new Set<string>(PROXY_FORWARD_HEADERS);
+
+	// The leak: the browser SDK sends credentials:"include" for OAuth bind cookies, and the
+	// proxy copied the whole request — so platform cookies went to api.openai.com.
+	it("never forwards credential-bearing or platform headers", () => {
+		for (const h of ["cookie", "set-cookie", "authorization", "proxy-authorization", "x-forwarded-for", "cf-connecting-ip", "host"]) {
+			expect(forwarded.has(h)).toBe(false);
+		}
+	});
+
+	// Load-bearing: the STT path posts FormData, and the multipart boundary rides in
+	// content-type. Dropping it breaks Whisper uploads.
+	it("forwards content-type, so multipart boundaries survive", () => {
+		expect(forwarded.has("content-type")).toBe(true);
+	});
+
+	it("is all lowercase, since lookups are case-insensitive but the set is not", () => {
+		for (const h of PROXY_FORWARD_HEADERS) expect(h).toBe(h.toLowerCase());
 	});
 });

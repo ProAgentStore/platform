@@ -4,6 +4,7 @@ import { requireOwnedInstance } from "./instances-runtime.js";
 import { getRegistryTool, registryTools, runRegistryTool, type JsonSchema } from "../lib/tool-registry.js";
 import { DISABLED_TOOLS_KEY, explainRefusal, instanceToolPolicy, readDisabledTools } from "../lib/instance-tool-policy.js";
 import { listConsents, revokeConsent, setConsent } from "../lib/connector-consent.js";
+import { getConnector } from "../lib/connectors/registry.js";
 import { startPipelineRun } from "../lib/pipeline-run-start.js";
 import { validatePipeline, type PipelineDef } from "../lib/pipeline.js";
 import { listRuns } from "../lib/pipeline-runs.js";
@@ -336,8 +337,26 @@ toolRoutes.put("/:id/connectors/:connector/consent", async (c) => {
 	await requireOwnedInstance(c.env, instanceId, session.uid);
 	const connector = c.req.param("connector");
 	const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
-	if (body.enabled) await setConsent(c.env, instanceId, session.uid, connector, "write");
-	else await revokeConsent(c.env, instanceId, connector, "write");
+
+	// Validate against the registry before writing (#216). runRegistryTool would refuse an
+	// unknown or read-only connector's write tools anyway, so this is not a live bypass — but
+	// storing the row anyway produced consent state that LOOKS granted and can never do
+	// anything. A permission record that lies about what it permits is the raw material for a
+	// later bypass: the next thing to read `instance_connector_consent` would have to
+	// independently re-derive that "granted" here doesn't mean granted.
+	//
+	// Revocation is deliberately NOT validated: a row written before this check existed, or one
+	// whose connector has since gone read-only, must remain removable.
+	if (body.enabled) {
+		const def = getConnector(connector);
+		if (!def) throw new HttpError(404, `Unknown connector: ${connector}`);
+		if (!def.scopes.write) {
+			throw new HttpError(400, `The ${def.id} connector is read-only — write access cannot be granted to it.`);
+		}
+		await setConsent(c.env, instanceId, session.uid, connector, "write");
+	} else {
+		await revokeConsent(c.env, instanceId, connector, "write");
+	}
 	return c.json({ ok: true, connector, scope: "write", enabled: !!body.enabled });
 });
 
