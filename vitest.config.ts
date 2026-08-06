@@ -113,6 +113,19 @@ export default defineConfig({
 					// hand for its own tests, so nothing in this category silently keeps a
 					// budget meant for a pure function, and a real hang still fails in 2min.
 					testTimeout: 120_000,
+					// The same budget for HOOKS, and for the same reason — this was the gap
+					// that let the starvation this split exists to absorb land anyway.
+					//
+					// `testTimeout` does not cover `beforeAll`/`afterAll`, which stayed on
+					// vitest's 10s default. But a hook here does the heaviest work in the file:
+					// LAUNCHING the real Chrome, or tearing one down. On 2026-08-06 the #274
+					// reaper made `mcp-runtime.test.ts`'s teardown slower, all 3,711 tests
+					// passed, and the file failed on a 10s hook — which then gated CI *and the
+					// API deploy* for an unrelated commit that landed next.
+					//
+					// Found independently by two agents in one afternoon, which is the argument
+					// for fixing it in the config rather than per-file.
+					hookTimeout: 120_000,
 				},
 			},
 		],
