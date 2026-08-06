@@ -62,6 +62,39 @@ Browser-capable agents are useful when a task needs:
 
 The Job Application Assistant is the reference browser-capable agent. Its Cloudflare Workflow brain drives a local Playwright browser through snapshot/action steps and can pause for user approval.
 
+### The generic browser task
+
+Job-apply's engine is not job-specific. `BrowserTaskWorkflow` drives the same snapshot/act loop toward an arbitrary `{url, objective}` (`POST /v1/instances/{id}/browse`), and an agent opts into it by declaring `runtime: "browser"` and `workflow: "BROWSER_TASK"` — no monorepo code per agent.
+
+The objective is composed, not typed: the agent's `identity.goal` supplies the standing instruction, and the subscriber's typed settings are rendered underneath it. `config.browserTask.startUrlSetting` names which setting holds the start URL, so the page to visit is configured once in the console rather than retyped on every manual run and duplicated into every cron trigger's config.
+
+All three handoffs come from the shared loop and behave identically to apply:
+
+| Reason | Trigger | What the subscriber sees |
+| --- | --- | --- |
+| `challenge` | The page snapshot reports a captcha, 2FA or security check | Live takeover — solve it in the real browser; the run resumes itself |
+| `stuck` | Repeated failures on one control | Take over that single step, then Resume |
+| `needs_input` | The brain calls `request_user_info` | An input box; the value is saved and the run continues |
+
+The brain is told never to sign in and never to invent a value — a missing answer is a handoff, not a guess.
+
+### Read-only browser agents
+
+`config.browserTask.readOnly` makes "this agent only ever observes" a runtime property rather than a prompt instruction. Declared on the **agent row**, it is read from there and nowhere else — not the request body, not the trigger config, not the instance config — so a subscriber, a cron config, or the model itself cannot clear it. The workflow's act layer refuses every committing click (`blockedActionReason`) before it reaches the page.
+
+This is what makes it reasonable to point an agent at a real logged-in account: the blast radius of a wrong decision is a wasted step rather than a payment.
+
+Two limits worth stating, because an unverifiable safety claim is worth nothing:
+
+- The guard covers committing **clicks**. Typing and Enter are not blocked, because a watcher needs a search box — so the guarantee is "it cannot click Pay", not a formal sandbox.
+- It is fail-safe by design, so a filter button literally labelled "Apply" is refused too. Refusing a harmless click is the cheap error.
+
+`readOnly` and the per-run `dryRun` share one commit-verb guard on purpose: two guards would eventually disagree about what "committing" means, and the weaker one would be the hole. `readOnly` wins when both are set, so a permanent property is never described to the model as a rehearsal it could retry.
+
+**Portal Watch** (`portal-watch`, migration 0087) is the first-party agent built on this. It reads the accounts that only tell you things after you log in — energy, rates, an insurance renewal, a case status, a supplier portal — in the subscriber's own signed-in browser, and reports the actual figures and dates. It exists entirely as seed data: declared capabilities, two typed settings, and a goal. There is no portal-watch code in the monorepo, so a sibling (a shipment tracker, a case-status watcher) is another row, not another PR.
+
+Paired with a `run_browse` cron trigger it does the round unattended. A run that finds nothing new still costs a run — change detection and notify-on-change are deliberately **not** built here; the right shape for them is a `browse` pipeline step feeding `dedupe_upsert` with `emitOn: "update"` into the delivery pump, which belongs with opening the step vocabulary rather than in a bespoke branch of the workflow.
+
 ## Coder Agents
 
 Coder agents use the same runtime idea, but the local capability is a coding CLI rather than a browser.
@@ -84,6 +117,7 @@ Coder also supports multiple connected machines for the same private instance. E
 - Runtime tasks are scoped to a private instance.
 - Destructive actions require explicit confirmation where supported.
 - Browser tasks can require approval before final submission.
+- An agent declared `readOnly` cannot perform a committing click at all; the refusal is enforced in the workflow, not requested in the prompt.
 - Local files and browser profiles stay local unless the user intentionally uploads or imports content.
 
 ## When Not To Use A Browser Runtime

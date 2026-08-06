@@ -54,16 +54,34 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 	const instCfg = parseJson(inst.config);
 	const identity = (agentCfg.identity ?? {}) as Record<string, unknown>;
 	const browserTaskCfg = (agentCfg.browserTask ?? {}) as Record<string, unknown>;
+	/** Declared by the agent: this one only ever observes. See `readOnly` on BrowserTaskJob. */
+	const readOnly = browserTaskCfg.readOnly === true;
 
-	// Start URL: explicit override > agent-declared start URL.
-	const startUrl = trimmed(input.url) ?? trimmed(browserTaskCfg.startUrl) ?? trimmed(agentCfg.startUrl);
-	if (!startUrl || !/^https?:\/\//.test(startUrl)) throw new BrowseError("no start URL — pass `url` or set config.browserTask.startUrl on the agent", 400);
+	const schema = caps.settingsSchema ?? [];
+	const settings = schema.length ? resolveSettingsValues(schema, instCfg.settings) : {};
+
+	// Start URL: explicit override > the typed SETTING the agent nominates for it >
+	// agent-declared default. The setting matters because the start URL is usually the one
+	// thing that differs per subscriber (which portal, which account). Without it the URL had
+	// to be retyped on every manual run and duplicated into every cron trigger's config, so
+	// two places could disagree about what the agent watches; `startUrlSetting` names the
+	// field once and both paths read it. Which field it is stays DATA — no slug is hardcoded.
+	const urlSettingId = trimmed(browserTaskCfg.startUrlSetting);
+	const settingUrl = urlSettingId ? trimmed(settings[urlSettingId]) : undefined;
+	const startUrl = trimmed(input.url) ?? settingUrl ?? trimmed(browserTaskCfg.startUrl) ?? trimmed(agentCfg.startUrl);
+	if (!startUrl || !/^https?:\/\//.test(startUrl)) {
+		throw new BrowseError(
+			urlSettingId
+				? "no start URL — set it in the console Settings tab, or pass `url`"
+				: "no start URL — pass `url` or set config.browserTask.startUrl on the agent",
+			400,
+		);
+	}
 
 	// Objective: explicit override > (agent goal + rendered subscriber settings). Fully
 	// data-driven; the settings block is generic (same one the chat prompt injects).
 	const goal = trimmed(identity.goal) ?? "";
-	const schema = caps.settingsSchema ?? [];
-	const settingsBlock = schema.length ? settingsPromptBlock(schema, resolveSettingsValues(schema, instCfg.settings)) : "";
+	const settingsBlock = schema.length ? settingsPromptBlock(schema, settings) : "";
 	const objective = trimmed(input.objective) ?? [goal, settingsBlock].filter(Boolean).join("\n\n");
 	if (!objective) throw new BrowseError("no objective — set the agent's goal or pass `objective`", 400);
 
@@ -109,6 +127,12 @@ export async function startBrowserTask(env: Env, instanceId: string, userId: str
 			url: startUrl,
 			objective,
 			dryRun: input.dryRun === true,
+			// Read from the AGENT row and NOWHERE else — not the request body, not the trigger
+			// config, not the instance config — so nobody downstream of the declaration can clear
+			// it, the way an actionable ticket's action is fixed when it is created and approving
+			// only chooses whether it runs. A read-only agent that its caller could talk out of
+			// being read-only would just be a prompt with extra steps.
+			readOnly,
 			specialInstructions: trimmed(instCfg.specialInstructions),
 			today: new Date().toISOString().slice(0, 10),
 		};

@@ -1,6 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
 import { describeAction, runApplyLoop, type ApplyDecision, type ApplyDeps, type ApplyResult, type PageSnapshot } from "../lib/apply-loop.js";
-import { decideBrowserTask, isCommitClick, type BrowserTaskJob } from "../lib/browser-task-loop.js";
+import { blockedActionReason, decideBrowserTask, type BrowserTaskJob } from "../lib/browser-task-loop.js";
 import { callRunner, getBoundRunnerConn } from "../lib/runner-client.js";
 import { logError } from "../lib/error-log.js";
 import { logEvent } from "../lib/events.js";
@@ -74,12 +74,15 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 			snapshot: () => step.do(`s${n++}-snapshot`, retry, () => callRunner<PageSnapshot>(conn, "/browser/snapshot", { taskId })) as Promise<PageSnapshot>,
 			decide: (p) => step.do(`s${n++}-decide`, retry, () => decideBrowserTask(env, userId, p, { kind: "chat", instanceId })) as Promise<ApplyDecision>,
 			act: (a) => { const sn = n++; return step.do(`s${sn}-act`, retry, async () => {
-				// Dry-run guard: in test mode NEVER let the committing click reach the page
-				// (the brain can't override the runtime). This is what makes dryRun safe for a
-				// task whose commit is a plain click (Confirm/Add/…), which apply's fill-gated
-				// guard wouldn't catch.
-				if (job.dryRun && isCommitClick(a)) {
-					return { url: "", challenge: null as string | null, error: `DRY-RUN (test mode): the committing action "${a.name ?? ""}" is BLOCKED — do not perform it. Call finish(status:"done") now.` };
+				// The commit guard, enforced HERE and not in the prompt: a rehearsal (`dryRun`) or a
+				// read-only agent (`readOnly`, declared on the agent row) never lets the committing
+				// click reach the page, and the brain cannot override a runtime it does not run in.
+				// This is what makes dryRun safe for a task whose commit is a plain click
+				// (Confirm/Add/…), which apply's fill-gated guard wouldn't catch — and what lets a
+				// read-only agent be pointed at a REAL logged-in account.
+				const blocked = blockedActionReason(job, a);
+				if (blocked) {
+					return { url: "", challenge: null as string | null, error: blocked };
 				}
 				try {
 					const r = await callRunner<{ url: string; challenge: string | null; feedback?: string; screenshot?: string }>(conn, "/browser/act", a);

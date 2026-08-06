@@ -22,9 +22,20 @@ export interface BrowserTaskJob extends BrowserJobBase {
 	userHint?: string;
 	/** Today's date (YYYY-MM-DD), stamped at trigger time — for any date fields. */
 	today?: string;
-	/** Test mode: the workflow's act layer blocks the commit action (click Confirm/
+	/** Per-RUN check: the workflow's act layer blocks the commit action (click Confirm/
 	 *  Submit/Send/…) so a run can be walked safely without committing anything. */
 	dryRun?: boolean;
+	/**
+	 * Per-AGENT property: this agent only ever OBSERVES. Same act-layer guard as
+	 * `dryRun`, but it is declared on the agent row (`config.browserTask.readOnly`)
+	 * and never read from a request body — so a subscriber, a cron config, or the
+	 * agent's own brain cannot turn it off. That is the difference between "this run
+	 * is a rehearsal" and "this agent cannot commit anything, ever".
+	 *
+	 * It is what makes a browser agent safe to point at a REAL logged-in account: the
+	 * blast radius of a wrong decision is a wasted step, not a payment.
+	 */
+	readOnly?: boolean;
 	/** Values the user supplied mid-run via a needs_input handoff (field → value),
 	 *  fed back so the agent never re-asks. */
 	providedAnswers?: Record<string, string>;
@@ -108,9 +119,20 @@ export function browserTaskSystemPrompt(job: BrowserTaskJob): string {
 		"- When the objective is complete, or there is nothing left to act on, call finish(status:\"done\", detail:\"<what you did>\").",
 		"- If you genuinely cannot proceed, call finish(status:\"blocked\", detail:\"<why>\").",
 		"- Be decisive and brief. Do not narrate.",
-		job.dryRun
-			? "- ⛔ TEST MODE (dry run): walk the flow but do NOT perform the committing action. When you would click a final Confirm/Add/Submit/Send/Post/Delete/Pay button, STOP and call finish(status:\"done\", detail:\"test mode — reached <button>\") instead. (Such clicks are blocked anyway.)"
-			: "",
+		// read-only is the stronger, permanent form of the same guard, so it wins when both are set.
+		job.readOnly
+			? [
+					"",
+					"## READ-ONLY — THIS IS THE WHOLE POINT OF THIS AGENT",
+					"You LOOK and you REPORT. You never change anything on this account.",
+					"- ALLOWED: navigate, scroll, open a menu/tab/statement, and type into a SEARCH or FILTER box to find what you were asked about.",
+					"- FORBIDDEN: submitting, sending, posting, paying, confirming, accepting, deleting, saving, or changing any setting. The runtime BLOCKS those clicks before they reach the page, so attempting one only wastes a step — and the block is not something you can talk your way past.",
+					"- If the only way to finish would be to change something, do NOT try: call finish(status:\"blocked\", detail:\"<what would have had to change>\") and say so.",
+					"- YOUR finish DETAIL IS THE REPORT. Put the ACTUAL figures, dates and statuses you read into it (\"Balance $184.20, due 3 September\") — never \"I checked the page\". If something you were asked for was not on screen, say that plainly; do NOT guess it.",
+				].join("\n")
+			: job.dryRun
+				? "- ⛔ REHEARSAL (dry run): walk the flow but do NOT perform the committing action. When you would click a final Confirm/Add/Submit/Send/Post/Delete/Pay button, STOP and call finish(status:\"done\", detail:\"dry run — reached <button>\") instead. (Such clicks are blocked anyway.)"
+				: "",
 	];
 	return lines.filter((l) => l !== "").join("\n");
 }
@@ -177,7 +199,29 @@ export async function decideBrowserTask(
 	return decision;
 }
 
-/** Is this action the committing step (blocked in dry-run)? Used by the workflow's act layer. */
+/** Is this action the committing step (blocked in dry-run / read-only)? */
 export function isCommitClick(action: BrowserAction): boolean {
 	return action.action === "click" && COMMIT_VERB_RE.test(action.name ?? "");
+}
+
+/**
+ * Why this action must not reach the page — the workflow's act layer returns this to the
+ * brain INSTEAD of performing it. `null` means "go ahead".
+ *
+ * Read-only and dry-run share one commit-verb guard on purpose: two guards would eventually
+ * disagree about what "committing" means, and the weaker one would be the hole. The guard is
+ * deliberately fail-safe — a filter button literally labelled "Apply" is refused too. For an
+ * agent whose promise is that it cannot act, refusing a harmless click is the cheap error and
+ * performing a harmful one is the expensive one.
+ */
+export function blockedActionReason(job: BrowserTaskJob, action: BrowserAction): string | null {
+	if (!isCommitClick(action)) return null;
+	const what = action.name ?? "";
+	if (job.readOnly) {
+		return `BLOCKED — this agent is READ-ONLY and can never perform "${what}". Do not attempt it again or look for another way round it. Report what you can already see: call finish with the values you read, or finish(status:"blocked") if the objective genuinely required changing something.`;
+	}
+	if (job.dryRun) {
+		return `DRY RUN (rehearsal): the committing action "${what}" is BLOCKED — do not perform it. Call finish(status:"done") now.`;
+	}
+	return null;
 }
