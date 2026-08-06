@@ -15,6 +15,7 @@
 		"includes": [
 			"**",
 			"!**/node_modules",
+			"!.claude",
 			"!**/dist",
 			"!**/.wrangler",
 			"!**/.vibe-check",

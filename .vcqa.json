@@ -1,0 +1,13 @@
+{
+	"ignore": [
+		".claude/**",
+		".vibe-check/**",
+		".gstack/**",
+		".playwright-mcp/**",
+		"store/docs/**",
+		"coverage/**",
+		"test-results/**",
+		"playwright-report/**",
+		"workers/host/src/pages.ts"
+	]
+}

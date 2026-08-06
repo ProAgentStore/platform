@@ -45,7 +45,8 @@
 		"openapi:coverage": "node scripts/openapi-coverage.mjs",
 		"docs:drift": "node scripts/docs-drift.mjs",
 		"lint": "biome check .",
-		"format": "biome format --write ."
+		"format": "biome format --write .",
+		"vcqa": "pnpm --filter @proagentstore/sdk build && npx --yes @vibecodeqa/cli@0.53.1 --skip-tests ."
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.0.0",

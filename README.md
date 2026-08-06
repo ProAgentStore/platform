@@ -360,6 +360,69 @@ watching. Deliberately-undocumented routes go in the `EXCLUSIONS` array in
 registration run, and `/health` plus three docs quote it.
 **When you add a docs page**, add it to `nav` in `zensical.toml`.
 
+### Quality scan (VCQA)
+
+```bash
+pnpm vcqa              # the canonical score: pinned CLI, --skip-tests, repo root
+```
+
+Two things in that one line are load-bearing.
+
+**It builds the SDK first**, for the same reason `pnpm typecheck` does: the console and
+the agent UIs import `@proagentstore/sdk` as built `dist`, so on a checkout that has not
+built it, `tsc` reports "Cannot find module '@proagentstore/sdk/client'" across three
+packages. VCQA's `types` check shells out to `tsc` and scores that **0/100**. Measured
+here: `types` 0 → 100 and the composite 65 → 71, from `pnpm --filter @proagentstore/sdk
+build` alone, with no source change. That is exactly what #288 reported as "typecheck
+fails" — an unbuilt dist, not broken code. Without the prefix this command manufactures
+that false alarm on every fresh checkout.
+
+**`--skip-tests` is deliberate** and is what the score is quoted against. VCQA's `testing`
+check otherwise executes the suite itself, which here means the `integration` project —
+real Chromes over CDP, bound sockets, a real `git clone` — inside a scan that already
+runs ~35 other checks. `pnpm test` is how you run the tests; this command measures
+everything else. The CLI version is pinned in the script so two people comparing scores
+are comparing the same scanner.
+
+**Three files decide what the scan sees, and they are not interchangeable.**
+
+| File | Applies to | Why it can't be merged into the others |
+|---|---|---|
+| `.vcqa.json` | VCQA's own file walker | `ignore` patterns, read by the in-process runners |
+| `.gitleaks.toml` | the `secrets` check | `gitleaks` is a **subprocess**; `.vcqa.json` never reaches it |
+| `biome.json` | the `lint` check and `pnpm lint` | Biome resolves its own config before any ignore list applies |
+
+That split is the whole point, and it is why the obvious one-file fix does not work.
+Measured at the repo root on 2026-08-06, on a machine with live agent worktrees:
+
+- **`pnpm lint` was not noisy, it was dead.** Biome refuses to start when it finds a
+  nested *root* config below the root config it loaded — and `.claude/worktrees/<agent>/`
+  contains a copy of this repo's `biome.json`. It exited 1 with "Found a nested root
+  configuration" and linted nothing. Fixed by `!.claude` in `files.includes` — and it has
+  to be spelled that way. Every neighbouring entry is `!**/x`, but `!**/.claude` matches an
+  *ancestor* when you are working inside a worktree (which lives under `.claude/`), so it
+  excludes the whole checkout from itself: "Checked 0 files", exit 0. Lint reporting
+  success having read nothing is worse than the crash. `!.claude` is resolved against the
+  config root; verified at 891 files from the repo root and 807 from inside a worktree.
+- **462 gitleaks findings, 451 of them (97.6%) from `.claude/worktrees/**`** — the same
+  three files re-reported once per agent session, 338 MB scanned in 25.4s. `secrets`
+  scored 25/100, the worst check in the report, almost entirely on duplication. With
+  `.gitleaks.toml`: 11 findings, 17.5 MB, 1.7s. Those 11 are real paths in real source
+  and are deliberately left visible.
+
+**What is deliberately still in scope.** `agents/coder` and `agents/job-application-assistant`
+are Tier-0 — pnpm workspace members that CI typechecks and builds — so they are scanned.
+The inert vendored seed copies that used to sit beside them were deleted on 2026-08-01
+(`f9980a8`) and `scripts/check-agents-allowlist.mjs` keeps them out; there is nothing
+stale under `agents/` left to exclude, and an `agents/**` ignore would now only hide
+shipping code. `scripts/check-qa-config.mjs` fails CI if one is added.
+
+**Before you add an ignore pattern**, note that VCQA is not a glob engine. It understands
+`prefix/**`, `*suffix`, and a plain path prefix — nothing else. `**/dist/**` reads as
+correct, matches nothing, and fails silently; VCQA already excludes `dist` (and
+`node_modules`, `.claude`, `coverage`, …) by directory name at any depth, so most patterns
+you reach for are already covered. The guard rejects a pattern that can never fire.
+
 ## Part of the FreeStore ecosystem
 
 | Store | URL | Product |

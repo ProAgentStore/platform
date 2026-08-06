@@ -1,0 +1,63 @@
+# gitleaks config (#290) — keep the secret scan pointed at THIS checkout.
+#
+# Why this file exists, measured rather than guessed. `gitleaks detect --no-git` is
+# what VCQA's `secrets` check shells out to, and gitleaks is an external process: it
+# knows nothing about VCQA's ignore list, nothing about `.vcqa.json`, and nothing
+# about `.gitignore`. It walks the working directory. On a developer machine that
+# directory contains `.claude/worktrees/<agent>/` — a full clone of this repo per
+# live agent session — so every finding in the repo was re-reported once per worktree.
+#
+# Measured at the repo root on 2026-08-06, before this file:
+#
+#   462 findings, 338.65 MB scanned, 25.4s
+#   451 of the 462 (97.6%) were under .claude/**  — the same 3 files, ~150 times over
+#
+# After:
+#
+#   11 findings, 17.53 MB scanned, 1.72s
+#
+# That is the whole of the issue's "unstable scores depending on which agent
+# worktrees happen to exist on a developer machine": the `secrets` check scored
+# 25/100 and was the worst check in the report, and ~98% of what dragged it there was
+# one file counted many times. A `.vcqa.json` ignore entry does NOT fix this — that
+# list is applied by VCQA's own file walker and never reaches the gitleaks subprocess,
+# which is why the fix has to live here in gitleaks' own config.
+#
+# The 11 that remain are real paths in real source (test fixtures with fake tokens,
+# and a `curl -H "Authorization: ..."` example in the docs page). They are deliberately
+# NOT allowlisted. This file excludes locations that are not part of the checkout; it
+# is not a place to silence findings in code that ships.
+#
+# Discovery is automatic: gitleaks reads `.gitleaks.toml` from the directory it scans,
+# so `gitleaks detect`, `pnpm vcqa`, and CI all pick it up with no flag. Verified.
+
+[extend]
+# Keep the full upstream ruleset. This file only narrows WHERE it looks, never WHAT
+# it looks for — dropping a rule is how a real leak gets missed.
+useDefault = true
+
+[[allowlists]]
+description = "Paths that are not part of this checkout: agent worktrees, tool output, and build/dependency trees."
+# Anchored with `(^|/)` rather than a bare `\.claude/`, so the pattern matches the
+# directory at any depth but does not match a FILE whose name merely ends in
+# `.claude` (e.g. `notes.claude/`). An unanchored pattern here would over-match and
+# quietly hide real findings; a `^`-only pattern would miss nested worktrees, which is
+# the exact case this file exists for.
+paths = [
+  # Claude Code agent worktrees — a full copy of the repo per live session.
+  '''(^|/)\.claude/''',
+  # VCQA's own report output embeds sample keys and trips the scanner on every run.
+  '''(^|/)\.vibe-check/''',
+  # Other agent-tool scratch dirs, same class as .claude/.
+  '''(^|/)\.gstack/''',
+  '''(^|/)\.playwright-mcp/''',
+  # Build output and dependencies. Both are gitignored and never committed, so a real
+  # secret cannot be hiding here — it would have to exist in the source that produced it,
+  # which IS scanned.
+  '''(^|/)node_modules/''',
+  '''(^|/)dist/''',
+  '''(^|/)\.wrangler/''',
+  # `zensical build` renders platform-docs into store/docs. Generated, gitignored; the
+  # source it is rendered from is scanned.
+  '''^store/docs/''',
+]
