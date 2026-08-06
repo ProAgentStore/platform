@@ -17,6 +17,7 @@
 			"!**/node_modules",
 			"!.claude",
 			"!**/dist",
+			"!**/coverage",
 			"!**/.wrangler",
 			"!**/.vibe-check",
 			"!workers/host/src/pages.ts",
