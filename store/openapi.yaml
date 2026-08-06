@@ -5540,6 +5540,79 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/mcp/consent:
+    get:
+      summary: This instance's outbound-MCP grants, per server and per remote tool
+      description: |
+        Separate from the connector-level consent because a connector row cannot name a server:
+        the MCP endpoint is user config, so one `mcp`/write grant used to reach EVERY MCP server
+        the instance could name. These rows name it.
+
+        Each grant carries `destructive` — the same name test the enforcement uses, returned so
+        the console can explain why a `*` grant doesn't cover a particular tool instead of
+        re-deriving the rule client-side and drifting from it.
+      operationId: listInstanceMcpConsent
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The outbound-MCP grants on this instance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  grants:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        endpoint: { type: string, description: Normalized https MCP endpoint. }
+                        tool: { type: string, description: 'A remote tool name, or `*` for every non-destructive tool on that server.' }
+                        destructive: { type: boolean, description: "Advisory for the UI. Judged on the tool name WE send — never the server's own `destructiveHint`, which is authored by the party being defended against." }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      summary: Grant or revoke one remote MCP tool on one server
+      description: |
+        Granting reach to a specific server IS a decision to let this agent write via MCP, so the
+        outer connector gate is satisfied in the same explicit action rather than left as a second
+        checkbox the user must discover after the first silently does nothing. The implication runs
+        one way only — granting the connector still names no server.
+
+        `tool` accepts `*`, which covers a server's ordinary tools but NOT destructive-looking names.
+      operationId: setInstanceMcpConsent
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [url, tool, enabled]
+              properties:
+                url: { type: string, description: An https MCP endpoint, e.g. `https://example.com/mcp`. }
+                tool: { type: string, maxLength: 128, description: 'A remote tool name, or `*`.' }
+                enabled: { type: boolean }
+      responses:
+        "200":
+          description: The resulting grant
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  endpoint: { type: string }
+                  tool: { type: string }
+                  enabled: { type: boolean }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/tools/{name}:
     put:
       summary: Turn one tool off (or back on)
