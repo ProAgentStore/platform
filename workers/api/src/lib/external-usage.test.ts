@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { splitUsage } from "./external-usage.js";
 
-const row = (user_id: string, agent_id: string | null, calls = 1, cost_micros = 0) => ({ user_id, agent_id, calls, cost_micros });
+/** `charged_micros` defaults to the full value — the old fixture's world, where every row is money. */
+const row = (user_id: string, agent_id: string | null, calls = 1, value_micros = 0, charged_micros = value_micros) => ({
+	user_id,
+	agent_id,
+	calls,
+	value_micros,
+	charged_micros,
+});
 
 describe("splitUsage", () => {
 	// The metric #68 is actually written in: "10 external users on ONE runtime agent".
@@ -29,8 +36,27 @@ describe("splitUsage", () => {
 
 	it("reports operator activity alongside, so the comparison is visible not implied", () => {
 		const r = splitUsage([row("op", "coder", 700, 17_000_000), row("ext", "coder", 5, 100)], new Set(["op"]));
-		expect(r.operator).toEqual({ users: 1, calls: 700, costMicros: 17_000_000 });
-		expect(r.totals).toEqual({ calls: 5, costMicros: 100 });
+		expect(r.operator).toEqual({ users: 1, calls: 700, valueMicros: 17_000_000, chargedMicros: 17_000_000 });
+		expect(r.totals).toEqual({ calls: 5, valueMicros: 100, chargedMicros: 100 });
+	});
+
+	/**
+	 * Value and charge are carried separately, because #57 turns one of them into a payout.
+	 *
+	 * A coding engine running on the owner's Claude subscription accrues large notional value and
+	 * no charge. Reporting the value alone under a money-shaped name is how a creator gets paid,
+	 * or a tenant billed, for dollars nobody was charged — the #343 error pointed outward.
+	 */
+	it("keeps notional value and actual charge apart", () => {
+		const r = splitUsage(
+			[
+				row("ext-1", "coder", 10, 48_760_000, 0), // a subscription engine session: value, no charge
+				row("ext-2", "coder", 4, 1_000_000, 1_000_000), // BYOK: value IS the charge
+			],
+			new Set(["op"]),
+		);
+		expect(r.totals).toEqual({ calls: 14, valueMicros: 49_760_000, chargedMicros: 1_000_000 });
+		expect(r.byAgent[0]).toMatchObject({ agentId: "coder", valueMicros: 49_760_000, chargedMicros: 1_000_000 });
 	});
 
 	// The failure mode this exists to prevent: reporting a falsely encouraging number. With no
@@ -66,7 +92,7 @@ describe("splitUsage", () => {
 
 	it("is empty and honest when there is no usage at all", () => {
 		const r = splitUsage([], new Set(["op"]));
-		expect(r).toMatchObject({ externalUsers: 0, byAgent: [], totals: { calls: 0, costMicros: 0 }, operatorUnknown: false });
+		expect(r).toMatchObject({ externalUsers: 0, byAgent: [], totals: { calls: 0, valueMicros: 0, chargedMicros: 0 }, operatorUnknown: false });
 	});
 });
 

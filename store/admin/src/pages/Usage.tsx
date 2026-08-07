@@ -11,12 +11,19 @@ interface UsageResp {
 	split: { platformPaid: { costMicros: number; calls: number }; byok: { costMicros: number; calls: number } };
 }
 
-/** GET /v1/admin/usage/external — mirrors ExternalUsageReport (workers/api/src/lib/external-usage.ts). */
+/**
+ * GET /v1/admin/usage/external — mirrors ExternalUsageReport (workers/api/src/lib/external-usage.ts).
+ *
+ * Two dollar figures, never one (#346): `valueMicros` is list-price value on every row,
+ * `chargedMicros` the subset anyone is actually charged. Work run on someone's Claude
+ * subscription has the first and not the second.
+ */
+interface ExternalTotals { calls: number; valueMicros: number; chargedMicros: number }
 interface ExternalResp {
 	externalUsers: number;
-	byAgent: Array<{ agentId: string; externalUsers: number; calls: number; costMicros: number }>;
-	totals: { calls: number; costMicros: number };
-	operator: { users: number; calls: number; costMicros: number };
+	byAgent: Array<{ agentId: string; externalUsers: number } & ExternalTotals>;
+	totals: ExternalTotals;
+	operator: { users: number } & ExternalTotals;
 	operatorUnknown: boolean;
 }
 
@@ -156,8 +163,8 @@ function ExternalSplit({ ext, days, agentLabels }: { ext: ExternalResp; days: nu
 
 			{/* Operator activity sits alongside rather than being netted out, so the comparison is visible. */}
 			<div className="grid grid-cols-2 gap-3 mt-4">
-				<Side label="External" users={ext.externalUsers} calls={ext.totals.calls} costMicros={ext.totals.costMicros} accent={!none} />
-				<Side label="Operator" users={ext.operator.users} calls={ext.operator.calls} costMicros={ext.operator.costMicros} />
+				<Side label="External" users={ext.externalUsers} totals={ext.totals} accent={!none} />
+				<Side label="Operator" users={ext.operator.users} totals={ext.operator} />
 			</div>
 
 			<h3 className="text-xs uppercase text-muted mt-5 mb-1.5">External users by agent</h3>
@@ -170,7 +177,8 @@ function ExternalSplit({ ext, days, agentLabels }: { ext: ExternalResp; days: nu
 							<th className="py-1.5">Agent</th>
 							<th className="text-right">External users</th>
 							<th className="text-right">Calls</th>
-							<th className="text-right">Cost</th>
+							<th className="text-right">Value</th>
+							<th className="text-right">Charged</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -182,7 +190,8 @@ function ExternalSplit({ ext, days, agentLabels }: { ext: ExternalResp; days: nu
 								</td>
 								<td className="text-right tabular-nums">{fmtInt(a.externalUsers)}</td>
 								<td className="text-right tabular-nums">{fmtInt(a.calls)}</td>
-								<td className="text-right tabular-nums">{fmtUsd(a.costMicros)}</td>
+								<td className="text-right tabular-nums">{fmtUsd(a.valueMicros)}</td>
+								<td className="text-right tabular-nums">{fmtUsd(a.chargedMicros)}</td>
 							</tr>
 						))}
 					</tbody>
@@ -192,14 +201,17 @@ function ExternalSplit({ ext, days, agentLabels }: { ext: ExternalResp; days: nu
 	);
 }
 
-function Side({ label, users, calls, costMicros, accent }: { label: string; users: number; calls: number; costMicros: number; accent?: boolean }) {
+function Side({ label, users, totals, accent }: { label: string; users: number; totals: ExternalTotals; accent?: boolean }) {
 	return (
 		<div className="border border-line rounded-lg p-3">
 			<div className={`text-xs uppercase tracking-wide ${accent ? "text-accent" : "text-muted"}`}>{label}</div>
 			<div className="text-sm mt-1.5 tabular-nums">
-				{fmtInt(users)} {users === 1 ? "user" : "users"} · {fmtInt(calls)} calls
+				{fmtInt(users)} {users === 1 ? "user" : "users"} · {fmtInt(totals.calls)} calls
 			</div>
-			<div className="text-sm text-muted tabular-nums">{fmtUsd(costMicros)}</div>
+			{/* Value first because that is what this panel is asking about — is anyone here? — then
+			    the charged subset, so the two are never added together or mistaken for each other. */}
+			<div className="text-sm text-muted tabular-nums">{fmtUsd(totals.valueMicros)} value</div>
+			<div className="text-xs text-muted-soft tabular-nums">{fmtUsd(totals.chargedMicros)} charged</div>
 		</div>
 	);
 }

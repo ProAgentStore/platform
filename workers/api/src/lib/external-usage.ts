@@ -1,4 +1,5 @@
 import type { Env } from "../types.js";
+import { CHARGED_SQL } from "./usage-payer.js";
 
 /**
  * How much of the platform's usage comes from someone who is NOT the operator (#68).
@@ -65,18 +66,46 @@ export async function operatorUserIds(env: Env, callerUid?: string): Promise<Set
 export interface UsageActor {
 	userId: string;
 	calls: number;
-	costMicros: number;
+	valueMicros: number;
+	chargedMicros: number;
 	agents: string[];
+}
+
+/**
+ * The two dollar figures this report carries, never one (#346).
+ *
+ * `valueMicros` is what the usage WOULD have cost at list prices, on every row without exception.
+ * `chargedMicros` is the subset someone is actually charged for — {@link CHARGED_SQL}, i.e. a
+ * `payer` of `byok-api` or `platform`. Work an engine did on somebody's Claude subscription has a
+ * large value and a charge of zero.
+ *
+ * Both are reported because this report answers two questions that are about to be asked by two
+ * different features. "Is anyone but the operator here?" (#68) wants VALUE: filtering it to
+ * charged rows would make a subscription-heavy external user read as no user at all, which is
+ * exactly the direction of error #343 was. "What is owed, and to whom?" (#57 metering → creator
+ * payouts, #56 cost governance) wants CHARGED, and nothing else — paying a creator, or billing a
+ * tenant, out of value drawn from somebody's own subscription is money invented from a list price.
+ *
+ * They are separate fields rather than one number and a flag so that a consumer has to name which
+ * one it means. Until this split, this file did not mention `payer` at all, and whoever wired the
+ * payout up would have inherited an unfiltered sum under an innocent name.
+ */
+export interface UsageTotals {
+	calls: number;
+	/** Notional list-price value of everything counted. Not a bill. */
+	valueMicros: number;
+	/** The subset of `valueMicros` that is money someone owes. THIS is the payout/billing input. */
+	chargedMicros: number;
 }
 
 export interface ExternalUsageReport {
 	/** The metric #68 is written in terms of. */
 	externalUsers: number;
 	/** Distinct external users per agent — "10 external users on ONE agent" is per-agent. */
-	byAgent: Array<{ agentId: string; externalUsers: number; calls: number; costMicros: number }>;
-	totals: { calls: number; costMicros: number };
+	byAgent: Array<{ agentId: string; externalUsers: number } & UsageTotals>;
+	totals: UsageTotals;
 	/** Operator activity, reported alongside so the comparison is visible rather than implied. */
-	operator: { users: number; calls: number; costMicros: number };
+	operator: { users: number } & UsageTotals;
 	/**
 	 * True when NO operator could be identified. The counts are then meaningless rather than
 	 * zero — every row looks external — so a caller must say "unknown", not "we have users".
@@ -89,33 +118,35 @@ export interface ExternalUsageReport {
 /** Split usage rows into operator vs external. Pure — the SQL and the classification stay apart
  *  so the definition of "external" is testable without a database. */
 export function splitUsage(
-	rows: Array<{ user_id: string; agent_id: string | null; calls: number; cost_micros: number }>,
+	rows: Array<{ user_id: string; agent_id: string | null; calls: number; value_micros: number; charged_micros: number }>,
 	operators: ReadonlySet<string>,
 ): ExternalUsageReport {
 	const external = rows.filter((r) => !operators.has(r.user_id));
 	const operatorRows = rows.filter((r) => operators.has(r.user_id));
 
-	const perAgent = new Map<string, { users: Set<string>; calls: number; costMicros: number }>();
+	const perAgent = new Map<string, { users: Set<string> } & UsageTotals>();
 	for (const r of external) {
 		// Rows with no agent id are real usage but cannot be attributed; they still count toward
 		// the user total and are grouped under "(unattributed)" rather than silently dropped.
 		const key = r.agent_id ?? "(unattributed)";
-		const e = perAgent.get(key) ?? { users: new Set<string>(), calls: 0, costMicros: 0 };
+		const e = perAgent.get(key) ?? { users: new Set<string>(), calls: 0, valueMicros: 0, chargedMicros: 0 };
 		e.users.add(r.user_id);
 		e.calls += r.calls;
-		e.costMicros += r.cost_micros;
+		e.valueMicros += r.value_micros;
+		e.chargedMicros += r.charged_micros;
 		perAgent.set(key, e);
 	}
 
-	const sum = (xs: typeof rows) => ({
+	const sum = (xs: typeof rows): UsageTotals => ({
 		calls: xs.reduce((n, r) => n + r.calls, 0),
-		costMicros: xs.reduce((n, r) => n + r.cost_micros, 0),
+		valueMicros: xs.reduce((n, r) => n + r.value_micros, 0),
+		chargedMicros: xs.reduce((n, r) => n + r.charged_micros, 0),
 	});
 
 	return {
 		externalUsers: new Set(external.map((r) => r.user_id)).size,
 		byAgent: [...perAgent.entries()]
-			.map(([agentId, e]) => ({ agentId, externalUsers: e.users.size, calls: e.calls, costMicros: e.costMicros }))
+			.map(([agentId, e]) => ({ agentId, externalUsers: e.users.size, calls: e.calls, valueMicros: e.valueMicros, chargedMicros: e.chargedMicros }))
 			.sort((a, b) => b.externalUsers - a.externalUsers || b.calls - a.calls),
 		totals: sum(external),
 		operator: { users: new Set(operatorRows.map((r) => r.user_id)).size, ...sum(operatorRows) },
@@ -131,12 +162,14 @@ export async function externalUsage(env: Env, days = 30, callerUid?: string): Pr
 		.replace("T", " ")
 		.slice(0, 19);
 	const { results } = await env.DB.prepare(
-		`SELECT user_id, agent_id, COUNT(*) AS calls, COALESCE(SUM(cost_micros), 0) AS cost_micros
+		`SELECT user_id, agent_id, COUNT(*) AS calls,
+		        COALESCE(SUM(cost_micros), 0) AS value_micros,
+		        COALESCE(SUM(CASE WHEN ${CHARGED_SQL} THEN cost_micros ELSE 0 END), 0) AS charged_micros
 		   FROM ai_usage
 		  WHERE created_at >= ?1
 		  GROUP BY user_id, agent_id`,
 	)
 		.bind(since)
-		.all<{ user_id: string; agent_id: string | null; calls: number; cost_micros: number }>();
+		.all<{ user_id: string; agent_id: string | null; calls: number; value_micros: number; charged_micros: number }>();
 	return splitUsage(results ?? [], operators);
 }
