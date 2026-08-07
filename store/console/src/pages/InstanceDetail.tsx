@@ -28,7 +28,7 @@ import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
 import { resolveInstanceRoute } from "../lib/instanceRoute";
 import { loopCompletionNotice, loopStartFailureNotice, loopStartNotice } from "../lib/loopNotices";
 import { chatExportPayload } from "../lib/chatExport";
-import { composerPlaceholder } from "../lib/composer";
+import { composerPlaceholder, shouldShowComposer } from "../lib/composer";
 
 /**
  * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
@@ -607,14 +607,21 @@ function InstancePage() {
 	// utterance is in flight. A FAILED utterance deliberately does not lock — the user is reading
 	// it and may well want to type the message themselves.
 	const voiceBusy = !!voice.interim || (!!voice.dictation && voice.dictation.status !== "failed");
-	// When the pill appears, its reserved padding is BELOW the current scroll position —
-	// nudge to the bottom so the last message rises clear of the pill immediately.
+	// Is the message box on screen? Text mode always; a voice mode only when the box holds
+	// something that would otherwise be lost — a `recover`ed turn (#175), a draft, or the notice
+	// line. The rule and the reasoning are pure and live in lib/composer.ts (#365).
+	const composerVisible = shouldShowComposer({ mode: voice.mode, draft: input, notice: voice.interim });
+	// Both of these change the THREAD's height: the pill reserves `pb-16` inside the scroll area,
+	// and the composer now sits below the thread and takes space from it (#365). Either way the
+	// bottom of the transcript moves relative to the viewport.
 	const pillVisible = !!voiceStatus;
+	// biome-ignore lint/correctness/useExhaustiveDependencies: both flags are TRIGGERS, not inputs — the effect re-pins after a height CHANGE and reads neither, so the lint's fix leaves an effect that never runs.
 	useEffect(() => {
-		// Only nudge to the bottom for the pill's reserved space when the user is AT the bottom —
-		// don't yank them down mid-read just because voice status appeared (#132).
-		if (pillVisible && atBottomRef.current && chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
-	}, [pillVisible]);
+		// Re-pin ONLY if the reader was already at the bottom — the #335 rule, unchanged: nothing
+		// but a pinned reader (or the jump button) may move the viewport. Scrolled up mid-read,
+		// showing or hiding the composer must leave the thread exactly where it is.
+		if (atBottomRef.current && chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight;
+	}, [pillVisible, composerVisible]);
 
 	// Only ONE replay at a time: a new double-tap (or word tap) cuts off the previous
 	// recording instead of layering Audio elements on top of each other.
@@ -932,149 +939,13 @@ function InstancePage() {
 			{/* Tab content */}
 			<div className="flex-1 overflow-hidden flex flex-col min-h-0">
 				{tab === "chat" && (
-					<div className="flex flex-col flex-1 min-h-0 relative">
-						{/* Input bar — top */}
-						<div className="flex gap-1 sm:gap-1.5 px-2 pt-2 pb-1 shrink-0 items-end">
-							<div className="flex-1 min-w-0 relative">
-									<textarea
-										ref={inputRef}
-										rows={1}
-										value={voice.interim || input}
-										onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
-									// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
-										onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendMessage(); } }}
-										aria-label="Agent message"
-										// Six branches, and `talking` outranking the mode is the one that matters —
-										// see lib/composer.ts.
-										placeholder={composerPlaceholder({ talking: voice.talking, mode: voice.mode, micOn: voice.micOn, isCoding, isTmux: surfaces.includes("tmux") })}
-									readOnly={voiceBusy}
-									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
-								/>
-								{voice.micOn && (
-									<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
-										<div className="h-full bg-green rounded-full transition-all" style={{ width: `${Math.round(voice.audioLevel * 100)}%`, transitionDuration: "50ms" }} />
-									</div>
-								)}
-							</div>
-							<button type="button" onClick={sendMessage} disabled={voiceBusy} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
-								<Send size={14} />
-							</button>
-						</div>
-						{/* Controls bar — mode selector + actions (tight under the input, no divider) */}
-						<div className="flex flex-wrap gap-1.5 px-2 pt-0.5 pb-1.5 shrink-0 items-center">
-							{/* Three distinct interaction modes — a single segmented control (was four
-							    overlapping toggles). Chat · Tap-to-talk · Hands-free. */}
-							<div className="flex border border-line rounded-lg overflow-hidden shrink-0" role="radiogroup" aria-label="Interaction mode">
-								{([
-									{ id: "text", label: "Chat", icon: <MessageSquare size={15} />, title: "Chat: type and read replies — no voice", on: "border-accent bg-accent text-white" },
-									{ id: "ptt", label: "Tap to talk", icon: <Mic size={15} />, title: "Tap to talk: tap the chat to record, tap again to send. Replies are read aloud.", on: "border-accent bg-accent text-white" },
-									{ id: "handsfree", label: "Hands-free", icon: <Headphones size={15} />, title: "Hands-free: fully automatic — it listens, detects when you stop, replies aloud, and listens again.", on: "border-green bg-green text-white" },
-								] as const).map((m) => (
-									<label
-										key={m.id}
-										aria-busy={voice.starting && m.id === "handsfree"}
-										title={m.title}
-										className={`flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-green/15 text-green" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
-									>
-										<input
-											type="radio"
-											name="interaction-mode"
-											value={m.id}
-											checked={voice.mode === m.id}
-											onChange={() => voice.setVoiceMode(m.id)}
-											className="sr-only"
-										/>
-										{/* #284: opening the mic costs a config read + getUserMedia, and until this
-										    spinner nothing on the control changed for that whole window — the press
-										    read as "nothing happened". It clears exactly when listening really
-										    begins, so the spinner and the ready-chime agree. */}
-										{voice.starting && m.id === "handsfree" ? <Loader2 size={15} className="animate-spin" /> : m.icon}
-										<span className="hidden sm:inline">{voice.starting && m.id === "handsfree" ? "Starting…" : m.label}</span>
-									</label>
-								))}
-							</div>
-							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
-							{loopOn ? (
-								<button type="button" onClick={stopLoop} title={`Loop ${loopIteration}/${loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative"><Square size={13} /><span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span></button>
-							) : (
-								<button type="button" onClick={toggleLoopForm} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
-							)}
-							<div className="relative">
-								{/* Kebab, NOT a gear: these are conversation ACTIONS (copy/clear) — real
-							    settings live on the Settings tab. A gear here read as a second
-							    settings surface and confused people. */}
-								<button
-									type="button"
-									onClick={() => setShowChatMenu((v) => !v)}
-									title="Chat options"
-									aria-label="Chat options"
-									className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}
-								>
-									<MoreVertical size={13} />
-								</button>
-								{showChatMenu && (
-									<>
-										<button type="button" aria-label="Close chat options" className="fixed inset-0 z-10 cursor-default" onClick={() => setShowChatMenu(false)}>
-											<span className="sr-only">Close chat options</span>
-										</button>
-										<div className="absolute right-0 top-full mt-1 z-20 bg-panel border border-line rounded-xl shadow-lg py-1 min-w-[10rem]">
-											<button
-												type="button"
-												onClick={() => { setShowChatMenu(false); copyChat(); }}
-												className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted hover:bg-panel-hover hover:text-accent transition-colors"
-											>
-												<Copy size={13} /> Copy JSON
-											</button>
-											<button
-												type="button"
-												onClick={() => { setShowChatMenu(false); clearChat(); }}
-												className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"
-											>
-												<Trash2 size={13} /> Clear messages
-											</button>
-										</div>
-									</>
-								)}
-							</div>
-						</div>
-						{/* Loop form with presets (#234). The presets were wired to the Coder's Co-pilot
-						    view alone, so every other way of starting a loop — including the only one a
-						    `copilot:false` agent has, this one — meant retyping the objective. */}
-						{showLoopForm && !loopOn && (
-							<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
-								{loopPresets.length > 0 && (
-									<div className="flex flex-wrap gap-1.5">
-										{loopPresets.map((p) => (
-											<button
-												key={p.id}
-												type="button"
-												onClick={() => setLoopObjective(p.objective)}
-												title={p.objective}
-												className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${loopObjective === p.objective ? "border-accent bg-accent-soft text-accent font-bold" : "border-line text-muted hover:border-accent hover:text-accent"}`}
-											>
-												{p.label}
-											</button>
-										))}
-									</div>
-								)}
-									<textarea
-										value={loopObjective}
-										onChange={(e) => setLoopObjective(e.target.value)}
-										onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startLoop(); } }}
-										aria-label="Loop objective"
-										placeholder={loopPresets.length ? "Or type a custom objective…" : "What should the agent work on?"}
-									className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm resize-none"
-									rows={2}
-								/>
-								<div className="flex items-center gap-2 justify-between">
-									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
-									<div className="flex gap-1.5">
-										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
-										<button type="button" onClick={startLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
-									</div>
-								</div>
-							</div>
-						)}
+					<div className="flex flex-col flex-1 min-h-0">
+						{/* The thread, and the two things that overlay it. This wrapper exists so the
+						    jump-to-latest button and the voice pill stay anchored to the BOTTOM OF THE
+						    THREAD (#365): `bottom-3` used to resolve against the tab container, whose
+						    bottom edge WAS the thread's — with the composer below, it would otherwise
+						    have started resolving against the composer. Same pixels as before. */}
+						<div className="relative flex-1 min-h-0 flex flex-col">
 							{/* Messages. Voice control lives in the explicit status pill below so this
 							    scroll region stays selectable and accessible. */}
 							<div
@@ -1217,14 +1088,178 @@ function InstancePage() {
 										onClick={s.tap ? (s.tone === "speak" ? voice.cancelSpeak : voice.toggleTalk) : undefined}
 										disabled={!s.tap}
 										aria-live="polite"
-										className={`pointer-events-auto flex items-center gap-2 px-4 py-2 rounded-full font-bold text-sm shadow-lg transition-all ${cls} ${s.tap ? "cursor-pointer" : "cursor-default"}`}
+										className={`pointer-events-auto relative flex items-center gap-2 px-4 rounded-full font-bold text-sm shadow-lg transition-all ${voice.micOn ? "pt-2 pb-3.5" : "py-2"} ${cls} ${s.tap ? "cursor-pointer" : "cursor-default"}`}
 									>
 										<StatusIcon size={16} className={s.icon === "spin" ? "animate-spin" : ""} />
 										{s.label}
+										{/* The mic level meter, rehomed (#365). It was pinned to the composer's bottom
+										    edge — and the composer is the one surface that is now gone in the voice
+										    modes, while this is the only "the mic is hearing you" signal there is.
+										    The pill is the host that exists exactly when the meter is relevant:
+										    `resolveVoiceStatus` never returns null outside text mode. White because
+										    an open mic only ever coincides with the live/work tones, both of which
+										    are white-on-colour. */}
+										{voice.micOn && (
+											<span className="absolute bottom-1.5 left-4 right-4 h-1 rounded-full overflow-hidden bg-white/30" aria-hidden="true">
+												<span className="block h-full bg-white rounded-full transition-all" style={{ width: `${Math.round(voice.audioLevel * 100)}%`, transitionDuration: "50ms" }} />
+											</span>
+										)}
 									</button>
 								</div>
 							);
 						})()}
+						</div>
+						{/* Controls bar — mode selector + actions. It sits between the thread and the
+						    composer and, unlike the composer, is shown in EVERY mode: it is what makes
+						    "switch back to Chat and type" one tap away from anywhere (#365). */}
+						<div className="flex flex-wrap gap-1.5 px-2 pt-1 pb-1 shrink-0 items-center">
+							{/* Three distinct interaction modes — a single segmented control (was four
+							    overlapping toggles). Chat · Tap-to-talk · Hands-free. */}
+							<div className="flex border border-line rounded-lg overflow-hidden shrink-0" role="radiogroup" aria-label="Interaction mode">
+								{([
+									{ id: "text", label: "Chat", icon: <MessageSquare size={15} />, title: "Chat: type and read replies — no voice", on: "border-accent bg-accent text-white" },
+									{ id: "ptt", label: "Tap to talk", icon: <Mic size={15} />, title: "Tap to talk: tap the chat to record, tap again to send. Replies are read aloud.", on: "border-accent bg-accent text-white" },
+									{ id: "handsfree", label: "Hands-free", icon: <Headphones size={15} />, title: "Hands-free: fully automatic — it listens, detects when you stop, replies aloud, and listens again.", on: "border-green bg-green text-white" },
+								] as const).map((m) => (
+									<label
+										key={m.id}
+										aria-busy={voice.starting && m.id === "handsfree"}
+										title={m.title}
+										className={`flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold transition-colors ${voice.mode === m.id ? m.on : voice.starting && m.id === "handsfree" ? "bg-green/15 text-green" : "text-muted hover:bg-panel-hover hover:text-accent"}`}
+									>
+										<input
+											type="radio"
+											name="interaction-mode"
+											value={m.id}
+											checked={voice.mode === m.id}
+											onChange={() => voice.setVoiceMode(m.id)}
+											className="sr-only"
+										/>
+										{/* #284: opening the mic costs a config read + getUserMedia, and until this
+										    spinner nothing on the control changed for that whole window — the press
+										    read as "nothing happened". It clears exactly when listening really
+										    begins, so the spinner and the ready-chime agree. */}
+										{voice.starting && m.id === "handsfree" ? <Loader2 size={15} className="animate-spin" /> : m.icon}
+										<span className="hidden sm:inline">{voice.starting && m.id === "handsfree" ? "Starting…" : m.label}</span>
+									</label>
+								))}
+							</div>
+							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
+							{loopOn ? (
+								<button type="button" onClick={stopLoop} title={`Loop ${loopIteration}/${loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative"><Square size={13} /><span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span></button>
+							) : (
+								<button type="button" onClick={toggleLoopForm} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
+							)}
+							<div className="relative">
+								{/* Kebab, NOT a gear: these are conversation ACTIONS (copy/clear) — real
+							    settings live on the Settings tab. A gear here read as a second
+							    settings surface and confused people. */}
+								<button
+									type="button"
+									onClick={() => setShowChatMenu((v) => !v)}
+									title="Chat options"
+									aria-label="Chat options"
+									className={`px-1.5 py-1.5 text-sm border rounded-lg transition-colors ${showChatMenu ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-accent hover:border-accent"}`}
+								>
+									<MoreVertical size={13} />
+								</button>
+								{showChatMenu && (
+									<>
+										<button type="button" aria-label="Close chat options" className="fixed inset-0 z-10 cursor-default" onClick={() => setShowChatMenu(false)}>
+											<span className="sr-only">Close chat options</span>
+										</button>
+										<div className="absolute right-0 top-full mt-1 z-20 bg-panel border border-line rounded-xl shadow-lg py-1 min-w-[10rem]">
+											<button
+												type="button"
+												onClick={() => { setShowChatMenu(false); copyChat(); }}
+												className="w-full flex items-center gap-2 px-3 py-2 text-xs text-muted hover:bg-panel-hover hover:text-accent transition-colors"
+											>
+												<Copy size={13} /> Copy JSON
+											</button>
+											<button
+												type="button"
+												onClick={() => { setShowChatMenu(false); clearChat(); }}
+												className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red hover:bg-red/10 transition-colors"
+											>
+												<Trash2 size={13} /> Clear messages
+											</button>
+										</div>
+									</>
+								)}
+							</div>
+						</div>
+						{/* Loop form with presets (#234). The presets were wired to the Coder's Co-pilot
+						    view alone, so every other way of starting a loop — including the only one a
+						    `copilot:false` agent has, this one — meant retyping the objective. */}
+						{showLoopForm && !loopOn && (
+							<div className="bg-panel border border-line rounded-xl p-3 mx-2 mb-1 flex flex-col gap-2">
+								{loopPresets.length > 0 && (
+									<div className="flex flex-wrap gap-1.5">
+										{loopPresets.map((p) => (
+											<button
+												key={p.id}
+												type="button"
+												onClick={() => setLoopObjective(p.objective)}
+												title={p.objective}
+												className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${loopObjective === p.objective ? "border-accent bg-accent-soft text-accent font-bold" : "border-line text-muted hover:border-accent hover:text-accent"}`}
+											>
+												{p.label}
+											</button>
+										))}
+									</div>
+								)}
+									<textarea
+										value={loopObjective}
+										onChange={(e) => setLoopObjective(e.target.value)}
+										onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); startLoop(); } }}
+										aria-label="Loop objective"
+										placeholder={loopPresets.length ? "Or type a custom objective…" : "What should the agent work on?"}
+									className="w-full bg-panel border border-line rounded-lg px-3 py-2 text-sm resize-none"
+									rows={2}
+								/>
+								<div className="flex items-center gap-2 justify-between">
+									<label className="text-xs text-muted flex items-center gap-1.5">Max: <input type="number" value={loopMax} onChange={(e) => setLoopMax(Math.max(1, Math.min(50, parseInt(e.target.value, 10) || 10)))} className="w-14 bg-panel border border-line rounded px-2 py-1 text-xs" min={1} max={50} /></label>
+									<div className="flex gap-1.5">
+										<button type="button" onClick={() => setShowLoopForm(false)} className="text-xs px-3 py-1.5 rounded-lg border border-line text-muted font-semibold">Cancel</button>
+										<button type="button" onClick={startLoop} disabled={!loopObjective.trim()} className="text-xs px-3 py-1.5 rounded-lg bg-accent text-white font-bold disabled:opacity-40">Start Loop</button>
+									</div>
+								</div>
+							</div>
+						)}
+						{/* Composer — BELOW the thread, where every messaging app puts it, and in text
+						    mode only (#365). The realtime dictation bubble is the last child of the thread,
+						    so inverting these two is what puts the words the user is speaking directly above
+						    the place they are looking, with exactly one surface showing them.
+
+						    `shouldShowComposer` is not `mode === "text"`: a turn the guard classified as
+						    `recover` (#175) lands in this box rather than being fired into a thread that
+						    moved on, and that happens in the VOICE modes by definition. Hiding the box
+						    outright would delete those words on arrival. So the box also appears whenever it
+						    holds something — a recovered turn, a draft, or the notice line — which is exactly
+						    when it has something to say and never otherwise. See lib/composer.ts. */}
+						{composerVisible && (
+						<div className="flex gap-1 sm:gap-1.5 px-2 pt-0.5 pb-2 shrink-0 items-end">
+							<div className="flex-1 min-w-0 relative">
+									<textarea
+										ref={inputRef}
+										rows={1}
+										value={voice.interim || input}
+										onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
+									// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
+										onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendMessage(); } }}
+										aria-label="Agent message"
+										// Six branches, and `talking` outranking the mode is the one that matters —
+										// see lib/composer.ts.
+										placeholder={composerPlaceholder({ talking: voice.talking, mode: voice.mode, micOn: voice.micOn, isCoding, isTmux: surfaces.includes("tmux") })}
+									readOnly={voiceBusy}
+									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
+								/>
+							</div>
+							<button type="button" onClick={sendMessage} disabled={voiceBusy} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">
+								<Send size={14} />
+							</button>
+						</div>
+						)}
 					</div>
 				)}
 

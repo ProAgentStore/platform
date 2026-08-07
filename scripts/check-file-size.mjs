@@ -137,7 +137,16 @@ const PINS = {
 	// (instanceRoute.ts), who narrates the end of a loop run (loopNotices.ts), the `[Context: …]`
 	// strip (chatExport.ts) and the composer placeholder (composer.ts) — and the prose that used to
 	// stand in for those tests stayed here, next to the call sites it explains.
-	"store/console/src/pages/InstanceDetail.tsx": 1274,
+	// +35 at #365: the composer moved BELOW the thread and is hidden outside text mode. The move
+	// itself is free — it is the same JSX in a different order — but three things around it are
+	// not. The thread gains a wrapper so the jump button and the voice pill keep resolving
+	// `bottom-3` against the thread's bottom edge rather than the composer's; the mic-level meter
+	// is rehomed onto the pill, because its old host is exactly what disappears in the modes where
+	// it matters; and both the gate and the re-pin need saying out loud, since "only in text mode"
+	// taken literally would delete a `recover`ed turn (#175) at the moment it arrives. The rule
+	// itself is pure and lives in lib/composer.ts with the tests, which is where a split would
+	// have put it anyway.
+	"store/console/src/pages/InstanceDetail.tsx": 1309,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
