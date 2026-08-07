@@ -82,6 +82,7 @@ const PINS = {
 	// rather than lowered. Each sibling is registered from the exact position its block occupied,
 	// and coding.contract.test.ts derives the route table, the order and each module's ownership
 	// by driving the handlers — the evidence that the split moved no behaviour.
+	//
 	// 1696 → 853 at #305. Three contiguous route blocks left for sibling modules along the seams
 	// the registrations already had — instances-tasks.ts (the board/ticket surface and the
 	// instance_runtime_tasks mirror it all reconciles against), instances-chat.ts (the AgentDO
