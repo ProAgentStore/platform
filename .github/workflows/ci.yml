@@ -128,7 +128,10 @@ jobs:
       - name: Build docs
         run: pnpm docs:build
       - run: pnpm test
-      - run: pnpm exec playwright install --with-deps chromium
+      # WebKit is not a second opinion, it is the engine every phone runs. The mobile geometry
+      # guards are scoped to it in playwright.config.ts (#384); without the binary here that
+      # project fails to launch rather than skipping.
+      - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e
       - name: Typecheck API worker
         run: cd workers/api && npx tsc --noEmit

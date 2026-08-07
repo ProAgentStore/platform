@@ -85,6 +85,24 @@
 		font-size: 0.88rem;
 		transition: border-color 0.15s;
 	}
+	/* A <select> must clip its own selected-option label, not widen the page (#384).
+	 *
+	 * WebKit lays that label out at its natural width and — because a control's `overflow`
+	 * computes to `visible` — the resulting box counts toward every ancestor's `scrollWidth`.
+	 * Chromium finds the same overflow but reports it ON the select and stops there, treating the
+	 * control as its own scroll container. So Preferences panned 59px sideways at 320px in Safari
+	 * and 0px in Chrome, revealing empty space because the widget still PAINTS clipped. Every
+	 * phone runs WebKit; the guard that would have caught it ran only Chromium.
+	 *
+	 * This is the whole fix, and it is global rather than per-select on purpose: the divergence
+	 * belongs to the element, ~40 of them are in this console and the vendored coder-web UI, and
+	 * every one of those layouts was signed off in Chromium — where this is already the behaviour.
+	 * `min-width: 0` is the obvious reach and was MEASURED to be inert here at every width: the
+	 * box was already capped and shrinking, the label was what escaped it. */
+	select {
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
 	input:not([type="checkbox"]):not([type="radio"]):focus,
 	textarea:focus,
 	select:focus {

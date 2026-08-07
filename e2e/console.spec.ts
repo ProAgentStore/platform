@@ -2379,3 +2379,121 @@ test.describe("mobile — Preferences with a connected account (#333)", () => {
 		});
 	}
 });
+
+/**
+ * Preferences on a phone, in the engine every phone actually runs (#384).
+ *
+ * The block above measures the same page at the same widths and has been green since #333; this
+ * one exists because of what that could not see. `playwright.config.ts` declared exactly one
+ * project — chromium — so every guard #333 built for "the page scrolls sideways on a phone" ran in
+ * the one engine where the remaining defect does not exist. Against WebKit `<main>` pans **59px at
+ * 320, 27 at 360, 18 at 375 and 9 at 390**, and 0 in Chromium at every one of them. The
+ * measurement was never wrong. It had no WebKit to run in, and "not reproducible" was reported
+ * twice on the strength of that.
+ *
+ * The offender is the Timezone row's `<select>`, and not for the reason a flex bug usually has.
+ * The control's BOX is already capped (`max-w-[60%]`) and shrinks in both engines; `min-width: 0`
+ * on it was measured to change nothing at any width. What escapes is the selected option's LABEL:
+ * WebKit lays it out at its natural width and, because a control's `overflow` computes to
+ * `visible`, that box counts toward every ancestor's `scrollWidth`. Chromium finds the same 85px
+ * of overflow but reports it ON the select and stops there, treating the control as its own scroll
+ * container. Nothing is painted out in the pan — which is exactly what both reports of this said:
+ * "empty space on the right, with no content out there".
+ *
+ * The zone is PINNED here rather than inherited from the host. `timezoneSeed` writes the browser's
+ * own zone when nothing is stored, so the selected option is whatever the runner's TZ happens to
+ * be — and a CI box on `UTC` seeds nothing, leaving a much shorter label selected. A guard whose
+ * worst case depends on the host's clock is the hollow fixture this file has already shipped
+ * twice, so the option is asserted before anything is measured. It is `America/North_Dakota/…`
+ * rather than the `America/Argentina/…` the report used because the two engines disagree about
+ * that one: Chromium's ICU canonicalises it to the shorter `America/Buenos_Aires` link and
+ * WebKit's does not, so the fixture would have carried a different worst case per engine.
+ */
+test.describe("mobile — Preferences in WebKit (#384)", () => {
+	test.use({ timezoneId: "America/North_Dakota/New_Salem" });
+
+	const connected = {
+		user: { githubLinked: "serge-ivo-development" },
+		connectors: DEFAULT_CONNECTORS,
+	};
+
+	for (const width of [320, 360, 375, 390]) {
+		test(`the timezone select does not pan the page at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockSignedInConsole(page, connected);
+			await page.goto("/console/preferences");
+			await page.waitForLoadState("networkidle");
+			await page.locator("main").waitFor();
+			await page.waitForTimeout(300);
+
+			// The seed landed, so the selected option really is the 30-character zone name this
+			// block is named after — not "Not set — agents will say UTC" wearing its numbers.
+			await expect(page.getByLabel("Your timezone")).toHaveValue("America/North_Dakota/New_Salem");
+
+			const { mainOv, docOv, navOv, scrollers, wide } = await measureOverflow(page);
+			expect(mainOv, `<main> pans by ${mainOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(docOv, `page overflows by ${docOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(navOv, `primary nav pans by ${navOv}px at ${width}w`).toBeLessThanOrEqual(1);
+			expect(wide, `content past the right edge at ${width}w: ${wide.join(", ")}`).toEqual([]);
+			expect(scrollers, `unexpected horizontal scrollers at ${width}w: ${scrollers.join(", ")}`).toEqual([]);
+		});
+	}
+
+	/**
+	 * The other half of the report — "buttons don't wrap so the text is squashed into one vertical
+	 * line" — which is a SQUEEZE, not an overflow, and therefore invisible to every assertion above.
+	 *
+	 * Both ingredients were added on purpose and are individually right: `[overflow-wrap:anywhere]`
+	 * (#333) is what stops the unbreakable email token running off the page, and `shrink-0` is what
+	 * stops the button pair collapsing. Together they leave the row unable to overflow and unable to
+	 * wrap, so the whole deficit lands on the one thing that will yield. At 320px the label column
+	 * gets **25% of the row and runs 390px tall** — in both engines, which is why this test does not
+	 * mention WebKit.
+	 *
+	 * A share floor, not a pin: the fix gives the column the whole row (100%), the bug gives it 25%,
+	 * and anything in between is a layout somebody chose. Pinning the width would fail on any
+	 * deliberate change to the buttons and teach nothing.
+	 */
+	const MIN_LABEL_SHARE = 60;
+
+	for (const width of [320, 390]) {
+		test(`the Connections rows keep their label readable at ${width}px`, async ({ page }) => {
+			await page.setViewportSize({ width, height: 812 });
+			await mockSignedInConsole(page, connected);
+			await page.goto("/console/preferences");
+			await page.waitForLoadState("networkidle");
+			await page.locator("main").waitFor();
+			await page.waitForTimeout(300);
+
+			// The rows exist and carry the account — the empty-section fixture is what made #333
+			// look clean, so it is checked before anything is measured here too.
+			await expect(page.getByText(DEFAULT_CONNECTORS[0].account as string).first()).toBeVisible();
+			// Wrapping must not cost the controls: the button pair is the whole reason the row is
+			// tight, and a fix that hid it would pass a width check.
+			await expect(page.getByRole("button", { name: "Disconnect" }).first()).toBeVisible();
+			await expect(page.getByRole("button", { name: "Reconnect" }).first()).toBeVisible();
+
+			const columns = await page.evaluate(() => {
+				const card = Array.from(document.querySelectorAll("h3")).find((h) => h.textContent === "Connections")?.parentElement;
+				// Structural rather than class-based: every connection row is a flex row whose FIRST
+				// child is the label column. That is the element the buttons crush.
+				return Array.from(card?.children ?? [])
+					.filter((el) => el.classList.contains("flex") && el.firstElementChild)
+					.map((row) => {
+						const col = row.firstElementChild as HTMLElement;
+						const rowWidth = row.getBoundingClientRect().width;
+						return {
+							label: (col.textContent || "").slice(0, 24),
+							share: Math.round((col.getBoundingClientRect().width / rowWidth) * 100),
+							height: Math.round(col.getBoundingClientRect().height),
+						};
+					});
+			});
+
+			expect(columns.length, "no connection rows were measured").toBeGreaterThanOrEqual(4);
+			for (const col of columns) {
+				expect(col.share, `"${col.label}" gets ${col.share}% of its row and runs ${col.height}px tall at ${width}w`).toBeGreaterThanOrEqual(MIN_LABEL_SHARE);
+			}
+		});
+	}
+});

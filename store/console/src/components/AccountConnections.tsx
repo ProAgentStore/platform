@@ -129,7 +129,15 @@ export default function AccountConnections() {
 			</p>
 
 			{/* GitHub — an identity link, not a stored token. See the component header. */}
-			<div className="flex items-start justify-between gap-3 mb-3">
+			{/* `flex-wrap` below sm, and only below sm (#384). #333's `[overflow-wrap:anywhere]` and
+			    this row's `shrink-0` are each right on their own — one stops the unbreakable email
+			    token running off the page, the other stops the buttons collapsing — but together
+			    they leave the row unable to overflow AND unable to wrap, so the whole deficit lands
+			    on the only thing that yields. At 320px the label took 25% of the row and ran 140px
+			    tall, in both engines: "connecte / d as / serge.pro. / job@gmail / .com". Wrapping is
+			    capped at sm because line-breaking uses each item's MAX-content width, so an unpinned
+			    `flex-wrap` drops the buttons below the label on a desktop row that fits. */}
+			<div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3 mb-3">
 				{/* `min-w-0` lets the COLUMN shrink; it does not make the STRING shorter. Every row
 				    here names an account, and an account name is one unbreakable token — a login, or
 				    an email — so the column shrinks to nothing and the token runs off the right edge,
@@ -160,7 +168,9 @@ export default function AccountConnections() {
 				: rows.length === 0
 					? <p className="text-xs text-muted">No other accounts can be connected on this deployment yet.</p>
 					: rows.map((entry) => (
-						<div key={entry.id} className="flex items-start justify-between gap-3 mb-3">
+						/* Same crush as the GitHub row above, and worse here: this one carries two
+						   buttons, so the label column is left with less of the row. */
+						<div key={entry.id} className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-3 mb-3">
 							{/* Same unbreakable-token problem as the GitHub row above — this is the one
 							    that was actually reported, because `connectionSummary` prints the whole
 							    Google/Zoho email. */}

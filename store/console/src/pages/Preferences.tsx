@@ -189,13 +189,18 @@ export default function Preferences() {
 					What "today", "this morning" and "overnight" mean when an agent talks to you, and the
 					clock every timestamp is shown in. Leave it unset and agents say UTC and say so.
 				</p>
-				<div className="flex justify-between items-center py-2.5 text-sm gap-3">
+				{/* Stacked on a phone, side by side from sm up. Zone names are long — the widest is
+				    30 characters — and `max-w-[60%]` left 162px for one at 320px, so the control now
+				    clips its label (see the `select` rule in index.css) instead of panning the page.
+				    Clipping the answer to "which zone am I in" is not an answer, and the row is the
+				    only thing standing between it and the full width (#384). */}
+				<div className="flex flex-col sm:flex-row sm:justify-between sm:items-center py-2.5 text-sm gap-2 sm:gap-3">
 					<span className="text-muted font-medium">Your timezone</span>
 					<select
 						aria-label="Your timezone"
 						value={timezone || ""}
 						onChange={(e) => void saveTimezone(e.target.value)}
-						className="text-sm bg-paper border border-line rounded-lg px-3 py-2 max-w-[60%]"
+						className="text-sm bg-paper border border-line rounded-lg px-3 py-2 sm:max-w-[60%]"
 					>
 						<option value="">Not set — agents will say UTC</option>
 						{timeZoneOptions(timezone).map((tz) => (
