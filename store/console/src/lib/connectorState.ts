@@ -49,6 +49,45 @@ export function showsConnector(status: ConnectorStatus | null | undefined): bool
 	return state === "connected" || state === "disconnected";
 }
 
+/**
+ * One entry of `GET /v1/instances/:id/connectors` (#352) — this AGENT's verdict on a connector,
+ * as opposed to the account-level answer above.
+ *
+ * The two questions are genuinely different and the page needs both. `ConnectorStatus` says what
+ * the deployment and the account did; this says whether the agent in front of you could use the
+ * result. Connect Drive once and the account answer is `connected:true` for all 26 instances,
+ * including terminal Operators that will never read a document — which is the state #352 is named
+ * for, and the one #353 and #355 could not reach because both narrowed on the account.
+ */
+export interface InstanceConnectorPolicy {
+	id: string;
+	allowed: boolean;
+	reason: string;
+}
+
+/**
+ * Should THIS agent's Settings tab show the folder-grant panel for a file connector?
+ *
+ * Two independent conditions, in the order they became true: the account must hold the connection
+ * (#355 — a grant against an account you have not connected is a dead row), and the agent must be
+ * able to use what a grant would import (#352 — a Drive import lands in the knowledge base and
+ * nowhere else, so an agent that cannot read one gains nothing from the folder).
+ *
+ * An unanswered or failed policy request falls back to SHOWING the panel. There is no safety
+ * property here to fail closed on — the grant routes are owner-scoped and the agent has no Drive
+ * tool to call either way — so the risk worth avoiding is the opposite one: a new endpoint being
+ * unreachable must not remove a control the owner came to this page to use.
+ */
+export function showsFileConnector(
+	status: ConnectorStatus | null | undefined,
+	policy: InstanceConnectorPolicy[] | null,
+	id: string,
+): boolean {
+	if (status?.connected !== true) return false;
+	if (!policy) return true;
+	return policy.find((p) => p.id === id)?.allowed !== false;
+}
+
 /** What a file connector's disconnect would destroy: folder grants, across agents (#357). */
 export interface ConnectorReach {
 	grants: number;

@@ -6527,6 +6527,57 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/connectors:
+    get:
+      summary: Every connector, with this instance's verdict on it
+      description: |
+        The per-AGENT companion to `GET /v1/connectors`, which answers for the ACCOUNT. Connecting
+        Google Drive is one token row shared by every instance, so the account answer is identical
+        for an agent that reads documents and one that drives a terminal — and the per-agent
+        folder-grant panel appeared on both.
+
+        A connector that provides tools is judged on them: it is part of this agent exactly when
+        one of its tools is (the same verdict `GET /v1/instances/{instanceId}/tools` reaches,
+        reported per connector). A connector that provides none is judged on where its content
+        lands — a Drive or WorkDrive import goes into the instance's knowledge base and nowhere
+        else, so an agent that may not read one gains nothing from a folder grant.
+
+        Gmail is deliberately reported as reachable whatever the allowlist says: its
+        `find_confirmation_link` is granted at runtime by the owner's per-agent inbox permission,
+        and a second answer derived here would either soften or contradict that gate.
+      operationId: listInstanceConnectors
+      tags: [Tools]
+      parameters: [{ $ref: "#/components/parameters/InstanceId" }]
+      responses:
+        "200":
+          description: The connector policy for this instance
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connectors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        label: { type: string }
+                        grantModel: { type: string, enum: [user, instance-resource] }
+                        tools: { type: array, items: { type: string }, description: "The connector's own tool names. Empty for the three connected accounts (Drive, WorkDrive, Gmail), which are not things an agent calls mid-turn." }
+                        allowed: { type: boolean, description: "Is this connector part of this agent at all? Not an enforcement point — a tool-less connector has nothing to enforce against, and a folder grant's reach is still checked on every Drive route." }
+                        reason:
+                          type: string
+                          enum: [tools, knowledge, permission, no_tools, no_knowledge]
+                          description: >-
+                            `tools` / `no_tools` — judged on its own tools. `knowledge` /
+                            `no_knowledge` — an ingestion source, judged on whether this agent can
+                            read the knowledge base its imports land in. `permission` — reach is
+                            decided by an owner-set per-agent permission flag this route does not
+                            evaluate (Gmail).
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /v1/instances/{instanceId}/connectors/consent:
     get:
       summary: Write consents granted on this instance

@@ -152,6 +152,57 @@ describe("GET /v1/instances/:id/tools", () => {
 	});
 });
 
+describe("GET /v1/instances/:id/connectors (#352)", () => {
+	const TERMINAL_OPERATOR = JSON.stringify({ capabilities: { tools: ["tmux_capture_pane", "tmux_send_keys"] } });
+	const DOC_READER = JSON.stringify({ capabilities: { tools: ["search_knowledge", "list_knowledge", "read_knowledge"] } });
+	const verdict = (body: Record<string, unknown>, id: string) => rec(rows(body.connectors).find((p) => p.id === id));
+
+	it("404s when the instance isn't owned", async () => {
+		const { app, env } = testApp({ owned: false });
+		const res = await req(app, env, "/v1/instances/i1/connectors", {}, await tok("u1"));
+		expect(res.status).toBe(404);
+	});
+
+	// The whole point of the issue: the ACCOUNT state is identical for both of these agents — one
+	// Drive connection, shared by every instance — and the verdict still differs, because the
+	// AGENT differs. Before this route there was nothing to ask.
+	it("withholds Drive from an agent that cannot read a knowledge base, and offers it to one that can", async () => {
+		const operator = testApp({ agentConfig: TERMINAL_OPERATOR });
+		const opBody = await jsonBody(await req(operator.app, operator.env, "/v1/instances/i1/connectors", {}, await tok("u1")));
+		expect(verdict(opBody, "google_drive")).toMatchObject({ allowed: false, reason: "no_knowledge" });
+		expect(verdict(opBody, "zoho_workdrive")).toMatchObject({ allowed: false, reason: "no_knowledge" });
+
+		const reader = testApp({ agentConfig: DOC_READER });
+		const readBody = await jsonBody(await req(reader.app, reader.env, "/v1/instances/i1/connectors", {}, await tok("u1")));
+		expect(verdict(readBody, "google_drive")).toMatchObject({ allowed: true, reason: "knowledge" });
+	});
+
+	// The subscriber's veto outranks the creator's declaration everywhere else (buildAgentToolDefinitions
+	// applies it last), so a connector must not be offered on the strength of a tool this instance
+	// would refuse to run.
+	it("honours the owner's per-tool off-switches", async () => {
+		const { app, env } = testApp({
+			agentConfig: DOC_READER,
+			config: JSON.stringify({ disabledTools: ["search_knowledge", "list_knowledge", "read_knowledge"] }),
+		});
+		const body = await jsonBody(await req(app, env, "/v1/instances/i1/connectors", {}, await tok("u1")));
+		expect(verdict(body, "google_drive")).toMatchObject({ allowed: false, reason: "no_knowledge" });
+	});
+
+	it("reports Gmail as reachable regardless — its gate is the per-agent permissions.email flag", async () => {
+		const { app, env } = testApp({ agentConfig: TERMINAL_OPERATOR });
+		const body = await jsonBody(await req(app, env, "/v1/instances/i1/connectors", {}, await tok("u1")));
+		expect(verdict(body, "gmail")).toMatchObject({ allowed: true, reason: "permission" });
+	});
+
+	it("returns the whole catalog, so 'what can this agent reach' also says what it cannot", async () => {
+		const { app, env } = testApp({ agentConfig: TERMINAL_OPERATOR });
+		const body = await jsonBody(await req(app, env, "/v1/instances/i1/connectors", {}, await tok("u1")));
+		expect(verdict(body, "tmux")).toMatchObject({ allowed: true, reason: "tools" });
+		expect(verdict(body, "github")).toMatchObject({ allowed: false, reason: "no_tools" });
+	});
+});
+
 describe("POST /v1/instances/:id/tools/:name", () => {
 	it("404s an unknown tool", async () => {
 		const { app, env } = testApp();

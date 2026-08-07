@@ -69,8 +69,12 @@ export const BASE = [
 	"set_stats_card",
 ] as const;
 
-/** Read the vector knowledge base (RAG). Only agents that HAVE an index get these. */
-const KB_READ = ["search_knowledge", "list_knowledge", "read_knowledge"] as const;
+/** Read the vector knowledge base (RAG). Only agents that HAVE an index get these.
+ *  Exported because it is also the answer to "can this agent use a file connector at all"
+ *  (lib/instance-connector-policy.ts, #352) — a Drive import lands in the knowledge base and
+ *  nowhere else, so an agent holding none of these names cannot reach it. Shared rather than
+ *  restated so the two cannot drift into disagreeing about which names read the index. */
+export const KB_READ = ["search_knowledge", "list_knowledge", "read_knowledge"] as const;
 /** Mutate the knowledge base. */
 const KB_WRITE = ["update_knowledge", "delete_knowledge", "add_knowledge"] as const;
 /** Binary file storage (R2). */

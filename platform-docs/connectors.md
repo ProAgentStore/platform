@@ -264,6 +264,28 @@ User account
 
 This avoids repeated OAuth flows, keeps revocation simple, and lets the user reuse one provider connection across many agents without giving every agent blanket access.
 
+### Which connectors an agent is offered
+
+Because the provider connection is an **account** act, "is Google Drive connected" is the same
+answer for every one of your agents — so the folder-grant control appeared on all of them, including
+agents that only drive a terminal. `GET /v1/instances/:id/connectors` is the per-agent answer:
+
+```text
+{ id, label, grantModel, tools[], allowed, reason }
+```
+
+A connector that provides tools is judged on them — it belongs to an agent exactly when one of its
+tools does, which is the verdict `GET /v1/instances/:id/tools` already reaches. The ingest
+connectors (Google Drive, Zoho WorkDrive) provide **no** agent-callable tools on purpose, so they
+are judged on where their content lands: an import becomes a document in that instance's knowledge
+base and nowhere else, so an agent that cannot read a knowledge base gains nothing from a folder
+grant (`reason: "no_knowledge"`). Gmail is always reported reachable (`reason: "permission"`) —
+its inbox tool is granted by the per-agent inbox permission on the agent's Settings tab, not by the
+tool allowlist.
+
+This is a **visibility** answer, not a second permission gate: a folder grant's reach is still
+checked on every Drive route, and an agent that declares no tool allowlist at all stays permissive.
+
 ## Google Docs Through Google Drive
 
 Google Docs files are Drive files with Google Docs MIME types. To let an agent work with Google Docs, connect Google Drive and grant the agent access to the relevant folders or shared drives.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connectorState, disconnectPrompt, showsConnector } from "./connectorState";
+import { connectorState, disconnectPrompt, showsConnector, showsFileConnector } from "./connectorState";
 
 describe("connectorState — an inert connector is a state, not a failure (#353)", () => {
 	it("names the deployment gap separately from 'you haven't connected it'", () => {
@@ -67,5 +67,32 @@ describe("disconnectPrompt — the blast radius, before the click (#357)", () =>
 			expect(msg).toContain("No agent currently holds a Google Drive folder grant");
 			expect(msg).not.toContain("REVOKES");
 		}
+	});
+});
+
+describe("showsFileConnector — the per-AGENT half of the answer (#352)", () => {
+	const connected = { connected: true, configured: true };
+	const operator = [{ id: "google_drive", allowed: false, reason: "no_knowledge" }];
+	const reader = [{ id: "google_drive", allowed: true, reason: "knowledge" }];
+
+	// One account connection, two agents, two answers. This is the state the issue is named for:
+	// #355 stopped rendering the panel until Drive was connected, and connecting it once put the
+	// panel back on every instance the owner has — terminal Operators included.
+	it("hides the panel from an agent that cannot use what a folder grant would import", () => {
+		expect(showsFileConnector(connected, operator, "google_drive")).toBe(false);
+		expect(showsFileConnector(connected, reader, "google_drive")).toBe(true);
+	});
+
+	it("still requires the account connection — a grant against nothing is a dead row", () => {
+		expect(showsFileConnector({ connected: false, configured: true }, reader, "google_drive")).toBe(false);
+		expect(showsFileConnector(null, reader, "google_drive")).toBe(false);
+	});
+
+	// Nothing here fails closed on purpose: there is no exposure to prevent (the grant routes are
+	// owner-scoped and the agent has no Drive tool), so an unreachable new endpoint must not remove
+	// a working control.
+	it("falls back to showing the panel when the policy is unavailable", () => {
+		expect(showsFileConnector(connected, null, "google_drive")).toBe(true);
+		expect(showsFileConnector(connected, [], "google_drive")).toBe(true);
 	});
 });

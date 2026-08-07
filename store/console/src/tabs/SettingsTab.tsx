@@ -11,7 +11,7 @@ import LoopRunsSection from "./LoopRunsSection";
 import TriggersSection from "./TriggersSection";
 import RunnerPanel from "../components/RunnerPanel";
 import ToolPermissions from "../components/ToolPermissions";
-import { showsConnector, type ConnectorReach } from "../lib/connectorState";
+import { showsConnector, showsFileConnector, type ConnectorReach, type InstanceConnectorPolicy } from "../lib/connectorState";
 import { voiceSummary } from "../lib/voiceSummary";
 import { FileConnectorPanel } from "../components/FileConnectorPanel";
 
@@ -84,6 +84,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	const [workdriveMsg, setWorkdriveMsg] = useState("");
 	const [workdriveGrantRef, setWorkdriveGrantRef] = useState("");
 	const [workdriveGrants, setWorkdriveGrants] = useState<ConnectorGrant[]>([]);
+	// THIS agent's verdict on each connector (#352), which the account-level status above cannot
+	// give: one Drive connection is shared by every instance, so `connected` is identical for an
+	// agent that reads documents and one that drives a terminal.
+	const [connectorPolicy, setConnectorPolicy] = useState<InstanceConnectorPolicy[] | null>(null);
 	// Triggers moved to <TriggersSection/> (#16/#18/#19) — it owns its own state and loading.
 
 	useEffect(() => {
@@ -146,6 +150,10 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 			try {
 				const d = await api<{ grants?: ConnectorGrant[] }>(`/v1/workdrive/instances/${instanceId}/grants`);
 				setWorkdriveGrants(d.grants || []);
+			} catch {}
+			try {
+				const p = await api<{ connectors?: InstanceConnectorPolicy[] }>(`/v1/instances/${instanceId}/connectors`);
+				setConnectorPolicy(p.connectors || []);
 			} catch {}
 			try {
 				const st = await api<{ permissions?: { email?: boolean } }>(`/v1/instances/${instanceId}/state`);
@@ -355,9 +363,15 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 	// not a control — it is the dead row #353 removed, wearing a different hat. On a deployment
 	// where nobody has connected Drive, the block is simply absent from every agent, which is the
 	// reported symptom gone. Gmail is the exception below and says why.
+	//
+	// #352 adds the half neither of those could reach: what the AGENT is. Connecting Drive once is
+	// an account act, so #355's `connected` check answers the same for all 26 instances — the
+	// panel came back everywhere, terminal Operators included. `GET /v1/instances/:id/connectors`
+	// judges each one against the agent's own declared tools; the rule is in
+	// workers/api/src/lib/instance-connector-policy.ts and the combination in lib/connectorState.
 	const showsEmail = showsConnector(emailStatus);
-	const showsDrive = driveStatus?.connected === true;
-	const showsWorkdrive = workdriveStatus?.connected === true;
+	const showsDrive = showsFileConnector(driveStatus, connectorPolicy, "google_drive");
+	const showsWorkdrive = showsFileConnector(workdriveStatus, connectorPolicy, "zoho_workdrive");
 
 	return (
 		// min-w-0 lets this shrink inside the flex scroll wrapper; overflow-x-hidden is a

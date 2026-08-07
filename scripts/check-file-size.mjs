@@ -315,7 +315,14 @@ const PINS = {
 	// coercion, and five lines saying why a generic verb carries a driver-specific target — which
 	// is the part a reader has to be told, because the obvious reading is that it does not belong
 	// here. The choice it feeds (and its two refusals) is pure and tested in lib/loop-drivers.ts.
-	"workers/api/src/routes/tools.ts": 893,
+	// +25 at #352 (three imports, a six-line handler, sixteen lines of why): the connector catalog
+	// resolved for ONE instance. Raised rather than split, and it belongs here specifically: this
+	// file already owns `/tools`, which is the same question asked about the eleven connectors that
+	// HAVE tools — putting the tool-less three somewhere else would be the split that let the two
+	// answers disagree. The RULE is pure and tested in lib/instance-connector-policy.ts; what is
+	// left at this call site is the one thing only a route can do, resolving the instance's allowed
+	// tool names from its capabilities and its owner's off-switches.
+	"workers/api/src/routes/tools.ts": 918,
 };
 
 /**
