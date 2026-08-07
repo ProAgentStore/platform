@@ -6,8 +6,11 @@
 // `/v1/connectors/<id>/oauth/callback` — no bespoke route code.
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
-import { getConnector } from "../lib/connectors/registry.js";
+import { CONNECTORS, getConnector } from "../lib/connectors/registry.js";
 import { resolveOauthConfig } from "../lib/connectors/client.js";
+import { connectorGrantReach, revokeUserConnectorGrants } from "../lib/connector-grants.js";
+import { unattendedClassOf } from "../lib/connectors/unattended.js";
+import type { Connector } from "../lib/connectors/types.js";
 import { signConnectorState, verifyConnectorState, saveConnectorRefreshToken } from "../lib/connector-oauth.js";
 import { clearOauthBindCookie, newOauthNonce, oauthBindCookie, readOauthBindCookie, OAUTH_BIND_ERROR } from "../lib/oauth-nonce.js";
 import type { Env } from "../types.js";
@@ -32,6 +35,72 @@ function requireOauthConnector(env: Env, id: string) {
 	}
 	return { connector, creds };
 }
+
+/**
+ * Is this connector usable ON THIS DEPLOYMENT at all? Distinct from "the caller connected it" —
+ * the same distinction #353 had to draw in the console, where an unconfigured connector was
+ * rendered as the owner's error.
+ */
+function isConfigured(env: Env, connector: Connector): boolean {
+	switch (connector.auth) {
+		case "oauth": {
+			const creds = resolveOauthConfig(env, connector.id);
+			return !!(creds.clientId && creds.clientSecret && creds.tokenUrl);
+		}
+		// A platform-token connector needs its env var; a vault-backed one is configured by
+		// definition (the credential is the user's to supply).
+		case "token":
+			return connector.tokenEnv ? !!env[connector.tokenEnv]?.trim() : true;
+		case "app":
+			return !!(env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY);
+		case "none":
+			return true;
+	}
+}
+
+/**
+ * GET /v1/connectors — the catalog, resolved for the caller (#352 Stage 1).
+ *
+ * The registry has been the single source of truth for connectors since #86, but nothing could
+ * READ it from outside the Worker, so every consumer that needed "which connectors exist and is
+ * this one connected" wrote its own list: two route files, three hand-written console blocks, an
+ * MCP `PROVIDERS` map plus a matching Zod enum, and the `sync_connector` trigger branch. Five
+ * copies, each a place a sixth connector has to be remembered. This is the one answer they can
+ * all derive from — the next consumer is a `.map()`.
+ *
+ * `connected` is one indexed read over `user_api_keys` for the whole catalog rather than one per
+ * connector, because the list is short and the round trips are not.
+ */
+connectorRoutes.get("/", async (c) => {
+	const session = await requireUser(c);
+	const rows = await c.env.DB.prepare(
+		"SELECT provider, created_at, account_label FROM user_api_keys WHERE user_id = ?1",
+	)
+		.bind(session.uid)
+		.all<{ provider: string; created_at: string; account_label: string | null }>();
+	const stored = new Map((rows.results ?? []).map((r) => [r.provider, r]));
+	return c.json({
+		connectors: CONNECTORS.map((connector) => {
+			const row = stored.get(connector.id);
+			// Only a connector that HOLDS a credential can be "connected". A relay/no-auth one has
+			// nothing to connect, and reporting `connected:false` for it would read as a gap.
+			const holdsCredential = connector.auth === "oauth" || (connector.auth === "token" && !connector.tokenEnv);
+			return {
+				id: connector.id,
+				label: connector.label,
+				auth: connector.auth,
+				scopes: connector.scopes,
+				grantModel: connector.grantModel,
+				unattended: unattendedClassOf(connector),
+				tools: connector.tools.map((t) => t.name),
+				configured: isConfigured(c.env, connector),
+				connected: holdsCredential ? !!row : null,
+				account: row?.account_label ?? null,
+				connectedAt: row?.created_at ?? null,
+			};
+		}),
+	});
+});
 
 /** GET /v1/connectors/:id/oauth/start — return the provider authorize URL (signed state). */
 connectorRoutes.get("/:id/oauth/start", async (c) => {
@@ -109,16 +178,39 @@ connectorRoutes.get("/:id/oauth/status", async (c) => {
 	const connector = getConnector(id);
 	if (!connector || connector.auth !== "oauth") throw new HttpError(404, `No OAuth connector "${id}".`);
 	const creds = resolveOauthConfig(c.env, id);
-	const row = await c.env.DB.prepare("SELECT created_at FROM user_api_keys WHERE user_id = ?1 AND provider = ?2")
+	const row = await c.env.DB.prepare("SELECT created_at, account_label FROM user_api_keys WHERE user_id = ?1 AND provider = ?2")
 		.bind(session.uid, id)
-		.first<{ created_at: string }>();
-	return c.json({ connected: !!row, connectedAt: row?.created_at ?? null, configured: !!(creds.clientId && creds.clientSecret) });
+		.first<{ created_at: string; account_label: string | null }>();
+	// Grant-holding connectors report what a disconnect would revoke, the same contract
+	// /v1/{drive,workdrive}/status carry (#357) — so a caller can state it before confirming.
+	const reach = connector.grantModel === "instance-resource"
+		? await connectorGrantReach(c.env, session.uid, id)
+		: undefined;
+	return c.json({
+		connected: !!row,
+		account: row?.account_label ?? null,
+		connectedAt: row?.created_at ?? null,
+		configured: !!(creds.clientId && creds.clientSecret),
+		...(reach ? { reach } : {}),
+	});
 });
 
-/** DELETE /v1/connectors/:id/oauth — disconnect (drop the stored refresh token). */
+/**
+ * DELETE /v1/connectors/:id/oauth — disconnect: drop the stored refresh token AND, for a
+ * connector whose reach is per-instance grants, those grants.
+ *
+ * Declaring Drive/WorkDrive (#352 Stage 1) makes this route a SECOND way to disconnect them, so
+ * without the cascade it would have quietly re-opened #357 through a different door: token gone,
+ * grants standing, restored by the next reconnect. A permission rule that only holds on one of
+ * two paths is not a rule.
+ */
 connectorRoutes.delete("/:id/oauth", async (c) => {
 	const session = await requireUser(c);
 	const id = c.req.param("id");
+	const connector = getConnector(id);
+	const revoked = connector?.grantModel === "instance-resource"
+		? await revokeUserConnectorGrants(c.env, session.uid, id)
+		: undefined;
 	await c.env.DB.prepare("DELETE FROM user_api_keys WHERE user_id = ?1 AND provider = ?2").bind(session.uid, id).run();
-	return c.json({ success: true });
+	return c.json({ success: true, ...(revoked ? { revoked } : {}) });
 });

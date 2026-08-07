@@ -8762,6 +8762,52 @@ paths:
 
   # ── Generic connector OAuth ───────────────────────────────────────────────
 
+  /v1/connectors:
+    get:
+      summary: The connector catalog, resolved for the caller
+      description: |
+        Every connector the platform declares, with what it IS (auth model, scopes, grant model,
+        unattended class, its tools) and where the caller stands with it (`configured` — does
+        this deployment have credentials at all; `connected` — has the caller connected it, or
+        `null` for a connector that holds no credential).
+
+        Added because the registry has been the single source of truth for connectors since #86
+        but only from inside the Worker, so every consumer that needed "which connectors exist
+        and is this one connected" kept its own list — two route files, three hand-written
+        console blocks, an MCP provider map with a matching enum, and the folder-sync trigger
+        branch. This is the one answer they derive from.
+      operationId: listConnectors
+      tags: [Connectors]
+      responses:
+        "200":
+          description: The catalog
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connectors:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, example: google_drive }
+                        label: { type: string, example: Google Drive }
+                        auth: { type: string, enum: [oauth, token, app, none] }
+                        scopes:
+                          type: object
+                          properties:
+                            read: { type: boolean }
+                            write: { type: boolean }
+                        grantModel: { type: string, enum: [user, instance-resource] }
+                        unattended: { type: string, enum: [yes, refresh, interactive-only] }
+                        tools: { type: array, items: { type: string } }
+                        configured: { type: boolean, description: Whether this deployment can offer the connector at all. }
+                        connected: { type: boolean, nullable: true, description: "Whether the caller has connected it; null when the connector holds no credential (relay/no-auth)." }
+                        account: { type: string, nullable: true }
+                        connectedAt: { type: string, nullable: true }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/connectors/{id}/oauth/start:
     get:
       summary: Begin a connector's OAuth flow
@@ -8834,8 +8880,12 @@ paths:
                 type: object
                 properties:
                   connected: { type: boolean }
+                  account: { type: string, nullable: true }
                   connectedAt: { type: string, nullable: true }
                   configured: { type: boolean, description: Whether this deployment has the connector's OAuth credentials at all. }
+                  reach:
+                    allOf: [{ $ref: "#/components/schemas/ConnectorReach" }]
+                    description: Present only for `grantModel: instance-resource` — what a disconnect would revoke.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404":
           description: No OAuth connector with that id
@@ -8846,7 +8896,11 @@ paths:
   /v1/connectors/{id}/oauth:
     delete:
       summary: Disconnect a connector
-      description: Drops the stored refresh token.
+      description: >
+        Drops the stored refresh token, and — for a `grantModel: instance-resource` connector —
+        every per-instance grant the caller made for it, reported as `revoked`. Without the
+        cascade this route would be a second disconnect path that leaves grants standing for the
+        next reconnect to restore.
       operationId: connectorOauthDisconnect
       tags: [Connectors]
       parameters:
@@ -8856,7 +8910,11 @@ paths:
           description: Disconnected
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Success" }
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  revoked: { $ref: "#/components/schemas/ConnectorReach" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   # ── Gmail ─────────────────────────────────────────────────────────────────

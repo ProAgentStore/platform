@@ -26,14 +26,16 @@ interface OauthClientCreds {
 	tokenUrl?: string;
 }
 
-/** Resolve a connector's OAuth token endpoint + client credentials. Manifest connectors carry
- *  their config on `Connector.oauth` (endpoint + env-var names for the credentials); the hand-
- *  written google_drive connector keeps its hardcoded creds. `resolveOauthConfig` is exported so
- *  the generic authorize/callback route (routes/connectors.ts) resolves the same way. */
+/** Resolve a connector's OAuth token endpoint + client credentials, from the connector's own
+ *  declaration (endpoint + the env-var NAMES holding the credentials; the values are resolved
+ *  server-side and never appear in a manifest). Exported so the generic authorize/callback route
+ *  (routes/connectors.ts) resolves exactly the same way a token mint does.
+ *
+ *  `google_drive` used to be special-cased here with hardcoded creds, because it was the one
+ *  OAuth connector that existed outside the registry. It is declared now (#352 Stage 1,
+ *  connected-accounts.ts) and resolves through the same path as everything else — the branch was
+ *  removed rather than left as a redundant fallback, so there is one answer per connector. */
 export function resolveOauthConfig(env: Env, connectorId: string): OauthClientCreds {
-	if (connectorId === "google_drive") {
-		return { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET, tokenUrl: "https://oauth2.googleapis.com/token" };
-	}
 	const oauth = getConnector(connectorId)?.oauth;
 	if (!oauth) return {};
 	const e = env as unknown as Record<string, string | undefined>;

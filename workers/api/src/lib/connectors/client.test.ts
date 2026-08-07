@@ -16,7 +16,18 @@ import { requireConnectorGrant } from "../connector-grants.js";
 
 const FIXTURES: Record<string, Connector> = {
 	app_conn: { id: "app_conn", label: "App Conn", auth: "app", scopes: { read: true, write: true }, grantModel: "user", tools: [] },
-	oauth_conn: { id: "google_drive", label: "Drive", auth: "oauth", scopes: { read: true, write: false }, grantModel: "user", tools: [] },
+	// The oauth config is DECLARED (#352 Stage 1) — `resolveOauthConfig` has no per-connector
+	// branch any more, so a fixture that omits it now resolves to no credentials, which is the
+	// correct answer for a connector that declares none.
+	oauth_conn: {
+		id: "google_drive",
+		label: "Drive",
+		auth: "oauth",
+		scopes: { read: true, write: false },
+		grantModel: "user",
+		oauth: { authUrl: "https://accounts.google.com/o/oauth2/v2/auth", tokenUrl: "https://oauth2.googleapis.com/token", clientIdEnv: "GOOGLE_CLIENT_ID", secretEnv: "GOOGLE_CLIENT_SECRET" },
+		tools: [],
+	},
 	env_token_conn: { id: "env_token_conn", label: "Env Token", auth: "token", scopes: { read: false, write: true }, grantModel: "user", tokenEnv: "META_ACCESS_TOKEN", tools: [] },
 	user_token_conn: { id: "user_token_conn", label: "User Token", auth: "token", scopes: { read: true, write: false }, grantModel: "user", tools: [] },
 	none_conn: { id: "none_conn", label: "None", auth: "none", scopes: { read: true, write: true }, grantModel: "user", tools: [] },

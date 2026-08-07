@@ -2,9 +2,53 @@ import { describe, expect, it } from "vitest";
 import { CONNECTORS, connectorTools, getConnector } from "./registry.js";
 
 describe("connector registry", () => {
-	it("declares browser, github, google_sheets, http, mcp, meta, repo-local, supervision, terminal, tmux, and web-search", () => {
+	it("declares every connector the platform has, including the three tool-less accounts", () => {
 		const ids = CONNECTORS.map((c) => c.id).sort();
-		expect(ids).toEqual(["browser", "github", "google_sheets", "http", "mcp", "meta", "repo-local", "supervision", "terminal", "tmux", "web-search"]);
+		expect(ids).toEqual([
+			"browser", "github", "gmail", "google_drive", "google_sheets", "http", "mcp",
+			"meta", "repo-local", "supervision", "terminal", "tmux", "web-search", "zoho_workdrive",
+		]);
+	});
+
+	// #352 Stage 1. Drive/WorkDrive/Gmail already stored their refresh token in the exact row an
+	// `auth:"oauth"` registry connector reads — `user_api_keys(user_id, provider=<id>)` — so
+	// declaring them moved no data. These assertions pin the two properties that made it safe:
+	// the ids are the ones already in live rows, and nothing gained a tool.
+	describe("the three connected accounts (#352 Stage 1)", () => {
+		it("keeps the ids that are already in user_api_keys and instance_connector_grants", () => {
+			expect(getConnector("google_drive")?.id).toBe("google_drive");
+			expect(getConnector("zoho_workdrive")?.id).toBe("zoho_workdrive");
+			expect(getConnector("gmail")?.id).toBe("gmail");
+		});
+
+		it("declares no tools, so connectorTools() is unchanged and no agent gains reach", () => {
+			for (const id of ["google_drive", "zoho_workdrive", "gmail"]) {
+				expect(getConnector(id)?.tools).toEqual([]);
+			}
+			expect(connectorTools().some((t) => ["google_drive", "zoho_workdrive", "gmail"].includes(t.connector ?? ""))).toBe(false);
+		});
+
+		it("is read-only across all three — there is no write path in drive.ts/workdrive.ts/gmail.ts", () => {
+			for (const id of ["google_drive", "zoho_workdrive", "gmail"]) {
+				expect(getConnector(id)?.scopes).toEqual({ read: true, write: false });
+			}
+		});
+
+		it("models Drive/WorkDrive reach as instance-resource and Gmail's as user", () => {
+			expect(getConnector("google_drive")?.grantModel).toBe("instance-resource");
+			expect(getConnector("zoho_workdrive")?.grantModel).toBe("instance-resource");
+			// Gmail has no grant row; its reach is the per-agent permissions.email flag, which the
+			// registry has no model for — see connected-accounts.ts for why it is not invented here.
+			expect(getConnector("gmail")?.grantModel).toBe("user");
+		});
+
+		it("declares WorkDrive with NO oauth block — its endpoints are per data-centre", () => {
+			// Not an omission: `workDriveAccountsBase(env)` is env-dependent, so there is no static
+			// authorize URL to declare. Omitting it keeps the generic OAuth route 404ing for this id
+			// instead of building a URL against the wrong DC.
+			expect(getConnector("zoho_workdrive")?.oauth).toBeUndefined();
+			expect(getConnector("google_drive")?.oauth?.tokenUrl).toBe("https://oauth2.googleapis.com/token");
+		});
 	});
 
 	// repo-local is the only read-ONLY connector: scopes.write:false is what makes it
