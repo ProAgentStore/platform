@@ -26,6 +26,7 @@ import { codingSessionLink } from "../lib/console-links.js";
 import { notifyUser } from "../routes/push.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
 import { instanceSpendMicros, recordEngineUsage } from "../lib/usage.js";
+import type { EngineAuthResolved } from "../lib/usage-payer.js";
 import { sanitizeEngineUsage } from "../lib/engine-usage.js";
 import { recordEngineActs, sanitizeEngineActs, summarizeActs } from "../lib/engine-acts.js";
 import {
@@ -376,7 +377,15 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 					.catch(() => null),
 			]);
 			const { usage, acts, ...pane } = snap;
-			await recordEngineUsage(env, { userId, sessionId, instanceId }, sanitizeEngineUsage(usage));
+			// The SAME snapshot carries how the engine authenticated (runtime.ts sets it on every
+			// capture), so the payer is in hand here exactly as it is on the route drain. Dropping
+			// it made the Pilot-driven sessions — the longest and most expensive the platform runs —
+			// the only ones recording an unknown payer (#356).
+			await recordEngineUsage(
+				env,
+				{ userId, sessionId, instanceId, authResolved: (snap as { authResolved?: EngineAuthResolved | null }).authResolved ?? null },
+				sanitizeEngineUsage(usage),
+			);
 			const reported = sanitizeEngineActs(acts);
 			// What this run actually DID (#294). Stamped with the loop-run id when there is one, so
 			// `/trace?trace_id=<runId>` reconstructs exactly what a delegation did — the record whose
@@ -660,7 +669,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				if (!snap) return null;
 				// Usage is drained by the same flag, so it has to be banked here too or this call
 				// would silently discard the closing turn's spend to record its acts (#267).
-				await recordEngineUsage(env, { userId, sessionId, instanceId }, sanitizeEngineUsage(snap.usage)).catch(() => undefined);
+				await recordEngineUsage(
+					env,
+					{ userId, sessionId, instanceId, authResolved: (snap as { authResolved?: EngineAuthResolved | null }).authResolved ?? null },
+					sanitizeEngineUsage(snap.usage),
+				).catch(() => undefined);
 				const closing = sanitizeEngineActs(snap.acts);
 				await recordEngineActs(env, { userId, sessionId, instanceId, traceId: event.payload.loopRunId ?? null }, closing).catch(() => undefined);
 				// A coding run routinely ends WITH the merge, so this drain is where the incident's own

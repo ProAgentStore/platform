@@ -161,10 +161,15 @@ export async function recordVoiceUsage(
  * attached. Whether the figure is money is `payer`, which is a different question with a different
  * answer.
  *
- * `authResolved` is what the runner OBSERVED about the engine's credential. Optional and defaulting
- * to unknown on purpose: several drain paths (session end, the Pilot's own capture) have no
- * observation to pass, and unknown-and-honest is the right row for them. It is never inferred from
- * the preset's SETTING — asking for a subscription is not the same as getting one.
+ * `authResolved` is what the runner OBSERVED about the engine's credential. It is never inferred
+ * from the preset's SETTING — asking for a subscription is not the same as getting one.
+ *
+ * Optional, but the bar for passing `null` is that no observation EXISTS — not that the call site
+ * did not bother. This comment previously said the Pilot's captures "have no observation to pass",
+ * which was false: `runtime.ts` puts `authResolved` on every capture snapshot, and both Pilot
+ * drains held it and dropped it. The result was that the longest and most expensive sessions on
+ * the platform were the only ones recording an unknown payer (#356) — while this docstring
+ * asserted that was correct.
  *
  * `INSERT OR IGNORE` on a deterministic id makes the write idempotent, which is what lets more
  * than one cloud path drain and record the same turn without double-charging. Best-effort like
