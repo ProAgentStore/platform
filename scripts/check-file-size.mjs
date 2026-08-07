@@ -165,7 +165,15 @@ const PINS = {
 	// comment beside the binding says which surface is the live one, which is the confusion that
 	// let a dead binding survive three releases. The binding rule itself is pure and lives in the
 	// SDK (voice/composer.ts), shared with the Coder Co-pilot rather than restated here.
-	"store/console/src/pages/InstanceDetail.tsx": 1326,
+	// +51 at #376: the Stop button gained the state it never had. A loop run has THREE states —
+	// running, settling the step it was asked to stop at, and ended — and the middle one was
+	// invisible, so a pressed Stop looked for minutes like a button that did nothing. The DECISION
+	// is pure and lives in lib/loopStopState.ts with its tests, which is where a split would have
+	// put it; what landed here is the state that carries the server's `cancelRequested` into the
+	// header (one `useState` written from the poll, the adopt path and the press), two phase→class
+	// records, and the comments explaining why the button now refuses a second press rather than
+	// escalating to a hard abort.
+	"store/console/src/pages/InstanceDetail.tsx": 1377,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.

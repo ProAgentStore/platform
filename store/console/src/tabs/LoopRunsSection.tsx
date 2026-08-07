@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import { loopStopControl, type LoopPhase } from "../lib/loopStopState";
 
 /**
  * Autonomous runs — the history of objectives this agent worked on by itself (#158/#182).
@@ -21,6 +22,8 @@ type LoopRun = {
 	detail?: string | null;
 	iteration: number;
 	maxIterations: number;
+	/** A stop the server accepted but the run has not reached yet (#376) — see lib/loopStopState.ts. */
+	cancelRequested?: boolean;
 	startedAt: number;
 	finishedAt?: number | null;
 };
@@ -42,6 +45,19 @@ const TONE: Record<string, string> = {
 	failed: "text-red",
 	cancelled: "text-muted",
 	running: "text-accent",
+};
+
+/**
+ * The live phases' colours. A lookup, not a decision — `loopStopControl` made the decision.
+ *
+ * Yellow for `stopping`, not orange: `index.css` `@theme` declares no `--color-orange`, so an
+ * orange utility compiles to nothing (the dead-class bug #368 fixed elsewhere; the `needs_human`
+ * entry above still has it, and belongs to that vocabulary rather than to this change).
+ */
+const PHASE_TONE: Record<LoopPhase, string> = {
+	running: "text-accent",
+	stopping: "text-yellow",
+	ended: "text-muted",
 };
 
 function when(ms: number): string {
@@ -82,9 +98,11 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 		setMsg("");
 		try {
 			await api(`/v1/instances/${instanceId}/loop/${runId}/cancel`, { method: "POST" });
-			// Cooperative: the in-flight step finishes and settles its spend, so the row stays
-			// "running" for a moment. Saying "stopping" is honest; saying "stopped" would not be.
-			setMsg("Stopping — the current step will finish first.");
+			// No success message any more. It used to say "Stopping — the current step will finish
+			// first" in component state, which is honest and lasted until the next poll, re-render
+			// or navigation — and the row it was explaining went on saying "running" underneath it
+			// (#376). The ROW now carries that state, from the server's own `cancelRequested`, so it
+			// survives everything a transient string does not. `msg` is for errors only.
 			await load();
 		} catch (e) {
 			setMsg(e instanceof Error ? e.message : String(e));
@@ -101,34 +119,40 @@ export default function LoopRunsSection({ instanceId }: { instanceId: string }) 
 				Objectives this agent worked on by itself. These run on the server, so they keep going
 				when you close this page.
 			</p>
-			{runs.slice(0, 10).map((r) => (
-				<div key={r.runId} className="border border-line rounded-lg px-3 py-2 mb-1.5">
-					<div className="flex items-start justify-between gap-2">
-						<span className="text-sm min-w-0 truncate" title={r.objective}>{r.objective}</span>
-						{r.status === "running" ? (
-							<button
-								type="button"
-								disabled={busy}
-								onClick={() => stop(r.runId)}
-								className="text-xs px-2 py-1 rounded-lg border border-line hover:bg-paper whitespace-nowrap"
-							>
-								Stop
-							</button>
-						) : (
-							<span className={`text-xs font-semibold whitespace-nowrap ${TONE[r.status] ?? "text-muted"}`}>
-								{REASON_LABEL[r.stopReason ?? ""] ?? r.status}
-							</span>
+			{runs.slice(0, 10).map((r) => {
+				const ctl = loopStopControl(r);
+				return (
+					<div key={r.runId} className="border border-line rounded-lg px-3 py-2 mb-1.5">
+						<div className="flex items-start justify-between gap-2">
+							<span className="text-sm min-w-0 truncate" title={r.objective}>{r.objective}</span>
+							{ctl.phase !== "ended" ? (
+								<button
+									type="button"
+									disabled={busy || !ctl.canStop}
+									onClick={() => stop(r.runId)}
+									title={ctl.hint ?? undefined}
+									className="text-xs px-2 py-1 rounded-lg border border-line hover:bg-paper whitespace-nowrap disabled:opacity-40"
+								>
+									{ctl.actionLabel}
+								</button>
+							) : (
+								<span className={`text-xs font-semibold whitespace-nowrap ${TONE[r.status] ?? "text-muted"}`}>
+									{REASON_LABEL[r.stopReason ?? ""] ?? r.status}
+								</span>
+							)}
+						</div>
+						<div className="text-[0.7rem] text-muted mt-0.5">
+							step {r.iteration}/{r.maxIterations} · started {when(r.startedAt)}
+							{ctl.statusLabel && <span className={PHASE_TONE[ctl.phase]}> · {ctl.statusLabel}</span>}
+						</div>
+						{/* What the wait is FOR. Without it a multi-minute settling window reads as a hang. */}
+						{ctl.hint && <div className="text-xs text-muted mt-1">{ctl.hint}</div>}
+						{r.detail && ctl.phase === "ended" && (
+							<div className="text-xs text-muted mt-1 line-clamp-2">{r.detail}</div>
 						)}
 					</div>
-					<div className="text-[0.7rem] text-muted mt-0.5">
-						step {r.iteration}/{r.maxIterations} · started {when(r.startedAt)}
-						{r.status === "running" && <span className="text-accent"> · running</span>}
-					</div>
-					{r.detail && r.status !== "running" && (
-						<div className="text-xs text-muted mt-1 line-clamp-2">{r.detail}</div>
-					)}
-				</div>
-			))}
+				);
+			})}
 			{msg && <div className="text-xs text-muted mt-2">{msg}</div>}
 		</div>
 	);

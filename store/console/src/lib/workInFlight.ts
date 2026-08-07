@@ -20,6 +20,8 @@ export interface LoopRunLike {
 	maxIterations?: number;
 	objective?: string;
 	startedAt?: number;
+	/** A stop the server accepted but the run has not reached yet (#376, lib/loopStopState.ts). */
+	cancelRequested?: boolean;
 }
 
 /** A run is live only while the server says `running`; every terminal state is a different word. */

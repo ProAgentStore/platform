@@ -27,6 +27,7 @@ import { useScrapLastTurn } from "../lib/deleteTurn";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
 import { resolveInstanceRoute } from "../lib/instanceRoute";
 import { loopCompletionNotice, loopStartFailureNotice, loopStartNotice } from "../lib/loopNotices";
+import { loopStopControl, STOPPING_HINT, type LoopPhase } from "../lib/loopStopState";
 import { chatExportPayload } from "../lib/chatExport";
 import { composerPlaceholder, shouldShowComposer } from "../lib/composer";
 
@@ -58,6 +59,29 @@ function CopyButton({ text }: { text: string }) {
 
 // A built-in SurfaceId or a custom (agent-published) surface id.
 type Tab = string;
+
+/**
+ * The chat header's Loop/Stop button, per phase. A lookup, not a decision — `loopStopControl`
+ * already made the decision; this only spells out what live and settling look like. `ended` never
+ * renders (the button becomes the Loop starter there) but the record must be total.
+ */
+const LOOP_BUTTON_CLASS: Record<LoopPhase, string> = {
+	running: "border-green bg-green/15 text-green",
+	// Yellow, not orange: `index.css` `@theme` declares no `--color-orange`, so an orange utility
+	// compiles to nothing and the chip renders unstyled (the class #368 fixed elsewhere).
+	stopping: "border-yellow bg-yellow/15 text-yellow",
+	ended: "border-line text-muted",
+};
+
+/**
+ * The iteration counter riding on that button, kept in step with it. A green badge on a yellow
+ * button is the two-statements-about-one-fact problem `lib/runnerPanel.ts` was written to end.
+ */
+const LOOP_BADGE_CLASS: Record<LoopPhase, string> = {
+	running: "bg-green text-white",
+	stopping: "bg-yellow text-paper",
+	ended: "bg-muted text-white",
+};
 
 /**
  * One mounted page per instance (#240).
@@ -162,6 +186,10 @@ function InstancePage() {
 	// #158: the loop now runs on the SERVER (AgentLoopWorkflow). This is the run we are watching,
 	// not a loop we are driving — closing this tab no longer kills the objective.
 	const [loopRunId, setLoopRunId] = useState<string | null>(null);
+	// A stop the server has accepted but the run has not reached yet (#376). Read from the run
+	// itself, not remembered from the press, so a tab that never pressed Stop — or one reopened
+	// afterwards — shows the same pending state as the one that did.
+	const [loopCancelPending, setLoopCancelPending] = useState(false);
 	const [showLoopForm, setShowLoopForm] = useState(false);
 	// The agent's loop presets (#234). Fetched when the form first opens rather than on mount —
 	// most visits to a chat never press Loop, and this is a request that would be wasted on them.
@@ -520,14 +548,18 @@ function InstancePage() {
 	const pollLoop = useCallback(async () => {
 		if (!id || !loopRunIdRef.current) return;
 		try {
-			const run = await api<{ status: string; iteration: number; stopReason?: string | null; detail?: string | null }>(
+			const run = await api<{ status: string; iteration: number; stopReason?: string | null; detail?: string | null; cancelRequested?: boolean }>(
 				`/v1/instances/${id}/loop/${loopRunIdRef.current}`,
 			);
 			setLoopIteration(run.iteration);
+			// The server's own answer, every poll — so a cancel requested from ANOTHER tab, or from
+			// the Settings run list, shows up here too (#376).
+			setLoopCancelPending(run.cancelRequested === true);
 			await loadMessagesRef.current();
 			if (run.status !== "running") {
 				setLoopOn(false);
 				setLoopRunId(null);
+				setLoopCancelPending(false);
 				// Who narrates the end of a run, and into what — both rules and their reasoning
 				// live in lib/loopNotices.ts (null = the workflow already wrote it; persist:false =
 				// this tab merely adopted the run, so show it but don't add an Nth copy to the log).
@@ -776,6 +808,9 @@ function InstancePage() {
 			loopDriverRef.current = null; // unknown for a run we did not start
 			setLoopRunId(run.runId);
 			setLoopIteration(run.iteration ?? 0);
+			// Seeded here rather than left to the first poll: a run adopted mid-cancel would
+			// otherwise offer a live Stop button for up to three seconds (#376).
+			setLoopCancelPending(run.cancelRequested === true);
 			if (run.maxIterations) setLoopMax(run.maxIterations);
 			if (run.objective) setLoopObjective(run.objective);
 			setLoopOn(true); // resumes the watcher above — it only ever lacked its starting value
@@ -809,6 +844,7 @@ function InstancePage() {
 			loopDriverRef.current = run.driver ?? null;
 			setLoopOn(true);
 			setLoopIteration(0);
+			setLoopCancelPending(false);
 			setLoopPaused(false);
 		} catch (e) {
 			emitSystemChat(loopStartFailureNotice(e));
@@ -823,12 +859,27 @@ function InstancePage() {
 			// Cooperative: the in-flight iteration finishes and settles its spend. The watcher
 			// below sees the terminal status and reports it, so we do not fake one here.
 			await api(`/v1/instances/${id}/loop/${runId}/cancel`, { method: "POST" });
-			emitSystemChat("Stopping the loop…");
+			// Flip the control NOW rather than waiting up to 3s for the next poll to confirm what
+			// the 200 already told us. The poll remains the authority — it will re-assert this
+			// every 3s, and clear it if the run somehow is not cancelling.
+			setLoopCancelPending(true);
+			// The same sentence the button and the run list use (#376): "Stopping the loop…" said
+			// nothing about the multi-minute wait, so the silence that followed read as a hang.
+			emitSystemChat(STOPPING_HINT);
 		} catch (e) {
 			// pollLoop's own catch refuses to kill the watcher for exactly this reason — the run is durable and carries on. Clearing it here stopped the poll, so the loop kept iterating and spending with no UI trace, no Stop control and no way to re-attach: on screen, identical to a stop that worked.
 			emitSystemChat(`Couldn't stop the loop — it's still running. ${e instanceof Error ? e.message : ""}`.trim(), false);
 		}
 	};
+
+	/**
+	 * What the header's Stop button says and does (#376).
+	 *
+	 * `loopOn` means this tab is watching a run the server calls `running`; the cancel flag is the
+	 * only thing that separates "running" from "settling the step it is in". Both live states used
+	 * to render identically, so a pressed Stop looked like a button that did nothing for minutes.
+	 */
+	const loopControl = loopStopControl(loopOn ? { status: "running", cancelRequested: loopCancelPending } : null);
 
 	/** Remove exactly the ids the server deleted (#342) — never a locally-recomputed span, so the
 	 *  thread can't diverge from the log if the two rules ever drift apart. */
@@ -1150,7 +1201,7 @@ function InstancePage() {
 							</div>
 							{voice.mode === "handsfree" && <button type="button" onClick={voice.toggleMute} title={voice.muted ? "Unmute the mic" : "Mute the mic (stay in hands-free)"} className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm border rounded-lg transition-colors ${voice.muted ? "border-red bg-red text-white" : "border-line text-muted hover:border-accent hover:text-accent"}`}><MicOff size={16} /><span className="text-xs font-semibold hidden sm:inline">{voice.muted ? "Muted" : "Mute"}</span></button>}
 							{loopOn ? (
-								<button type="button" onClick={stopLoop} title={`Loop ${loopIteration}/${loopMax}`} className="px-1.5 py-1.5 text-sm border border-green bg-green/15 text-green rounded-lg relative"><Square size={13} /><span className="absolute -top-1 -right-1 text-[0.55rem] bg-green text-white rounded-full px-1 font-bold leading-tight">{loopIteration}</span></button>
+								<button type="button" onClick={stopLoop} disabled={!loopControl.canStop} aria-label={loopControl.actionLabel} title={loopControl.hint ?? `Loop ${loopIteration}/${loopMax}`} className={`px-1.5 py-1.5 text-sm border rounded-lg relative disabled:opacity-60 ${LOOP_BUTTON_CLASS[loopControl.phase]}`}>{loopControl.phase === "stopping" ? <Loader2 size={13} className="animate-spin" /> : <Square size={13} />}<span className={`absolute -top-1 -right-1 text-[0.55rem] rounded-full px-1 font-bold leading-tight ${LOOP_BADGE_CLASS[loopControl.phase]}`}>{loopIteration}</span></button>
 							) : (
 								<button type="button" onClick={toggleLoopForm} title="Loop" className={`px-1.5 py-1.5 text-sm border rounded-lg ${showLoopForm ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:border-accent hover:text-accent"}`}><Repeat size={13} /></button>
 							)}
