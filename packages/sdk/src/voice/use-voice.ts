@@ -846,12 +846,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// Control words — honored at ANY time. `muted` is passed so unmute is matched ONLY while
 		// muted (and mute/repeat are inert there); see matchVoiceCommand.
 		//
-		// ECHO (#386): this is the ONLY listener running while the agent speaks, so it is also the
-		// only one that cannot answer speaker→mic bleed by dropping the result — that would delete
-		// mute-during-TTS, the capability #153 built it for. `echoing` instead raises the bar inside
-		// that window (no partials, whole-utterance only), which is what separates a deliberate
-		// "mute mute" from the agent saying "Stop me if this is wrong", whose first interim is
-		// exactly "stop". The rule itself is in commandStateFor, with what it costs.
+		// ECHO (#386) — and READ docs/adr/0001-mute-is-always-available.md (M3) before changing it.
+		// This is the ONLY listener running while the agent speaks, so it is also the only one that
+		// cannot answer speaker→mic bleed by dropping the result: that would delete mute-during-TTS,
+		// the capability #153 built it for. `echoing` raises the bar inside that window instead (no
+		// partials, whole-utterance only), which separates a deliberate "mute mute" from the agent
+		// saying "Stop me if this is wrong". The rule is in commandStateFor, with what it costs.
 		//
 		// `canScrap` is deliberately NOT passed. This listener has no scrap dispatch, and now that it
 		// states the REAL transcript kind, passing the flag would quietly enable a destructive command
