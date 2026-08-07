@@ -308,6 +308,9 @@ export class AgentLoopWorkflow extends WorkflowEntrypoint<Env, AgentLoopParams> 
 					"Your agent needs you",
 					stop.message.slice(0, 200),
 					instanceLink(instanceId),
+					// One run stops once. `alert` because the run has STOPPED and only a human
+					// restarts it — never muted (#360).
+					{ key: `loop:${runId}:${stop.reason}`, kind: "alert" },
 				).catch(() => undefined);
 			}
 		});

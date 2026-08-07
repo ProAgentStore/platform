@@ -579,7 +579,17 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				await step.do(`handoff-${round}`, () => callRunner<{ ok?: boolean }>(conn, "/coding/takeover", { sessionId, label, reason }));
 				// Ping the user — the agent is paused waiting on them.
 				await step.do(`notify-handoff-${round}`, async () => {
-					await notifyUser(env, userId, "coding", "🙋 Coder needs you", `${goal.repo}: ${label}`, codingSessionLink(instanceId, sessionId)).catch(() => undefined);
+					await notifyUser(
+						env,
+						userId,
+						"coding",
+						"🙋 Coder needs you",
+						`${goal.repo}: ${label}`,
+						codingSessionLink(instanceId, sessionId),
+						// The Engine is stopped until someone answers — `alert`, so muting "Coder"
+						// silences the finished/stopped updates below and never this.
+						{ key: `coding-handoff:${sessionId}:${reason}:${round}`, kind: "alert" },
+					).catch(() => undefined);
 					return null;
 				});
 
@@ -721,7 +731,11 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 				const ok = result.outcome !== "failed" && result.outcome !== "max_steps";
 				const title = ok ? "✅ Coder finished" : "⚠️ Coder stopped";
 				const body = `${goal.repo}: ${result.detail || result.outcome}`;
-				await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId)).catch(() => undefined);
+				// A session ends once. `update` — nothing is waiting on the user, so this is what a
+				// "Coder" mute is for.
+				await notifyUser(env, userId, "coding", title, body, codingSessionLink(instanceId, sessionId), {
+					key: `coding-end:${sessionId}`,
+				}).catch(() => undefined);
 				return null;
 			});
 			// #155: close out the observable delegation task on the board (if this was a

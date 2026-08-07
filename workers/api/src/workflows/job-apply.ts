@@ -276,7 +276,14 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				// The whole point of this notification is that the user learns their application
 				// is paused waiting on THEM. If every channel fails, that must not vanish silently —
 				// record it so it's visible in the error log rather than a lost pause.
-				await notifyUser(env, userId, "apply", title, body, link).catch(async (e) => {
+				// The run is PAUSED on a human: `alert`, so no mute can hide it. The key is the
+				// pause itself (this task, this reason, this round), not the prose — a workflow
+				// step that replays must not buzz twice for one pause, and the NEXT round's pause
+				// is a different event that must still get through.
+				await notifyUser(env, userId, "apply", title, body, link, {
+					key: `apply-handoff:${taskId}:${reason}:${round}`,
+					kind: "alert",
+				}).catch(async (e) => {
 					await logError(env, { source: "job-apply", userId, message: `handoff notify failed (${reason}): ${e instanceof Error ? e.message : String(e)}`.slice(0, 300), context: { instanceId, taskId, reason } }).catch(() => undefined);
 				});
 				return null;

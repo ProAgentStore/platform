@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { notificationDedupeKey } from "../lib/notifications.js";
 import type { Env } from "../types.js";
-import { isSafePushEndpoint, sendPushToUser } from "./push.js";
+import { isSafePushEndpoint, notifyUser, sendPushToUser } from "./push.js";
 
 const b64url = (b: Uint8Array) =>
 	btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
@@ -103,5 +104,113 @@ describe("sendPushToUser", () => {
 		vi.stubGlobal("fetch", async () => new Response(null, { status: 410 }));
 		expect(await sendPushToUser(env, "u1", { title: "t", body: "b" })).toBe(0);
 		expect(deletes).toEqual(["dead"]);
+	});
+});
+
+/**
+ * A DB that answers the three reads `notifyUser` makes (preferences, duplicate probe, the
+ * subscription list) and records every notification row written, so a test can assert the two
+ * things that matter separately: did the ROW get written, and did the phone BUZZ.
+ */
+function notifyEnv(opts: { preferences?: unknown; duplicate?: boolean; subs?: unknown[] }) {
+	const inserted: Array<Record<string, unknown>> = [];
+	const DB = {
+		prepare(sql: string) {
+			return {
+				bind(...args: unknown[]) {
+					return {
+						async all() {
+							return { results: opts.subs ?? [] };
+						},
+						async run() {
+							if (/INSERT INTO notifications/i.test(sql)) {
+								inserted.push({ type: args[2], title: args[3], kind: args[7], dedupeKey: args[8], pushedAt: args[9] });
+							}
+							return {};
+						},
+						async first() {
+							if (/SELECT preferences FROM users/i.test(sql)) {
+								return { preferences: opts.preferences === undefined ? null : JSON.stringify(opts.preferences) };
+							}
+							if (/FROM notifications/i.test(sql)) return opts.duplicate ? { 1: 1 } : null;
+							return null;
+						},
+					};
+				},
+			};
+		},
+	};
+	return { env: { DB } as unknown as Env, inserted };
+}
+
+/**
+ * The floor (#361). Every assertion here is "the row survived, the buzz did not" — the whole
+ * design is that suppression is visible in the log rather than hidden the way the push `tag`
+ * hid it in the OS tray.
+ */
+describe("notifyUser", () => {
+	it("records the event key and the kind on the row", async () => {
+		const { env, inserted } = notifyEnv({});
+		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", "/console/", { key: "deploy:r1:abc" });
+		expect(inserted).toHaveLength(1);
+		expect(inserted[0].kind).toBe("update");
+		expect(inserted[0].dedupeKey).toBe(notificationDedupeKey("deploy", "deploy:r1:abc", "✅ Deployed", "live"));
+		expect(inserted[0].pushedAt).toBeTypeOf("string"); // it interrupted, so the window starts here
+	});
+
+	it("keeps the row but skips the push for a recent duplicate", async () => {
+		const { env, inserted } = notifyEnv({ duplicate: true });
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live", "/console/", { key: "deploy:r1:abc" });
+		expect(inserted).toHaveLength(1); // the bell list is a LOG and stays complete
+		expect(inserted[0].pushedAt).toBeNull(); // ...and this copy did not restart the window
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("keeps the row but skips the push for a muted type", async () => {
+		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: ["deploy"] } } });
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(env, "u1", "deploy", "✅ Deployed", "live");
+		expect(inserted[0].pushedAt).toBeNull();
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	// The one that must never regress: muting a type does not silence a run that has STOPPED
+	// and is waiting for a human. Muting "Coder" stops "✅ Coder finished", never "🙋 needs you".
+	it("still pushes an alert for a muted type", async () => {
+		const subs = [await realSub("phone")];
+		const { env, inserted } = notifyEnv({ preferences: { notifications: { muted: ["coding"] } }, subs });
+		const envWithVapid = { ...(env as object), ...(await vapidEnvKeys()) } as unknown as Env;
+		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(envWithVapid, "u1", "coding", "🙋 Coder needs you", "stuck", "/console/", { kind: "alert" });
+		expect(inserted[0].kind).toBe("alert");
+		expect(fetchSpy).toHaveBeenCalled();
+	});
+
+	// A notification must not be LOST because the floor could not be evaluated.
+	it("falls open when the preference read throws", async () => {
+		const subs = [await realSub("phone")];
+		const broken = {
+			DB: {
+				prepare(sql: string) {
+					if (/SELECT preferences/i.test(sql)) throw new Error("no such column");
+					return {
+						bind: () => ({
+							all: async () => ({ results: subs }),
+							run: async () => ({}),
+							first: async () => null,
+						}),
+					};
+				},
+			},
+			...(await vapidEnvKeys()),
+		} as unknown as Env;
+		const fetchSpy = vi.fn(async () => new Response(null, { status: 201 }));
+		vi.stubGlobal("fetch", fetchSpy);
+		await notifyUser(broken, "u1", "deploy", "t", "b");
+		expect(fetchSpy).toHaveBeenCalled();
 	});
 });

@@ -626,9 +626,40 @@ components:
         read:
           type: integer
           enum: [0, 1]
+        kind:
+          type: string
+          enum: [alert, update]
+          description: |
+            `alert` = a human is blocked on it (a handoff, a stopped run); `update` = news.
+            A per-type mute never hides an `alert` — silencing a run that is waiting for you
+            is worse than the noise it would remove.
+        pushed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: |
+            When this row actually interrupted the user. `null` means it was written but
+            nothing buzzed — a recent duplicate, or a muted type. The row is kept either way:
+            the bell list is a log, and only the interruption is bounded.
         created_at:
           type: string
           format: date-time
+
+    NotificationPreferences:
+      type: object
+      description: |
+        Which notification types may interrupt you. Account-level, because push subscriptions
+        are per-USER and fan out to every device — "mute deploys" is not a property of one
+        agent or one browser.
+
+        A mute applies to `update` notifications only. An `alert` — a run stopped and waiting
+        on a human — is always delivered, whatever is listed here: a mute that could hide one
+        is how someone misses a run blocked waiting for them.
+      properties:
+        muted:
+          type: array
+          description: Type ids from `notificationTypes`. An unknown id is a 400 on write.
+          items: { type: string }
 
     AgentCapabilities:
       type: object
@@ -8019,9 +8050,25 @@ paths:
                     properties:
                       voice: { $ref: "#/components/schemas/VoiceSettings" }
                       translation: { $ref: "#/components/schemas/TranslationConfig" }
+                      timezone: { type: string, nullable: true }
+                      notifications: { $ref: "#/components/schemas/NotificationPreferences" }
                   languages:
                     type: array
                     items: { type: object, additionalProperties: true }
+                  notificationTypes:
+                    type: array
+                    description: |
+                      The notification vocabulary, served rather than hardcoded in the console so a
+                      new type gets a mute control by being added to `lib/notifications.ts`.
+                      `alerts: true` marks a type that can ALSO raise an actionable notification,
+                      which a mute never hides — the control says so before you mute it.
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        label: { type: string }
+                        description: { type: string }
+                        alerts: { type: boolean }
         "401": { $ref: "#/components/responses/Unauthorized" }
     put:
       summary: Save account defaults
@@ -8042,6 +8089,8 @@ paths:
               properties:
                 voice: { $ref: "#/components/schemas/VoiceSettings" }
                 translation: { $ref: "#/components/schemas/TranslationConfig" }
+                timezone: { type: string, nullable: true }
+                notifications: { $ref: "#/components/schemas/NotificationPreferences" }
       responses:
         "200":
           description: The stored preferences
@@ -8055,6 +8104,8 @@ paths:
                     properties:
                       voice: { $ref: "#/components/schemas/VoiceSettings" }
                       translation: { $ref: "#/components/schemas/TranslationConfig" }
+                      timezone: { type: string, nullable: true }
+                      notifications: { $ref: "#/components/schemas/NotificationPreferences" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 

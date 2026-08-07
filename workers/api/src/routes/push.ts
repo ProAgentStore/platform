@@ -1,6 +1,13 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
 import { consoleHomeLink } from "../lib/console-links.js";
+import {
+	DUPLICATE_WINDOW_MINUTES,
+	type NotificationKind,
+	notificationDedupeKey,
+	pushAllowedByPreference,
+} from "../lib/notifications.js";
+import { parseAccountPreferences } from "../lib/preferences.js";
 import { type PushSubscription, sendWebPush, type VapidConfig } from "../lib/web-push.js";
 import type { Env } from "../types.js";
 import { createNotification } from "./notifications.js";
@@ -192,7 +199,38 @@ export async function sendPushToUser(env: Env, userId: string, msg: PushMessage)
 	return sent;
 }
 
-/** In-app notification + Web Push to the user's phone, in one call. */
+export interface NotifyOptions {
+	/**
+	 * What this notification is ABOUT, stably — a commit sha, a session handoff, a trigger id.
+	 * Two calls carrying the same event key inside `DUPLICATE_WINDOW_MINUTES` interrupt once.
+	 * Omitting it falls back to a key derived from title+body, which is the weaker floor: see
+	 * `notificationDedupeKey` for why prose is not identity in either direction.
+	 */
+	key?: string;
+	/**
+	 * `alert` = a human is blocked on this. Alerts are never muted and are badged in the list.
+	 * Defaults to `update`, so a caller that has not thought about it cannot accidentally
+	 * declare itself unmutable.
+	 */
+	kind?: NotificationKind;
+}
+
+/**
+ * In-app notification + Web Push to the user's phone, in one call — and the ONE place that
+ * decides whether the user's phone is allowed to buzz (#361, #360).
+ *
+ * Three gates, in order, all of which keep the row and only ever suppress the interruption:
+ *
+ *  1. **Mute** — a per-type preference on the account. Never applies to an `alert`.
+ *  2. **Recent duplicate** — the same event key already pushed inside the window. This is the
+ *     floor: it exists to bound a malfunction, not to express a policy. #359 is what happens
+ *     without it — a watcher bug turned ~20 pushes into 40–80 notifications and nothing
+ *     between the bug and the device was willing to say "I have already sent this".
+ *  3. VAPID/subscription handling, which `sendPushToUser` already owns.
+ *
+ * Every read here is best-effort: a notification must not be LOST because the floor could not
+ * be evaluated, so a failing lookup falls open (interrupt) rather than closed.
+ */
 export async function notifyUser(
 	env: Env,
 	userId: string,
@@ -200,7 +238,41 @@ export async function notifyUser(
 	title: string,
 	body: string,
 	url?: string,
+	opts: NotifyOptions = {},
 ): Promise<void> {
-	await createNotification(env.DB, userId, type, title, body, undefined, url).catch(() => undefined);
+	const kind: NotificationKind = opts.kind === "alert" ? "alert" : "update";
+	const dedupeKey = notificationDedupeKey(type, opts.key, title, body);
+
+	let interrupt = true;
+	try {
+		const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
+			.bind(userId)
+			.first<{ preferences: string | null }>();
+		interrupt = pushAllowedByPreference(parseAccountPreferences(row?.preferences).notifications, type, kind);
+	} catch {
+		// Fall open — an unreadable preference must not swallow a notification.
+	}
+
+	if (interrupt) {
+		try {
+			const dupe = await env.DB.prepare(
+				`SELECT 1 FROM notifications
+				  WHERE user_id = ?1 AND dedupe_key = ?2
+				    AND pushed_at IS NOT NULL
+				    AND pushed_at > ?3
+				  LIMIT 1`,
+			)
+				.bind(userId, dedupeKey, new Date(Date.now() - DUPLICATE_WINDOW_MINUTES * 60_000).toISOString())
+				.first();
+			if (dupe) interrupt = false;
+		} catch {
+			// Fall open, as above. The column may also predate migration 0093 on a stale DB.
+		}
+	}
+
+	await createNotification(env.DB, userId, type, title, body, undefined, url, { dedupeKey, kind, interrupt }).catch(
+		() => undefined,
+	);
+	if (!interrupt) return;
 	await sendPushToUser(env, userId, { title, body, url, tag: type }).catch(() => undefined);
 }

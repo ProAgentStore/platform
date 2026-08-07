@@ -15,6 +15,7 @@
 import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { isValidTimeZone } from "../lib/cron-time.js";
+import { isKnownNotificationType, NOTIFICATION_TYPES, sanitizeNotificationPreferences } from "../lib/notifications.js";
 import {
 	parseAccountPreferences,
 	sanitizeTranslationSettings,
@@ -38,7 +39,17 @@ preferenceRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
 	// The language list rides along: the Preferences page needs it to render the translation
 	// target, and it has no instance to ask. Owned by instances-translation.ts, not duplicated.
-	return c.json({ preferences: await readPreferences(c.env, session.uid), languages: TRANSLATION_LANGUAGES });
+	//
+	// `notificationTypes` rides along for the same reason and is served rather than hardcoded in
+	// the console: the type table is the vocabulary the mute is expressed in, and a new type
+	// should get a control by being added to `lib/notifications.ts` — the same reason
+	// `GET /v1/instances/behaviour-schema` serialises the behaviour table instead of the page
+	// carrying a second copy of it.
+	return c.json({
+		preferences: await readPreferences(c.env, session.uid),
+		languages: TRANSLATION_LANGUAGES,
+		notificationTypes: NOTIFICATION_TYPES,
+	});
 });
 
 /**
@@ -50,7 +61,25 @@ preferenceRoutes.get("/", async (c) => {
  */
 preferenceRoutes.put("/", async (c) => {
 	const session = await requireUser(c);
-	const body = (await c.req.json().catch(() => ({}))) as { voice?: unknown; translation?: unknown; timezone?: unknown };
+	const body = (await c.req.json().catch(() => ({}))) as {
+		voice?: unknown;
+		translation?: unknown;
+		timezone?: unknown;
+		notifications?: unknown;
+	};
+	// Strict on write, like the timezone below: silently dropping a mute for a type we do not
+	// know leaves the user believing they turned something off. The sanitizer that runs on READ
+	// is lenient on purpose (it parses rows written by older code); a save is not.
+	if (body.notifications !== undefined) {
+		const muted = (body.notifications as { muted?: unknown } | null)?.muted;
+		if (!body.notifications || typeof body.notifications !== "object" || (muted !== undefined && !Array.isArray(muted))) {
+			throw new HttpError(400, "notifications must be an object with a `muted` array");
+		}
+		const unknown = (muted ?? []).find((id: unknown) => !isKnownNotificationType(id));
+		if (unknown !== undefined) {
+			throw new HttpError(400, `unknown notification type: ${String(unknown).slice(0, 40)}`);
+		}
+	}
 	if (body.voice !== undefined) {
 		// Same strict-on-write rule as the per-instance override route.
 		const bad = unknownVoiceField((body.voice ?? {}) as Record<string, unknown>);
@@ -77,6 +106,10 @@ preferenceRoutes.put("/", async (c) => {
 		// is not "UTC", it is "you were never told", and it is what makes the agent say UTC out loud
 		// instead of dressing a guess up as local time.
 		timezone: body.timezone === undefined ? current.timezone : clearsTimezone ? undefined : (body.timezone as string),
+		notifications:
+			body.notifications === undefined
+				? current.notifications
+				: sanitizeNotificationPreferences(body.notifications),
 	};
 
 	await c.env.DB.prepare("UPDATE users SET preferences = ?1 WHERE id = ?2")

@@ -363,6 +363,12 @@ export async function executeTriggerAction(
 					? runnerSkipMessage(target.name, caps)
 					: `${target.name}: a run is already in progress; skipping this one.`,
 				instanceBoardLink(target.instance_id),
+				// Keyed on (trigger, condition), so a five-minute cron whose runner stayed offline
+				// all afternoon says so once per window instead of once per tick. That IS the
+				// event: "your machine is not ready" has not changed between ticks.
+				// A synthetic target (a manual run) carries no id — fall back to the instance so the
+				// key is still about a THING and never collapses two different agents together.
+				{ key: `trigger-skip:${target.id ?? target.instance_id}:${offline ? "offline" : "busy"}` },
 			).catch(() => undefined);
 		}
 	}

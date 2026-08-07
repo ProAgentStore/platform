@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireUser } from "../lib/auth.js";
+import type { NotificationKind } from "../lib/notifications.js";
 import type { Env } from "../types.js";
 
 export const notificationRoutes = new Hono<{ Bindings: Env }>();
@@ -42,6 +43,22 @@ notificationRoutes.post("/read-all", async (c) => {
 });
 
 /**
+ * What the row records beyond its prose (#361/#360).
+ *
+ * `interrupt: false` still writes the row — the bell list is a LOG and must stay complete;
+ * it is the interruption that needs bounding. Same split as the #176 visibility gate, which
+ * suppresses the OS banner for a visible console tab and still forwards the payload so the
+ * badge updates. So a suppressed notification is visible and auditable, which is exactly what
+ * the push `tag` was not: it hid the repetition in the tray while every alert still fired.
+ */
+export interface NotificationRecordOptions {
+	dedupeKey?: string;
+	kind?: NotificationKind;
+	/** False when this copy was suppressed (duplicate, or a muted type) — no push, no Slack. */
+	interrupt?: boolean;
+}
+
+/**
  * Create a notification (internal — called by other routes).
  * Not exposed as an API endpoint.
  */
@@ -53,11 +70,32 @@ export async function createNotification(
 	body: string,
 	agentId?: string,
 	url?: string,
+	opts: NotificationRecordOptions = {},
 ): Promise<void> {
+	const interrupt = opts.interrupt !== false;
 	await db.prepare(
-		`INSERT INTO notifications (id, user_id, type, title, body, agent_id, url, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))`,
-	).bind(crypto.randomUUID(), userId, type, title, body, agentId || null, url || null).run();
+		`INSERT INTO notifications (id, user_id, type, title, body, agent_id, url, kind, dedupe_key, pushed_at, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))`,
+	)
+		.bind(
+			crypto.randomUUID(),
+			userId,
+			type,
+			title,
+			body,
+			agentId || null,
+			url || null,
+			opts.kind || "update",
+			opts.dedupeKey || null,
+			// The window is measured against a real interruption — see migration 0093.
+			interrupt ? new Date().toISOString() : null,
+		)
+		.run();
+
+	// Slack is an interruption channel like the push is, so a suppressed copy is silent there
+	// too. Muting deploys in the console and still being pinged in Slack would make the control
+	// a half-truth.
+	if (!interrupt) return;
 
 	// Send Slack webhook if configured (fire-and-forget)
 	try {

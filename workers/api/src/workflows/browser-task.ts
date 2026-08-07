@@ -133,7 +133,11 @@ export class BrowserTaskWorkflow extends WorkflowEntrypoint<Env, BrowserTaskPara
 						: reason === "challenge"
 							? { title: "🔐 Verification needed", body: `A human check (${label}) appeared — take over to solve it and the agent continues.` }
 							: { title: "✋ Your agent needs a hand", body: `Stuck on: ${label}. Take over that one step and it continues.` };
-				await notifyUser(env, userId, "apply", title, body, link).catch(async (e) => {
+				// Paused on a human — `alert`, never muted. Keyed on the pause, not the prose.
+				await notifyUser(env, userId, "apply", title, body, link, {
+					key: `browse-handoff:${taskId}:${reason}:${round}`,
+					kind: "alert",
+				}).catch(async (e) => {
 					await logError(env, { source: "browser-task", userId, message: `handoff notify failed (${reason}): ${e instanceof Error ? e.message : String(e)}`.slice(0, 300), context: { instanceId, taskId, reason } }).catch(() => undefined);
 				});
 				return null;

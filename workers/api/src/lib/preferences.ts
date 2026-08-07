@@ -27,6 +27,7 @@
 // removes.
 
 import { isValidTimeZone } from "./cron-time.js";
+import { type NotificationPreferences, sanitizeNotificationPreferences } from "./notifications.js";
 
 // Lenient on READ, strict on WRITE. The sanitizers below coerce anything unknown to a safe value,
 // because they also parse rows that were stored years ago by older code — but an explicit save must
@@ -112,6 +113,18 @@ export interface AccountPreferences {
 	 * `"UTC"`: that would be indistinguishable from a user who really is in UTC.
 	 */
 	timezone?: string;
+	/**
+	 * Which notification types may interrupt you (#360).
+	 *
+	 * Account-level for the same reason the rest of this blob is: push subscriptions are
+	 * per-user and `sendPushToUser` fans out to every device, so "mute deploys" is not a
+	 * property of one agent or one browser. It lives here rather than as a per-instance
+	 * setting because a user who finds deploy notifications noisy would otherwise have to
+	 * find and mute every agent that can produce one.
+	 *
+	 * Enforced in `notifyUser`, and NEVER over an `alert` — see `pushAllowedByPreference`.
+	 */
+	notifications?: NotificationPreferences;
 }
 
 const num = (v: unknown, lo: number, hi: number, dflt: number): number =>
@@ -232,6 +245,7 @@ export function parseAccountPreferences(raw: string | null | undefined): Account
 			// this check (or name a zone this runtime's tz database does not carry). Dropping it back
 			// to `undefined` lands on the honest unset branch instead of failing a chat turn.
 			timezone: isValidTimeZone(o.timezone) ? o.timezone : undefined,
+			notifications: sanitizeNotificationPreferences(o.notifications),
 		};
 	} catch {
 		return {};
