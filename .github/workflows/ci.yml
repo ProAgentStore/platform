@@ -49,7 +49,7 @@ jobs:
         # is where they get a budget sized for real I/O instead of vitest's 5s default.
         run: node scripts/check-test-isolation.mjs
       - run: pnpm install --frozen-lockfile
-      - name: Lint — packages/**, workers/mcp/** and store/** (#326)
+      - name: Lint — packages/**, workers/** and store/** (#326)
         # `pnpm lint` has never been in CI, so every Biome rule in this repo is advisory:
         # the 300-issue count #326 is about is not a regression anyone was told about, it
         # is what "nobody is watching" looks like after a year. A gate can only be turned
@@ -63,20 +63,20 @@ jobs:
         # suppressing NOTHING while the findings they answer went unreported, which is the
         # exact failure mode of an advisory lint (#305 cleared them).
         #
-        # WIDENING THIS IS THE POINT, and each remaining tree needs its own work first:
-        #   workers/api    ONE finding away: a `useOptionalChain` in routes/triggers.ts. The
-        #                  `any` debt is gone — all 184 were in *.test.ts, which this repo's
-        #                  tsconfig excludes, so they were never typechecked either; the ones
-        #                  with a real type now have it, and the partial test doubles keep a
-        #                  documented cast per file rather than a fake interface. Add
-        #                  `workers/api` here the moment that last warning clears.
-        #   agents/coder   1.
-        # Add a path here the moment one of them reaches zero — do NOT widen it early and
-        # then reach for `continue-on-error`, which is this step with the teeth removed.
+        # WIDENING THIS IS THE POINT. `workers/api` joined on 2026-08-07 — the last of its
+        # 300 was a single `useOptionalChain` in routes/triggers.ts, and the `any` debt that
+        # looked much larger was all 184 in *.test.ts, which this repo's tsconfig excludes,
+        # so it was never typechecked either. `workers` now covers api, host and mcp, so a
+        # NEW worker is in the gate from its first commit rather than accruing a backlog
+        # nobody is told about.
+        # One tree is still out:
+        #   agents/coder   1 (a react/useExhaustiveDependencies in the web UI).
+        # Add it the moment it reaches zero — do NOT widen early and then reach for
+        # `continue-on-error`, which is this step with the teeth removed.
         #
         # `pnpm exec`, not `npx`: the pinned @biomejs/biome, so a new upstream rule cannot
         # turn a green main red without anyone changing this repo.
-        run: pnpm exec biome check --error-on-warnings packages workers/mcp store
+        run: pnpm exec biome check --error-on-warnings packages workers store
       - name: Docs drift (#210)
         # Documented claims vs the code that defines them: nav, MCP tool table and
         # count, removed commands, and (via scripts/openapi-coverage.mjs) the route

@@ -382,7 +382,7 @@ triggerRoutes.post("/webhook/:token", async (c) => {
 	const trigger = await c.env.DB.prepare("SELECT * FROM agent_triggers WHERE secret_token = ?1 AND type = 'webhook'")
 		.bind(token)
 		.first<TriggerRow>();
-	if (!trigger || trigger.enabled !== 1) throw new HttpError(404, "Webhook trigger not found");
+	if (trigger?.enabled !== 1) throw new HttpError(404, "Webhook trigger not found");
 	await recordTriggerEvent(c.env, trigger, "webhook", "received");
 	const contentType = c.req.header("content-type") || "";
 	const payload = contentType.includes("application/json") ? await c.req.json().catch(() => ({})) : { text: await c.req.text() };
