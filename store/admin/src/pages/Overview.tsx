@@ -14,7 +14,7 @@ interface Overview {
 }
 interface Spending {
 	daily: Array<{ date: string; costMicros: number; calls: number }>;
-	byok: { costMicros: number };
+	byok: { chargedMicros: number };
 	platformAiEnabled: boolean;
 }
 
@@ -41,12 +41,12 @@ export default function OverviewPage() {
 				<Stat label="Active instances" value={fmtInt(o.instancesActive)} />
 				<Stat label="Errors (24h)" value={fmtInt(o.errors24h)} accent={o.errors24h > 0} />
 				<Stat label="Platform-paid AI (30d, est.)" value={fmtUsd(o.platformSpend30dMicros)} accent />
-				<Stat label="BYOK spend (30d)" value={fmtUsd(s.byok.costMicros)} />
+				<Stat label="BYOK spend (30d)" value={fmtUsd(s.byok.chargedMicros)} />
 				<Stat label="AI calls (24h)" value={fmtInt(o.aiCalls24h)} />
 				<Stat label="Platform AI" value={s.platformAiEnabled ? "ON" : "OFF"} />
 			</div>
 			<div className="grid md:grid-cols-2 gap-4">
-				<Panel title="AI spend — last 30 days">
+				<Panel title="AI value — last 30 days (list price)">
 					<BarChart
 						points={s.daily.map((d) => ({ date: d.date, value: d.costMicros, secondary: d.calls }))}
 						format={fmtUsd}

@@ -8,7 +8,7 @@ interface UsageResp {
 	totals: { inputTokens: number; outputTokens: number; costMicros: number; calls: number };
 	daily: Array<{ date: string; costMicros: number }>;
 	byProvider: Bucket[]; byModel: Bucket[]; byKind: Bucket[]; byUser: Bucket[]; byAgent: Bucket[];
-	split: { platformPaid: { costMicros: number; calls: number }; byok: { costMicros: number; calls: number } };
+	split: { platformPaid: { costMicros: number; calls: number }; byok: { costMicros: number; chargedMicros: number; calls: number } };
 }
 
 /**

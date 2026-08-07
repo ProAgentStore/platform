@@ -7,7 +7,8 @@ interface Spending {
 	range: string;
 	totals: { costMicros: number; calls: number };
 	daily: Array<{ date: string; costMicros: number }>;
-	byok: { costMicros: number; calls: number };
+	/** costMicros is list-price VALUE; chargedMicros the part anyone is billed for (#346). */
+	byok: { costMicros: number; chargedMicros: number; calls: number };
 	topSpenders: Bucket[];
 	topModels: Bucket[];
 	platformAiEnabled: boolean;
@@ -40,7 +41,7 @@ export default function Spending() {
 		<div>
 			<div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
 				<Stat label={`Platform-paid (${range}, est.)`} value={fmtUsd(data.platformPaid.costMicros)} accent />
-				<Stat label={`BYOK spend (${range})`} value={fmtUsd(data.byok.costMicros)} />
+				<Stat label={`BYOK spend (${range})`} value={fmtUsd(data.byok.chargedMicros)} />
 				<Stat label="Total AI calls" value={fmtInt(data.totals.calls)} />
 				<Stat label="Platform AI" value={data.platformAiEnabled ? "ON" : "OFF"} />
 			</div>
@@ -50,12 +51,12 @@ export default function Spending() {
 				<p className="text-xs text-muted-soft mt-3">{data.platformPaid.note}</p>
 			</Panel>
 
-			<Panel title="Spend trend" right={rangeCtl}>
+			<Panel title="AI value trend (list price)" right={rangeCtl}>
 				<TrendBars points={data.daily} />
 			</Panel>
 
 			<div className="grid md:grid-cols-2 gap-4">
-				<Panel title="Top spenders">
+				<Panel title="Top consumers (by value)">
 					<BucketTable rows={data.topSpenders} nameHead="User" />
 				</Panel>
 				<Panel title="Top models">
@@ -74,7 +75,7 @@ function BucketTable({ rows, nameHead }: { rows: Bucket[]; nameHead: string }) {
 				<tr className="text-muted text-xs uppercase text-left border-b border-line">
 					<th className="py-1.5">{nameHead}</th>
 					<th className="text-right">Calls</th>
-					<th className="text-right">Cost</th>
+					<th className="text-right">Value</th>
 				</tr>
 			</thead>
 			<tbody>

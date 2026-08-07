@@ -45,6 +45,32 @@ describe("aggregateAdminUsage", () => {
 		expect(s.split.byok.calls).toBe(2);
 	});
 
+	/**
+	 * The split is on the VENDOR, so the bucket alone cannot say what was charged (#346).
+	 *
+	 * `anthropic` is reached both by a metered API key and by a Claude subscription that costs
+	 * nothing per token. The operator dashboard's "BYOK spend" reads `chargedMicros` for exactly
+	 * this reason — the value figure beside it counts a subscription's engine turns at list price,
+	 * which is the arithmetic that refused a delegation in #343.
+	 */
+	it("keeps BYOK VALUE and BYOK SPEND apart — same vendor, different payer", () => {
+		const s = aggregateAdminUsage([
+			row({ provider: "anthropic", cost_micros: 48_760_000, payer: "subscription" }),
+			row({ provider: "anthropic", cost_micros: 1_000_000, payer: "byok-api" }),
+			row({ provider: PLATFORM_PROVIDER, cost_micros: 250, payer: "platform", kind: "embedding" as AdminUsageRow["kind"] }),
+		]);
+		expect(s.split.byok.costMicros).toBe(49_760_000);
+		expect(s.split.byok.chargedMicros).toBe(1_000_000);
+		expect(s.split.platformPaid.chargedMicros).toBe(250);
+	});
+
+	it("counts a row with no established payer as value, never as a charge", () => {
+		// NULL is the honest answer for a machine-login engine; it must not become a bill.
+		const s = aggregateAdminUsage([row({ provider: "anthropic", cost_micros: 900, payer: null })]);
+		expect(s.split.byok.costMicros).toBe(900);
+		expect(s.split.byok.chargedMicros).toBe(0);
+	});
+
 	it("labels users and agents from the provided name maps", () => {
 		const s = aggregateAdminUsage([row({ user_id: "u1", agent_id: "a1" })], {
 			userNames: { u1: "alice" },

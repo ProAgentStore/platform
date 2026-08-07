@@ -418,7 +418,16 @@ export interface AdminUsageRow extends UsageRow {
 export interface BucketTotals {
 	inputTokens: number;
 	outputTokens: number;
+	/** List-price value of every row counted. Not a bill (#346). */
 	costMicros: number;
+	/**
+	 * The subset anyone is actually charged for — `payer` in byok-api / platform.
+	 *
+	 * The split below is on `provider`, which is the VENDOR axis: `anthropic` is reached both by a
+	 * metered API key and by a subscription that costs nothing per token. So "BYOK" as a bucket is
+	 * "not our Workers AI", and the figure an operator reads as BYOK SPEND has to be this one.
+	 */
+	chargedMicros: number;
 	calls: number;
 }
 
@@ -437,12 +446,13 @@ export interface AdminUsageSummary {
 /** Rows whose cost the platform pays are marked with this provider by the metering layer. */
 export const PLATFORM_PROVIDER = "platform";
 
-const zeroTotals = (): BucketTotals => ({ inputTokens: 0, outputTokens: 0, costMicros: 0, calls: 0 });
+const zeroTotals = (): BucketTotals => ({ inputTokens: 0, outputTokens: 0, costMicros: 0, chargedMicros: 0, calls: 0 });
 
 function addInto(t: BucketTotals, r: UsageRow) {
 	t.inputTokens += r.input_tokens || 0;
 	t.outputTokens += r.output_tokens || 0;
 	t.costMicros += r.cost_micros || 0;
+	if (isCharged(r.payer)) t.chargedMicros += r.cost_micros || 0;
 	t.calls += 1;
 }
 
