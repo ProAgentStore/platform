@@ -25,6 +25,10 @@ import SystemMessage from "../components/SystemMessage";
 import DeleteTurnButton from "../components/DeleteTurnButton";
 import { useScrapLastTurn } from "../lib/deleteTurn";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
+import { resolveInstanceRoute } from "../lib/instanceRoute";
+import { loopCompletionNotice, loopStartFailureNotice, loopStartNotice } from "../lib/loopNotices";
+import { chatExportPayload } from "../lib/chatExport";
+import { composerPlaceholder } from "../lib/composer";
 
 /**
  * Per-message copy button — top-right of a bubble, subtle, 16px. Always visible on mobile
@@ -99,24 +103,25 @@ function InstancePage() {
 	// memo at all. That churn reaches the injected header: `tabDefs` and the header memo below both
 	// re-derive every render, the instance tab bar is replaced continuously, and a click on a tab
 	// lands on a node that no longer exists — the tabs render but do not switch (#309).
-	//
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the deps ARE these values; joining
-	// them is what makes the comparison by-value. Taking the lint's suggestion is what broke it.
+	// A biome-ignore covers only the line that FOLLOWS it, so the reason has to fit on one line —
+	// this one sat two prose lines up, suppressed a COMMENT, and let the findings it answers back
+	// through unseen (#326). InstanceDetail.test.ts holds both memos to that shape.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the deps ARE these values — joining is what makes the comparison by-value, and taking the lint's suggestion is what broke #309.
 	const surfaceCaps = useMemo(() => ({ surfaces, tools: declaredTools }), [surfaces.join(","), declaredTools?.join(",")]);
 	// Phase 3: agent-published UIs, loaded dynamically (see DynamicSurface).
 	const customSurfaces = instance?.capabilities?.customSurfaces || [];
 
-	// Tab + session from URL — always sync with the route. Gate the tab against the
-	// surfaces THIS instance actually exposes (built-in + custom), so a deep link like
-	// /coding on a non-coding agent falls back to chat instead of mounting a broken tab.
-	const splatParts = splat?.split("/") || [];
-	const urlTab = splatParts[0] || "";
-	const allowedSurfaces = new Set<string>([
+	// Tab + session from URL — always sync with the route. Gated against the surfaces THIS
+	// instance actually exposes (built-in + custom), so a deep link like /coding on a non-coding
+	// agent falls back to chat instead of mounting a broken tab. The parse itself is positional
+	// (`<tab>/<sessionId>`, anything further dropped) and lives in lib/instanceRoute.ts, where a
+	// test can hold it against the grammar lib/routes.ts uses to police the links Workers emit —
+	// that grammar was a claim about this component that nothing executed (#344).
+	const { tab: resolvedTab, sessionId: urlSessionId } = resolveInstanceRoute(splat, [
 		...visibleSurfaces(surfaceCaps).map((s) => s.id),
 		...customSurfaces.map((c) => c.id),
 	]);
-	const tab: Tab = allowedSurfaces.has(urlTab) ? urlTab : "chat";
-	const urlSessionId = splatParts[1] || undefined; // e.g. coding/csess_xxx
+	const tab: Tab = resolvedTab;
 	const setTab = useCallback((t: Tab) => {
 		navigate(`/instances/${id}/${t}`, { replace: true });
 	}, [id, navigate]);
@@ -522,15 +527,17 @@ function InstancePage() {
 			if (run.status !== "running") {
 				setLoopOn(false);
 				setLoopRunId(null);
-				// The coding driver posts its own outcome from the workflow, so the transcript
-				// refresh above already brought it in — emitting here would show it twice.
-				if (loopDriverRef.current !== "coding") {
-					const label = run.stopReason === "done" ? "Loop complete" : `Loop stopped (${run.stopReason ?? run.status})`;
-					// An ADOPTED run (#252) is not ours to narrate into the transcript: the tab that
-					// started it writes that line, and any number of tabs may be watching. Show it
-					// here, locally, so this tab still sees the run end.
-					emitSystemChat(`${label}: ${run.detail || ""}`.trim(), !loopAdoptedRef.current);
-				}
+				// Who narrates the end of a run, and into what — both rules and their reasoning
+				// live in lib/loopNotices.ts (null = the workflow already wrote it; persist:false =
+				// this tab merely adopted the run, so show it but don't add an Nth copy to the log).
+				const notice = loopCompletionNotice({
+					status: run.status,
+					stopReason: run.stopReason,
+					detail: run.detail,
+					driver: loopDriverRef.current,
+					adopted: loopAdoptedRef.current,
+				});
+				if (notice) emitSystemChat(notice.text, notice.persist);
 				loopDriverRef.current = null;
 				loopAdoptedRef.current = false;
 			}
@@ -783,16 +790,8 @@ function InstancePage() {
 				method: "POST",
 				body: JSON.stringify({ objective: loopObjective.trim(), maxIterations: loopMax }),
 			});
-			// Say that it started, and — crucially — WHERE the work will happen. The Loop dispatches
-			// on the agent's declared workflow (#210), so on a coding agent it drives the ENGINE,
-			// not this chat: nothing appears in this thread while it works. Without this the run
-			// was completely silent until a one-line result, which reads as "the button did
-			// nothing" right up until it reads as "where did this commit come from".
-			emitSystemChat(
-				run.driver === "coding"
-					? `**Loop started** — working on: ${loopObjective.trim()}\n\nIt drives the coding engine, so progress shows on the **Coding** tab, not here. Up to ${loopMax} steps.`
-					: `**Loop started** — working on: ${loopObjective.trim()}\n\nUp to ${loopMax} steps.`,
-			);
+			// Say that it started, and — crucially — WHERE the work will happen (lib/loopNotices.ts).
+			emitSystemChat(loopStartNotice({ driver: run.driver, objective: loopObjective, maxIterations: loopMax }));
 			setLoopRunId(run.runId);
 			// Remember WHICH driver ran: a coding loop's completion notice is written server-side
 			// (it must survive this tab closing), so emitting one here too would duplicate it.
@@ -801,7 +800,7 @@ function InstancePage() {
 			setLoopIteration(0);
 			setLoopPaused(false);
 		} catch (e) {
-			emitSystemChat(`Could not start the loop: ${e instanceof Error ? e.message : String(e)}`);
+			emitSystemChat(loopStartFailureNotice(e));
 		}
 	};
 
@@ -847,12 +846,9 @@ function InstancePage() {
 		if (!id) return;
 		try {
 			const data = await api<{ messages: Message[] }>(`/v1/instances/${id}/messages?limit=2000`);
-			const msgs = (data.messages || []).map((m) => ({
-				role: m.role,
-				content: (m.content || "").replace(/^\[Context:[\s\S]*?\]\s*\n*/i, ""),
-				timestamp: m.createdAt,
-			}));
-			await navigator.clipboard.writeText(JSON.stringify({ instanceId: id, count: msgs.length, messages: msgs }, null, 2));
+			// The `[Context: …]` strip is anchored and non-greedy for reasons a call site cannot
+			// show — see lib/chatExport.ts.
+			await navigator.clipboard.writeText(JSON.stringify(chatExportPayload(id, data.messages || []), null, 2));
 		} catch (e) {
 			alert("Copy failed: " + (e instanceof Error ? e.message : String(e)));
 		}
@@ -860,15 +856,15 @@ function InstancePage() {
 
 	const isApply = surfaces.includes("apply");
 	// Tabs are derived from the surface registry filtered by this instance's capabilities.
+	// `surfaceCaps` is stable by content (see above); `customSurfaces` is another `… || []`, so it
+	// is joined for the same reason. The suppression sits HERE, not beside the dep array: the
+	// diagnostic is raised on the `useMemo` call, so one inside the call covered nothing (#326).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: by-value on purpose — an identity-keyed list here rebuilds the tab bar every render (#309).
 	const tabDefs = useMemo(
 		() => [
 			...visibleSurfaces(surfaceCaps).map((s) => ({ id: s.id as string, label: s.label, icon: s.icon })),
 			...customSurfaces.map((c) => ({ id: c.id, label: c.label, icon: c.icon || "🧩" })),
 		],
-		// `surfaceCaps` is now stable by content (see above); `customSurfaces` is another
-		// `… || []`, so it is joined for the same reason.
-		// biome-ignore lint/correctness/useExhaustiveDependencies: by-value on purpose — see the
-		// surfaceCaps comment. An identity-keyed list here rebuilds the tab bar every render.
 		[surfaceCaps, customSurfaces.map((c) => c.id).join(",")],
 	);
 
@@ -948,7 +944,9 @@ function InstancePage() {
 									// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
 										onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendMessage(); } }}
 										aria-label="Agent message"
-											placeholder={voice.talking ? "Listening — tap to send" : voice.mode === "ptt" ? "Use the voice control to talk — or type" : voice.mode === "handsfree" ? (voice.micOn ? "Listening…" : "Hands-free — just talk") : isCoding ? "Ask about your repos..." : surfaces.includes("tmux") ? "Ask about tmux sessions..." : "Send a message..."}
+										// Six branches, and `talking` outranking the mode is the one that matters —
+										// see lib/composer.ts.
+										placeholder={composerPlaceholder({ talking: voice.talking, mode: voice.mode, micOn: voice.micOn, isCoding, isTmux: surfaces.includes("tmux") })}
 									readOnly={voiceBusy}
 									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
 								/>

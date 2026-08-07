@@ -129,7 +129,12 @@ const PINS = {
 	// (the handler wants the thread and the delete callback, both defined below the useVoice call
 	// — the same shape `voiceRef` already uses here). The staging, the last-turn rule and the
 	// quoted confirmation live in lib/deleteTurn.ts + lib/turnEffects.ts.
-	"store/console/src/pages/InstanceDetail.tsx": 1276,
+	// 1276 → 1274 at #305, and the honest reading of that number is that this slice was not about
+	// length. Four DECISIONS left for lib/ where a test can reach them — the splat parse
+	// (instanceRoute.ts), who narrates the end of a loop run (loopNotices.ts), the `[Context: …]`
+	// strip (chatExport.ts) and the composer placeholder (composer.ts) — and the prose that used to
+	// stand in for those tests stayed here, next to the call sites it explains.
+	"store/console/src/pages/InstanceDetail.tsx": 1274,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
