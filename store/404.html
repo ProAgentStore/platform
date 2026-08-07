@@ -20,31 +20,21 @@
     h1{font-family:'Fraunces',Georgia,serif;font-size:4rem;font-weight:700;color:#7c3aed;margin-bottom:0.5rem}
     p{color:#a3a3a3;font-size:1.05rem;margin-bottom:1.5rem;max-width:400px;line-height:1.6}
     a{color:#7c3aed;text-decoration:none;font-weight:600}a:hover{text-decoration:underline}
-    .links{display:flex;gap:1.5rem;font-size:0.9rem}
+    /* wrap, because these three links need ~270px and a 320px phone leaves 256px after the
+       body's 2rem padding. `overflow-x:clip` below hid the overflow rather than fixing it. */
+    .links{display:flex;flex-wrap:wrap;justify-content:center;gap:1.5rem;font-size:0.9rem}
   </style>
 
 
 <style id="m-fix">
+/* The shared mobile block, minus the header/nav drawer: this page has no <header> and no <nav>,
+   so those rules — and the hamburger script that went with them — never matched anything. */
 html{overflow-x:clip}
-header{position:sticky;top:0;z-index:50;background:var(--paper,#0a0a0a)}
-.m-menu-btn{display:none}
 @media(max-width:640px){
 body{overflow-x:clip;max-width:100%}
-pre,code{max-width:100%;overflow-x:auto;white-space:pre-wrap;word-break:break-word}
 img,video,canvas{max-width:100%;height:auto}
-table{display:block;overflow-x:auto}
-.container,.c{padding-left:1rem;padding-right:1rem}
-header{flex-wrap:wrap}
-header>div{position:relative;flex-wrap:nowrap}
-.m-menu-btn{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;width:40px;height:40px;border:1px solid var(--line,#262626);border-radius:9px;background:transparent;color:var(--ink,#fafafa);font-size:1.25rem;line-height:1;cursor:pointer;flex-shrink:0;padding:0}
-header nav{display:none!important;position:absolute;top:100%;left:0;right:0;width:100%;flex-direction:column!important;gap:0!important;background:var(--panel,#171717);border-bottom:1px solid var(--line,#262626);padding:0.25rem 1rem 0.6rem;z-index:1000;margin:0!important;box-shadow:0 10px 25px -8px rgba(0,0,0,0.5)}
-header.m-open nav{display:flex!important}
-header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;border-bottom:1px solid var(--line,#1f1f1f);font-size:0.98rem;text-align:left}
 }
 </style>
-<script>
-(()=> {function init(){var h=document.querySelector("header");if(!h)return;var nav=h.querySelector("nav");if(!nav||h.querySelector(".m-menu-btn"))return;var b=document.createElement("button");b.className="m-menu-btn";b.setAttribute("aria-label","Menu");b.type="button";b.textContent="☰";b.addEventListener("click",(e)=> {e.stopPropagation();h.classList.toggle("m-open");b.textContent=h.classList.contains("m-open")?"✕":"☰";});nav.parentNode.insertBefore(b,nav);function close(){h.classList.remove("m-open");b.textContent="☰";}document.addEventListener("click",close);nav.addEventListener("click",close);}if(document.readyState!=="loading")init();else document.addEventListener("DOMContentLoaded",init);})();
-</script>
 </head>
 <body>
   <h1>404</h1>

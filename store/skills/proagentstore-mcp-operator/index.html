@@ -64,9 +64,14 @@ table{display:block;overflow-x:auto}
 header{flex-wrap:wrap}
 header>div{position:relative;flex-wrap:nowrap}
 .m-menu-btn{display:inline-flex;align-items:center;justify-content:center;margin-left:auto;width:40px;height:40px;border:1px solid var(--line,#262626);border-radius:9px;background:transparent;color:var(--ink,#fafafa);font-size:1.25rem;line-height:1;cursor:pointer;flex-shrink:0;padding:0}
-header nav{display:none!important;position:absolute;top:100%;left:0;right:0;width:100%;flex-direction:column!important;gap:0!important;background:var(--panel,#171717);border-bottom:1px solid var(--line,#262626);padding:0.25rem 1rem 0.6rem;z-index:1000;margin:0!important;box-shadow:0 10px 25px -8px rgba(0,0,0,0.5)}
-header.m-open nav{display:flex!important}
-header nav a,header nav button{padding:0.8rem 0.25rem!important;width:100%;border-bottom:1px solid var(--line,#1f1f1f);font-size:0.98rem;text-align:left}
+/* No !important here: `header nav` (0,0,2) already outranks the page's own `nav` rule
+   (0,0,1) and comes later in the document, and `header.m-open nav` outranks both. The
+   drawer-row rules are `>` children so they leave auth-widget.js's inline-styled account
+   pill alone — overriding that was the one thing the !important actually did. */
+header nav{display:none;position:absolute;top:100%;left:0;right:0;width:100%;flex-direction:column;gap:0;background:var(--panel,#171717);border-bottom:1px solid var(--line,#262626);padding:0.25rem 1rem 0.6rem;z-index:1000;margin:0;box-shadow:0 10px 25px -8px rgba(0,0,0,0.5)}
+header.m-open nav{display:flex}
+header nav>a,header nav>button{padding:0.8rem 0.25rem;width:100%;border-bottom:1px solid var(--line,#1f1f1f);font-size:0.98rem;text-align:left}
+header nav>span{padding:0.8rem 0.25rem;border-bottom:1px solid var(--line,#1f1f1f);font-size:0.98rem;text-align:left}
 }
 </style>
 <script>
