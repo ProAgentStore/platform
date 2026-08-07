@@ -142,9 +142,36 @@ export function groupTerminalNodes(nodeRows: NodeRow[], sessionRows: SessionRow[
 	/** Freshness of the row that named each group, so a later row can rename it. */
 	const nameStamp = new Map<string, number>();
 
+	// An UNIDENTIFIED row adopts the identity of its hostname — but only when that hostname is
+	// unambiguous.
+	//
+	// Why adopting at all: there is one row per (instance, hostname), and a `pags up` stamps the id
+	// on the instances it registers, so an instance it did not attach this session keeps NULL under
+	// the very same hostname. Reading the id off whichever row arrived first split one machine in
+	// two, and when the NULL row came first it folded nothing. Found in production, not in review:
+	// `/runner-node` folded while this endpoint did not, on the same rows.
+	//
+	// Why only when unambiguous: a hostname is not an identity and must never transfer one. Two
+	// laptops both called `Mac` — each serving different instances — are two machines, and merging
+	// them is the exact failure the fold exists to avoid, in mirror image. When a name carries more
+	// than one id, the identified rows keep their own and the unidentified ones stay on the name,
+	// which is the honest answer: we know those two are separate and we do not know about the rest.
+	const idsForName = new Map<string, Set<string>>();
+	for (const r of nodeRows) {
+		const id = (r.machine_id ?? "").trim();
+		if (!r.runner_node || !id) continue;
+		const set = idsForName.get(r.runner_node) ?? new Set<string>();
+		set.add(id);
+		idsForName.set(r.runner_node, set);
+	}
+	const adoptableId = (name: string): string => {
+		const ids = idsForName.get(name);
+		return ids && ids.size === 1 ? [...ids][0] : "";
+	};
+
 	for (const r of nodeRows) {
 		if (!r.runner_node) continue;
-		const machineId = (r.machine_id ?? "").trim();
+		const machineId = (r.machine_id ?? "").trim() || adoptableId(r.runner_node);
 		const key = machineId || `node:${r.runner_node}`;
 		let n = byKey.get(key);
 		if (!n) {

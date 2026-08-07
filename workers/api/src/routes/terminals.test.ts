@@ -165,3 +165,36 @@ describe("groupTerminalNodes — one machine, several names (#393)", () => {
 		expect(mac?.instances[0].bound).toBe(false);
 	});
 });
+
+describe("groupTerminalNodes — an id carried by only SOME rows of a hostname", () => {
+	// Found in production, not in review. There is one row per (instance, hostname), and a
+	// `pags up` stamps the machine id on the instances it registers — an instance it did not
+	// attach keeps NULL under the SAME hostname. Keying the group off whichever row arrived first
+	// split one machine in two, and when the NULL row came first it folded nothing at all.
+	it("folds when the id is present on one row of a name and absent on another", () => {
+		const nodes = groupTerminalNodes([
+			nodeRow({ instance_id: "i-unattached", runner_node: "Mac", machine_id: null, last_seen_at: "2026-08-08T09:00:00Z" }),
+			nodeRow({ instance_id: "i-attached", runner_node: "Mac", machine_id: "m-1", last_seen_at: "2026-08-08T09:00:00Z" }),
+			nodeRow({ instance_id: "i-attached", runner_node: "RLs-MacBook-Air.local", machine_id: "m-1", last_seen_at: "2026-08-07T09:00:00Z" }),
+		], []);
+		expect(nodes).toHaveLength(1);
+		expect(nodes[0].node).toBe("Mac");
+		expect(nodes[0].machineId).toBe("m-1");
+		expect(nodes[0].aka).toEqual(["RLs-MacBook-Air.local"]);
+		expect(nodes[0].instances.map((i) => i.instanceId).sort()).toEqual(["i-attached", "i-unattached"]);
+	});
+
+	it("does not let an AMBIGUOUS name adopt an identity", () => {
+		// Two laptops both called "Mac", each serving a different instance, plus an unidentified row
+		// under the same name. The two identified machines stay apart — a hostname is not an
+		// identity and must never transfer one — and the unidentified row stays on the name, which
+		// is the honest answer: we know those two are separate and we do not know about the third.
+		const nodes = groupTerminalNodes([
+			nodeRow({ instance_id: "i1", runner_node: "Mac", machine_id: "m-1" }),
+			nodeRow({ instance_id: "i2", runner_node: "Mac", machine_id: "m-2" }),
+			nodeRow({ instance_id: "i3", runner_node: "Mac", machine_id: null }),
+		], []);
+		expect(nodes).toHaveLength(3);
+		expect(nodes.map((n) => n.machineId).sort()).toEqual(["m-1", "m-2", null]);
+	});
+});
