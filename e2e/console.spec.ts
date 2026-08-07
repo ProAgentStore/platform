@@ -1379,6 +1379,48 @@ test.describe("ProAgentStore Console smoke", () => {
 		await expect.poll(() => replayed).toContain("/connections/deliveries/del-dead/replay");
 	});
 
+	test("a direction the AGENT proposed is confirmed, not silently adopted (#330)", async ({ page }) => {
+		// The Lead's epic for one subordinate. What this asserts is the security boundary made
+		// visible: an agent may propose a direction, and only the owner pressing Confirm sends it
+		// through the one route that stamps `setBy: "user"`. Rendered identically to a set
+		// direction, the owner would have no way to notice that a repo's standing brief is text
+		// their agent lifted out of an issue body.
+		await mockSignedInConsole(page, {
+			instances: [
+				{ id: "inst-1", name: "Coder Lead", slug: "coder-lead", category: "code", capabilities: { surfaces: [] } },
+				{ id: "inst-2", name: "FWS platform", slug: "coder-repo", category: "code", capabilities: { surfaces: ["coding"] } },
+			],
+		});
+
+		let confirmed: unknown = null;
+		await page.route("**/v1/instances/inst-1/supervision**", async (route) => {
+			const json = (data: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
+			if (route.request().method() === "PUT") {
+				confirmed = route.request().postDataJSON();
+				return json({ ok: true });
+			}
+			return json({
+				supervision: [
+					{
+						id: "link-1",
+						supervisorInstanceId: "inst-1",
+						subordinateInstanceId: "inst-2",
+						enabled: true,
+						direction: { text: "Finish the voice port.", setBy: "agent", updatedAt: "2026-08-07T00:00:00.000Z" },
+					},
+				],
+			});
+		});
+
+		await page.goto("/console/instances/inst-1/settings");
+		await expect(page.getByRole("heading", { name: "Teamwork" })).toBeVisible();
+		await expect(page.getByText("Proposed by the agent — it carries no authority until you confirm it.")).toBeVisible();
+
+		// The button SAYS Confirm, because pressing it is an act of authorship, not a save.
+		await page.getByRole("button", { name: "Confirm", exact: true }).click();
+		await expect.poll(() => confirmed).toEqual({ direction: "Finish the voice port." });
+	});
+
 	test("instance chat sends messages and shows responses", async ({
 		page,
 	}) => {
