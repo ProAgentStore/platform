@@ -181,7 +181,13 @@ const PINS = {
 	// header (one `useState` written from the poll, the adopt path and the press), two phase→class
 	// records, and the comments explaining why the button now refuses a second press rather than
 	// escalating to a hard abort.
-	"store/console/src/pages/InstanceDetail.tsx": 1377,
+	// +6 at #264: the pending-MCP-input panel is mounted above the thread, with the paragraph
+	// saying why it is HERE and not in a settings tab — the pause happens mid-conversation, and a
+	// form nobody finds inside the 30-minute deadline is the same as no form. One import, one
+	// conditional element; the card, its controls and every rule they follow live in
+	// components/McpInputRequests.tsx + lib/mcpInputRequests.ts, which is where a split would
+	// have put them anyway.
+	"store/console/src/pages/InstanceDetail.tsx": 1383,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
@@ -198,7 +204,18 @@ const PINS = {
 	// on the one guarded path out of this Worker. Raised rather than split — the network belongs
 	// with the rest of the transport, and the reasoning it feeds is pure and lives in
 	// mcp-connection.ts, which is where a split would have put it anyway.
-	"workers/api/src/lib/connectors/mcp.ts": 1236,
+	// +107 at #264, and most of it is prose rather than logic. A call that hits a server→client ask
+	// now PAUSES instead of failing: `pauseForUserInput` parks the call and `elicitationRound`
+	// bounds how often that may happen. Raised rather than split, because the paragraphs are the
+	// point — the header note and the one beside `pauseForUserInput` say why answering an
+	// elicitation in band is impossible on this transport (three independent reasons), why the
+	// resume is a RETRY through `mcp_call_tool` rather than a direct dispatch (it re-checks #262
+	// consent and re-resolves the #286 credential), and why a pause that cannot be completed must
+	// fall back to the honest refusal instead of promising a form that never appears. A reader who
+	// finds the code without those will eventually "simplify" the fallback away. The decisions
+	// themselves are pure and live in lib/mcp-elicitation.ts, and the storage in
+	// lib/mcp-input-requests.ts — which is where a split would have put them.
+	"workers/api/src/lib/connectors/mcp.ts": 1343,
 	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
 	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
 	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
@@ -322,7 +339,16 @@ const PINS = {
 	// answers disagree. The RULE is pure and tested in lib/instance-connector-policy.ts; what is
 	// left at this call site is the one thing only a route can do, resolving the instance's allowed
 	// tool names from its capabilities and its owner's off-switches.
-	"workers/api/src/routes/tools.ts": 918,
+	// +106 at #264: the two routes that make a paused outbound-MCP call answerable — list the asks,
+	// and submit or cancel one. Raised rather than split BECAUSE of the paragraph above them: the
+	// resume goes back through `runRegistryTool("mcp_call_tool")` rather than dispatching the stored
+	// call directly, and that is the entire security argument for the design — it means a grant
+	// revoked, a tool switched off or a credential deleted while the ask sat in the console stops
+	// the retry. A reader who finds these routes without that sentence will eventually "optimise"
+	// the re-entry away and turn this into a way to spend a permission the owner took back. The
+	// rules the handlers apply are pure and tested in lib/mcp-elicitation.ts, and the one-shot claim
+	// is in lib/mcp-input-requests.ts.
+	"workers/api/src/routes/tools.ts": 1024,
 };
 
 /**

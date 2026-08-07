@@ -23,6 +23,7 @@ import GlossedMessage from "../components/GlossedMessage";
 import SpokenMessage from "../components/SpokenMessage";
 import SystemMessage from "../components/SystemMessage";
 import DeleteTurnButton from "../components/DeleteTurnButton";
+import McpInputRequests from "../components/McpInputRequests";
 import { useScrapLastTurn } from "../lib/deleteTurn";
 import { isPinnedToBottom, shouldScrollAfterLoad } from "../lib/chatScroll";
 import { resolveInstanceRoute } from "../lib/instanceRoute";
@@ -995,6 +996,11 @@ function InstancePage() {
 			<div className="flex-1 overflow-hidden flex flex-col min-h-0">
 				{tab === "chat" && (
 					<div className="flex flex-col flex-1 min-h-0">
+						{/* #264: a remote MCP server that paused a call to ask the person something. It sits
+						    ABOVE the thread rather than in a settings tab because the pause happens
+						    mid-conversation — the agent has just said it is waiting on you — and a form
+						    nobody finds inside the 30-minute deadline is the same as no form. */}
+						{id && <McpInputRequests instanceId={id} />}
 						{/* The thread, and the two things that overlay it. This wrapper exists so the
 						    jump-to-latest button and the voice pill stay anchored to the BOTTOM OF THE
 						    THREAD (#365): `bottom-3` used to resolve against the tab container, whose

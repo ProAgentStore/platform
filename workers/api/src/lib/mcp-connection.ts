@@ -168,12 +168,13 @@ export function connectionStatusFor(failure: McpFailureClass | undefined, ok: bo
 		case "unsupported_version":
 		case "header_mismatch":
 		case "missing_capability":
-		// A server→client ask (elicitation, #264) is a MISSING CLIENT CAPABILITY seen from the
-		// other side: the transport is fine and the credential is fine, but this client cannot
-		// hold the interactive round trip the server wants. It lands here rather than getting a
-		// status of its own precisely because the remedy is the same one `missing_capability`
-		// already describes — and inventing a ninth status would mean a console that has never
-		// heard of it renders the connection as unknown instead of as a protocol shortfall.
+		// A server→client ask reaching HERE (#264) is one this client could not park for the owner
+		// to answer — a `tools/list` probe (the only method this status is ever computed for) has
+		// nobody to ask and nothing to resume, and a `tools/call` that CAN be parked never returns
+		// this failure to a connection test at all. So it is a missing client capability seen from
+		// the other side, and it lands on the existing status rather than getting a ninth: the
+		// remedy is the one `missing_capability` already describes, and a console that has never
+		// heard of a new status renders the connection as unknown instead of a protocol shortfall.
 		case "input_required":
 			return "unsupported_protocol";
 		case "blocked":

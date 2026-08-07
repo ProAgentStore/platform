@@ -14,6 +14,9 @@ import { probeMcpEndpoint, probeMcpSurface } from "../lib/connectors/mcp.js";
 import { discoverAuthServer } from "../lib/connectors/discovery.js";
 import { connectionStatusFor, parseToolCatalog, summarizeConnection, summarizeSurface, summarizeTools, type McpConnectionReport } from "../lib/mcp-connection.js";
 import { replaceMcpToolCatalog } from "../lib/mcp-tool-catalog.js";
+import { describeAnswer, inputClosedNotice, mergeElicitedArgs, validateElicitationAnswer } from "../lib/mcp-elicitation.js";
+import { claimMcpInputRequest, listMcpInputRequests, purgeExpiredMcpInputRequests, readMcpInputRequest } from "../lib/mcp-input-requests.js";
+import { logEvent } from "../lib/events.js";
 import {
 	adoptLegacyMcpCredential,
 	deleteMcpCredential,
@@ -549,6 +552,109 @@ toolRoutes.delete("/:id/mcp/credentials", async (c) => {
 	// Removing one endpoint's credential touches no other endpoint — that isolation is the point
 	// of keying on the endpoint, and is the acceptance criterion this route exists to satisfy.
 	return c.json({ ok: true, endpoint, removed: await deleteMcpCredential(c.env, session.uid, endpoint) });
+});
+
+/**
+ * Interactive outbound-MCP calls (#264, migration 0094).
+ *
+ * A remote server that needs more from the person answers `tools/call` with an
+ * `elicitation/create` request instead of a result. This client cannot answer that in band (see
+ * lib/mcp-elicitation.ts for the three independent reasons), so the call PAUSES: the ask is stored,
+ * the console renders it, and the answer RETRIES the original call with the values merged into the
+ * remote tool's arguments.
+ *
+ * GET  /v1/instances/:id/mcp/input-requests               → the asks waiting on this agent
+ * POST /v1/instances/:id/mcp/input-requests/:requestId    { action: "submit" | "cancel", values? }
+ *
+ * THE RESUME RE-ENTERS `mcp_call_tool` THROUGH `runRegistryTool`, which is the whole security
+ * argument for this shape and not an implementation convenience. It means the retry passes the
+ * connector's write-consent gate (#90), the per-(endpoint, tool) grant (#262) and the per-endpoint
+ * credential resolution (#286) exactly as the first attempt did — so a grant revoked, a tool
+ * switched off or a credential deleted while the ask sat in the console STOPS the resume. A route
+ * that dispatched the stored call directly would be a way to spend a permission the owner had since
+ * taken away.
+ *
+ * `traceId` is carried from the stored row into the retry's ctx, so the paused call and the call
+ * that completes it sit under one run in the trace rather than looking like two unrelated attempts.
+ */
+toolRoutes.get("/:id/mcp/input-requests", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	// Opportunistic, like `purgeExpiredFlows`: the deadline is already enforced by
+	// `resolveInputStatus`, so this is not the gate — it is making sure an encrypted copy of
+	// somebody's arguments does not outlive the ask that justified holding it.
+	await purgeExpiredMcpInputRequests(c.env);
+	return c.json({ requests: await listMcpInputRequests(c.env, instanceId, session.uid) });
+});
+
+toolRoutes.post("/:id/mcp/input-requests/:requestId", async (c) => {
+	const session = await requireUser(c);
+	const instanceId = c.req.param("id");
+	await requireOwnedInstance(c.env, instanceId, session.uid);
+	const requestId = c.req.param("requestId");
+	const body = (await c.req.json().catch(() => ({}))) as { action?: string; values?: unknown };
+
+	const ask = await readMcpInputRequest(c.env, requestId, instanceId, session.uid);
+	if (!ask) throw new HttpError(404, "There is no such input request on this agent.");
+	// The derived status, not the column: an ask past its deadline is closed whether or not the
+	// sweeper has run, so the console badge and this gate cannot disagree about whether the answer
+	// still counts.
+	if (ask.status !== "pending") throw new HttpError(409, inputClosedNotice(ask.status));
+
+	if (body.action === "cancel") {
+		if (!(await claimMcpInputRequest(c.env, requestId, instanceId, session.uid, "cancelled"))) {
+			throw new HttpError(409, "That request was already resolved.");
+		}
+		await logEvent(c.env, {
+			source: "mcp",
+			event: "mcp.input_cancelled",
+			message: `${ask.tool} → ${ask.endpoint} cancelled by the owner`,
+			level: "warn",
+			userId: session.uid,
+			instanceId,
+			traceId: ask.traceId,
+			context: { endpoint: ask.endpoint, tool: ask.tool, round: ask.round, requestId },
+		}).catch(() => undefined);
+		return c.json({ ok: true, status: "cancelled", detail: "Nothing was sent to that server." });
+	}
+
+	// Validated BEFORE the claim. A typo must not burn the ask — the claim is one-shot by design
+	// (a remote tool call is not idempotent), so spending it on a rejected form would leave the user
+	// holding an answer with nowhere to put it.
+	const checked = validateElicitationAnswer(ask.fields, body.values ?? {});
+	if (!checked.ok) throw new HttpError(400, checked.error);
+
+	const paused = await claimMcpInputRequest(c.env, requestId, instanceId, session.uid, "answered");
+	if (!paused) throw new HttpError(409, "That request was already resolved.");
+
+	const supplied = describeAnswer(checked.values);
+	await logEvent(c.env, {
+		source: "mcp",
+		event: "mcp.input_answered",
+		message: `${ask.tool} → ${ask.endpoint} resumed with the owner's answer`,
+		level: "info",
+		userId: session.uid,
+		instanceId,
+		traceId: ask.traceId,
+		// KEY NAMES AND A BYTE COUNT. Never the values: an elicited value is more likely to be a
+		// password than an ordinary argument is, and #265's rule for arguments applies here twice
+		// over. `redactSecrets` is not a substitute for not writing them down.
+		context: { endpoint: ask.endpoint, tool: ask.tool, round: ask.round, requestId, fields: supplied.keys, bytes: supplied.bytes },
+	}).catch(() => undefined);
+
+	const result = await runRegistryTool(
+		"mcp_call_tool",
+		{ env: c.env, userId: session.uid, instanceId, traceId: ask.traceId ?? undefined },
+		{
+			url: ask.endpoint,
+			tool: ask.tool,
+			args: mergeElicitedArgs(paused.args, checked.values),
+			auth: paused.useAuth ? "vault" : "none",
+			elicitationRound: ask.round + 1,
+		},
+	);
+	return c.json({ ok: result.success, status: "answered", content: result.content });
 });
 
 /**

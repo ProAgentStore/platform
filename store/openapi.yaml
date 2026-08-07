@@ -6082,6 +6082,124 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/instances/{instanceId}/mcp/input-requests:
+    get:
+      summary: Outbound-MCP calls paused waiting for something from you
+      description: |
+        A remote MCP server that needs more from the person answers `tools/call` with an
+        `elicitation/create` request instead of a result. This client is strictly request/response
+        over one POST, so it cannot answer that in band — and a human takes minutes, which no
+        request may wait for. The call therefore PAUSES: the ask is parked with its arguments
+        encrypted at rest, and answering it retries the original call with the values merged in.
+
+        Metadata only. The user's answer is never stored, and the paused call's arguments are not
+        returned by this route — the fields here are what a form needs to be rendered, nothing more.
+
+        A pending ask past `expiresAt` reads as `expired` whether or not anything has swept it: the
+        deadline is a fact about the clock, so the badge and the answer gate cannot disagree.
+      operationId: listInstanceMcpInputRequests
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+      responses:
+        "200":
+          description: The asks on this instance, newest first
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requests:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        endpoint: { type: string, description: Normalized https MCP endpoint whose server asked. }
+                        tool: { type: string, description: The remote tool whose call is paused. }
+                        status: { type: string, enum: [pending, answered, cancelled, expired] }
+                        round: { type: integer, description: Which ask this is for one logical call. }
+                        maxRounds: { type: integer, description: After this many asks the call is stopped rather than asked again. }
+                        message: { type: string, description: "The server's own prompt, redacted. Untrusted remote text — render it as text." }
+                        fields:
+                          type: array
+                          description: What to collect. Flat primitives only, as MCP's elicitation schema allows.
+                          items:
+                            type: object
+                            properties:
+                              name: { type: string }
+                              type: { type: string, enum: [string, number, integer, boolean] }
+                              title: { type: string }
+                              description: { type: string }
+                              required: { type: boolean }
+                              options: { type: array, items: { type: string } }
+                              optionLabels: { type: array, items: { type: string } }
+                              format: { type: string }
+                              minLength: { type: number }
+                              maxLength: { type: number }
+                              minimum: { type: number }
+                              maximum: { type: number }
+                              sensitive: { type: boolean, description: Reads like a secret — mask it, never echo it back. }
+                        traceId: { type: string, nullable: true, description: The run the paused call belongs to; the retry is logged under the same one. }
+                        expiresAt: { type: string, format: date-time }
+                        createdAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/instances/{instanceId}/mcp/input-requests/{requestId}:
+    post:
+      summary: Answer or cancel a paused outbound-MCP call
+      description: |
+        `submit` retries the ORIGINAL call with your values merged into the remote tool's
+        arguments; on a name collision the answer wins, because the server elicited precisely
+        because what it already had was unusable.
+
+        The retry is an ordinary `mcp_call_tool`, so it re-checks the per-(endpoint, tool) grant and
+        re-resolves that endpoint's credential rather than being waved through as already
+        authorized — a grant revoked while the ask sat unanswered stops it.
+
+        `cancel` sends nothing to the server. Either way the ask is claimed exactly once: a second
+        answer gets `409`, so a double click cannot make the remote call twice.
+      operationId: respondToInstanceMcpInputRequest
+      tags: [Tools]
+      parameters:
+        - { $ref: "#/components/parameters/InstanceId" }
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [submit, cancel] }
+                values:
+                  type: object
+                  description: |
+                    One entry per requested field. Keys the server did not ask for are dropped, so
+                    this cannot rewrite the paused call's other arguments.
+                  additionalProperties: true
+      responses:
+        "200":
+          description: The outcome of the retry, or the cancellation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean, description: Whether the retried remote call succeeded. Absent for a cancellation. }
+                  status: { type: string, enum: [answered, cancelled] }
+                  content: { type: string, description: The remote tool's result, or the reason the retry failed. }
+                  detail: { type: string, description: Present on a cancellation. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /v1/instances/{instanceId}/mcp/credentials:
     get:
       summary: Which MCP servers this account holds a credential for

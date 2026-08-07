@@ -75,12 +75,21 @@
 // returned. See the block above MCP_TOOLS for why each of those three is a decision rather than a
 // detail.
 //
-// INTERACTIVE CALLS (#264). A server cannot ask this client for anything. We advertise
-// `clientCapabilities: {}`, a modern-era call is one stateless POST, and a legacy-era call holds
-// no channel open after the response — so elicitation is impossible here by construction, not by
-// omission. What this client does instead is RECOGNISE the ask (`serverRequestIn`) and fail with
-// a sentence saying nothing was submitted, rather than reporting the unanswerable question as an
-// unparseable response and sending the user to debug a working transport.
+// INTERACTIVE CALLS (#264). A server cannot ask this client for anything IN BAND. We advertise
+// `clientCapabilities: {}`, a modern-era call is one stateless POST, and a legacy-era call would
+// deadlock (`rpc()` cannot return until the server closes a stream the server holds open waiting
+// for our answer) — so answering an `elicitation/create` on the same request is impossible here by
+// construction, not by omission. And a human takes minutes, which no Worker request may wait for.
+//
+// So a call that hits an ask PAUSES instead. `serverRequestIn` recognises the request and carries
+// its params; `parseElicitation` (lib/mcp-elicitation.ts) turns them into a renderable form;
+// `pauseForUserInput` writes ONE pending row (lib/mcp-input-requests.ts, migration 0094) holding
+// the call's arguments ENCRYPTED, and the agent is told the call did not complete and that a person
+// is now in the loop. Answering it in the console re-enters `mcp_call_tool` with the values merged
+// into `args` — an ordinary call, so it re-checks #262 consent and re-resolves the #286 credential
+// rather than being waved through as "already authorized". Bounded by MAX_ROUNDS, because a server
+// that never accepts the elicited values as arguments would otherwise ask forever. An ask we cannot
+// parse, or cannot store, still falls back to the standing honest refusal.
 //
 // Every request goes through safeFetch (lib/ssrf.ts) — https-only, redirect-revalidated — so
 // a pipeline-supplied endpoint can't be aimed at cloud metadata or an internal address.
@@ -91,6 +100,8 @@ import { authFailureGuidance, discoverAuthServer, type DiscoveryResult } from ".
 import { consentInstanceOf } from "../execution-authority.js";
 import { hasMcpConsent, mcpConsentDenial, normalizeMcpEndpoint } from "../mcp-consent.js";
 import { mcpCredentialDenial } from "../mcp-credentials.js";
+import { MAX_ROUNDS, parseElicitation, pausedForInputNotice } from "../mcp-elicitation.js";
+import { openMcpInputRequest } from "../mcp-input-requests.js";
 import { ensureMcpAccessToken } from "../mcp-oauth-store.js";
 import { logEvent } from "../events.js";
 import { redactSecrets, redactText } from "../redact.js";
@@ -123,6 +134,9 @@ interface JsonRpcResponse {
 	/** Present when the message is a REQUEST or notification rather than an answer — see
 	 *  `serverRequestIn`, which is how a server→client ask (elicitation) is recognised (#264). */
 	method?: unknown;
+	/** The ask's content when `method` is set — for `elicitation/create`, the message the human
+	 *  must read and the schema of what to collect (parsed by lib/mcp-elicitation.ts). */
+	params?: unknown;
 	result?: unknown;
 	error?: { code?: number; message?: string; data?: unknown };
 }
@@ -189,10 +203,13 @@ export function parseRpcBody(contentType: string, body: string): JsonRpcResponse
  * A request is distinguished from a notification by having an `id`: a notification is fire-and-
  * forget and needs no answer, so it is not a reason to fail a call.
  */
-export function serverRequestIn(contentType: string, body: string, parsed: JsonRpcResponse | null): { method: string } | null {
+export function serverRequestIn(contentType: string, body: string, parsed: JsonRpcResponse | null): { method: string; params?: unknown } | null {
 	const isAsk = (m: JsonRpcResponse | null): m is JsonRpcResponse & { method: string } =>
 		!!m && typeof m.method === "string" && m.id !== undefined && m.id !== null && m.result === undefined && m.error === undefined;
-	if (isAsk(parsed)) return { method: parsed.method };
+	// `params` rides along because #264's pause needs the ask's CONTENT (message + requestedSchema),
+	// and re-scanning the body a third time to find the same frame is how the detector and the
+	// parser end up disagreeing about which frame they are talking about.
+	if (isAsk(parsed)) return { method: parsed.method, params: parsed.params };
 	if (parsed) return null; // the server answered; whatever else was in the stream is not our problem.
 
 	const isSse = contentType.includes("text/event-stream") || /^\s*(event|data):/m.test(body);
@@ -200,7 +217,7 @@ export function serverRequestIn(contentType: string, body: string, parsed: JsonR
 		try {
 			const v = JSON.parse(body) as unknown;
 			const list = Array.isArray(v) ? v : [v];
-			for (const m of list) if (isAsk(m as JsonRpcResponse)) return { method: (m as JsonRpcResponse).method as string };
+			for (const m of list) if (isAsk(m as JsonRpcResponse)) return { method: (m as JsonRpcResponse).method as string, params: (m as JsonRpcResponse).params };
 		} catch {
 			/* not JSON — no ask to find */
 		}
@@ -212,7 +229,7 @@ export function serverRequestIn(contentType: string, body: string, parsed: JsonR
 		if (!payload || payload === "[DONE]") continue;
 		try {
 			const msg = JSON.parse(payload) as JsonRpcResponse;
-			if (isAsk(msg)) return { method: msg.method };
+			if (isAsk(msg)) return { method: msg.method, params: msg.params };
 		} catch {
 			/* unparseable frame — keep scanning */
 		}
@@ -475,7 +492,10 @@ export type McpFailureClass =
 	| "network";
 
 interface McpEventFields {
-	event: "mcp.call" | "mcp.denied";
+	/** `mcp.input_required` is its own event rather than a `mcp.call` with a failure class, so
+	 *  "how often does a real server ask a human for something" is one query instead of a filter
+	 *  over every outbound call — which is the number that decides whether #264 was worth it. */
+	event: "mcp.call" | "mcp.denied" | "mcp.input_required";
 	level: "info" | "warn";
 	endpoint: string;
 	method: string;
@@ -551,6 +571,13 @@ interface CallOutcome {
 	 * show "OAuth-protected by X, no refresh token" as fields instead of re-parsing a sentence.
 	 */
 	discovery?: DiscoveryResult;
+	/**
+	 * The server→client request that ended this call, when there was one (#264). Carried
+	 * STRUCTURALLY, not only rendered into `content`, because `mcp_call_tool` has to decide whether
+	 * the ask is one a human can answer — and re-parsing a refusal sentence to find out would be a
+	 * second, weaker copy of `serverRequestIn`.
+	 */
+	ask?: { method: string; params?: unknown };
 }
 
 /** Shared 401/403 handling: ask the server what auth model it wants instead of guessing (#180). */
@@ -567,7 +594,7 @@ function finish(out: RpcOutcome, era: McpEra, version: string): CallOutcome {
 	// transport that worked (#264).
 	const ask = serverRequestIn(out.contentType, out.rawBody, out.res);
 	if (ask) {
-		return { content: serverRequestRefusal(ask.method), success: false, failure: "input_required", status: out.status, era, version };
+		return { content: serverRequestRefusal(ask.method), success: false, failure: "input_required", status: out.status, era, version, ask };
 	}
 	if (!out.res) {
 		return {
@@ -759,6 +786,76 @@ async function mcpCall(
 		resultBytes: outcome.success ? outcome.content.length : undefined,
 	});
 	return { ...outcome, durationMs };
+}
+
+// ─── Pausing for user input (#264) ──────────────────────────────────────────────────────
+
+/**
+ * Which ask this is for one logical call. Read off the tool input, and deliberately ABSENT from
+ * `mcp_call_tool`'s published `jsonSchema`: the round is set by the resume route from the row it
+ * just claimed, not by the model. A model that invented one could only make the connector refuse
+ * to pause sooner — each round costs a human answer, so there is no loop to drive — but a number
+ * the agent can nudge is a number a reader will eventually trust for something it cannot carry.
+ */
+function elicitationRound(input: Record<string, unknown>): number {
+	const n = Number(input.elicitationRound);
+	return Number.isFinite(n) && n >= 1 ? Math.min(Math.floor(n), MAX_ROUNDS + 1) : 1;
+}
+
+/**
+ * Turn a server→client ask into a pending question for the owner, and tell the agent it is waiting.
+ *
+ * Returns null when the pause cannot honestly be offered — a malformed ask, a round budget spent,
+ * no owner to ask, no key to encrypt the paused call with — and the caller then falls back to the
+ * standing refusal, which already says nothing was submitted. That fallback is the important half:
+ * a pause we cannot complete must degrade to an honest failure, never to a promise of a form that
+ * will not appear.
+ */
+async function pauseForUserInput(
+	ctx: RegistryToolCtx,
+	p: { endpoint: string; tool: string; args: Record<string, unknown>; useAuth: boolean; round: number; ask: { method: string; params?: unknown } },
+): Promise<{ content: string; success: boolean } | null> {
+	if (!ctx.env?.DB || !ctx.env.KEY_ENCRYPTION_KEY || !ctx.userId || !ctx.instanceId) return null;
+	if (p.round > MAX_ROUNDS) {
+		// The server keeps asking for values it then does not accept as arguments. Say exactly that,
+		// because the alternative reads as "the tool is broken" and the remedy is on the server side.
+		return {
+			content: `"${p.tool}" on ${p.endpoint} has asked for more input ${MAX_ROUNDS} times and still has not completed, so it was stopped. The server does not appear to accept these values as tool arguments — ask its operator for a non-interactive way to make this call. Nothing was submitted.`,
+			success: false,
+		};
+	}
+	const parsed = parseElicitation(p.ask.method, p.ask.params);
+	if ("error" in parsed) return null;
+
+	let id: string;
+	try {
+		id = await openMcpInputRequest(ctx.env, {
+			userId: ctx.userId,
+			instanceId: ctx.instanceId,
+			traceId: ctx.traceId ?? null,
+			endpoint: p.endpoint,
+			tool: p.tool,
+			round: p.round,
+			ask: parsed.ask,
+			call: { args: p.args, useAuth: p.useAuth },
+		});
+	} catch {
+		return null; // storage refused — fall back to the honest refusal rather than a phantom form
+	}
+	await recordMcp(ctx, {
+		event: "mcp.input_required",
+		level: "warn",
+		endpoint: p.endpoint,
+		method: "tools/call",
+		tool: p.tool,
+		ok: false,
+		failure: "input_required",
+		reason: `paused for user input (round ${p.round}, request ${id})`,
+		// FIELD NAMES ONLY, exactly as arguments are recorded. What the server is asking for is
+		// metadata; what the user answers is never written anywhere, here or later.
+		argKeys: parsed.ask.fields.map((f) => f.name),
+	});
+	return { content: pausedForInputNotice(p.tool, p.endpoint, parsed.ask.message, parsed.ask.fields.length), success: false };
 }
 
 /** What a connection probe learned about the transport. Consent/gate reasoning lives elsewhere. */
@@ -1057,7 +1154,17 @@ export const MCP_TOOLS: ToolDef[] = [
 			}
 
 			const out = await mcpCall(ctx, input, "tools/call", { name: tool, arguments: args }, { tool, argKeys, argBytes });
-			if (!out.success) return { content: out.content, success: false };
+			if (!out.success) {
+				// #264 — an ask a person can answer PAUSES rather than fails. The call is remembered
+				// (encrypted), the owner answers it in the console, and the answer re-enters THIS
+				// handler, so the resume re-checks consent above and re-resolves the credential below
+				// rather than being waved through as "already authorized".
+				if (out.failure === "input_required" && out.ask) {
+					const paused = await pauseForUserInput(ctx, { endpoint: endpointKey, tool, args, useAuth: input.auth !== "none", round: elicitationRound(input), ask: out.ask });
+					if (paused) return paused;
+				}
+				return { content: out.content, success: false };
+			}
 
 			// Unwrap the MCP result envelope so pipelines chain off the payload, not the
 			// protocol shape. `isError` is the server saying the TOOL failed while the RPC

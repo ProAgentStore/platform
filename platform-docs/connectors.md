@@ -130,17 +130,45 @@ A server that implements none of this answers `-32601`, which reads as *"this se
 resources"* rather than as a connection failure — a model told the connection failed retries and
 then blames the server.
 
-**A server cannot ask this client a question** (#264). Across every protocol revision this client
-speaks, the mechanism for a server needing more input mid-call is **elicitation** — a server→client
-request. It is impossible here by construction, three times over: we advertise
-`clientCapabilities: {}`, a modern-era call is one stateless POST with no server→client channel at
-all, and answering on the legacy transport would mean POSTing a response while the server holds the
-original stream open — which the client cannot do, since it reads that stream to completion before
-returning. So elicitation is **not implemented**, and is not faked. What the client does instead is
-*recognise* the ask and fail with a sentence that says the call did not complete and nothing was
-submitted, instead of reporting an unanswerable question as an unparseable response and sending the
-user to debug a transport that worked. Supporting it for real means declaring the capability and
-adding a resumable channel — a transport change, tracked on #264.
+**A server that needs something from you pauses the call** (#264). Across every protocol revision
+this client speaks, the mechanism for a server needing more input mid-call is **elicitation** — a
+server→client request (`elicitation/create`). Answering one *in band* is impossible here by
+construction, three times over: we advertise `clientCapabilities: {}`, a modern-era call is one
+stateless POST with no server→client channel at all, and answering on the legacy transport would
+mean POSTing a response while the server holds the original stream open — which the client cannot
+do, since it reads that stream to completion before returning. And a human takes minutes, which no
+request may wait for.
+
+So the call **pauses** instead. The ask is parsed into a form (message plus the flat primitive
+fields MCP's elicitation schema allows), one pending row is written with the call's **arguments
+envelope-encrypted at rest**, and the agent is told the call did **not** complete and that a person
+is now in the loop — the sentence ends *"do not report this as done"*, because the failure mode this
+exists to stop is a model narrating a submission that never happened. The owner answers it in the
+chat surface (`GET`/`POST /v1/instances/:id/mcp/input-requests`), and the answer **retries the
+original call** with the values merged into the remote tool's arguments.
+
+Four properties are load-bearing:
+
+- **The resume is an ordinary `mcp_call_tool`.** It re-checks the per-(endpoint, tool) grant and
+  re-resolves that endpoint's credential rather than being waved through as *already authorized* —
+  a grant revoked while the ask sat unanswered stops it. `traceId` carries across, so the paused
+  call and the call that completes it sit under one run.
+- **The answer is never stored.** There is no column for it: the values arrive on the resume
+  request, are validated, merged and dispatched in the same handler, which is also where the held
+  ciphertext is dropped. The trace records the answered field **names and a byte count**, never a
+  value — an elicited value is more likely to be a password than an ordinary argument is.
+- **Timeout and cancel are explicit.** An ask expires 30 minutes after it is raised, derived from
+  the clock rather than from a sweeper having run, so the console badge and the answer gate cannot
+  disagree. Cancelling sends nothing. Either way the ask is claimed exactly once, so a double click
+  cannot make the remote call twice.
+- **A malformed ask degrades to the old honest refusal.** An `elicitation/create` with no message,
+  no `requestedSchema`, or a required field of a kind this client cannot collect is refused rather
+  than half-understood: a form built from a guess collects the wrong values and sends them.
+
+It is a **retry**, not an in-band answer, and that is stated in the console before you press the
+button: a remote tool that half-completed before it elicited will run its first half again. Rounds
+are bounded (3), because a server that never accepts the elicited values as arguments would
+otherwise keep a person answering forever.
 
 **Every outbound MCP call is traced** (#265) as one redacted `agent_events` row (`source: "mcp"`):
 endpoint, method, remote tool, era + negotiated version, HTTP status, duration and a failure class,
