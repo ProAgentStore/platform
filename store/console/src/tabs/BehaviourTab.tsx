@@ -65,9 +65,15 @@ export function bandFor(field: Field, value: number): Band | undefined {
 	return field.bands?.find((b) => value <= b.max) ?? field.bands?.[field.bands.length - 1];
 }
 
-/** Is this field configured, as opposed to sitting at the platform default? */
+/**
+ * Is this field configured, as opposed to sitting at the platform default?
+ *
+ * `Object.hasOwn`, not `in` — a field explicitly set to `null` (the API's "clear this") is
+ * CONFIGURED, and a prototype-chain hit is not. The long `Object.prototype.hasOwnProperty.call`
+ * form said the same thing for the same reason; this is the ES2022 spelling of it.
+ */
 export function isSet(behaviour: Record<string, Value>, id: string): boolean {
-	return Object.prototype.hasOwnProperty.call(behaviour, id);
+	return Object.hasOwn(behaviour, id);
 }
 
 /**

@@ -160,7 +160,10 @@ const PINS = {
 	// explanation of why a read-scoped tool belongs in a WRITE list.
 	// #357 extracted the Drive/WorkDrive blocks — one <FileConnectorPanel/>, rendered twice —
 	// so the tab shrank while gaining the reconnect affordance and the blast-radius line.
-	"store/console/src/tabs/SettingsTab.tsx": 1167,
+	// +2 at #326: the focus re-check listed `instanceId` alongside the `refreshRunner` callback
+	// that is already keyed on it, so one id change re-subscribed the listener twice. Removing the
+	// redundant dep is one character; the two lines are the note saying why it is not a missing dep.
+	"store/console/src/tabs/SettingsTab.tsx": 1169,
 	// +6 for #319: the voice turn's live capture is accepted and stored on the message beside
 	// `audioKey`. Raised rather than split — it is one field on the record that handleChat
 	// already builds, and putting it anywhere else would give it a second retention rule.

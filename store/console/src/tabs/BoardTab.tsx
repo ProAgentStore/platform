@@ -566,7 +566,26 @@ function ListRow({ item, cols, expanded, onToggleAttempts, onOpen, onAsk, onMove
 }
 
 /** Editing shape for one column — statuses held as raw text so typing commas isn't fought. */
-interface DraftCol { id: string; title: string; color: string; statusesText: string; catchAll?: boolean }
+interface DraftCol {
+	/**
+	 * Row identity for React, and nothing else — never sent, never read by `build`.
+	 *
+	 * The rows below reorder (Move up/down), are removed from the middle and are appended to, and
+	 * `id` cannot serve: a NEW row's id is empty until `build` slugs it from the title, so two new
+	 * columns share the key "". Keying by array index made "Move down" swap the data while the DOM
+	 * nodes stayed put, so the focus ring and caret stayed on the position rather than following
+	 * the row that moved — mid-rename, that types into the wrong column.
+	 */
+	uid: string;
+	id: string;
+	title: string;
+	color: string;
+	statusesText: string;
+	catchAll?: boolean;
+}
+
+let draftSeq = 0;
+const nextUid = () => `col-${++draftSeq}`;
 
 /** Add / rename / recolor / reorder / remove the instance's board columns. Saves a
  *  per-instance override via PUT /board-config; "Reset" drops it back to the agent's. */
@@ -577,7 +596,7 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 	onSaved: () => void;
 }) {
 	const [draft, setDraft] = useState<DraftCol[]>(() =>
-		current.filter((c) => c.id !== "__other").map((c) => ({ id: c.id, title: c.title, color: c.color || "#a3a3a3", statusesText: (c.statuses ?? []).join(", "), catchAll: c.catchAll })),
+		current.filter((c) => c.id !== "__other").map((c) => ({ uid: nextUid(), id: c.id, title: c.title, color: c.color || "#a3a3a3", statusesText: (c.statuses ?? []).join(", "), catchAll: c.catchAll })),
 	);
 	const [saving, setSaving] = useState(false);
 	const [err, setErr] = useState<string | null>(null);
@@ -591,7 +610,7 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 	const patch = (i: number, p: Partial<DraftCol>) => setDraft((d) => d.map((c, idx) => (idx === i ? { ...c, ...p } : c)));
 	const remove = (i: number) => setDraft((d) => d.filter((_, idx) => idx !== i));
 	const swap = (i: number, dir: -1 | 1) => setDraft((d) => { const j = i + dir; if (j < 0 || j >= d.length) return d; const n = [...d]; [n[i], n[j]] = [n[j], n[i]]; return n; });
-	const addCol = () => setDraft((d) => [...d, { id: "", title: "New column", color: "#a3a3a3", statusesText: "" }]);
+	const addCol = () => setDraft((d) => [...d, { uid: nextUid(), id: "", title: "New column", color: "#a3a3a3", statusesText: "" }]);
 	// Exactly one catchAll column — toggling one clears the others.
 	const toggleCatchAll = (i: number) => setDraft((d) => d.map((c, idx) => ({ ...c, catchAll: idx === i ? !c.catchAll : false })));
 
@@ -640,7 +659,7 @@ function ColumnEditor({ instanceId, current, onClose, onSaved }: {
 
 				<div className="flex flex-col gap-2">
 					{draft.map((c, i) => (
-						<div key={i} className="border border-line rounded-xl p-2.5 bg-paper flex flex-col gap-2">
+						<div key={c.uid} className="border border-line rounded-xl p-2.5 bg-paper flex flex-col gap-2">
 							<div className="flex items-center gap-2">
 								<input type="color" value={/^#[0-9a-fA-F]{6}$/.test(c.color) ? c.color : "#a3a3a3"} onChange={(e) => patch(i, { color: e.target.value })} className="w-7 h-7 rounded border border-line bg-panel shrink-0 cursor-pointer" title="Column color" aria-label="Column color" />
 								{/* Indexed, because these rows repeat: "Column title" named all four of them

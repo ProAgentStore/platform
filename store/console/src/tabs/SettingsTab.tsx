@@ -348,7 +348,9 @@ export default function SettingsTab({ instanceId, isApply, settingsSchema, onUns
 		};
 		window.addEventListener("focus", onFocus);
 		return () => window.removeEventListener("focus", onFocus);
-	}, [instanceId, refreshRunner]);
+		// `refreshRunner` alone: it is a useCallback keyed on `instanceId`, so naming that too
+		// only re-subscribed the listener twice for one change.
+	}, [refreshRunner]);
 
 	// Agent settings save (patch semantics — only the changed field is sent).
 	const saveSetting = async (id: string, value: string | number | boolean) => {

@@ -529,7 +529,14 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						</table>
 						<h4 className="font-semibold text-sm mb-2">Audit trail — what the agent did</h4>
 						<ol className="text-xs space-y-2">
+							{/* The index IS the identity here, so keying by it is correct rather than tolerated:
+							    this is an append-only audit trail on ONE already-fetched record, rendered in the
+							    order the agent wrote it. Nothing reorders, inserts, removes or filters it, and no
+							    row holds state of its own — the failure the rule warns about (React reusing a
+							    node whose state belongs to a different item) has no way to occur. A synthetic id
+							    would only be the index under another name. */}
 							{(Array.isArray(detail.data.audit) ? (detail.data.audit as Array<Record<string, string>>) : []).map((s, i) => (
+								// biome-ignore lint/suspicious/noArrayIndexKey: an append-only trail on an immutable record — position IS the step's identity.
 								<li key={i} className="border-l-2 border-accent/40 pl-2">
 									<div className="font-medium">{s.step}</div>
 									<div className="text-muted-soft">{s.detail}</div>
