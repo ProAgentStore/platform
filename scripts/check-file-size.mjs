@@ -80,7 +80,13 @@ const PINS = {
 	// three lines that read one field off a body, which belong with the other fields of the same
 	// PUT and would be worse anywhere else.
 	"workers/api/src/routes/coding.ts": 1774,
-	"workers/api/src/routes/instances.ts": 1696,
+	// 1696 → 853 at #305. Three contiguous route blocks left for sibling modules along the seams
+	// the registrations already had — instances-tasks.ts (the board/ticket surface and the
+	// instance_runtime_tasks mirror it all reconciles against), instances-chat.ts (the AgentDO
+	// message log), instances-knowledge.ts (the subscriber's own KB). All three are under LIMIT,
+	// so they get no entry; this one is lowered rather than deleted because what remains —
+	// subscribe/cancel, runtime + node binding, voice, settings, trace — is still over it.
+	"workers/api/src/routes/instances.ts": 853,
 	// +5 for #319: the send path now hands the live capture to the consumer alongside the audio
 	// key, so the two readings of a turn can be compared on the message. Raised rather than
 	// split — the whole change is one `storedDictation` call and the two `onSend` sites that

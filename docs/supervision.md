@@ -127,7 +127,7 @@ Supervision needs an autonomous worker to delegate *to*. Today that worker is ha
 place.
 
 The platform **already owns the thinking**: `POST /v1/instances/:id/loop-decide` lives in
-`routes/instances.ts` — not `coding.ts` — with a pure `lib/loop-decide.ts`. It is instance-scoped
+`routes/instances-chat.ts` — not `coding.ts` — with a pure `lib/loop-decide.ts`. It is instance-scoped
 and agent-generic.
 
 The **browser owns the persistence**: `store/console/src/pages/InstanceDetail.tsx` polls that
