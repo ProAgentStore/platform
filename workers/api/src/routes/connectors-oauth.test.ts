@@ -148,16 +148,26 @@ describe("GET /:id/oauth/callback", () => {
 // registry has been the single source of truth since #86 but only from inside the Worker, so five
 // consumers each kept their own list. This is the answer they can derive from.
 describe("GET /v1/connectors — the catalog, resolved for the caller", () => {
-	/** A DB whose user_api_keys holds a row for each named provider. */
-	const envWithKeys = (providers: string[]) =>
+	/**
+	 * A DB whose user_api_keys holds a row for each named provider, and whose
+	 * instance_connector_grants answers the grant roll-up.
+	 *
+	 * SQL-aware on purpose: the route now makes two different reads, and a stub that answers both
+	 * with the same rows would let a mistake in either one pass.
+	 */
+	const envWithKeys = (providers: string[], grants: Array<{ provider: string; grants: number; instances: number }> = []) =>
 		({
 			...env(),
 			DB: {
-				prepare: () => ({
+				prepare: (sql: string) => ({
 					bind: () => ({
 						first: async () => null,
 						run: async () => ({}),
-						all: async () => ({ results: providers.map((p) => ({ provider: p, created_at: "2026-08-07T00:00:00Z", account_label: `${p}@example.com` })) }),
+						all: async () => ({
+							results: sql.includes("instance_connector_grants")
+								? grants
+								: providers.map((p) => ({ provider: p, created_at: "2026-08-07T00:00:00Z", account_label: `${p}@example.com` })),
+						}),
 					}),
 				}),
 			},
@@ -197,5 +207,45 @@ describe("GET /v1/connectors — the catalog, resolved for the caller", () => {
 	it("reports the three connected accounts as tool-less — declaring them grants no agent anything", async () => {
 		const by = await list(envWithKeys([]));
 		for (const id of ["google_drive", "zoho_workdrive", "gmail"]) expect(by.get(id)).toMatchObject({ tools: [] });
+	});
+
+	// #355: the account page shows connect/disconnect for every connector at once, so what a
+	// disconnect destroys has to arrive with the list rather than one confirmation at a time.
+	it("carries what a disconnect would revoke, per grant-holding connector", async () => {
+		const by = await list(envWithKeys(["google_drive"], [{ provider: "google_drive", grants: 5, instances: 2 }]));
+		expect(by.get("google_drive")).toMatchObject({ reach: { grants: 5, instances: 2 } });
+		// Declared and grant-scoped, just not granted anywhere — zero, not absent.
+		expect(by.get("zoho_workdrive")).toMatchObject({ reach: { grants: 0, instances: 0 } });
+	});
+
+	it("reports no reach for a connector whose reach is not grants", async () => {
+		const by = await list(envWithKeys([], [{ provider: "google_drive", grants: 5, instances: 2 }]));
+		// Gmail's reach is the per-agent permission flag, not a grant row. `{grants:0}` would be a
+		// lie shaped like a fact.
+		expect(by.get("gmail")).toMatchObject({ reach: null });
+		expect(by.get("slack")).toMatchObject({ reach: null });
+	});
+
+	// The console renders connect/disconnect from this, so a connector whose flow is not named
+	// here has no buttons — which is the honest outcome for one that cannot be connected.
+	it("names the LIVE connect/disconnect flow, dedicated or generic", async () => {
+		const by = await list(envWithKeys([]));
+		expect(by.get("google_drive")).toMatchObject({ flow: { start: "/v1/drive/google/start", disconnect: "/v1/drive/google" } });
+		expect(by.get("gmail")).toMatchObject({ flow: { start: "/v1/email/google/start", disconnect: "/v1/email/google" } });
+		expect(by.get("zoho_workdrive")).toMatchObject({ flow: { start: "/v1/workdrive/zoho/start", disconnect: "/v1/workdrive/zoho" } });
+		// Nothing dedicated: the generic routes, which its manifest CAN drive.
+		expect(by.get("slack")).toMatchObject({ flow: { start: "/v1/connectors/slack/oauth/start", disconnect: "/v1/connectors/slack/oauth" } });
+	});
+
+	// WorkDrive declares no `oauth` block (its endpoints are per data-centre), so the manifest
+	// route could not tell whether the deployment can connect it — and said "no" while
+	// /v1/workdrive/status said "yes". Two answers to one question is the bug the catalog exists
+	// to remove.
+	it("judges a connector on its declared credential env when the manifest cannot say", async () => {
+		const by = await list(envWithKeys([]));
+		expect(by.get("zoho_workdrive")).toMatchObject({ configured: false });
+		const wired = { ...envWithKeys([]), ZOHO_CLIENT_ID: "zid", ZOHO_CLIENT_SECRET: "zsec" } as unknown as Env;
+		const byWired = await list(wired);
+		expect(byWired.get("zoho_workdrive")).toMatchObject({ configured: true });
 	});
 });

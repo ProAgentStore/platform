@@ -143,6 +143,28 @@ export async function connectorGrantReach(
 }
 
 /**
+ * The same blast radius, for every grant-holding connector at once (#355).
+ *
+ * The account page lists all connectors together, so asking `connectorGrantReach` per connector
+ * would be one round trip per row to answer a question one GROUP BY answers. Providers with no
+ * grants are simply absent — the caller reads a missing entry as zero, which is what it is.
+ */
+export async function connectorGrantReachByProvider(
+	env: Env,
+	userId: string,
+): Promise<Map<string, ConnectorGrantReach>> {
+	const rows = await env.DB.prepare(
+		`SELECT provider, COUNT(*) AS grants, COUNT(DISTINCT instance_id) AS instances
+     FROM instance_connector_grants WHERE user_id = ?1 GROUP BY provider`,
+	)
+		.bind(userId)
+		.all<{ provider: string; grants: number; instances: number }>();
+	return new Map(
+		(rows.results ?? []).map((r) => [r.provider, { grants: Number(r.grants) || 0, instances: Number(r.instances) || 0 }]),
+	);
+}
+
+/**
  * Disconnecting revokes: every grant this user made for this connector, on every agent.
  *
  * That is the meaning the product now commits to, and the confirmation says so before you

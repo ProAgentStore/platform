@@ -136,6 +136,15 @@ export interface Connector {
 	 * stops the two drifting apart. Declare it only to say something the auth type does not.
 	 */
 	unattended?: UnattendedClass;
+	/**
+	 * Env vars that must ALL be set for this connector to be usable on a deployment, when that
+	 * cannot be read off `oauth` (#355). Zoho WorkDrive is the case: its authorize/token endpoints
+	 * are per data-centre, so it declares no `oauth` block — and without this the catalog would
+	 * report it unconfigured on a deployment where `/v1/workdrive/status` says otherwise. Two
+	 * answers to "can I connect this?" is the bug the catalog exists to remove, so the one that is
+	 * not manifest-derivable is declared rather than inferred.
+	 */
+	credentialEnv?: string[];
 	/** For auth:"oauth" connectors: the OAuth2 config (from the manifest) that drives the
 	 *  generic authorize/callback/refresh flow. `clientIdEnv`/`secretEnv` name the Worker env
 	 *  vars holding the client credentials (resolved server-side, never in the manifest). */

@@ -78,6 +78,11 @@ export const ZOHO_WORKDRIVE_CONNECTOR: Connector = {
 	// declare and the manifest shape cannot express one. Omitting it keeps the generic OAuth
 	// routes answering 404 for this id rather than minting an authorize URL against the wrong
 	// DC — the declaration says what is true, including the part that is not yet generic.
+	//
+	// But "no manifest oauth" is not "cannot be connected": the dedicated flow works whenever
+	// these two are set, and `/v1/workdrive/status` has always said so. Declaring them keeps the
+	// catalog's `configured` from contradicting it (#355).
+	credentialEnv: ["ZOHO_CLIENT_ID", "ZOHO_CLIENT_SECRET"],
 	tools: [],
 };
 

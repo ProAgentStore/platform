@@ -8,7 +8,7 @@ import { Hono } from "hono";
 import { HttpError, requireUser } from "../lib/auth.js";
 import { CONNECTORS, getConnector } from "../lib/connectors/registry.js";
 import { resolveOauthConfig } from "../lib/connectors/client.js";
-import { connectorGrantReach, revokeUserConnectorGrants } from "../lib/connector-grants.js";
+import { connectorGrantReach, connectorGrantReachByProvider, revokeUserConnectorGrants } from "../lib/connector-grants.js";
 import { unattendedClassOf } from "../lib/connectors/unattended.js";
 import type { Connector } from "../lib/connectors/types.js";
 import { signConnectorState, verifyConnectorState, saveConnectorRefreshToken } from "../lib/connector-oauth.js";
@@ -42,6 +42,10 @@ function requireOauthConnector(env: Env, id: string) {
  * rendered as the owner's error.
  */
 function isConfigured(env: Env, connector: Connector): boolean {
+	const e = env as unknown as Record<string, string | undefined>;
+	// A connector that names its credential env vars is judged on those — the only way to answer
+	// for one whose OAuth endpoints are not manifest-expressible (Zoho WorkDrive). See types.ts.
+	if (connector.credentialEnv?.length) return connector.credentialEnv.every((k) => !!e[k]?.trim());
 	switch (connector.auth) {
 		case "oauth": {
 			const creds = resolveOauthConfig(env, connector.id);
@@ -59,6 +63,36 @@ function isConfigured(env: Env, connector: Connector): boolean {
 }
 
 /**
+ * Which connect/disconnect flow is LIVE for a connector today (#355).
+ *
+ * Three of them predate the generic OAuth routes and keep their own, because their OAuth apps
+ * register `/v1/{drive,email}/google/callback` — not `/v1/connectors/<id>/oauth/callback` — so
+ * the generic authorize URL would be rejected at the provider (see connected-accounts.ts).
+ *
+ * This lives on the server rather than in the console because the console is the FOURTH consumer
+ * to need it, and the previous three each hardcoded their own copy. That is the arrangement this
+ * whole route exists to end: the account page renders whatever the catalog says, so an owner sees
+ * a new connector without a console change, and #352 Stage 2 retires a dedicated flow by deleting
+ * one line here rather than by hunting for the buttons that point at it.
+ */
+const DEDICATED_FLOWS: Record<string, { start: string; disconnect: string }> = {
+	google_drive: { start: "/v1/drive/google/start", disconnect: "/v1/drive/google" },
+	zoho_workdrive: { start: "/v1/workdrive/zoho/start", disconnect: "/v1/workdrive/zoho" },
+	gmail: { start: "/v1/email/google/start", disconnect: "/v1/email/google" },
+};
+
+/** The endpoints a UI should call to connect/disconnect, or null when there is nothing to call. */
+function connectFlow(connector: Connector): { start: string; disconnect: string } | null {
+	const dedicated = DEDICATED_FLOWS[connector.id];
+	if (dedicated) return dedicated;
+	// The generic flow can only be offered to a connector whose manifest declares where to send
+	// the browser. Anything else has no connect step a caller could take.
+	if (connector.auth !== "oauth" || !connector.oauth) return null;
+	const id = encodeURIComponent(connector.id);
+	return { start: `/v1/connectors/${id}/oauth/start`, disconnect: `/v1/connectors/${id}/oauth` };
+}
+
+/**
  * GET /v1/connectors — the catalog, resolved for the caller (#352 Stage 1).
  *
  * The registry has been the single source of truth for connectors since #86, but nothing could
@@ -69,15 +103,18 @@ function isConfigured(env: Env, connector: Connector): boolean {
  * all derive from — the next consumer is a `.map()`.
  *
  * `connected` is one indexed read over `user_api_keys` for the whole catalog rather than one per
- * connector, because the list is short and the round trips are not.
+ * connector, because the list is short and the round trips are not. `reach` is the same trick
+ * over `instance_connector_grants`: the account page states what a disconnect would revoke BEFORE
+ * the click (#355/#357), and it has to state it for every row, not the one being confirmed.
  */
 connectorRoutes.get("/", async (c) => {
 	const session = await requireUser(c);
-	const rows = await c.env.DB.prepare(
-		"SELECT provider, created_at, account_label FROM user_api_keys WHERE user_id = ?1",
-	)
-		.bind(session.uid)
-		.all<{ provider: string; created_at: string; account_label: string | null }>();
+	const [rows, reachByProvider] = await Promise.all([
+		c.env.DB.prepare("SELECT provider, created_at, account_label FROM user_api_keys WHERE user_id = ?1")
+			.bind(session.uid)
+			.all<{ provider: string; created_at: string; account_label: string | null }>(),
+		connectorGrantReachByProvider(c.env, session.uid),
+	]);
 	const stored = new Map((rows.results ?? []).map((r) => [r.provider, r]));
 	return c.json({
 		connectors: CONNECTORS.map((connector) => {
@@ -97,6 +134,13 @@ connectorRoutes.get("/", async (c) => {
 				connected: holdsCredential ? !!row : null,
 				account: row?.account_label ?? null,
 				connectedAt: row?.created_at ?? null,
+				// Only meaningful where a grant IS the reach. A `user`-model connector has no grants
+				// to count, and `{grants:0}` on it would read as "nothing uses this" rather than
+				// "this is not how its reach works".
+				reach: connector.grantModel === "instance-resource"
+					? (reachByProvider.get(connector.id) ?? { grants: 0, instances: 0 })
+					: null,
+				flow: connectFlow(connector),
 			};
 		}),
 	});
