@@ -25,6 +25,15 @@ import { describe, expect, it } from "vitest";
 
 const CONSOLE_SRC = join(import.meta.dirname, "..");
 const ADMIN_SRC = join(import.meta.dirname, "../../../admin/src");
+/**
+ * The Coder UI ships INSIDE the console — `index.css` `@source`s it so its classes are
+ * compiled against the console's tokens — but it lives outside `store/`, so the first cut
+ * of this guard scanned two of the three trees that share one palette. Three pale-surface
+ * banners were sitting in it while both gates read green: a signed-out notice rendered
+ * twice and the runner-offline CTA, each a cream box with dark text and a white code block
+ * on a black page. Exactly the defect the gate exists for, in the tree it did not look at.
+ */
+const CODER_WEB_SRC = join(import.meta.dirname, "../../../../agents/coder/web/src");
 
 const TAILWIND_HUES =
 	"slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose";
@@ -73,6 +82,11 @@ describe("no light-theme surfaces on a dark-only app (#368)", () => {
 		const offenders = scan(ADMIN_SRC, LIGHT_SURFACE).filter((f) => !LIGHT_SURFACE_ALLOWED.has(f.file));
 		expect(offenders.map((f) => `${f.file}: ${f.hits.join(" ")}`)).toEqual([]);
 	});
+
+	it("the Coder UI uses no pale Tailwind background", () => {
+		const offenders = scan(CODER_WEB_SRC, LIGHT_SURFACE).filter((f) => !LIGHT_SURFACE_ALLOWED.has(f.file));
+		expect(offenders.map((f) => `${f.file}: ${f.hits.join(" ")}`)).toEqual([]);
+	});
 });
 
 describe("raw Tailwind palette classes — a ratchet, not a gate", () => {
@@ -86,7 +100,7 @@ describe("raw Tailwind palette classes — a ratchet, not a gate", () => {
 	 * in the same commit. A `<=` ceiling leaves the ground you just took available
 	 * as headroom, which is numerically how the last ratchet here got spent.
 	 */
-	const PINNED = { console: 33, admin: 1 };
+	const PINNED = { console: 33, admin: 1, coderWeb: 9 };
 
 	it("the console holds its count", () => {
 		const count = scan(CONSOLE_SRC, RAW_PALETTE).reduce((n, f) => n + f.hits.length, 0);
@@ -96,6 +110,11 @@ describe("raw Tailwind palette classes — a ratchet, not a gate", () => {
 	it("the admin app holds its count", () => {
 		const count = scan(ADMIN_SRC, RAW_PALETTE).reduce((n, f) => n + f.hits.length, 0);
 		expect(count).toBe(PINNED.admin);
+	});
+
+	it("the Coder UI holds its count", () => {
+		const count = scan(CODER_WEB_SRC, RAW_PALETTE).reduce((n, f) => n + f.hits.length, 0);
+		expect(count).toBe(PINNED.coderWeb);
 	});
 });
 

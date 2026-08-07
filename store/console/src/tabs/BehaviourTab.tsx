@@ -224,7 +224,7 @@ export default function BehaviourTab({ instanceId }: { instanceId: string }) {
 				// has nothing to reset, and offering it there was the same inert control one level up.
 				const overrides = groupFields.filter((f) => stateOf(f.id) === "override");
 				return (
-					<section key={g.id} className="border border-border rounded-lg p-4">
+					<section key={g.id} className="border border-line rounded-lg p-4">
 						<div className="flex items-start justify-between gap-3 mb-3">
 							<div className="min-w-0">
 								<h3 className="font-semibold">{g.label}</h3>
@@ -388,7 +388,7 @@ function FieldRow({
 					key={inputKey}
 					id={controlId}
 					type="text"
-					className="mt-2 w-full rounded border border-border bg-transparent px-2 py-1 text-sm"
+					className="mt-2 w-full rounded border border-line bg-transparent px-2 py-1 text-sm"
 					maxLength={field.maxLength}
 					defaultValue={(effective as string) || ""}
 					onBlur={(e) => {
@@ -404,7 +404,7 @@ function FieldRow({
 					key={inputKey}
 					id={controlId}
 					type="number"
-					className="mt-2 w-32 rounded border border-border bg-transparent px-2 py-1 text-sm"
+					className="mt-2 w-32 rounded border border-line bg-transparent px-2 py-1 text-sm"
 					min={field.min}
 					max={field.max}
 					defaultValue={Number(effective) || 0}
@@ -417,7 +417,7 @@ function FieldRow({
 					key={inputKey}
 					id={controlId}
 					type="text"
-					className="mt-2 w-full rounded border border-border bg-transparent px-2 py-1 text-sm"
+					className="mt-2 w-full rounded border border-line bg-transparent px-2 py-1 text-sm"
 					placeholder="comma separated"
 					defaultValue={Array.isArray(effective) ? (effective as string[]).join(", ") : ""}
 					onBlur={(e) => {

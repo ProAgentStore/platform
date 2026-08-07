@@ -27,6 +27,11 @@ const UNIT_TESTS = [
 	// dirs under agents/ are inert vendored seed copies (see pags/CLAUDE.md) and must
 	// not be swept into the suite.
 	"agents/coder/web/src/**/*.test.ts",
+	// The CI guards under scripts/ had no tests at all: each is a regex over the tree
+	// that decides whether main is red, and nothing checked that any of them still
+	// matches the defect it was written for — or that it stays quiet on correct code,
+	// which is the half that decides whether people fix a finding or suppress it.
+	"scripts/**/*.test.mjs",
 ];
 
 export default defineConfig({

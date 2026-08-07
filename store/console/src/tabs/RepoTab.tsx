@@ -173,7 +173,7 @@ export default function RepoTab({ instanceId }: Props) {
 							)}
 
 							{expanded[r.key] && r.paths && (
-								<div className="mt-2 max-h-56 overflow-y-auto bg-base border border-line rounded-lg p-3 font-mono text-xs text-muted leading-relaxed">
+								<div className="mt-2 max-h-56 overflow-y-auto bg-paper border border-line rounded-lg p-3 font-mono text-xs text-muted leading-relaxed">
 									{r.paths.map((p) => <div key={p} className="truncate">{p}</div>)}
 								</div>
 							)}

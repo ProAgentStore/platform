@@ -136,9 +136,9 @@ export default function ReposList({
 	};
 
 	const offlineCta = runnerOnline === false && (
-		<div className="bg-orange-50 border border-amber-500 rounded-lg p-2.5 mt-3 text-sm text-orange-900">
+		<div className="bg-yellow/10 border border-yellow/40 text-yellow rounded-lg p-2.5 mt-3 text-sm">
 			<b>Your machine isn't connected.</b> Start the runner:
-			<code className="block mt-1.5 bg-white border border-amber-500 rounded-md p-1.5 text-sm">pags up</code>
+			<code className="block mt-1.5 bg-paper border border-line text-ink rounded-md p-1.5 text-sm">pags up</code>
 		</div>
 	);
 

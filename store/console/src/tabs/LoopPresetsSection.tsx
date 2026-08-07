@@ -180,7 +180,7 @@ export default function LoopPresetsSection({ instanceId }: { instanceId: string 
 							</button>
 						)}
 						{incomplete > 0 && (
-							<span className="text-xs text-orange">
+							<span className="text-xs text-yellow">
 								{incomplete === 1 ? "One preset needs" : `${incomplete} presets need`} both a label and an objective — otherwise it won't be saved.
 							</span>
 						)}

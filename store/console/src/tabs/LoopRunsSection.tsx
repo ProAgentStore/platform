@@ -41,7 +41,7 @@ const REASON_LABEL: Record<string, string> = {
 
 const TONE: Record<string, string> = {
 	completed: "text-green",
-	needs_human: "text-orange",
+	needs_human: "text-yellow",
 	failed: "text-red",
 	cancelled: "text-muted",
 	running: "text-accent",
@@ -50,9 +50,10 @@ const TONE: Record<string, string> = {
 /**
  * The live phases' colours. A lookup, not a decision — `loopStopControl` made the decision.
  *
- * Yellow for `stopping`, not orange: `index.css` `@theme` declares no `--color-orange`, so an
- * orange utility compiles to nothing (the dead-class bug #368 fixed elsewhere; the `needs_human`
- * entry above still has it, and belongs to that vocabulary rather than to this change).
+ * Yellow is the warn token this app declares; the amber/orange family is not. A utility naming
+ * an undeclared token compiles to nothing, so the label renders as ordinary body text —
+ * `needs_human` above was exactly that until #367 swept it. Never spell such a class out in a
+ * comment: Tailwind v4's source scan reads comments, so explaining one can regenerate it.
  */
 const PHASE_TONE: Record<LoopPhase, string> = {
 	running: "text-accent",

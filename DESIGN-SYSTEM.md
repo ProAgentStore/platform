@@ -69,6 +69,25 @@ maps a status → an intent (`success` · `danger` · `warning` · `info` · `ne
 surface showing a status chip must go through it. Renaming the CSS tokens to intent remains open;
 the code layer is what makes the rename a one-file change when someone does it.
 
+### A token that does not exist is silent
+
+Tailwind v4 has no error state. A utility naming a token `@theme` does not declare generates **no rule**,
+so the element keeps whatever colour it inherited: a warning label renders as ordinary body text, and a
+bordered element keeps v4's `currentColor` default — a near-white 1px line on a black page. Nothing else
+in this repo can see it. Biome lints JS/TS and cannot read a class name; `tsc` sees a string; the build
+succeeds; a screenshot looks plausible.
+
+Twenty-six of these had accumulated by 2026-08-08 (#367): two status-tone lookups, two banners on the
+agent-create screen, four Behaviour-tab sections wearing the near-white outline, and an entire vocabulary
+from somebody else's design system — generic `surface`/`base`/`bg`/`border` naming, pasted in, alive in
+five files. All fixed, and `scripts/check-design-tokens.mjs` now fails the build on the next one.
+
+**The rule:** every colour utility must name a token declared in the `@theme` block that compiles it, a
+numbered shade of Tailwind's default palette, or one of `white`/`black`/`transparent`/`current`. Note
+which `@theme` compiles which tree — `agents/coder/web` has no stylesheet of its own; the console
+`@source`s it, so its classes are judged against the console's tokens and a dead one there is invisible
+from inside its own package.
+
 ### The missing `-soft` pairings
 
 `@theme` declares a soft background for the accent (`--color-accent-soft`) and for nothing else. Every
@@ -138,15 +157,38 @@ front page.
 
 ## 5. What is enforced, and what is taste
 
-`store/console/src/lib/designTokens.test.ts` runs in the normal unit suite. It holds three things,
-each chosen because it is mechanical **and** corresponds to a defect that actually shipped:
+Two guards, each holding only what a machine can honestly hold.
 
-1. **No pale Tailwind background** (`bg-*-50/100/200`) in either SPA — a gate, at zero. This is the
-   exact signature of #368. Allowlisted: `pages/Login.tsx`, whose white Google button is
-   brand-mandated and is a white button on every site that has one.
-2. **Raw palette classes are pinned** at 33 (console) and 1 (admin) — a ratchet, not a gate, because
-   the count is not zero. Pinned exactly, like the file-size ratchet: removing a use lowers the pin
-   in the same commit, so the ground taken is not left as headroom.
+**`scripts/check-design-tokens.mjs`** — a CI step (`ci.yml`, alongside the other `check-*.mjs` guards),
+because it covers three trees rather than belonging to one package. **No colour utility may name a token
+nothing declares** (§1). A gate at zero for `store/console` and `agents/coder/web`; `store/admin` is
+pinned at 2, since fixing those needed a tree that had uncommitted maintainer work when this landed —
+pinned rather than excluded, so the debt is visible and may only go down. The mechanism is a pure module
+(`scripts/lib/design-tokens.mjs`) with its own tests, which is also the first test coverage any guard
+under `scripts/` has had.
+
+Two things about it are load-bearing:
+
+- **It scans SOURCE, not the built stylesheet.** Tailwind v4's source scan reads comments and strings,
+  so an output-scanning guard is defeated by a doc comment — quoting the broken class names while
+  explaining them is what regenerated #368's exact rules into the built CSS from its own postmortem.
+  For the same reason, never write a dead utility verbatim in a comment; describe its shape.
+- **Comments are blanked before scanning.** This tree's prose is full of hyphenated phrases that a
+  class-name regex reads as utilities (a lazy fill-in fallback, a jump-to-bottom button, tap-to-talk).
+  Every one would be a false positive, and a guard that cries wolf gets suppressed rather than fixed.
+
+**`store/console/src/lib/designTokens.test.ts`** — in the normal unit suite. Three things, each mechanical
+and each matching a defect that actually shipped:
+
+1. **No pale Tailwind background** (`bg-*-50/100/200`) in any of the three trees — a gate, at zero. This
+   is the exact signature of #368. Allowlisted: `pages/Login.tsx`, whose white Google button is
+   brand-mandated and is a white button on every site that has one. `agents/coder/web` joined on
+   2026-08-08: it ships *inside* the console but lives outside `store/`, so the first cut of this gate
+   scanned two of the three trees that share one palette — and three cream-on-black banners were sitting
+   in the third while both gates read green.
+2. **Raw palette classes are pinned** at 33 (console), 1 (admin) and 9 (Coder UI) — a ratchet, not a
+   gate, because the count is not zero. Pinned exactly, like the file-size ratchet: removing a use lowers
+   the pin in the same commit, so the ground taken is not left as headroom.
 3. **The console and admin `@theme` blocks are equal** — the admin file claims its tokens are "shared
    with the console"; they are shared by copy, so nothing was keeping the claim true.
 
@@ -160,6 +202,13 @@ palette split (§4 — resolving it is a restyling decision about the marketing 
 
 ## 6. Open
 
-- Rename the pigment tokens to intent, and add the `-soft` pairings (§1).
+- **Rename the pigment tokens to intent, and add the `-soft` pairings** (§1). Still the right change and
+  deliberately not taken in #367's sweep, for two reasons worth recording. It cannot be done in the
+  console alone: the `@theme` blocks are held equal by test (§5.3) and the second copy lives in
+  `store/admin`, so the rename is one commit across both trees or it is a broken guard. And adding
+  `--color-danger` as an *alias* beside `--color-red` without migrating ~200 call sites would leave two
+  names for one idea — the failure #368 explicitly refused when it declined to invent a third status
+  vocabulary. The intent layer in `lib/statusBadge.ts` is what keeps the eventual rename cheap.
 - Collapse the 17 arbitrary type sizes into a scale, after #366 (§2).
 - Decide whether the marketing pages adopt the SPA palette or keep their own (§4).
+- Clear `store/admin`'s two pinned dead utilities (§5) and drop its pin to zero.

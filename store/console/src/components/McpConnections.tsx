@@ -147,7 +147,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 					onChange={(e) => setTokenValue(e.target.value)}
 					aria-label={`Access token for ${endpoint}`}
 					placeholder={`Access token for ${endpoint}`}
-					className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-surface border border-line rounded font-mono"
+					className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-paper border border-line rounded font-mono"
 				/>
 				<button
 					type="button"
@@ -397,7 +397,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 							</div>
 							<div className="flex flex-wrap gap-1 mt-0.5">
 								{c.grants.map((g) => (
-									<span key={g.tool} className="px-1.5 py-0.5 rounded bg-surface border border-line font-mono text-[0.65rem]">
+									<span key={g.tool} className="px-1.5 py-0.5 rounded bg-paper border border-line font-mono text-[0.65rem]">
 										{g.tool === "*" ? "*" : g.tool}
 										{g.destructive && <span className="text-red ml-1">!</span>}
 										<button type="button" className="ml-1 text-muted-soft hover:text-red" onClick={() => setGrant(c.endpoint, g.tool, false)} aria-label={`Revoke ${g.tool}`}>
@@ -427,7 +427,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 								setUrl(p.url);
 								void runTest(p.url, "vault");
 							}}
-							className="px-2 py-0.5 text-[0.68rem] rounded-full border border-line bg-surface hover:border-accent disabled:opacity-40"
+							className="px-2 py-0.5 text-[0.68rem] rounded-full border border-line bg-paper hover:border-accent disabled:opacity-40"
 						>
 							{p.label}
 						</button>
@@ -443,7 +443,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 						onChange={(e) => setUrl(e.target.value)}
 						aria-label="MCP endpoint URL"
 						placeholder="https://example.com/mcp"
-						className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-surface border border-line rounded"
+						className="flex-1 min-w-[12rem] px-2 py-1 text-xs bg-paper border border-line rounded"
 					/>
 				<button
 					type="button"
@@ -462,7 +462,7 @@ export default function McpConnections({ instanceId, grants, onGrantsChanged }: 
 
 			{/* The report. Everything here is the result of the test just run — never cached. */}
 			{report && (
-				<div className="mt-2 p-2 rounded border border-line bg-surface">
+				<div className="mt-2 p-2 rounded border border-line bg-paper">
 					<div className="flex items-center gap-2 text-xs">
 						<span className={`font-semibold ${toneClass}`}>{badge?.label}</span>
 						<code className="font-mono text-muted truncate max-w-[14rem]">{report.endpoint}</code>

@@ -61,6 +61,19 @@ jobs:
         # comments excluded, because correcting a comment that says something untrue is the
         # one edit to a shipped migration that is always right (0080, 2026-08-07).
         run: node scripts/check-migrations.mjs --require-history
+      - name: Design tokens — no dead colour utility (#367)
+        # Tailwind v4 has no error state. A utility naming a token `@theme` does not declare
+        # generates NO rule, so the element silently keeps the colour it inherited — and a
+        # bordered one keeps v4's `currentColor` default, i.e. a near-white line on a black
+        # page. Nothing in this repo could see it: Biome lints JS/TS and cannot read a class
+        # name, tsc sees a string, and the build succeeds. That is how 26 of them accumulated
+        # across the console and the Coder UI, including a whole vocabulary from someone
+        # else's design system.
+        #
+        # Deliberately a source scan, not an output scan: Tailwind v4 reads comments and
+        # strings, so a guard reading the built stylesheet is defeated by a doc comment
+        # (#368's broken rules came back from its own postmortem that way).
+        run: node scripts/check-design-tokens.mjs
       - name: Guard heavy-test isolation (#253)
         # Keeps real-browser / real-socket tests inside the `integration` project, which
         # is where they get a budget sized for real I/O instead of vitest's 5s default.

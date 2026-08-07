@@ -155,7 +155,7 @@ export default function VectorsSection({ instanceId, active }: { instanceId: str
 							onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
 							aria-label="Test search — what the agent can find"
 							placeholder="Test what the agent can find, e.g. “ice machine capacity”"
-							className="flex-1 bg-bg border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-accent"
+							className="flex-1 bg-paper border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-accent"
 						/>
 						<button type="button" onClick={runSearch} disabled={searching || !query.trim()} className="text-xs px-3 py-2 rounded-lg bg-accent text-white font-bold disabled:opacity-50">
 							{searching ? "Searching…" : "Search"}
