@@ -211,7 +211,14 @@ const PINS = {
 	// conditional element; the card, its controls and every rule they follow live in
 	// components/McpInputRequests.tsx + lib/mcpInputRequests.ts, which is where a split would
 	// have put them anyway.
-	"store/console/src/pages/InstanceDetail.tsx": 1383,
+	// +13 at #378: the shell already polled `/runtime/status` for the header dot but kept only the
+	// boolean, so no surface below it could render an offline state and the Terminal tab learned
+	// the runner was gone by failing a relay round-trip. What landed is the attachment REASON
+	// beside the boolean (one `useState`, written on both branches of the same poll) and the
+	// presence object handed to every surface through `SurfaceContext`. Not split: this is the
+	// page's existing runner poll gaining one field, and moving the poll out would put the header
+	// dot's own data source in another file. The decisions it feeds are in lib/tmuxView.ts.
+	"store/console/src/pages/InstanceDetail.tsx": 1396,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.

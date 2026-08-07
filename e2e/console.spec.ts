@@ -584,7 +584,16 @@ async function mockSignedInConsole(page: Page, options: OpsMockOptions = {}) {
 			});
 		}
 		if (path === "/v1/instances/inst-1/runtime/status") {
-			return json(options.runtime ?? { connected: true, node: "my-machine" });
+			// The REAL wire shape: `relay.connected` + `attachment`, never a top-level `connected`.
+			// The old fixture answered the shape the console once wrongly read (and #370's own
+			// comment in InstanceDetail describes) — so every signed-in console test ran with a
+			// runner the page could only read as offline, and no surface rendering an offline state
+			// could be trusted here (#378).
+			return json(options.runtime ?? {
+				runtime: { instanceId: "inst-1", status: "online", runnerNode: "my-machine" },
+				relay: { connected: true, runnerNode: "my-machine", live: true },
+				attachment: { state: "attached", message: "Connected.", remedy: null },
+			});
 		}
 		if (path === "/v1/instances/inst-1/tasks") {
 			return json({
@@ -2093,6 +2102,71 @@ test.describe("mobile — the terminal pane is readable (#370)", () => {
 		await page.getByText("scratch").click();
 		await expect(page.locator("pre")).toBeVisible();
 		expect(await paneLines(page)).toBeGreaterThanOrEqual(MIN_LINES);
+	});
+
+	/**
+	 * The offline state, on the device it was reported from (#378).
+	 *
+	 * With no runner every tool call fails, and the tab used to say so only in a red line it
+	 * blanked at the start of the next 4s poll — around three sentences that each assert a runner
+	 * that is not there. The phone therefore showed an empty pane and a flicker, which is
+	 * indistinguishable from a broken app.
+	 *
+	 * Asserted on the OUTPUT view, deliberately: the one empty state that named the runner used to
+	 * live on Targets, which `DEFAULT_TMUX_VIEW` means a phone never lands on.
+	 */
+	test("a phone with no runner is told so, and the message does not blink", async ({ page }) => {
+		await page.setViewportSize({ width: 390, height: 812 });
+		await mockTmux(page);
+		// Registered AFTER the fixture, so it wins: this instance is pinned to a machine that is up
+		// for other agents — the case where `pags up` is the wrong advice.
+		await page.route("**/v1/instances/inst-1/runtime/status", (route) => route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({
+				runtime: { instanceId: "inst-1", status: "offline", runnerNode: "my-machine" },
+				relay: { connected: false, runnerNode: "my-machine", live: false },
+				attachment: {
+					state: "machine-online-agent-detached",
+					message: "The machine is online but this agent isn't attached.",
+					remedy: "pags up --force",
+				},
+			}),
+		}));
+		// No runner ⇒ every terminal tool fails, which is how the tab used to find out at all.
+		await page.route("**/v1/instances/inst-1/tools/terminal_**", (route) => route.fulfill({
+			status: 200,
+			contentType: "application/json",
+			body: JSON.stringify({ success: false, content: "No runner is connected for this agent — run `pags up`." }),
+		}));
+		await page.goto("/console/instances/inst-1/tmux");
+		await page.waitForLoadState("networkidle");
+
+		await expect(page.getByRole("button", { name: "Output", exact: true })).toHaveAttribute("aria-pressed", "true");
+		await expect(page.getByText("The machine is online but this agent isn't attached.")).toBeVisible();
+		// The remedy the CLI knew and nobody could see — and it names the OTHER machine, since
+		// `pags up --force` is not a thing this phone can run.
+		await expect(page.getByText("pags up --force", { exact: true })).toBeVisible();
+		await expect(page.getByText(/Run\s+pags up --force\s+on my-machine\./).first()).toBeVisible();
+		// The pane says what will happen rather than asking for a target that cannot exist.
+		await expect(page.locator("pre").getByText("Terminal output appears here as soon as the runner reconnects.")).toBeVisible();
+
+		// It must not claim a runner anywhere on the tab.
+		const body = await page.evaluate(() => document.body.innerText);
+		expect(body).not.toContain("connected runner");
+		expect(body).not.toContain("connected machine");
+
+		// And it must STAND. Sampled across more than one 4s poll rather than asserted once: the
+		// defect was a message that existed only between a call failing and the next one starting.
+		const misses = await page.evaluate(async () => {
+			let missed = 0;
+			for (let i = 0; i < 55; i++) {
+				await new Promise((r) => setTimeout(r, 100));
+				if (!document.body.innerText.includes("isn't attached")) missed++;
+			}
+			return missed;
+		});
+		expect(misses, "the offline notice disappeared during a poll").toBe(0);
 	});
 
 	test("the wide layout still shows every block at once", async ({ page }) => {

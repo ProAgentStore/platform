@@ -5,10 +5,19 @@ import { api } from "@proagentstore/sdk/client";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { Clipboard, Keyboard, List, Loader2, Play, Plus, RefreshCw, SlidersHorizontal, SquareTerminal, Terminal, Trash2 } from "lucide-react";
 import { tmuxBusy } from "../lib/pollBusy";
-import { DEFAULT_TMUX_VIEW, TMUX_VIEWS, type TmuxView, tmuxBlockClass } from "../lib/tmuxView";
+import { DEFAULT_TMUX_VIEW, TMUX_VIEWS, type TmuxView, tmuxBlockClass, tmuxPaneState } from "../lib/tmuxView";
+import type { RunnerPresence } from "../lib/types";
 
 interface Props {
 	instanceId: string;
+	/**
+	 * Is the runner reachable, from the shell's own `/runtime/status` poll (#378)?
+	 *
+	 * Optional because a surface must render before the first status answer lands, and because the
+	 * shell is the only caller — `online: null` (or no prop at all) means "not answered yet", which
+	 * `tmuxPaneState` deliberately treats as unknown rather than as offline.
+	 */
+	runner?: RunnerPresence;
 }
 
 interface TerminalTarget {
@@ -73,6 +82,13 @@ const VIEW_CHROME: Record<TmuxView, { label: string; Icon: typeof List }> = {
 	controls: { label: "Controls", Icon: SlidersHorizontal },
 };
 
+/** Notice tone → colour. The DECISION of which tone applies is `tmuxPaneState`'s; this is paint. */
+const NOTICE_TONE: Record<"error" | "status" | "hint", string> = {
+	error: "text-red",
+	status: "text-green",
+	hint: "text-muted",
+};
+
 function createdLabel(created?: string): string {
 	if (!created) return "";
 	const n = Number(created);
@@ -80,7 +96,7 @@ function createdLabel(created?: string): string {
 	return new Date(n * 1000).toLocaleString();
 }
 
-export default function TmuxTab({ instanceId }: Props) {
+export default function TmuxTab({ instanceId, runner }: Props) {
 	const [targets, setTargets] = useState<TerminalTarget[]>([]);
 	const [selected, setSelected] = useState("");
 	const [pane, setPane] = useState("");
@@ -120,9 +136,15 @@ export default function TmuxTab({ instanceId }: Props) {
 		}
 	}, [instanceId]);
 
+	// The two POLLED calls write the error slot only when they SETTLE — never on attempt (#378).
+	//
+	// Clearing it first unmounted the conditionally-rendered notice row and remounted it when the
+	// call failed 200ms later; at the 4s tier `tmuxBusy` pins it to while failing, that is a
+	// message that blinks forever and can never be read. Writing on completion means it holds
+	// the outcome of the LAST COMPLETED attempt, whichever of the two calls that was — so a list
+	// that succeeds cannot wipe the reason a capture failed before anyone has seen it either.
 	const refreshTargets = useCallback(async () => {
 		setLoadingList(true);
-		setError("");
 		try {
 			const content = await callTool("terminal_list_targets");
 			const list = parseTargets(content);
@@ -132,6 +154,7 @@ export default function TmuxTab({ instanceId }: Props) {
 				return list[0] ? targetKey(list[0]) : "";
 			});
 			if (list.length === 0) setPane("");
+			setError("");
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -142,10 +165,10 @@ export default function TmuxTab({ instanceId }: Props) {
 	const capture = useCallback(async (session = selectedRef.current) => {
 		if (!session) return;
 		setLoadingPane(true);
-		setError("");
 		try {
 			const content = await callTool("terminal_capture", { target: session, lines: 500 });
 			setPane(content);
+			setError("");
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		} finally {
@@ -169,10 +192,14 @@ export default function TmuxTab({ instanceId }: Props) {
 
 	// Two tool calls per tick — a target list AND a 500-line pane capture — each of which is a
 	// relay round-trip to the user's own machine (#272). Full rate while a pane is actually
-	// running something, or while the last call FAILED: a failure here means the runner could
-	// not be reached, and backing off then is how the tab stays showing an error long after the
+	// running something, or while we believe the runner is unreachable: that is the state a change
+	// is imminent from, and backing off then is how the tab stays showing an error long after the
 	// machine came back (#241). A rack of panes all sitting at a prompt is the slow case.
-	useTieredPolling(tick, { activeMs: 4000, passiveMs: 20000 }, tmuxBusy(targets, !!error));
+	//
+	// Offline is now supplied by the runner-presence signal as well as by a failed call, so the
+	// fast tier starts at the FIRST paint of an offline tab rather than only after a round-trip has
+	// failed. `pollBusy`'s rule is unchanged — it is being handed a better fact.
+	useTieredPolling(tick, { activeMs: 4000, passiveMs: 20000 }, tmuxBusy(targets, !!error || runner?.online === false));
 
 	const selectedInfo = useMemo(() => targets.find((s) => targetKey(s) === selected), [targets, selected]);
 	const canRunCommand = allowedTools.has("terminal_run_command");
@@ -180,6 +207,16 @@ export default function TmuxTab({ instanceId }: Props) {
 	const canCreateTarget = allowedTools.has("terminal_new_target");
 	const canKillTarget = allowedTools.has("terminal_kill_target");
 	const canWrite = canRunCommand || canSendKeys || canCreateTarget || canKillTarget;
+	// Every sentence this tab prints about connectivity is decided in `lib/tmuxView.ts`, including
+	// which of the notice / error / status / write-hint lines wins. Rendering only.
+	const paneState = tmuxPaneState({
+		presence: runner ?? { online: null },
+		error,
+		status,
+		canWrite,
+		selected,
+		targetCount: targets.length,
+	});
 
 	const runCommand = async () => {
 		if (!selected || !command.trim()) return;
@@ -304,7 +341,7 @@ export default function TmuxTab({ instanceId }: Props) {
 					</div>
 					<div className="overflow-y-auto min-h-0 chat-scroll p-2 space-y-1">
 						{targets.length === 0 && (
-							<div className="text-xs text-muted-soft px-2 py-4">No terminal targets found on the connected runner.</div>
+							<div className="text-xs text-muted-soft px-2 py-4">{paneState.emptyTargets}</div>
 						)}
 						{targets.map((s) => (
 							<button
@@ -334,7 +371,7 @@ export default function TmuxTab({ instanceId }: Props) {
 								{selectedInfo?.attached != null && <span className={`text-[0.65rem] px-1.5 py-0.5 rounded-full ${selectedInfo.attached ? "bg-green/15 text-green" : "bg-panel text-muted"}`}>{selectedInfo.attached ? "attached" : "detached"}</span>}
 							</div>
 							<div className="text-[0.7rem] text-muted-soft truncate">
-								{selectedInfo ? `${selectedInfo.backend}${selectedInfo.activeCommand ? ` - ${selectedInfo.activeCommand}` : ""}${selectedInfo.activeWindow ? ` - ${selectedInfo.activeWindow}` : ""}${createdLabel(selectedInfo.created) ? ` - ${createdLabel(selectedInfo.created)}` : ""}` : "Start a terminal target below or open tmux, kitty, or iTerm2 on the connected machine."}
+								{selectedInfo ? `${selectedInfo.backend}${selectedInfo.activeCommand ? ` - ${selectedInfo.activeCommand}` : ""}${selectedInfo.activeWindow ? ` - ${selectedInfo.activeWindow}` : ""}${createdLabel(selectedInfo.created) ? ` - ${createdLabel(selectedInfo.created)}` : ""}` : paneState.hint}
 							</div>
 						</div>
 						<div className="flex items-center gap-1.5">
@@ -350,10 +387,16 @@ export default function TmuxTab({ instanceId }: Props) {
 						</div>
 					</div>
 
-					{/* Owned by BOTH views: it is the only feedback channel for the actions in Controls. */}
-					{(error || status || !canWrite) && (
+					{/* Owned by BOTH views: it is the only feedback channel for the actions in Controls.
+					    While the runner is unreachable this row is derived from PRESENCE, not from the
+					    error slot a poll writes — so it stands for as long as the condition does instead
+					    of unmounting and remounting every 4 seconds. */}
+					{paneState.notice && (
 						<div className={`${tmuxBlockClass(view, ["output", "controls"], "block")} px-3 py-2 border-b border-line text-xs`}>
-							{error ? <span className="text-red">{error}</span> : status ? <span className="text-green">{status}</span> : <span className="text-muted">Grant terminal write access in Settings to run commands, send keys, create targets, or close targets.</span>}
+							<span className={NOTICE_TONE[paneState.notice.tone]}>{paneState.notice.text}</span>
+							{paneState.notice.remedy && (
+								<span className="text-muted"> Run <code className="px-1 py-0.5 rounded bg-paper border border-line font-mono">{paneState.notice.remedy}</code> on {paneState.notice.remedyOn}.</span>
+							)}
 						</div>
 					)}
 
@@ -363,7 +406,7 @@ export default function TmuxTab({ instanceId }: Props) {
 						{/* `whitespace-pre-wrap break-words` keeps a wide pane wrapping inside its own column
 						    instead of panning the page — the platform rule for wide monospace content. */}
 						<pre className="h-full overflow-auto chat-scroll p-3 text-[0.74rem] leading-relaxed font-mono whitespace-pre-wrap break-words">
-							<SafeHtmlView as="code" html={renderTerminal(pane || (selected ? "" : "Select a terminal target to capture its output."))} />
+							<SafeHtmlView as="code" html={renderTerminal(pane || paneState.emptyPane)} />
 						</pre>
 					</div>
 

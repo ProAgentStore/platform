@@ -11,7 +11,7 @@ import SettingsTab from "../tabs/SettingsTab";
 import StatsTab from "../tabs/StatsTab";
 import TmuxTab from "../tabs/TmuxTab";
 import { deepLinkedBuildsRepo } from "./deepLink";
-import type { BoardColumn, SettingsField } from "./types";
+import type { BoardColumn, RunnerPresence, SettingsField } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Surface registry — the console "shell" loads agent UIs from here.
@@ -53,6 +53,14 @@ export interface SurfaceContext {
 	/** Per-surface options (capabilities.surfaceOptions). `repos:"single"` hides the
 	 *  multi-repo affordances for an agent that owns exactly one repo. */
 	surfaceOptions?: Record<string, { repos?: string; drive?: boolean; copilot?: boolean }>;
+	/**
+	 * Is this agent's runner reachable, and why not (#378)?
+	 *
+	 * The shell already polls `/runtime/status` for the header dot, so a surface that needs
+	 * connectivity reads it from here rather than discovering it by failing a relay round-trip —
+	 * and every runtime surface then makes the SAME statement about it as the dot above it.
+	 */
+	runner?: RunnerPresence;
 	setChildHeader: (node: ReactNode | null) => void;
 	onUnsubscribe: () => void;
 }
@@ -187,7 +195,7 @@ export const SURFACES: SurfaceDef[] = [
 		label: "Terminal",
 		icon: "▣",
 		show: ({ surfaces }) => surfaces.includes("tmux"),
-		render: ({ instanceId }) => <TmuxTab instanceId={instanceId} />,
+		render: ({ instanceId, runner }) => <TmuxTab instanceId={instanceId} runner={runner} />,
 	},
 	{
 		id: "activity",

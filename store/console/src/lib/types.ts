@@ -61,6 +61,27 @@ export interface Instance {
 	};
 }
 
+/**
+ * What the shell knows about this agent's runner, so a surface can render an offline state
+ * instead of discovering one by failing a relay round-trip (#378).
+ *
+ * Read from `GET /v1/instances/:id/runtime/status`, which the page already polls for the header
+ * dot — so this is a fact being PASSED DOWN, not a second poll of the console's most expensive
+ * endpoint, and the tab cannot end up contradicting the dot above it.
+ */
+export interface RunnerPresence {
+	/** `relay.connected` — the live socket, pin-aware (#238). `null` until the first answer lands. */
+	online: boolean | null;
+	/** The machine that socket is (or would be) on. */
+	node?: string;
+	/**
+	 * `diagnoseAttachment` (#237): why it isn't attached and the one command that fixes it. Absent
+	 * when the status probe answered without one (a transient blip), which is why every consumer
+	 * must carry its own fallback sentence rather than rendering an empty line.
+	 */
+	attachment?: { message?: string; remedy?: string | null } | null;
+}
+
 /** One option of a select settings field (mirrors the server type). */
 export interface SettingsFieldOption {
 	value: string;

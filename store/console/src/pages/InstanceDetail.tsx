@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api, API, getToken } from "@proagentstore/sdk/client";
-import type { Instance, Message } from "../lib/types";
+import type { Instance, Message, RunnerPresence } from "../lib/types";
 import { identityFor } from "../lib/identity";
 import { classifyMessage, messageKey, toolCallSummary } from "@proagentstore/sdk/ui";
 import ErrorBoundary from "../components/ErrorBoundary";
@@ -177,6 +177,10 @@ function InstancePage() {
 	// Runtime status
 	const [runnerOnline, setRunnerOnline] = useState<boolean | null>(null);
 	const [runnerNode, setRunnerNode] = useState("");
+	// WHY it isn't attached, computed server-side (#237). The dot could only ever be a colour; a
+	// surface that renders an offline state needs the reason and the remedy — and `pags up` is the
+	// wrong advice for one of the three cases (#378).
+	const [runnerAttachment, setRunnerAttachment] = useState<RunnerPresence["attachment"]>(null);
 
 	// Agent loop state
 	const [loopOn, setLoopOn] = useState(false);
@@ -384,13 +388,19 @@ function InstancePage() {
 			// from the relay DO, not a throw, so the route still answers 200.) The node name came
 			// from snake_case `runner_node`, but the response is camelCase, so it was always blank.
 			// SettingsTab fixed exactly this; the header was never updated.
-			const d = await api<{ runtime?: { runnerNode?: string | null }; relay?: { connected?: boolean; runnerNode?: string | null } }>(
-				`/v1/instances/${id}/runtime/status`,
-			);
+			const d = await api<{
+				runtime?: { runnerNode?: string | null };
+				relay?: { connected?: boolean; runnerNode?: string | null };
+				attachment?: RunnerPresence["attachment"];
+			}>(`/v1/instances/${id}/runtime/status`);
 			setRunnerOnline(d.relay?.connected === true);
 			setRunnerNode(d.relay?.runnerNode || d.runtime?.runnerNode || "");
+			setRunnerAttachment(d.attachment ?? null);
 		} catch {
 			setRunnerOnline(false);
+			// A failed probe is not a diagnosis. Keeping the previous reason would let a stale
+			// "another runner may already hold this agent" outlive the state it described.
+			setRunnerAttachment(null);
 		}
 	}, [id, hasRuntime]);
 
@@ -1369,6 +1379,9 @@ function InstancePage() {
 						boardColumns: instance?.capabilities?.boardColumns,
 						settingsSchema: instance?.capabilities?.settingsSchema,
 						surfaceOptions: instance?.capabilities?.surfaceOptions,
+						// The same reading the header dot renders, handed to the surface (#378) — one
+						// poll, one answer, so a tab cannot contradict the dot directly above it.
+						runner: { online: runnerOnline, node: runnerNode, attachment: runnerAttachment },
 						setChildHeader,
 						onUnsubscribe: () => navigate("/instances"),
 					});
