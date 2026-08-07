@@ -1,6 +1,4 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
 
 /**
  * Low-level tmux primitives for the coding runtime.

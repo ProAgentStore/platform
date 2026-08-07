@@ -1249,7 +1249,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// then claims the shared slot; leaving it (or unmounting) releases the slot. Keyed on convoOn
 	// so it fires for EVERY entry path (toggleConvo, setVoiceMode, unmount) across all views.
 	const selfTokenRef = useRef({});
-	// biome-ignore lint/correctness/useExhaustiveDependencies: selfTokenRef/stopConvoRef are stable refs; only convoOn should retrigger this.
+	// Deps are `[convoOn]` ON PURPOSE: selfTokenRef/stopConvoRef are stable refs and activeHandsFree is module state, so only convoOn may retrigger this. (Biome agrees today — no suppression needed. If it ever disagrees, suppress it; do NOT widen the deps.)
 	useEffect(() => {
 		if (!convoOn) return;
 		if (activeHandsFree && activeHandsFree.token !== selfTokenRef.current) activeHandsFree.stop();

@@ -149,14 +149,26 @@ export class McpRuntime {
 		await this.client.connect(clientTransport);
 	}
 
+	/**
+	 * The connected client, or a diagnosis. `client` is unset before `start()` AND cleared by
+	 * `stop()`, so both call sites below are reachable with it missing — a use-after-stop is the
+	 * likely one, since `stop()` runs on teardown while a slow in-flight action is still landing.
+	 * A bare `this.client!` turned that into "Cannot read properties of undefined (reading
+	 * 'callTool')" at the relay boundary, which names neither the runtime nor the lifecycle.
+	 */
+	private connected(): Client {
+		if (!this.client) throw new Error("MCP runtime is not running — call start() first (or it was already stopped).");
+		return this.client;
+	}
+
 	/** The standard Playwright MCP tool schemas — advertised to the cloud brain verbatim. */
 	async listTools(): Promise<Array<{ name: string; description?: string; inputSchema: unknown }>> {
-		const res = await this.client!.listTools();
+		const res = await this.connected().listTools();
 		return res.tools as Array<{ name: string; description?: string; inputSchema: unknown }>;
 	}
 
 	async callTool(name: string, args: Record<string, unknown> = {}): Promise<McpToolResult> {
-		return (await this.client!.callTool({ name, arguments: args })) as McpToolResult;
+		return (await this.connected().callTool({ name, arguments: args })) as McpToolResult;
 	}
 
 	/** Text of the last tool result (the standard tools return their output as text content). */

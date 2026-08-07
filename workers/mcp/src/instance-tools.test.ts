@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerInstanceTools } from "./instance-tools/index.js";
 import type { McpEnv } from "./http.js";
 import type { SafetyContext } from "./safety.js";
@@ -513,7 +513,7 @@ describe("destructive tools — confirmation gate", () => {
 		expect(needsConfirm.content[0].text).toContain('confirm="delete_instance_knowledge"');
 
 		// With scope + confirm → DELETE fires.
-		ok.fetchStub.respond((u, m) => m === "DELETE", { body: { ok: true } });
+		ok.fetchStub.respond((_u, m) => m === "DELETE", { body: { ok: true } });
 		await ok.tools.get("delete_instance_knowledge")!.handler({
 			instance_id: "i1",
 			document_id: "d1",
