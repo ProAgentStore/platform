@@ -24,6 +24,29 @@ export function jsonText(value: unknown): TextResult {
 	return text(JSON.stringify(value, null, 2));
 }
 
+/** What `parseJsonArg` returns for a string argument that is not valid JSON. */
+export const INVALID_JSON = Symbol("invalid-json");
+
+/**
+ * Coerce an object/array-shaped tool argument that arrived as a JSON *string*. Models
+ * routinely send one when a schema says "object", and rejecting that outright turns a
+ * working call into a retry loop — so accepting it is deliberate.
+ *
+ * A string that is NOT valid JSON is a different case and must never collapse to
+ * `undefined`. `create_agent` used to do exactly that, so a malformed `capabilities`
+ * produced an agent with no surfaces, no runtime and no tools[] allowlist — the plain chat
+ * agent its own description promises you avoid — and still answered `Created: <id>` (#325).
+ * Callers compare against INVALID_JSON and refuse.
+ */
+export function parseJsonArg(value: unknown): unknown {
+	if (typeof value !== "string") return value;
+	try {
+		return JSON.parse(value);
+	} catch {
+		return INVALID_JSON;
+	}
+}
+
 export function apiBase(env?: McpEnv): string {
 	return env?.API_BASE || API;
 }

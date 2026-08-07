@@ -2,7 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { McpAgent } from "agents/mcp";
 import { OAuthProvider, type OAuthHelpers } from "@cloudflare/workers-oauth-provider";
 import { z } from "zod";
-import { apiCall, authedCall, authRequired, type McpEnv, jsonText, text } from "./http.js";
+import { apiCall, authedCall, authRequired, INVALID_JSON, type McpEnv, jsonText, parseJsonArg, text } from "./http.js";
 import { registerInstanceTools } from "./instance-tools/index.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { loginHandler } from "./oauth-provider.js";
@@ -344,23 +344,13 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 			}) => {
 				const sessionToken = this.token(token);
 				if (!sessionToken) return text("Error: authentication required. Connect with browser sign-in or pass a PAGS session token.");
-				// Accept a JSON string as well as an object: models routinely send one when a
-				// schema says "object", and rejecting that turns a working call into a retry loop.
-				// A string that is not valid JSON is a different case and must NOT collapse to
-				// undefined: `capabilities` is what makes this "a fully-formed agent in one call",
-				// and undefined is silently the plain-chat agent the description promises you avoid
-				// — created, reported as `Created: <id>`, with no surfaces, no runtime and no
-				// tools[] allowlist. update_agent below already errors on exactly this input.
-				const parseMaybeJson = (v: unknown): { ok: true; value: unknown } | { ok: false } => {
-					if (typeof v !== "string") return { ok: true, value: v };
-					try { return { ok: true, value: JSON.parse(v) }; } catch { return { ok: false }; }
-				};
-				const parsedCaps = parseMaybeJson(capabilities);
-				if (!parsedCaps.ok) return text("Error: capabilities must be a JSON object or valid JSON string.");
-				const parsedSchema = parseMaybeJson(settings_schema);
-				if (!parsedSchema.ok) return text("Error: settings_schema must be a JSON array or valid JSON string.");
-				const caps = parsedCaps.value;
-				const schema = parsedSchema.value;
+				// A JSON string is accepted (see parseJsonArg), a malformed one refused: undefined
+				// capabilities is silently the plain chat agent this tool's description promises
+				// you avoid, created and reported as `Created: <id>`.
+				const caps = parseJsonArg(capabilities);
+				if (caps === INVALID_JSON) return text("Error: capabilities must be a JSON object or valid JSON string.");
+				const schema = parseJsonArg(settings_schema);
+				if (schema === INVALID_JSON) return text("Error: settings_schema must be a JSON array or valid JSON string.");
 				const input = { slug, name, description, category, model, personality, goal, capabilities: caps, settingsSchema: schema };
 				const denied = await requirePermission(this.safety(token), "write", "create_agent", input);
 				if (denied) return denied;
@@ -560,9 +550,9 @@ export class PagsMcp extends McpAgent<Env, unknown, Props> {
 				}
 				// Coerce a stringified capabilities object (MCP-client quirk) back to an object;
 				// the API's sanitizeDeclaredCapabilities validates it regardless.
-				if (typeof body.capabilities === "string") {
-					try { body.capabilities = JSON.parse(body.capabilities); } catch { return text("Error: capabilities must be a JSON object or valid JSON string."); }
-				}
+				const caps = parseJsonArg(body.capabilities);
+				if (caps === INVALID_JSON) return text("Error: capabilities must be a JSON object or valid JSON string.");
+				if (caps !== undefined) body.capabilities = caps;
 				const input = { agent_id, ...body };
 				const denied = await requirePermission(this.safety(token), "write", "update_agent", input);
 				if (denied) return denied;

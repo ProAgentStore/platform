@@ -148,8 +148,12 @@ tells you exactly what you changed about it.
   404; `/` answers a protocol client with a JSON-RPC 405 pointing at `/mcp`. The flood is
   invisible to every guard we have — see the comment in `oauth-provider.ts`.
 - **`apiCall` never lets a non-2xx pass as success.** It returns
-  `{error: "API <status>", ...}`, so a tool cannot format a failure as a result. Do not
-  add a code path that discards that.
+  `{error: "API <status>", ...}`, so a tool cannot format a failure as a result — but only
+  if you *look*. Because it RETURNS rather than throws, discarding the result is a silent
+  success claim, and `remove_repo` did exactly that (#325): a failed clear answered
+  "Removed all repositories." and wrote `action:"completed"` to the audit log while up to
+  20 repos' vectors survived. Bind the result and check `.error` before you report, the
+  way `coding_session_message` does.
 - **No `isError`.** Nothing in this worker sets it; failures are text starting `Error: `
   or JSON carrying an `error` key. If you add structured error signalling, update
   `AGENTS.md` rule 3 in the same change.

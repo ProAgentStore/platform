@@ -145,7 +145,11 @@ const PINS = {
 	// with the rest of the transport, and the reasoning it feeds is pure and lives in
 	// mcp-connection.ts, which is where a split would have put it anyway.
 	"workers/api/src/lib/connectors/mcp.ts": 1236,
-	"workers/mcp/src/index.ts": 1151,
+	// -1 at #325: the JSON-string coercion create_agent and update_agent each had inline moved
+	// to `http.ts` as `parseJsonArg`, which is where the two copies could stop disagreeing about
+	// what a MALFORMED string means (create silently dropped it, update refused). Pin lowered so
+	// the ground is kept, per this ratchet's own rule.
+	"workers/mcp/src/index.ts": 1150,
 	// +6 for #324: the "Runs on" machine picker had a <label> that named nothing — a label can
 	// only name one control and what it labels is a GRID of tiles — so it becomes a named group,
 	// which costs a useId, the two lines saying why, and the ignore explaining why not <fieldset>.
