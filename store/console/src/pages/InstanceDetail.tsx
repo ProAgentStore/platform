@@ -9,7 +9,7 @@ import { renderMd, formatDateTime } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
 import PlaybackIcon from "../components/PlaybackIcon";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
-import { useVoice, buildTranscribePrompt, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
+import { useVoice, buildTranscribePrompt, resolveVoiceStatus, resolveComposer } from "@proagentstore/sdk/hooks";
 import { Copy, Check, Trash2, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, ArrowLeft, Repeat, Square, Wrench, MoreVertical, Loader2, ChevronDown } from "lucide-react";
 import { useHideNav, useHeaderSlot } from "../lib/HeaderContext";
 import { useConversation, useConversationSwitch } from "../lib/ConversationContext";
@@ -245,15 +245,16 @@ function InstancePage() {
 	const voiceRef = useRef(voice);
 	voiceRef.current = voice;
 
-	// Auto-grow the chat input so the FULL live transcript (or a long typed message) is readable
-	// as it grows, instead of truncating to one line (#164). Caps at ~40vh, then scrolls.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: resize only when the visible draft text changes.
+	// Auto-grow the chat input so a long typed message is readable as it grows, instead of
+	// truncating to one line (#164). Caps at ~40vh, then scrolls. It used to also grow for the
+	// live transcript; speech is not in this box any more (#364), so the draft is the only input.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `input` is a trigger, not an input — the effect must re-run as the draft changes so the box keeps growing.
 	useEffect(() => {
 		const el = inputRef.current;
 		if (!el) return;
 		el.style.height = "auto";
 		el.style.height = `${el.scrollHeight}px`;
-	}, [voice.interim, input]);
+	}, [input]);
 
 	useEffect(() => {
 		if (!id) return;
@@ -603,14 +604,17 @@ function InstancePage() {
 		muted: voice.muted,
 		starting: voice.starting,
 	});
-	// The composer is locked while voice owns the turn: a transient notice is showing, or an
-	// utterance is in flight. A FAILED utterance deliberately does not lock — the user is reading
-	// it and may well want to type the message themselves.
-	const voiceBusy = !!voice.interim || (!!voice.dictation && voice.dictation.status !== "failed");
+	// What the composer shows and whether voice owns it (#364) — one tested rule, shared with the
+	// Coder Co-pilot. The box holds the TYPED draft: live speech is the pending bubble at the end
+	// of the thread, and the notice is the banner directly above the box. Locked only while an
+	// utterance is in flight; a FAILED one deliberately does not lock (the user is reading it and
+	// may well want to type the message themselves), and neither does a notice.
+	const composer = resolveComposer({ draft: input, dictation: voice.dictation, notice: voice.notice });
+	const voiceBusy = composer.readOnly;
 	// Is the message box on screen? Text mode always; a voice mode only when the box holds
 	// something that would otherwise be lost — a `recover`ed turn (#175), a draft, or the notice
 	// line. The rule and the reasoning are pure and live in lib/composer.ts (#365).
-	const composerVisible = shouldShowComposer({ mode: voice.mode, draft: input, notice: voice.interim });
+	const composerVisible = shouldShowComposer({ mode: voice.mode, draft: input, notice: composer.notice });
 	// Both of these change the THREAD's height: the pill reserves `pb-16` inside the scroll area,
 	// and the composer now sits below the thread and takes space from it (#365). Either way the
 	// bottom of the transcript moves relative to the viewport.
@@ -1226,6 +1230,16 @@ function InstancePage() {
 								</div>
 							</div>
 						)}
+						{/* Voice notice — a mic error or the wrong-language nudge, and the ONLY thing that
+						    surfaces either. It used to be written into the composer's own `value`, which
+						    hid the draft, made the box read-only for the seconds it was up, and left the
+						    input styled as the live-speech surface it had stopped being (#364). Its own
+						    line, directly above the box, so the box can go on holding what you typed. */}
+						{composer.notice && (
+							<output aria-live="polite" className="mx-2 mb-1 block rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-1.5 text-xs text-yellow whitespace-pre-wrap break-words">
+								{composer.notice}
+							</output>
+						)}
 						{/* Composer — BELOW the thread, where every messaging app puts it, and in text
 						    mode only (#365). The realtime dictation bubble is the last child of the thread,
 						    so inverting these two is what puts the words the user is speaking directly above
@@ -1243,16 +1257,19 @@ function InstancePage() {
 									<textarea
 										ref={inputRef}
 										rows={1}
-										value={voice.interim || input}
-										onChange={(e) => { if (!voice.interim) setInput(e.target.value); }}
+										value={composer.value}
+										onChange={(e) => { if (!composer.readOnly) setInput(e.target.value); }}
 									// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
 										onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendMessage(); } }}
 										aria-label="Agent message"
 										// Six branches, and `talking` outranking the mode is the one that matters —
 										// see lib/composer.ts.
 										placeholder={composerPlaceholder({ talking: voice.talking, mode: voice.mode, micOn: voice.micOn, isCoding, isTmux: surfaces.includes("tmux") })}
-									readOnly={voiceBusy}
-									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent italic" : voice.micOn ? "border-green" : "border-line"}`}
+									readOnly={composer.readOnly}
+									// Green while the mic is open; accent while voice owns the turn. The old
+									// accent-italic "you are speaking" state keyed off the notice string, so
+									// after #281 it fired on a mic ERROR and never on speech (#364).
+									className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-xl px-4 py-2.5 text-sm leading-relaxed transition-colors ${composer.readOnly ? "border-accent" : voice.micOn ? "border-green" : "border-line"}`}
 								/>
 							</div>
 							<button type="button" onClick={sendMessage} disabled={voiceBusy} aria-label="Send" className="px-3 py-2.5 bg-accent text-white rounded-xl font-bold text-sm disabled:opacity-40">

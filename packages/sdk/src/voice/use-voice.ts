@@ -153,9 +153,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// the automatic end-of-turn VAD is suppressed and only their tap-off sends the turn.
 	const [talking, setTalking] = useState(false);
 	const manualTalkRef = useRef(false);
-	// `interim` is now ONLY the composer's transient NOTICE line (mic errors, the wrong-language
-	// nudge). The user's actual words moved to `dictation` below — see the note there (#281).
-	const [interim, setInterim] = useState("");
+	// The transient NOTICE line (mic errors, the wrong-language nudge). It was called `interim`
+	// until #364, three releases after #281 moved the user's actual words out of it and into
+	// `dictation` below: both consumers still had it bound to their composer's `value`, so the
+	// input lit up as "you are speaking" ONLY on a mic error and showed nothing at all while
+	// someone spoke. A name that lies is how a dead binding survives a review — this one is now
+	// called what it carries, and it is rendered BESIDE the composer, never inside it.
+	const [notice, setNotice] = useState("");
 	// The utterance in flight, as a real object with a lifecycle instead of a string that had to
 	// be destroyed to change its status (#281). Rendered by the consumer as a pending bubble IN
 	// THE THREAD, so speech is visible from the moment it starts, through transcription, until
@@ -177,10 +181,10 @@ export function useVoice(instanceId: string | undefined, opts: {
 		dictationRef.current = next;
 		setDictation(next);
 	}, []);
-	/** Clear the composer notice AND end the pending utterance — the pairing that every former
+	/** Clear the notice AND end the pending utterance — the pairing that every former
 	 *  `setInterim("")` site meant, now impossible to do by halves. */
 	const clearVoiceText = useCallback(() => {
-		setInterim("");
+		setNotice("");
 		dictate({ type: "clear" });
 	}, [dictate]);
 	// True while a voice session is opening the mic (#284). Set SYNCHRONOUSLY on the tap, before
@@ -484,8 +488,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 			// gets no notice at all: there is nothing for the user to do about a turn they didn't
 			// take, and telling them there was one is the confusing part.
 			if (plan.reason === "language") {
-				flushSync(() => setInterim("Didn't catch your language — please say that again."));
-				setTimeout(() => setInterim((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
+				flushSync(() => setNotice("Didn't catch your language — please say that again."));
+				setTimeout(() => setNotice((s) => (s.startsWith("Didn't catch your language") ? "" : s)), 2800);
 			}
 			return;
 		}
@@ -1141,11 +1145,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// Real speech may already be on screen — mark the bubble failed rather than
 					// clearing it, so the words (and the saved recording) survive the failure.
 					dictate({ type: "failed", note: micUnavailableMessage(String(err)), at: Date.now() });
-					flushSync(() => setInterim(msg));
+					flushSync(() => setNotice(msg));
 					setPaused(false);
 					setConvoOn(false);
 					setMicOn(false);
-					setTimeout(() => setInterim((cur) => (cur === msg ? "" : cur)), 6000);
+					setTimeout(() => setNotice((cur) => (cur === msg ? "" : cur)), 6000);
 					return;
 				}
 				if (err) {
@@ -1156,7 +1160,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					if (!isConnectivityError(String(err))) {
 						reportClientError("voice", String(err), { sttWhisper: sttIsWhisperRef.current });
 					}
-					// Surface real errors (Whisper 401/400, mic denied) in the input —
+					// Surface real errors (Whisper 401/400, mic denied) as a notice —
 					// otherwise a swallowed failure is indistinguishable from "nothing
 					// happened", which is exactly how Whisper looked broken.
 					const msg = `⚠ ${err}`;
@@ -1165,11 +1169,12 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// failed — "a failed transcription leaves the bubble with its partials and
 					// the recording, not an empty gap" (#281).
 					dictate({ type: "failed", note: String(err), at: Date.now() });
-					flushSync(() => setInterim(msg));
+					flushSync(() => setNotice(msg));
 					setPaused(false);
-					// Auto-clear so the error doesn't lock the input (readOnly while interim
-					// is set). Only clears if it's still showing this same error.
-					setTimeout(() => setInterim((cur) => (cur === msg ? "" : cur)), 4500);
+					// Auto-clear so a stale error isn't still on screen next turn. (It no longer
+					// locks the input — a notice is not voice owning the turn, #364.) Only clears
+					// if it's still showing this same error.
+					setTimeout(() => setNotice((cur) => (cur === msg ? "" : cur)), 4500);
 				}
 				if (!convoOnRef.current) setMicOn(false);
 			},
@@ -1354,8 +1359,8 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const msg = classifyVoiceError(code) === "mic-unavailable"
 				? micUnavailableMessage(code)
 				: "Couldn't start voice — please try again.";
-			flushSync(() => setInterim(`⚠ ${msg}`));
-			setTimeout(() => setInterim((cur) => (cur === `⚠ ${msg}` ? "" : cur)), 6000);
+			flushSync(() => setNotice(`⚠ ${msg}`));
+			setTimeout(() => setNotice((cur) => (cur === `⚠ ${msg}` ? "" : cur)), 6000);
 		} finally {
 			// In a `finally` so a thrown start can never strand the spinner on forever.
 			startingRef.current = false;
@@ -1568,9 +1573,11 @@ export function useVoice(instanceId: string | undefined, opts: {
 		/** The voice interaction phase (idle/starting/listening/transcribing/speaking/muted). */
 		phase,
 		micOn, speakOn, convoOn, muted,
-		/** Transient composer NOTICE only (mic errors, the wrong-language nudge) — the user's
-		 *  words live in `dictation`, not here (#281). */
-		interim,
+		/** Transient NOTICE only (mic errors, the wrong-language nudge) — the user's words live in
+		 *  `dictation`, not here (#281). Render it as its own banner: putting it in the composer's
+		 *  `value` is what left the input claiming to be the live-speech surface (#364). Bind it
+		 *  through `resolveComposer` and the shape is decided in one tested place. */
+		notice,
 		/**
 		 * The utterance in flight: `{ text, status, startedAt, heard, note }`, or null between
 		 * turns. Render it as a PENDING message in the thread — it appears the moment speech

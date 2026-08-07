@@ -1,7 +1,7 @@
 import { type KeyboardEvent, type RefObject, useState, useEffect, useRef } from "react";
 import { renderMd, formatDateTime, classifyMessage, toolCallSummary, messageKey as sdkMessageKey } from "@proagentstore/sdk/ui";
 import { SafeHtmlView } from "@proagentstore/sdk/ui-react";
-import { resolveVoiceStatus } from "@proagentstore/sdk/hooks";
+import { resolveComposer, resolveVoiceStatus } from "@proagentstore/sdk/hooks";
 import { API, getToken } from "@proagentstore/sdk/client";
 import type { LoopPreset } from "./types";
 import { Trash2, Copy, Check, Repeat, Square, Mic, MicOff, Volume2, MessageSquare, Headphones, Send, Wrench, Settings, Loader2, Pencil, CircleDot, ArrowDown, X } from "lucide-react";
@@ -108,16 +108,17 @@ export default function CopilotView({
 	const [editDraft, setEditDraft] = useState("");
 	const openEdit = () => { setEditDraft(chatInput); setEditOpen(true); };
 	const applyEdit = () => { setChatInput(editDraft); setEditOpen(false); };
-	// Auto-grow the input so the FULL live transcript (or a long typed message) is readable as
-	// it grows, instead of truncating to one line (#164). Caps at ~40vh, then scrolls.
+	// Auto-grow the input so a long typed message is readable as it grows, instead of truncating
+	// to one line (#164). Caps at ~40vh, then scrolls. It used to also grow for the live
+	// transcript; speech is not in this box any more (#364), so the draft is the only input.
 	const inputRef = useRef<HTMLTextAreaElement>(null);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: resize only when the visible draft text changes.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `chatInput` is a trigger, not an input — the effect must re-run as the draft changes so the box keeps growing.
 	useEffect(() => {
 		const el = inputRef.current;
 		if (!el) return;
 		el.style.height = "auto";
 		el.style.height = `${el.scrollHeight}px`;
-	}, [voice.interim, chatInput]);
+	}, [chatInput]);
 	// Smart auto-scroll (#132): follow new messages ONLY while the user is at the bottom.
 	// Scrolled up → don't yank them down; the jump button is shown instead. (The old
 	// unconditional auto-scroll lived in CodingTab and ignored the user's scroll position.)
@@ -141,9 +142,13 @@ export default function CopilotView({
 		muted: voice.muted,
 		starting: voice.starting,
 	});
-	// Voice owns the composer while a notice is showing or an utterance is in flight; a FAILED
-	// utterance does not lock it (the user is reading it and may want to type it themselves).
-	const voiceBusy = !!voice.interim || (!!voice.dictation && voice.dictation.status !== "failed");
+	// What the composer shows and whether voice owns it (#364) — the same tested rule the Assistant
+	// tab uses. The box holds the TYPED draft; live speech is the pending bubble at the end of the
+	// thread below, and a notice is the banner under the input. Voice locks the box only while an
+	// utterance is in flight — not for a notice, and not for a FAILED utterance (the user is
+	// reading it and may want to type it themselves).
+	const composer = resolveComposer({ draft: chatInput, dictation: voice.dictation, notice: voice.notice });
+	const voiceBusy = composer.readOnly;
 	return (
 		<div className="flex flex-col flex-1 min-h-0">
 			{/* Input bar — top, always visible. Compact input, big controls. relative z-10 keeps it
@@ -153,14 +158,17 @@ export default function CopilotView({
 					<textarea
 						ref={inputRef}
 						rows={1}
-						value={voice.interim || chatInput}
-						onChange={(e) => { if (!voice.interim) setChatInput(e.target.value); }}
+						value={composer.value}
+						onChange={(e) => { if (!composer.readOnly) setChatInput(e.target.value); }}
 						// Enter sends; Shift+Enter inserts a newline (standard chat multi-line input).
 						onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !voiceBusy) { e.preventDefault(); sendInstruction(); } }}
 						aria-label="Co-pilot message"
 						placeholder="Talk to Co-Pilot"
-						readOnly={voiceBusy}
-						className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-lg px-2.5 py-1.5 text-sm leading-relaxed transition-colors ${voice.interim ? "border-accent text-accent font-semibold" : voice.micOn ? "border-green" : "border-line"}`}
+						readOnly={composer.readOnly}
+						// Green while the mic is open; accent while voice owns the turn. The old
+						// accent "you are speaking" state keyed off the notice string, so after #281
+						// it fired on a mic ERROR and never on speech (#364).
+						className={`w-full resize-none overflow-y-auto max-h-[40vh] bg-panel border rounded-lg px-2.5 py-1.5 text-sm leading-relaxed transition-colors ${composer.readOnly ? "border-accent" : voice.micOn ? "border-green" : "border-line"}`}
 					/>
 					{voice.micOn && (
 						<div className="absolute bottom-0 left-2 right-2 h-1 rounded-full overflow-hidden bg-line/50">
@@ -178,10 +186,15 @@ export default function CopilotView({
 					{summaryBusy ? <Loader2 size={17} className="animate-spin" /> : <Send size={17} />}
 				</button>
 			</div>
-			{/* The live transcript is shown in the auto-growing input above (value={voice.interim ||
-			    chatInput}) — it expands vertically so the FULL spoken text is readable in real time
-			    (#164), then scrolls past ~40vh. A single display: the old truncated 🎙 strip was a
-			    redundant second copy of the same voice.interim and was removed. */}
+			{/* Voice notice — a mic error or the wrong-language nudge, and the ONLY thing that
+			    surfaces either. It used to be written into the composer's own value, which hid the
+			    draft and made the box read-only for the seconds it was up (#364). The live
+			    transcript is NOT here: it is the pending bubble at the end of the thread below. */}
+			{composer.notice && (
+				<output aria-live="polite" className="mx-2 mb-1 block rounded-lg border border-yellow/40 bg-yellow/10 px-3 py-1.5 text-xs text-yellow whitespace-pre-wrap break-words">
+					{composer.notice}
+				</output>
+			)}
 			{/* Controls bar — mode selector + actions (matches the Assistant tab). */}
 			<div className="flex flex-wrap gap-1.5 px-2 pt-0.5 pb-1.5 shrink-0 items-center">
 				{/* Three distinct interaction modes — one segmented control (was four

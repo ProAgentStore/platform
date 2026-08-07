@@ -16,6 +16,10 @@ export type { PollTier, PollCadence, PollSignals } from "./poll-cadence.js";
 export { useVoice, type VoiceMode } from "./voice/use-voice.js";
 export { buildTranscribePrompt } from "./voice/prompt.js";
 export { resolveVoiceStatus, type VoiceStatus } from "./voice/convo.js";
+// How the composer binds to a running voice turn (#364). One tested rule for both chat UIs:
+// speech is the thread's pending bubble, a notice is its own banner, and the input box only ever
+// holds what the user TYPED.
+export { resolveComposer, type ComposerBinding } from "./voice/composer.js";
 // TTS engine — so agent UIs (e.g. the repos overview play button) can speak text
 // with the instance's configured voice without instantiating a full useVoice hook.
 export { createTts } from "./voice/config.js";

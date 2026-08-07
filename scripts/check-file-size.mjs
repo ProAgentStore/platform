@@ -114,7 +114,11 @@ const PINS = {
 	// chain is nearly as long as the chain was. `commandStateFor` is the same trade at the five
 	// matcher call sites: the interim/final distinction is now stated at each site and enforced on
 	// the way in, rather than being an omission plus a paragraph explaining the omission.
-	"packages/sdk/src/voice/use-voice.ts": 1602,
+	// +7 for #364, and all of it is the note explaining a rename. `interim` became `notice`: it
+	// stopped carrying speech at #281 and kept a name that said otherwise, which is how both
+	// consumers went on binding it to their composer's `value` for three releases. The rule the
+	// rename enforces is pure and lives in voice/composer.ts.
+	"packages/sdk/src/voice/use-voice.ts": 1609,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or
@@ -146,7 +150,12 @@ const PINS = {
 	// taken literally would delete a `recover`ed turn (#175) at the moment it arrives. The rule
 	// itself is pure and lives in lib/composer.ts with the tests, which is where a split would
 	// have put it anyway.
-	"store/console/src/pages/InstanceDetail.tsx": 1309,
+	// +17 more for #364: the composer stopped displaying voice text at all, so the notice it used
+	// to hide inside its own `value` needs somewhere to be — its own line above the box — and the
+	// comment beside the binding says which surface is the live one, which is the confusion that
+	// let a dead binding survive three releases. The binding rule itself is pure and lives in the
+	// SDK (voice/composer.ts), shared with the Coder Co-pilot rather than restated here.
+	"store/console/src/pages/InstanceDetail.tsx": 1326,
 	// +7 for #338: a deploy notification deep-links to the repo's Builds view, so the tab accepts
 	// the repo id and both layouts (solo and multi-repo) open on Builds when it is set. Not split
 	// — it is one prop threaded into two `useState` initialisers and two existing call sites.
