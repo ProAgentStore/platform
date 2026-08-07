@@ -245,4 +245,25 @@ describe("getBoundRunnerConn (live-aware routing)", () => {
 		const env = buildEnv({ pin: "A", nodes: ["A", "B"], liveNames: [relayNameForInstance(INST, "B")] });
 		expect(await getBoundRunnerConn(env, INST, "u1")).toBeNull();
 	});
+
+	it("pin UNREADABLE: returns null rather than treating it as unpinned (#325)", async () => {
+		// The pin read used to `.catch(() => "")`, and "" means unpinned — so one D1 blip took the
+		// exact fallback the contract above forbids: it would route to B, run the agent in a
+		// checkout on a machine the user did not choose, and report that machine as online. Not
+		// knowing where an agent is pinned is indistinguishable from its machine being offline.
+		// Only the pin read fails; every other query answers normally and B holds a live socket, so
+		// the old code routed there and looked entirely healthy doing it.
+		const env = buildEnv({ pin: "A", nodes: ["A", "B"], liveNames: [relayNameForInstance(INST, "B")] });
+		const inner = (env as unknown as { DB: { prepare: (sql: string) => unknown } }).DB;
+		const broken = {
+			...(env as unknown as Record<string, unknown>),
+			DB: {
+				prepare: (sql: string) =>
+					sql.includes("FROM agent_instances")
+						? { bind: () => ({ async first(): Promise<never> { throw new Error("D1_ERROR: network"); } }) }
+						: inner.prepare(sql),
+			},
+		} as unknown as Env;
+		expect(await getBoundRunnerConn(broken, INST, "u1")).toBeNull();
+	});
 });

@@ -127,6 +127,28 @@ describe("ensureActiveSession — who owns the session (#271, #275)", () => {
 		expect(store.endSession).toHaveBeenCalledWith(env, "inst", "u", "csess_dead", "error");
 	});
 
+	it("does not report ok:true for a REUSED session whose engine could not be re-attached (#325)", async () => {
+		// The re-attach exists so the reused path isn't "quietly driving a dead pane" — but its
+		// answer was discarded twice over (the throw caught, the null return unread) and `ok: true`
+		// returned regardless, which is that same outcome. `loop-drivers` reads ok:true as a live
+		// engine: it claims the driver, opens the run row and bills the Pilot's reasoning turns
+		// against a pane that never launched.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValue(session("csess_dead"));
+		vi.mocked(runner.callRunner).mockRejectedValue(new Error("fatal: repository not found"));
+		vi.mocked(store.getRepo).mockResolvedValue({ ...repo, cloneError: "fatal: repository not found" });
+		expect(await ensureActiveSession(env, "inst", "u", repo)).toMatchObject({ ok: false, startError: "fatal: repository not found" });
+	});
+
+	it("does not report ok:true for the RACE WINNER when its engine could not be re-attached (#325)", async () => {
+		// Same discarded answer, second copy. A loser that reports a live engine is worse here:
+		// the winner's own run is already driving that pane.
+		vi.mocked(store.getActiveSessionForRepo).mockResolvedValueOnce(null).mockResolvedValueOnce(session("csess_winner"));
+		vi.mocked(store.createSession).mockRejectedValue(new Error("UNIQUE constraint failed"));
+		vi.mocked(runner.callRunner).mockRejectedValue(new Error("no runner"));
+		vi.mocked(store.getRepo).mockResolvedValue({ ...repo, cloneError: null });
+		expect(await ensureActiveSession(env, "inst", "u", repo)).toMatchObject({ ok: false });
+	});
+
 	it("relocates a reused session to the machine that is live now", async () => {
 		// Machine-switch reclaim. `getRunnerConn` resolves from D1 even for a laptop that closed
 		// its lid (the `status` column is never cleared), so without the live check a delegated run

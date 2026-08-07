@@ -1,5 +1,6 @@
 import { decryptKey, encryptKey } from "./crypto.js";
 import { HttpError } from "./auth.js";
+import { logError } from "./error-log.js";
 import type { Env } from "../types.js";
 
 export interface CredentialSecrets {
@@ -61,8 +62,18 @@ export function credDomain(value: string): string {
 	}
 }
 
-async function decryptSecrets(env: Env, row: Pick<CredRow, "secrets_ciphertext" | "secrets_dek" | "secrets_iv">): Promise<CredentialSecrets> {
-	if (!row.secrets_ciphertext || !row.secrets_dek || !row.secrets_iv || !env.KEY_ENCRYPTION_KEY) return {};
+/**
+ * `{}` = this row stores no secrets. `null` = it stores secrets we could NOT read.
+ *
+ * The distinction is the whole point (#325). Collapsing both to `{}` — which this did — is what
+ * let a rotated KEK, a corrupt DEK/IV or an unparseable plaintext reach `updateCredential`'s merge
+ * as "there was nothing here", and the merge then writes NULL over intact ciphertext. The comment
+ * on that merge already forbids exactly this; its guard only covered a MISSING key, because a
+ * failed decrypt was indistinguishable from an empty one by the time it got there.
+ */
+async function decryptSecrets(env: Env, row: Pick<CredRow, "secrets_ciphertext" | "secrets_dek" | "secrets_iv">): Promise<CredentialSecrets | null> {
+	if (!row.secrets_ciphertext || !row.secrets_dek || !row.secrets_iv) return {};
+	if (!env.KEY_ENCRYPTION_KEY) return null;
 	try {
 		const json = await decryptKey(
 			new Uint8Array(row.secrets_ciphertext),
@@ -71,8 +82,15 @@ async function decryptSecrets(env: Env, row: Pick<CredRow, "secrets_ciphertext" 
 			env.KEY_ENCRYPTION_KEY,
 		);
 		return JSON.parse(json) as CredentialSecrets;
-	} catch {
-		return {};
+	} catch (e) {
+		// Undecryptable ciphertext is a durable, operator-visible fact (`list_errors`), not a
+		// per-request nuisance: every read of this row is about to under-report, and the reason
+		// is knowable exactly here. No secret material is included.
+		await logError(env, {
+			source: "credentials",
+			message: `Stored credential secrets could not be decrypted: ${e instanceof Error ? e.message : String(e)}`,
+		}).catch(() => undefined);
+		return null;
 	}
 }
 
@@ -103,10 +121,13 @@ export async function listCredentials(env: Env, instanceId: string, userId: stri
 	const out: CredentialSummary[] = [];
 	for (const row of res.results ?? []) {
 		const summary = rowToSummary(row);
+		// Undecryptable → the row DOES hold a secret, we just can't read it. Reporting the flags as
+		// false tells the owner "no password stored" about a row that has one, and invites them to
+		// "fix" it with exactly the metadata edit that used to delete it.
 		const secrets = await decryptSecrets(env, row);
-		summary.hasPassword = !!secrets.password;
-		summary.hasPin = !!secrets.pin;
-		summary.hasRecoveryCodes = !!secrets.recoveryCodes;
+		summary.hasPassword = secrets ? !!secrets.password : true;
+		summary.hasPin = !!secrets?.pin;
+		summary.hasRecoveryCodes = !!secrets?.recoveryCodes;
 		out.push(summary);
 	}
 	return out;
@@ -119,6 +140,7 @@ export async function revealCredential(env: Env, instanceId: string, userId: str
 		.first<CredRow>();
 	if (!row) return null;
 	const secrets = await decryptSecrets(env, row);
+	if (!secrets) throw new HttpError(503, "This credential's stored secrets could not be decrypted. Nothing was changed — the ciphertext is intact.");
 	const summary = rowToSummary(row);
 	return { ...summary, hasPassword: !!secrets.password, hasPin: !!secrets.pin, hasRecoveryCodes: !!secrets.recoveryCodes, ...secrets };
 }
@@ -140,6 +162,12 @@ export async function findCredentialForHost(env: Env, instanceId: string, userId
 	});
 	if (!match) return null;
 	const secrets = await decryptSecrets(env, match);
+	// A credential we cannot decrypt is not a credential the agent can sign in with. Handing back
+	// `{password: undefined}` is what produced "hasStoredLogin: true but the login doesn't work" —
+	// the brain tries the stored login, fails, and burns the run on a stuck handoff. And stamping
+	// last_used_at would record a use that never happened, on the one column an owner reads to
+	// decide whether the credential is still in play.
+	if (!secrets) return null;
 	await env.DB.prepare("UPDATE agent_credentials SET last_used_at = datetime('now') WHERE id = ?1").bind(match.id).run();
 	return { id: match.id, username: match.username ?? undefined, loginUrl: match.login_url ?? undefined, password: secrets.password, pin: secrets.pin };
 }
@@ -180,7 +208,14 @@ export async function updateCredential(env: Env, instanceId: string, userId: str
 	if (hasStoredSecrets && !env.KEY_ENCRYPTION_KEY) {
 		throw new HttpError(503, "Credential storage is unavailable: this deployment has no encryption key configured. Nothing was changed.");
 	}
+	// The guard above only ever covered a MISSING key. A rotated KEK, a damaged DEK/IV or an
+	// unparseable plaintext failed the same way and used to arrive here as "no secrets stored",
+	// which is the exact input the merge below turns into `secrets_ciphertext = NULL` — while
+	// returning true, so the API answered 200 "saved" to a request that destroyed the password.
 	const current = await decryptSecrets(env, existing);
+	if (!current) {
+		throw new HttpError(503, "This credential's stored secrets could not be decrypted. Nothing was changed — the ciphertext is intact, so it can still be recovered.");
+	}
 	const merged: CredentialInput = {
 		domain: input.domain || existing.domain,
 		password: kept(input.password, current.password),

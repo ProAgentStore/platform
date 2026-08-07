@@ -544,19 +544,22 @@ export function denseDays(fromDay: string, toDay: string): string[] {
  * same instance while a loop runs has that chat attributed to the loop's budget. That errs toward
  * charging the pool too much, which stops a run early — the safe direction. Under-charging would
  * let a runaway continue.
+ *
+ * Which is why this one THROWS while every other swallow in this file is marked "observability,
+ * never load-bearing". It is read twice per iteration to compute `after - before`, so a swallowed
+ * failure returned 0 and booked the iteration as free: the reservation is released, the tree pool
+ * never depletes, the cap that exists to stop a runaway becomes inert, and `list_delegation_budgets`
+ * reports a `spent` figure that is untrue. Every caller is inside a retrying workflow step, or has
+ * an explicit fallback that errs toward over-charging.
  */
 export async function instanceSpendMicros(env: Env, userId: string, instanceId: string): Promise<number> {
-	try {
-		const row = await env.DB.prepare(
-			`SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage
-			  WHERE user_id = ?1 AND instance_id = ?2 AND ${CHARGED_SQL}`,
-		)
-			.bind(userId, instanceId)
-			.first<{ total: number }>();
-		return Math.max(0, Number(row?.total ?? 0));
-	} catch {
-		return 0;
-	}
+	const row = await env.DB.prepare(
+		`SELECT COALESCE(SUM(cost_micros), 0) AS total FROM ai_usage
+		  WHERE user_id = ?1 AND instance_id = ?2 AND ${CHARGED_SQL}`,
+	)
+		.bind(userId, instanceId)
+		.first<{ total: number }>();
+	return Math.max(0, Number(row?.total ?? 0));
 }
 
 /**

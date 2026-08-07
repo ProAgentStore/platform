@@ -103,6 +103,12 @@ export function trackedSessionIds(diagnostics: unknown): string[] | null {
  * and leave the actual child process running, which is the leak. It is best-effort: a session whose
  * machine is offline has no process left to stop, and its row still has to stop claiming to be
  * active.
+ *
+ * But "offline machine, nothing to stop" and "connected machine, /coding/end failed" were reported
+ * identically, and the timeline sentence asserts the second case never happens: it told the human
+ * "the engine process was released" about a child process still running on their laptop — the exact
+ * leak the paragraph above excludes, written into the session's own durable record. The row still
+ * closes (it must stop claiming to be active), but only a stop that actually happened is claimed.
  */
 async function reapSession(
 	env: Env,
@@ -110,7 +116,9 @@ async function reapSession(
 	idleHours: number,
 ): Promise<boolean> {
 	const conn = await getBoundRunnerConn(env, s.instanceId, s.userId).catch(() => null);
-	if (conn) await callRunner(conn, "/coding/end", { sessionId: s.id }, { timeoutMs: READ_TIMEOUT_MS }).catch(() => undefined);
+	const stopped = conn
+		? await callRunner(conn, "/coding/end", { sessionId: s.id }, { timeoutMs: READ_TIMEOUT_MS }).then(() => true, () => false)
+		: true; // no live runner → no process of ours left to stop
 	const closed = await endSession(env, s.instanceId, s.userId, s.id, "ended").catch(() => false);
 	if (closed) {
 		// Say so where the human will look. A session that vanished with no explanation is how a
@@ -120,7 +128,9 @@ async function reapSession(
 			instanceId: s.instanceId,
 			userId: s.userId,
 			type: "outcome",
-			content: `Session closed automatically after ${idleHours} hours with no activity — the engine process was released. Start a new session to pick the work back up.`,
+			content: stopped
+				? `Session closed automatically after ${idleHours} hours with no activity — the engine process was released. Start a new session to pick the work back up.`
+				: `Session closed automatically after ${idleHours} hours with no activity, but the engine could not be stopped on your machine — it may still be running. Check it there if you need the process gone.`,
 		}).catch(() => undefined);
 	}
 	return closed;

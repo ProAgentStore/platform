@@ -618,8 +618,8 @@ export class AgentDO extends DurableObject<Env> {
 
 	/**
 	 * Turn every abandoned marker into a visible line in the transcript, then clear it (#251).
-	 * Idempotent — the marker is deleted with the notice, so a reader that runs this twice
-	 * announces the interruption once.
+	 * Idempotent — the marker is deleted with the notice, and "with" is literal: only once the append
+	 * SUCCEEDED, or a swallowed write loses the record AND the one thing that could ever re-emit it.
 	 */
 	private async reapAbandonedTurns(channel?: string): Promise<InflightTurn[]> {
 		const turns = await this.listInflightTurns().catch(() => [] as InflightTurn[]);
@@ -636,9 +636,9 @@ export class AgentDO extends DurableObject<Env> {
 				channel: turn.channel || channel || "chat",
 				createdAt: new Date().toISOString(),
 			};
-			await this.appendMessage(msg).catch(() => undefined);
+			const persisted = await this.appendMessage(msg).then(() => true, () => false);
 			this.broadcast({ type: "message", message: msg });
-			await this.ctx.storage.delete(inflightKey(turn.turnId)).catch(() => undefined);
+			if (persisted) await this.ctx.storage.delete(inflightKey(turn.turnId)).catch(() => undefined);
 		}
 		return running;
 	}

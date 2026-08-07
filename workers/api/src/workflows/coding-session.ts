@@ -458,8 +458,13 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 						return await decideCodingAction(env, userId, p, { kind: "coding", instanceId });
 					} finally {
 						// Settled in `finally` so a throwing decide still charges what it burned —
-						// otherwise a failing loop would run free.
-						const after = await instanceSpendMicros(env, userId, instanceId);
+						// otherwise a failing loop would run free. The read may itself fail, and a
+						// `finally` must not throw (it would replace the decide's real error), so an
+						// unreadable ledger charges the whole reservation: over-charging stops a run
+						// early, under-charging lets a runaway continue.
+						const after = await instanceSpendMicros(env, userId, instanceId).catch(
+							() => before + (draw.reserved ?? CODING_RESERVE_MICROS),
+						);
 						await settle(env, userId, budgetId, draw.reserved ?? CODING_RESERVE_MICROS, Math.max(0, after - before)).catch(() => undefined);
 					}
 				}) as Promise<CodingDecision>,

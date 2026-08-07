@@ -38,6 +38,8 @@ function stub(opts: {
 	diagnostics?: unknown;
 	/** No relay socket → getBoundRunnerConn resolves null. */
 	connected?: boolean;
+	/** Runner is there but refuses to stop the engine — the case the timeline used to lie about. */
+	endFails?: boolean;
 }) {
 	const calls: Call[] = [];
 	const runnerCalls: Array<{ path: string; body: unknown }> = [];
@@ -78,6 +80,7 @@ function stub(opts: {
 					const body = (await req.json()) as { path: string; body: unknown };
 					runnerCalls.push({ path: body.path, body: body.body });
 					if (body.path === "/coding/diagnostics") return new Response(JSON.stringify(opts.diagnostics ?? {}));
+					if (opts.endFails && body.path === "/coding/end") return new Response("engine busy", { status: 500 });
 					return new Response(JSON.stringify({ ok: true }));
 				},
 			}),
@@ -111,6 +114,22 @@ describe("sweepCodingSessions — idle reaping (#275)", () => {
 		const res = await sweepCodingSessions(env, Date.now());
 		expect(res.reaped).toBe(1);
 		expect(runnerCalls.find((c) => c.path === "/coding/end")).toBeUndefined();
+	});
+
+	it("does not write 'the engine process was released' when the stop FAILED (#325)", async () => {
+		// The two cases the swallow made indistinguishable: an offline machine (nothing of ours is
+		// left to stop) and a connected machine whose /coding/end failed (the child process is
+		// still resident — the leak the docstring excludes). The row closes either way, but the
+		// timeline is the session's own durable record and it survives the session it describes,
+		// so it may only claim a stop that actually happened.
+		const { env, calls } = stub({
+			idle: [{ id: "csess_1", instance_id: "inst", user_id: "u", repo_id: "r", runner_node: "mac" }],
+			endFails: true,
+		});
+		expect((await sweepCodingSessions(env, Date.now())).reaped).toBe(1);
+		const said = calls.flatMap((c) => c.args).filter((a): a is string => typeof a === "string" && a.includes("closed automatically"));
+		expect(said.join(" ")).toMatch(/may still be running/i);
+		expect(said.join(" ")).not.toMatch(/process was released/i);
 	});
 
 	it("asks for sessions quiet for the full idle window, not for any quiet session", async () => {

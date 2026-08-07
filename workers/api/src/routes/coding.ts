@@ -318,7 +318,11 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/signin", async (c) =>
 	// surfaces takeovers from `needs_human` tasks) showed nothing at all. The sign-in page sat open
 	// on a machine the user may not be at, with no surface to drive it — while `authPromptGuidance`
 	// told them to "open the takeover view".
-	await mirrorRuntimeTask(c.env, instanceId, uid, {
+	// …and "MUST" has to mean it. Both of these were `.catch(() => undefined)` directly under that
+	// paragraph, so the very failure it describes still shipped: card lost, `if (task)` false, no
+	// needs_human flip, no board entry — and the route below still answered ok:true with
+	// `authPromptGuidance` telling the owner to open a takeover view that does not exist.
+	const carded = await mirrorRuntimeTask(c.env, instanceId, uid, {
 		id: taskId,
 		type: "engine.signin",
 		status: "needs_human",
@@ -327,12 +331,13 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/signin", async (c) =>
 		reasoning: authPromptGuidance(prompt),
 		createdAt: new Date().toISOString(),
 		updatedAt: new Date().toISOString(),
-	}).catch(() => undefined);
+	}).then(() => true, () => false);
+	if (!carded) throw new HttpError(502, "The sign-in page is open in the runner's browser, but the board card that drives the takeover couldn't be created. Try again.");
 	await callRunner<{ ok: boolean }>(conn, "/browser/handoff", {
 		taskId,
 		label: "Engine sign-in",
 		reason: "challenge",
-	}).catch(() => undefined);
+	});
 
 	await logEvent(c.env, {
 		source: "coding",
@@ -492,27 +497,33 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/message", async (c) =
 	if (action.kind === "message" && action.text) {
 		const repo = session ? await getRepo(c.env, instanceId, uid, session.repoId) : null;
 		const watchId = `cw-${sessionId}-${Date.now()}`;
-		await c.env.DB.prepare(
+		// The stamp IS the supersession rule, so losing it inverts it: the column still holds the
+		// PREVIOUS send's watchId, this watcher stands down as "superseded by a newer send", and the
+		// stale one — still stamped — announces "✅ Coder finished" against the earlier instruction.
+		// A wrong completion notice is worse than a missing one; start no watcher unless it can win.
+		const stamped = await c.env.DB.prepare(
 			"UPDATE coding_sessions SET watch_workflow_id = ?1 WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4",
 		)
 			.bind(watchId, sessionId, instanceId, uid)
 			.run()
-			.catch(() => undefined);
-		await c.env.CODING_SESSION.create({
-			id: watchId,
-			params: {
-				instanceId,
-				userId: uid,
-				sessionId,
-				repoId: repo?.id ?? "",
-				runnerNode: session.runnerNode ?? null,
-				mode: "watch",
-				watchId,
-				goal: { objective: action.text, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" },
-			},
-		}).catch(async () => {
-			await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "system", content: "(Couldn't start the progress watcher — I won't auto-report when this finishes; ask me for an update.)" }).catch(() => undefined);
-		});
+			.then(() => true, () => false);
+		const noWatcher = () =>
+			appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "system", content: "(Couldn't start the progress watcher — I won't auto-report when this finishes; ask me for an update.)" }).catch(() => undefined);
+		if (!stamped) await noWatcher();
+		else
+			await c.env.CODING_SESSION.create({
+				id: watchId,
+				params: {
+					instanceId,
+					userId: uid,
+					sessionId,
+					repoId: repo?.id ?? "",
+					runnerNode: session.runnerNode ?? null,
+					mode: "watch",
+					watchId,
+					goal: { objective: action.text, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" },
+				},
+			}).catch(noWatcher);
 	}
 	return c.json(snap as object);
 });
@@ -577,9 +588,15 @@ codingRoutes.post("/:instanceId/coding/sessions/:sessionId/resume", async (c) =>
 	const conn = await getSessionRunnerConn(c.env, instanceId, uid, session);
 	if (!conn) throw new HttpError(409, "No coding runner connected");
 	await touchSessionActivity(c.env, instanceId, uid, sessionId);
-	await callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/resolve`, {
+	// `body.value` is the human's answer to a blocked engine — a 2FA code, a field the agent could
+	// not fill. Swallowing the delivery reported it landed and threw it away: the Pilot goes on
+	// polling /coding/takeover-status, never sees `resolved`, and closes the run
+	// "<reason> not resolved in time" — a run recorded as the HUMAN's timeout when the human did
+	// answer. Same rule the ticket-cancel route states: don't report success for a call that failed.
+	const delivered = await callRunner(conn, `/coding/takeover/${encodeURIComponent(sessionId)}/resolve`, {
 		value: typeof body.value === "string" ? body.value : undefined,
-	}).catch(() => undefined);
+	}).then(() => true, () => false);
+	if (!delivered) throw new HttpError(502, "Couldn't hand your answer to the coding runner — it's still waiting. Try again.");
 	return c.json({ ok: true });
 });
 

@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
-import { requireUser } from "../lib/auth.js";
+import { HttpError, requireUser } from "../lib/auth.js";
 import {
 	boardConfigForInstance,
 	buildInstanceBoard,
@@ -537,9 +537,15 @@ export function registerTaskRoutes(router: Hono<{ Bindings: Env }>): void {
 		// Best-effort stop on the LIVE node (#218). getRuntime returned the default row, which is
 		// not cleared on disconnect — so the cancel could be posted at a machine that is gone while
 		// the task kept running on the one that is actually connected, and the board hid it anyway.
+		// #218 fixed the ADDRESSING (post at the live node, not a stale row) and left the swallow,
+		// so the other half of the reported symptom survived: when the cancel itself fails we
+		// delete the card anyway and answer ok:true. The task keeps running on the user's machine
+		// with nothing on the board pointing at it and no route left to reach it — deleting the
+		// only handle to a live process is not a best-effort operation.
 		const runtime = await getLiveRuntime(c.env, instanceId, session.uid);
 		if (runtime?.endpoint_url) {
-			await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" }).catch(() => undefined);
+			const stopped = await callRuntime(c.env, runtime, `/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" }).then(() => true, () => false);
+			if (!stopped) throw new HttpError(502, "Couldn't stop that task on your runner, so it's still on the board — it would have kept running with nothing pointing at it. Try again.");
 		}
 		await deleteMirroredRuntimeTask(c.env, instanceId, session.uid, taskId);
 		return c.json({ ok: true });

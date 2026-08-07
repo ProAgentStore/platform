@@ -20,7 +20,7 @@ import { installationTokenForOwner } from "../lib/github-app.js";
 import { runUserWorkersAi } from "../lib/user-ai.js";
 import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
 import { copilotSummary } from "../lib/coding-copilot.js";
-import { claimSessionDriver, getActiveSessionForRepo, getRepo, getSession, listRepos, touchSessionActivity } from "../lib/coding-store.js";
+import { claimSessionDriver, getActiveSessionForRepo, getRepo, getSession, listRepos, releaseSessionDriver, touchSessionActivity } from "../lib/coding-store.js";
 import { mirrorRuntimeTask } from "./instances-runtime.js";
 import { agentCapabilities } from "../lib/agent-capabilities.js";
 import { optionsFor } from "../lib/surface-options.js";
@@ -66,18 +66,23 @@ async function driveClaude(
 	}
 	// Finish watcher (one per send: stamp the session so only the latest notifies).
 	const watchId = `cw-${sessionId}-${Date.now()}`;
-	await c.env.DB.prepare("UPDATE coding_sessions SET watch_workflow_id = ?1 WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4")
+	// A lost stamp does not cost a watcher, it MIS-ATTRIBUTES one: the column still names the
+	// previous send, so this watcher stands down as superseded and the stale one reports the
+	// earlier instruction as finished. Treat it exactly like a watcher that failed to start.
+	const stamped = await c.env.DB.prepare("UPDATE coding_sessions SET watch_workflow_id = ?1 WHERE id = ?2 AND instance_id = ?3 AND user_id = ?4")
 		.bind(watchId, sessionId, instanceId, uid)
 		.run()
-		.catch(() => undefined);
-	await c.env.CODING_SESSION.create({
-		id: watchId,
-		params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", runnerNode: session.runnerNode ?? null, mode: "watch", watchId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
-	}).catch(async () => {
-		// The finish-watcher failed to start — tell the user so the missing completion
-		// summary isn't a silent "did it even work?".
-		await appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "system", content: "(Couldn't start the progress watcher — I won't auto-report when this finishes; ask me for an update.)" }).catch(() => undefined);
-	});
+		.then(() => true, () => false);
+	// The finish-watcher failed to start — tell the user so the missing completion
+	// summary isn't a silent "did it even work?".
+	const noWatcher = () =>
+		appendTimeline(c.env, { sessionId, instanceId, userId: uid, type: "system", content: "(Couldn't start the progress watcher — I won't auto-report when this finishes; ask me for an update.)" }).catch(() => undefined);
+	if (!stamped) await noWatcher();
+	else
+		await c.env.CODING_SESSION.create({
+			id: watchId,
+			params: { instanceId, userId: uid, sessionId, repoId: repo?.id ?? "", runnerNode: session.runnerNode ?? null, mode: "watch", watchId, goal: { objective: instruction, repo: repo?.name ?? "your repo", clientType: session?.clientType ?? "claude" } },
+		}).catch(noWatcher);
 	// Show the user a plain-language summary, NOT the raw (often long/technical)
 	// instruction we sent to the CLI.
 	const reply = summary ? `On it — ${summary}` : "On it — working on that now.";
@@ -132,7 +137,16 @@ async function delegateToTarget(
 	const now = new Date().toISOString();
 	const label = objective.length > 120 ? `${objective.slice(0, 117)}…` : objective;
 	// 1) Observable board task (running), attributed to the Overseer on the user's behalf.
-	await mirrorRuntimeTask(c.env, instanceId, uid, delegationTaskRecord({ id: taskId, targetLabel: repo.name, objective, status: "running", now })).catch(() => undefined);
+	// The claim above is ordered "so a refusal doesn't leave a board card announcing work that
+	// never started" — this is the mirror failure, and it was silent: no card, but the Pilot starts
+	// anyway and the thread below states "tracking on the board" as fact. That leaves a real run
+	// spending the user's tokens with nothing to observe or stop it from. Refuse instead, and give
+	// the claim back so the next attempt isn't told the repo is already being worked on.
+	const carded = await mirrorRuntimeTask(c.env, instanceId, uid, delegationTaskRecord({ id: taskId, targetLabel: repo.name, objective, status: "running", now })).then(() => true, () => false);
+	if (!carded) {
+		await releaseSessionDriver(c.env, instanceId, uid, session.id, driverId).catch(() => undefined);
+		return { ok: false, reply: `I couldn't put ${targetLabel} on the board, so I haven't started — you'd have had no way to watch or stop it. Try again.` };
+	}
 	// 2) Unified trace + the target session thread (visible, as an agent action).
 	await logEvent(c.env, { source: "coding", event: "delegate", message: `Overseer → ${repo.name}: ${label}`, userId: uid, instanceId, traceId: taskId }).catch(() => undefined);
 	await appendTimeline(c.env, { sessionId: session.id, instanceId, userId: uid, type: "chat_assistant", content: `On it — delegated to ${repo.name}: ${label} (tracking on the board)` }).catch(() => undefined);

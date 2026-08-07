@@ -1,5 +1,5 @@
 import type { Hono } from "hono";
-import { requireUser } from "../lib/auth.js";
+import { HttpError, requireUser } from "../lib/auth.js";
 import { requirePro } from "../lib/billing.js";
 import { capabilitiesForInstance } from "../lib/agent-capabilities.js";
 import { deriveJobPassword, listAtsCache } from "../lib/apply-cache.js";
@@ -261,7 +261,12 @@ export function registerApplyRoutes(router: Hono<{ Bindings: Env }>): void {
 		const session = await requireUser(c);
 		const instanceId = c.req.param("instanceId");
 		await requireOwnedInstance(c.env, instanceId, session.uid);
-		await c.env.STORAGE.delete(resumeKey(session.uid, instanceId)).catch(() => undefined);
+		// This is the only way to remove an uploaded CV — name, address, employment history — and
+		// `{ok:true}` was unconditional. A failed R2 delete left the object readable by the
+		// token-authed download below and by every later run, while the console reported the
+		// résumé gone. A deletion endpoint that cannot fail is a retention record that lies.
+		const removed = await c.env.STORAGE.delete(resumeKey(session.uid, instanceId)).then(() => true, () => false);
+		if (!removed) throw new HttpError(502, "Couldn't delete the stored résumé — it is still on file. Try again.");
 		return c.json({ ok: true });
 	});
 

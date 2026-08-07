@@ -71,7 +71,12 @@ export async function getRunnerConn(env: Env, instanceId: string, userId: string
  * offline; the user can start that machine or repin). Unpinned → the legacy default runtime.
  */
 export async function getBoundRunnerConn(env: Env, instanceId: string, userId: string): Promise<RunnerConn | null> {
-	const node = await readInstanceRunnerNode(env, instanceId, userId).catch(() => "");
+	// A read failure is NOT "unpinned". Treating it as one walks straight into the fallback this
+	// function's contract forbids two lines below — running the agent on a machine the user did not
+	// choose, in a different checkout, and reporting that machine as online. When the pin cannot be
+	// read, the honest answer is the same as pinned-and-offline: no connection, retry.
+	const node = await readInstanceRunnerNode(env, instanceId, userId).catch(() => null);
+	if (node === null) return null;
 	if (node) {
 		// Pinned = authoritative: only that machine, and only if its relay socket is ACTUALLY
 		// live. We can't trust the DB `status` column — it's never cleared when a runner drops

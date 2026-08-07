@@ -98,15 +98,23 @@ export async function ensureActiveSession(
 	userId: string,
 	repo: CodingRepo,
 ): Promise<EnsureSessionResult> {
+	// Re-attach before handing a session over: it can be `active` in D1 while its engine process is
+	// gone (runner restarted, laptop slept). Idempotent on the runner, so this is free when it
+	// really is live — and it is what makes the reused path as reliable as a fresh one.
+	//
+	// Which only holds if the ANSWER is read. Both reuse paths discarded it twice over (the throw
+	// caught, the null return unread) and returned `ok: true` regardless — so "quietly driving a
+	// dead pane", the thing this re-attach exists to prevent, was still the outcome: `loop-drivers`
+	// reads `ok: true` as a live engine, claims the driver, opens the run row and bills the Pilot's
+	// reasoning turns against a pane that never launched. Report what the fresh path reports.
+	const reattach = async (s: CodingSessionRecord): Promise<EnsureSessionResult> => {
+		if (await startSessionOnRunner(env, instanceId, userId, s, repo).catch(() => null)) return { ok: true, session: s, opened: false };
+		const fresh = await getRepo(env, instanceId, userId, repo.id).catch(() => null);
+		return { ok: false, startError: fresh?.cloneError ?? null };
+	};
+
 	const existing = await getActiveSessionForRepo(env, instanceId, userId, repo.id);
-	if (existing) {
-		// Re-attach before handing it over: a session can be `active` in D1 while its engine
-		// process is gone (runner restarted, laptop slept). Idempotent on the runner, so this is
-		// free when it really is live — and it is what makes the reused path as reliable as a
-		// fresh one instead of quietly driving a dead pane.
-		await startSessionOnRunner(env, instanceId, userId, existing, repo).catch(() => null);
-		return { ok: true, session: existing, opened: false };
-	}
+	if (existing) return reattach(existing);
 
 	const conn = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
 	const { command, clientType } = await resolveEngine(env, instanceId, userId, repo.defaultClient);
@@ -123,8 +131,7 @@ export async function ensureActiveSession(
 		// open, so it is reused, not owned.
 		const winner = await getActiveSessionForRepo(env, instanceId, userId, repo.id);
 		if (!winner) return { ok: false, startError: "could not create a session" };
-		await startSessionOnRunner(env, instanceId, userId, winner, repo).catch(() => null);
-		return { ok: true, session: winner, opened: false };
+		return reattach(winner);
 	}
 
 	const started = await startSessionOnRunner(env, instanceId, userId, session, repo);

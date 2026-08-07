@@ -145,3 +145,48 @@ describe("credential vault fails closed without a key (#220)", () => {
 		expect(after?.password).toBe("hunter2");
 	});
 });
+
+// ── #325: the #220 guard was narrower than the hazard it documents ───────────
+//
+// That guard fires on a MISSING key. A key that is present but WRONG — a rotation gone wrong, a
+// re-derived KEK, a damaged DEK/IV — failed inside `decryptSecrets`, which returned `{}` for both
+// "no secrets stored" and "could not decrypt". So the merge in `updateCredential` saw "there was
+// nothing here", `encryptSecretsFor` had nothing to encrypt, and the UPDATE wrote NULL over intact
+// ciphertext — while returning true, so the API answered 200 "saved" to a request that destroyed
+// the user's ATS password. Storing ciphertext we cannot read is strictly better: a key can come back.
+describe("credential vault fails closed on an UNREADABLE secret (#325)", () => {
+	const WRONG_KEK = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
+	/** Same rows, different key — what a rotated/re-derived KEK looks like to this module. */
+	const withKek = (env: Env, kek: string) => ({ ...(env as unknown as Record<string, unknown>), KEY_ENCRYPTION_KEY: kek }) as unknown as Env;
+
+	it("refuses the update and leaves the ciphertext recoverable", async () => {
+		const good = mockEnv();
+		const id = await createCredential(good, "i1", "u1", { domain: "acme.com", password: "hunter2" });
+
+		await expect(
+			updateCredential(withKek(good, WRONG_KEK), "i1", "u1", id, { domain: "acme.com", username: "renamed" }),
+		).rejects.toThrow(/could not be decrypted/i);
+
+		// The whole point: the right key still opens it.
+		expect((await revealCredential(good, "i1", "u1", id))?.password).toBe("hunter2");
+	});
+
+	it("reports hasPassword TRUE for a row it cannot read, not 'no password stored'", async () => {
+		// Reporting false invites the owner to 'fix' it with exactly the metadata edit above.
+		const good = mockEnv();
+		await createCredential(good, "i1", "u1", { domain: "acme.com", password: "hunter2" });
+		const list = await listCredentials(withKek(good, WRONG_KEK), "i1", "u1");
+		expect(list[0].hasPassword).toBe(true);
+	});
+
+	it("hands the apply agent NO credential, and does not stamp last_used_at", async () => {
+		// `{password: undefined}` is what produced "hasStoredLogin: true but the login doesn't
+		// work" — the brain tries it, fails, and burns the run on a stuck handoff. And last_used_at
+		// is the column an owner reads to decide whether a credential is still in play.
+		const good = mockEnv();
+		await createCredential(good, "i1", "u1", { domain: "acme.com", password: "hunter2" });
+		expect(await findCredentialForHost(withKek(good, WRONG_KEK), "i1", "u1", "jobs.acme.com")).toBeNull();
+		expect((await listCredentials(good, "i1", "u1"))[0].lastUsedAt).toBeUndefined();
+	});
+});

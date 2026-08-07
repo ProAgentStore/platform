@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aggregateUsage, denseDays, usageDay, type UsageRow } from "./usage.js";
+import { aggregateUsage, denseDays, instanceSpendMicros, usageDay, type UsageRow } from "./usage.js";
+import type { Env } from "../types.js";
 
 const row = (over: Partial<UsageRow> = {}): UsageRow => ({
 	agent_id: "a1", instance_id: "i1", provider: "anthropic", model: "claude-sonnet-4-6",
@@ -130,3 +131,26 @@ describe("prompt-cache tokens are reported separately (#212)", () => {
 	});
 });
 
+
+// ── #325: the one read in this module that is NOT observability ──────────────
+//
+// Every other swallow in usage.ts is marked "observability, never load-bearing". This one is read
+// twice per iteration to compute `after - before`, so a swallowed failure returned 0 and booked the
+// iteration as free: the reservation is released, the tree pool never depletes, the cap that exists
+// to stop a runaway becomes inert, and `list_delegation_budgets` reports a `spent` that is untrue.
+// The module's own docstring says under-charging is the unsafe direction — and 0 is the maximum of it.
+describe("instanceSpendMicros — a ledger read failure is not a spend of zero (#325)", () => {
+	const envWith = (first: () => Promise<{ total: number } | null>) =>
+		({ DB: { prepare: () => ({ bind: () => ({ first }) }) } }) as unknown as Env;
+
+	it("propagates the failure instead of reporting nothing was spent", async () => {
+		await expect(
+			instanceSpendMicros(envWith(async () => { throw new Error("D1_ERROR: network"); }), "u1", "i1"),
+		).rejects.toThrow(/D1_ERROR/);
+	});
+
+	it("still reads a real total, and floors a nonsense one at zero", async () => {
+		expect(await instanceSpendMicros(envWith(async () => ({ total: 4200 })), "u1", "i1")).toBe(4200);
+		expect(await instanceSpendMicros(envWith(async () => null), "u1", "i1")).toBe(0);
+	});
+});

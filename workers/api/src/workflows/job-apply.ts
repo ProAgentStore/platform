@@ -104,12 +104,16 @@ export class JobApplyWorkflow extends WorkflowEntrypoint<Env, JobApplyParams> {
 				}
 				const now = new Date().toISOString();
 				payload = { ...payload, id: taskId, status: "failed", error: "No browser runner connected. Start it with: pags up", updatedAt: now, completedAt: now };
+				// NOT best-effort: this write is the only thing that closes the task, and everything
+				// the paragraph above describes comes back the moment it is skipped — a permanently
+				// "running" card with a Cancel button owned by nothing, and a single-flight claim
+				// that 409s every application for the next four hours. Let it throw so the step
+				// RETRIES; a workflow step is the one place where that is free.
 				await env.DB.prepare(
 					"UPDATE instance_runtime_tasks SET status = 'failed', payload = ?4, updated_at = datetime('now') WHERE id = ?1 AND instance_id = ?2 AND user_id = ?3",
 				)
 					.bind(taskId, instanceId, userId, JSON.stringify(payload))
-					.run()
-					.catch(() => undefined);
+					.run();
 				return null;
 			});
 			return { outcome: "failed", detail: "No browser runner connected. Start it with: pags up", steps: 0 };
