@@ -9,16 +9,19 @@ import {
 	type CodingPaneSnapshot,
 	type CodingResult,
 } from "../lib/coding-loop.js";
-import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "../lib/runner-client.js";
+import { callRunner, getRunnerConn, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "../lib/runner-client.js";
+import { runtimeConnectivity } from "../lib/instance-connectivity.js";
+import { runWatchSession } from "./coding-watch.js";
+import type { CodingSessionParams } from "./coding-session-params.js";
+import { isRunnerGone, makeRunnerGuard, noRunnerDetail, RUNNER_PROBE_INTERVAL, type RunStep } from "../lib/runner-availability.js";
 import { endSession, getSession, getRepo, reassignSessionNode, releaseSessionDriver, touchSessionActivity, touchSessionDriver } from "../lib/coding-store.js";
 import { shouldEndSessionAfterRun } from "../lib/coding-session-lifecycle.js";
 import { describeRepoState, readRepoWorkingState, type RepoWorkingState } from "../lib/repo-state.js";
 import { closeWorkCards, setWorkCardProgress, upsertWorkCard } from "../lib/work-card.js";
 import { normalizeRunnerNode } from "../lib/runtime-nodes.js";
 import { resolveEngineEnv } from "../lib/coding-engines.js";
-import { appendTimeline, contextForCopilot, lastTerminal } from "../lib/coding-timeline.js";
+import { appendTimeline } from "../lib/coding-timeline.js";
 import { delegationTaskRecord } from "../lib/delegation.js";
-import { copilotSummary } from "../lib/coding-copilot.js";
 import { codingSessionLink } from "../lib/console-links.js";
 import { notifyUser } from "../routes/push.js";
 import { markExhausted, reserve, settle } from "../lib/delegation-budget-store.js";
@@ -37,72 +40,11 @@ import { actsInWindow } from "../lib/instance-work.js";
 import { finishLoopRun, recordIteration } from "../lib/agent-loop-store.js";
 import type { Env } from "../types.js";
 
+export type { CodingSessionParams } from "./coding-session-params.js";
+
 /** Bounded worst case for one Pilot decide step, in USD micros. Settle refunds the rest. */
 const CODING_RESERVE_MICROS = 150_000; // $0.15
 
-export interface CodingSessionParams {
-	instanceId: string;
-	userId: string;
-	/** The coding_sessions row this workflow drives. */
-	sessionId: string;
-	/** Repo identity + clone source, so the runner can (re)clone if it lost the session. */
-	repoId: string;
-	/** Runner node that owns this coding session. Null/empty falls back to the legacy default runner. */
-	runnerNode?: string | null;
-	cloneUrl?: string;
-	branch?: string;
-	/** GitHub App installation token for cloning a private repo. */
-	token?: string;
-	goal: CodingGoal;
-	/**
-	 * "watch": don't drive the CLI — the user just sent it an instruction manually
-	 * (➤ Agent). Wait for the pane to go idle, then summarize what happened and
-	 * notify the user. Durable, so it reaches them even with the console closed.
-	 */
-	mode?: "watch";
-	/** This watcher's id — only the one currently stamped on the session notifies. */
-	watchId?: string;
-	/**
-	 * When set, this run is a delegated GOAL (e.g. the Overseer handing work to this Pilot on
-	 * the user's behalf, #155). The Pilot updates this board task's status at its terminal
-	 * state (done/error) so the delegation is observable on the board, not just in the thread.
-	 */
-	boardTaskId?: string;
-	/**
-	 * Delegation budget to draw against (#184). Present ONLY when a supervisor delegated this
-	 * run — a human driving their own Coder from the Coding tab passes none and is unmetered,
-	 * exactly as before. Adding a cap to that path would change behaviour nobody asked for.
-	 */
-	budgetId?: string | null;
-	/** Depth in the supervision tree; the budget refuses past its cap. */
-	depth?: number;
-	/**
-	 * agent_loop_runs row to close when this finishes (#159). A delegated coding run must be
-	 * answerable through `check_delegation` like every other delegation — otherwise the
-	 * supervisor is handed a run id it cannot look up.
-	 */
-	loopRunId?: string | null;
-	/**
-	 * The single-flight claim this run holds on the session (#208). Released when the run ends —
-	 * including the early no-runner return, which is exactly where a claim would otherwise be
-	 * stranded and lock the session out of every future run.
-	 */
-	driverId?: string | null;
-	/**
-	 * Did THIS run open the session it drives? (#271)
-	 *
-	 * Absent/false means a human (or an earlier run) opened it, and the Pilot leaves it live when
-	 * it finishes. It used to end the session unconditionally, which made delegation single-use:
-	 * `loop-drivers.ts` required a live session, the Pilot consumed it, and the next goal 409'd
-	 * with a message blaming the runner. It also quietly deleted a session the user had opened by
-	 * hand and expected to still be there.
-	 *
-	 * Defaulting to false is the safe direction: the worst case is an idle session left live,
-	 * which the user can end from the Coding tab. The reverse — closing someone else's session —
-	 * is not recoverable.
-	 */
-	sessionOpenedByRun?: boolean;
-}
 
 /** Max minutes to wait for a human to resolve a stuck/needs-input handoff. */
 const HANDOFF_WAIT_POLLS = 180; // 180 × 5s = 15 min
@@ -117,7 +59,7 @@ const HANDOFF_WAIT_POLLS = 180; // 180 × 5s = 15 min
  */
 export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSessionParams> {
 	async run(event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
-		if (event.payload.mode === "watch") return this.runWatch(event, step);
+		if (event.payload.mode === "watch") return runWatchSession(this.env, event, step);
 		const { instanceId, userId, sessionId, repoId, runnerNode, cloneUrl, branch, token, goal } = event.payload;
 		const env = this.env;
 		/**
@@ -146,7 +88,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		// unconfigured run claims no protection it does not have.
 		const authorityNote = describeAuthority(mergePolicy, goal.clientType);
 
-		let conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
+		let startConn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
 		// Machine-switch reclaim (matches the interactive /message path). A durable /run can be
 		// queued/resumed long after it was created, by which point the session's owning machine
 		// may be offline while the user is running `pags up` elsewhere. `conn` resolves from the
@@ -158,7 +100,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			const fallback = await getBoundRunnerConn(env, instanceId, userId);
 			if (fallback && normalizeRunnerNode(fallback.runnerNode) !== normalizeRunnerNode(runnerNode)) {
 				await reassignSessionNode(env, instanceId, userId, sessionId, fallback.runnerNode ?? null).catch(() => undefined);
-				conn = fallback;
+				startConn = fallback;
 			}
 		}
 		/**
@@ -291,14 +233,19 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			}
 		};
 
-		if (!conn) {
+		if (!startConn) {
 			// This return is BEFORE the try/finally, so the delegation rows have to be closed
 			// here explicitly. They weren't: `delegateToPilot` inserts agent_loop_runs (running)
 			// and a board card (running) before creating the workflow, so a Lead delegating to a
 			// Repo Coder whose machine had gone offline left both rows `running` PERMANENTLY —
 			// `check_delegation` told the supervisor the run was still going and the card never
 			// moved. Exactly the "looks delegated and never moves" failure the design forbids.
-			const noRunner: CodingResult = { outcome: "failed", detail: "No coding runner connected. Start it with: pags up", steps: 0 };
+			// The remedy is DIAGNOSED, not assumed (#341). "Start it with: pags up" is wrong for the
+			// case the console needed its own state for — machine online, this agent detached, answer
+			// `pags up --force` — and being told to run a command already running is what teaches
+			// people to stop reading these messages.
+			const detail = noRunnerDetail(await runtimeConnectivity(env, instanceId, userId).catch(() => null));
+			const noRunner: CodingResult = { outcome: "failed", detail, steps: 0 };
 			await closeDelegation(noRunner, "-no-runner");
 			// The only exit that leaves the session ACTIVE, so it is the only one that has to free
 			// the claim itself — everywhere else `endSession` does it. Miss this and one offline
@@ -309,10 +256,94 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			return noRunner;
 		}
 
+		// The machine this run is talking to. A `let`, because the runner guard below re-points it
+		// when a disconnect heals on a DIFFERENT machine. Re-declared rather than narrowed: a
+		// closure that ASSIGNS to a variable discards its narrowing at every other call site.
+		let conn: RunnerConn = startConn;
+
 		const retry = { retries: { limit: 2, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "3 minutes" as const };
 		// waitIdle polls internally for minutes, so it needs a longer step budget than `retry`.
 		const idleRetry = { retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "10 minutes" as const };
+		const startRetry = { retries: { limit: 1, delay: "3 seconds" as const, backoff: "constant" as const }, timeout: "5 minutes" as const };
+		/**
+		 * `step.do` with its options pre-bound, as a plain callable the runner guard can drive.
+		 *
+		 * The cast is over Cloudflare's `Rpc.Serializable` constraint, which a generic wrapper cannot
+		 * carry through — the same reason every `step.do` result below already casts.
+		 */
+		type LooseDo = (name: string, opts: unknown, cb: () => Promise<unknown>) => Promise<unknown>;
+		const runWith = (opts: unknown): RunStep => (name, fn) => (step.do as unknown as LooseDo)(name, opts, fn);
+		const runRetry = runWith(retry);
+		const runIdle = runWith(idleRetry);
 		let n = 0;
+
+		/**
+		 * Make sure the session exists on whatever machine we are talking to.
+		 *
+		 * Hoisted out of the "start" step because a RECONNECT needs the same thing: a runner that
+		 * dropped may have restarted, or the agent may be live on a different machine, and either way
+		 * the engine must be (re)launched before the loop can carry on. `/coding/start` is idempotent.
+		 */
+		const startOnRunner = async () => {
+			// Resolve the session's exact CLI command, its workDir, and its engine env
+			// (API key / OAuth token) FRESH here — the same fields startSessionOnRunner
+			// passes. Without them, a runner that must re-create the session after a restart
+			// would relaunch the DEFAULT cli with NO auth (wrong binary / auth failure). Env
+			// is resolved inside the step (not journaled) so the key never lands in workflow
+			// state — matching how the runner token is kept out of state elsewhere.
+			const [sess, repo] = await Promise.all([
+				getSession(env, instanceId, userId, sessionId),
+				getRepo(env, instanceId, userId, repoId),
+			]);
+			const engineEnv = sess ? await resolveEngineEnv(env, instanceId, userId, sess) : undefined;
+			return callRunner<{ sessionId?: string }>(conn, "/coding/start", {
+				sessionId, repoId,
+				workDir: repo?.workdir || undefined,
+				cloneUrl, branch, token,
+				clientType: goal.clientType,
+				command: sess?.launchCommand || undefined,
+				env: engineEnv,
+			});
+		};
+
+		/**
+		 * A DISCONNECT IS A PAUSE, NOT AN ENDING (#341).
+		 *
+		 * Heartfull's run died at iteration 2 of 50 because a ~4s step-retry budget expired while the
+		 * runner was still inside its own 30s-capped reconnect backoff. A bigger number with the same
+		 * terminal behaviour only moves the cliff; what a run with 48 iterations left has is TIME. So
+		 * the guard waits for the relay, says so in the thread (#252), re-points at whichever machine
+		 * is live now, relaunches the engine, and resumes at the same step. Bounded per loss AND per
+		 * run — see lib/runner-availability.ts for the sizing and the whole argument.
+		 */
+		const guard = makeRunnerGuard({
+			wait: {
+				probe: () => runtimeConnectivity(env, instanceId, userId),
+				// step.sleep, so a ten-minute pause survives the workflow being evicted.
+				sleep: (label) => step.sleep(label, RUNNER_PROBE_INTERVAL),
+				announce: postToChat,
+				// The run still owns this session while it waits. Without the heartbeat a long pause
+				// would let its OWN single-flight claim go stale and a second Pilot could take the
+				// session out from under it — the collision the claim exists to prevent.
+				tick: async () => {
+					if (event.payload.driverId) await touchSessionDriver(env, instanceId, userId, sessionId, event.payload.driverId).catch(() => undefined);
+					await touchSessionActivity(env, instanceId, userId, sessionId).catch(() => undefined);
+				},
+			},
+			reconnect: async (label) => {
+				// The machine that comes back may not be the machine that went away — a user closing
+				// one laptop and opening another is the ordinary case. Re-resolve live (pin-aware),
+				// relocate the session's owning node, then relaunch the engine there.
+				const back = await getBoundRunnerConn(env, instanceId, userId).catch(() => null);
+				if (back) {
+					if (normalizeRunnerNode(back.runnerNode) !== normalizeRunnerNode(conn.runnerNode)) {
+						await reassignSessionNode(env, instanceId, userId, sessionId, back.runnerNode ?? null).catch(() => undefined);
+					}
+					conn = back;
+				}
+				await runWith(startRetry)(`restart-${label}`, startOnRunner);
+			},
+		});
 		/**
 		 * Read the pane AND whether the run should stop.
 		 *
@@ -387,9 +418,9 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		};
 
 		const deps: CodingDeps = {
-			snapshot: () => step.do(`s${n++}-snapshot`, retry, capture) as Promise<CodingPaneSnapshot>,
+			snapshot: () => guard(runRetry, `s${n++}-snapshot`, capture) as Promise<CodingPaneSnapshot>,
 			act: (a: CodingActionKind) =>
-				step.do(`s${n++}-act`, retry, () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: a })) as Promise<CodingPaneSnapshot>,
+				guard(runRetry, `s${n++}-act`, () => callRunner<CodingPaneSnapshot>(conn, "/coding/act", { sessionId, action: a })) as Promise<CodingPaneSnapshot>,
 			// The LLM call is the one place this loop spends money, so it is the one place the
 			// budget has to sit. Delegated runs (#159) previously reached the Pilot with a pool id
 			// and never drew on it — unbounded spend on exactly the path a supervisor can trigger
@@ -427,7 +458,7 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			// Poll capture until the CLI goes idle (the pane stops "thinking"/"responding").
 			// Bounded so the loop can't outrun idleRetry's 10-minute step timeout.
 			waitIdle: () =>
-				step.do(`s${n++}-waitidle`, idleRetry, async () => {
+				guard(runIdle, `s${n++}-waitidle`, async () => {
 					// Settle first: a just-sent instruction may not have flipped the pane
 					// to "thinking" yet, so an immediate capture could read a stale idle.
 					await sleep(1500);
@@ -485,29 +516,10 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		// retries) STILL ends the session + notifies — otherwise the D1 row sits "active"
 		// forever, the runner tmux is never torn down, and the run silently vanishes.
 		try {
-			// Ensure the tmux session is up and the CLI launched (clones the repo if the
-			// runner doesn't already have this session, e.g. after a runner restart).
-			await step.do("start", { retries: { limit: 1, delay: "3 seconds" as const, backoff: "constant" as const }, timeout: "5 minutes" as const }, async () => {
-				// Resolve the session's exact CLI command, its workDir, and its engine env
-				// (API key / OAuth token) FRESH here — the same fields startSessionOnRunner
-				// passes. Without them, a runner that must re-create the session after a restart
-				// would relaunch the DEFAULT cli with NO auth (wrong binary / auth failure). Env
-				// is resolved inside the step (not journaled) so the key never lands in workflow
-				// state — matching how the runner token is kept out of state elsewhere.
-				const [sess, repo] = await Promise.all([
-					getSession(env, instanceId, userId, sessionId),
-					getRepo(env, instanceId, userId, repoId),
-				]);
-				const engineEnv = sess ? await resolveEngineEnv(env, instanceId, userId, sess) : undefined;
-				return callRunner<{ sessionId?: string }>(conn, "/coding/start", {
-					sessionId, repoId,
-					workDir: repo?.workdir || undefined,
-					cloneUrl, branch, token,
-					clientType: goal.clientType,
-					command: sess?.launchCommand || undefined,
-					env: engineEnv,
-				});
-			});
+			// Ensure the session is up and the CLI launched (clones the repo if the runner doesn't
+			// already have this session, e.g. after a runner restart). Guarded like every other
+			// runner call: a run queued while the machine was rebooting used to die here too.
+			await guard(runWith(startRetry), "start", startOnRunner);
 			// What state did the last run leave this checkout in? (#276)
 			//
 			// Delegated runs park repos wherever they stopped — one live Lead had a subordinate
@@ -585,7 +597,12 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 		} catch (e) {
 			// A step exhausted its retries and threw — record it so the finally still
 			// syncs the session + notifies, instead of letting the run vanish.
-			result = { outcome: "failed", detail: `run error: ${e instanceof Error ? e.message : String(e)}`, steps: result.steps, transcript: result.transcript };
+			//
+			// A waited-out runner is reported as ITSELF, without the "run error:" prefix — that
+			// prefix reads as a crash, and "the runner did not come back" is a finding, not one.
+			// This is the sentence that replaces "run error: No runner connected — run `pags up`".
+			const message = e instanceof Error ? e.message : String(e);
+			result = { outcome: "failed", detail: isRunnerGone(e) ? message : `run error: ${message}`, steps: result.steps, transcript: result.transcript };
 		} finally {
 			// Uncommitted work is a PENDING HUMAN DECISION, so it goes on the board (#276).
 			//
@@ -705,81 +722,6 @@ export class CodingSessionWorkflow extends WorkflowEntrypoint<Env, CodingSession
 			await closeDelegation(result);
 		}
 		return result;
-	}
-
-	/**
-	 * Watch a manually-driven session: the user typed an instruction into the CLI
-	 * (➤ Agent). Wait for the pane to settle to idle, then summarize what happened,
-	 * persist it to the chat thread, and notify the user — so "the agent comes back
-	 * to you" the same way the autonomous run does, even with the console closed.
-	 */
-	private async runWatch(event: WorkflowEvent<CodingSessionParams>, step: WorkflowStep): Promise<CodingResult> {
-		const { instanceId, userId, sessionId, runnerNode, goal } = event.payload;
-		const env = this.env;
-		const conn = await getRunnerConn(env, instanceId, userId, runnerNode ?? null);
-		if (!conn) return { outcome: "failed", detail: "No coding runner connected.", steps: 0 };
-
-		// Wait for the just-sent instruction to run to completion (pane goes idle).
-		const finalPane = (await step.do(
-			"watch-idle",
-			{ retries: { limit: 1, delay: "2 seconds" as const, backoff: "constant" as const }, timeout: "15 minutes" as const },
-			async () => {
-				const capture = () => callRunner<CodingPaneSnapshot & { sessionId: string }>(conn, "/coding/capture", { sessionId }, { timeoutMs: READ_TIMEOUT_MS });
-				await sleep(2500); // let the CLI receive the input
-				let snap = await capture();
-				// Phase 1: wait for Claude to actually START on it (go non-idle), up to ~24s.
-				// A quick/no-op message may never go busy — fall through and summarize anyway,
-				// rather than reading a premature idle and reporting "nothing happened".
-				for (let i = 0; i < 12 && snap.runState === "idle" && snap.alive && !snap.cancelled; i++) {
-					await sleep(2000);
-					snap = await capture();
-				}
-				// Phase 2: wait for it to FINISH (return to idle).
-				for (let poll = 0; poll < 360 && snap.runState !== "idle" && snap.alive && !snap.cancelled; poll++) {
-					await sleep(2000);
-					snap = await capture();
-				}
-				return snap;
-			},
-		)) as CodingPaneSnapshot;
-
-		// Bow out if a later send superseded this watcher — only the latest one
-		// notifies, so one completion can't fire several push notifications.
-		const stillLatest = (await step.do("watch-is-latest", async () => {
-			if (!event.payload.watchId) return true;
-			const row = await env.DB.prepare("SELECT watch_workflow_id FROM coding_sessions WHERE id = ?1")
-				.bind(sessionId)
-				.first<{ watch_workflow_id: string | null }>();
-			return !row?.watch_workflow_id || row.watch_workflow_id === event.payload.watchId;
-		})) as boolean;
-		if (!stillLatest) return { outcome: "done", detail: "superseded by a newer send", steps: 0 };
-
-		// Summarize what the agent did, post it to the thread, and ping the user.
-		await step.do("watch-summarize", async () => {
-			const memory = await contextForCopilot(env, sessionId);
-			const reply = await copilotSummary(env, userId, { finished: true, memory, pane: finalPane.pane || "", instanceId }).catch(() => "");
-			if (reply) await appendTimeline(env, { sessionId, instanceId, userId, type: "chat_assistant", content: reply });
-			// Save the actual terminal transcript too (deduped) — the audit trail of what
-			// Claude really did, not just the summary. Otherwise the manual chat flow only
-			// keeps your message + the gist, and the real work isn't recorded anywhere.
-			const pane = (finalPane.pane || "").trim();
-			if (pane) {
-				const prev = await lastTerminal(env, sessionId).catch(() => null);
-				if (pane !== (prev ?? "").trim()) {
-					await appendTimeline(env, { sessionId, instanceId, userId, type: "terminal", content: pane.slice(-12000) }).catch(() => undefined);
-				}
-			}
-			await notifyUser(
-				env,
-				userId,
-				"coding",
-				"✅ Coder finished",
-				`${goal.repo}: ${reply ? reply.slice(0, 140) : "done — open to see what it did"}`,
-				codingSessionLink(instanceId, sessionId),
-			).catch(() => undefined);
-			return null;
-		});
-		return { outcome: "done", detail: "watched to idle", steps: 0 };
 	}
 }
 

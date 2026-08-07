@@ -1,4 +1,5 @@
 import { decryptKey } from "./crypto.js";
+import { NO_SOCKET_MARKER, relayFailureIsDisconnect, RunnerUnreachableError } from "./runner-unreachable.js";
 import { normalizeRunnerNode, readInstanceRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
 import type { Env } from "../types.js";
 
@@ -150,9 +151,17 @@ export async function callRunner<T = unknown>(conn: RunnerConn, path: string, bo
 		headers: { "Content-Type": "application/json" },
 		body: JSON.stringify({ method: "POST", path, body, timeoutMs: opts?.timeoutMs }),
 	}));
-	if (res.status === 503) throw new Error("No runner connected — run `pags up`");
 	if (!res.ok) {
 		const detail = await res.text().catch(() => "");
+		// A DISCONNECT KNOWS IT IS ONE (#341, following #339). The RelayDO reports two distinct
+		// facts — 503, no socket at dispatch; 504 "Runner disconnected", the socket went away with
+		// a command in flight — and both mean "gone for now", which a caller can wait out. Raising
+		// a typed error stops every catch site inferring that from the wording, and stops this line
+		// prescribing `pags up` to someone already running it: the remedy depends on WHY it is not
+		// attached (`diagnoseAttachment`, #237), which this function cannot see and must not guess.
+		if (relayFailureIsDisconnect(res.status, detail)) {
+			throw new RunnerUnreachableError(`No runner connected — ${NO_SOCKET_MARKER} for this agent.`);
+		}
 		throw new Error(`Runner ${path} → ${res.status}: ${detail.slice(0, 200)}`);
 	}
 	return (await res.json()) as T;

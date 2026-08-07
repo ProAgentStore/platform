@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { callRunner, getBoundRunnerConn, isRunnerOnline, relayConnected, READ_TIMEOUT_MS, type RunnerConn } from "./runner-client.js";
 import { normalizeRunnerNode, relayNameForInstance } from "./runtime-nodes.js";
+import { isRunnerUnreachable } from "./runner-unreachable.js";
 import type { Env } from "../types.js";
 
 type MockRelay = {
@@ -98,10 +99,22 @@ describe("callRunner (relay-only)", () => {
 		expect(seenName).toBe("inst-1:node:macbook");
 	});
 
-	it("throws when relay returns 503 (no runner connected)", async () => {
+	it("throws a TYPED, retryable error when relay returns 503 (no runner connected)", async () => {
+		// #341: the caller must be able to tell "gone for now" from "broken" without reading the
+		// wording, and the message must not prescribe `pags up` to someone already running it.
 		const relay = mockRelay(async () => Response.json({ error: "No runner connected" }, { status: 503 }));
 		const conn = mockConn({ RELAY: relay });
-		await expect(callRunner(conn, "/test")).rejects.toThrow("No runner connected");
+		const err = await callRunner(conn, "/test").then(() => null, (e) => e as Error);
+		expect(isRunnerUnreachable(err)).toBe(true);
+		expect(err?.message).toContain("No runner connected");
+		expect(err?.message).not.toContain("run `pags up`");
+	});
+
+	it("treats a socket that dropped mid-command (504) as unreachable, but a hung runner as a real error", async () => {
+		const dropped = mockRelay(async () => Response.json({ error: "Runner disconnected" }, { status: 504 }));
+		expect(isRunnerUnreachable(await callRunner(mockConn({ RELAY: dropped }), "/test").catch((e) => e))).toBe(true);
+		const hung = mockRelay(async () => Response.json({ error: "Relay command timed out" }, { status: 504 }));
+		expect(isRunnerUnreachable(await callRunner(mockConn({ RELAY: hung }), "/test").catch((e) => e))).toBe(false);
 	});
 
 	it("throws when RELAY binding is absent", async () => {
