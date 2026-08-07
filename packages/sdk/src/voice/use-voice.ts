@@ -51,7 +51,7 @@ import { initVad, shouldAutoDetectEndOfTurn, vadStep } from "./vad.js";
 import { computeRmsLevel } from "./audio.js";
 import { createSpeechGate, speechGateAvailable, type SpeechGate } from "./gate.js";
 import { canOpenMic, classifyResult, derivePhase, dictationDiverged, endOfTurnAction, isEchoing, prepareConversationSwitch, reduceDictation, resolveToggleAction, shouldIgnoreResult, type Dictation, type DictationEvent, type VoiceGuardState } from "./machine.js";
-import { classifyVoiceError, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
+import { classifyVoiceError, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, micUnavailableMessage, normalizeMediaError, planRestartBail, resolveVoiceMode, shouldRunControlListener, shouldScanGateTranscript, stripStopWord, type VoiceMode } from "./convo.js";
 import { extendTranscribePrompt } from "./prompt.js";
 import { planFinalizedTurn, planNoiseRejection, planSend, utteranceSoFar } from "./turn.js";
 import { getAudioCtx, playListeningChime, playStartCue, playThinkingChime, unlockSpeechSynthesis } from "./cues.js";
@@ -321,7 +321,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 							// let's move on". commandStateFor drops the destructive flag (#342).
 							const cmd = matchVoiceCommand(
 								text,
-								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
+								{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 								voiceLangRef.current,
 								commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
 							);
@@ -830,9 +830,13 @@ export function useVoice(instanceId: string | undefined, opts: {
 	// Web Speech (e.g. iOS Safari) — the feature degrades to the existing in-turn detection.
 	// (ctrlSttRef / ctrlWantRef are declared up top so startListening can yield the mic.)
 
-	const handleControlResult = useCallback((text: string) => {
+	const handleControlResult = useCallback((text: string, isFinal: boolean) => {
 		if (!text?.trim() || !commandsEnabledRef.current) return;
-		// Stop-speech keyword: interrupt the agent's TTS the instant it's heard.
+		// Stop-speech keyword: interrupt the agent's TTS the instant it's heard. Deliberately left
+		// OUTSIDE the echo hardening below: it is gated on the agent SPEAKING, which is what contains
+		// its loose substring matcher, and interrupting playback is the one command whose entire
+		// purpose is to fire while the agent talks. The worst a self-match can do is end the agent's
+		// own sentence early.
 		if (matchesStopSpeech({ keyword: stopSpeechKeywordRef.current, text, ttsSpeaking: !!ttsRef.current?.speaking })) {
 			ttsRef.current?.cancel();
 			setSpeaking(false);
@@ -842,16 +846,25 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// Control words — honored at ANY time. `muted` is passed so unmute is matched ONLY while
 		// muted (and mute/repeat are inert there); see matchVoiceCommand.
 		//
-		// "partial" (#342): this recognizer is wired to check INTERIM as well as final results —
-		// that is what makes it able to catch "mute" the instant it is spoken — so the destructive
-		// flag is dropped. The cost is that "scrap that" said WHILE the agent is talking does
-		// nothing; the mic reopens a moment later and the main path hears it. Missing a delete is
-		// the cheap failure; performing one nobody finished asking for is not.
+		// ECHO (#386): this is the ONLY listener running while the agent speaks, so it is also the
+		// only one that cannot answer speaker→mic bleed by dropping the result — that would delete
+		// mute-during-TTS, the capability #153 built it for. `echoing` instead raises the bar inside
+		// that window (no partials, whole-utterance only), which is what separates a deliberate
+		// "mute mute" from the agent saying "Stop me if this is wrong", whose first interim is
+		// exactly "stop". The rule itself is in commandStateFor, with what it costs.
+		//
+		// `canScrap` is deliberately NOT passed. This listener has no scrap dispatch, and now that it
+		// states the REAL transcript kind, passing the flag would quietly enable a destructive command
+		// on a path that cannot act on it (and would let it mask a command below it in the order).
 		const cmd = matchVoiceCommand(
 			text,
-			{ mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
+			{ mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 			voiceLangRef.current,
-			commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
+			commandStateFor(isFinal ? "final" : "partial", {
+				muted: mutedRef.current,
+				canSwitch: canSwitchRef.current,
+				echoing: isEchoing(readGuard(), Date.now()),
+			}),
 		);
 		if (cmd === "mute") muteFromCommandRef.current();
 		else if (cmd === "unmute") unmuteFromCommandRef.current();
@@ -859,7 +872,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 		// This listener is the ONLY one running while the agent speaks or thinks and the mic is
 		// closed — i.e. exactly when a hands-free user has nothing to look at and most wants out.
 		else if (cmd === "next") nextFromCommandRef.current();
-	}, []);
+	}, [readGuard]);
 	const handleControlResultRef = useRef(handleControlResult);
 	handleControlResultRef.current = handleControlResult;
 
@@ -872,7 +885,9 @@ export function useVoice(instanceId: string | undefined, opts: {
 		if (!ctrlSttRef.current) {
 			ctrlSttRef.current = new VoiceStt("browser", {
 				language: voiceLangRef.current,
-				onResult: (text) => handleControlResultRef.current(text), // checks interim AND final
+				// Interim AND final both reach the handler; which one this is now MATTERS (#386), so it
+				// is passed through rather than discarded at the boundary.
+				onResult: (text, isFinal) => handleControlResultRef.current(text, isFinal),
 				onError: () => { /* mic denied / no-speech — onEnd re-arms if still wanted */ },
 				onEnd: () => { if (ctrlWantRef.current) { try { ctrlSttRef.current?.start(); } catch { /* SR busy */ } } },
 			});
@@ -964,7 +979,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			const cmd = combined
 				? matchVoiceCommand(
 						combined,
-						{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
+						{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 						voiceLangRef.current,
 						commandStateFor("partial", { muted: mutedRef.current, canSwitch: canSwitchRef.current, canScrap: canScrapRef.current }),
 					)
@@ -1008,7 +1023,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 					canScrap: canScrapRef.current,
 					canSwitch: canSwitchRef.current,
 					muted: mutedRef.current,
-					words: { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
+					words: { repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 					lang: voiceLangRef.current,
 					stopWords: stopWordsRef.current,
 				});
@@ -1125,7 +1140,7 @@ export function useVoice(instanceId: string | undefined, opts: {
 			if (commandsEnabledRef.current) {
 				const cmd = matchVoiceCommand(
 					text.trim(),
-					{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current },
+					{ repeat: repeatWordsRef.current, mute: muteWordsRef.current, unmute: unmuteWordsRef.current, exit: exitWordsRef.current, next: nextWordsRef.current, scrap: scrapWordsRef.current, stopSpeech: stopSpeechKeywordRef.current },
 					voiceLangRef.current,
 					// "final" — one of only two sites where a destructive command may be judged
 					// (#342). Tap-to-talk is also where the auto-VAD is off, so this really is the
@@ -1230,9 +1245,23 @@ export function useVoice(instanceId: string | undefined, opts: {
 					// Recognizer ended mid-conversation. If it keeps ending instantly we're in
 					// a failing restart loop (mic blocked / abort) — decideRestart counts those
 					// and bails after a few so the page never freezes. (Pure + unit-tested.)
-					const { bail, nextRapidEnds } = decideRestart(Date.now() - lastListenStartRef.current, rapidEndsRef.current);
+					const { bail, nextRapidEnds, rapidEnds } = decideRestart(Date.now() - lastListenStartRef.current, rapidEndsRef.current);
 					rapidEndsRef.current = nextRapidEnds;
-					if (bail) { setConvoOn(false); setMicOn(false); return; }
+					if (bail) {
+						// Giving up is a RESULT, and it used to be the only path here that produced no
+						// evidence of itself (#387) — the toggle flipped back and nothing said why, which
+						// reads as a crash. Both halves, because they answer different questions: the
+						// notice is the only thing that helps the user (every cause is theirs to fix and
+						// only if named), the durable row is the only thing that makes "it keeps dropping
+						// out on my phone" countable. planRestartBail holds both, and the reason the
+						// notice is NOT auto-cleared like the error notices above it.
+						const plan = planRestartBail({ rapidEnds, sttWhisper: sttIsWhisperRef.current });
+						reportClientError("voice", plan.report, plan.context);
+						flushSync(() => setNotice(plan.notice));
+						setConvoOn(false);
+						setMicOn(false);
+						return;
+					}
 					setTimeout(() => {
 						if (convoOnRef.current && !pausedForThinkingRef.current) startListening();
 					}, RESTART_DELAY_MS);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandPhrases, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
+import { commandPhrases, commandStateFor, decideRestart, matchesStopSpeech, matchVoiceCommand, planRestartBail, resolveVoiceMode, resolveVoiceStatus, shouldRunControlListener, shouldScanGateTranscript, splitTrailingCommand, stripStopWord, transcriptLanguageMismatch } from "./convo.js";
 
 describe("decideRestart", () => {
 	it("reopens the mic (no bail) after a healthy-length turn and resets the counter", () => {
@@ -704,8 +704,8 @@ describe("commandStateFor", () => {
 		// The three live-partial call sites pass `canScrap: true` and get `false` back. That is
 		// the point: the flag is refused on the way IN rather than never passed, so the rule
 		// cannot be undone by a reader who notices one site "missing" what its siblings have.
-		expect(commandStateFor("partial", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: false });
-		expect(commandStateFor("final", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: true });
+		expect(commandStateFor("partial", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: false, judgeable: true, whole: false });
+		expect(commandStateFor("final", { canScrap: true })).toEqual({ muted: false, canSwitch: false, canScrap: true, judgeable: true, whole: false });
 	});
 
 	it("makes the same words a delete on a final and ordinary speech on a partial", () => {
@@ -727,8 +727,8 @@ describe("commandStateFor", () => {
 	});
 
 	it("passes muted and canSwitch through as booleans, defaulting to off", () => {
-		expect(commandStateFor("final", {})).toEqual({ muted: false, canSwitch: false, canScrap: false });
-		expect(commandStateFor("final", { muted: true, canSwitch: true })).toEqual({ muted: true, canSwitch: true, canScrap: false });
+		expect(commandStateFor("final", {})).toEqual({ muted: false, canSwitch: false, canScrap: false, judgeable: true, whole: false });
+		expect(commandStateFor("final", { muted: true, canSwitch: true })).toEqual({ muted: true, canSwitch: true, canScrap: false, judgeable: true, whole: false });
 	});
 });
 
@@ -757,5 +757,132 @@ describe("matchesStopSpeech", () => {
 
 	it("does not match text without the keyword", () => {
 		expect(matchesStopSpeech({ keyword: "stop", text: "keep going", ...speaking })).toBe(false);
+	});
+});
+
+describe("precedence: an explicit binding outranks a built-in (#385)", () => {
+	// The reported account, verbatim: exitWords never set, stopSpeechKeyword explicitly set to the
+	// phrase the built-in English exit list happens to own. Saying it while the agent was silent
+	// tore hands-free down — the destructive reading, and the one the user never chose.
+	const REPORTED = { stopSpeech: "stop stop" };
+
+	it("does not exit on a phrase the user bound to stop-speech", () => {
+		expect(matchVoiceCommand("stop stop", REPORTED, "en-US")).toBeNull();
+		expect(matchVoiceCommand("Stop-stop.", REPORTED, "en-US")).toBeNull(); // #334 normalisation
+		expect(commandPhrases("exit", REPORTED, "en-US")).not.toContain("stop stop");
+	});
+
+	it("leaves the REST of the exit list working — only the colliding phrase is given up", () => {
+		for (const utterance of ["exit voice", "text mode", "back to text"]) {
+			expect(matchVoiceCommand(utterance, REPORTED, "en-US"), utterance).toBe("exit");
+		}
+		// "stop stop" was reserved, bare "stop" was not: the keyword is not a substring of it, so
+		// nothing the user bound would fire on that word.
+		expect(matchVoiceCommand("stop", REPORTED, "en-US")).toBe("exit");
+	});
+
+	// matchesStopSpeech is a SUBSTRING matcher, so the reservation has to be as wide as it is:
+	// saying "stop stop" IS saying "stop", and the explicit binding is what the user chose.
+	it("a one-word stop-speech keyword also reserves the built-ins that contain it", () => {
+		const bound = { stopSpeech: "stop" };
+		expect(matchVoiceCommand("stop", bound, "en-US")).toBeNull();
+		expect(matchVoiceCommand("stop stop", bound, "en-US")).toBeNull();
+		expect(matchVoiceCommand("exit voice", bound, "en-US")).toBe("exit"); // untouched
+		// "stop listening" contains it too, so it goes with it rather than firing a different
+		// action on a phrase the user has claimed.
+		expect(matchVoiceCommand("stop listening", bound, "en-US")).toBeNull();
+	});
+
+	it("applies between command lists too, in whichever order they are checked", () => {
+		// exit is matched BEFORE mute, so without this rule the built-in exit "stop" would win
+		// over a mute the user typed themselves.
+		expect(matchVoiceCommand("stop", { mute: ["stop"] }, "en-US")).toBe("mute");
+		// And the reverse direction: a bound exit phrase is not re-read as a repeat.
+		expect(matchVoiceCommand("pardon", { exit: ["pardon"] }, "en-US")).toBe("exit");
+	});
+
+	it("carries the same rule into splitTrailingCommand, which strips words off a real message", () => {
+		// Without the shared rule the two disagree: the matcher says "not a command", the splitter
+		// still amputates the phrase from the end of the sentence it is part of.
+		expect(splitTrailingCommand("stop stop", REPORTED, "en-US", { muted: false })).toEqual({ command: null, text: "stop stop" });
+	});
+
+	it("changes nothing for a user who bound nothing — blank still means 'use ours'", () => {
+		for (const utterance of ["stop", "stop stop", "exit voice", "mute", "repeat"]) {
+			expect(matchVoiceCommand(utterance, undefined, "en-US"), utterance).toBe(matchVoiceCommand(utterance, {}, "en-US"));
+		}
+		expect(matchVoiceCommand("stop stop", {}, "en-US")).toBe("exit");
+	});
+});
+
+describe("the agent's own voice cannot issue commands (#386)", () => {
+	const echoing = (kind: "partial" | "final") => commandStateFor(kind, { canSwitch: true, echoing: true });
+
+	// The concrete failure: the agent says "Stop me if this is wrong", the control listener's first
+	// interim is exactly "stop", the whole-utterance rule matches the built-in exit word, and
+	// hands-free is torn down with the user having said nothing.
+	it("judges no PARTIAL while the agent may be in the microphone", () => {
+		expect(matchVoiceCommand("stop", undefined, "en", echoing("partial"))).toBeNull();
+		expect(matchVoiceCommand("mute", undefined, "en", echoing("partial"))).toBeNull();
+		expect(matchVoiceCommand("next", undefined, "en", echoing("partial"))).toBeNull();
+	});
+
+	it("still honours a deliberate command on the FINAL — #153's whole capability survives", () => {
+		expect(matchVoiceCommand("mute", undefined, "en", echoing("final"))).toBe("mute");
+		expect(matchVoiceCommand("mute mute", { mute: ["mute mute"] }, "en", echoing("final"))).toBe("mute");
+		expect(matchVoiceCommand("unmute", undefined, "en", commandStateFor("final", { muted: true, echoing: true }))).toBe("unmute");
+	});
+
+	it("refuses a multi-word phrase buried in a longer sentence while the agent speaks", () => {
+		// An agent explaining its own controls, and a coordinator naming the next agent — both fire
+		// today, because a multi-word phrase may match as a run inside a longer utterance.
+		expect(matchVoiceCommand("say mute mute to silence me", { mute: ["mute mute"] }, "en", echoing("final"))).toBeNull();
+		expect(matchVoiceCommand("the switch agent step is next", undefined, "en", echoing("final"))).toBeNull();
+		// …and outside the echo window that same sentence is still a command, unchanged.
+		expect(matchVoiceCommand("okay mute mute now", { mute: ["mute mute"] }, "en", commandStateFor("final", {}))).toBe("mute");
+	});
+
+	it("does not swallow single words wholesale — a real 'commit' still reaches the agent (#377)", () => {
+		expect(matchVoiceCommand("commit", undefined, "en", echoing("final"))).toBeNull();
+		expect(matchVoiceCommand("commit", undefined, "en", echoing("partial"))).toBeNull();
+	});
+
+	it("is inert when the agent is silent — every existing call site is byte-identical", () => {
+		for (const kind of ["partial", "final"] as const) {
+			expect(commandStateFor(kind, { canScrap: true, canSwitch: true, muted: true })).toEqual(
+				commandStateFor(kind, { canScrap: true, canSwitch: true, muted: true, echoing: false }),
+			);
+		}
+		expect(commandStateFor("partial", { echoing: true }).judgeable).toBe(false);
+		expect(commandStateFor("final", { echoing: true }).whole).toBe(true);
+	});
+});
+
+describe("planRestartBail (#387 — hands-free never gives up in silence)", () => {
+	it("says what happened AND what to try, and does not expire", () => {
+		const plan = planRestartBail({ rapidEnds: 4, sttWhisper: false });
+		expect(plan.notice).toMatch(/hands-free/i);
+		expect(plan.notice).toMatch(/mic/i);
+		// Every cause is user-fixable and only if named — a notice that does not say what to do
+		// leaves the user with "hands-free is flaky", the conclusion this exists to prevent.
+		expect(plan.notice).toMatch(/allowed|permission|tab|app/i);
+	});
+
+	it("reports a FIXED message with the varying detail in the context", () => {
+		// reportClientError de-dups on source+message, so a burst must collapse to ONE row.
+		const a = planRestartBail({ rapidEnds: 4, sttWhisper: false });
+		const b = planRestartBail({ rapidEnds: 9, sttWhisper: true });
+		expect(a.report).toBe(b.report);
+		expect(a.report).toBeTruthy();
+		expect(a.context).toEqual({ rapidEnds: 4, sttWhisper: false });
+		expect(b.context).toEqual({ rapidEnds: 9, sttWhisper: true });
+	});
+
+	it("gets the count from the decision that bailed — nextRapidEnds is reset and cannot say", () => {
+		const d = decideRestart(50, 3);
+		expect(d.bail).toBe(true);
+		expect(d.nextRapidEnds).toBe(0);
+		expect(d.rapidEnds).toBe(4);
+		expect(planRestartBail({ rapidEnds: d.rapidEnds, sttWhisper: false }).context.rapidEnds).toBe(4);
 	});
 });

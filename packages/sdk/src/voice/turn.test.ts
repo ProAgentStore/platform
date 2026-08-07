@@ -349,10 +349,18 @@ describe("command matcher call sites", () => {
 		}
 	});
 
-	it("keeps three partial sites and two final ones", () => {
+	/**
+	 * Four sites hold ONE kind and say so as a literal. The fifth — the always-on control listener
+	 * — holds whichever kind the recognizer just handed it, and since #386 that difference decides
+	 * whether the transcript may be judged at all while the agent is speaking. It is the one site
+	 * that must pass the kind through rather than name it, so it is pinned separately instead of
+	 * being allowed to vanish from the count.
+	 */
+	it("keeps two partial sites, two final ones, and one that passes the kind through", () => {
 		const all = Object.values(sources).join("\n");
-		expect(all.match(/commandStateFor\("partial"/g)?.length, "the gate, the control listener, the interim keyword path").toBe(3);
+		expect(all.match(/commandStateFor\("partial"/g)?.length, "the gate, the interim keyword path").toBe(2);
 		expect(all.match(/commandStateFor\("final"/g)?.length, "the finished hands-free turn, the push-to-talk final").toBe(2);
+		expect(all.match(/commandStateFor\(isFinal \? "final" : "partial"/g)?.length, "the always-on control listener").toBe(1);
 	});
 
 	/**

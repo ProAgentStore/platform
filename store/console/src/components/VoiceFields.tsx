@@ -360,7 +360,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 
 			{/* Configurable command keywords. Comma-separated. Repeat/mute obey the toggle
 			    above; the stop-word works whenever it's set. */}
-			<p className="text-[0.7rem] text-muted-soft mt-3">These <b>override</b> your global voice commands (Preferences → Voice) for this agent only. Leave blank to use your global default.</p>
+			<p className="text-[0.7rem] text-muted-soft mt-3">These <b>override</b> your global voice commands (Preferences → Voice) for this agent only. Leave blank to use your global default. Anything you type here wins over our built-in phrasings — the same phrase is never read as two different commands.</p>
 			<div className="grid gap-2.5 mt-2">
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Repeat keywords</span>
@@ -399,7 +399,7 @@ export default function VoiceFields({ value, onPatch, hasOpenAiKey, savedNote = 
 				<label className="block">
 					<span className="block text-xs font-semibold mb-0.5">Stop-speech keyword — interrupt the agent</span>
 					<input value={stopSpeechKeyword} onChange={(e) => setStopSpeechKeyword(e.target.value)} onBlur={() => saveVoice({ stopSpeechKeyword })} placeholder="e.g. stop stop  (blank = off)" className="w-full bg-paper border border-line rounded-lg px-2.5 py-1.5 text-sm" />
-					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it <b>while the agent is talking</b> to halt playback immediately (hands-free keeps listening through TTS when this is set). Off by default; pick a distinctive phrase so the agent's own speech can't trigger it.</span>
+					<span className="block text-[0.7rem] text-muted-soft mt-0.5">Say it <b>while the agent is talking</b> to halt playback immediately (hands-free keeps listening through TTS when this is set). Off by default; pick a distinctive phrase so the agent's own speech can't trigger it. A phrase you set here is <b>yours</b> — it won't also be read as an exit or mute word, even if it's one of our built-in ones.</span>
 				</label>
 			</div>
 

@@ -93,6 +93,26 @@ apply across every agent; a per-instance voice config can still override them. T
 is script-aware — the gate, STT, TTS, and the "repeat" command all work in every supported
 language.
 
+**A phrase you bind is yours.** Leaving a command field blank still means "use our built-in
+phrasings", but a phrase you have bound to one action is never also read as another: it is
+removed from every built-in list before those are matched. Binding the stop-speaking keyword to
+`stop stop` used to give that phrase two meanings, chosen by whether TTS happened to be playing —
+stop the speech while the agent talked, and *leave voice entirely* when it didn't, because the
+built-in exit list owns the same words. The explicit binding now wins in both windows.
+
+**The agent's own voice cannot command it.** The background control listener is the one path that
+runs *while* the agent speaks — that is what makes "mute" work during playback — so it cannot
+simply ignore what it hears in that window. Instead the bar goes up: while the agent is talking (or
+inside its short echo tail) a partial transcript is not judged at all, and a command must be the
+whole utterance. So a deliberate "mute mute" still stops it, and the agent saying *"Stop me if this
+is wrong"* no longer ends your session on the word "stop".
+
+**Hands-free says why it stopped.** If the recogniser dies immediately several times in a row — mic
+permission revoked mid-session, another tab or app taking the device, the OS suspending it — the
+session gives up rather than spinning in a restart loop. It now says so, with what to try, and
+leaves the message up until you act; the give-up is also recorded in the durable error log
+(`client:voice`), so a device that keeps dropping out is countable rather than anecdotal.
+
 ## Recording replay, translation & transliteration
 
 - **Replay** — each voice turn's audio is saved to R2 (`/voice-audio/:turnId`). The speaker

@@ -136,7 +136,31 @@ const PINS = {
 	// a `client:voice` breadcrumb at each, because the defect's worst property was leaving no
 	// record anywhere. `gateSnapshot()` is the one extraction: both flags now read together at
 	// every decision point instead of separately at each.
-	"packages/sdk/src/voice/use-voice.ts": 1663,
+	// +29 for #385/#386/#387, and none of the three DECIDES anything here. The precedence rule
+	// (#385) is one field threaded into the five matcher call sites — the stop-speech keyword is now
+	// visible to the matcher, because a phrase the user bound is what has to outrank a built-in — and
+	// it is decided in convo.ts's `commandPhrases`. #386 costs the control listener its `isFinal`
+	// argument, an echo snapshot read from the existing `readGuard()`, and the paragraph saying why
+	// this one listener raises its bar instead of dropping results like its three siblings do: it is
+	// the only one that runs while the agent speaks, which is the capability #153 built it for. #387
+	// is the largest slice and the whole point of the ticket — a bail used to be three statements
+	// that said nothing, and is now a durable `client:voice` row plus a notice that deliberately does
+	// not expire; both come out of `planRestartBail` in convo.ts, so what landed here is the dispatch
+	// and the reason the notice outlives the ones above it.
+	"packages/sdk/src/voice/use-voice.ts": 1692,
+	// New entry at #385/#386/#387 — 689 → 845, crossing LIMIT, and it is prose that crossed it.
+	// This file is the vocabulary and the RULES over it: which phrases are in force for a command,
+	// which transcript may be judged for one, what a failing restart loop means. All three tickets
+	// are rules of exactly that kind, so the alternative to growing it is a second file that owns
+	// half a decision — `commandPhrases` and `matchVoiceCommand` must agree by construction, and
+	// `commandStateFor` exists precisely because the interim/final distinction was once spread over
+	// five call sites. The added length is the reasoning: why an explicit binding outranks a built-in
+	// and what the deliberately-unfixed half of #385 would cost (a backfill, and freezing
+	// language-derived words into user config), why the echo bar goes UP for one listener instead of
+	// the door closing, and why a bail needs both a notice and a durable row. A split along
+	// "commands" / "session control" is available later if this keeps growing; today it would put the
+	// restart guard on one side of a line and the thing that reports its failure on the other.
+	"packages/sdk/src/voice/convo.ts": 845,
 	// +2 for #319: an import and the one-line swap of the user-bubble body for `SpokenMessage`.
 	// The toggle, the divergence count and their prose live in that component, not here.
 	// +6 net for #335/#336: `loadMessages` now says whether it is OPENING a conversation or

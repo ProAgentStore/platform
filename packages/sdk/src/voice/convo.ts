@@ -20,6 +20,10 @@ export interface RestartDecision {
 	bail: boolean;
 	/** The updated consecutive-rapid-end counter to carry forward. */
 	nextRapidEnds: number;
+	/** How many consecutive rapid ends this decision COUNTED, including the one it just judged.
+	 *  Carried out separately because `nextRapidEnds` is reset to 0 on a bail, so it cannot say
+	 *  how the bail was reached — and a bail that cannot say that is the #387 defect in miniature. */
+	rapidEnds: number;
 }
 
 /**
@@ -36,9 +40,49 @@ export function decideRestart(elapsedMs: number, rapidEnds: number, cfg: Restart
 	const maxRapid = cfg.maxRapid ?? 4;
 	if (elapsedMs < rapidMs) {
 		const next = rapidEnds + 1;
-		return next >= maxRapid ? { bail: true, nextRapidEnds: 0 } : { bail: false, nextRapidEnds: next };
+		return next >= maxRapid ? { bail: true, nextRapidEnds: 0, rapidEnds: next } : { bail: false, nextRapidEnds: next, rapidEnds: next };
 	}
-	return { bail: false, nextRapidEnds: 0 };
+	return { bail: false, nextRapidEnds: 0, rapidEnds: 0 };
+}
+
+/**
+ * What a hands-free BAIL says and records (#387).
+ *
+ * Bailing out is correct — the alternative is a restart loop that pegs the CPU and freezes the
+ * page — but it used to be the one path in the whole voice stack that did it in silence. No
+ * notice, no durable row, no console line: hands-free simply stopped and the mode toggle flipped
+ * back on its own, which from the outside is indistinguishable from a crash. Twenty lines away in
+ * the same handler, an error the recognizer REPORTS is logged, surfaced and self-clearing; the
+ * failure it expresses by dying four times in a row — the more serious of the two, because it ends
+ * the whole session rather than one turn — said nothing at all.
+ *
+ * Both halves are here because they answer different questions and neither substitutes for the
+ * other. The NOTICE is the only thing that helps the user: every cause on the list (permission
+ * revoked mid-session, another tab or app took the microphone, the OS suspended it) is
+ * user-fixable, and only if it is named. The REPORT is the only thing that makes "hands-free keeps
+ * dropping out on my phone" countable — with no row in the durable log there is nothing to confirm
+ * it against, which is the same shape as #241 and #376: the system knew and no surface read it back.
+ *
+ * Shaped like `planNoiseRejection` in turn.ts: a FIXED report string, because `reportClientError`
+ * de-dups on source+message and a burst must collapse to one row, with everything that varies in
+ * the context.
+ */
+export interface RestartBailPlan {
+	/** Shown to the user, and deliberately NOT auto-cleared like a transcription error: the
+	 *  session is gone until they act, so a message that expires restores the original silence. */
+	notice: string;
+	/** Durable-log message (`client:voice`). Fixed — see above. */
+	report: string;
+	/** What varies per bail, so the frequency is measurable per device / STT mode. */
+	context: { rapidEnds: number; sttWhisper: boolean };
+}
+
+const BAIL_NOTICE =
+	"⚠ Hands-free stopped — the microphone stopped responding. Check that mic access is still allowed, close any other tab or app using it, then turn hands-free back on.";
+const BAIL_REPORT = "hands-free bailed out — the recognizer ended immediately several times in a row";
+
+export function planRestartBail(s: { rapidEnds: number; sttWhisper: boolean }): RestartBailPlan {
+	return { notice: BAIL_NOTICE, report: BAIL_REPORT, context: { rapidEnds: s.rapidEnds, sttWhisper: s.sttWhisper } };
 }
 
 /**
@@ -113,7 +157,8 @@ export function resolveVoiceStatus(input: {
 export type VoiceCommand = "repeat" | "mute" | "unmute" | "exit" | "next" | "scrap";
 
 /** Per-instance overrides for the command keywords (Settings → Voice). Empty/absent =
- *  use the built-in defaults for repeat/mute/unmute/exit/next; stop-words are OFF unless configured. */
+ *  use the built-in defaults for repeat/mute/unmute/exit/next; stop-words are OFF unless configured.
+ *  A phrase set on ANY of these fields outranks every built-in — see {@link commandPhrases}. */
 export interface VoiceCommandWords {
 	/** Phrases that re-speak the last reply. Overrides the built-in multilingual set. */
 	repeat?: string[];
@@ -127,6 +172,14 @@ export interface VoiceCommandWords {
 	next?: string[];
 	/** Phrases that scrap the last turn (#342). Whole-utterance ONLY — see SCRAP_BY_LANG. */
 	scrap?: string[];
+	/**
+	 * The stop-speech keyword (#153) — halt the agent's playback. Not a command LIST and never
+	 * returned by {@link matchVoiceCommand} (it has its own gated matcher, {@link matchesStopSpeech}),
+	 * but it is an explicit user BINDING, so the precedence rule in {@link commandPhrases} has to be
+	 * able to see it. Without it, a keyword of `"stop stop"` was outranked by the built-in EXIT list
+	 * that happens to contain the same phrase (#385).
+	 */
+	stopSpeech?: string;
 }
 
 /** "Unmute" phrasings per language. The mirror of MUTE_BY_LANG — matched ONLY while muted
@@ -171,6 +224,10 @@ const UNMUTE_BY_LANG: Record<string, string[]> = {
  * NOT moved here: `"stop listening"`, which stays a MUTE phrase. It says literally what mute
  * does, exit is checked first and would have stolen it, and silencing the mic is the smaller,
  * recoverable reading of an ambiguous request.
+ *
+ * What #331 did not anticipate is a user binding one of these words to a DIFFERENT action. It
+ * happened with the stop-speech keyword, and the built-in silently won (#385) — so this list is
+ * now filtered by {@link commandPhrases} against every phrase the user bound elsewhere.
  */
 const EXIT_BY_LANG: Record<string, string[]> = {
 	en: ["exit voice", "exit voice mode", "stop voice", "stop voice mode", "leave voice", "text mode", "switch to text", "back to text", "stop", "stop stop"],
@@ -370,20 +427,26 @@ export function phraseMatchesTranscript(normalizedTranscript: string, phrase: st
  * sentence containing the word isn't hijacked; a multi-word command phrase also matches when it
  * appears as a whole-word run inside the utterance (see {@link phraseMatchesTranscript}). Built-in
  * phrasings are scoped to the agent's `lang` (the configured voice language) — an English agent
- * won't trigger on a Chinese phrase. Custom `words` from Settings/Profile REPLACE the built-ins
- * and apply in any language (the user chose them explicitly).
+ * won't trigger on a Chinese phrase. Which phrases are in force for each command — including the
+ * rule that an explicitly bound phrase outranks a built-in (#385) — is decided in ONE place,
+ * {@link commandPhrases}, so this matcher and `splitTrailingCommand` cannot disagree about it.
  */
 export function matchVoiceCommand(
 	text: string,
 	words?: VoiceCommandWords,
 	lang?: string,
-	state?: { muted?: boolean; canSwitch?: boolean; canScrap?: boolean },
+	state?: Partial<CommandMatchState>,
 ): VoiceCommand | null {
+	// A transcript captured while the agent's own voice may be in the microphone, and not yet
+	// finished, is not evidence of anything (#386) — see commandStateFor.
+	if (state?.judgeable === false) return null;
 	const t = normalizeTranscript(text);
-	const l = langKey(lang);
-	const pick = (custom: string[] | undefined, table: Record<string, string[]>) =>
-		custom?.length ? custom : (table[l] ?? table.en);
-	const hit = (phrases: string[], opts?: { whole?: boolean }) => phrases.some((p) => phraseMatchesTranscript(t, p, opts));
+	const pick = (command: VoiceCommand) => commandPhrases(command, words, lang);
+	// `state.whole` raises EVERY phrase to the whole-utterance rule for the same reason `opts.whole`
+	// raises `scrap` to it: when a match would be acted on despite the transcript being untrustworthy,
+	// the run-inside-a-sentence reading is the one that fires on somebody else's words.
+	const hit = (phrases: string[], opts?: { whole?: boolean }) =>
+		phrases.some((p) => phraseMatchesTranscript(t, p, { whole: opts?.whole === true || state?.whole === true }));
 	// "next" is a command ONLY where something can act on it (#277). The voice stack has no
 	// idea what an agent roster is, so the consumer opting in — by passing a handler — is what
 	// turns the word on. Everywhere else ("next" said to the Coder's Co-pilot, which has no
@@ -401,15 +464,15 @@ export function matchVoiceCommand(
 		// "next" IS meaningful muted, deliberately: mute silences the microphone, not the user's
 		// ability to leave. Being unable to walk away from a muted agent by voice is the exact
 		// "it demands the screen" failure #277 exists to remove.
-		if (hit(pick(words?.unmute, UNMUTE_BY_LANG))) return "unmute";
-		if (hit(pick(words?.exit, EXIT_BY_LANG))) return "exit";
-		if (canSwitch && hit(pick(words?.next, NEXT_BY_LANG))) return "next";
+		if (hit(pick("unmute"))) return "unmute";
+		if (hit(pick("exit"))) return "exit";
+		if (canSwitch && hit(pick("next"))) return "next";
 		return null;
 	}
 	// Not muted: unmute is meaningless, and matching it here would fire on someone SAYING the
 	// word ("say unmute to turn the mic back on") rather than commanding it.
-	if (hit(pick(words?.exit, EXIT_BY_LANG))) return "exit";
-	if (canSwitch && hit(pick(words?.next, NEXT_BY_LANG))) return "next";
+	if (hit(pick("exit"))) return "exit";
+	if (canSwitch && hit(pick("next"))) return "next";
 	// "scrap" (#342). Gated on `canScrap` for the same two reasons `next` is gated on `canSwitch`,
 	// and one more. (1) A surface with no delete path — the Coder's Co-pilot — must leave the word
 	// as ordinary speech rather than swallow it. (2) The consumer passing a handler is what turns
@@ -417,9 +480,9 @@ export function matchVoiceCommand(
 	// on INTERIM transcripts: a partial of "scrap that idea and let's move on" is momentarily
 	// exactly "scrap that", so a destructive command must only ever be judged on a FINAL utterance,
 	// where the whole-utterance rule below can actually see the whole utterance.
-	if (state?.canScrap && hit(pick(words?.scrap, SCRAP_BY_LANG), { whole: true })) return "scrap";
-	if (hit(pick(words?.repeat, REPEAT_BY_LANG))) return "repeat";
-	if (hit(pick(words?.mute, MUTE_BY_LANG))) return "mute";
+	if (state?.canScrap && hit(pick("scrap"), { whole: true })) return "scrap";
+	if (hit(pick("repeat"))) return "repeat";
+	if (hit(pick("mute"))) return "mute";
 	return null;
 }
 
@@ -428,6 +491,20 @@ export function matchVoiceCommand(
  * sentence still being spoken; a FINAL is an utterance the user finished.
  */
 export type TranscriptKind = "partial" | "final";
+
+/** The matching rules in force for ONE transcript — every field derived by {@link commandStateFor}
+ *  from the kind of transcript the caller holds and the state it was captured in. */
+export interface CommandMatchState {
+	muted: boolean;
+	canSwitch: boolean;
+	canScrap: boolean;
+	/** May this transcript be judged for a command at all? False for a partial captured while the
+	 *  agent's own voice may be in the microphone (#386). */
+	judgeable: boolean;
+	/** Every phrase must BE the whole utterance — the `scrap` rule (#342) applied to every command,
+	 *  because a phrase matched as a run INSIDE this transcript may be the agent's words (#386). */
+	whole: boolean;
+}
 
 /**
  * The `state` argument for {@link matchVoiceCommand}, derived from the kind of transcript the
@@ -444,15 +521,42 @@ export type TranscriptKind = "partial" | "final";
  * why the flag was missing — a shape whose failure mode is a reader "fixing" the inconsistency.
  * Here the kind is stated at every site and a partial cannot enable the command even when the
  * consumer has one: the flag is dropped on the way in, not merely never passed.
+ *
+ * ── `echoing`: the agent's own voice (#386)
+ *
+ * Four paths reason about speaker→mic bleed; the ONE that runs exclusively inside the echo window —
+ * the always-on control listener — had no guard at all, so the agent saying *"Stop me if this is
+ * wrong"* produced a first interim of exactly `"stop"`, which whole-utterance-matched the built-in
+ * exit word and tore hands-free down with the user silent. Same shape for *"say mute mute to
+ * silence me"* and *"the next agent in the chain"*.
+ *
+ * The blunt guard the other paths use — drop everything while echoing — cannot be applied there: it
+ * would remove mute-during-TTS, which is the single capability that listener was built for (#153),
+ * and `isEchoing` cannot separate the agent's voice from the user's precisely in the window where
+ * both are possible. So the bar goes UP instead of the door closing:
+ *
+ *   - a PARTIAL is not judged at all — it is the recognizer's guess at a sentence still being
+ *     spoken, and "the whole utterance so far" is exactly what makes a bare word match a word the
+ *     agent is in the middle of saying;
+ *   - a FINAL is judged, but whole-utterance only — no run inside a longer sentence.
+ *
+ * A deliberate "mute mute" still fires, on the final rather than the interim. What is paid for that:
+ * a command spoken while the agent talks lands when the recognizer closes the utterance (a beat
+ * later, not a keystroke later), and a command buried in a longer sentence *while the agent is
+ * speaking* no longer fires — everywhere else it still does. Single words are NOT dropped
+ * wholesale: #377's rule stands, and swallowing a real "commit" would be the worse failure.
  */
 export function commandStateFor(
 	kind: TranscriptKind,
-	ctx: { muted?: boolean; canSwitch?: boolean; canScrap?: boolean },
-): { muted: boolean; canSwitch: boolean; canScrap: boolean } {
+	ctx: { muted?: boolean; canSwitch?: boolean; canScrap?: boolean; echoing?: boolean },
+): CommandMatchState {
+	const echoing = ctx.echoing === true;
 	return {
 		muted: ctx.muted === true,
 		canSwitch: ctx.canSwitch === true,
 		canScrap: kind === "final" && ctx.canScrap === true,
+		judgeable: !(echoing && kind === "partial"),
+		whole: echoing,
 	};
 }
 
@@ -563,22 +667,73 @@ function dropNormalizedSuffix(cleaned: string, phrase: string): string | null {
 	return null;
 }
 
-/** The phrase list actually in force for one command — custom words if the user set any,
- *  else the built-ins for their language. Exported so callers can strip a spoken command
- *  out of a message without re-deriving the precedence rules. */
+const TABLES: Record<VoiceCommand, Record<string, string[]>> = {
+	repeat: REPEAT_BY_LANG,
+	mute: MUTE_BY_LANG,
+	unmute: UNMUTE_BY_LANG,
+	exit: EXIT_BY_LANG,
+	next: NEXT_BY_LANG,
+	scrap: SCRAP_BY_LANG,
+};
+const ALL_COMMANDS = Object.keys(TABLES) as VoiceCommand[];
+
+/**
+ * Is `phrase` one the user has explicitly bound to something OTHER than `command`? (#385)
+ *
+ * Two matchers, because the two kinds of binding are matched differently and the reservation has
+ * to be as wide as the matcher that will act on it:
+ *  - a command LIST is compared phrase-for-phrase, the same equality {@link phraseMatchesTranscript}
+ *    starts from;
+ *  - the stop-speech KEYWORD is a case-insensitive SUBSTRING matcher ({@link matchesStopSpeech}), so
+ *    it owns every built-in phrase that CONTAINS it, not merely the one that equals it. A keyword of
+ *    `"stop"` therefore reserves the built-in `"stop stop"` too: saying that phrase IS saying the
+ *    keyword, and the explicit binding is what the user chose.
+ */
+function reservedElsewhere(command: VoiceCommand, phrase: string, words?: VoiceCommandWords): boolean {
+	if (!words) return false;
+	const p = normalizeTranscript(phrase);
+	if (!p) return false;
+	for (const other of ALL_COMMANDS) {
+		if (other === command) continue;
+		if (words[other]?.some((w) => normalizeTranscript(w) === p)) return true;
+	}
+	const stop = normalizeTranscript(words.stopSpeech ?? "");
+	return !!stop && p.includes(stop);
+}
+
+/**
+ * The phrase list actually in force for one command — THE precedence rule, in one place (#385).
+ *
+ * **An explicit binding always outranks a built-in.** In two directions, and the second is the one
+ * that was missing:
+ *
+ *  1. Words configured FOR this command replace the built-ins for it (unchanged).
+ *  2. A phrase the user bound to a DIFFERENT action is removed from this command's built-ins.
+ *
+ * Rule (2) is the reported bug. An account with `stopSpeechKeyword: "stop stop"` and an empty
+ * `exitWords` got both meanings for one phrase, chosen by whether TTS happened to be playing at
+ * that instant: speaking → stop the speech (what they configured), silent → fall through to the
+ * built-in English exit list, which contains `"stop"` and `"stop stop"` (#331), and hands-free was
+ * torn down. The destructive reading was the one they never chose, and there was no way to say so —
+ * the only lever was to bind `exitWords` to some other phrase, i.e. keep the feature and move it.
+ *
+ * What this deliberately does NOT change: a BLANK field still means "use ours". Flipping blank to
+ * mean "off" is the other half of #385 and it is not a code change — it silently removes working
+ * `repeat`/`mute`/`exit` from every user who never opened the panel, so it needs a backfill that
+ * writes the built-ins into their settings first. The built-ins are also language-derived data
+ * (they follow `lang`), so freezing today's English list into a user's config would break the
+ * property that changing your voice language changes your command words. That trade belongs in its
+ * own change, with a migration. This one resolves the collision, which is the destructive part, and
+ * changes behaviour for nobody who has not explicitly bound a colliding phrase.
+ *
+ * Exported so callers can strip a spoken command out of a message without re-deriving any of it.
+ */
 export function commandPhrases(command: VoiceCommand, words?: VoiceCommandWords, lang?: string): string[] {
-	const l = langKey(lang);
-	const TABLES: Record<VoiceCommand, Record<string, string[]>> = {
-		repeat: REPEAT_BY_LANG,
-		mute: MUTE_BY_LANG,
-		unmute: UNMUTE_BY_LANG,
-		exit: EXIT_BY_LANG,
-		next: NEXT_BY_LANG,
-		scrap: SCRAP_BY_LANG,
-	};
-	const table = TABLES[command];
 	const custom = words?.[command];
-	return custom?.length ? custom : (table[l] ?? table.en);
+	if (custom?.length) return custom;
+	const table = TABLES[command];
+	const builtIn = table[langKey(lang)] ?? table.en;
+	return builtIn.filter((p) => !reservedElsewhere(command, p, words));
 }
 
 /**
