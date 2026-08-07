@@ -201,6 +201,15 @@ export const DENIAL_RULES: readonly DenialRule[] = [
 		why: "this agent declares the `repo` surface, so it genuinely has a vector index of code.",
 	},
 	{
+		id: "no-voice-control",
+		// "you do not control the microphone or voice mode"; "You cannot start, stop, mute, unmute or
+		// switch it". Narrow to the voice channel — an agent saying it cannot stop a RUN is a different
+		// sentence and must stay legal.
+		re: /\byou do not control the (?:microphone|mic|voice mode)\b|\byou cannot start, stop, mute\b/gi,
+		holds: (m) => !m.controlsVoice,
+		why: "this agent has a tool that operates the voice channel, so denying it is the #254 shape — a denial that survived the arrival of the tool contradicting it. Rewrite the line to describe what it CAN do, and check whether the client still matches exit phrases before the model sees them.",
+	},
+	{
 		id: "cannot-add-repo",
 		re: /\byou cannot add (?:one|a repository)\b/gi,
 		holds: (m) => m.singleRepo,

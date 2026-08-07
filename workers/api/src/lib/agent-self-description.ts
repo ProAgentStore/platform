@@ -75,7 +75,34 @@ export interface SelfModel {
 	 * it will never be shown, so it either invents a call or deflects the request.
 	 */
 	tools: ReadonlySet<string>;
+	/**
+	 * Can it operate the VOICE CHANNEL — start, stop, mute or switch the microphone (#340)?
+	 *
+	 * False for every agent today, and that is the point of deriving it rather than hardcoding the
+	 * denial. Voice is a client feature: the mic belongs to the app the user speaks through, exit
+	 * phrases are matched there, and no tool in the catalog reaches it. So an agent replying "Got it.
+	 * Stopped." is asserting an action nothing could have performed — and could only have SEEN the
+	 * words because the client failed to match them, which makes it a confirmation that fires
+	 * exclusively on failure.
+	 *
+	 * Derived from the resolved tool set against {@link VOICE_CONTROL_TOOLS}, which is empty of real
+	 * tools on purpose: it is the hook that makes `no-voice-control` a live check instead of a
+	 * constant. #254 is the precedent — "you do not drive the engine" was true when written and went
+	 * false the day `start_work` joined BASE, with nothing to notice. If a voice-control tool is ever
+	 * added, this flips, the denial becomes a lie, and the guard fails before it ships.
+	 */
+	controlsVoice: boolean;
 }
+
+/**
+ * Tools that would let an agent operate the microphone or voice mode.
+ *
+ * Deliberately empty. The platform has no such tool and no plan for one — voice lives entirely in
+ * the client (`packages/sdk/src/voice/*`), which is why an exit phrase never reaches the model at
+ * all. Named and consulted anyway so that adding one is what turns `controlsVoice` true, rather than
+ * someone remembering that a prompt line elsewhere needs revisiting.
+ */
+export const VOICE_CONTROL_TOOLS: readonly string[] = [];
 
 /**
  * The tabs a set of capabilities renders, mirroring `store/console/src/lib/surfaces.tsx`.
@@ -133,6 +160,7 @@ export function resolveSelfModel(capabilities: AgentCapabilities): SelfModel {
 		hasRunner: (capabilities.runtime ?? null) !== null,
 		tools,
 		singleRepo: optionsFor(capabilities, "coding")?.repos === "single",
+		controlsVoice: VOICE_CONTROL_TOOLS.some((t) => tools.has(t)),
 	};
 }
 

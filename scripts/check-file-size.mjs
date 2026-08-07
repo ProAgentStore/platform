@@ -139,7 +139,13 @@ const PINS = {
 	// supervisor's runs are never on its own instance and the block therefore never fired for one.
 	// Not split — the change is one `Promise.all` inside the existing selfModel section, and the
 	// rendering it feeds already lives in `lib/work-report.ts`.
-	"workers/api/src/agent-think.ts": 828,
+	// +26 for #329 (a clock and whose it is) and #340 (the voice channel it does not own). Raised on
+	// purpose, and the split it looks like it wants is the one that was already done: every WORD of
+	// both lives in `lib/agent-clock.ts` and `lib/agent-style-prompt.ts`, where a unit test can
+	// assemble and adjudicate it. What is left here is what only this function can do — one field on
+	// the config join it already performs, the turn's instant, and two `systemPrompt +=` lines. Moving
+	// those would put a read next to nothing that reads it.
+	"workers/api/src/agent-think.ts": 851,
 	"workers/api/src/routes/instances-runtime.ts": 849,
 	"workers/api/src/lib/triggers.ts": 838,
 	"packages/browser-runner/src/coding/headless.ts": 819,

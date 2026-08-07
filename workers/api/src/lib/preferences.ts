@@ -1,5 +1,9 @@
 // Account-level preferences, and how they resolve against a per-agent override (#211).
 //
+// `isValidTimeZone` is imported rather than re-implemented: triggers have validated timezones since
+// #18, and one timezone vocabulary for the whole platform is the point — a zone the cron scheduler
+// accepts and the prompt rejects (or vice versa) is a bug waiting for a user to find it.
+//
 // Voice and translation settings were stored ONLY on `agent_instances.config`, so "I prefer Whisper
 // over browser dictation" and "read replies at 1.2×" had to be set once per agent — and a new
 // subscription seeds neither, so every agent you add makes you re-tune your own preferences from
@@ -21,6 +25,8 @@
 // why migration 0071 renames the pre-existing per-instance copies out of the way instead of leaving
 // them: otherwise every agent would read as "customised" on day one, which is the sprawl this
 // removes.
+
+import { isValidTimeZone } from "./cron-time.js";
 
 // Lenient on READ, strict on WRITE. The sanitizers below coerce anything unknown to a safe value,
 // because they also parse rows that were stored years ago by older code — but an explicit save must
@@ -87,6 +93,22 @@ export interface TranslationSettings {
 export interface AccountPreferences {
 	voice?: VoiceSettings;
 	translation?: TranslationSettings;
+	/**
+	 * The user's IANA timezone — the account default for every surface that shows a time (#329).
+	 *
+	 * It lives here rather than in `user_profile` or a per-agent `settingsSchema` field for the same
+	 * reason voice and translation do: a timezone is a property of the PERSON, not of an agent or of
+	 * a job application. `user_profile` is the apply pipeline's structured PII (name, phone,
+	 * work-auth) and is only maintained by people using that one agent; a typed setting would have to
+	 * be declared, and then re-set, per agent. This blob is the one the owner already maintains for
+	 * everything else that follows them across agents.
+	 *
+	 * **`undefined` is a first-class state and must stay one.** An unset zone means "nobody has told
+	 * us", and the prompt then names UTC honestly rather than a guessed local time — a confidently
+	 * wrong hour is worse than an explicit UTC. So there is no default here, and no fallback to
+	 * `"UTC"`: that would be indistinguishable from a user who really is in UTC.
+	 */
+	timezone?: string;
 }
 
 const num = (v: unknown, lo: number, hi: number, dflt: number): number =>
@@ -200,6 +222,11 @@ export function parseAccountPreferences(raw: string | null | undefined): Account
 		return {
 			voice: o.voice ? sanitizeVoiceSettings(o.voice) : undefined,
 			translation: o.translation ? sanitizeTranslationSettings(o.translation) : undefined,
+			// Validated on READ as well as on write. A zone the runtime cannot resolve would make
+			// `Intl.DateTimeFormat` throw on the per-turn prompt path, and a stored value can predate
+			// this check (or name a zone this runtime's tz database does not carry). Dropping it back
+			// to `undefined` lands on the honest unset branch instead of failing a chat turn.
+			timezone: isValidTimeZone(o.timezone) ? o.timezone : undefined,
 		};
 	} catch {
 		return {};

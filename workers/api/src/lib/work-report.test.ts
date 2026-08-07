@@ -24,6 +24,39 @@ function run(over: Partial<LoopRunView> = {}): LoopRunView {
 	};
 }
 
+describe("run times in the owner's zone (#329)", () => {
+	it("adds a formatted wall clock beside the relative time when a zone is known", () => {
+		// FORMATTED here, not converted by the model: #329's symptom was a Lead reporting "completed
+		// at 22:34:19 UTC", which is a different claim from the one its reader hears.
+		const s = describeLoopRun(run(), NOW, "Australia/Sydney");
+		expect(s).toContain("1m ago");
+		expect(s).toMatch(/AE[SD]T|GMT\+1[01]/);
+	});
+
+	it("says nothing absolute when the zone is unset — the pre-#329 output, unchanged", () => {
+		// Relative times were always safe: they carry no zone, so they cannot be wrong about one. An
+		// account that never set a timezone must keep exactly what it had rather than gain a
+		// wall-clock in a zone nobody chose.
+		expect(describeLoopRun(run(), NOW)).toBe(describeLoopRun(run(), NOW, undefined));
+		expect(describeLoopRun(run(), NOW)).not.toMatch(/\d{2}:\d{2}/);
+	});
+
+	it("degrades to relative-only rather than failing a turn on an unresolvable zone", () => {
+		// A stored zone can outlive the tz database that knew it. Losing the wall clock is a far
+		// smaller failure than losing the chat turn it was decorating.
+		const s = describeLoopRun(run(), NOW, "Australia/Melbourn");
+		expect(s).toContain("1m ago");
+	});
+
+	it("reaches both the tool result and the prompt block, so the two agree", () => {
+		// `work-report.ts`'s own contract: one rendering serves `check_work` and the automatic recent-
+		// work block precisely so they can never tell different stories about one run.
+		const zone = "Australia/Sydney";
+		expect(describeWorkCheck([run()], NOW, { timeZone: zone })).toMatch(/AE[SD]T|GMT\+1[01]/);
+		expect(recentWorkPrompt([run()], NOW, { timeZone: zone })).toMatch(/AE[SD]T|GMT\+1[01]/);
+	});
+});
+
 describe("describeLoopRun", () => {
 	it("states the outcome so a challenged agent can quote it", () => {
 		const s = describeLoopRun(run(), NOW);

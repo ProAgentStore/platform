@@ -19,6 +19,29 @@ import { capabilitiesForInstance } from "./agent-capabilities.js";
 import { openBudget } from "./delegation-budget-store.js";
 import { SELF_WRITABLE_FIELDS, behaviourToolSchema, describeBehaviour } from "./agent-behaviour.js";
 import { patchBehaviour, readBehaviour } from "./behaviour-store.js";
+import { parseAccountPreferences } from "./preferences.js";
+
+/**
+ * The caller's own timezone, for rendering run times as wall-clock (#329).
+ *
+ * `work-report.ts` states that `check_work` and the automatic "recent work" prompt block must never
+ * tell different stories about one run. The prompt block gets the zone free (it is on the config
+ * join `agent-think` already does); this path has no such join, so it pays one indexed lookup — the
+ * alternative is the same run reading `08:33 AEST` in the prompt and only `3m ago` in the tool
+ * result, which is the inconsistency that comment forbids.
+ *
+ * Undefined on any failure, which is the honest unset state: relative times only, never a guess.
+ */
+async function accountTimeZone(env: Env, userId: string): Promise<string | undefined> {
+	try {
+		const row = await env.DB.prepare("SELECT preferences FROM users WHERE id = ?1")
+			.bind(userId)
+			.first<{ preferences: string | null }>();
+		return parseAccountPreferences(row?.preferences).timezone;
+	} catch {
+		return undefined;
+	}
+}
 
 /**
  * The tool contract now lives in `connectors/types.ts` — a leaf module with no imports
@@ -90,6 +113,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 		},
 		handler: async (ctx, input) => {
 			if (!ctx.instanceId || !ctx.userId) return { content: "check_work needs an owned instance context.", success: false };
+			const timeZone = await accountTimeZone(ctx.env, ctx.userId);
 			const runId = typeof input.runId === "string" ? input.runId.trim() : "";
 			if (runId) {
 				const run = await getLoopRun(ctx.env, ctx.userId, runId);
@@ -105,7 +129,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 				if (!run || !(own || run.delegatedBy === ctx.instanceId)) {
 					return { content: `No run ${runId} belongs to you. Do not describe it as if it happened.`, success: false };
 				}
-				return { content: describeWorkCheck(own ? [run] : [], Date.now(), own ? {} : { delegated: [run] }), success: true };
+				return { content: describeWorkCheck(own ? [run] : [], Date.now(), own ? { timeZone } : { delegated: [run], timeZone }), success: true };
 			}
 			const [runs, delegatedRuns] = await Promise.all([
 				listLoopRuns(ctx.env, ctx.userId, ctx.instanceId, 5),
@@ -120,7 +144,7 @@ const FIRST_PARTY_TOOLS: ToolDef[] = [
 			const supervises =
 				runs.length + delegatedRuns.length === 0 &&
 				(await subordinateIdsOf(ctx.env, ctx.userId, ctx.instanceId).catch(() => [])).length > 0;
-			return { content: describeWorkCheck(runs, Date.now(), { delegated: delegatedRuns, supervises }), success: true };
+			return { content: describeWorkCheck(runs, Date.now(), { delegated: delegatedRuns, supervises, timeZone }), success: true };
 		},
 	},
 	{

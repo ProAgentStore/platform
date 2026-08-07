@@ -9,6 +9,8 @@ import { agentCapabilities, type AgentCapabilities } from "./lib/agent-capabilit
 import { renderActiveTasks } from "./lib/agent-tasks.js";
 import { readDisabledTools } from "./lib/instance-tool-policy.js";
 import { readInstanceConfigPairForDurableObject } from "./lib/instance-config.js";
+import { parseAccountPreferences } from "./lib/preferences.js";
+import { clockPrompt } from "./lib/agent-clock.js";
 import { stableStringify } from "./lib/stable-json.js";
 import { fenceUntrusted } from "./lib/untrusted-fence.js";
 import { loadImportedMcpTools } from "./lib/mcp-tool-catalog.js";
@@ -23,7 +25,7 @@ import { lastTerminal } from "./lib/coding-timeline.js";
 import { describeTerminal, renderTerminalLine } from "./lib/terminal-label.js";
 import { callRunner, getBoundRunnerConn, relayConnected, READ_TIMEOUT_MS } from "./lib/runner-client.js";
 import { executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./lib/agent-self-description.js";
-import { indexedReposPrompt, noActiveSessionPrompt, runnerStatusPrompt, styleGuidance } from "./lib/agent-style-prompt.js";
+import { indexedReposPrompt, noActiveSessionPrompt, runnerStatusPrompt, styleGuidance, voiceControlPrompt } from "./lib/agent-style-prompt.js";
 import { listDelegatedRuns, listLoopRuns } from "./lib/agent-loop-store.js";
 import { recentWorkPrompt } from "./lib/work-report.js";
 import {
@@ -154,6 +156,12 @@ export async function runAgentThink(opts: {
 	const { state, engine, messages, memory, tasks, userId, env, doStorage, broadcast, delegation } = opts;
 	const lastUserMessage = messages.filter((m) => m.role === "user").pop()?.content || "";
 
+	// ONE instant for the whole turn. The clock block and the "N minutes ago" work report are read
+	// together by the model, and two separate `Date.now()` calls seconds apart make them disagree —
+	// a small inconsistency, but this prompt's entire job on the timestamp question is to be the
+	// thing the model can quote instead of compute.
+	const turnStartedAt = Date.now();
+
 	// Authoritative capabilities → gate tools to what this agent type can actually use
 	// (e.g. a Coder never gets search_knowledge, so it can't hallucinate an empty index).
 	const capabilities = await resolveAgentCapabilities(env, state.agentId);
@@ -163,6 +171,8 @@ export async function runAgentThink(opts: {
 	// empty. Best-effort: a failed read must never block the turn.
 	let instanceCfg: Record<string, unknown> = {};
 	let agentCfg: Record<string, unknown> = {};
+	/** The owner's account preferences (#211), raw — read on the same join, parsed below for #329. */
+	let ownerPreferences: string | null = null;
 	try {
 		// Joined rather than a second query: the agent row is only wanted for the creator's
 		// behaviour default, which is not worth another round trip on every turn. The UNSCOPED
@@ -172,6 +182,7 @@ export async function runAgentThink(opts: {
 		if (pair) {
 			instanceCfg = pair.config;
 			agentCfg = pair.agentConfig;
+			ownerPreferences = pair.ownerPreferences;
 		} else {
 			// A TEMPLATE preview DO is keyed by the AGENT id, so the join above finds nothing and
 			// the creator previewing their own agent saw none of the behaviour they declared on it
@@ -301,6 +312,19 @@ export async function runAgentThink(opts: {
 	const statsBlock = statsPromptBlock(resolveStatsCards(agentCfg.statsSchema, instanceCfg.stats));
 	if (statsBlock) systemPrompt += `\n\n${statsBlock}`;
 
+	// A clock, and whose clock it is (#329). Nothing in this builder had ever told an agent what time
+	// it was, so every timestamp it read was an ISO string it could only label UTC — which is a
+	// different claim from the one the reader hears, not merely a different format. The zone comes
+	// from the owner's account preferences, already in hand from the join above; UNSET is honest and
+	// keeps the block in UTC rather than inventing a locale. See `lib/agent-clock.ts`.
+	const ownerTimeZone = parseAccountPreferences(ownerPreferences).timezone;
+	systemPrompt += clockPrompt(turnStartedAt, ownerTimeZone);
+
+	// The voice channel the agent is heard through and does not own (#340). Unconditional: voice is a
+	// client feature of every agent's chat, so the denial is true for all of them. The wording lives
+	// in the pure module because a claim written HERE is a claim nothing can check (#315).
+	systemPrompt += voiceControlPrompt;
+
 	// ── What this agent IS (#255) ────────────────────────────────────────────────────────────
 	//
 	// Derived from the capability registry, not from memory. A Repo Coder's only sense of owning a
@@ -347,7 +371,9 @@ export async function runAgentThink(opts: {
 			listLoopRuns(env, userId, state.agentId, 3).catch(() => []),
 			selfModel.canDelegate ? listDelegatedRuns(env, userId, state.agentId, 3).catch(() => []) : [],
 		]);
-		systemPrompt += recentWorkPrompt(recentRuns, Date.now(), { delegated });
+		// The zone rides along so a run's absolute time is FORMATTED here rather than converted by the
+		// model (#329) — the reported symptom was a Lead narrating run times in UTC.
+		systemPrompt += recentWorkPrompt(recentRuns, turnStartedAt, { delegated, timeZone: ownerTimeZone });
 	}
 
 	// Under-message translation is on → the PLATFORM displays translations (and, when

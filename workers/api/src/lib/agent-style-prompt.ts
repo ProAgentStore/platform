@@ -23,6 +23,52 @@
 import type { SelfModel } from "./agent-self-description.js";
 
 /**
+ * The channel the agent is heard through, and does not control (#340).
+ *
+ * ── A confirmation that fires ONLY on failure
+ *
+ * A user said **"Stop-stop."** into a live voice session. It was transcribed, sent as an ordinary
+ * chat message, and the agent replied *"Got it. Stopped."* Nothing stopped: the mic stayed open and
+ * two phantom turns followed (#332).
+ *
+ * The shape is what makes this worth a prompt line rather than a shrug. A voice-exit command is
+ * matched CLIENT-SIDE and the utterance is never sent — so the only way the model can see the words
+ * at all is if the match FAILED. "Stopped" is therefore emitted exactly and only when the stop did
+ * not happen. And it did the damage a false confirmation always does: the user, told it worked,
+ * stopped trying, which is what left the mic open for the phantom turns.
+ *
+ * ── Why a line and not a detector
+ *
+ * `3d7e28b` fixed the transport half (#334/#331/#332) — `"Stop-stop."` now normalises and matches,
+ * bare `"stop"` was added, the silence hole is closed — so the trigger is largely gone. What is left
+ * is the residue: a phrase in a language or wording nobody configured still arrives as text, and the
+ * model must not confirm an action it cannot take. That residue is a WORDING problem, and a wording
+ * problem is what a prompt line is for. The client-side alternative (#340 option 2) would regex
+ * generated replies for voice verbs on turns where no exit occurred — the same unreliable class of
+ * check, with a false-positive path ("I stopped the run") that would flag correct answers, built
+ * speculatively for a condition the transport fix already removes.
+ *
+ * ── Why it cannot quietly drift back out
+ *
+ * This is a DENIAL keyed to a named capability, so `prompt-claims.ts` adjudicates it in both
+ * directions. The source ratchet compares the found claims EXACTLY, so deleting this line fails the
+ * test; and `DENIAL_RULES`' `no-voice-control` predicate asks the resolved `SelfModel` — the day any
+ * agent is granted a tool that really does control the mic, the denial becomes false and the guard
+ * fires. That is the #254 shape (a denial surviving the arrival of the tool that contradicts it),
+ * caught by mechanism instead of by memory.
+ *
+ * Unconditional because it is unconditionally true: voice is a client feature on every agent's chat,
+ * and no agent anywhere has a tool for it.
+ */
+export const voiceControlPrompt =
+	"\n\nVOICE: you do not control the microphone or voice mode — the app the user speaks through does, on their device." +
+	" You cannot start, stop, mute, unmute or switch it, and you never see whether it is on." +
+	"\n- NEVER reply \"Stopped\", \"Muted\", \"Listening\" or anything else that confirms a voice action. You would only ever be" +
+	" reading those words because the app did NOT act on them, so confirming is telling the user a failure succeeded." +
+	"\n- If the user asks you to stop listening, mute, or leave voice, say plainly that you cannot do it from here and that they" +
+	" should tap the voice control in the app. Then answer whatever else they asked.";
+
+/**
  * A clause that names a console tab, emitted ONLY when the agent has that tab.
  *
  * The fallback is not a reworded tab — it is silence. "Add it somewhere" is useless advice, and

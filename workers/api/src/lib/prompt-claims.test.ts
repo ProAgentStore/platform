@@ -21,10 +21,11 @@ import { describe, expect, it } from "vitest";
 import { toolBlurbFor } from "../agent-think.js";
 import { resolveResponseStyle } from "./agent-behaviour.js";
 import { executionAuthorityPrompt, resolveSelfModel, selfDescriptionPrompt } from "./agent-self-description.js";
-import { indexedReposPrompt, noActiveSessionPrompt, runnerStatusPrompt, styleGuidance } from "./agent-style-prompt.js";
+import { indexedReposPrompt, noActiveSessionPrompt, runnerStatusPrompt, styleGuidance, voiceControlPrompt } from "./agent-style-prompt.js";
 import type { AgentCapabilities } from "./agent-capabilities.js";
 import { CODER_LEAD, CODER_REPO, FIRST_PARTY_AGENTS, LEGACY_CODER, PLAIN_CHAT, REPO_CHAT } from "./first-party-agents.js";
 import {
+	DENIAL_RULES,
 	describeViolation,
 	findSourceClaims,
 	findTabMentions,
@@ -127,6 +128,9 @@ function assemblePrompt(
 		opts.hasRepos ? runnerStatusPrompt(model, opts.runnerOnline) : "",
 		opts.hasRepos && !opts.activeSession ? noActiveSessionPrompt(model) : "",
 		styleGuidance({ model, codingContext, hasCodingContext: opts.hasRepos, plainSpeech, lengthRule: "MAXIMUM 2 sentences." }),
+		// Unconditional in `runAgentThink`, so unconditional here: the semantic check must see it for
+		// every agent and every branch, not only the ones a condition happens to reach (#340).
+		voiceControlPrompt,
 		recentWorkPrompt([], Date.now(), { delegated: [] }),
 	];
 	return parts.join("\n");
@@ -190,6 +194,19 @@ describe("the incidents that motivated this", () => {
 		expect(promptClaimViolations("Never claim you fixed a bug you did not fix.", CODER_LEAD)).toEqual([]);
 	});
 
+	it("#340 — the voice denial is honest today, and goes red the day it stops being", () => {
+		// Legal for every real agent: none of them can touch the mic.
+		expect(promptClaimViolations(voiceControlPrompt, CODER_LEAD)).toEqual([]);
+		expect(promptClaimViolations(voiceControlPrompt, PLAIN_CHAT)).toEqual([]);
+		// And the guard is a live check, not a constant. Granting a voice-control tool makes the same
+		// sentence a lie, exactly as `start_work` joining BASE did in #254 — so the rule is asserted
+		// against a model where it holds false rather than against a hypothetical.
+		const v = DENIAL_RULES.filter((r) => r.id === "no-voice-control");
+		expect(v).toHaveLength(1);
+		expect(v[0].holds({ ...resolveSelfModel(PLAIN_CHAT), controlsVoice: true })).toBe(false);
+		expect(v[0].holds(resolveSelfModel(PLAIN_CHAT))).toBe(true);
+	});
+
 	it("#247 — describing a tmux pane to an agent whose engine is a child process", () => {
 		const v = promptClaimViolations("Read the tmux pane to see what the engine is doing.", LEGACY_CODER);
 		expect(v.map((x) => x.claim)).toEqual(["tmux"]);
@@ -245,7 +262,13 @@ const PROMPT_MODULES = [
 	"agent-do-tools.ts",
 	"lib/agent-self-description.ts",
 	"lib/agent-style-prompt.ts",
+	"lib/agent-clock.ts",
 	"lib/agent-behaviour.ts",
+	// Added when #337 moved the `## Active Tasks` block out of `agent-think.ts` into a pure module.
+	// It names no capability today, and that is worth pinning rather than assuming: the block now
+	// carries provenance and withholding prose, which is the kind of text that grows a tab or tool
+	// name later.
+	"lib/agent-tasks.ts",
 	"lib/instance-settings.ts",
 	"lib/stats-schema.ts",
 	"lib/tool-registry.ts",
@@ -268,6 +291,12 @@ const ALLOWED_CLAIMS: Record<string, number> = {
 	// Derived: `readOnlyClause` / `actionClause` / the no-executor branch, each gated on the
 	// resolved SelfModel. These are the #254 sentences, now conditional.
 	"lib/agent-style-prompt.ts — denial:cannot-act": 3,
+	// #340 — "you do not control the microphone or voice mode" / "You cannot start, stop, mute…".
+	// True for every agent: voice is a client feature and `VOICE_CONTROL_TOOLS` is empty, so
+	// `controlsVoice` is false everywhere. Pinned at 2 so DELETING the line fails this test, which is
+	// the acceptance criterion — the reply it prevents ("Got it. Stopped.") is a confirmation that
+	// fires only when the stop failed, and the last thing it should do is quietly disappear again.
+	"lib/agent-style-prompt.ts — denial:no-voice-control": 2,
 	// The Coder branch, which genuinely has no vector index (its code is in live sessions).
 	"lib/agent-style-prompt.ts — denial:no-code-index": 2,
 	// The Repo Chat branch, which genuinely does have one.

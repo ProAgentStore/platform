@@ -116,7 +116,10 @@ describe("check_work — the other half: an agent must be able to OBSERVE what i
 		const res = await getRegistryTool("check_work")?.handler({ env, instanceId: "i1", userId: "u1" } as never, {});
 		expect(res?.success).toBe(true);
 		expect(String(res?.content)).toContain("Already up to date.");
-		expect(reads[0].args).toEqual(["u1", "i1", 5]);
+		// Matched on the SHAPE of the run-list read rather than on read ordinal. `check_work` also
+		// looks up the owner's timezone now (#329), so pinning `reads[0]` was pinning "which query
+		// happens to run first" — a fact about neither this tool's scoping nor its output.
+		expect(reads.some((r) => r.args.length === 3 && r.args[0] === "u1" && r.args[1] === "i1" && r.args[2] === 5)).toBe(true);
 	});
 
 	it("says plainly that nothing ran, so it can contradict its own earlier claim", async () => {

@@ -17,7 +17,28 @@
 //
 // Pure and exported: the same rendering serves the `check_work` tool result and the automatic
 // "recent work" context block, so the two can never tell different stories about one run.
+import { formatInZone } from "./agent-clock.js";
 import type { LoopRunView } from "./agent-loop-store.js";
+
+/**
+ * A run's wall-clock time, in the OWNER's zone, formatted here (#329).
+ *
+ * The reported symptom of #329 was a Lead saying *"the run completed at 22:34:19 UTC"* — a different
+ * claim from the one its reader heard. Relative times (`ago`) were always safe because they carry no
+ * zone; the moment an absolute time is wanted, the honest place to produce it is here, where the
+ * epoch millisecond and the zone are both in hand, rather than in a model asked to do DST arithmetic
+ * on an ISO string. Absent zone ⇒ absent clause: no zone means no local time, never a guessed one.
+ */
+function at(ms: number, zone?: string): string {
+	if (!zone) return "";
+	try {
+		return ` (${formatInZone(ms, zone)})`;
+	} catch {
+		// A stored zone this runtime cannot resolve must not take down a chat turn. The relative time
+		// beside it is still true, so degrading to it loses precision and nothing else.
+		return "";
+	}
+}
 
 /** Round to a human interval. Exact ms in a prompt invites the model to quote it back as precision. */
 function ago(ms: number): string {
@@ -52,7 +73,7 @@ export function isStalled(run: LoopRunView, now: number): boolean {
  * The outcome is stated FIRST and unhedged. The whole point is that when the user asks "did that
  * actually happen?", the agent has a sentence it can quote instead of a belief it has to form.
  */
-export function describeLoopRun(run: LoopRunView, now: number = Date.now()): string {
+export function describeLoopRun(run: LoopRunView, now: number = Date.now(), timeZone?: string): string {
 	const parts: string[] = [];
 	const stalled = isStalled(run, now);
 	const status = stalled ? "running but STALLED (no progress reported recently — it may have died)" : run.status;
@@ -61,8 +82,8 @@ export function describeLoopRun(run: LoopRunView, now: number = Date.now()): str
 	parts.push(`step ${run.iteration}/${run.maxIterations}`);
 	if (run.stopReason) parts.push(`stopped because: ${run.stopReason}`);
 	if (run.detail) parts.push(`result: ${run.detail}`);
-	parts.push(`started ${ago(now - run.startedAt)}`);
-	if (run.finishedAt) parts.push(`finished ${ago(now - run.finishedAt)}`);
+	parts.push(`started ${ago(now - run.startedAt)}${at(run.startedAt, timeZone)}`);
+	if (run.finishedAt) parts.push(`finished ${ago(now - run.finishedAt)}${at(run.finishedAt, timeZone)}`);
 	if (run.cancelRequested && run.status === "running") parts.push("a cancel has been requested");
 	return parts.join(" · ");
 }
@@ -84,11 +105,19 @@ export interface WorkCheckContext {
 	 * assert. See {@link describeWorkCheck}.
 	 */
 	supervises?: boolean;
+	/**
+	 * The OWNER's IANA timezone (#329), when they have set one.
+	 *
+	 * Optional and unset-by-default on purpose: it is the account preference from #211, and an
+	 * account that has never set one gets relative times only — the same output as before this
+	 * existed — rather than a wall-clock in a zone nobody chose.
+	 */
+	timeZone?: string;
 }
 
 /** One delegated run, named with the agent it was handed to so the supervisor can cite both. */
-function describeDelegatedRun(run: LoopRunView, now: number): string {
-	return `${describeLoopRun(run, now)} · delegated to instance ${run.instanceId}`;
+function describeDelegatedRun(run: LoopRunView, now: number, timeZone?: string): string {
+	return `${describeLoopRun(run, now, timeZone)} · delegated to instance ${run.instanceId}`;
 }
 
 /**
@@ -116,14 +145,14 @@ export function describeWorkCheck(
 	if (runs.length) {
 		sections.push(
 			`${runs.length === 1 ? "The run" : `Your ${runs.length} most recent runs`} on this instance, newest first:\n` +
-				runs.map((r) => `- ${describeLoopRun(r, now)}`).join("\n"),
+				runs.map((r) => `- ${describeLoopRun(r, now, ctx.timeZone)}`).join("\n"),
 		);
 	}
 	if (delegated.length) {
 		sections.push(
 			`${delegated.length === 1 ? "One run" : `${delegated.length} runs`} YOU started by delegating to an agent you` +
 				" supervise, newest first. You started these — the work runs on them, and saying you did it is accurate:\n" +
-				delegated.map((r) => `- ${describeDelegatedRun(r, now)}`).join("\n"),
+				delegated.map((r) => `- ${describeDelegatedRun(r, now, ctx.timeZone)}`).join("\n"),
 		);
 	}
 	if (!sections.length) {
@@ -160,8 +189,8 @@ export function recentWorkPrompt(
 	const delegated = ctx.delegated ?? [];
 	if (!runs.length && !delegated.length) return "";
 	const lines = [
-		...runs.map((r) => `- ${describeLoopRun(r, now)}`),
-		...delegated.map((r) => `- ${describeDelegatedRun(r, now)}`),
+		...runs.map((r) => `- ${describeLoopRun(r, now, ctx.timeZone)}`),
+		...delegated.map((r) => `- ${describeDelegatedRun(r, now, ctx.timeZone)}`),
 	];
 	return (
 		"\n\n## Your recent work\nRuns YOU started — with `start_work`, or by delegating to an agent you supervise" +

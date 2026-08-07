@@ -93,6 +93,15 @@ export interface InstanceConfigPair {
 	config: Record<string, unknown>;
 	/** `agents.config` for the instance's template. `{}` when absent or malformed. */
 	agentConfig: Record<string, unknown>;
+	/**
+	 * The OWNER's account preferences blob (#211), raw — parsed by `parseAccountPreferences`.
+	 *
+	 * Read on the same join for the same reason the pair itself is: the chat prompt needs the owner's
+	 * timezone on every turn (#329), and a second round trip for one column on a per-turn path is the
+	 * cost this function exists to avoid. `null` when the instance has no owner row (a template
+	 * preview DO), which resolves to the honest "we were never told a zone" state.
+	 */
+	ownerPreferences: string | null;
 }
 
 /** A config blob is written by us but read defensively: a malformed one must not fail a turn. */
@@ -109,10 +118,17 @@ export function parseConfigBlob(raw: string | null | undefined): Record<string, 
 interface ConfigRow {
 	config: string | null;
 	agent_config: string | null;
+	owner_preferences: string | null;
 }
 
 const toPair = (row: ConfigRow | null): InstanceConfigPair | null =>
-	row ? { config: parseConfigBlob(row.config), agentConfig: parseConfigBlob(row.agent_config) } : null;
+	row
+		? {
+				config: parseConfigBlob(row.config),
+				agentConfig: parseConfigBlob(row.agent_config),
+				ownerPreferences: row.owner_preferences ?? null,
+			}
+		: null;
 
 /**
  * The owner-scoped read. Returns null when the instance does not exist OR is not `userId`'s.
@@ -125,9 +141,10 @@ const toPair = (row: ConfigRow | null): InstanceConfigPair | null =>
  */
 export async function readInstanceConfigPair(env: Env, instanceId: string, userId: string): Promise<InstanceConfigPair | null> {
 	const row = await env.DB.prepare(
-		`SELECT i.config AS config, a.config AS agent_config
+		`SELECT i.config AS config, a.config AS agent_config, u.preferences AS owner_preferences
 		   FROM agent_instances i
 		   LEFT JOIN agents a ON a.id = i.agent_id
+		   LEFT JOIN users u ON u.id = i.user_id
 		  WHERE i.id = ?1 AND i.user_id = ?2`,
 	)
 		.bind(instanceId, userId)
@@ -149,9 +166,10 @@ export async function readInstanceConfigPair(env: Env, instanceId: string, userI
  */
 export async function readInstanceConfigPairForDurableObject(env: Env, instanceId: string): Promise<InstanceConfigPair | null> {
 	const row = await env.DB.prepare(
-		`SELECT i.config AS config, a.config AS agent_config
+		`SELECT i.config AS config, a.config AS agent_config, u.preferences AS owner_preferences
 		   FROM agent_instances i
 		   LEFT JOIN agents a ON a.id = i.agent_id
+		   LEFT JOIN users u ON u.id = i.user_id
 		  WHERE i.id = ?1`,
 	)
 		.bind(instanceId)
