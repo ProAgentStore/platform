@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@proagentstore/sdk/client";
+import { statusBadgeClass } from "../lib/statusBadge";
 
 // Spreadsheet + board view over an agent's structured collections:
 // filter/sort, show/hide columns, edit the status pipeline inline, toggle a
@@ -39,23 +40,8 @@ const PIPELINE = ["new", "contacted", "won", "dead"];
 const FILTERABLE = new Set(["status", "country", "state", "city", "suburb", "website_status"]);
 const DATETIME = new Set(["found_at", "checked_at", "created_at", "createdAt", "updatedAt"]);
 
-const STATUS_CLASS: Record<string, string> = {
-	new: "bg-blue-100 text-blue-700",
-	contacted: "bg-amber-100 text-amber-700",
-	won: "bg-green-100 text-green-700",
-	dead: "bg-gray-200 text-gray-600",
-	none: "bg-green-100 text-green-700",
-	unreachable: "bg-amber-100 text-amber-700",
-	// Pipeline run statuses (issue #98).
-	running: "bg-blue-100 text-blue-700",
-	completed: "bg-green-100 text-green-700",
-	failed: "bg-red-100 text-red-700",
-	interrupted: "bg-amber-100 text-amber-700",
-};
-
 function Badge({ value }: { value: string }) {
-	const cls = STATUS_CLASS[value] || "bg-gray-100 text-gray-600";
-	return <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${cls}`}>{value}</span>;
+	return <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${statusBadgeClass(value)}`}>{value}</span>;
 }
 
 function fmtDateTime(v: unknown): string {
@@ -230,7 +216,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 			aria-label={`Status of ${String(rec.data.name ?? rec.data.title ?? rec.id ?? "record")}`}
 			value={String(rec.data.status ?? "")}
 			onChange={(e) => setStatus(rec, e.target.value)}
-			className="border rounded text-xs px-1 py-0.5"
+			className="border border-line rounded text-xs px-1 py-0.5"
 		>
 			{PIPELINE.map((s) => (
 				<option key={s} value={s}>
@@ -244,7 +230,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 		<div className="text-sm">
 			<div className="mb-3">
 				<div className="flex flex-wrap items-center gap-2">
-					<div className="inline-flex rounded border overflow-hidden">
+					<div className="inline-flex rounded border border-line overflow-hidden">
 						{(["records", "runs"] as const).map((v) => (
 							<button
 								key={v}
@@ -268,7 +254,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							setFilters({});
 							setHidden(new Set());
 						}}
-						className="border rounded px-2 py-1"
+						className="border border-line rounded px-2 py-1"
 					>
 						{collections.length === 0 && <option value="">No collections</option>}
 						{collections.map((c) => (
@@ -280,7 +266,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					</select>
 
 					{hasStatus && (
-						<div className="inline-flex rounded border overflow-hidden">
+						<div className="inline-flex rounded border border-line overflow-hidden">
 							{(["table", "board"] as const).map((v) => (
 								<button
 									key={v}
@@ -301,27 +287,27 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					<button
 						type="button"
 						onClick={() => setShowControls((s) => !s)}
-						className="border rounded px-2 py-1 text-xs ml-auto"
+						className="border border-line rounded px-2 py-1 text-xs ml-auto"
 					>
 						{showControls ? "Hide controls ▲" : "Controls ▾"}
 					</button>
 					</>
 					)}
 					{surface === "runs" && (
-						<button type="button" onClick={loadRuns} className="border rounded px-2 py-1 text-xs ml-auto">
+						<button type="button" onClick={loadRuns} className="border border-line rounded px-2 py-1 text-xs ml-auto">
 							Refresh
 						</button>
 					)}
 				</div>
 
 				{surface === "records" && showControls && (
-					<div className="flex flex-wrap items-center gap-2 mt-2 border-t pt-2">
+					<div className="flex flex-wrap items-center gap-2 mt-2 border-t border-line pt-2">
 						<input
 							aria-label="Filter records"
 							value={q}
 							onChange={(e) => setQ(e.target.value)}
 							placeholder="Filter…"
-							className="border rounded px-2 py-1 flex-1 min-w-40"
+							className="border border-line rounded px-2 py-1 flex-1 min-w-40"
 						/>
 
 						{Object.keys(facetValues).map((f) => (
@@ -330,7 +316,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 								aria-label={`Filter by ${f}`}
 								value={filters[f] || ""}
 								onChange={(e) => setFilters((p) => ({ ...p, [f]: e.target.value }))}
-								className="border rounded px-1 py-1 text-xs"
+								className="border border-line rounded px-1 py-1 text-xs"
 							>
 								<option value="">{f}: all</option>
 								{facetValues[f].map((v) => (
@@ -342,11 +328,11 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						))}
 
 						<div className="relative">
-							<button type="button" onClick={() => setShowCols((s) => !s)} className="border rounded px-2 py-1 text-xs">
+							<button type="button" onClick={() => setShowCols((s) => !s)} className="border border-line rounded px-2 py-1 text-xs">
 								Columns ▾
 							</button>
 							{showCols && (
-								<div className="absolute z-10 mt-1 bg-white border rounded shadow p-2 max-h-64 overflow-auto text-xs">
+								<div className="absolute z-10 mt-1 bg-panel border border-line rounded shadow p-2 max-h-64 overflow-auto text-xs">
 									{baseColumns.map((c) => (
 										<label key={c} className="flex items-center gap-1.5 py-0.5 whitespace-nowrap cursor-pointer">
 											<input
@@ -367,7 +353,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							)}
 						</div>
 
-						<button type="button" onClick={exportCsv} className="border rounded px-2 py-1 text-xs">
+						<button type="button" onClick={exportCsv} className="border border-line rounded px-2 py-1 text-xs">
 							CSV
 						</button>
 						<button
@@ -376,7 +362,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 								loadCollections();
 								if (selected) loadRecords(selected);
 							}}
-							className="border rounded px-2 py-1 text-xs"
+							className="border border-line rounded px-2 py-1 text-xs"
 						>
 							Refresh
 						</button>
@@ -392,12 +378,12 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 				) : runs.length === 0 ? (
 					<p className="text-muted-soft py-5">No pipeline runs yet.</p>
 				) : (
-					<div className="overflow-auto border rounded">
+					<div className="overflow-auto border border-line rounded">
 						<table className="w-full border-collapse">
 							<thead>
 								<tr>
 									{["pipeline", "started", "status", "seen", "added", "skipped", "errors", "trigger"].map((h) => (
-										<th key={h} className="text-left px-2 py-1 border-b whitespace-nowrap sticky top-0 bg-white">
+										<th key={h} className="text-left px-2 py-1 border-b border-line whitespace-nowrap sticky top-0 bg-panel">
 											{h}
 										</th>
 									))}
@@ -405,7 +391,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 							</thead>
 							<tbody>
 								{runs.map((r) => (
-									<tr key={r.run_id} className="border-b hover:bg-black/5" title={r.detail || ""}>
+									<tr key={r.run_id} className="border-b border-line hover:bg-panel" title={r.detail || ""}>
 										<td className="px-2 py-1 whitespace-nowrap">{r.pipeline}</td>
 										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{fmtDateTime(r.started_at)}</td>
 										<td className="px-2 py-1">
@@ -414,7 +400,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 										<td className="px-2 py-1 text-right">{r.seen}</td>
 										<td className="px-2 py-1 text-right">{r.added}</td>
 										<td className="px-2 py-1 text-right">{r.skipped}</td>
-										<td className={`px-2 py-1 text-right ${r.errors ? "text-red-600 font-medium" : ""}`}>{r.errors}</td>
+										<td className={`px-2 py-1 text-right ${r.errors ? "text-red font-medium" : ""}`}>{r.errors}</td>
 										<td className="px-2 py-1 whitespace-nowrap text-muted-soft">{r.trigger}</td>
 									</tr>
 								))}
@@ -438,7 +424,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 								</div>
 								<div className="flex flex-col gap-2">
 									{cards.map((r) => (
-										<div key={r.id} className="border rounded p-2 bg-white">
+										<div key={r.id} className="border border-line rounded p-2 bg-panel">
 											<div className="font-medium">{cell("name", r.data.name)}</div>
 											<div className="text-xs text-muted-soft">
 												{[r.data.suburb, r.data.city].filter(Boolean).join(", ")}
@@ -459,16 +445,16 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					})}
 				</div>
 			) : (
-				<div className="overflow-auto border rounded">
+				<div className="overflow-auto border border-line rounded">
 					<table className="w-full border-collapse">
 						<thead>
 							<tr>
-								<th className="px-1 py-1 border-b sticky top-0 bg-white" />
+								<th className="px-1 py-1 border-b border-line sticky top-0 bg-panel" />
 								{columns.map((c) => (
 									<th
 										key={c}
 										onClick={() => toggleSort(c)}
-										className="cursor-pointer text-left px-2 py-1 border-b whitespace-nowrap select-none sticky top-0 bg-white"
+										className="cursor-pointer text-left px-2 py-1 border-b border-line whitespace-nowrap select-none sticky top-0 bg-panel"
 									>
 										{c}
 										{sortBy === c ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
@@ -478,7 +464,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 						</thead>
 						<tbody>
 							{rows.map((r) => (
-								<tr key={r.id} className="border-b hover:bg-black/5">
+								<tr key={r.id} className="border-b border-line hover:bg-panel">
 									<td className="px-1 py-1 align-top">
 										<button type="button" onClick={() => setDetail(r)} title="View audit log" className="text-accent">
 											🔍
@@ -506,7 +492,7 @@ export default function DataTab({ instanceId }: { instanceId: string }) {
 					<button type="button" aria-label="Close record details" className="absolute inset-0 bg-black/40 cursor-default" onClick={() => setDetail(null)}>
 						<span className="sr-only">Close record details</span>
 					</button>
-					<div className="relative bg-white rounded shadow-lg max-w-2xl w-full max-h-[85vh] overflow-auto p-4">
+					<div className="relative bg-panel rounded shadow-lg max-w-2xl w-full max-h-[85vh] overflow-auto p-4">
 						<div className="flex items-center justify-between mb-3">
 							<h3 className="font-semibold text-base">{String(detail.data.name ?? detail.data.title ?? detail.id ?? "Record")}</h3>
 							<button type="button" aria-label="Close record details" onClick={() => setDetail(null)} className="text-muted-soft">

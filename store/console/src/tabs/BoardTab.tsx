@@ -5,6 +5,7 @@ import type { BoardColumn } from "../lib/types";
 import { formatTime } from "@proagentstore/sdk/ui";
 import { useTieredPolling } from "@proagentstore/sdk/hooks";
 import { boardBusy } from "../lib/pollBusy";
+import { statusBadgeClass } from "../lib/statusBadge";
 import { LayoutGrid, List, SlidersHorizontal, Plus, Trash2, ArrowUp, ArrowDown, MessageCircleQuestion } from "lucide-react";
 
 type BoardView = "kanban" | "list";
@@ -704,16 +705,18 @@ function columnFor(cols: BoardColumn[], status: string): string | null {
 	return catchAll ? catchAll.id : null;
 }
 
+/**
+ * Board-only accents: three statuses that must read as distinct from
+ * queued/running/failed sitting beside them, and for which `@theme` declares no
+ * token. They stay literals until the palette grows a name for them (#367).
+ */
+const BOARD_ONLY_STATUS_CLASS: Record<string, string> = {
+	needs_human: "bg-amber-500/15 text-amber-500",
+	interview: "bg-violet-500/15 text-violet-500",
+	blocked: "bg-orange-500/15 text-orange-500",
+};
+
+/** Everything else routes through the one status vocabulary (`lib/statusBadge`, #368). */
 function statusClass(status: string): string {
-	switch (status) {
-		case "queued": case "needs_approval": return "bg-yellow/15 text-yellow";
-		case "running": return "bg-blue/15 text-blue";
-		case "needs_human": return "bg-amber-500/15 text-amber-500";
-		case "completed": case "submitted": case "offer": case "accepted": return "bg-green/15 text-green";
-		case "interview": return "bg-violet-500/15 text-violet-500";
-		case "failed": return "bg-red/15 text-red";
-		case "blocked": return "bg-orange-500/15 text-orange-500";
-		case "rejected": case "cancelled": return "bg-muted/15 text-muted";
-		default: return "bg-muted/15 text-muted";
-	}
+	return BOARD_ONLY_STATUS_CLASS[status] ?? statusBadgeClass(status);
 }
