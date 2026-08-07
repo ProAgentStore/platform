@@ -31,6 +31,37 @@ the rule *never hardcode a colour where a token exists*. Owning the system is a 
 tokens, not a licence to scatter Tailwind literals — #368 is what the absence of that rule looked
 like.
 
+## 0b. The Tailwind setup — v4, CSS-first, no config file
+
+Recorded because "which Tailwind is this" decides what half the advice on the internet is worth, and
+because the v3 shapes are the ones a contributor reaches for by habit. Measured 2026-08-08 on both
+`store/console` and `store/admin`:
+
+| | |
+|---|---|
+| Version | `tailwindcss@^4.3.1` |
+| Build | **`@tailwindcss/vite`** plugin (`vite.config.ts`) — v4's first-class path, not PostCSS |
+| Entry | **`@import "tailwindcss";`** — *not* `@tailwind base/components/utilities` |
+| Config | **none.** No `tailwind.config.js`, no `postcss.config.js`, in either app |
+| Tokens | `@theme { --color-…: … }` in `index.css`, consumed as ordinary utilities |
+| Extra content roots | **`@source "../../../agents/coder/web/src";`** — the v4 way to scan a sibling package the app imports (`coder-web` has no stylesheet of its own) |
+| Custom utilities | **`@utility scrollbar-none { … }`** — v4's API, not `@layer utilities` and not a plugin |
+| `@apply` | **zero uses**, in either app |
+
+All of that is current v4 idiom, and it is the whole toolchain: there is nowhere else a Tailwind
+decision can be hiding. Three consequences worth stating, because each is a thing a contributor can
+undo without noticing:
+
+- **Do not add a `tailwind.config.js`.** v4 reads configuration from CSS. Adding one does not merge
+  with `@theme` — it changes how the whole app is configured, and it is the single most common piece
+  of stale v3 advice.
+- **`@source` is load-bearing, not tidiness.** Delete it and every class used only inside
+  `agents/coder/web` stops being generated — the Coding tab loses its styling with no error, the
+  same silent-failure mode §1 describes for a token that does not exist.
+- **Prefer a component over `@apply`.** The zero count is worth keeping: `@apply` was the v3 answer
+  to "this control is repeated 291 times", and it moves the duplication into CSS rather than
+  removing it. The answer here is the component layer (#366), not a `.btn` class.
+
 ## 1. Tokens
 
 Declared as Tailwind v4 `@theme` custom properties, consumed as ordinary utilities (`bg-panel`,
@@ -209,6 +240,14 @@ palette split (§4 — resolving it is a restyling decision about the marketing 
   `--color-danger` as an *alias* beside `--color-red` without migrating ~200 call sites would leave two
   names for one idea — the failure #368 explicitly refused when it declined to invent a third status
   vocabulary. The intent layer in `lib/statusBadge.ts` is what keeps the eventual rename cheap.
-- Collapse the 17 arbitrary type sizes into a scale, after #366 (§2).
+- Collapse the 17 arbitrary type sizes into a scale, after #366 (§2). Measured rendered, 2026-08-08
+  (#390): **148 sub-12px strings on Terminals**, 100 on Activity, and 9.9px body copy under form
+  controls on the instance Settings tab — nine of the values sit inside a 2px band.
+- **Decide whether this document may become prescriptive, and about what.** It is descriptive by
+  design, and the two floors an audit keeps asking for — a minimum tap target (#389: 40 controls
+  under 40px on the Assistant screen, 12×12px checkboxes on Behaviour, a 16px *Remove* on Repo) and
+  a minimum readable font size (#390) — cannot be recorded here without changing that. Both belong
+  in the component layer (#366) rather than at 291 + 168 call sites, so the sequencing is #367 →
+  #366 → adopt; the open question is only whether the numbers live *here* once they exist.
 - Decide whether the marketing pages adopt the SPA palette or keep their own (§4).
 - Clear `store/admin`'s two pinned dead utilities (§5) and drop its pin to zero.
